@@ -24,6 +24,9 @@ from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
 from scrapers.counties.charlotte import CharlotteCountyScraper
 from scrapers.counties.hendry import HendryCountyScraper
+from scrapers.counties.desoto import DeSotoCountyScraper
+from scrapers.counties.manatee import ManateeCountyScraper
+from scrapers.counties.sarasota import SarasotaCountyScraper
 
 # ── Logging ──
 logging.basicConfig(
@@ -81,10 +84,10 @@ def register_scrapers(sched: ScraperScheduler):
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
-    # Future counties will be registered here as they are ported:
-    # sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
-    # sched.register_scraper(ManateeCountyScraper(), interval_minutes=30)
-    # sched.register_scraper(SarasotaCountyScraper(), interval_minutes=30)
+    # ── Tier 3: Expanded SWFL coverage (browser-automated) ──
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
+    sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
 
 
 def handle_shutdown(signum, frame):
