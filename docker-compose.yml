@@ -1,0 +1,28 @@
+# ============================================
+# ShamrockLeads — Docker Compose
+# ============================================
+version: "3.9"
+
+services:
+  shamrock-leads:
+    build: .
+    container_name: shamrock-leads
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./creds:/app/creds:ro           # GCP service account key
+      - ./logs:/app/logs                # Persistent logs
+    ports:
+      - "8088:8088"                     # Future: API server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

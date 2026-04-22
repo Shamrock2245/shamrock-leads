@@ -1,0 +1,34 @@
+# .env
+.env
+*.env
+
+# Credentials
+creds/
+*.json
+!counties.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Docker
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual envs
+venv/
+.venv/
+env/
