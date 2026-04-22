@@ -1,9 +1,11 @@
 # ============================================
 # ShamrockLeads — Docker Compose
+# Runs: Scraper Engine + Node-RED Ops Dashboard
 # ============================================
 version: "3.9"
 
 services:
+  # ── Core: Scraper + Scoring Engine ──
   shamrock-leads:
     build: .
     container_name: shamrock-leads
@@ -14,7 +16,7 @@ services:
       - ./creds:/app/creds:ro           # GCP service account key
       - ./logs:/app/logs                # Persistent logs
     ports:
-      - "8088:8088"                     # Future: API server
+      - "8088:8088"                     # Future: health/status API
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -26,3 +28,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── Ops Dashboard: Node-RED ──
+  node-red:
+    image: nodered/node-red:latest
+    container_name: shamrock-node-red
+    restart: unless-stopped
+    environment:
+      - TZ=America/New_York
+    volumes:
+      - node-red-data:/data             # Persistent flows + config
+    ports:
+      - "1880:1880"                     # Node-RED dashboard
+    depends_on:
+      - shamrock-leads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:1880/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  node-red-data:
+    driver: local

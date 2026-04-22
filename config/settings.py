@@ -34,6 +34,7 @@ class Settings:
     # --- Slack ---
     SLACK_WEBHOOK_ARRESTS: str = os.getenv("SLACK_WEBHOOK_ARRESTS", "")
     SLACK_WEBHOOK_LEADS: str = os.getenv("SLACK_WEBHOOK_LEADS", "")
+    SLACK_WEBHOOK_ERRORS: str = os.getenv("SLACK_WEBHOOK_ERRORS", "")
 
     # --- Twilio ---
     TWILIO_ACCOUNT_SID: str = os.getenv("TWILIO_ACCOUNT_SID", "")
