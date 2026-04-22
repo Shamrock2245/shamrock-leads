@@ -21,6 +21,9 @@ from writers.mongo_writer import MongoWriter
 
 # Import county scrapers
 from scrapers.counties.lee import LeeCountyScraper
+from scrapers.counties.collier import CollierCountyScraper
+from scrapers.counties.charlotte import CharlotteCountyScraper
+from scrapers.counties.hendry import HendryCountyScraper
 
 # ── Logging ──
 logging.basicConfig(
@@ -50,7 +53,10 @@ def build_writers() -> list:
         try:
             # Lazy import — gspread is optional
             from writers.sheets_writer import SheetsWriter
-            sheets = SheetsWriter()
+            sheets = SheetsWriter(
+                spreadsheet_id=settings.GOOGLE_SPREADSHEET_ID,
+                credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS
+            )
             writers.append(sheets)
             logger.info("✅ Google Sheets writer initialized")
         except ImportError:
@@ -67,14 +73,16 @@ def build_writers() -> list:
 def register_scrapers(sched: ScraperScheduler):
     """Register all county scrapers with their schedules."""
 
-    # ── Tier 1: Core SWFL counties ──
+    # ── Tier 1: Core SWFL counties (API-based, high frequency) ──
     sched.register_scraper(LeeCountyScraper(), interval_minutes=20)
+    sched.register_scraper(CollierCountyScraper(), interval_minutes=30)
+
+    # ── Tier 2: Browser-automated counties (lower frequency) ──
+    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
     # Future counties will be registered here as they are ported:
-    # sched.register_scraper(CharlotteCountyScraper(), interval_minutes=30)
-    # sched.register_scraper(CollierCountyScraper(), interval_minutes=30)
     # sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
-    # sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
     # sched.register_scraper(ManateeCountyScraper(), interval_minutes=30)
     # sched.register_scraper(SarasotaCountyScraper(), interval_minutes=30)
 
