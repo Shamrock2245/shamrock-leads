@@ -19,6 +19,13 @@ from datetime import datetime, timezone
 
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
+
+try:
+    from dashboard.server import update_scraper_status
+    _dashboard_available = True
+except ImportError:
+    _dashboard_available = False
+
 from writers.slack_notifier import SlackNotifier
 
 logger = logging.getLogger(__name__)
@@ -164,6 +171,24 @@ class BaseScraper(ABC):
             except Exception as slack_err:
                 logger.warning(f"⚠️ Slack notification failed: {slack_err}")
 
+
+            # ── Step 5: Update dashboard ──
+            if _dashboard_available:
+                try:
+                    cold_count = sum(1 for r in records if r.Lead_Status == "Cold")
+                    update_scraper_status(
+                        county=self.county,
+                        records=len(records),
+                        hot=hot_count,
+                        warm=warm_count,
+                        cold=cold_count,
+                        disqualified=disqualified,
+                        duration=elapsed,
+                        status="ok",
+                    )
+                except Exception:
+                    pass
+
             return combined_stats
 
         except Exception as e:
@@ -176,6 +201,17 @@ class BaseScraper(ABC):
                 _slack.notify_scraper_error(self.county, str(e))
             except:
                 pass
+
+
+            # Update dashboard with error status
+            if _dashboard_available:
+                try:
+                    update_scraper_status(
+                        county=self.county, records=0, hot=0, warm=0,
+                        duration=elapsed, status="error", error=str(e),
+                    )
+                except Exception:
+                    pass
 
             return {
                 "county": self.county,
