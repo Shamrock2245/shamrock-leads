@@ -1,214 +1,370 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ShamrockLeads — Intelligence Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShamrockLeads — Live Fleet Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green:   #22c55e;
+      --green-glow: rgba(34,197,94,0.25);
+      --yellow:  #eab308;
+      --red:     #ef4444;
+      --blue:    #3b82f6;
+      --orange:  #f97316;
+      --purple:  #a855f7;
+      --gray:    #6b7280;
+      --bg:      #0a0f1a;
+      --card:    #111827;
+      --card-hover: #1a2234;
+      --border:  #1f2937;
+      --text:    #f1f5f9;
+      --muted:   #9ca3af;
+      --surface: #151c2c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, -apple-system, sans-serif; min-height: 100vh; }
+
+    /* ── Header ── */
+    header {
+      background: linear-gradient(135deg, #064e3b 0%, #065f46 40%, #047857 100%);
+      padding: 20px 28px;
+      border-bottom: 2px solid rgba(34,197,94,0.3);
+      position: sticky; top: 0; z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+    .header-inner { max-width: 1600px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-icon { font-size: 32px; }
+    .logo-text h1 { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.5px; }
+    .logo-text p { font-size: 0.7rem; color: #a7f3d0; margin-top: 1px; font-weight: 500; }
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .live-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; animation: pulse 2s infinite; display: inline-block; }
+    @keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.4); } 50% { opacity: 0.8; box-shadow: 0 0 0 6px rgba(34,197,94,0); } }
+    .live-label { font-size: 0.7rem; color: #a7f3d0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; gap: 6px; }
+    .refresh-timer { font-size: 0.65rem; color: #6ee7b7; background: rgba(0,0,0,0.2); padding: 4px 10px; border-radius: 20px; }
+
+    /* ── KPI Bar ── */
+    .kpi-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 28px; }
+    .kpi-inner { max-width: 1600px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+    .kpi { text-align: center; padding: 8px 0; }
+    .kpi-value { font-size: 2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    .kpi-label { font-size: 0.65rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+    .kpi-value.green { color: var(--green); }
+    .kpi-value.yellow { color: var(--yellow); }
+    .kpi-value.red { color: var(--red); }
+    .kpi-value.blue { color: var(--blue); }
+    .kpi-value.orange { color: var(--orange); }
+    .kpi-value.purple { color: var(--purple); }
+
+    /* ── Controls ── */
+    .controls { max-width: 1600px; margin: 0 auto; padding: 16px 28px 8px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .search-box { flex: 1; min-width: 180px; max-width: 300px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; color: var(--text); font-size: 0.85rem; outline: none; font-family: inherit; }
+    .search-box::placeholder { color: var(--muted); }
+    .search-box:focus { border-color: var(--green); box-shadow: 0 0 0 2px var(--green-glow); }
+    .filter-btn { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 7px 14px; color: var(--muted); font-size: 0.8rem; cursor: pointer; transition: all 0.15s; font-family: inherit; font-weight: 500; }
+    .filter-btn:hover { border-color: var(--green); color: var(--text); }
+    .filter-btn.active { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+    .sort-select { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; color: var(--muted); font-size: 0.8rem; font-family: inherit; outline: none; cursor: pointer; }
+
+    /* ── Grid ── */
+    .main-content { max-width: 1600px; margin: 0 auto; padding: 12px 28px 60px; }
+    .county-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-top: 12px; }
+
+    /* ── County Card ── */
+    .county-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px; transition: all 0.2s; cursor: default; position: relative; overflow: hidden;
+    }
+    .county-card:hover { border-color: rgba(34,197,94,0.4); transform: translateY(-1px); box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+    .county-card.status-ok { border-left: 3px solid var(--green); }
+    .county-card.status-error { border-left: 3px solid var(--red); }
+    .county-card.status-pending { border-left: 3px solid var(--gray); }
+    .county-card.status-running { border-left: 3px solid var(--blue); animation: card-pulse 3s infinite; }
+    @keyframes card-pulse { 0%,100% { border-left-color: var(--blue); } 50% { border-left-color: var(--green); } }
+    .county-card.hidden { display: none; }
+
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+    .county-name { font-size: 0.95rem; font-weight: 700; }
+    .status-badge { font-size: 0.6rem; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge-ok { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-error { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-pending { background: rgba(107,114,128,0.15); color: var(--gray); }
+    .badge-running { background: rgba(59,130,246,0.15); color: var(--blue); }
+
+    .card-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 6px; }
+    .mini-stat { text-align: center; background: var(--surface); border-radius: 6px; padding: 6px 4px; }
+    .mini-stat-value { font-size: 1.1rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+    .mini-stat-label { font-size: 0.55rem; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .card-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.65rem; color: var(--muted); }
+    .card-error { color: var(--red); font-size: 0.65rem; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+    /* ── Hot Leads Panel ── */
+    .hot-leads-panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-top: 16px; }
+    .hot-leads-panel h3 { font-size: 0.85rem; font-weight: 700; color: var(--orange); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+    .lead-row { display: grid; grid-template-columns: 2fr 1fr 1fr 80px; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 0.75rem; align-items: center; }
+    .lead-row:last-child { border-bottom: none; }
+    .lead-name { font-weight: 600; }
+    .lead-county { color: var(--muted); }
+    .lead-bond { color: var(--green); font-weight: 600; }
+    .lead-score { background: var(--orange); color: #fff; padding: 2px 8px; border-radius: 12px; font-weight: 700; font-size: 0.7rem; text-align: center; }
+
+    /* ── Footer ── */
+    .footer { text-align: center; padding: 20px; color: var(--muted); font-size: 0.65rem; }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .county-grid { grid-template-columns: 1fr; }
+      .kpi-inner { grid-template-columns: repeat(3, 1fr); }
+      .kpi-value { font-size: 1.4rem; }
+      header { padding: 14px 16px; }
+      .main-content { padding: 12px 16px 40px; }
+    }
+  </style>
 </head>
 <body>
-
-<div class="header">
-  <div class="header-left">
-    <img src="https://www.shamrockbailbonds.biz/logo.png" alt="Shamrock" class="header-logo" onerror="this.style.display='none'">
-    <h1>ShamrockLeads Intelligence<small>Florida Arrest Data Pipeline</small></h1>
-  </div>
-  <div class="header-right">
-    <div class="live">LIVE</div>
-    <div class="meta" id="lastUpdate">Loading...</div>
-    <div class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">
-      <span>☀️</span><div class="toggle-track"><div class="toggle-knob"></div></div><span>🌙</span>
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">☘️</span>
+        <div class="logo-text">
+          <h1>ShamrockLeads</h1>
+          <p>Florida Arrest Intelligence — Live Fleet Dashboard</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="live-label"><span class="live-dot"></span> LIVE</span>
+        <span class="refresh-timer" id="refreshTimer">Refreshing in 30s</span>
+      </div>
     </div>
-    <button class="refresh-btn" onclick="refreshCurrentTab()">↻ Refresh</button>
-  </div>
-</div>
+  </header>
 
-<!-- ── Tab Navigation ── -->
-<div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('analytics')" id="tabAnalytics">
-    📊 Analytics
-  </button>
-  <button class="tab-btn" onclick="switchTab('health')" id="tabHealth">
-    🏥 Scraper Health <span class="badge" id="healthBadge">—</span>
-  </button>
-  <button class="tab-btn" onclick="switchTab('defendants')" id="tabDefendants">
-    👤 Defendant Profiles <span class="badge" id="defBadge">—</span>
-  </button>
-</div>
-
-<!-- ════════════════════════════════════════════════════
-     TAB 1: ANALYTICS DASHBOARD
-     ════════════════════════════════════════════════════ -->
-<div class="tab-content active" id="panelAnalytics">
-<div class="container">
-  <div class="stats-grid" id="statsGrid">
-    <div class="stat-card"><div class="stat-label">Total Arrests</div><div class="stat-value" id="statTotal">—</div><div class="stat-sub">All counties, deduped</div></div>
-    <div class="stat-card"><div class="stat-label">Counties Active</div><div class="stat-value" id="statCounties">—</div><div class="stat-sub">Scrapers running</div></div>
-    <div class="stat-card"><div class="stat-label">New Today</div><div class="stat-value" id="statToday">—</div><div class="stat-sub">Since midnight UTC</div></div>
-    <div class="stat-card"><div class="stat-label">Avg Bond</div><div class="stat-value" id="statAvgBond">—</div><div class="stat-sub">Where bond > $0</div></div>
-    <div class="stat-card"><div class="stat-label">High Value (>$2.5K)</div><div class="stat-value" id="statHighValue">—</div><div class="stat-sub">Bounty board targets</div></div>
-  </div>
-
-  <div class="grid-2">
-    <div class="panel"><div class="panel-title">📊 Arrests by County</div><canvas id="countyChart"></canvas></div>
-    <div class="panel"><div class="panel-title">💰 Bond Distribution</div><canvas id="bondChart"></canvas></div>
-  </div>
-
-  <div class="grid-3">
-    <div class="panel">
-      <div class="panel-title">🏛️ County Breakdown</div>
-      <div id="countyList"><div class="loading">Loading...</div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-title">⚖️ Top Charges</div>
-      <ul class="charges-list" id="chargesList"><li class="loading">Loading...</li></ul>
+  <div class="kpi-bar">
+    <div class="kpi-inner">
+      <div class="kpi"><div class="kpi-value green" id="kpiActive">—</div><div class="kpi-label">Active Scrapers</div></div>
+      <div class="kpi"><div class="kpi-value blue" id="kpiTotal">—</div><div class="kpi-label">Total Records</div></div>
+      <div class="kpi"><div class="kpi-value orange" id="kpiHot">—</div><div class="kpi-label">🔥 Hot Leads</div></div>
+      <div class="kpi"><div class="kpi-value yellow" id="kpiWarm">—</div><div class="kpi-label">🟡 Warm Leads</div></div>
+      <div class="kpi"><div class="kpi-value purple" id="kpiCounties">—</div><div class="kpi-label">Counties Covered</div></div>
+      <div class="kpi"><div class="kpi-value red" id="kpiErrors">—</div><div class="kpi-label">Errors</div></div>
     </div>
   </div>
 
-  <div class="panel" style="margin-bottom:22px">
-    <div class="panel-title">🎯 Bounty Board — High Value Targets (Bond > $2,500)</div>
-    <div class="filters" style="margin-bottom:10px">
-      <select id="bountySort" onchange="loadBountyBoard()">
-        <option value="bond_amount">Sort: Highest Bond</option>
-        <option value="booking_date">Sort: Most Recent</option>
-        <option value="county">Sort: County A→Z</option>
-      </select>
-      <select id="bountyCounty" onchange="loadBountyBoard()"><option value="">All Counties</option></select>
-      <span id="bountyCount" style="color:var(--muted);font-size:12px"></span>
-    </div>
-    <div class="table-wrap">
-      <table><thead><tr>
-        <th onclick="sortBounty('full_name')" style="cursor:pointer">Name ↕</th>
-        <th onclick="sortBounty('county')" style="cursor:pointer">County ↕</th>
-        <th onclick="sortBounty('bond_amount')" style="cursor:pointer">Bond ↕</th>
-        <th>Charges</th>
-        <th onclick="sortBounty('booking_date')" style="cursor:pointer">Booking Date ↕</th>
-        <th>Status</th>
-      </tr></thead>
-      <tbody id="bountyBody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody></table>
-    </div>
-    <div class="pagination" id="bountyPagination"></div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-title">📋 All Arrests</div>
-    <div class="filters">
-      <select id="filterCounty" onchange="loadArrests()"><option value="">All Counties</option></select>
-      <input type="text" id="filterSearch" placeholder="Search name, charge, booking #..." onkeyup="debounceSearch()" style="min-width:240px">
-      <input type="number" id="filterMinBond" placeholder="Min bond $" onchange="loadArrests()" style="width:120px">
-      <span id="resultCount" style="color:var(--muted);font-size:12px"></span>
-    </div>
-    <div class="table-wrap">
-      <table><thead><tr>
-        <th onclick="sortTable('full_name')">Name ↕</th><th onclick="sortTable('county')">County ↕</th>
-        <th onclick="sortTable('bond_amount')">Bond ↕</th><th onclick="sortTable('charges')">Charges</th>
-        <th onclick="sortTable('booking_date')">Booked ↕</th><th onclick="sortTable('arrest_date')">Arrested ↕</th>
-        <th onclick="sortTable('status')">Status</th><th>Facility</th>
-      </tr></thead>
-      <tbody id="arrestBody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody></table>
-    </div>
-    <div class="pagination" id="pagination"></div>
-  </div>
-</div>
-</div>
-
-<!-- ════════════════════════════════════════════════════
-     TAB 2: SCRAPER HEALTH
-     ════════════════════════════════════════════════════ -->
-<div class="tab-content" id="panelHealth">
-<div class="container">
-  <div class="stats-grid" id="healthStatsGrid">
-    <div class="stat-card"><div class="stat-label">Total Counties</div><div class="stat-value" id="healthCounties">—</div><div class="stat-sub">With data in MongoDB</div></div>
-    <div class="stat-card"><div class="stat-label">Healthy Scrapers</div><div class="stat-value" id="healthHealthy" style="color:#10b981">—</div><div class="stat-sub">Updated &lt;2h ago</div></div>
-    <div class="stat-card"><div class="stat-label">24h New Records</div><div class="stat-value" id="health24h">—</div><div class="stat-sub">Across all counties</div></div>
-    <div class="stat-card"><div class="stat-label">Stale / Offline</div><div class="stat-value" id="healthStale" style="color:#ef4444">—</div><div class="stat-sub">Needs attention</div></div>
-  </div>
-
-  <div class="panel" style="margin-bottom:22px">
-    <div class="panel-title">🏥 Scraper Status by County <span style="font-size:12px;color:var(--muted);font-weight:400">(click county to view arrests)</span></div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Status</th>
-          <th onclick="sortHealth('county')" style="cursor:pointer">County ↕</th>
-          <th onclick="sortHealth('total_records')" style="cursor:pointer">Total ↕</th>
-          <th onclick="sortHealth('records_24h')" style="cursor:pointer">24h New ↕</th>
-          <th>In Custody</th>
-          <th onclick="sortHealth('avg_bond')" style="cursor:pointer">Avg Bond ↕</th>
-          <th onclick="sortHealth('total_bond')" style="cursor:pointer">Total Bond ↕</th>
-          <th onclick="sortHealth('hours_since_update')" style="cursor:pointer">Last Update ↕</th>
-        </tr></thead>
-        <tbody id="healthBody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- County Drill-Down -->
-  <div class="panel" id="countyDrillPanel" style="display:none;margin-bottom:22px">
-    <div class="panel-title" id="drillTitle">📋 County Arrests</div>
-    <div class="filters" style="margin-bottom:12px">
-      <input type="text" id="drillSearch" placeholder="Search name, charges..." onkeyup="debounceDrillSearch()" style="min-width:240px">
-      <span id="drillCount" style="color:var(--muted);font-size:12px"></span>
-      <button class="refresh-btn" onclick="closeDrill()" style="margin-left:auto">✕ Close</button>
-    </div>
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th onclick="sortDrill('full_name')" style="cursor:pointer">Name ↕</th>
-          <th onclick="sortDrill('bond_amount')" style="cursor:pointer">Bond ↕</th>
-          <th>Charges</th>
-          <th onclick="sortDrill('booking_date')" style="cursor:pointer">Booked ↕</th>
-          <th onclick="sortDrill('created_at')" style="cursor:pointer">Scraped ↕</th>
-          <th>Status</th>
-          <th>Facility</th>
-        </tr></thead>
-        <tbody id="drillBody"><tr><td colspan="7" class="loading">Select a county</td></tr></tbody>
-      </table>
-    </div>
-    <div class="pagination" id="drillPagination"></div>
-  </div>
-</div>
-</div>
-
-<!-- ════════════════════════════════════════════════════
-     TAB 3: DEFENDANT PROFILES
-     ════════════════════════════════════════════════════ -->
-<div class="tab-content" id="panelDefendants">
-<div class="container">
-  <div class="filters" style="margin-bottom:20px">
-    <select id="defFilterCounty" onchange="loadDefendants()"><option value="">All Counties</option></select>
-    <input type="text" id="defSearch" placeholder="Search name, address, charges, case #..." onkeyup="debounceDefSearch()" style="min-width:280px">
-    <input type="number" id="defMinBond" placeholder="Min bond $" onchange="loadDefendants()" style="width:120px">
-    <select id="defSort" onchange="loadDefendants()">
-      <option value="bond_amount">Sort: Bond (High→Low)</option>
-      <option value="booking_date">Sort: Booking Date</option>
-      <option value="full_name">Sort: Name (A→Z)</option>
+  <div class="controls">
+    <input type="text" class="search-box" id="searchBox" placeholder="Search counties..." />
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="ok">✅ OK</button>
+    <button class="filter-btn" data-filter="error">❌ Error</button>
+    <button class="filter-btn" data-filter="pending">⏳ Pending</button>
+    <select class="sort-select" id="sortSelect">
+      <option value="name">Sort: Name</option>
+      <option value="records">Sort: Records ↓</option>
+      <option value="hot">Sort: Hot Leads ↓</option>
+      <option value="recent">Sort: Most Recent</option>
     </select>
-    <span id="defResultCount" style="color:var(--muted);font-size:12px"></span>
   </div>
-  <div class="defendant-grid" id="defendantGrid"><div class="loading" style="grid-column:1/-1">Loading...</div></div>
-  <div class="pagination" id="defPagination"></div>
-</div>
-</div>
 
-<!-- ── Write Bond Modal ── -->
-<div class="modal-overlay" id="writeBondModal">
-  <div class="modal">
-    <div class="modal-header">
-      <h2>✅ Write Bond — Export to SignNow</h2>
-      <button class="modal-close" onclick="closeModal()">✕</button>
+  <div class="main-content">
+    <div class="county-grid" id="countyGrid">
+      <div style="text-align: center; padding: 40px; color: var(--muted); grid-column: 1/-1;">
+        <div style="font-size: 2rem; margin-bottom: 8px;">⏳</div>
+        Loading live data...
+      </div>
     </div>
-    <div class="modal-body" id="modalBody"></div>
-    <div class="modal-footer">
-      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-      <button class="btn-primary" id="btnExportSignNow" onclick="exportToSignNow()">🍀 Export & Send Paperwork</button>
+
+    <div class="hot-leads-panel" id="hotLeadsPanel" style="display:none;">
+      <h3>🔥 Recent Hot Leads (24h)</h3>
+      <div id="hotLeadsList"></div>
     </div>
   </div>
-</div>
 
-<script src="dashboard.js"></script>
-<script src="defendants.js"></script>
+  <div class="footer">
+    ShamrockLeads v2.0 — Shamrock Active Software &copy; 2026 — Auto-refreshes every 30s
+  </div>
+
+<script>
+const API_BASE = window.location.origin;
+const REFRESH_INTERVAL = 30000;
+const ALL_COUNTIES = [
+  "Lee","Collier","Charlotte","Manatee","Sarasota","DeSoto","Hendry",
+  "Hillsborough","Pinellas","Seminole","Orange","Pasco","Lake","Hernando",
+  "Polk","Osceola","Citrus","Sumter",
+  "Broward","Palm Beach","Martin","St. Lucie","Indian River","Highlands","Glades",
+  "Volusia","Brevard","Alachua","Marion","Putnam",
+  "Escambia","Okaloosa","Bay","Leon",
+  "Duval","St. Johns","Taylor","Dixie"
+];
+
+let currentFilter = "all";
+let currentSort = "name";
+let scraperData = {};
+let mongoData = {};
+
+// ── Fetch Data ──
+async function fetchData() {
+  try {
+    const [statusRes, mongoRes] = await Promise.all([
+      fetch(`${API_BASE}/api/status`),
+      fetch(`${API_BASE}/api/mongo-stats`),
+    ]);
+    scraperData = await statusRes.json();
+    mongoData = await mongoRes.json();
+    render();
+  } catch (e) {
+    console.error("Fetch failed:", e);
+  }
+}
+
+// ── Render ──
+function render() {
+  renderKPIs();
+  renderGrid();
+  renderHotLeads();
+}
+
+function renderKPIs() {
+  const scrapers = scraperData.scrapers || {};
+  const counties = Object.keys(scrapers);
+  const okCount = counties.filter(c => scrapers[c].status === "ok").length;
+  const errCount = counties.filter(c => scrapers[c].status !== "ok").length;
+
+  document.getElementById("kpiActive").textContent = okCount;
+  document.getElementById("kpiTotal").textContent = (mongoData.total_records || 0).toLocaleString();
+  document.getElementById("kpiHot").textContent = mongoData.scores?.hot || 0;
+  document.getElementById("kpiWarm").textContent = mongoData.scores?.warm || 0;
+  document.getElementById("kpiCounties").textContent = Object.keys(mongoData.by_county || {}).length;
+  document.getElementById("kpiErrors").textContent = errCount;
+}
+
+function renderGrid() {
+  const grid = document.getElementById("countyGrid");
+  const scrapers = scraperData.scrapers || {};
+  const search = document.getElementById("searchBox").value.toLowerCase();
+
+  // Build county data
+  let counties = ALL_COUNTIES.map(name => {
+    const data = scrapers[name] || null;
+    const mongoCount = (mongoData.by_county || {})[name] || 0;
+    return {
+      name,
+      status: data ? data.status : "pending",
+      records: data?.records || 0,
+      hot: data?.hot_leads || 0,
+      warm: data?.warm_leads || 0,
+      disqualified: data?.disqualified || 0,
+      duration: data?.duration_seconds || 0,
+      lastRun: data?.last_run || null,
+      error: data?.error || null,
+      runCount: data?.run_count || 0,
+      totalRecords: data?.total_records || 0,
+      mongoRecords: mongoCount,
+    };
+  });
+
+  // Filter
+  if (search) counties = counties.filter(c => c.name.toLowerCase().includes(search));
+  if (currentFilter !== "all") counties = counties.filter(c => c.status === currentFilter);
+
+  // Sort
+  if (currentSort === "records") counties.sort((a, b) => b.mongoRecords - a.mongoRecords);
+  else if (currentSort === "hot") counties.sort((a, b) => b.hot - a.hot);
+  else if (currentSort === "recent") counties.sort((a, b) => (b.lastRun || "").localeCompare(a.lastRun || ""));
+  else counties.sort((a, b) => a.name.localeCompare(b.name));
+
+  grid.innerHTML = counties.map(c => {
+    const badgeClass = `badge-${c.status}`;
+    const statusLabel = c.status === "ok" ? "OK" : c.status === "error" ? "ERR" : c.status;
+    const ago = c.lastRun ? timeAgo(c.lastRun) : "—";
+    return `
+      <div class="county-card status-${c.status}">
+        <div class="card-header">
+          <span class="county-name">${c.name}</span>
+          <span class="status-badge ${badgeClass}">${statusLabel}</span>
+        </div>
+        <div class="card-stats">
+          <div class="mini-stat">
+            <div class="mini-stat-value" style="color:var(--blue)">${c.mongoRecords.toLocaleString()}</div>
+            <div class="mini-stat-label">In DB</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-stat-value" style="color:var(--orange)">${c.hot}</div>
+            <div class="mini-stat-label">Hot</div>
+          </div>
+          <div class="mini-stat">
+            <div class="mini-stat-value" style="color:var(--yellow)">${c.warm}</div>
+            <div class="mini-stat-label">Warm</div>
+          </div>
+        </div>
+        <div class="card-meta">
+          <span>Last: ${ago}</span>
+          <span>${c.duration > 0 ? c.duration + 's' : '—'}</span>
+          <span>Runs: ${c.runCount}</span>
+        </div>
+        ${c.error ? `<div class="card-error" title="${c.error}">⚠️ ${c.error}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function renderHotLeads() {
+  const panel = document.getElementById("hotLeadsPanel");
+  const list = document.getElementById("hotLeadsList");
+  const leads = mongoData.recent_hot_leads || [];
+
+  if (leads.length === 0) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+
+  list.innerHTML = leads.map(l => `
+    <div class="lead-row">
+      <span class="lead-name">${l.full_name || 'Unknown'}</span>
+      <span class="lead-county">${l.county || '—'}</span>
+      <span class="lead-bond">${l.bond_amount ? '$' + Number(l.bond_amount).toLocaleString() : '—'}</span>
+      <span class="lead-score">${l.lead_score || '—'}</span>
+    </div>
+  `).join('');
+}
+
+// ── Helpers ──
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return Math.round(diff) + 's ago';
+  if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.round(diff / 3600) + 'h ago';
+  return Math.round(diff / 86400) + 'd ago';
+}
+
+// ── Event Listeners ──
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    renderGrid();
+  });
+});
+
+document.getElementById('searchBox').addEventListener('input', renderGrid);
+document.getElementById('sortSelect').addEventListener('change', (e) => {
+  currentSort = e.target.value;
+  renderGrid();
+});
+
+// ── Refresh Timer ──
+let countdown = 30;
+setInterval(() => {
+  countdown--;
+  document.getElementById('refreshTimer').textContent = `Refreshing in ${countdown}s`;
+  if (countdown <= 0) {
+    countdown = 30;
+    fetchData();
+  }
+}, 1000);
+
+// ── Init ──
+fetchData();
+</script>
 </body>
 </html>
