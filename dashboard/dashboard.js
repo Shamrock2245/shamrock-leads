@@ -13,6 +13,7 @@ const fetchJSON=async u=>{try{return(await fetch(u)).json()}catch(e){console.err
 
 let currentPage=1,currentSort='created_at',currentDir=-1;
 let countyChart,bondChart,searchTimeout;
+let bountyPage=1,bountySortCol='bond_amount',bountySortDir=-1;
 
 // ── Theme ──
 function toggleTheme(){
@@ -80,6 +81,7 @@ async function loadCounties(){
   const populate=(sel,cur)=>{sel.innerHTML='<option value="">All Counties</option>'+data.map(d=>`<option value="${d.county}">${d.county} (${d.total})</option>`).join('');sel.value=cur};
   populate($('filterCounty'),$('filterCounty').value);
   populate($('defFilterCounty'),$('defFilterCounty').value);
+  populate($('bountyCounty'),$('bountyCounty').value);
 }
 
 // ── Bond Chart ──
@@ -97,9 +99,28 @@ async function loadCharges(){
 }
 
 // ── Bounty Board ──
+function sortBounty(col){
+  const sel=$('bountySort');
+  if(bountySortCol===col){bountySortDir*=-1}
+  else{bountySortCol=col;bountySortDir=col==='county'||col==='full_name'?1:-1}
+  if(col==='bond_amount')sel.value='bond_amount';
+  else if(col==='booking_date')sel.value='booking_date';
+  else if(col==='county')sel.value='county';
+  bountyPage=1;loadBountyBoard();
+}
 async function loadBountyBoard(){
-  const data=await fetchJSON('/api/bounty-board');if(!data)return;
-  $('bountyBody').innerHTML=data.length?data.map(d=>`<tr><td style="font-weight:600">${val(d.full_name)}</td><td>${val(d.county)}</td><td class="${bondClass(d.bond_amount)}">${money(d.bond_amount)}</td><td title="${d.charges||''}">${truncate(d.charges,50)}</td><td>${val(d.booking_date)}</td><td>${val(d.status)}</td></tr>`).join(''):'<tr><td colspan="6" class="loading">No high-value targets</td></tr>';
+  const selVal=$('bountySort').value;
+  if(selVal&&selVal!==bountySortCol){bountySortCol=selVal;bountySortDir=selVal==='county'?1:-1;bountyPage=1;}
+  const county=$('bountyCounty').value;
+  let url=`/api/bounty-board?sort=${bountySortCol}&dir=${bountySortDir}&page=${bountyPage}&limit=50`;
+  if(county)url+=`&county=${encodeURIComponent(county)}`;
+  const data=await fetchJSON(url);if(!data)return;
+  const rows=data.targets||data;const total=data.total||rows.length;
+  $('bountyCount').textContent=`${total.toLocaleString()} targets`;
+  $('bountyBody').innerHTML=rows.length?rows.map(d=>`<tr><td style="font-weight:600">${val(d.full_name)}</td><td>${val(d.county)}</td><td class="${bondClass(d.bond_amount)}">${money(d.bond_amount)}</td><td title="${d.charges||''}">${truncate(d.charges,50)}</td><td>${val(d.booking_date)}</td><td>${val(d.status)}</td></tr>`).join(''):'<tr><td colspan="6" class="loading">No high-value targets</td></tr>';
+  if(data.pages&&data.pages>1){
+    $('bountyPagination').innerHTML=`<button ${data.page<=1?'disabled':''} onclick="bountyPage=${data.page-1};loadBountyBoard()">← Prev</button><span>Page ${data.page} of ${data.pages}</span><button ${data.page>=data.pages?'disabled':''} onclick="bountyPage=${data.page+1};loadBountyBoard()">Next →</button>`;
+  }else{$('bountyPagination').innerHTML='';}
 }
 
 // ── Arrests Table ──

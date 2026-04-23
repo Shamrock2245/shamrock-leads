@@ -69,10 +69,27 @@
 
   <div class="panel" style="margin-bottom:22px">
     <div class="panel-title">🎯 Bounty Board — High Value Targets (Bond > $2,500)</div>
+    <div class="filters" style="margin-bottom:10px">
+      <select id="bountySort" onchange="loadBountyBoard()">
+        <option value="bond_amount">Sort: Highest Bond</option>
+        <option value="booking_date">Sort: Most Recent</option>
+        <option value="county">Sort: County A→Z</option>
+      </select>
+      <select id="bountyCounty" onchange="loadBountyBoard()"><option value="">All Counties</option></select>
+      <span id="bountyCount" style="color:var(--muted);font-size:12px"></span>
+    </div>
     <div class="table-wrap">
-      <table><thead><tr><th>Name</th><th>County</th><th>Bond</th><th>Charges</th><th>Booking Date</th><th>Status</th></tr></thead>
+      <table><thead><tr>
+        <th onclick="sortBounty('full_name')" style="cursor:pointer">Name ↕</th>
+        <th onclick="sortBounty('county')" style="cursor:pointer">County ↕</th>
+        <th onclick="sortBounty('bond_amount')" style="cursor:pointer">Bond ↕</th>
+        <th>Charges</th>
+        <th onclick="sortBounty('booking_date')" style="cursor:pointer">Booking Date ↕</th>
+        <th>Status</th>
+      </tr></thead>
       <tbody id="bountyBody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody></table>
     </div>
+    <div class="pagination" id="bountyPagination"></div>
   </div>
 
   <div class="panel">

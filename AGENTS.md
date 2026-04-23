@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** April 22, 2026
+> **Last Updated:** April 23, 2026
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Find every family.
 
@@ -55,7 +55,8 @@ County Jail Roster → Scraper → ArrestRecord → Lead Scorer → Writer(s) �
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  67 County Scrapers  │  │  Slack relay               │ │
+│  │  20 County Scrapers  │  │  Slack relay               │ │
+│  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  │                            │ │
 │  │  Lead Scorer         │  └─────────┬────────────────┘ │
 │  │    ↓                 │            │                   │
@@ -146,19 +147,36 @@ The Finder uses public records to identify potential indemnitors:
 
 ---
 
-## 6. County JMS Vendors
+## 6. County JMS Vendors (20 Active)
 
 Florida counties use different Jail Management Systems. Understanding the vendor determines the scraping strategy:
 
-| JMS Vendor | Counties Using | Scraper Pattern |
-|------------|---------------|-----------------|
-| **Odyssey (Tyler)** | Lee, Collier, Charlotte, Sarasota | REST API + charge enrichment |
+| JMS Vendor | Active Counties | Scraper Pattern |
+|------------|----------------|-----------------|
+| **Odyssey (Tyler)** | Lee, Collier, Sarasota, Polk, Brevard, Escambia | REST API + charge enrichment |
 | **New World (Tyler)** | Manatee, Hillsborough | HTML table parsing |
-| **JailTracker** | Hendry, DeSoto, Glades | Paginated HTML + CAPTCHA |
-| **Superion (CentralSquare)** | Various small counties | XML/SOAP endpoints |
-| **Custom/In-House** | Many rural counties | HTTP GET + regex extraction |
+| **JailTracker** | Hendry, DeSoto, Pinellas | Paginated HTML + CAPTCHA |
+| **Custom/In-House** | Charlotte, Orange, Osceola, Seminole, Palm Beach, Broward, Duval, Volusia, Pasco | HTTP GET + HTML parsing |
 
 See `docs/COUNTY_REGISTRY.md` for the full 67-county breakdown.
+
+---
+
+## 6.5 Self-Healing Infrastructure
+
+The `BaseScraper` includes built-in self-healing:
+
+| Feature | Description |
+|---------|-------------|
+| **Pre-flight URL check** | HEAD request to roster URL before scraping — detects 404/403/SSL early |
+| **Retry with backoff** | 3 attempts with exponential backoff (2s, 4s, 8s) |
+| **Error classification** | Auto-classifies failures: `network`, `anti_bot`, `url_changed`, `parse_error`, `ssl_error`, `rate_limited` |
+| **Auto-disable** | Scraper disabled after 5 consecutive failures — prevents wasted resources |
+| **Auto-re-enable** | Disabled scraper tries one recovery per interval — re-enables on success |
+| **Failure history** | Last 10 failures stored with timestamps + error types for diagnosis |
+| **Force re-enable** | `scraper.force_enable()` for human override |
+
+See `.agent/skills/scraper-debugger/SKILL.md` for the full self-healing decision tree.
 
 ---
 
@@ -168,8 +186,10 @@ See `docs/COUNTY_REGISTRY.md` for the full 67-county breakdown.
 2. **Idempotent Writes** — `Booking_Number` + `County` is the dedup key. Every write checks before inserting.
 3. **Score Everything** — No record enters the database without a lead score. Even $0 bonds get scored (as Disqualified).
 4. **Fail Loudly** — Every scraper error fires a Slack alert. Silent failures are unacceptable.
-5. **Human-in-the-Loop for Outreach** — No automated client contact without explicit human approval.
-6. **PII is Sacred** — Never log phone numbers, SSNs, or addresses to Slack or console in production.
+5. **Self-Heal First** — BaseScraper retries 3x, classifies errors, and auto-disables. Fix root causes, not symptoms.
+6. **Human-in-the-Loop for Outreach** — No automated client contact without explicit human approval.
+7. **PII is Sacred** — Never log phone numbers, SSNs, or addresses to Slack or console in production.
+8. **Document Everything** — Every fix updates COUNTY_REGISTRY.md and scraper-debugger KB. No silent fixes.
 
 ---
 
@@ -197,6 +217,8 @@ See `.agent/skills/lead-scoring-tuning/SKILL.md` for weight adjustment procedure
 | `SLACK_WEBHOOK_ARRESTS` | ✅ | #new-arrests channel |
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel |
+| `HCSO_EMAIL` | Optional | Hillsborough County login |
+| `HCSO_PASSWORD` | Optional | Hillsborough County password |
 | `OPENAI_API_KEY` | Optional | AI-powered contact discovery |
 | `SCRAPER_LOG_LEVEL` | Optional | `DEBUG`, `INFO`, `WARNING` |
 | `SCRAPER_MAX_CONCURRENT` | Optional | Max parallel scrapers |

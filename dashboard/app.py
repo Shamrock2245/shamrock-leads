@@ -218,15 +218,26 @@ def api_top_charges():
 # ── API: High-Value Targets (Bounty Board) ──
 @app.route("/api/bounty-board")
 def api_bounty_board():
-    """High-value unposted bonds (>$2,500)."""
+    """High-value unposted bonds (>$2,500). Sortable by bond, date, county."""
+    sort_by = request.args.get("sort", "bond_amount")
+    sort_dir = int(request.args.get("dir", -1))
+    county = request.args.get("county", "")
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 50))
+
     query = {
         "bond_amount": {"$gte": 2500},
         "bond_paid": {"$nin": ["YES", "POSTED", "BONDED"]},
     }
+    if county:
+        query["county"] = county
+
+    total = arrests.count_documents(query)
     cursor = (
         arrests.find(query, {"_id": 0})
-        .sort("bond_amount", DESCENDING)
-        .limit(25)
+        .sort(sort_by, sort_dir)
+        .skip((page - 1) * limit)
+        .limit(limit)
     )
     results = []
     for doc in cursor:
@@ -234,7 +245,12 @@ def api_bounty_board():
             if isinstance(v, datetime):
                 doc[k] = v.isoformat()
         results.append(doc)
-    return jsonify(results)
+    return jsonify({
+        "targets": results,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + limit - 1) // limit),
+    })
 
 
 # ── API: Scraping Activity Timeline ──
