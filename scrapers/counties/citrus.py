@@ -5,6 +5,7 @@ URL: https://www.sheriffcitrus.org/public_info/recent_arrest.php
 Method: requests + BeautifulSoup — simple GET, parse HTML table
 """
 import logging
+import time
 import re
 from typing import List
 from scrapers.base_scraper import BaseScraper
