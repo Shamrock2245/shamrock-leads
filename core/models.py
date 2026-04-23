@@ -11,6 +11,116 @@ from typing import Optional, Dict, Any, List
 import re
 
 
+# ══════════════════════════════════════════════════════════════
+# Surety Configuration — Phase 5 Scaffold
+# Based on actual inventory receipts dated 04/20/2026.
+# See docs/specs/surety-config-schema.md for full documentation.
+# ══════════════════════════════════════════════════════════════
+
+@dataclass
+class POATier:
+    """A POA prefix tier with its maximum bond value."""
+    prefix: str          # e.g., "OSI3", "PSC50"
+    max_bond_value: int  # Maximum bond amount for this tier
+
+
+@dataclass
+class SuretyConfig:
+    """
+    Configuration for a surety/insurance company.
+
+    Shamrock represents two sureties:
+      - OSI (O'Shaughnahill Surety & Insurance, Inc.)
+      - Palmetto Surety Corporation
+
+    Premium split rates (per $100 in premium collected):
+      - OSI:     $7.50 to surety + $5.00 to BUF = $12.50 total
+      - Palmetto: $10.00 to surety + $5.00 to BUF = $15.00 total
+    """
+    surety_id: str                   # "osi" or "palmetto"
+    company_name: str
+    licensed_states: List[str]
+    poa_tiers: List[POATier]
+    surety_rate_per_100: float       # Dollars owed to surety per $100 premium
+    buf_rate_per_100: float          # Dollars owed to BUF per $100 premium
+    template_set_id: str = ""        # SignNow template group (Phase 6)
+    active: bool = True
+
+    def calculate_split(self, bond_amount: float, premium_rate: float = 0.10) -> Dict[str, float]:
+        """Calculate premium split for a given bond amount."""
+        premium = bond_amount * premium_rate
+        surety_owed = premium * (self.surety_rate_per_100 / 100.0)
+        buf_owed = premium * (self.buf_rate_per_100 / 100.0)
+        agent_retains = premium - surety_owed - buf_owed
+        return {
+            "premium": round(premium, 2),
+            "surety_owed": round(surety_owed, 2),
+            "buf_owed": round(buf_owed, 2),
+            "agent_retains": round(agent_retains, 2),
+        }
+
+    def get_tier_for_bond(self, bond_amount: float) -> Optional[POATier]:
+        """Find the smallest POA tier that covers the bond amount."""
+        sorted_tiers = sorted(self.poa_tiers, key=lambda t: t.max_bond_value)
+        for tier in sorted_tiers:
+            if bond_amount <= tier.max_bond_value:
+                return tier
+        return None  # Bond exceeds all available tiers
+
+
+# --- Surety Registry (from actual receipts dated 04/20/2026) ---
+
+SURETY_OSI = SuretyConfig(
+    surety_id="osi",
+    company_name="O'Shaughnahill Surety & Insurance, Inc.",
+    licensed_states=["FL"],
+    surety_rate_per_100=7.50,
+    buf_rate_per_100=5.00,
+    poa_tiers=[
+        POATier(prefix="OSI3", max_bond_value=3_000),
+        POATier(prefix="OSI6", max_bond_value=6_000),
+        POATier(prefix="OSI16", max_bond_value=16_000),
+        POATier(prefix="OSI51", max_bond_value=51_000),
+        POATier(prefix="OSI101", max_bond_value=101_000),
+        POATier(prefix="OSI251", max_bond_value=251_000),
+    ],
+)
+
+SURETY_PALMETTO = SuretyConfig(
+    surety_id="palmetto",
+    company_name="Palmetto Surety Corporation",
+    licensed_states=["FL", "SC", "NC", "TN", "TX", "CT", "LA", "MS"],
+    surety_rate_per_100=10.00,
+    buf_rate_per_100=5.00,
+    poa_tiers=[
+        POATier(prefix="PSC5", max_bond_value=5_000),
+        POATier(prefix="PSC15", max_bond_value=15_000),
+        POATier(prefix="PSC25", max_bond_value=25_000),
+        POATier(prefix="PSC50", max_bond_value=50_000),
+        POATier(prefix="PSC75", max_bond_value=75_000),
+        POATier(prefix="PSC105", max_bond_value=105_000),
+        POATier(prefix="PSC200", max_bond_value=200_000),
+        POATier(prefix="PSC250", max_bond_value=250_000),
+    ],
+)
+
+SURETY_REGISTRY: Dict[str, SuretyConfig] = {
+    "osi": SURETY_OSI,
+    "palmetto": SURETY_PALMETTO,
+}
+
+
+def get_surety(surety_id: str) -> SuretyConfig:
+    """Get surety config by ID. Raises ValueError if unknown."""
+    if surety_id not in SURETY_REGISTRY:
+        raise ValueError(f"Unknown surety_id: {surety_id!r}. Valid: {list(SURETY_REGISTRY.keys())}")
+    return SURETY_REGISTRY[surety_id]
+
+
+# ══════════════════════════════════════════════════════════════
+# ArrestRecord — Phase 1 (Implemented)
+# ══════════════════════════════════════════════════════════════
+
 @dataclass
 class ArrestRecord:
     """

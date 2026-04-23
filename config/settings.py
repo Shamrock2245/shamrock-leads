@@ -58,6 +58,9 @@ class Settings:
     HCSO_EMAIL: str = os.getenv("HCSO_EMAIL", "")
     HCSO_PASSWORD: str = os.getenv("HCSO_PASSWORD", "")
 
+    # --- Surety / Insurance Companies ---
+    DEFAULT_SURETY: str = os.getenv("DEFAULT_SURETY", "osi")
+
     # --- GAS Integration ---
     GAS_WEB_APP_URL: str = os.getenv("GAS_WEB_APP_URL", "")
 
