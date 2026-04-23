@@ -43,7 +43,7 @@ class Settings:
 
     # --- Scraper ---
     LOG_LEVEL: str = os.getenv("SCRAPER_LOG_LEVEL", "INFO")
-    MAX_CONCURRENT: int = int(os.getenv("SCRAPER_MAX_CONCURRENT", "3"))
+    MAX_CONCURRENT: int = int(os.getenv("SCRAPER_MAX_CONCURRENT", "5"))
     DEFAULT_INTERVAL_MINUTES: int = int(
         os.getenv("SCRAPER_DEFAULT_INTERVAL_MINUTES", "60")
     )
