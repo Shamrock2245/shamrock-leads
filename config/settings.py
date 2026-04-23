@@ -54,6 +54,16 @@ class Settings:
     ENABLE_SLACK_ALERTS: bool = os.getenv("ENABLE_SLACK_ALERTS", "true").lower() == "true"
     ENABLE_LEAD_SCORING: bool = os.getenv("ENABLE_LEAD_SCORING", "true").lower() == "true"
 
+    # --- County-Specific Credentials ---
+    HCSO_EMAIL: str = os.getenv("HCSO_EMAIL", "")
+    HCSO_PASSWORD: str = os.getenv("HCSO_PASSWORD", "")
+
+    # --- Surety / Insurance Companies ---
+    DEFAULT_SURETY: str = os.getenv("DEFAULT_SURETY", "osi")
+
+    # --- GAS Integration ---
+    GAS_WEB_APP_URL: str = os.getenv("GAS_WEB_APP_URL", "")
+
     # --- Derived ---
     @classmethod
     def mongo_configured(cls) -> bool:
