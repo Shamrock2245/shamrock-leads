@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShamrockLeads — Scraper Dashboard</title>
+  <style>
+    :root {
+      --green:   #22c55e;
+      --yellow:  #eab308;
+      --red:     #ef4444;
+      --blue:    #3b82f6;
+      --gray:    #6b7280;
+      --bg:      #0f172a;
+      --card:    #1e293b;
+      --border:  #334155;
+      --text:    #f1f5f9;
+      --muted:   #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+    /* ── Header ── */
+    header { background: linear-gradient(135deg, #064e3b 0%, #065f46 50%, #047857 100%); padding: 24px 32px; border-bottom: 1px solid #065f46; }
+    .header-inner { max-width: 1400px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+    .logo { display: flex; align-items: center; gap: 12px; }
+    .logo-icon { font-size: 36px; }
+    .logo-text h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.5px; }
+    .logo-text p { font-size: 0.8rem; color: #a7f3d0; margin-top: 2px; }
+    .header-meta { text-align: right; }
+    .header-meta .timestamp { font-size: 0.75rem; color: #a7f3d0; }
+    .header-meta .version { font-size: 0.7rem; color: #6ee7b7; margin-top: 2px; }
+
+    /* ── Stats Bar ── */
+    .stats-bar { background: var(--card); border-bottom: 1px solid var(--border); padding: 16px 32px; }
+    .stats-inner { max-width: 1400px; margin: 0 auto; display: flex; gap: 24px; flex-wrap: wrap; }
+    .stat { display: flex; flex-direction: column; align-items: center; min-width: 80px; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; line-height: 1; }
+    .stat-label { font-size: 0.7rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-value.green { color: var(--green); }
+    .stat-value.yellow { color: var(--yellow); }
+    .stat-value.blue { color: var(--blue); }
+    .stat-value.gray { color: var(--gray); }
+
+    /* ── Controls ── */
+    .controls { max-width: 1400px; margin: 0 auto; padding: 20px 32px 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .search-box { flex: 1; min-width: 200px; max-width: 320px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; color: var(--text); font-size: 0.9rem; outline: none; }
+    .search-box:focus { border-color: var(--green); }
+    .filter-btn { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px; color: var(--muted); font-size: 0.85rem; cursor: pointer; transition: all 0.15s; }
+    .filter-btn:hover { border-color: var(--green); color: var(--text); }
+    .filter-btn.active { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+
+    /* ── Grid ── */
+    .grid-container { max-width: 1400px; margin: 0 auto; padding: 16px 32px 48px; }
+    .section-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .county-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+
+    /* ── County Card ── */
+    .county-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; transition: all 0.2s; cursor: default; position: relative; overflow: hidden; }
+    .county-card:hover { border-color: var(--green); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(34,197,94,0.1); }
+    .county-card.status-active { border-left: 3px solid var(--green); }
+    .county-card.status-porting { border-left: 3px solid var(--yellow); }
+    .county-card.status-validated { border-left: 3px solid var(--blue); }
+    .county-card.status-recon { border-left: 3px solid var(--gray); }
+    .county-card.status-blocked { border-left: 3px solid var(--red); }
+    .county-card.hidden { display: none; }
+
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 10px; }
+    .county-name { font-size: 1rem; font-weight: 700; }
+    .county-tier { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+    .status-badge { font-size: 0.65rem; font-weight: 600; padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+    .badge-active   { background: rgba(34,197,94,0.15);  color: var(--green); }
+    .badge-porting  { background: rgba(234,179,8,0.15);  color: var(--yellow); }
+    .badge-validated { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-recon    { background: rgba(107,114,128,0.15); color: var(--gray); }
+    .badge-blocked  { background: rgba(239,68,68,0.15);  color: var(--red); }
+
+    .card-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 0.75rem; }
+    .meta-item { display: flex; flex-direction: column; }
+    .meta-label { color: var(--muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 1px; }
+    .meta-value { color: var(--text); font-weight: 500; }
+    .meta-value.mono { font-family: monospace; font-size: 0.7rem; }
+
+    .card-footer { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .interval-badge { font-size: 0.7rem; color: var(--muted); }
+    .source-link { font-size: 0.7rem; color: var(--blue); text-decoration: none; }
+    .source-link:hover { text-decoration: underline; }
+
+    /* ── Pulse dot ── */
+    .pulse-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+    .pulse-dot.green { background: var(--green); box-shadow: 0 0 0 2px rgba(34,197,94,0.3); animation: pulse 2s infinite; }
+    .pulse-dot.yellow { background: var(--yellow); }
+    .pulse-dot.blue   { background: var(--blue); }
+    .pulse-dot.gray   { background: var(--gray); }
+    .pulse-dot.red    { background: var(--red); }
+    @keyframes pulse { 0%,100% { box-shadow: 0 0 0 2px rgba(34,197,94,0.3); } 50% { box-shadow: 0 0 0 5px rgba(34,197,94,0.1); } }
+
+    /* ── Footer ── */
+    footer { text-align: center; padding: 24px; color: var(--muted); font-size: 0.75rem; border-top: 1px solid var(--border); }
+
+    /* ── Mobile ── */
+    @media (max-width: 640px) {
+      header { padding: 16px; }
+      .stats-bar { padding: 12px 16px; }
+      .controls { padding: 12px 16px 4px; }
+      .grid-container { padding: 12px 16px 32px; }
+      .county-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">
+      <div class="logo-icon">🍀</div>
+      <div class="logo-text">
+        <h1>ShamrockLeads</h1>
+        <p>Florida Arrest Intelligence Platform — Scraper Dashboard</p>
+      </div>
+    </div>
+    <div class="header-meta">
+      <div class="timestamp" id="ts">Loading…</div>
+      <div class="version">v2.0 · 36 Active Scrapers · 67 County Target</div>
+    </div>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div class="stats-inner">
+    <div class="stat"><div class="stat-value green" id="cnt-active">36</div><div class="stat-label">Active</div></div>
+    <div class="stat"><div class="stat-value yellow" id="cnt-porting">7</div><div class="stat-label">Porting</div></div>
+    <div class="stat"><div class="stat-value blue" id="cnt-validated">2</div><div class="stat-label">Validated</div></div>
+    <div class="stat"><div class="stat-value gray" id="cnt-recon">22</div><div class="stat-label">Needs Recon</div></div>
+    <div class="stat"><div class="stat-value gray" id="cnt-total">67</div><div class="stat-label">Total Counties</div></div>
+  </div>
+</div>
+
+<div class="controls">
+  <input class="search-box" type="text" id="search" placeholder="🔍 Search county…" oninput="filterCards()" />
+  <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+  <button class="filter-btn" onclick="setFilter('active',this)">✅ Active</button>
+  <button class="filter-btn" onclick="setFilter('porting',this)">🔄 Porting</button>
+  <button class="filter-btn" onclick="setFilter('validated',this)">🔵 Validated</button>
+  <button class="filter-btn" onclick="setFilter('recon',this)">🟡 Needs Recon</button>
+</div>
+
+<div class="grid-container" id="grid">
+
+  <!-- ── TIER 1 — SWFL Core ── -->
+  <div class="section-title">Tier 1 — SWFL Core</div>
+  <div class="county-grid" id="tier1"></div>
+
+  <!-- ── TIER 2 — Tampa Bay / Central FL ── -->
+  <div class="section-title">Tier 2 — Tampa Bay / Central FL</div>
+  <div class="county-grid" id="tier2"></div>
+
+  <!-- ── TIER 3 — South FL / Metro ── -->
+  <div class="section-title">Tier 3 — South FL / Metro</div>
+  <div class="county-grid" id="tier3"></div>
+
+  <!-- ── TIER 4 — North Central FL ── -->
+  <div class="section-title">Tier 4 — North Central FL</div>
+  <div class="county-grid" id="tier4"></div>
+
+  <!-- ── TIER 5 — Panhandle / NW FL ── -->
+  <div class="section-title">Tier 5 — Panhandle / NW FL</div>
+  <div class="county-grid" id="tier5"></div>
+
+  <!-- ── TIER 6 — NE FL / First Coast ── -->
+  <div class="section-title">Tier 6 — NE FL / First Coast</div>
+  <div class="county-grid" id="tier6"></div>
+
+  <!-- ── TIER 7 — North FL / Rural ── -->
+  <div class="section-title">Tier 7 — North FL / Rural</div>
+  <div class="county-grid" id="tier7"></div>
+
+</div>
+
+<footer>ShamrockLeads · Shamrock2245 · Built 2026-04-23 · 36/67 counties active</footer>
+
+<script>
+const COUNTIES = [
+  // ── Tier 1 — SWFL Core ──────────────────────────────────────────────────
+  { tier:1, name:"Lee",         status:"active",    jms:"Odyssey",    interval:"20 min",  file:"lee.py",         url:"https://www.sheriffleefl.org/booking-search" },
+  { tier:1, name:"Collier",     status:"active",    jms:"Odyssey",    interval:"30 min",  file:"collier.py",     url:"https://www2.colliersheriff.org/arrestsearch/Report.aspx" },
+  { tier:1, name:"Charlotte",   status:"active",    jms:"Custom",     interval:"45 min",  file:"charlotte.py",   url:"https://www.ccso.org/inmate-search" },
+  { tier:1, name:"Manatee",     status:"active",    jms:"New World",  interval:"45 min",  file:"manatee.py",     url:"https://www.manateesheriff.com/inmate-search" },
+  { tier:1, name:"Sarasota",    status:"active",    jms:"Odyssey",    interval:"60 min",  file:"sarasota.py",    url:"https://www.sarasotasheriff.org/inmate-search" },
+  { tier:1, name:"DeSoto",      status:"active",    jms:"JailTracker",interval:"60 min",  file:"desoto.py",      url:"https://www.desotoso.com/inmate-search" },
+  { tier:1, name:"Hendry",      status:"active",    jms:"OCV/VINE",   interval:"120 min", file:"hendry.py",      url:"https://www.hendrysheriff.org/inmateSearch" },
+
+  // ── Tier 2 — Tampa Bay / Central FL ─────────────────────────────────────
+  { tier:2, name:"Hillsborough",status:"active",    jms:"New World",  interval:"90 min",  file:"hillsborough.py",url:"https://www.hcso.tampa.fl.us/inmate-search" },
+  { tier:2, name:"Pinellas",    status:"active",    jms:"Custom",     interval:"90 min",  file:"pinellas.py",    url:"https://www.pinellassheriff.gov/InmateBooking" },
+  { tier:2, name:"Seminole",    status:"active",    jms:"Custom",     interval:"90 min",  file:"seminole.py",    url:"https://www.seminolesheriff.org/inmate-search" },
+  { tier:2, name:"Orange",      status:"active",    jms:"Custom",     interval:"90 min",  file:"orange.py",      url:"https://www.ocso.com/inmate-search" },
+  { tier:2, name:"Pasco",       status:"active",    jms:"Custom",     interval:"90 min",  file:"pasco.py",       url:"https://www.pascosheriff.org/inmate-search" },
+  { tier:2, name:"Lake",        status:"active",    jms:"Superion",   interval:"90 min",  file:"lake.py",        url:"https://www.lcso.org/inmates/" },
+  { tier:2, name:"Hernando",    status:"active",    jms:"Custom",     interval:"90 min",  file:"hernando.py",    url:"https://www.hernandosheriff.org/inmate-search" },
+  { tier:2, name:"Polk",        status:"active",    jms:"Odyssey",    interval:"120 min", file:"polk.py",        url:"https://www.polksheriff.org/inmates" },
+  { tier:2, name:"Osceola",     status:"active",    jms:"Custom",     interval:"120 min", file:"osceola.py",     url:"https://www.osceolacofl.gov/inmate-search" },
+  { tier:2, name:"Citrus",      status:"active",    jms:"Custom",     interval:"120 min", file:"citrus.py",      url:"https://www.sheriffcitrus.org/public_info/recent_arrest.php" },
+  { tier:2, name:"Sumter",      status:"active",    jms:"SmartCOP",   interval:"180 min", file:"sumter.py",      url:"http://portal.sumtercountysheriff.org/smartwebclient/Jail.aspx" },
+
+  // ── Tier 3 — South FL / Metro ────────────────────────────────────────────
+  { tier:3, name:"Broward",     status:"active",    jms:"Custom",     interval:"60 min",  file:"broward.py",     url:"https://www.sheriff.org/Divisions/Pages/Corrections/InmateSearch.aspx" },
+  { tier:3, name:"Palm Beach",  status:"active",    jms:"Custom",     interval:"120 min", file:"palm_beach.py",  url:"https://www.pbso.org/inmate-search" },
+  { tier:3, name:"Martin",      status:"active",    jms:"Custom",     interval:"120 min", file:"martin.py",      url:"https://www.martinso.us/inmatesearch/" },
+  { tier:3, name:"St. Lucie",   status:"active",    jms:"Custom",     interval:"90 min",  file:"st_lucie.py",    url:"https://www.stluciesheriff.com/divisions/corrections/inmate-search" },
+  { tier:3, name:"Indian River",status:"active",    jms:"Custom",     interval:"120 min", file:"indian_river.py",url:"https://www.ircsheriff.org/inmate-search" },
+  { tier:3, name:"Highlands",   status:"active",    jms:"OCV/VINE",   interval:"120 min", file:"highlands.py",   url:"https://www.highlandssheriff.org/inmateSearch" },
+  { tier:3, name:"Glades",      status:"active",    jms:"SmartCOP",   interval:"180 min", file:"glades.py",      url:"http://smartweb.gladessheriff.org/smartwebclient/Jail.aspx" },
+  { tier:3, name:"Miami-Dade",  status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.miamidade.gov/corrections/inmate-search.asp" },
+  { tier:3, name:"Monroe",      status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.keysso.net/inmate-search" },
+  { tier:3, name:"Okeechobee",  status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.okeechobeesheriff.org" },
+
+  // ── Tier 4 — North Central FL ────────────────────────────────────────────
+  { tier:4, name:"Alachua",     status:"active",    jms:"ASP.NET",    interval:"90 min",  file:"alachua.py",     url:"https://asosite.alachuasheriff.org/ASOInmateLookup.aspx" },
+  { tier:4, name:"Marion",      status:"active",    jms:"Custom",     interval:"90 min",  file:"marion.py",      url:"https://jail.marionso.com/" },
+  { tier:4, name:"Volusia",     status:"active",    jms:"Custom",     interval:"90 min",  file:"volusia.py",     url:"https://www.vcso.us/inmate-search" },
+  { tier:4, name:"Brevard",     status:"active",    jms:"Custom",     interval:"120 min", file:"brevard.py",     url:"https://www.brevardcounty.us/JailCompliance/SubSearch" },
+  { tier:4, name:"Putnam",      status:"active",    jms:"SmartCOP",   interval:"180 min", file:"putnam.py",      url:"http://smartweb.pcso.us/smartwebclient/Jail.aspx" },
+  { tier:4, name:"Flagler",     status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.flaglersheriff.org" },
+  { tier:4, name:"Levy",        status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.levysheriff.org" },
+  { tier:4, name:"Osceola",     status:"active",    jms:"Custom",     interval:"120 min", file:"osceola.py",     url:"https://www.osceolacofl.gov/inmate-search" },
+
+  // ── Tier 5 — Panhandle / NW FL ───────────────────────────────────────────
+  { tier:5, name:"Escambia",    status:"active",    jms:"Custom",     interval:"120 min", file:"escambia.py",    url:"https://www.escambiasheriff.com/inmate-search" },
+  { tier:5, name:"Okaloosa",    status:"active",    jms:"Archonix",   interval:"120 min", file:"okaloosa.py",    url:"http://www3.myokaloosa.com/ArchonixXJailPublic/Default.aspx" },
+  { tier:5, name:"Bay",         status:"active",    jms:"Custom",     interval:"120 min", file:"bay.py",         url:"https://baysomobile.org" },
+  { tier:5, name:"Leon",        status:"active",    jms:"Odyssey",    interval:"90 min",  file:"leon.py",        url:"https://www.leoncountyso.com/resources/inmate-search" },
+  { tier:5, name:"Santa Rosa",  status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.srso.com/inmate-search" },
+  { tier:5, name:"Walton",      status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.waltonso.org" },
+  { tier:5, name:"Jackson",     status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.jacksonso.com" },
+  { tier:5, name:"Gadsden",     status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.gadsdenso.com" },
+  { tier:5, name:"Wakulla",     status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.wakullafl.gov/sheriff" },
+
+  // ── Tier 6 — NE FL / First Coast ─────────────────────────────────────────
+  { tier:6, name:"Duval",       status:"active",    jms:"Custom",     interval:"90 min",  file:"duval.py",       url:"https://inmatesearch.jaxsheriff.org/" },
+  { tier:6, name:"St. Johns",   status:"active",    jms:"Custom",     interval:"120 min", file:"st_johns.py",    url:"https://www.stjohnssheriff.org/inmate-search" },
+  { tier:6, name:"Clay",        status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.claysheriff.com" },
+  { tier:6, name:"Nassau",      status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.nassauso.com" },
+  { tier:6, name:"Baker",       status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.bakersheriff.org" },
+  { tier:6, name:"Bradford",    status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.bradfordsheriff.org" },
+  { tier:6, name:"Columbia",    status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.columbiacountysheriff.com" },
+  { tier:6, name:"Suwannee",    status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.suwanneesheriff.com" },
+
+  // ── Tier 7 — North FL / Rural ─────────────────────────────────────────────
+  { tier:7, name:"Taylor",      status:"active",    jms:"SmartCOP",   interval:"240 min", file:"taylor.py",      url:"http://smartcop.taylorsheriff.org/smartwebclient/Jail.aspx" },
+  { tier:7, name:"Dixie",       status:"active",    jms:"SmartCOP",   interval:"240 min", file:"dixie.py",       url:"http://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx" },
+  { tier:7, name:"Lafayette",   status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.lafayettesheriff.com" },
+  { tier:7, name:"Madison",     status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.madisonsheriff.org" },
+  { tier:7, name:"Hamilton",    status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.hamiltonsheriff.org" },
+  { tier:7, name:"Suwannee",    status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.suwanneesheriff.com" },
+  { tier:7, name:"Union",       status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.unionsheriff.com" },
+  { tier:7, name:"Gilchrist",   status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.gilchristsheriff.com" },
+  { tier:7, name:"Levy",        status:"recon",     jms:"Custom",     interval:"—",       file:"—",              url:"https://www.levysheriff.org" },
+  { tier:7, name:"Alachua",     status:"active",    jms:"ASP.NET",    interval:"90 min",  file:"alachua.py",     url:"https://asosite.alachuasheriff.org/ASOInmateLookup.aspx" },
+];
+
+// De-dupe by name (some counties appear in multiple tiers for display)
+const seen = new Set();
+const UNIQUE_COUNTIES = COUNTIES.filter(c => {
+  const key = c.name + c.tier;
+  if (seen.has(key)) return false;
+  seen.add(key);
+  return true;
+});
+
+let currentFilter = 'all';
+
+function statusBadge(s) {
+  const map = {
+    active:    ['badge-active',    '✅ Active'],
+    porting:   ['badge-porting',   '🔄 Porting'],
+    validated: ['badge-validated', '🔵 Validated'],
+    recon:     ['badge-recon',     '🟡 Needs Recon'],
+    blocked:   ['badge-blocked',   '🔴 Blocked'],
+  };
+  const [cls, label] = map[s] || ['badge-recon', s];
+  return `<span class="status-badge ${cls}">${label}</span>`;
+}
+
+function dotColor(s) {
+  return { active:'green', porting:'yellow', validated:'blue', recon:'gray', blocked:'red' }[s] || 'gray';
+}
+
+function renderCard(c) {
+  const dot = dotColor(c.status);
+  return `
+    <div class="county-card status-${c.status}" data-status="${c.status}" data-name="${c.name.toLowerCase()}">
+      <div class="card-header">
+        <div>
+          <div class="county-name"><span class="pulse-dot ${dot}"></span>${c.name}</div>
+          <div class="county-tier">Tier ${c.tier}</div>
+        </div>
+        ${statusBadge(c.status)}
+      </div>
+      <div class="card-meta">
+        <div class="meta-item">
+          <div class="meta-label">JMS</div>
+          <div class="meta-value">${c.jms}</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Interval</div>
+          <div class="meta-value">${c.interval}</div>
+        </div>
+        <div class="meta-item" style="grid-column:1/-1">
+          <div class="meta-label">Scraper File</div>
+          <div class="meta-value mono">${c.file}</div>
+        </div>
+      </div>
+      <div class="card-footer">
+        <span class="interval-badge">⏱ ${c.interval}</span>
+        <a class="source-link" href="${c.url}" target="_blank" rel="noopener">Source ↗</a>
+      </div>
+    </div>`;
+}
+
+function renderAll() {
+  for (let t = 1; t <= 7; t++) {
+    const el = document.getElementById(`tier${t}`);
+    if (!el) continue;
+    const counties = UNIQUE_COUNTIES.filter(c => c.tier === t);
+    el.innerHTML = counties.map(renderCard).join('');
+  }
+}
+
+function filterCards() {
+  const q = document.getElementById('search').value.toLowerCase();
+  document.querySelectorAll('.county-card').forEach(card => {
+    const nameMatch = card.dataset.name.includes(q);
+    const statusMatch = currentFilter === 'all' || card.dataset.status === currentFilter;
+    card.classList.toggle('hidden', !(nameMatch && statusMatch));
+  });
+}
+
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterCards();
+}
+
+function updateTimestamp() {
+  document.getElementById('ts').textContent = 'Last updated: ' + new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: true });
+}
+
+// Boot
+renderAll();
+updateTimestamp();
+setInterval(updateTimestamp, 60000);
+</script>
+</body>
+</html>

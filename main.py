@@ -18,6 +18,7 @@ from core.scheduler import ScraperScheduler
 from core.dedup import DedupEngine
 from writers.mongo_writer import MongoWriter
 
+# ── Wave 1 — SWFL Core ──────────────────────────────────────────────────────
 from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
 from scrapers.counties.charlotte import CharlotteCountyScraper
@@ -25,19 +26,49 @@ from scrapers.counties.hendry import HendryCountyScraper
 from scrapers.counties.desoto import DeSotoCountyScraper
 from scrapers.counties.manatee import ManateeCountyScraper
 from scrapers.counties.sarasota import SarasotaCountyScraper
+
+# ── Wave 1 — Tampa Bay / Central FL ─────────────────────────────────────────
 from scrapers.counties.orange import OrangeCountyScraper
 from scrapers.counties.pinellas import PinellasCountyScraper
 from scrapers.counties.polk import PolkCountyScraper
 from scrapers.counties.osceola import OsceolaCountyScraper
 from scrapers.counties.seminole import SeminoleCountyScraper
-from scrapers.counties.palm_beach import PalmBeachCountyScraper
 from scrapers.counties.hillsborough import HillsboroughCountyScraper
+from scrapers.counties.pasco import PascoCountyScraper
+from scrapers.counties.hernando import HernandoCountyScraper
+from scrapers.counties.citrus import CitrusCountyScraper
+from scrapers.counties.sumter import SumterCountyScraper
+from scrapers.counties.lake import LakeCountyScraper
+
+# ── Wave 1 — South FL / Metro ────────────────────────────────────────────────
+from scrapers.counties.palm_beach import PalmBeachCountyScraper
 from scrapers.counties.broward import BrowardCountyScraper
-from scrapers.counties.duval import DuvalCountyScraper
+from scrapers.counties.martin import MartinCountyScraper
+from scrapers.counties.st_lucie import StLucieCountyScraper
+from scrapers.counties.indian_river import IndianRiverCountyScraper
+from scrapers.counties.glades import GladesCountyScraper
+from scrapers.counties.highlands import HighlandsCountyScraper
+
+# ── Wave 1 — North Central FL ────────────────────────────────────────────────
+from scrapers.counties.alachua import AlachuaCountyScraper
+from scrapers.counties.marion import MarionCountyScraper
 from scrapers.counties.volusia import VolusiaCountyScraper
 from scrapers.counties.brevard import BrevardCountyScraper
-from scrapers.counties.pasco import PascoCountyScraper
+from scrapers.counties.putnam import PutnamCountyScraper
+
+# ── Wave 1 — Panhandle / NW FL ───────────────────────────────────────────────
 from scrapers.counties.escambia import EscambiaCountyScraper
+from scrapers.counties.okaloosa import OkaloosaCountyScraper
+from scrapers.counties.bay import BayCountyScraper
+from scrapers.counties.leon import LeonCountyScraper
+
+# ── Wave 1 — NE FL / First Coast ─────────────────────────────────────────────
+from scrapers.counties.duval import DuvalCountyScraper
+from scrapers.counties.st_johns import StJohnsCountyScraper
+
+# ── Wave 1 — North FL / Rural ────────────────────────────────────────────────
+from scrapers.counties.taylor import TaylorCountyScraper
+from scrapers.counties.dixie import DixieCountyScraper
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
@@ -71,26 +102,57 @@ def build_writers():
     return writers
 
 def register_scrapers(sched):
+    # ── SWFL Core (highest priority) ──────────────────────────────────────────
     sched.register_scraper(LeeCountyScraper(), interval_minutes=20)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=30)
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
-    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
-    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
     sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
-    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
+
+    # ── Tampa Bay / Central FL ─────────────────────────────────────────────────
+    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
     sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
+    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
+    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(LakeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(HernandoCountyScraper(), interval_minutes=90)
     sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
     sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
-    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
+    sched.register_scraper(CitrusCountyScraper(), interval_minutes=120)
+    sched.register_scraper(SumterCountyScraper(), interval_minutes=180)
+
+    # ── South FL / Metro ───────────────────────────────────────────────────────
     sched.register_scraper(BrowardCountyScraper(), interval_minutes=60)
-    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
+    sched.register_scraper(MartinCountyScraper(), interval_minutes=120)
+    sched.register_scraper(StLucieCountyScraper(), interval_minutes=90)
+    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=120)
+    sched.register_scraper(HighlandsCountyScraper(), interval_minutes=120)
+    sched.register_scraper(GladesCountyScraper(), interval_minutes=180)
+
+    # ── North Central FL ───────────────────────────────────────────────────────
     sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
     sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
-    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
+
+    # ── Panhandle / NW FL ──────────────────────────────────────────────────────
     sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(BayCountyScraper(), interval_minutes=120)
+    sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
+
+    # ── NE FL / First Coast ────────────────────────────────────────────────────
+    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(StJohnsCountyScraper(), interval_minutes=120)
+
+    # ── North FL / Rural ───────────────────────────────────────────────────────
+    sched.register_scraper(TaylorCountyScraper(), interval_minutes=240)
+    sched.register_scraper(DixieCountyScraper(), interval_minutes=240)
 
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")
