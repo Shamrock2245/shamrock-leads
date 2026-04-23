@@ -23,3 +23,6 @@ DrissionPage>=4.0.0
 # Development
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+
+# Dashboard & Health API
+flask>=3.0.0

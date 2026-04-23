@@ -1,7 +1,7 @@
 """
 Hernando County Arrest Scraper — HTML Inmate Search.
 Source: Hernando County Sheriff's Office
-URL: https://www.hernandosheriff.org/inmate-search
+URL: https://www.hernandosheriff.org/jail/Applications/JailSearch/
 Method: DrissionPage — JavaScript-rendered page
 """
 import logging
@@ -14,7 +14,7 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.hernandosheriff.org"
-SEARCH_URL = f"{BASE_URL}/inmate-search"
+SEARCH_URL = f"{BASE_URL}/jail/Applications/JailSearch/"
 FACILITY = "Hernando County Jail"
 
 

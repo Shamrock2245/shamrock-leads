@@ -1,7 +1,7 @@
 """
 St. Lucie County Arrest Scraper — JailTracker HTML Table.
 Source: St. Lucie County Sheriff's Office
-URL: https://www.stluciesheriff.com/divisions/corrections/inmate-search
+URL: https://www.stluciesheriff.com/215/Inmate-Lookup
 Method: DrissionPage — JavaScript-rendered JailTracker table
 """
 import logging
@@ -14,7 +14,7 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.stluciesheriff.com"
-SEARCH_URL = f"{BASE_URL}/divisions/corrections/inmate-search"
+SEARCH_URL = f"{BASE_URL}/215/Inmate-Lookup"
 FACILITY = "St. Lucie County Jail"
 
 

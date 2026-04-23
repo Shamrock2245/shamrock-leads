@@ -40,6 +40,7 @@ class CitrusCountyScraper(BaseScraper):
 
         try:
             resp = session.get(SEARCH_URL, timeout=30)
+            time.sleep(1)  # Rate limit
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Citrus: failed to load page: {e}"); return []

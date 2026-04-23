@@ -1,7 +1,7 @@
 """
 Martin County Arrest Scraper — HTML Inmate Search.
 Source: Martin County Sheriff's Office
-URL: https://www.martinso.us/inmatesearch/
+URL: https://www.mcsofl.org/223/Jail-Inmate-Search
 Method: requests + BeautifulSoup — GET/POST inmate search form
 """
 import logging
@@ -14,8 +14,8 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.martinso.us"
-SEARCH_URL = f"{BASE_URL}/inmatesearch/"
+BASE_URL = "https://www.mcsofl.org"
+SEARCH_URL = f"{BASE_URL}/223/Jail-Inmate-Search"
 FACILITY = "Martin County Jail"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",

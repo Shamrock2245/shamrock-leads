@@ -1,7 +1,7 @@
 """
 Taylor County Arrest Scraper — SmartCOP ASP.NET.
 Source: Taylor County Sheriff's Office
-URL: http://smartcop.taylorsheriff.org/smartwebclient/Jail.aspx
+URL: https://smartcop.taylorsheriff.org/smartwebclient/Jail.aspx
 Method: requests + BeautifulSoup — ASP.NET ViewState form
 """
 import logging
@@ -12,7 +12,7 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://smartcop.taylorsheriff.org"
+BASE_URL = "https://smartcop.taylorsheriff.org"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
 FACILITY = "Taylor County Jail"
 HEADERS = {
@@ -40,6 +40,7 @@ class TaylorCountyScraper(BaseScraper):
 
         try:
             resp = session.get(SEARCH_URL, timeout=30)
+            time.sleep(1)  # Rate limit
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Taylor: failed to load page: {e}"); return []

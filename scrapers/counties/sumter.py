@@ -1,7 +1,7 @@
 """
 Sumter County Arrest Scraper — SmartCOP ASP.NET.
 Source: Sumter County Sheriff's Office
-URL: http://portal.sumtercountysheriff.org/smartwebclient/Jail.aspx
+URL: https://portal.sumtercountysheriff.org/smartwebclient/Jail.aspx
 Method: requests + BeautifulSoup — ASP.NET ViewState form
 """
 import logging
@@ -12,7 +12,7 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://portal.sumtercountysheriff.org"
+BASE_URL = "https://portal.sumtercountysheriff.org"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
 FACILITY = "Sumter County Detention Center"
 HEADERS = {
@@ -40,6 +40,7 @@ class SumterCountyScraper(BaseScraper):
 
         try:
             resp = session.get(SEARCH_URL, timeout=30)
+            time.sleep(1)  # Rate limit
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Sumter: failed to load page: {e}"); return []

@@ -45,6 +45,7 @@ class HighlandsCountyScraper(BaseScraper):
         records = []
         try:
             resp = session.get(INMATES_JSON_URL, timeout=30)
+            time.sleep(1)  # Rate limit
             resp.raise_for_status()
             data = resp.json()
             logger.info(f"Highlands: {len(data)} inmates from OCV JSON")
@@ -100,7 +101,7 @@ class HighlandsCountyScraper(BaseScraper):
                 Address=demo.get("address", ""),
                 City=demo.get("city", ""),
                 State=demo.get("state", "FL"),
-                Zip=demo.get("zip", ""),
+                ZIP=demo.get("zip", ""),
                 Mugshot_URL=mugshot_url,
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",
@@ -114,6 +115,7 @@ class HighlandsCountyScraper(BaseScraper):
         try:
             from bs4 import BeautifulSoup
             resp = session.get(DETAIL_BASE_URL, timeout=30)
+            time.sleep(1)  # Rate limit
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             records = []

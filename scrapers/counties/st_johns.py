@@ -1,7 +1,7 @@
 """
 St. Johns County Arrest Scraper — HTML Inmate Search.
 Source: St. Johns County Sheriff's Office
-URL: https://www.stjohnssheriff.org/inmate-search
+URL: https://www.sjso.org/sj-inmate-search/
 Method: requests + BeautifulSoup — HTML table scraping
 """
 import logging
@@ -14,8 +14,8 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://www.stjohnssheriff.org"
-SEARCH_URL = f"{BASE_URL}/inmate-search"
+BASE_URL = "https://www.sjso.org"
+SEARCH_URL = f"{BASE_URL}/sj-inmate-search/"
 FACILITY = "St. Johns County Jail"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",

@@ -18,6 +18,13 @@ from core.scheduler import ScraperScheduler
 from core.dedup import DedupEngine
 from writers.mongo_writer import MongoWriter
 
+# Dashboard server
+try:
+    from dashboard.server import start_dashboard_server
+    DASHBOARD_AVAILABLE = True
+except ImportError:
+    DASHBOARD_AVAILABLE = False
+
 # ── Wave 1 — SWFL Core ──────────────────────────────────────────────────────
 from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
@@ -181,6 +188,12 @@ def main():
             logger.error(f"No scraper found for county: {county}")
         return
     scheduler.start()
+    # Start dashboard server on port 8088
+    if DASHBOARD_AVAILABLE:
+        try:
+            start_dashboard_server(port=8088)
+        except Exception as e:
+            logger.warning(f"Dashboard server failed to start: {e}")
     logger.info("Scheduler running. Press Ctrl+C to stop.")
     try:
         while True:
