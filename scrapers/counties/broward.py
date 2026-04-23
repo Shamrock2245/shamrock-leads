@@ -97,7 +97,7 @@ class BrowardCountyScraper(BaseScraper):
             Booking_Date=booking_date, DOB=dob, Race=race, Sex=sex, Status="In Custody",
             Facility="Broward County Main Jail", Charges=" | ".join(charges) if charges else "",
             Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Arrest_Location=agency, Detail_URL=f"{DETAIL_URL}/{jms_id}", LastCheckedMode="INITIAL")
+            Agency=agency, Detail_URL=f"{DETAIL_URL}/{jms_id}", LastCheckedMode="INITIAL")
 
     @staticmethod
     def _extract_labeled_fields(html):
