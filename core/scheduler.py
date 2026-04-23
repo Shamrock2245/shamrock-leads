@@ -12,11 +12,15 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+from datetime import timedelta
 
 from scrapers.base_scraper import BaseScraper
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Stagger delay between first-run starts (seconds per county)
+STAGGER_SECONDS = 15
 
 
 class ScraperScheduler:
@@ -26,6 +30,7 @@ class ScraperScheduler:
     Features:
     - Per-county interval configuration
     - Max concurrent job limits
+    - Staggered first-run on startup (fires immediately, not after first interval)
     - Job execution logging
     - Health status endpoint data
     """
@@ -48,6 +53,7 @@ class ScraperScheduler:
         self._scrapers: Dict[str, BaseScraper] = {}
         self._writers: list = []
         self._job_history: List[Dict] = []
+        self._registration_count: int = 0
 
         # Listen for job events
         self.scheduler.add_listener(
@@ -62,11 +68,20 @@ class ScraperScheduler:
         scraper: BaseScraper,
         interval_minutes: int = None,
     ):
-        """Register a county scraper with its schedule."""
+        """Register a county scraper with its schedule.
+
+        Jobs fire immediately on startup (staggered by STAGGER_SECONDS per county)
+        then repeat every interval_minutes thereafter.
+        """
         interval = interval_minutes or settings.DEFAULT_INTERVAL_MINUTES
         job_id = scraper.scraper_id
 
         self._scrapers[job_id] = scraper
+
+        # Stagger first run: county 0 starts at +10s, county 1 at +25s, etc.
+        stagger_offset = 10 + (self._registration_count * STAGGER_SECONDS)
+        first_run = datetime.now(timezone.utc) + timedelta(seconds=stagger_offset)
+        self._registration_count += 1
 
         self.scheduler.add_job(
             self._run_scraper,
@@ -75,11 +90,12 @@ class ScraperScheduler:
             name=f"{scraper.county} County Scraper",
             args=[job_id],
             replace_existing=True,
+            next_run_time=first_run,
         )
 
         logger.info(
             f"📋 Registered {scraper.county} scraper "
-            f"(every {interval} min, job_id={job_id})"
+            f"(every {interval} min, first run in {stagger_offset}s, job_id={job_id})"
         )
 
     def set_writers(self, writers: list):

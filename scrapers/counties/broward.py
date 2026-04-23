@@ -191,7 +191,7 @@ class BrowardCountyScraper(BaseScraper):
             Facility="Broward County Main Jail",
             Charges=" | ".join(charges) if charges else "",
             Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Arrest_Location=agency,
+            Agency=agency,
             Detail_URL=f"{DETAIL_URL}/{jms_id}",
             LastCheckedMode="INITIAL",
         )
