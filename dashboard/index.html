@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShamrockLeads — Intelligence Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <img src="https://www.shamrockbailbonds.biz/logo.png" alt="Shamrock" class="header-logo" onerror="this.style.display='none'">
+    <h1>ShamrockLeads Intelligence<small>Florida Arrest Data Pipeline</small></h1>
+  </div>
+  <div class="header-right">
+    <div class="live">LIVE</div>
+    <div class="meta" id="lastUpdate">Loading...</div>
+    <div class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+      <span>☀️</span><div class="toggle-track"><div class="toggle-knob"></div></div><span>🌙</span>
+    </div>
+    <button class="refresh-btn" onclick="refreshCurrentTab()">↻ Refresh</button>
+  </div>
+</div>
+
+<!-- ── Tab Navigation ── -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('analytics')" id="tabAnalytics">
+    📊 Analytics
+  </button>
+  <button class="tab-btn" onclick="switchTab('defendants')" id="tabDefendants">
+    👤 Defendant Profiles <span class="badge" id="defBadge">—</span>
+  </button>
+</div>
+
+<!-- ════════════════════════════════════════════════════
+     TAB 1: ANALYTICS DASHBOARD
+     ════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="panelAnalytics">
+<div class="container">
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="stat-label">Total Arrests</div><div class="stat-value" id="statTotal">—</div><div class="stat-sub">All counties, deduped</div></div>
+    <div class="stat-card"><div class="stat-label">Counties Active</div><div class="stat-value" id="statCounties">—</div><div class="stat-sub">Scrapers running</div></div>
+    <div class="stat-card"><div class="stat-label">New Today</div><div class="stat-value" id="statToday">—</div><div class="stat-sub">Since midnight UTC</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Bond</div><div class="stat-value" id="statAvgBond">—</div><div class="stat-sub">Where bond > $0</div></div>
+    <div class="stat-card"><div class="stat-label">High Value (>$2.5K)</div><div class="stat-value" id="statHighValue">—</div><div class="stat-sub">Bounty board targets</div></div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel"><div class="panel-title">📊 Arrests by County</div><canvas id="countyChart"></canvas></div>
+    <div class="panel"><div class="panel-title">💰 Bond Distribution</div><canvas id="bondChart"></canvas></div>
+  </div>
+
+  <div class="grid-3">
+    <div class="panel">
+      <div class="panel-title">🏛️ County Breakdown</div>
+      <div id="countyList"><div class="loading">Loading...</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">⚖️ Top Charges</div>
+      <ul class="charges-list" id="chargesList"><li class="loading">Loading...</li></ul>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:22px">
+    <div class="panel-title">🎯 Bounty Board — High Value Targets (Bond > $2,500)</div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Name</th><th>County</th><th>Bond</th><th>Charges</th><th>Booking Date</th><th>Status</th></tr></thead>
+      <tbody id="bountyBody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">📋 All Arrests</div>
+    <div class="filters">
+      <select id="filterCounty" onchange="loadArrests()"><option value="">All Counties</option></select>
+      <input type="text" id="filterSearch" placeholder="Search name, charge, booking #..." onkeyup="debounceSearch()" style="min-width:240px">
+      <input type="number" id="filterMinBond" placeholder="Min bond $" onchange="loadArrests()" style="width:120px">
+      <span id="resultCount" style="color:var(--muted);font-size:12px"></span>
+    </div>
+    <div class="table-wrap">
+      <table><thead><tr>
+        <th onclick="sortTable('full_name')">Name ↕</th><th onclick="sortTable('county')">County ↕</th>
+        <th onclick="sortTable('bond_amount')">Bond ↕</th><th onclick="sortTable('charges')">Charges</th>
+        <th onclick="sortTable('booking_date')">Booked ↕</th><th onclick="sortTable('arrest_date')">Arrested ↕</th>
+        <th onclick="sortTable('status')">Status</th><th>Facility</th>
+      </tr></thead>
+      <tbody id="arrestBody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody></table>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════════════════════════════════════════════
+     TAB 2: DEFENDANT PROFILES
+     ════════════════════════════════════════════════════ -->
+<div class="tab-content" id="panelDefendants">
+<div class="container">
+  <div class="filters" style="margin-bottom:20px">
+    <select id="defFilterCounty" onchange="loadDefendants()"><option value="">All Counties</option></select>
+    <input type="text" id="defSearch" placeholder="Search name, address, charges, case #..." onkeyup="debounceDefSearch()" style="min-width:280px">
+    <input type="number" id="defMinBond" placeholder="Min bond $" onchange="loadDefendants()" style="width:120px">
+    <select id="defSort" onchange="loadDefendants()">
+      <option value="bond_amount">Sort: Bond (High→Low)</option>
+      <option value="booking_date">Sort: Booking Date</option>
+      <option value="full_name">Sort: Name (A→Z)</option>
+    </select>
+    <span id="defResultCount" style="color:var(--muted);font-size:12px"></span>
+  </div>
+  <div class="defendant-grid" id="defendantGrid"><div class="loading" style="grid-column:1/-1">Loading...</div></div>
+  <div class="pagination" id="defPagination"></div>
+</div>
+</div>
+
+<!-- ── Write Bond Modal ── -->
+<div class="modal-overlay" id="writeBondModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>✅ Write Bond — Export to SignNow</h2>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-primary" id="btnExportSignNow" onclick="exportToSignNow()">🍀 Export & Send Paperwork</button>
+    </div>
+  </div>
+</div>
+
+<script src="dashboard.js"></script>
+<script src="defendants.js"></script>
+</body>
+</html>

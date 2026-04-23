@@ -24,6 +24,17 @@ from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
 from scrapers.counties.charlotte import CharlotteCountyScraper
 from scrapers.counties.hendry import HendryCountyScraper
+from scrapers.counties.desoto import DeSotoCountyScraper
+from scrapers.counties.manatee import ManateeCountyScraper
+from scrapers.counties.sarasota import SarasotaCountyScraper
+
+# Tier 4: Central & East FL expansion
+from scrapers.counties.orange import OrangeCountyScraper
+from scrapers.counties.pinellas import PinellasCountyScraper
+from scrapers.counties.polk import PolkCountyScraper
+from scrapers.counties.osceola import OsceolaCountyScraper
+from scrapers.counties.seminole import SeminoleCountyScraper
+from scrapers.counties.palm_beach import PalmBeachCountyScraper
 
 # ── Logging ──
 logging.basicConfig(
@@ -81,10 +92,18 @@ def register_scrapers(sched: ScraperScheduler):
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
-    # Future counties will be registered here as they are ported:
-    # sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
-    # sched.register_scraper(ManateeCountyScraper(), interval_minutes=30)
-    # sched.register_scraper(SarasotaCountyScraper(), interval_minutes=30)
+    # ── Tier 3: Expanded SWFL coverage (browser-automated) ──
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
+    sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
+
+    # ── Tier 4: Central & East FL expansion (browser-automated, lower freq) ──
+    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
+    sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
 
 
 def handle_shutdown(signum, frame):

@@ -1,6 +1,6 @@
 # ============================================
 # ShamrockLeads — Docker Compose
-# Runs: Scraper Engine + Node-RED Ops Dashboard
+# Runs: Scraper Engine + Dashboard + Node-RED
 # ============================================
 version: "3.9"
 
@@ -15,14 +15,36 @@ services:
     volumes:
       - ./creds:/app/creds:ro           # GCP service account key
       - ./logs:/app/logs                # Persistent logs
-    ports:
-      - "8088:8088"                     # Future: health/status API
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Intelligence Dashboard (Flask) ──
+  dashboard:
+    build: .
+    container_name: shamrock-dashboard
+    restart: unless-stopped
+    command: python dashboard/app.py
+    env_file:
+      - .env
+    ports:
+      - "5050:5050"                     # Dashboard UI
+    depends_on:
+      - shamrock-leads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/api/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     logging:
       driver: "json-file"
       options:

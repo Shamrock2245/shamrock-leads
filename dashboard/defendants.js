@@ -1,0 +1,357 @@
+/* ═══════════════════════════════════════════════════════
+   ShamrockLeads — Defendant Profiles Tab
+   Full booking sheet detail + Write Bond export
+   ═══════════════════════════════════════════════════════ */
+
+let defPage=1, defSearchTimeout, selectedDefendant=null;
+
+function debounceDefSearch(){clearTimeout(defSearchTimeout);defSearchTimeout=setTimeout(()=>loadDefendants(1),300)}
+
+// ── Parse charges string into structured rows ──
+function parseCharges(chargesStr, bondAmount, bondType, caseNumber){
+  if(!chargesStr) return [{charge:'No charges listed',bond:'—',type:'—',case:'—'}];
+  // Try pipe-delimited first, then semicolons, then newlines
+  let parts=chargesStr.split(/\s*\|\s*/);
+  if(parts.length<=1) parts=chargesStr.split(/\s*;\s*/);
+  if(parts.length<=1 && chargesStr.length>80) parts=chargesStr.split(/\n/);
+  
+  if(parts.length===1){
+    return [{charge:parts[0].trim(),bond:money(bondAmount),type:val(bondType),case:val(caseNumber)}];
+  }
+  // Distribute bond evenly if we can't parse individual amounts
+  const perCharge=bondAmount>0?bondAmount/parts.length:0;
+  return parts.filter(p=>p.trim()).map(p=>({
+    charge:p.trim(),
+    bond:money(perCharge),
+    type:val(bondType),
+    case:val(caseNumber)
+  }));
+}
+
+// ── Status badge helper ──
+function statusBadge(status){
+  if(!status) return '<span class="def-status-badge other">Unknown</span>';
+  const s=status.toLowerCase();
+  if(s.includes('custody')||s.includes('confined')||s.includes('held')||s.includes('active'))
+    return `<span class="def-status-badge custody">● ${status}</span>`;
+  if(s.includes('released')||s.includes('bonded')||s.includes('rts'))
+    return `<span class="def-status-badge released">● ${status}</span>`;
+  return `<span class="def-status-badge other">● ${status}</span>`;
+}
+
+// ── Render a single defendant card ──
+function renderDefCard(d){
+  const charges=parseCharges(d.charges, d.bond_amount, d.bond_type, d.case_number);
+  const hasMugshot=d.mugshot_url&&d.mugshot_url.startsWith('http');
+  const fullAddr=[d.address,d.city,d.state,d.zip].filter(v=>v&&v!=='—').join(', ');
+
+  return `
+  <div class="def-card" data-booking="${d.booking_number||''}">
+    <!-- Header -->
+    <div class="def-card-header">
+      <div style="display:flex;gap:14px;align-items:center;flex:1;min-width:0">
+        ${hasMugshot?`<img src="${d.mugshot_url}" class="mugshot" alt="" onerror="this.outerHTML='<div class=mugshot-placeholder>👤</div>'">`:'<div class="mugshot-placeholder">👤</div>'}
+        <div style="min-width:0">
+          <div class="def-name">${val(d.full_name)}</div>
+          <div class="def-booking">#${val(d.booking_number)} · ${val(d.county)} County</div>
+        </div>
+      </div>
+      <div class="def-bond-pill ${bondPill(d.bond_amount)}">${money(d.bond_amount)}</div>
+    </div>
+
+    <div class="def-body">
+      <!-- Demographics -->
+      <div class="def-section">
+        <div class="def-section-title">👤 Demographics</div>
+        <div class="def-row">
+          <div class="def-field"><div class="def-label">Date of Birth</div><div class="def-value">${val(d.dob)}</div></div>
+          <div class="def-field"><div class="def-label">Sex / Race</div><div class="def-value">${val(d.sex)} / ${val(d.race)}</div></div>
+          <div class="def-field"><div class="def-label">Height</div><div class="def-value">${val(d.height)}</div></div>
+          <div class="def-field"><div class="def-label">Weight</div><div class="def-value">${val(d.weight)}</div></div>
+        </div>
+        <div class="def-row wide" style="margin-top:4px">
+          <div class="def-field"><div class="def-label">Address</div><div class="def-value">${fullAddr||'—'}</div></div>
+        </div>
+      </div>
+
+      <!-- Booking Info -->
+      <div class="def-section">
+        <div class="def-section-title">🏛️ Booking Information</div>
+        <div class="def-row">
+          <div class="def-field"><div class="def-label">Arrest Date</div><div class="def-value">${val(d.arrest_date)}${d.arrest_time?' '+d.arrest_time:''}</div></div>
+          <div class="def-field"><div class="def-label">Booking Date</div><div class="def-value">${val(d.booking_date)}${d.booking_time?' '+d.booking_time:''}</div></div>
+          <div class="def-field"><div class="def-label">Facility</div><div class="def-value">${val(d.facility)}</div></div>
+          <div class="def-field"><div class="def-label">Arresting Agency</div><div class="def-value">${val(d.agency)}</div></div>
+          <div class="def-field"><div class="def-label">Status</div><div class="def-value">${statusBadge(d.status)}</div></div>
+          <div class="def-field"><div class="def-label">Bond Paid</div><div class="def-value">${val(d.bond_paid)}</div></div>
+        </div>
+      </div>
+
+      <!-- Charges -->
+      <div class="def-section">
+        <div class="def-section-title">⚖️ Charges & Bond Detail</div>
+        <table class="def-charges-table">
+          <thead><tr><th>Charge Description</th><th>Bond</th><th>Type</th><th>Case #</th></tr></thead>
+          <tbody>${charges.map(c=>`<tr><td style="white-space:normal">${c.charge}</td><td style="font-weight:600">${c.bond}</td><td>${c.type}</td><td class="mono" style="font-size:11px">${c.case}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>
+
+      <!-- Court Info -->
+      <div class="def-section">
+        <div class="def-section-title">📅 Court Information</div>
+        <div class="def-row">
+          <div class="def-field"><div class="def-label">Court Date</div><div class="def-value">${val(d.court_date)}${d.court_time?' at '+d.court_time:''}</div></div>
+          <div class="def-field"><div class="def-label">Court Type</div><div class="def-value">${val(d.court_type)}</div></div>
+          <div class="def-field"><div class="def-label">Court Location</div><div class="def-value">${val(d.court_location)}</div></div>
+          <div class="def-field"><div class="def-label">Case Number</div><div class="def-value mono">${val(d.case_number)}</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer Actions -->
+    <div class="def-card-footer">
+      ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail">🔗 Source</a>`:''}
+      <button class="btn-write-bond" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'>✅ Write Bond</button>
+    </div>
+  </div>`;
+}
+
+// ── Load Defendants ──
+async function loadDefendants(page){
+  if(page)defPage=page;
+  const sortVal=$('defSort').value;
+  const sortDir=sortVal==='full_name'?1:-1;
+  let url=`/api/defendants?page=${defPage}&limit=12&sort=${sortVal}&dir=${sortDir}`;
+  const county=$('defFilterCounty').value,search=$('defSearch').value,minBond=$('defMinBond').value;
+  if(county)url+=`&county=${encodeURIComponent(county)}`;
+  if(search)url+=`&search=${encodeURIComponent(search)}`;
+  if(minBond)url+=`&min_bond=${minBond}`;
+
+  const data=await fetchJSON(url);
+  if(!data)return;
+  $('defResultCount').textContent=`${data.total.toLocaleString()} defendants`;
+  $('defendantGrid').innerHTML=data.defendants.length?data.defendants.map(renderDefCard).join(''):'<div class="loading" style="grid-column:1/-1">No defendants match your filters</div>';
+  $('defPagination').innerHTML=`<button ${data.page<=1?'disabled':''} onclick="loadDefendants(${data.page-1})">← Prev</button><span>Page ${data.page} of ${data.pages}</span><button ${data.page>=data.pages?'disabled':''} onclick="loadDefendants(${data.page+1})">Next →</button>`;
+}
+
+
+/* ═══════════════════════════════════════════════════════
+   WRITE BOND MODAL — Insurance Carrier + Premium Calc
+   ═══════════════════════════════════════════════════════ */
+
+let selectedInsurer = 'osi'; // default
+
+function selectInsurer(choice) {
+  selectedInsurer = choice;
+  document.querySelectorAll('.insurer-pill').forEach(el => el.classList.remove('active'));
+  const active = document.querySelector(`.insurer-pill[data-insurer="${choice}"]`);
+  if (active) active.classList.add('active');
+  // Update premium display
+  updatePremiumDisplay();
+}
+
+function updatePremiumDisplay() {
+  if (!selectedDefendant) return;
+  const bond = selectedDefendant.bond_amount || 0;
+  const premiumRate = 0.10; // 10% standard
+  const premium = bond * premiumRate;
+  const premiumEl = document.getElementById('premiumAmount');
+  if (premiumEl) premiumEl.textContent = money(premium);
+  const bondEl = document.getElementById('modalBondTotal');
+  if (bondEl) bondEl.textContent = money(bond);
+}
+
+function openWriteBond(defendant) {
+  selectedDefendant = defendant;
+  selectedInsurer = 'osi'; // reset to default
+  const charges = parseCharges(defendant.charges, defendant.bond_amount, defendant.bond_type, defendant.case_number);
+  const fullAddr = [defendant.address, defendant.city, defendant.state, defendant.zip].filter(v => v && v !== '—').join(', ');
+  const bond = defendant.bond_amount || 0;
+  const premium = bond * 0.10;
+
+  $('modalBody').innerHTML = `
+    <!-- Defendant Summary -->
+    <div class="wb-section">
+      <div class="wb-section-label">DEFENDANT</div>
+      <div class="wb-defendant-summary">
+        <div class="wb-name">${val(defendant.full_name)}</div>
+        <div class="wb-meta-grid">
+          <div><span class="wb-meta-label">DOB</span> ${val(defendant.dob)}</div>
+          <div><span class="wb-meta-label">Sex/Race</span> ${val(defendant.sex)}/${val(defendant.race)}</div>
+          <div><span class="wb-meta-label">County</span> ${val(defendant.county)}</div>
+          <div><span class="wb-meta-label">Booking #</span> ${val(defendant.booking_number)}</div>
+          <div style="grid-column:1/-1"><span class="wb-meta-label">Address</span> ${fullAddr || '—'}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charges & Bond -->
+    <div class="wb-section">
+      <div class="wb-section-label">CHARGES & BOND</div>
+      <div class="wb-charges-box">
+        <table class="wb-charges-table">
+          ${charges.map(c => `<tr><td>${c.charge}</td><td class="wb-charge-bond">${c.bond}</td></tr>`).join('')}
+        </table>
+        <div class="wb-bond-total-row">
+          <span>Total Bond</span>
+          <span class="wb-bond-total" id="modalBondTotal">${money(bond)}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Insurance Company Selection -->
+    <div class="wb-section">
+      <div class="wb-section-label">INSURANCE COMPANY</div>
+      <div class="insurer-selector">
+        <button class="insurer-pill active" data-insurer="osi" onclick="selectInsurer('osi')">
+          <div class="insurer-pill-icon">🏛️</div>
+          <div class="insurer-pill-name">OSI</div>
+          <div class="insurer-pill-full">Old Surety Insurance</div>
+        </button>
+        <button class="insurer-pill" data-insurer="palmetto" onclick="selectInsurer('palmetto')">
+          <div class="insurer-pill-icon">🌴</div>
+          <div class="insurer-pill-name">Palmetto</div>
+          <div class="insurer-pill-full">Palmetto Surety Corp</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Premium Calculation -->
+    <div class="wb-section">
+      <div class="wb-section-label">PREMIUM CALCULATION</div>
+      <div class="wb-premium-box">
+        <div class="wb-premium-row">
+          <span>Bond Amount</span>
+          <span class="wb-premium-value">${money(bond)}</span>
+        </div>
+        <div class="wb-premium-row">
+          <span>Rate</span>
+          <span class="wb-premium-value">10%</span>
+        </div>
+        <div class="wb-premium-row total">
+          <span>Premium Due</span>
+          <span class="wb-premium-value accent" id="premiumAmount">${money(premium)}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- POA Notice -->
+    <div class="wb-poa-notice">
+      <span class="wb-poa-icon">📋</span>
+      <div>
+        <div class="wb-poa-title">Power of Attorney</div>
+        <div class="wb-poa-text">POA number will be assigned manually after packet generation. Auto-assignment coming in a future update.</div>
+      </div>
+    </div>
+  `;
+  $('writeBondModal').classList.add('show');
+}
+
+function closeModal() {
+  $('writeBondModal').classList.remove('show');
+  selectedDefendant = null;
+}
+
+// ── Toast Notification System ──
+function showToast(message, type = 'success', duration = 4000) {
+  // Remove existing toasts
+  document.querySelectorAll('.toast-notification').forEach(t => t.remove());
+
+  const toast = document.createElement('div');
+  toast.className = `toast-notification toast-${type}`;
+  toast.innerHTML = `
+    <span class="toast-icon">${type === 'success' ? '✅' : type === 'error' ? '❌' : '⏳'}</span>
+    <span class="toast-message">${message}</span>
+  `;
+  document.body.appendChild(toast);
+
+  // Trigger animation
+  requestAnimationFrame(() => toast.classList.add('show'));
+
+  if (duration > 0) {
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+  return toast;
+}
+
+// ── Export to SignNow via /api/write-bond ──
+async function exportToSignNow() {
+  if (!selectedDefendant) return;
+
+  const btn = $('btnExportSignNow');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span> Generating Packet...';
+
+  const payload = {
+    action: 'generate_packet',
+    insurance_company: selectedInsurer,
+    defendant: {
+      full_name: selectedDefendant.full_name,
+      first_name: selectedDefendant.first_name,
+      last_name: selectedDefendant.last_name,
+      middle_name: selectedDefendant.middle_name || '',
+      dob: selectedDefendant.dob,
+      address: selectedDefendant.address,
+      city: selectedDefendant.city,
+      state: selectedDefendant.state,
+      zip: selectedDefendant.zip,
+      sex: selectedDefendant.sex,
+      race: selectedDefendant.race,
+      height: selectedDefendant.height,
+      weight: selectedDefendant.weight,
+    },
+    booking: {
+      booking_number: selectedDefendant.booking_number,
+      county: selectedDefendant.county,
+      facility: selectedDefendant.facility,
+      agency: selectedDefendant.agency,
+      arrest_date: selectedDefendant.arrest_date,
+      booking_date: selectedDefendant.booking_date,
+    },
+    bond: {
+      amount: selectedDefendant.bond_amount,
+      type: selectedDefendant.bond_type,
+      paid: selectedDefendant.bond_paid,
+      premium: (selectedDefendant.bond_amount || 0) * 0.10,
+    },
+    charges: selectedDefendant.charges,
+    court: {
+      date: selectedDefendant.court_date,
+      time: selectedDefendant.court_time,
+      type: selectedDefendant.court_type,
+      location: selectedDefendant.court_location,
+      case_number: selectedDefendant.case_number,
+    }
+  };
+
+  try {
+    const res = await fetch('/api/write-bond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      showToast(`Bond packet queued for ${val(selectedDefendant.full_name)} via ${selectedInsurer.toUpperCase()}`, 'success');
+      closeModal();
+    } else {
+      showToast(`Error: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (err) {
+    console.error('Write Bond error:', err);
+    showToast(`Network error: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+// Close modal on overlay click
+$('writeBondModal').addEventListener('click', e => { if (e.target === $('writeBondModal')) closeModal() });
+// Close modal on Escape
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal() });
