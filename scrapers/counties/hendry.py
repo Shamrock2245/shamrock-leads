@@ -1,153 +1,270 @@
 """
-Hendry County Arrest Scraper — Wix Blog API Interception via DrissionPage.
+Hendry County Arrest Scraper — Hybrid: OCV JSON + Detail Page Enrichment.
 
-Source: Hendry County Sheriff's Office inmate search
+Source: Hendry County Sheriff's Office
 URL: https://www.hendrysheriff.org/inmateSearch
-Method: DrissionPage browser automation with API response interception
+Method: HTTP bulk fetch + DrissionPage detail page enrichment
 
-Architecture:
-1. Load inmate search page → wait for Cloudflare
-2. Intercept XHR/Fetch API responses (paginatedBlog JSON)
-3. Parse HTML content embedded in API response entries
-4. Extract: name, booking info, charges, bond, address, mugshot
-5. Handle pagination via "Page Right" button clicks
+Architecture (2-phase):
+  Phase 1: HTTP GET to OCV S3 JSON -> all inmates with demographics (~0.1s)
+  Phase 2: DrissionPage visits detail pages for recent inmates -> charges + bonds
 
-Note: Hendry's inmate roster is built on the Wix platform, which serves
-inmate data through an internal paginatedBlog-style API. The data is
-returned as HTML fragments embedded in JSON responses.
+The OCV JSON feed provides name, address, demographics, mugshot, and booking
+date for all ~278 inmates. Charges and bond amounts are only available on
+individual detail pages at /inmateSearch/{id}.
+
+Self-healing: If Phase 2 (browser) fails, Phase 1 data is still returned
+with all demographics. Bond amounts default to "0" if enrichment fails.
 """
 
 import logging
 import re
 import time
-import json
-from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──
-INMATE_SEARCH_URL = "https://www.hendrysheriff.org/inmateSearch"
-MAX_PAGES = 50
-API_WAIT_TIMEOUT = 15  # seconds to wait for API response
+INMATES_JSON_URL = "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json"
+DETAIL_BASE_URL = "https://www.hendrysheriff.org/inmateSearch"
+FACILITY = "Hendry County Jail"
+MAX_DETAIL_ENRICHMENT = 40
 
 
 class HendryCountyScraper(BaseScraper):
-    """Hendry County (FL) arrest scraper — Wix Blog API interception."""
+    """Hendry County (FL) arrest scraper - OCV JSON + detail page enrichment."""
 
     @property
     def county(self) -> str:
         return "Hendry"
 
     def scrape(self) -> List[ArrestRecord]:
-        """Scrape Hendry County via DrissionPage + API interception."""
+        """2-phase scrape: bulk JSON then selective detail enrichment."""
+        try:
+            import requests
+        except ImportError:
+            logger.error("requests not installed")
+            return []
+
+        records = self._phase1_bulk_json(requests)
+        if not records:
+            logger.warning("Phase 1 returned 0 records")
+            return []
+
+        logger.info(f"Phase 1 complete: {len(records)} records from OCV JSON")
+        self._phase2_enrich_details(records)
+        return records
+
+    def _phase1_bulk_json(self, requests_mod) -> List[ArrestRecord]:
+        """Fetch all inmates from OCV S3 JSON endpoint."""
+        try:
+            resp = requests_mod.get(
+                INMATES_JSON_URL,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"Hendry JSON fetch failed: {e}")
+            return []
+
+        if not isinstance(data, list):
+            logger.error(f"Unexpected JSON type: {type(data)}")
+            return []
+
+        data.sort(key=lambda x: x.get("date", {}).get("sec", 0), reverse=True)
+
+        records = []
+        seen = set()
+
+        for entry in data:
+            try:
+                record = self._parse_json_entry(entry)
+                if not record:
+                    continue
+                if record.Booking_Number in seen:
+                    continue
+                seen.add(record.Booking_Number)
+                records.append(record)
+            except Exception as e:
+                logger.warning(f"Error parsing {entry.get('title', '?')}: {e}")
+
+        return records
+
+    def _parse_json_entry(self, entry: dict) -> Optional[ArrestRecord]:
+        """Parse a single OCV JSON entry into an ArrestRecord."""
+        full_name = entry.get("title", "").strip()
+        first_name = entry.get("firstName", "").strip()
+        last_name = entry.get("lastName", "").strip()
+
+        if not full_name:
+            return None
+
+        middle_name = ""
+        if not last_name and "," in full_name:
+            parts = full_name.split(",", 1)
+            last_name = parts[0].strip()
+            fp = parts[1].strip().split()
+            first_name = fp[0] if fp else ""
+            middle_name = " ".join(fp[1:]) if len(fp) > 1 else ""
+        else:
+            tf = entry.get("titleWithFirst", "").strip().split()
+            if len(tf) > 2:
+                middle_name = " ".join(tf[1:-1])
+
+        inmate_id = entry.get("inmateID", "")
+        if not inmate_id:
+            return None
+
+        booking_date = ""
+        date_obj = entry.get("date", {})
+        if isinstance(date_obj, dict) and "sec" in date_obj:
+            try:
+                ts = int(date_obj["sec"])
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                booking_date = dt.strftime("%m/%d/%Y %H:%M")
+            except (ValueError, TypeError, OSError):
+                pass
+
+        mugshot_url = ""
+        images = entry.get("images", [])
+        if images and isinstance(images, list):
+            img = images[0] if images else {}
+            if isinstance(img, dict):
+                large = img.get("large", "")
+                if large and "missing-image" not in large:
+                    mugshot_url = large
+
+        demos = self._parse_content_html(entry.get("content", ""))
+
+        if not booking_date and demos.get("booking_date"):
+            booking_date = demos["booking_date"]
+
+        detail_id = ""
+        id_obj = entry.get("_id", {})
+        if isinstance(id_obj, dict):
+            detail_id = id_obj.get("$id", "")
+        elif isinstance(id_obj, str):
+            detail_id = id_obj
+        detail_url = f"{DETAIL_BASE_URL}/{detail_id}" if detail_id else DETAIL_BASE_URL
+
+        record = ArrestRecord(
+            County=self.county,
+            Booking_Number=inmate_id,
+            Full_Name=full_name,
+            First_Name=first_name,
+            Middle_Name=middle_name,
+            Last_Name=last_name,
+            DOB="",
+            Booking_Date=booking_date,
+            Status=demos.get("custody_status", "In Custody"),
+            Facility=FACILITY,
+            Race=demos.get("race", ""),
+            Sex=demos.get("gender", ""),
+            Height=demos.get("height", ""),
+            Weight=demos.get("weight", ""),
+            Address=demos.get("address", ""),
+            City=demos.get("city", ""),
+            State=demos.get("state", "FL"),
+            ZIP=demos.get("zip", ""),
+            Mugshot_URL=mugshot_url,
+            Charges="",
+            Bond_Amount="0",
+            Bond_Paid="NO",
+            Detail_URL=detail_url,
+            LastCheckedMode="INITIAL",
+        )
+        record._detail_id = detail_id
+        return record
+
+    def _phase2_enrich_details(self, records: List[ArrestRecord]) -> None:
+        """Visit detail pages for recent inmates to extract charges and bonds."""
         try:
             from DrissionPage import ChromiumPage, ChromiumOptions
         except ImportError:
-            logger.error(
-                "❌ DrissionPage not installed. "
-                "Install with: pip install DrissionPage"
-            )
-            return []
+            logger.warning("DrissionPage not installed - skipping charge enrichment")
+            return
 
-        page = self._setup_browser()
-        records: List[ArrestRecord] = []
-        api_responses: List[dict] = []
+        to_enrich = [r for r in records[:MAX_DETAIL_ENRICHMENT] if getattr(r, '_detail_id', '')]
 
+        if not to_enrich:
+            logger.info("No records to enrich")
+            return
+
+        logger.info(f"Phase 2: enriching {len(to_enrich)} recent inmates with charges")
+
+        page = None
         try:
-            # Set up network listener for API responses
-            page.listen.start("paginatedBlog")
+            page = self._setup_browser()
+            enriched = 0
 
-            logger.info(f"📡 Loading {INMATE_SEARCH_URL}...")
-            page.get(INMATE_SEARCH_URL)
-            time.sleep(5)
+            for i, record in enumerate(to_enrich):
+                try:
+                    page.get(record.Detail_URL)
+                    time.sleep(2)
 
-            # Wait for Cloudflare
-            if not self._wait_for_cloudflare(page):
-                logger.error("❌ Cloudflare challenge did not clear")
-                return []
+                    body_el = page.ele('tag:body', timeout=5)
+                    if not body_el:
+                        continue
 
-            # Handle disclaimer
-            try:
-                agree_btn = page.ele("text:I Agree", timeout=3)
-                if agree_btn:
-                    agree_btn.click()
-                    logger.info("👆 Clicked disclaimer")
-                    time.sleep(1)
-            except Exception:
-                pass
+                    text = body_el.text
+                    if not text or 'Record Details' not in text:
+                        time.sleep(2)
+                        text = body_el.text if body_el else ""
 
-            # Try to sort by newest
-            self._try_sort_newest(page)
+                    charges, total_bond = self._extract_charges_from_text(text)
 
-            # Process pages
-            page_num = 1
-            session_ids = set()
+                    if charges:
+                        record.Charges = charges
+                    if total_bond > 0:
+                        record.Bond_Amount = str(total_bond)
 
-            while page_num <= MAX_PAGES:
-                logger.info(f"📄 Processing page {page_num}...")
+                    enriched += 1
 
-                # Wait for API response
-                resp_data = self._wait_for_api_response(page)
-                if not resp_data:
-                    logger.info(f"⚠️ No API data on page {page_num}, stopping")
-                    break
+                    if (i + 1) % 10 == 0:
+                        logger.info(f"Phase 2 progress: {i+1}/{len(to_enrich)}")
 
-                entries = resp_data.get("entries", [])
-                if not entries:
-                    logger.info(f"⚠️ No entries on page {page_num}, stopping")
-                    break
+                except Exception as e:
+                    logger.debug(f"Enrichment failed for {record.Full_Name}: {e}")
 
-                logger.info(f"📊 Found {len(entries)} entries on page {page_num}")
+                time.sleep(0.5)
 
-                # Process each entry
-                for i, entry in enumerate(entries):
-                    try:
-                        record = self._parse_entry(entry)
-                        if not record:
-                            continue
-
-                        # Dedup within session
-                        if record.Booking_Number in session_ids:
-                            continue
-                        session_ids.add(record.Booking_Number)
-
-                        records.append(record)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error parsing entry {i}: {e}")
-
-                # Check for more pages
-                pagination = resp_data.get("pagination", {})
-                if not pagination.get("next"):
-                    logger.info("🏁 No more pages (API)")
-                    break
-
-                # Click next page
-                if not self._click_next_page(page):
-                    break
-
-                page_num += 1
-
-            logger.info(f"✅ Scraped {len(records)} records from Hendry")
-            return records
+            logger.info(f"Phase 2 done: enriched {enriched}/{len(to_enrich)} with charges")
 
         except Exception as e:
-            logger.error(f"❌ Hendry scraper fatal error: {e}")
-            return []
-
+            logger.warning(f"Phase 2 browser error (Phase 1 data preserved): {e}")
         finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _extract_charges_from_text(text: str) -> tuple:
+        """Extract charge descriptions and bond amounts from detail page text."""
+        charges_list = []
+        total_bond = 0.0
+
+        charge_descs = re.findall(r"Charge Description:\s*(.+?)(?:\n|Bond)", text)
+        bond_amounts = re.findall(r"Bond Amount:\s*\$?([\d,]+\.?\d*)", text)
+
+        for desc in charge_descs:
+            clean = desc.strip()
+            if clean:
+                charges_list.append(clean)
+
+        for amt in bond_amounts:
             try:
-                page.listen.stop()
-            except Exception:
-                pass
-            try:
-                page.quit()
-            except Exception:
+                total_bond += float(amt.replace(",", ""))
+            except (ValueError, TypeError):
                 pass
 
-    # ── Browser Setup ──
+        return " | ".join(charges_list) if charges_list else "", total_bond
 
     @staticmethod
     def _setup_browser():
@@ -170,267 +287,56 @@ class HendryCountyScraper(BaseScraper):
         return ChromiumPage(addr_or_opts=co)
 
     @staticmethod
-    def _wait_for_cloudflare(page, max_wait: int = 30) -> bool:
-        """Wait for Cloudflare challenge to clear."""
-        for attempt in range(max_wait):
-            title = page.title.lower() if page.title else ""
-            if "just a moment" not in title and "security" not in title:
-                logger.info("✅ Page loaded successfully")
-                return True
-            if attempt % 5 == 0:
-                logger.debug(
-                    f"⏳ Cloudflare challenge... ({attempt}/{max_wait}s)"
-                )
-            time.sleep(1)
-        return False
+    def _parse_content_html(html: str) -> dict:
+        """Parse the HTML content field for demographics."""
+        if not html:
+            return {}
 
-    def _try_sort_newest(self, page) -> None:
-        """Attempt to sort the inmate list by newest first."""
-        try:
-            sort_select = page.ele("css:select.form-select, select#sort", timeout=3)
-            if sort_select:
-                try:
-                    sort_select.select("dateDesc")
-                    logger.info("✅ Sorted by newest (dateDesc)")
-                except Exception:
-                    try:
-                        sort_select.select("Newest")
-                        logger.info("✅ Sorted by newest (label)")
-                    except Exception:
-                        logger.debug("⚠️ Could not set sort order")
-                time.sleep(3)
-        except Exception:
-            logger.debug("⚠️ Sort select not found")
+        text = re.sub(r"<[^>]+>", "\n", html)
+        text = re.sub(r"\n+", "\n", text).strip()
+        result = {}
 
-    def _wait_for_api_response(self, page) -> Optional[dict]:
-        """Wait for and capture the paginatedBlog API response."""
-        try:
-            resp = page.listen.wait(timeout=API_WAIT_TIMEOUT)
-            if resp and resp.response:
-                try:
-                    body = resp.response.body
-                    if isinstance(body, str):
-                        return json.loads(body)
-                    elif isinstance(body, dict):
-                        return body
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        except Exception as e:
-            logger.debug(f"⚠️ API wait error: {e}")
-        return None
+        m = re.search(r"Main Address:\s*\n(.+?)(?:\n|$)", text)
+        if m:
+            addr = m.group(1).strip()
+            if addr.upper() not in ("HOMELESS AT THIS TIME", "STILL AT LARGE", ""):
+                result["address"] = addr
 
-    def _click_next_page(self, page) -> bool:
-        """Click the next page button."""
-        try:
-            next_btn = page.ele('css:button[aria-label="Page Right"]', timeout=3)
-            if next_btn:
-                next_btn.click()
-                time.sleep(3)
-                return True
-        except Exception as e:
-            logger.debug(f"⚠️ Next page click failed: {e}")
-        return False
-
-    # ── Data Parsing ──
-
-    def _parse_entry(self, entry: dict) -> Optional[ArrestRecord]:
-        """Parse a single API response entry into an ArrestRecord."""
-        try:
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("❌ beautifulsoup4 not installed")
-            return None
-
-        html_content = entry.get("content", "")
-        if not html_content:
-            return None
-
-        soup = BeautifulSoup(html_content, "html.parser")
-
-        # Name from entry metadata
-        full_name = entry.get("title", entry.get("titleWithFirst", "")).strip()
-        first_name = entry.get("firstName", "").strip()
-        last_name = entry.get("lastName", "").strip()
-
-        if not last_name and "," in full_name:
-            parts = full_name.split(",", 1)
-            last_name = parts[0].strip()
-            first_name = parts[1].strip()
-
-        if not full_name:
-            return None
-
-        # Booking number
-        booking_number = entry.get("inmateID") or self._extract_label(
-            soup, "Inmate ID"
+        m = re.search(
+            r"(?:Main Address:.*?\n.+?\n)([A-Z][A-Za-z\s]+),?\s*([A-Z]{2})\s*(\d{5})?",
+            text,
         )
-        if not booking_number:
-            return None
+        if m:
+            city = m.group(1).strip()
+            if "Currently Unavailable" not in city:
+                result["city"] = city
+            result["state"] = m.group(2)
+            if m.group(3):
+                result["zip"] = m.group(3)
 
-        # Demographics
-        booking_date = self._extract_label(soup, "Booked Date") or ""
-        sex = self._extract_label(soup, "Gender") or ""
-        race = self._extract_label(soup, "Race") or ""
-        height = self._extract_label(soup, "Height") or ""
-        weight = self._extract_label(soup, "Weight") or ""
+        m = re.search(r"Height:\s*(\d+)\s*ft\s*(\d+)", text)
+        if m:
+            result["height"] = f"{m.group(1)}'{m.group(2)}\""
 
-        # Address parsing
-        address = ""
-        city = ""
-        state = "FL"
-        zip_code = ""
-        raw_address = self._extract_label(soup, "Address")
-        if raw_address:
-            address, city, state, zip_code = self._parse_address(raw_address)
+        m = re.search(r"Weight:\s*(\d+)\s*lbs?", text)
+        if m:
+            result["weight"] = f"{m.group(1)} lbs"
 
-        # Mugshot
-        mugshot_url = ""
-        images = entry.get("images", [])
-        if images and isinstance(images, list) and len(images) > 0:
-            img = images[0]
-            if isinstance(img, dict):
-                mugshot_url = img.get("large", img.get("small", ""))
+        m = re.search(r"Gender:\s*([A-Z])", text)
+        if m:
+            result["gender"] = m.group(1)
 
-        # Charges & Bond
-        charges_list = []
-        total_bond = 0.0
+        m = re.search(r"Race:\s*([A-Z]+)", text)
+        if m:
+            result["race"] = m.group(1)
 
-        charge_tags = soup.find_all(
-            string=re.compile("Charge Description:", re.IGNORECASE)
-        )
-        for ctag in charge_tags:
-            try:
-                desc = str(ctag).split("Charge Description:", 1)[-1].strip()
-                clean_desc = self._clean_charge_text(desc)
-                if clean_desc:
-                    charges_list.append(clean_desc)
-            except Exception:
-                pass
+        m = re.search(r"Custody Status:\s*(\S+)", text)
+        if m:
+            status = m.group(1).upper()
+            result["custody_status"] = "In Custody" if status == "IN" else status
 
-        bond_tags = soup.find_all(
-            string=re.compile("Bond Amount:", re.IGNORECASE)
-        )
-        for btag in bond_tags:
-            try:
-                bond_text = (
-                    str(btag)
-                    .split("Bond Amount:", 1)[-1]
-                    .strip()
-                    .replace("$", "")
-                    .replace(",", "")
-                    .strip()
-                )
-                total_bond += float(bond_text)
-            except (ValueError, TypeError):
-                pass
+        m = re.search(r"Booked Date:\s*(\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2})", text)
+        if m:
+            result["booking_date"] = m.group(1)
 
-        charges_str = " | ".join(charges_list) if charges_list else ""
-
-        return ArrestRecord(
-            County=self.county,
-            Booking_Number=booking_number,
-            Full_Name=full_name,
-            First_Name=first_name,
-            Last_Name=last_name,
-            DOB="",  # Not available in Hendry's roster
-            Booking_Date=booking_date,
-            Status="In Custody",
-            Facility="Hendry County Jail",
-            Race=race,
-            Sex=sex,
-            Height=height,
-            Weight=weight,
-            Address=address,
-            City=city,
-            State=state,
-            ZIP=zip_code,
-            Mugshot_URL=mugshot_url,
-            Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Bond_Paid="NO",
-            Detail_URL=INMATE_SEARCH_URL,
-            LastCheckedMode="INITIAL",
-        )
-
-    # ── Utilities ──
-
-    @staticmethod
-    def _extract_label(soup, label_text: str) -> Optional[str]:
-        """Extract a value following a label in the HTML."""
-        # Try <b> or <strong> tags first
-        for tag_name in ["b", "strong"]:
-            tag = soup.find(
-                tag_name, string=re.compile(label_text, re.IGNORECASE)
-            )
-            if tag and tag.next_sibling:
-                val = str(tag.next_sibling).strip().replace(":", "").strip()
-                if val:
-                    return val
-
-        # Fallback: search all text nodes
-        for node in soup.find_all(string=True):
-            if label_text.lower() in node.lower():
-                val = (
-                    str(node)
-                    .split(label_text, 1)[-1]
-                    .strip()
-                    .replace(":", "", 1)
-                    .strip()
-                )
-                if val:
-                    return val
-
-        return None
-
-    @staticmethod
-    def _parse_address(raw: str) -> tuple:
-        """Parse a raw address string into (address, city, state, zip)."""
-        if not raw:
-            return ("", "", "FL", "")
-
-        clean = re.sub(r"\s+", " ", raw).strip()
-        zip_code = ""
-        state = "FL"
-        city = ""
-        address = clean
-
-        # Extract ZIP
-        zip_match = re.search(r"\b(\d{5})\b$", clean)
-        if zip_match:
-            zip_code = zip_match.group(1)
-            clean = clean[: zip_match.start()].strip()
-
-        # Extract state
-        state_match = re.search(r"\b([A-Z]{2})\b$", clean)
-        if state_match:
-            state = state_match.group(1)
-            clean = clean[: state_match.start()].strip().rstrip(",")
-
-        # Extract city
-        if "," in clean:
-            parts = clean.rsplit(",", 1)
-            city = parts[1].strip()
-            address = parts[0].strip()
-
-        return (address, city, state, zip_code)
-
-    @staticmethod
-    def _clean_charge_text(raw_charge: str) -> str:
-        """Clean charge text to extract human-readable description."""
-        if not raw_charge:
-            return ""
-        text = re.sub(
-            r"^(New Charge:|Weekender:|Charge Description:)\s*",
-            "",
-            raw_charge,
-            flags=re.IGNORECASE,
-        )
-        # Extract text after statute number and dash
-        match = re.search(r"[\d.]+[a-z]*\s*-\s*(.+)", text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-        # Remove leading statute number
-        text = re.sub(r"^[\d.]+[a-z]*\s*", "", text)
-        # Remove degree indicators
-        text = re.sub(r"\s*\([A-Z]\d?\)\s*$", "", text)
-        return text.strip()
+        return result
