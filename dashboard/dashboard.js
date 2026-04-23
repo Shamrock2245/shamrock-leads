@@ -11,7 +11,7 @@ const truncate=(s,n)=>s&&s.length>n?s.substring(0,n)+'…':(s||'—');
 const val=v=>(v!=null&&v!=='')?v:'—';
 const fetchJSON=async u=>{try{return(await fetch(u)).json()}catch(e){console.error(e);return null}};
 
-let currentPage=1,currentSort='booking_date',currentDir=-1;
+let currentPage=1,currentSort='created_at',currentDir=-1;
 let countyChart,bondChart,searchTimeout;
 
 // ── Theme ──
@@ -35,6 +35,9 @@ function switchTab(tab){
   document.querySelectorAll('.tab-content').forEach(p=>p.classList.remove('active'));
   if(tab==='analytics'){
     $('tabAnalytics').classList.add('active');$('panelAnalytics').classList.add('active');
+  }else if(tab==='health'){
+    $('tabHealth').classList.add('active');$('panelHealth').classList.add('active');
+    if(!window._healthLoaded){loadHealthTab();window._healthLoaded=true}
   }else{
     $('tabDefendants').classList.add('active');$('panelDefendants').classList.add('active');
     if(!window._defLoaded){loadDefendants();window._defLoaded=true}
@@ -43,6 +46,7 @@ function switchTab(tab){
 function refreshCurrentTab(){
   $('lastUpdate').textContent='Updated: '+new Date().toLocaleTimeString();
   if($('panelAnalytics').classList.contains('active'))loadDashboard();
+  else if($('panelHealth').classList.contains('active')){window._healthLoaded=false;loadHealthTab();}
   else loadDefendants();
 }
 
@@ -122,3 +126,103 @@ async function loadDashboard(){
 }
 loadDashboard();
 setInterval(()=>{if($('panelAnalytics').classList.contains('active'))loadDashboard()},120000);
+
+// ═══════════════════════════════════════════════════════
+//  Scraper Health Tab
+// ═══════════════════════════════════════════════════════
+let healthData=[], healthSortCol='total_records', healthSortDir=-1;
+let drillCounty='', drillPage=1, drillSort='created_at', drillDir=-1, drillTimeout;
+
+async function loadHealthTab(){
+  healthData = await fetchJSON('/api/scraper-health');
+  if(!healthData) return;
+  
+  const healthy = healthData.filter(d=>d.status==='healthy').length;
+  const stale = healthData.filter(d=>['stale','warning','offline'].includes(d.status)).length;
+  const total24h = healthData.reduce((s,d)=>s+d.records_24h, 0);
+  
+  $('healthCounties').textContent = healthData.length;
+  $('healthHealthy').textContent = healthy;
+  $('health24h').textContent = total24h.toLocaleString();
+  $('healthStale').textContent = stale;
+  $('healthBadge').textContent = healthData.length;
+  
+  renderHealthTable();
+}
+
+function renderHealthTable(){
+  const d = [...healthData];
+  d.sort((a,b)=>{
+    let av=a[healthSortCol], bv=b[healthSortCol];
+    if(typeof av==='string') return healthSortDir * av.localeCompare(bv);
+    return healthSortDir * ((av||0) - (bv||0));
+  });
+  
+  const statusBadge = s => {
+    const map = {healthy:'🟢', stale:'🟡', warning:'🟠', offline:'🔴'};
+    return `<span class="status-badge status-${s}">${map[s]||'⚪'} ${s}</span>`;
+  };
+  const timeAgo = h => {
+    if(h>=999) return '—';
+    if(h<1) return `${Math.round(h*60)}m ago`;
+    if(h<24) return `${Math.round(h)}h ago`;
+    return `${Math.round(h/24)}d ago`;
+  };
+  
+  $('healthBody').innerHTML = d.length ? d.map(r => `
+    <tr class="health-row" onclick="openDrill('${r.county}')" style="cursor:pointer">
+      <td>${statusBadge(r.status)}</td>
+      <td style="font-weight:600">${r.county}</td>
+      <td>${r.total_records.toLocaleString()}</td>
+      <td style="color:${r.records_24h>0?'#10b981':'var(--muted)'}">${r.records_24h}</td>
+      <td>${r.in_custody.toLocaleString()}</td>
+      <td class="${bondClass(r.avg_bond)}">${money(r.avg_bond)}</td>
+      <td>${money(r.total_bond)}</td>
+      <td style="color:${r.hours_since_update<2?'#10b981':r.hours_since_update<6?'#f59e0b':'#ef4444'}">${timeAgo(r.hours_since_update)}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="8" class="loading">No scraper data</td></tr>';
+}
+
+function sortHealth(col){
+  if(healthSortCol===col) healthSortDir*=-1;
+  else { healthSortCol=col; healthSortDir=-1; }
+  renderHealthTable();
+}
+
+// ── County Drill-Down ──
+async function openDrill(county){
+  drillCounty=county; drillPage=1;
+  $('countyDrillPanel').style.display='block';
+  $('drillTitle').textContent=`📋 ${county} County — Recent Arrests (newest first)`;
+  $('drillSearch').value='';
+  loadDrillData();
+  $('countyDrillPanel').scrollIntoView({behavior:'smooth'});
+}
+function closeDrill(){$('countyDrillPanel').style.display='none';}
+function sortDrill(col){
+  if(drillSort===col) drillDir*=-1;
+  else { drillSort=col; drillDir=-1; }
+  drillPage=1; loadDrillData();
+}
+function debounceDrillSearch(){clearTimeout(drillTimeout);drillTimeout=setTimeout(()=>{drillPage=1;loadDrillData();},300);}
+
+async function loadDrillData(){
+  let url=`/api/county-arrests/${encodeURIComponent(drillCounty)}?page=${drillPage}&sort=${drillSort}&dir=${drillDir}&limit=25`;
+  const s=$('drillSearch').value;
+  if(s) url+=`&search=${encodeURIComponent(s)}`;
+  const data = await fetchJSON(url);
+  if(!data) return;
+  $('drillCount').textContent=`${data.total} results`;
+  $('drillBody').innerHTML = data.arrests.length ? data.arrests.map(d=>`
+    <tr>
+      <td style="font-weight:500">${val(d.full_name)}</td>
+      <td class="${bondClass(d.bond_amount)}">${money(d.bond_amount)}</td>
+      <td title="${d.charges||''}">${truncate(d.charges,40)}</td>
+      <td>${val(d.booking_date)}</td>
+      <td style="color:var(--muted);font-size:11px">${d.created_at?new Date(d.created_at).toLocaleString():'—'}</td>
+      <td>${val(d.status)}</td>
+      <td style="color:var(--muted)">${val(d.facility)}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="7" class="loading">No records</td></tr>';
+  $('drillPagination').innerHTML=`<button ${data.page<=1?'disabled':''} onclick="drillPage=${data.page-1};loadDrillData()">← Prev</button><span>Page ${data.page} of ${data.pages}</span><button ${data.page>=data.pages?'disabled':''} onclick="drillPage=${data.page+1};loadDrillData()">Next →</button>`;
+}

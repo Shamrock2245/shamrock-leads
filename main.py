@@ -36,6 +36,15 @@ from scrapers.counties.osceola import OsceolaCountyScraper
 from scrapers.counties.seminole import SeminoleCountyScraper
 from scrapers.counties.palm_beach import PalmBeachCountyScraper
 
+# Tier 5: Statewide expansion — High-Pop (batch 1)
+from scrapers.counties.hillsborough import HillsboroughCountyScraper
+from scrapers.counties.broward import BrowardCountyScraper
+from scrapers.counties.duval import DuvalCountyScraper
+from scrapers.counties.volusia import VolusiaCountyScraper
+from scrapers.counties.brevard import BrevardCountyScraper
+from scrapers.counties.pasco import PascoCountyScraper
+from scrapers.counties.escambia import EscambiaCountyScraper
+
 # ── Logging ──
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
@@ -104,6 +113,15 @@ def register_scrapers(sched: ScraperScheduler):
     sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
     sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
     sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
+
+    # ── Tier 5: Statewide High-Pop expansion (batch 1) ──
+    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
+    sched.register_scraper(BrowardCountyScraper(), interval_minutes=60)
+    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
+    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
 
 
 def handle_shutdown(signum, frame):

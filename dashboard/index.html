@@ -30,6 +30,9 @@
   <button class="tab-btn active" onclick="switchTab('analytics')" id="tabAnalytics">
     📊 Analytics
   </button>
+  <button class="tab-btn" onclick="switchTab('health')" id="tabHealth">
+    🏥 Scraper Health <span class="badge" id="healthBadge">—</span>
+  </button>
   <button class="tab-btn" onclick="switchTab('defendants')" id="tabDefendants">
     👤 Defendant Profiles <span class="badge" id="defBadge">—</span>
   </button>
@@ -95,7 +98,65 @@
 </div>
 
 <!-- ════════════════════════════════════════════════════
-     TAB 2: DEFENDANT PROFILES
+     TAB 2: SCRAPER HEALTH
+     ════════════════════════════════════════════════════ -->
+<div class="tab-content" id="panelHealth">
+<div class="container">
+  <div class="stats-grid" id="healthStatsGrid">
+    <div class="stat-card"><div class="stat-label">Total Counties</div><div class="stat-value" id="healthCounties">—</div><div class="stat-sub">With data in MongoDB</div></div>
+    <div class="stat-card"><div class="stat-label">Healthy Scrapers</div><div class="stat-value" id="healthHealthy" style="color:#10b981">—</div><div class="stat-sub">Updated &lt;2h ago</div></div>
+    <div class="stat-card"><div class="stat-label">24h New Records</div><div class="stat-value" id="health24h">—</div><div class="stat-sub">Across all counties</div></div>
+    <div class="stat-card"><div class="stat-label">Stale / Offline</div><div class="stat-value" id="healthStale" style="color:#ef4444">—</div><div class="stat-sub">Needs attention</div></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:22px">
+    <div class="panel-title">🏥 Scraper Status by County <span style="font-size:12px;color:var(--muted);font-weight:400">(click county to view arrests)</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Status</th>
+          <th onclick="sortHealth('county')" style="cursor:pointer">County ↕</th>
+          <th onclick="sortHealth('total_records')" style="cursor:pointer">Total ↕</th>
+          <th onclick="sortHealth('records_24h')" style="cursor:pointer">24h New ↕</th>
+          <th>In Custody</th>
+          <th onclick="sortHealth('avg_bond')" style="cursor:pointer">Avg Bond ↕</th>
+          <th onclick="sortHealth('total_bond')" style="cursor:pointer">Total Bond ↕</th>
+          <th onclick="sortHealth('hours_since_update')" style="cursor:pointer">Last Update ↕</th>
+        </tr></thead>
+        <tbody id="healthBody"><tr><td colspan="8" class="loading">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- County Drill-Down -->
+  <div class="panel" id="countyDrillPanel" style="display:none;margin-bottom:22px">
+    <div class="panel-title" id="drillTitle">📋 County Arrests</div>
+    <div class="filters" style="margin-bottom:12px">
+      <input type="text" id="drillSearch" placeholder="Search name, charges..." onkeyup="debounceDrillSearch()" style="min-width:240px">
+      <span id="drillCount" style="color:var(--muted);font-size:12px"></span>
+      <button class="refresh-btn" onclick="closeDrill()" style="margin-left:auto">✕ Close</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th onclick="sortDrill('full_name')" style="cursor:pointer">Name ↕</th>
+          <th onclick="sortDrill('bond_amount')" style="cursor:pointer">Bond ↕</th>
+          <th>Charges</th>
+          <th onclick="sortDrill('booking_date')" style="cursor:pointer">Booked ↕</th>
+          <th onclick="sortDrill('created_at')" style="cursor:pointer">Scraped ↕</th>
+          <th>Status</th>
+          <th>Facility</th>
+        </tr></thead>
+        <tbody id="drillBody"><tr><td colspan="7" class="loading">Select a county</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="drillPagination"></div>
+  </div>
+</div>
+</div>
+
+<!-- ════════════════════════════════════════════════════
+     TAB 3: DEFENDANT PROFILES
      ════════════════════════════════════════════════════ -->
 <div class="tab-content" id="panelDefendants">
 <div class="container">

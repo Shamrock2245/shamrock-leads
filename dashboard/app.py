@@ -275,6 +275,117 @@ def api_timeline():
     })
 
 
+# ── API: Scraper Health & Metrics ──
+@app.route("/api/scraper-health")
+def api_scraper_health():
+    """Per-county scraper health metrics."""
+    now = datetime.now(timezone.utc)
+    h24_ago = now - timedelta(hours=24)
+
+    pipeline = [
+        {"$group": {
+            "_id": "$county",
+            "total_records": {"$sum": 1},
+            "latest_record": {"$max": "$created_at"},
+            "latest_booking": {"$max": "$booking_date"},
+            "latest_scrape": {"$max": "$scrape_timestamp"},
+            "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
+            "max_bond": {"$max": "$bond_amount"},
+            "total_bond": {"$sum": "$bond_amount"},
+            "in_custody": {
+                "$sum": {"$cond": [
+                    {"$regexMatch": {"input": {"$ifNull": ["$status", ""]}, "regex": "custody|confined|held", "options": "i"}},
+                    1, 0
+                ]}
+            },
+        }},
+        {"$sort": {"total_records": -1}},
+    ]
+    results = list(arrests.aggregate(pipeline))
+
+    # Get 24h counts per county
+    pipeline_24h = [
+        {"$match": {"created_at": {"$gte": h24_ago}}},
+        {"$group": {"_id": "$county", "count_24h": {"$sum": 1}}},
+    ]
+    counts_24h = {r["_id"]: r["count_24h"] for r in arrests.aggregate(pipeline_24h)}
+
+    out = []
+    for r in results:
+        county = r["_id"]
+        latest = r.get("latest_record") or r.get("latest_scrape")
+
+        # Calculate staleness
+        if isinstance(latest, datetime):
+            hours_since = (now - latest).total_seconds() / 3600
+        else:
+            hours_since = 999
+
+        if hours_since < 2:
+            status = "healthy"
+        elif hours_since < 6:
+            status = "stale"
+        elif hours_since < 24:
+            status = "warning"
+        else:
+            status = "offline"
+
+        out.append({
+            "county": county,
+            "total_records": r["total_records"],
+            "in_custody": r["in_custody"],
+            "records_24h": counts_24h.get(county, 0),
+            "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
+            "hours_since_update": round(hours_since, 1),
+            "status": status,
+            "avg_bond": round(r["avg_bond"] or 0, 2),
+            "max_bond": round(r["max_bond"] or 0, 2),
+            "total_bond": round(r["total_bond"] or 0, 2),
+        })
+
+    return jsonify(out)
+
+
+# ── API: County-Specific Arrests (sorted by newest) ──
+@app.route("/api/county-arrests/<county_name>")
+def api_county_arrests(county_name):
+    """Get arrests for a specific county, sorted newest first."""
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 50))
+    sort_by = request.args.get("sort", "created_at")
+    sort_dir = int(request.args.get("dir", -1))
+    search = request.args.get("search", "")
+
+    query = {"county": county_name}
+    if search:
+        query["$or"] = [
+            {"full_name": {"$regex": search, "$options": "i"}},
+            {"charges": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = arrests.count_documents(query)
+    cursor = (
+        arrests.find(query, {"_id": 0})
+        .sort(sort_by, sort_dir)
+        .skip((page - 1) * limit)
+        .limit(limit)
+    )
+    results = []
+    for doc in cursor:
+        for k, v in doc.items():
+            if isinstance(v, datetime):
+                doc[k] = v.isoformat()
+        results.append(doc)
+
+    return jsonify({
+        "county": county_name,
+        "arrests": results,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + limit - 1) // limit),
+    })
+
+
 # ── API: Defendant Profiles (paginated, full detail) ──
 @app.route("/api/defendants")
 def api_defendants():

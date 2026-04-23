@@ -249,3 +249,18 @@ canvas{max-height:280px}
 .toast-icon{font-size:18px;flex-shrink:0}
 .toast-message{line-height:1.4}
 
+/* ═══════════════════════════════════════════════════════
+   SCRAPER HEALTH TAB
+   ═══════════════════════════════════════════════════════ */
+.status-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;text-transform:capitalize;letter-spacing:.3px}
+.status-healthy{background:rgba(16,185,129,.12);color:#34d399}
+.status-stale{background:rgba(245,158,11,.12);color:#fbbf24}
+.status-warning{background:rgba(249,115,22,.12);color:#fb923c}
+.status-offline{background:rgba(239,68,68,.12);color:#f87171}
+
+.health-row{transition:var(--transition)}
+.health-row:hover{background:var(--hover) !important;transform:none}
+.health-row td{padding:10px 14px !important}
+
+#countyDrillPanel{border:1px solid var(--border-accent);animation:slideIn .3s ease-out}
+@keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
