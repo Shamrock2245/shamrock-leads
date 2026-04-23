@@ -6,7 +6,7 @@ URL: https://www.hendrysheriff.org/inmateSearch
 Method: DrissionPage browser automation with API response interception
 
 Architecture:
-1. Load inmate search page → wait for Cloudflare
+1. Load inmate search page -> wait for Cloudflare
 2. Intercept XHR/Fetch API responses (paginatedBlog JSON)
 3. Parse HTML content embedded in API response entries
 4. Extract: name, booking info, charges, bond, address, mugshot
@@ -28,7 +28,7 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──
+# -- Config --
 INMATE_SEARCH_URL = "https://www.hendrysheriff.org/inmateSearch"
 MAX_PAGES = 50
 API_WAIT_TIMEOUT = 15  # seconds to wait for API response
@@ -47,7 +47,7 @@ class HendryCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage, ChromiumOptions
         except ImportError:
             logger.error(
-                "❌ DrissionPage not installed. "
+                "DrissionPage not installed. "
                 "Install with: pip install DrissionPage"
             )
             return []
@@ -60,13 +60,13 @@ class HendryCountyScraper(BaseScraper):
             # Set up network listener for API responses
             page.listen.start("paginatedBlog")
 
-            logger.info(f"📡 Loading {INMATE_SEARCH_URL}...")
+            logger.info(f"Loading {INMATE_SEARCH_URL}...")
             page.get(INMATE_SEARCH_URL)
             time.sleep(5)
 
             # Wait for Cloudflare
             if not self._wait_for_cloudflare(page):
-                logger.error("❌ Cloudflare challenge did not clear")
+                logger.error("Cloudflare challenge did not clear")
                 return []
 
             # Handle disclaimer
@@ -74,7 +74,7 @@ class HendryCountyScraper(BaseScraper):
                 agree_btn = page.ele("text:I Agree", timeout=3)
                 if agree_btn:
                     agree_btn.click()
-                    logger.info("👆 Clicked disclaimer")
+                    logger.info("Clicked disclaimer")
                     time.sleep(1)
             except Exception:
                 pass
@@ -87,20 +87,20 @@ class HendryCountyScraper(BaseScraper):
             session_ids = set()
 
             while page_num <= MAX_PAGES:
-                logger.info(f"📄 Processing page {page_num}...")
+                logger.info(f"Processing page {page_num}...")
 
                 # Wait for API response
                 resp_data = self._wait_for_api_response(page)
                 if not resp_data:
-                    logger.info(f"⚠️ No API data on page {page_num}, stopping")
+                    logger.info(f"No API data on page {page_num}, stopping")
                     break
 
                 entries = resp_data.get("entries", [])
                 if not entries:
-                    logger.info(f"⚠️ No entries on page {page_num}, stopping")
+                    logger.info(f"No entries on page {page_num}, stopping")
                     break
 
-                logger.info(f"📊 Found {len(entries)} entries on page {page_num}")
+                logger.info(f"Found {len(entries)} entries on page {page_num}")
 
                 # Process each entry
                 for i, entry in enumerate(entries):
@@ -116,12 +116,12 @@ class HendryCountyScraper(BaseScraper):
 
                         records.append(record)
                     except Exception as e:
-                        logger.warning(f"⚠️ Error parsing entry {i}: {e}")
+                        logger.warning(f"Error parsing entry {i}: {e}")
 
                 # Check for more pages
                 pagination = resp_data.get("pagination", {})
                 if not pagination.get("next"):
-                    logger.info("🏁 No more pages (API)")
+                    logger.info("No more pages (API)")
                     break
 
                 # Click next page
@@ -130,11 +130,11 @@ class HendryCountyScraper(BaseScraper):
 
                 page_num += 1
 
-            logger.info(f"✅ Scraped {len(records)} records from Hendry")
+            logger.info(f"Scraped {len(records)} records from Hendry")
             return records
 
         except Exception as e:
-            logger.error(f"❌ Hendry scraper fatal error: {e}")
+            logger.error(f"Hendry scraper fatal error: {e}")
             return []
 
         finally:
@@ -147,7 +147,7 @@ class HendryCountyScraper(BaseScraper):
             except Exception:
                 pass
 
-    # ── Browser Setup ──
+    # -- Browser Setup --
 
     @staticmethod
     def _setup_browser():
@@ -175,11 +175,11 @@ class HendryCountyScraper(BaseScraper):
         for attempt in range(max_wait):
             title = page.title.lower() if page.title else ""
             if "just a moment" not in title and "security" not in title:
-                logger.info("✅ Page loaded successfully")
+                logger.info("Page loaded successfully")
                 return True
             if attempt % 5 == 0:
                 logger.debug(
-                    f"⏳ Cloudflare challenge... ({attempt}/{max_wait}s)"
+                    f"Cloudflare challenge... ({attempt}/{max_wait}s)"
                 )
             time.sleep(1)
         return False
@@ -191,16 +191,16 @@ class HendryCountyScraper(BaseScraper):
             if sort_select:
                 try:
                     sort_select.select("dateDesc")
-                    logger.info("✅ Sorted by newest (dateDesc)")
+                    logger.info("Sorted by newest (dateDesc)")
                 except Exception:
                     try:
                         sort_select.select("Newest")
-                        logger.info("✅ Sorted by newest (label)")
+                        logger.info("Sorted by newest (label)")
                     except Exception:
-                        logger.debug("⚠️ Could not set sort order")
+                        logger.debug("Could not set sort order")
                 time.sleep(3)
         except Exception:
-            logger.debug("⚠️ Sort select not found")
+            logger.debug("Sort select not found")
 
     def _wait_for_api_response(self, page) -> Optional[dict]:
         """Wait for and capture the paginatedBlog API response."""
@@ -216,7 +216,7 @@ class HendryCountyScraper(BaseScraper):
                 except (json.JSONDecodeError, TypeError):
                     pass
         except Exception as e:
-            logger.debug(f"⚠️ API wait error: {e}")
+            logger.debug(f"API wait error: {e}")
         return None
 
     def _click_next_page(self, page) -> bool:
@@ -228,17 +228,17 @@ class HendryCountyScraper(BaseScraper):
                 time.sleep(3)
                 return True
         except Exception as e:
-            logger.debug(f"⚠️ Next page click failed: {e}")
+            logger.debug(f"Next page click failed: {e}")
         return False
 
-    # ── Data Parsing ──
+    # -- Data Parsing --
 
     def _parse_entry(self, entry: dict) -> Optional[ArrestRecord]:
         """Parse a single API response entry into an ArrestRecord."""
         try:
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("❌ beautifulsoup4 not installed")
+            logger.error("beautifulsoup4 not installed")
             return None
 
         html_content = entry.get("content", "")
@@ -352,7 +352,7 @@ class HendryCountyScraper(BaseScraper):
             LastCheckedMode="INITIAL",
         )
 
-    # ── Utilities ──
+    # -- Utilities --
 
     @staticmethod
     def _extract_label(soup, label_text: str) -> Optional[str]:
