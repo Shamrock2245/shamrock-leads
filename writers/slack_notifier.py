@@ -9,7 +9,7 @@ import os
 import json
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -124,7 +124,7 @@ class SlackNotifier:
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": f"_ShamrockLeads • {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
+                    "text": f"_ShamrockLeads • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_",
                 }
             ],
         })
@@ -175,7 +175,7 @@ class SlackNotifier:
                     "type": "context",
                     "elements": [{
                         "type": "mrkdwn",
-                        "text": f"_{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}_",
+                        "text": f"_{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_",
                     }],
                 },
             ]
