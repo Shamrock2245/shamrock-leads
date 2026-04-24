@@ -59,13 +59,18 @@ class AlachuaCountyScraper(BaseScraper):
             logger.warning("Alachua: no __VIEWSTATE found — page structure may have changed")
 
         # Step 2: POST with "View All" button
+        # The button name varies — try both the full ContentPlaceHolder prefix and the short form
         post_data = {
             "__VIEWSTATE": viewstate,
             "__VIEWSTATEGENERATOR": viewstate_gen,
             "__EVENTVALIDATION": event_validation,
             "__EVENTTARGET": "",
             "__EVENTARGUMENT": "",
+            "ButtonView": "View All",
             "ctl00$ContentPlaceHolder1$ButtonView": "View All",
+            "txtLName": "",
+            "txtFName": "",
+            "txtBookNo": "",
         }
 
         try:

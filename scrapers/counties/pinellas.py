@@ -56,22 +56,86 @@ class PinellasCountyScraper(BaseScraper):
         return ChromiumPage(addr_or_opts=co)
 
     def _scrape_date(self, page, date_str):
+        """Use requests+BeautifulSoup against the ASP.NET InmateBooking endpoint."""
+        import requests
+        from bs4 import BeautifulSoup
         records = []
-        page.get(SEARCH_URL); time.sleep(3)
+        s = requests.Session()
+        s.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+            'Referer': BASE_URL,
+        })
+        # GET to harvest ViewState tokens
         try:
-            date_input = page.ele('css:input[type="date"]') or page.ele('css:input[name*="date"]') or page.ele('css:#BookingDate')
-            if date_input: date_input.clear(); date_input.input(date_str); time.sleep(1)
-            search_btn = page.ele('css:button[type="submit"]') or page.ele('css:input[type="submit"]') or page.ele('text:Search')
-            if search_btn: search_btn.click(); time.sleep(3)
+            r0 = s.get(SEARCH_URL, timeout=20)
+            r0.raise_for_status()
         except Exception as e:
-            logger.warning(f"Form error: {e}"); return records
-        rows = page.eles('xpath://table//tr[td]')
-        if not rows: rows = page.eles('css:.inmate-row') or page.eles('css:.booking-row')
-        for row in rows:
-            try:
-                record = self._parse_row(row, date_str)
-                if record and record.Full_Name and record.Booking_Number: records.append(record)
-            except: continue
+            logger.error(f'Pinellas GET failed: {e}'); return records
+        soup0 = BeautifulSoup(r0.text, 'html.parser')
+        def _gh(n):
+            el = soup0.find('input', {'name': n})
+            return el['value'] if el and el.get('value') else ''
+        post_data = {
+            '_TSM_HiddenField_': _gh('_TSM_HiddenField_'),
+            '__EVENTTARGET': '', '__EVENTARGUMENT': '', '__LASTFOCUS': '',
+            '__VIEWSTATE': _gh('__VIEWSTATE'),
+            '__VIEWSTATEGENERATOR': _gh('__VIEWSTATEGENERATOR'),
+            '__EVENTVALIDATION': _gh('__EVENTVALIDATION'),
+            '__ncforminfo': _gh('__ncforminfo'),
+            'txtLastName': '', 'txtFirstName': '', 'drpRace': 'Any', 'drpSex': 'Any',
+            'txtDocketNumber': '', 'txtBookingDate': date_str,
+            'drpAgencies': '', 'drpCharge': '', 'drpChargeType': '',
+            'drpSortBy': 'Name', 'drpPageSize': '100',
+            'btnSearch': 'Search', 'hdnType': '',
+        }
+        try:
+            r1 = s.post(SEARCH_URL, data=post_data, timeout=30)
+            r1.raise_for_status()
+        except Exception as e:
+            logger.error(f'Pinellas POST failed for {date_str}: {e}'); return records
+        soup1 = BeautifulSoup(r1.text, 'html.parser')
+        # Find the results table — it has name/docket/booking columns
+        result_table = None
+        for table in soup1.find_all('table'):
+            trows = table.find_all('tr')
+            if len(trows) > 2:
+                hdrs = [th.get_text(strip=True).lower() for th in trows[0].find_all(['th', 'td'])]
+                if any(k in ' '.join(hdrs) for k in ['name', 'docket', 'booking']):
+                    result_table = table
+                    break
+        if not result_table:
+            logger.debug(f'Pinellas: no results table for {date_str}')
+            return records
+        trows = result_table.find_all('tr')
+        hdrs = [th.get_text(strip=True).lower() for th in trows[0].find_all(['th', 'td'])]
+        col = {h: i for i, h in enumerate(hdrs)}
+        def _gc(cells, keys):
+            for k in keys:
+                for h, i in col.items():
+                    if k in h and i < len(cells):
+                        return cells[i].get_text(strip=True)
+            return ''
+        for row in trows[1:]:
+            cells = row.find_all(['td', 'th'])
+            if not cells or len(cells) < 2: continue
+            name = _gc(cells, ['name'])
+            if not name: continue
+            docket = _gc(cells, ['docket'])
+            race = _gc(cells, ['race'])
+            sex = _gc(cells, ['sex', 'gender'])
+            charge = _gc(cells, ['charge', 'offense'])
+            agency = _gc(cells, ['agency'])
+            arrest_type = _gc(cells, ['arrest type', 'type'])
+            name_parts = name.split(',', 1)
+            last = name_parts[0].strip()
+            first = name_parts[1].strip() if len(name_parts) > 1 else ''
+            records.append(ArrestRecord(
+                County=self.county, Booking_Number=docket, Full_Name=name,
+                First_Name=first, Last_Name=last, Booking_Date=date_str,
+                Status='In Custody', Facility='Pinellas County Jail',
+                Race=race, Sex=sex, Charges=charge,
+                Bond_Amount='0', Detail_URL=SEARCH_URL, LastCheckedMode='INITIAL'
+            ))
         return records
 
     def _parse_row(self, row, date_str):

@@ -1,8 +1,9 @@
 """
 Volusia County Arrest Scraper — VCSO Inmate Search.
 Source: Volusia County Sheriff's Office
-URL: https://vcso.us/jail-info/inmate-search/
+URL: https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml
 Method: DrissionPage browser (Cloudflare-protected)
+Note: Old URL vcso.us was wrong — site moved to volusia.org
 """
 import logging, json, re, time
 from typing import List
@@ -10,7 +11,8 @@ from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-BASE_URL = "https://vcso.us/jail-info/inmate-search/"
+BASE_URL = "https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml"
+SEARCH_URL = "https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml"
 FACILITY = "Volusia County Branch Jail"
 
 class VolusiaCountyScraper(BaseScraper):
@@ -30,19 +32,19 @@ class VolusiaCountyScraper(BaseScraper):
         page = ChromiumPage(addr_or_opts=co)
         records = []
         try:
-            page.listen.start("json")
+            page.listen.start("api")
             page.get(BASE_URL)
             for i in range(15):
                 if any(k in (page.title or "").lower() for k in ["just a moment", "security"]): time.sleep(3)
                 else: break
-            time.sleep(5)
+            time.sleep(8)  # Wait for JS to fully render
             try:
                 inp = page.ele("tag:input@@type=text", timeout=5)
                 if inp: inp.input("a"); time.sleep(1)
                 btn = page.ele("tag:button@@text():Search", timeout=3)
                 if btn: btn.click(); time.sleep(5)
             except: pass
-            for pkt in page.listen.steps(timeout=15):
+            for pkt in page.listen.steps(timeout=20):
                 try:
                     body = pkt.response.body if hasattr(pkt, "response") and pkt.response else None
                     if isinstance(body, str) and body.strip().startswith(("{","[")): body = json.loads(body)

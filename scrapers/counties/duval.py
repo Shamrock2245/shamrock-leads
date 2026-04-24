@@ -29,9 +29,9 @@ class DuvalCountyScraper(BaseScraper):
         api_responses = []
 
         try:
-            page.listen.start("json")
+            page.listen.start("api")
             page.get(BASE_URL)
-            time.sleep(5)
+            time.sleep(8)  # Angular SPA needs more time to bootstrap and fire API calls
             for attempt in range(15):
                 title = page.title or ""
                 if any(kw in title.lower() for kw in ["just a moment", "security", "checking"]):
@@ -47,7 +47,7 @@ class DuvalCountyScraper(BaseScraper):
                 if search_btn:
                     search_btn.click(); time.sleep(5)
             except Exception: pass
-            packets = page.listen.steps(timeout=15)
+            packets = page.listen.steps(timeout=20)
             for packet in packets:
                 try:
                     if hasattr(packet, "response") and packet.response:

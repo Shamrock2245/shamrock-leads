@@ -54,15 +54,16 @@ class MarionCountyScraper(BaseScraper):
             return el["value"] if el and el.get("value") else ""
 
         # Step 2: POST empty search (shows recent bookings)
+        # Confirmed field names from live form inspection: txtLname, txtFName, btnSearch
         post_data = {
             "__VIEWSTATE": _get_hidden("__VIEWSTATE"),
             "__VIEWSTATEGENERATOR": _get_hidden("__VIEWSTATEGENERATOR"),
             "__EVENTVALIDATION": _get_hidden("__EVENTVALIDATION"),
             "__EVENTTARGET": "",
             "__EVENTARGUMENT": "",
-            "ctl00$ContentPlaceHolder1$txtLastName": "",
-            "ctl00$ContentPlaceHolder1$txtFirstName": "",
-            "ctl00$ContentPlaceHolder1$btnSearch": "Search",
+            "txtLname": "",
+            "txtFName": "",
+            "btnSearch": "Search",
         }
 
         try:
@@ -97,13 +98,20 @@ class MarionCountyScraper(BaseScraper):
             if not any(texts):
                 continue
 
-            full_name = texts[0] if len(texts) > 0 else ""
-            booking_num = texts[1] if len(texts) > 1 else ""
-            booking_date = texts[2] if len(texts) > 2 else ""
-            charges = texts[3] if len(texts) > 3 else ""
-            bond_raw = texts[4] if len(texts) > 4 else "0"
-            race = texts[5] if len(texts) > 5 else ""
-            sex = texts[6] if len(texts) > 6 else ""
+            # Marion columns: Booking#, Photo, InmateID, LastName, FirstName, Middle, Suffix, DOB, Sex, Race, BookingDate, ReleaseDate, InCustody
+            booking_num = texts[0] if len(texts) > 0 else ""
+            inmate_id = texts[2] if len(texts) > 2 else ""
+            last_name = texts[3] if len(texts) > 3 else ""
+            first_name = texts[4] if len(texts) > 4 else ""
+            middle_name = texts[5] if len(texts) > 5 else ""
+            dob = texts[7] if len(texts) > 7 else ""
+            sex = texts[8] if len(texts) > 8 else ""
+            race = texts[9] if len(texts) > 9 else ""
+            booking_date = texts[10] if len(texts) > 10 else ""
+            in_custody = texts[12] if len(texts) > 12 else "Y"
+            full_name = f"{last_name}, {first_name} {middle_name}".strip().rstrip(",")
+            charges = ""
+            bond_raw = "0"
 
             detail_url = ""
             link = row.find("a", href=True)
@@ -113,23 +121,24 @@ class MarionCountyScraper(BaseScraper):
                     href = f"{BASE_URL}/{href.lstrip('/')}"
                 detail_url = href
 
-            f, m, l = self._pn(full_name)
-            bond_amount = self._parse_bond(bond_raw)
+            status = "In Custody" if in_custody.upper() in ("Y", "YES", "1") else "Released"
 
             records.append(ArrestRecord(
                 County=self.county,
                 Booking_Number=self._clean(booking_num),
+                Person_ID=inmate_id,
                 Full_Name=full_name,
-                First_Name=f,
-                Middle_Name=m,
-                Last_Name=l,
+                First_Name=first_name,
+                Middle_Name=middle_name,
+                Last_Name=last_name,
+                DOB=self._clean(dob),
                 Booking_Date=self._clean(booking_date),
-                Status="In Custody",
+                Status=status,
                 Facility=FACILITY,
                 Race=self._clean(race),
                 Sex=self._clean(sex)[:1].upper() if sex else "",
-                Charges=self._clean(charges),
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                Charges=charges,
+                Bond_Amount="0",
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",
             ))

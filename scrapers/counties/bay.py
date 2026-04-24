@@ -1,8 +1,10 @@
 """
-Bay County Arrest Scraper — Bay County Sheriff's Office Mobile Site.
+Bay County Arrest Scraper — Bay County Sheriff's Office Inmate Search.
 Source: Bay County Sheriff's Office
-URL: https://baysomobile.org
-Method: requests + BeautifulSoup — HTML table scraping
+URL: https://www.baysomobile.org/is/
+Method: requests + session — UniGUI/Ext.js hyb.dll HandleEvent API
+Pattern: GET page to get session ID → POST HandleEvent to search → parse HTML response
+Note: Old URL baysomobile.org/inmates was wrong; correct URL is baysomobile.org/is/
 """
 import logging
 import re
@@ -13,180 +15,162 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://baysomobile.org"
-SEARCH_URL = f"{BASE_URL}/inmates"
+BASE_URL = "https://www.baysomobile.org/is"
+HANDLE_URL = f"{BASE_URL}/hyb.dll/HandleEvent"
 FACILITY = "Bay County Jail"
+
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": BASE_URL,
 }
 
 
 class BayCountyScraper(BaseScraper):
+
     @property
     def county(self) -> str:
         return "Bay"
 
+    @property
+    def interval_minutes(self) -> int:
+        return 120
+
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            return self._scrape_unigui()
+        except Exception as e:
+            logger.error(f"[BAY] Scrape failed: {e}")
+            return []
+
+    def _scrape_unigui(self) -> List[ArrestRecord]:
+        """Scrape Bay County using UniGUI/hyb.dll session-based API."""
+        import requests
+        from bs4 import BeautifulSoup
 
         session = requests.Session()
         session.headers.update(HEADERS)
 
-        all_records = []
-        seen = set()
-        page_num = 1
+        # Step 1: GET the page to establish session and get _S_ID
+        logger.info("[BAY] Loading inmate search page...")
+        resp = session.get(f"{BASE_URL}/", timeout=30)
+        resp.raise_for_status()
 
-        while True:
-            try:
-                url = SEARCH_URL if page_num == 1 else f"{SEARCH_URL}?page={page_num}"
-                resp = session.get(url, timeout=30)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
-
-                batch = self._parse_page(soup, seen)
-                if not batch:
-                    break
-
-                all_records.extend(batch)
-
-                # Check for next page link
-                next_link = soup.find("a", string=re.compile(r"next|>|\u00bb", re.I))
-                if not next_link:
-                    break
-
-                page_num += 1
-                time.sleep(1)
-
-            except Exception as e:
-                logger.warning(f"Bay page {page_num}: {e}")
+        # Extract session ID from page source
+        sid = ""
+        for pattern in [r'_S_ID["\s]*[:=]["\s]*([A-Za-z0-9]+)', r'"_S_ID":"([^"]+)"', r'_S_ID=([A-Za-z0-9]+)']:
+            m = re.search(pattern, resp.text)
+            if m:
+                sid = m.group(1)
+                logger.info(f"[BAY] Got session ID: {sid[:8]}...")
                 break
 
-        logger.info(f"Bay: {len(all_records)} records")
-        return all_records
+        if not sid:
+            logger.warning("[BAY] Could not extract session ID")
 
-    def _parse_page(self, soup, seen: set) -> List[ArrestRecord]:
+        # Step 2: POST HandleEvent to trigger search with empty last name (returns all)
+        search_headers = {
+            **HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{BASE_URL}/",
+        }
+
+        post_data = f"Ajax=1&IsEvent=1&Obj=O68&Evt=click&this=O68&_S_ID={sid}&_seq_=3&_uo_=O0"
+
+        logger.info("[BAY] Submitting search...")
+        search_resp = session.post(
+            HANDLE_URL,
+            data=post_data,
+            headers=search_headers,
+            timeout=30,
+        )
+
         records = []
-        table = None
-        for t in soup.find_all("table"):
-            text = t.get_text(" ").lower()
-            if any(kw in text for kw in ["name", "booking", "inmate", "arrest"]):
-                rows = t.find_all("tr")
-                if len(rows) > 1:
-                    table = t
-                    break
+        if search_resp.status_code == 200:
+            records = self._parse_html(search_resp.text)
 
-        if not table:
-            # Try list-based layout
-            items = soup.find_all(class_=re.compile(r"inmate|booking|arrest|record", re.I))
-            for item in items:
-                text = item.get_text(" ", strip=True)
-                if not text:
-                    continue
-                # Basic extraction
-                name_m = re.search(r"([A-Z]+,\s*[A-Z]+)", text)
-                booking_m = re.search(r"(?:Booking|#)\s*:?\s*(\w+)", text, re.I)
-                if name_m:
-                    full_name = name_m.group(1)
-                    booking_num = booking_m.group(1) if booking_m else ""
-                    key = (full_name, booking_num)
-                    if key not in seen:
-                        seen.add(key)
-                        f, m, l = self._pn(full_name)
-                        records.append(ArrestRecord(
-                            County=self.county,
-                            Full_Name=full_name,
-                            First_Name=f,
-                            Middle_Name=m,
-                            Last_Name=l,
-                            Booking_Number=booking_num,
-                            Status="In Custody",
-                            Facility=FACILITY,
-                            LastCheckedMode="INITIAL",
-                        ))
-            return records
+        # If no records from HandleEvent, try parsing the initial page
+        if not records:
+            logger.info("[BAY] Trying initial page parse...")
+            records = self._parse_html(resp.text)
 
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            if not any(texts):
-                continue
-
-            full_name = texts[0] if len(texts) > 0 else ""
-            booking_num = texts[1] if len(texts) > 1 else ""
-            booking_date = texts[2] if len(texts) > 2 else ""
-            charges = texts[3] if len(texts) > 3 else ""
-            bond_raw = texts[4] if len(texts) > 4 else "0"
-
-            key = (full_name, booking_num)
-            if key in seen or not full_name:
-                continue
-            seen.add(key)
-
-            detail_url = ""
-            link = row.find("a", href=True)
-            if link:
-                href = link["href"]
-                if not href.startswith("http"):
-                    href = f"{BASE_URL}/{href.lstrip('/')}"
-                detail_url = href
-
-            f, m, l = self._pn(full_name)
-            bond_amount = self._parse_bond(bond_raw)
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=self._clean(booking_num),
-                Full_Name=full_name,
-                First_Name=f,
-                Middle_Name=m,
-                Last_Name=l,
-                Booking_Date=self._clean(booking_date),
-                Status="In Custody",
-                Facility=FACILITY,
-                Charges=self._clean(charges),
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
-            ))
-
+        logger.info(f"[BAY] Found {len(records)} records")
         return records
 
-    @staticmethod
-    def _clean(text):
-        if not text:
-            return ""
-        return " ".join(str(text).strip().split())
+    def _parse_html(self, html: str) -> List[ArrestRecord]:
+        """Parse UniGUI HTML response for inmate records."""
+        from bs4 import BeautifulSoup
 
-    @staticmethod
-    def _pn(n):
-        if not n:
-            return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), p[-1] if len(p) >= 2 else ""
+        records = []
+        seen = set()
+        soup = BeautifulSoup(html, "html.parser")
 
-    @staticmethod
-    def _parse_bond(bond_str):
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+        # UniGUI grid rows
+        rows = soup.find_all("tr", class_=re.compile(r"x-grid-row|unigrid-row|grid-row", re.I))
+
+        if not rows:
+            # Try any table with multiple rows
+            for table in soup.find_all("table"):
+                trows = table.find_all("tr")
+                if len(trows) > 2:
+                    rows = trows[1:]
+                    break
+
+        for row in rows:
+            try:
+                cells = row.find_all(["td", "div"], class_=re.compile(r"x-grid-cell|grid-cell", re.I))
+                if not cells:
+                    cells = row.find_all("td")
+                if len(cells) < 2:
+                    continue
+
+                cell_texts = [c.get_text(" ", strip=True) for c in cells]
+                booking_text = " ".join(cell_texts)
+
+                # Extract name (LAST, FIRST pattern)
+                name_match = re.search(r"([A-Z][A-Z\s,'-]{2,}),\s*([A-Z][A-Z\s'-]+)", booking_text)
+                if not name_match:
+                    continue
+
+                last_name = name_match.group(1).strip()
+                first_name = name_match.group(2).strip()
+
+                booking_match = re.search(r"(?:Booking|Book)\s*#?\s*:?\s*([A-Z0-9-]+)", booking_text, re.I)
+                booking_num = booking_match.group(1) if booking_match else ""
+
+                dob_match = re.search(r"(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", booking_text, re.I)
+                dob = dob_match.group(1) if dob_match else ""
+
+                date_match = re.search(r"(?:Booking Date|Booked)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", booking_text, re.I)
+                booking_date = date_match.group(1) if date_match else ""
+
+                charges_text = cell_texts[-1] if len(cell_texts) > 2 else ""
+
+                bond_match = re.search(r"\$[\d,]+\.?\d*", booking_text)
+                bond_amount = bond_match.group(0) if bond_match else ""
+
+                key = (last_name, booking_num)
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                records.append(ArrestRecord(
+                    County=self.county,
+                    First_Name=first_name,
+                    Last_Name=last_name,
+                    Booking_Number=booking_num,
+                    Booking_Date=booking_date,
+                    DOB=dob,
+                    Charges=charges_text[:500],
+                    Bond_Amount=bond_amount,
+                    Facility=FACILITY,
+                    Status="In Custody",
+                    LastCheckedMode="INITIAL",
+                ))
+
+            except Exception as e:
+                logger.debug(f"[BAY] Row parse error: {e}")
+                continue
+
+        return records

@@ -1,27 +1,33 @@
 """
-Indian River County Arrest Scraper — HTML Inmate Search.
+Indian River County Arrest Scraper — Custom HTML Table
 Source: Indian River County Sheriff's Office
-URL: https://www.ircsheriff.org/inmate-search
-Method: requests + BeautifulSoup — alphabetical search to get all inmates
+URL: https://www.ircsheriff.org/inmate-search (SSL cert issues — use verify=False)
+Method: requests with SSL verification disabled + BeautifulSoup
+Note: ircsheriff.org has an expired/invalid SSL cert — verify=False required
 """
 import logging
 import re
-import string
-import time
+import warnings
+import urllib3
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+
+# Suppress SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.ircsheriff.org"
 SEARCH_URL = f"{BASE_URL}/inmate-search"
+TODAYS_URL = f"{BASE_URL}/todays-bookings"
 FACILITY = "Indian River County Jail"
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": BASE_URL,
 }
 
 
@@ -35,109 +41,114 @@ class IndianRiverCountyScraper(BaseScraper):
             import requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("requests/bs4 not installed")
+            return []
 
         session = requests.Session()
         session.headers.update(HEADERS)
+        session.verify = False  # SSL cert issue on ircsheriff.org
 
-        all_records = []
+        records = []
         seen = set()
 
-        # Try alphabetical last name search
-        for letter in string.ascii_uppercase:
+        # Try main inmate search page first
+        for url in [SEARCH_URL, TODAYS_URL]:
             try:
-                resp = session.post(SEARCH_URL, data={"last_name": letter, "first_name": ""}, timeout=30)
-                if resp.status_code != 200:
-                    resp = session.get(f"{SEARCH_URL}?last_name={letter}", timeout=30)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
-                batch = self._parse_table(soup, seen)
-                all_records.extend(batch)
-                time.sleep(0.5)
+                resp = session.get(url, timeout=30)
+                if resp.status_code == 200 and len(resp.text) > 1000:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    batch = self._parse_html(soup, seen)
+                    records.extend(batch)
+                    if records:
+                        break
             except Exception as e:
-                logger.warning(f"Indian River letter {letter}: {e}")
+                logger.warning(f"Indian River: {url} failed: {e}")
                 continue
 
-        if not all_records:
-            # Fallback: simple GET
-            try:
-                resp = session.get(SEARCH_URL, timeout=30)
-                resp.raise_for_status()
-                soup = BeautifulSoup(resp.text, "html.parser")
-                all_records = self._parse_table(soup, seen)
-            except Exception as e:
-                logger.error(f"Indian River fallback: {e}")
+        # If no records, try DrissionPage fallback
+        if not records:
+            records = self._browser_fallback(seen)
 
-        logger.info(f"Indian River: {len(all_records)} records")
-        return all_records
-
-    def _parse_table(self, soup, seen: set) -> List[ArrestRecord]:
-        records = []
-        table = None
-        for t in soup.find_all("table"):
-            text = t.get_text(" ").lower()
-            if any(kw in text for kw in ["name", "booking", "inmate", "arrest"]):
-                rows = t.find_all("tr")
-                if len(rows) > 1:
-                    table = t
-                    break
-
-        if not table:
-            return []
-
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            if not any(texts):
-                continue
-
-            full_name = texts[0] if len(texts) > 0 else ""
-            booking_num = texts[1] if len(texts) > 1 else ""
-            booking_date = texts[2] if len(texts) > 2 else ""
-            charges = texts[3] if len(texts) > 3 else ""
-            bond_raw = texts[4] if len(texts) > 4 else "0"
-
-            key = (full_name, booking_num)
-            if key in seen or not full_name:
-                continue
-            seen.add(key)
-
-            detail_url = ""
-            link = row.find("a", href=True)
-            if link:
-                href = link["href"]
-                if not href.startswith("http"):
-                    href = f"{BASE_URL}/{href.lstrip('/')}"
-                detail_url = href
-
-            f, m, l = self._pn(full_name)
-            bond_amount = self._parse_bond(bond_raw)
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=self._clean(booking_num),
-                Full_Name=full_name,
-                First_Name=f,
-                Middle_Name=m,
-                Last_Name=l,
-                Booking_Date=self._clean(booking_date),
-                Status="In Custody",
-                Facility=FACILITY,
-                Charges=self._clean(charges),
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
-            ))
-
+        logger.info(f"Indian River: {len(records)} records")
         return records
 
-    @staticmethod
-    def _clean(text):
-        if not text:
-            return ""
-        return " ".join(str(text).strip().split())
+    def _parse_html(self, soup, seen: set) -> List[ArrestRecord]:
+        records = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+            header_text = rows[0].get_text(" ").lower()
+            if not any(kw in header_text for kw in ["name", "booking", "inmate"]):
+                continue
+            for row in rows[1:]:
+                cells = row.find_all("td")
+                if len(cells) < 2:
+                    continue
+                texts = [c.get_text(strip=True) for c in cells]
+                full_name = texts[0]
+                if not full_name:
+                    continue
+                booking_num = texts[1] if len(texts) > 1 else ""
+                booking_date = texts[2] if len(texts) > 2 else ""
+                charges = texts[3] if len(texts) > 3 else ""
+                bond_raw = texts[4] if len(texts) > 4 else "0"
+                key = booking_num or full_name
+                if key in seen:
+                    continue
+                seen.add(key)
+                detail_url = ""
+                link = row.find("a", href=True)
+                if link:
+                    href = link["href"]
+                    detail_url = href if href.startswith("http") else f"{BASE_URL}/{href.lstrip('/')}"
+                f, m, l = self._pn(full_name)
+                bond_amount = self._parse_bond(bond_raw)
+                records.append(ArrestRecord(
+                    County=self.county,
+                    Booking_Number=booking_num,
+                    Full_Name=full_name,
+                    First_Name=f, Middle_Name=m, Last_Name=l,
+                    Booking_Date=booking_date,
+                    Status="In Custody",
+                    Facility=FACILITY,
+                    Charges=charges,
+                    Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                    Detail_URL=detail_url,
+                    LastCheckedMode="INITIAL",
+                ))
+            if records:
+                break
+        return records
+
+    def _browser_fallback(self, seen: set) -> List[ArrestRecord]:
+        try:
+            from DrissionPage import ChromiumPage, ChromiumOptions
+            from bs4 import BeautifulSoup
+        except ImportError:
+            return []
+        opts = ChromiumOptions()
+        opts.headless(True)
+        opts.set_argument("--no-sandbox")
+        opts.set_argument("--disable-dev-shm-usage")
+        opts.set_argument("--ignore-certificate-errors")
+        opts.set_argument("--disable-gpu")
+        page = None
+        try:
+            page = ChromiumPage(addr_or_opts=opts)
+            page.get(SEARCH_URL)
+            page.wait(5)
+            soup = BeautifulSoup(page.html, "html.parser")
+            return self._parse_html(soup, seen)
+        except Exception as e:
+            logger.error(f"Indian River browser fallback: {e}")
+            return []
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass
 
     @staticmethod
     def _pn(n):
@@ -150,13 +161,13 @@ class IndianRiverCountyScraper(BaseScraper):
             fm = p[1].strip().split()
             return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
         p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), p[-1] if len(p) >= 2 else ""
+        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
 
     @staticmethod
     def _parse_bond(bond_str):
         if not bond_str:
             return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
+        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
         if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
             return 0.0
         try:
