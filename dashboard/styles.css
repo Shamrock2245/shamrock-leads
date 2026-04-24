@@ -181,6 +181,7 @@ canvas{max-height:280px}
 .modal-close:hover{color:var(--text);background:var(--hover)}
 .modal-body{padding:24px}
 .modal-footer{padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+.modal-lg{max-width:720px}
 .btn-primary{padding:10px 24px;border-radius:var(--radius-sm);border:none;background:var(--accent);color:#000;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;transition:var(--transition)}
 .btn-primary:hover{filter:brightness(1.1);transform:translateY(-1px)}
 .btn-cancel{padding:10px 24px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-secondary);font-weight:500;font-size:13px;cursor:pointer;font-family:inherit;transition:var(--transition)}
@@ -369,4 +370,71 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
   .grid-2,.grid-3{grid-template-columns:1fr}
   .preset-bar{gap:4px}
   .preset-btn{padding:4px 10px;font-size:10px}
+}
+
+/* ── Write Bond Button ── */
+.btn-write-bond{background:linear-gradient(135deg,var(--accent),#059669);color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:var(--transition);display:inline-flex;align-items:center;gap:4px}
+.btn-write-bond:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(16,185,129,.3)}
+
+/* ── Insurer Selector ── */
+.insurer-selector{display:flex;gap:12px;margin-top:8px}
+.insurer-pill{flex:1;background:var(--surface);border:2px solid var(--border);border-radius:12px;padding:16px;cursor:pointer;text-align:center;transition:var(--transition)}
+.insurer-pill:hover{border-color:var(--accent);background:var(--hover)}
+.insurer-pill.active{border-color:var(--accent);background:rgba(16,185,129,.08);box-shadow:0 0 20px rgba(16,185,129,.1)}
+.insurer-pill-icon{font-size:24px;display:block;margin-bottom:6px}
+.insurer-pill-name{font-size:16px;font-weight:700;display:block;color:var(--text)}
+.insurer-pill-full{font-size:11px;color:var(--muted);display:block;margin-top:2px}
+
+/* ── Write Bond Modal Sections ── */
+.wb-section{margin-bottom:20px}
+.wb-section-label{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:10px;font-weight:600}
+.wb-defendant-summary{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}
+.wb-name{font-size:18px;font-weight:700;margin-bottom:12px}
+.wb-meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.wb-meta-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:2px}
+.wb-poa-notice{display:flex;gap:12px;align-items:flex-start;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:14px}
+.wb-poa-icon{font-size:20px}
+.wb-poa-title{font-size:13px;font-weight:700;color:var(--gold)}
+.wb-poa-text{font-size:12px;color:var(--text-secondary);margin-top:2px}
+
+/* ── Defendant Cards ── */
+.def-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;margin-top:16px}
+.def-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:var(--transition)}
+.def-card:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--glow)}
+.def-card-header{display:flex;justify-content:space-between;align-items:flex-start;padding:16px 16px 12px;border-bottom:1px solid var(--border)}
+.def-name{font-size:15px;font-weight:700}
+.def-booking{font-size:11px;color:var(--muted);margin-top:2px}
+.def-bond-pill{padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700}
+.def-bond-pill.high{background:rgba(239,68,68,.12);color:#f87171}
+.def-bond-pill.mid{background:rgba(245,158,11,.12);color:#fbbf24}
+.def-bond-pill.low{background:rgba(16,185,129,.12);color:#34d399}
+.def-body{padding:12px 16px}
+.def-section{margin-bottom:10px}
+.def-section-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px;font-weight:600}
+.def-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.def-row.wide{grid-template-columns:1fr}
+.def-field{display:flex;flex-direction:column;gap:1px}
+.def-label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+.def-value{font-size:13px;color:var(--text)}
+.def-status-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.def-status-badge.custody{background:rgba(245,158,11,.12);color:#fbbf24}
+.def-status-badge.released{background:rgba(100,116,139,.12);color:#94a3b8}
+.def-status-badge.other{background:rgba(59,130,246,.08);color:#60a5fa}
+.def-card-footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.btn-detail{background:var(--surface);border:1px solid var(--border);color:var(--text-secondary);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;transition:var(--transition)}
+.btn-detail:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ── Command Center Enhancements ── */
+.accent-card{border:1px solid rgba(16,185,129,.3) !important;background:linear-gradient(135deg,rgba(16,185,129,.04),rgba(59,130,246,.02)) !important}
+.bond-queue-table{width:100%;font-size:13px}
+.bond-queue-table th{text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);border-bottom:1px solid var(--border)}
+.bond-queue-table td{padding:8px 10px;border-bottom:1px solid var(--border)}
+.county-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.county-row:last-child{border:none}
+.county-name{font-weight:600;font-size:13px}
+.court-soon{color:var(--red) !important;font-weight:700}
+@media(max-width:768px){
+  .wb-meta-grid{grid-template-columns:1fr 1fr}
+  .insurer-selector{flex-direction:column}
+  .def-grid{grid-template-columns:1fr}
 }

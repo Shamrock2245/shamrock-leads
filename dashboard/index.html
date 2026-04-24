@@ -12,7 +12,8 @@
 <!-- ═══ HEADER ═══ -->
 <div class="header">
   <div class="header-left">
-    <h1>☘️ ShamrockLeads <small>Florida Arrest Intelligence</small></h1>
+    <img src="https://static.wixstatic.com/media/a3f587_7e5b0a3e2e6a4e5bbc789aff6aa04f4a~mv2.png" alt="Shamrock" style="height:36px;margin-right:10px;vertical-align:middle">
+    <h1>ShamrockLeads <small>Florida Arrest Intelligence</small></h1>
   </div>
   <div class="header-right">
     <span class="live">LIVE</span>
@@ -39,21 +40,68 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content active" id="tabCommand">
   <div class="container">
+    <!-- KPI Row -->
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">Total Records</div><div class="stat-value" id="kpiRecords">—</div><div class="stat-sub" id="kpiRecordsSub"></div></div>
-      <div class="stat-card"><div class="stat-label">Active Scrapers</div><div class="stat-value" id="kpiActive">—</div><div class="stat-sub" id="kpiActiveSub"></div></div>
-      <div class="stat-card"><div class="stat-label">🔥 Hot Leads (24h)</div><div class="stat-value" id="kpiHot">—</div></div>
-      <div class="stat-card"><div class="stat-label">🟡 Warm Leads</div><div class="stat-value" id="kpiWarm">—</div></div>
-      <div class="stat-card"><div class="stat-label">Errors</div><div class="stat-value" id="kpiErrors">—</div></div>
+      <div class="stat-card">
+        <div class="stat-label">Total Records</div>
+        <div class="stat-value" id="kpiRecords">—</div>
+        <div class="stat-sub" id="kpiRecordsSub"></div>
+      </div>
+      <div class="stat-card accent-card">
+        <div class="stat-label">💰 Bond Pipeline</div>
+        <div class="stat-value" id="kpiPipeline">—</div>
+        <div class="stat-sub" id="kpiPipelineSub">est. premium</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">🔥 Hot Leads</div>
+        <div class="stat-value" id="kpiHot">—</div>
+        <div class="stat-sub">score ≥ 70</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">✍️ Bond-Ready</div>
+        <div class="stat-value" id="kpiBondReady">—</div>
+        <div class="stat-sub">in custody + bondable</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">🟢 Active Scrapers</div>
+        <div class="stat-value" id="kpiActive">—</div>
+        <div class="stat-sub" id="kpiActiveSub"></div>
+      </div>
     </div>
+
+    <!-- Bond-Ready Queue (main actionable widget) -->
+    <div class="panel" style="margin-bottom:18px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>✍️ Bond-Ready Queue — In Custody, $1K+ Bond, Score ≥ 40</span>
+        <span class="meta" id="bondQueueMeta"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Defendant</th>
+              <th>County</th>
+              <th>Bond Amount</th>
+              <th>Est. Premium</th>
+              <th>Score</th>
+              <th>Charges</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="bondQueueBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Two-column: Custody by County + Recent Activity Feed -->
     <div class="grid-2">
       <div class="panel">
-        <div class="panel-title">📍 Counties by Volume</div>
-        <div id="countyList"></div>
+        <div class="panel-title">📍 In-Custody by County (Bond Value)</div>
+        <div id="custodyCountyList"></div>
       </div>
       <div class="panel">
-        <div class="panel-title">⚡ Recent Hot Leads</div>
-        <div id="recentHot"></div>
+        <div class="panel-title">⚡ Recent Activity Feed</div>
+        <div id="recentActivity"></div>
       </div>
     </div>
   </div>
@@ -87,9 +135,9 @@
       <div class="btn-group" id="dateRange">
         <button onclick="SL.setDays(1)">1d</button>
         <button onclick="SL.setDays(2)">2d</button>
-        <button class="active" onclick="SL.setDays(3)">3d</button>
+        <button onclick="SL.setDays(3)">3d</button>
         <button onclick="SL.setDays(5)">5d</button>
-        <button onclick="SL.setDays(0)">All</button>
+        <button class="active" onclick="SL.setDays(0)">All</button>
       </div>
 
       <select id="custodyFilter" onchange="SL.applyFilters()">
@@ -148,7 +196,7 @@
             <th data-sort="bond_amount" onclick="SL.sortBy('bond_amount')">Bond</th>
             <th data-sort="lead_score" onclick="SL.sortBy('lead_score')">Score</th>
             <th>Status</th>
-            <th data-sort="arrest_date" onclick="SL.sortBy('arrest_date')" class="sort-desc">Arrest Date</th>
+            <th data-sort="arrest_date" onclick="SL.sortBy('arrest_date')">Arrest Date</th>
             <th>Court Date</th>
             <th>Source</th>
           </tr>
@@ -165,10 +213,47 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabDefendants">
   <div class="container">
+    <!-- Defendant Filters & Sort -->
     <div class="filters">
-      <input type="text" id="defSearch" placeholder="🔍 Search defendants..." style="flex:1;min-width:250px" oninput="SL.debounceDefSearch()">
+      <input type="text" id="defSearch" placeholder="🔍 Search defendants..." style="flex:1;min-width:200px" oninput="SL.debounceDefSearch()">
+
+      <select id="defSort" onchange="SL.loadDefendants()">
+        <option value="bond_amount">Sort: Bond (Highest)</option>
+        <option value="lead_score">Sort: Lead Score</option>
+        <option value="full_name">Sort: Name (A-Z)</option>
+        <option value="arrest_date">Sort: Arrest Date (Newest)</option>
+        <option value="county">Sort: County</option>
+      </select>
+
+      <select id="defCustody" onchange="SL.loadDefendants()">
+        <option value="">All Status</option>
+        <option value="true">In Custody Only</option>
+        <option value="released">Released Only</option>
+      </select>
+
+      <select id="defCountyFilter" onchange="SL.loadDefendants()">
+        <option value="">All Counties</option>
+      </select>
+
+      <select id="defLimit" onchange="SL.loadDefendants()">
+        <option value="24">24 cards</option>
+        <option value="48" selected>48 cards</option>
+        <option value="96">96 cards</option>
+      </select>
     </div>
-    <div class="defendant-grid" id="defendantGrid"></div>
+
+    <div class="filters" style="justify-content:space-between">
+      <div class="btn-group" id="defBondRange">
+        <button class="active" onclick="SL.setDefBond(0)">$0+</button>
+        <button onclick="SL.setDefBond(1000)">$1K+</button>
+        <button onclick="SL.setDefBond(2500)">$2.5K+</button>
+        <button onclick="SL.setDefBond(5000)">$5K+</button>
+        <button onclick="SL.setDefBond(10000)">$10K+</button>
+      </div>
+      <span class="meta" id="defResultsMeta"></span>
+    </div>
+
+    <div class="def-grid" id="defendantGrid"></div>
     <div class="pagination" id="defPagination"></div>
   </div>
 </div>
@@ -194,11 +279,12 @@
 
 <!-- ═══ WRITE BOND MODAL ═══ -->
 <div class="modal-overlay" id="bondModal">
-  <div class="modal">
+  <div class="modal modal-lg">
     <div class="modal-header"><h2>✍️ Write Bond</h2><button class="modal-close" onclick="SL.closeModal()">✕</button></div>
     <div class="modal-body" id="bondModalBody"></div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="SL.closeModal()">Cancel</button>
+      <a id="btnDownloadPdf" class="btn-export" style="display:none" download>📥 Download Bond PDF</a>
       <button class="btn-primary" id="btnSubmitBond" onclick="SL.submitBond()">☘️ Generate Packet</button>
     </div>
   </div>
@@ -212,6 +298,8 @@
   <source src="data:audio/wav;base64,UklGRl9vT19telephones..." type="audio/wav">
 </audio>
 
-<script src="/leads-engine.js"></script>
+<script src="/sl-core.js"></script>
+<script src="/sl-data.js"></script>
+<script src="/sl-features.js"></script>
 </body>
 </html>

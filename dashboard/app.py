@@ -48,8 +48,8 @@ def index():
 
 @app.route("/<path:filename>")
 def serve_file(filename):
-    """Serve CSS, JS, and other static files from dashboard dir."""
-    if filename.endswith((".css", ".js", ".png", ".ico", ".svg")):
+    """Serve CSS, JS, PDF, and other static files from dashboard dir."""
+    if filename.endswith((".css", ".js", ".png", ".ico", ".svg", ".pdf")):
         return send_from_directory(".", filename)
     return send_from_directory(".", "index.html")
 
@@ -136,6 +136,63 @@ def api_mongo_stats_compat():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/command")
+def api_command_center():
+    """Rich command center data — actionable leads, bond-ready queue, revenue pipeline."""
+    try:
+        # Top bond-ready defendants: In Custody + High Bond + Hot/Warm score
+        bond_ready = list(arrests.find(
+            {"status": {"$regex": "custody|confined|held", "$options": "i"},
+             "bond_amount": {"$gte": 1000}, "lead_score": {"$gte": 40}},
+            {"_id": 0, "full_name": 1, "county": 1, "charges": 1,
+             "bond_amount": 1, "lead_score": 1, "lead_status": 1,
+             "status": 1, "booking_number": 1, "dob": 1, "arrest_date": 1,
+             "booking_date": 1, "bond_type": 1, "detail_url": 1}
+        ).sort("bond_amount", -1).limit(25))
+        for doc in bond_ready:
+            for k, v in doc.items():
+                if isinstance(v, datetime):
+                    doc[k] = v.isoformat()
+
+        # Revenue pipeline: sum of bondable amounts
+        pipeline_total = sum(d.get("bond_amount", 0) for d in bond_ready)
+        premium_est = sum(max(100, d.get("bond_amount", 0) * 0.1) for d in bond_ready)
+
+        # Recent activity: last 10 arrests regardless of score
+        recent = list(arrests.find(
+            {}, {"_id": 0, "full_name": 1, "county": 1, "bond_amount": 1,
+                 "lead_score": 1, "lead_status": 1, "scraped_at": 1,
+                 "status": 1, "charges": 1}
+        ).sort("scraped_at", -1).limit(10))
+        for doc in recent:
+            for k, v in doc.items():
+                if isinstance(v, datetime):
+                    doc[k] = v.isoformat()
+
+        # In-custody counts by county (for the map)
+        custody_pipeline = [
+            {"$match": {"status": {"$regex": "custody|confined|held", "$options": "i"}}},
+            {"$group": {"_id": "$county", "count": {"$sum": 1},
+                        "total_bond": {"$sum": "$bond_amount"}}},
+            {"$sort": {"total_bond": -1}}
+        ]
+        custody_by_county = list(arrests.aggregate(custody_pipeline))
+
+        return jsonify({
+            "bond_ready": bond_ready,
+            "pipeline_total": pipeline_total,
+            "premium_estimate": premium_est,
+            "bond_ready_count": len(bond_ready),
+            "recent_activity": recent,
+            "custody_by_county": [{"county": d["_id"], "count": d["count"],
+                                   "total_bond": d.get("total_bond", 0)}
+                                  for d in custody_by_county if d["_id"]],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def _build_leads_query():
     """Shared query builder for /api/leads and /api/leads/export."""
     query = {}
@@ -161,18 +218,15 @@ def _build_leads_query():
     elif custody_param == "released":
         query["status"] = {"$regex": "released|bonded|rts", "$options": "i"}
 
-    # Date range: days=1..5 filters booking_date relative to today
+    # Date range: days=1..30 filters by scraped_at relative to today
     days_param = request.args.get("days", "").strip()
     if days_param:
         try:
             days_int = int(days_param)
             if 1 <= days_int <= 30:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=days_int)
-                # booking_date can be a string or datetime, handle both
-                cutoff_str = cutoff.strftime("%m/%d/%Y")
-                query["$or"] = query.get("$or", [])  # preserve existing $or
-                # Use created_at (datetime) as the canonical date filter
-                query["created_at"] = {"$gte": cutoff}
+                # scraped_at stored as ISO string — compare as string
+                query["scraped_at"] = {"$gte": cutoff.strftime("%Y-%m-%dT%H:%M:%S")}
         except (ValueError, TypeError):
             pass
 
