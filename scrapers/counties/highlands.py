@@ -1,30 +1,30 @@
 """
-Escambia County Arrest Scraper — OCV Next.js SPA via DrissionPage
-Source: Escambia County Sheriff's Office
-URL: https://www.escambiaso.com/inmate-lookup
-Method: DrissionPage — loads Next.js SPA, intercepts OCV API calls for inmate data
-Note: myescambia.com is DEAD. New URL is escambiaso.com/inmate-lookup (OCV platform)
-Proven pattern: swfl-arrest-scrapers/counties/escambia/solver.py (updated URL)
+Highlands County Arrest Scraper — OCV Next.js SPA via DrissionPage
+Source: Highlands County Sheriff's Office
+URL: https://www.highlandssheriff.org/inmateSearch
+Method: DrissionPage — intercepts OCV API calls to get inmate JSON
+Note: The S3 JSON URL (a999041447) returns 403 — app ID is wrong or access restricted.
+      DrissionPage loads the page as a real browser and intercepts the authenticated API calls.
+Proven pattern: swfl-arrest-scrapers/counties/highlands/solver.py
 """
 import logging
 import re
 import json
 import time
-import string
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://www.escambiaso.com/inmate-lookup"
-FACILITY = "Escambia County Jail"
+SEARCH_URL = "https://www.highlandssheriff.org/inmateSearch"
+FACILITY = "Highlands County Jail"
 
 
-class EscambiaCountyScraper(BaseScraper):
+class HighlandsCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
-        return "Escambia"
+        return "Highlands"
 
     def scrape(self) -> List[ArrestRecord]:
         try:
@@ -45,42 +45,48 @@ class EscambiaCountyScraper(BaseScraper):
 
         try:
             page = ChromiumPage(addr_or_opts=opts)
-
-            # Start network interception to catch OCV API calls
             page.listen.start("api")
             page.get(SEARCH_URL)
-            page.wait(5)
+            page.wait(6)
 
             # Collect API responses
-            api_responses = []
-            for pkt in page.listen.steps(timeout=8):
+            api_data = []
+            for pkt in page.listen.steps(timeout=10):
                 try:
                     if pkt.response and pkt.response.body:
                         body = pkt.response.body
                         if isinstance(body, (dict, list)):
-                            api_responses.append(body)
+                            api_data.append(body)
                         elif isinstance(body, str) and (body.startswith("{") or body.startswith("[")):
-                            api_responses.append(json.loads(body))
+                            api_data.append(json.loads(body))
                 except Exception:
                     pass
 
-            # Process intercepted API responses
-            for data in api_responses:
+            # Extract records from API responses
+            for data in api_data:
                 batch = self._extract_from_api(data, seen)
                 all_records.extend(batch)
 
-            # If no API data, try parsing the rendered HTML
+            # If no API data, try scrolling to load more and parse HTML
             if not all_records:
+                # Try clicking "View All" or scrolling
+                try:
+                    btns = page.eles("tag:button")
+                    for btn in btns:
+                        txt = (btn.text or "").lower()
+                        if any(w in txt for w in ["all", "view all", "show all", "load all"]):
+                            btn.click()
+                            page.wait(4)
+                            break
+                except Exception:
+                    pass
+
                 from bs4 import BeautifulSoup
                 soup = BeautifulSoup(page.html, "html.parser")
                 all_records = self._parse_html(soup, seen)
 
-            # Try clicking through A-Z if still no results
-            if not all_records:
-                all_records = self._scrape_az(page, seen)
-
         except Exception as e:
-            logger.error(f"Escambia: DrissionPage error: {e}")
+            logger.error(f"Highlands: DrissionPage error: {e}")
         finally:
             if page:
                 try:
@@ -89,61 +95,23 @@ class EscambiaCountyScraper(BaseScraper):
                 except Exception:
                     pass
 
-        logger.info(f"Escambia: {len(all_records)} records")
+        logger.info(f"Highlands: {len(all_records)} records")
         return all_records
 
-    def _scrape_az(self, page, seen: set) -> List[ArrestRecord]:
-        """Try A-Z letter search if API interception didn't work."""
-        from bs4 import BeautifulSoup
-        records = []
-
-        for letter in string.ascii_uppercase:
-            try:
-                # Look for a search input
-                inputs = page.eles("tag:input")
-                for inp in inputs:
-                    t = inp.attr("type") or ""
-                    placeholder = (inp.attr("placeholder") or "").lower()
-                    if t == "text" or "name" in placeholder or "search" in placeholder:
-                        inp.clear()
-                        inp.input(letter)
-                        break
-
-                # Submit
-                btns = page.eles("tag:button")
-                for btn in btns:
-                    txt = (btn.text or "").lower()
-                    if any(w in txt for w in ["search", "find", "go", "submit"]):
-                        btn.click()
-                        break
-
-                page.wait(3)
-                soup = BeautifulSoup(page.html, "html.parser")
-                batch = self._parse_html(soup, seen)
-                records.extend(batch)
-                time.sleep(0.5)
-
-            except Exception as e:
-                logger.debug(f"Escambia A-Z {letter}: {e}")
-                continue
-
-        return records
-
     def _extract_from_api(self, data, seen: set) -> List[ArrestRecord]:
-        """Extract records from intercepted OCV API JSON."""
+        """Extract records from intercepted OCV/API JSON responses."""
         records = []
 
-        # Handle list of inmates
         items = []
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
-            for key in ["inmates", "records", "data", "results", "items", "bookings"]:
+            for key in ["inmates", "records", "data", "results", "items", "bookings", "docs"]:
                 if key in data and isinstance(data[key], list):
                     items = data[key]
                     break
-            if not items and "total" in data:
-                items = [data]
+            if not items:
+                items = [data] if any(k in data for k in ["lastName", "last_name", "inmateID", "bookingNumber"]) else []
 
         for item in items:
             if not isinstance(item, dict):
@@ -153,25 +121,37 @@ class EscambiaCountyScraper(BaseScraper):
                 for k in keys:
                     for dk in item.keys():
                         if dk.lower() == k.lower():
-                            return str(item[dk]).strip()
+                            v = item[dk]
+                            return str(v).strip() if v is not None else ""
                 return ""
 
-            full_name = _get("name", "fullname", "full_name", "inmateFullName")
-            last_name = _get("lastName", "last_name", "lname", "surname")
+            last_name = _get("lastName", "last_name", "lname")
             first_name = _get("firstName", "first_name", "fname")
             middle_name = _get("middleName", "middle_name", "mname")
-            booking_num = _get("bookingNumber", "booking_number", "bookingNo", "id")
-            booking_date = _get("bookingDate", "booking_date", "arrestDate")
-            charges = _get("charges", "charge", "offenses")
-            bond_raw = _get("bondAmount", "bond_amount", "bond", "totalBond")
-            race = _get("race")
-            sex = _get("sex", "gender")
-            status = _get("status", "inmateStatus") or "In Custody"
-
+            full_name = _get("name", "fullname", "full_name", "titleWithFirst", "title")
             if not full_name and last_name:
                 full_name = f"{last_name}, {first_name}"
                 if middle_name:
                     full_name += f" {middle_name}"
+
+            booking_num = _get("inmateID", "bookingNumber", "booking_number", "bookingNo", "id")
+            booking_date = _get("bookingDate", "booking_date", "arrestDate", "bookedDate")
+            charges = _get("charges", "charge", "offenses")
+            bond_raw = _get("bondAmount", "bond_amount", "bond", "totalBond")
+            race = _get("race")
+            sex = _get("sex", "gender")
+            status = _get("status", "custodyStatus", "custody_status_cd") or "In Custody"
+
+            # Parse OCV content HTML for demographics
+            content = item.get("content", "")
+            if content:
+                demo = self._parse_content(content)
+                if not booking_date:
+                    booking_date = demo.get("booking_date", "")
+                if not race:
+                    race = demo.get("race", "")
+                if not sex:
+                    sex = demo.get("gender", "")
 
             key = booking_num or full_name
             if not key or key in seen:
@@ -184,6 +164,16 @@ class EscambiaCountyScraper(BaseScraper):
             f, m, l = self._pn(full_name) if full_name else (first_name, middle_name, last_name)
             bond_amount = self._parse_bond(bond_raw)
 
+            # Get mugshot URL
+            mugshot_url = ""
+            images = item.get("images", [])
+            if images and isinstance(images, list):
+                img = images[0]
+                if isinstance(img, dict):
+                    mugshot_url = img.get("large", img.get("small", ""))
+                elif isinstance(img, str):
+                    mugshot_url = img
+
             records.append(ArrestRecord(
                 County=self.county,
                 Booking_Number=booking_num,
@@ -192,12 +182,13 @@ class EscambiaCountyScraper(BaseScraper):
                 Middle_Name=m or middle_name,
                 Last_Name=l or last_name,
                 Booking_Date=booking_date,
-                Status=status,
+                Status="In Custody",
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
                 Charges=charges,
                 Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                Mugshot_URL=mugshot_url,
                 LastCheckedMode="INITIAL",
             ))
 
@@ -246,8 +237,28 @@ class EscambiaCountyScraper(BaseScraper):
                     Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
                     LastCheckedMode="INITIAL",
                 ))
+            break
 
         return records
+
+    @staticmethod
+    def _parse_content(html: str) -> dict:
+        """Parse OCV content HTML for demographics."""
+        if not html:
+            return {}
+        text = re.sub(r"<[^>]+>", "\n", html)
+        text = re.sub(r"\n+", "\n", text).strip()
+        result = {}
+        m = re.search(r"Gender:\s*([A-Z])", text)
+        if m:
+            result["gender"] = m.group(1)
+        m = re.search(r"Race:\s*([A-Z]+)", text)
+        if m:
+            result["race"] = m.group(1)
+        m = re.search(r"Booked Date:\s*(\d{1,2}/\d{1,2}/\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)", text)
+        if m:
+            result["booking_date"] = m.group(1)
+        return result
 
     @staticmethod
     def _pn(n):

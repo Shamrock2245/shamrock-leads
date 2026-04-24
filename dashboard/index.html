@@ -11,268 +11,62 @@
 body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;min-height:100vh}
 header{background:linear-gradient(135deg,#064e3b,#047857);padding:16px 24px;border-bottom:2px solid rgba(34,197,94,0.3);position:sticky;top:0;z-index:100}
 .header-inner{max-width:1600px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
-.logo{display:flex;align-items:center;gap:8px}
-.logo h1{font-size:1.2rem;font-weight:800}
-.logo p{font-size:0.65rem;color:#a7f3d0;margin-top:1px}
+.logo{display:flex;align-items:center;gap:8px}.logo h1{font-size:1.2rem;font-weight:800}.logo p{font-size:0.65rem;color:#a7f3d0}
 .live-dot{width:8px;height:8px;background:#22c55e;border-radius:50%;animation:pulse 2s infinite;display:inline-block}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(34,197,94,0.4)}50%{opacity:0.8;box-shadow:0 0 0 6px rgba(34,197,94,0)}}
 .live-label{font-size:0.65rem;color:#a7f3d0;font-weight:600;text-transform:uppercase;letter-spacing:1px;display:flex;align-items:center;gap:6px}
 .tabs{display:flex;gap:2px;background:var(--surface);border-bottom:1px solid var(--border);padding:0 24px}
-.tab-btn{background:none;border:none;color:var(--muted);font-family:inherit;font-size:0.8rem;font-weight:600;padding:12px 18px;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
-.tab-btn:hover{color:var(--text)}
-.tab-btn.active{color:var(--green);border-bottom-color:var(--green)}
+.tab-btn{background:none;border:none;color:var(--muted);font-family:inherit;font-size:0.8rem;font-weight:600;padding:12px 18px;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}.tab-btn:hover{color:var(--text)}.tab-btn.active{color:var(--green);border-bottom-color:var(--green)}
 .tab-panel{display:none}.tab-panel.active{display:block}
 .kpi-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 24px}
 .kpi-inner{max-width:1600px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:14px}
 .kpi{text-align:center}.kpi-value{font-size:1.8rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}.kpi-label{font-size:0.6rem;color:var(--muted);margin-top:3px;text-transform:uppercase;letter-spacing:0.8px;font-weight:600}
 .main{max-width:1600px;margin:0 auto;padding:16px 24px 60px}
 .county-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;margin-top:10px}
-.county-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;border-left:3px solid var(--green);transition:all .15s}
-.county-card:hover{border-color:rgba(34,197,94,0.4);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,0.3)}
-.county-card.error{border-left-color:var(--red)}.county-card.pending{border-left-color:var(--gray)}
-.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.county-name{font-size:0.9rem;font-weight:700}
-.badge{font-size:0.55rem;font-weight:700;padding:2px 7px;border-radius:12px;text-transform:uppercase}
-.badge-ok{background:rgba(34,197,94,0.15);color:var(--green)}.badge-error{background:rgba(239,68,68,0.15);color:var(--red)}.badge-pending{background:rgba(107,114,128,0.15);color:var(--gray)}
-.card-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:4px}
-.mini-stat{text-align:center;background:var(--surface);border-radius:4px;padding:4px}
-.mini-stat-val{font-size:1rem;font-weight:700;line-height:1}.mini-stat-lbl{font-size:0.5rem;color:var(--muted);margin-top:1px;text-transform:uppercase}
-.card-meta{display:flex;justify-content:space-between;margin-top:6px;font-size:0.6rem;color:var(--muted)}
-.card-error{color:var(--red);font-size:0.6rem;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Leads Table */
+.county-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;border-left:3px solid var(--green);transition:all .15s}.county-card:hover{border-color:rgba(34,197,94,0.4);transform:translateY(-1px);box-shadow:0 4px 20px rgba(0,0,0,0.3)}.county-card.error{border-left-color:var(--red)}.county-card.pending{border-left-color:var(--gray)}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}.county-name{font-size:0.9rem;font-weight:700}
+.badge{font-size:0.55rem;font-weight:700;padding:2px 7px;border-radius:12px;text-transform:uppercase}.badge-ok{background:rgba(34,197,94,0.15);color:var(--green)}.badge-error{background:rgba(239,68,68,0.15);color:var(--red)}.badge-pending{background:rgba(107,114,128,0.15);color:var(--gray)}
+.card-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:4px}.mini-stat{text-align:center;background:var(--surface);border-radius:4px;padding:4px}.mini-stat-val{font-size:1rem;font-weight:700;line-height:1}.mini-stat-lbl{font-size:0.5rem;color:var(--muted);margin-top:1px;text-transform:uppercase}
+.card-meta{display:flex;justify-content:space-between;margin-top:6px;font-size:0.6rem;color:var(--muted)}.card-error{color:var(--red);font-size:0.6rem;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .leads-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-.leads-controls input,.leads-controls select{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-size:0.8rem;font-family:inherit;outline:none}
-.leads-controls input:focus,.leads-controls select:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(34,197,94,0.2)}
-.leads-controls input{flex:1;min-width:180px;max-width:300px}
-.leads-table{width:100%;border-collapse:collapse;font-size:0.75rem}
-.leads-table th{text-align:left;padding:8px 10px;background:var(--surface);color:var(--muted);font-size:0.6rem;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;position:sticky;top:0;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}
-.leads-table th:hover{color:var(--green)}
-.leads-table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;max-width:300px}
-.leads-table tr:hover{background:var(--card)}
-.score-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:0.65rem;color:#fff}
-.score-hot{background:var(--orange)}.score-warm{background:var(--yellow);color:#000}.score-cold{background:var(--blue)}.score-disq{background:var(--gray)}
+.leads-controls input,.leads-controls select{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-size:0.8rem;font-family:inherit;outline:none}.leads-controls input:focus,.leads-controls select:focus{border-color:var(--green);box-shadow:0 0 0 2px rgba(34,197,94,0.2)}.leads-controls input{flex:1;min-width:180px;max-width:300px}
+.leads-table{width:100%;border-collapse:collapse;font-size:0.75rem}.leads-table th{text-align:left;padding:8px 10px;background:var(--surface);color:var(--muted);font-size:0.6rem;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;position:sticky;top:0;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap}.leads-table th:hover{color:var(--green)}.leads-table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top;max-width:300px}.leads-table tr:hover{background:var(--card)}
+.score-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:700;font-size:0.65rem;color:#fff}.score-hot{background:var(--orange)}.score-warm{background:var(--yellow);color:#000}.score-cold{background:var(--blue)}.score-disq{background:var(--gray)}
 .bond-val{color:var(--green);font-weight:700;white-space:nowrap}
-.charges-cell{font-size:0.7rem;line-height:1.4;max-height:3.6em;overflow:hidden;text-overflow:ellipsis}
-.charges-cell:hover{max-height:none}
-.custody-tag{font-size:0.55rem;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(239,68,68,0.15);color:var(--red)}
-.released-tag{font-size:0.55rem;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(107,114,128,0.15);color:var(--gray)}
+.charges-cell{font-size:0.7rem;line-height:1.4;max-height:3.6em;overflow:hidden;text-overflow:ellipsis}.charges-cell:hover{max-height:none}
+.custody-tag{font-size:0.55rem;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(239,68,68,0.15);color:var(--red)}.released-tag{font-size:0.55rem;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(107,114,128,0.15);color:var(--gray)}
 .source-link{color:var(--blue);text-decoration:none;font-size:0.65rem}.source-link:hover{text-decoration:underline}
-.pagination{display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px}
-.page-btn{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.75rem;cursor:pointer;font-family:inherit}
-.page-btn:hover{border-color:var(--green)}.page-btn.active{background:var(--green);border-color:var(--green);color:#fff}
-.page-btn:disabled{opacity:0.3;cursor:not-allowed}
-.page-info{font-size:0.7rem;color:var(--muted)}
-.detail-modal{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
-.detail-card{background:var(--card);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}
-.detail-card h2{font-size:1.1rem;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.detail-field{padding:8px;background:var(--surface);border-radius:6px}
-.detail-field .lbl{font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600}
-.detail-field .val{font-size:0.85rem;font-weight:600;margin-top:2px;word-break:break-word}
-.detail-charges{grid-column:1/-1;padding:10px;background:var(--surface);border-radius:6px;margin-top:4px}
-.detail-charges .lbl{font-size:0.55rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px;font-weight:600}
-.detail-charges .charge-item{font-size:0.8rem;padding:4px 0;border-bottom:1px solid var(--border)}
-.detail-charges .charge-item:last-child{border:none}
+.pagination{display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px}.page-btn{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 12px;color:var(--text);font-size:0.75rem;cursor:pointer;font-family:inherit}.page-btn:hover{border-color:var(--green)}.page-btn:disabled{opacity:0.3;cursor:not-allowed}.page-info{font-size:0.7rem;color:var(--muted)}
+.detail-modal{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}.detail-card{background:var(--card);border:1px solid var(--border);border-radius:12px;max-width:700px;width:100%;max-height:85vh;overflow-y:auto;padding:24px}.detail-card h2{font-size:1.1rem;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.detail-field{padding:8px;background:var(--surface);border-radius:6px}.detail-field .lbl{font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:600}.detail-field .val{font-size:0.85rem;font-weight:600;margin-top:2px;word-break:break-word}
+.detail-charges{grid-column:1/-1;padding:10px;background:var(--surface);border-radius:6px;margin-top:4px}.detail-charges .lbl{font-size:0.55rem;color:var(--muted);text-transform:uppercase;margin-bottom:4px;font-weight:600}.detail-charges .charge-item{font-size:0.8rem;padding:4px 0;border-bottom:1px solid var(--border)}.detail-charges .charge-item:last-child{border:none}
 .close-btn{position:absolute;top:16px;right:16px;background:var(--surface);border:1px solid var(--border);color:var(--text);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:1rem;display:flex;align-items:center;justify-content:center}
-.empty-msg{text-align:center;padding:40px;color:var(--muted)}
-.footer{text-align:center;padding:16px;color:var(--muted);font-size:0.6rem}
+.empty-msg{text-align:center;padding:40px;color:var(--muted)}.footer{text-align:center;padding:16px;color:var(--muted);font-size:0.6rem}
 @media(max-width:768px){.county-grid{grid-template-columns:1fr}.kpi-inner{grid-template-columns:repeat(3,1fr)}.kpi-value{font-size:1.3rem}.detail-grid{grid-template-columns:1fr}.leads-table{font-size:0.65rem}}
 </style>
 </head>
 <body>
-<header><div class="header-inner"><div class="logo"><span style="font-size:28px">☘️</span><div><h1>ShamrockLeads</h1><p>Florida Arrest Intelligence — Live Command Center</p></div></div><div style="display:flex;align-items:center;gap:14px"><span class="live-label"><span class="live-dot"></span>LIVE</span><span style="font-size:0.6rem;color:#6ee7b7;background:rgba(0,0,0,0.2);padding:3px 8px;border-radius:12px" id="refreshTimer">30s</span></div></div></header>
-
-<div class="tabs">
-<button class="tab-btn active" data-tab="overview">📊 Overview</button>
-<button class="tab-btn" data-tab="leads">🔍 All Leads</button>
-<button class="tab-btn" data-tab="hot">🔥 Hot Leads</button>
-</div>
-
-<!-- OVERVIEW TAB -->
-<div class="tab-panel active" id="panel-overview">
-<div class="kpi-bar"><div class="kpi-inner">
-<div class="kpi"><div class="kpi-value" style="color:var(--green)" id="kA">—</div><div class="kpi-label">Active</div></div>
-<div class="kpi"><div class="kpi-value" style="color:var(--blue)" id="kT">—</div><div class="kpi-label">Records</div></div>
-<div class="kpi"><div class="kpi-value" style="color:var(--orange)" id="kH">—</div><div class="kpi-label">🔥 Hot</div></div>
-<div class="kpi"><div class="kpi-value" style="color:var(--yellow)" id="kW">—</div><div class="kpi-label">🟡 Warm</div></div>
-<div class="kpi"><div class="kpi-value" style="color:var(--purple)" id="kC">—</div><div class="kpi-label">Counties</div></div>
-<div class="kpi"><div class="kpi-value" style="color:var(--red)" id="kE">—</div><div class="kpi-label">Errors</div></div>
-</div></div>
-<div class="main"><div class="county-grid" id="countyGrid"><div class="empty-msg">⏳ Loading...</div></div></div>
-</div>
-
-<!-- LEADS TAB -->
-<div class="tab-panel" id="panel-leads">
-<div class="main">
-<div class="leads-controls">
-<input type="text" id="leadSearch" placeholder="Search name or charges..."/>
-<select id="leadCounty"><option value="">All Counties</option></select>
-<select id="leadStatus"><option value="">All Statuses</option><option value="Hot">🔥 Hot</option><option value="Warm">🟡 Warm</option><option value="Cold">❄️ Cold</option><option value="Disqualified">❌ Disqualified</option></select>
-<select id="leadSort"><option value="lead_score">Score ↓</option><option value="bond_amount">Bond ↓</option><option value="booking_date">Date ↓</option><option value="full_name">Name</option></select>
-<select id="leadCustody"><option value="">All</option><option value="true">In Custody Only</option></select>
-</div>
-<div style="overflow-x:auto">
-<table class="leads-table"><thead><tr>
-<th>Name</th><th>County</th><th>Charges</th><th>Bond</th><th>Type</th><th>Score</th><th>Status</th><th>Booked</th><th>Court</th><th>Source</th>
-</tr></thead><tbody id="leadsBody"></tbody></table>
-</div>
-<div class="pagination" id="pagination"></div>
-</div>
-</div>
-
-<!-- HOT TAB -->
-<div class="tab-panel" id="panel-hot">
-<div class="main">
-<h3 style="color:var(--orange);margin-bottom:12px;font-size:0.9rem">🔥 Hot Leads — Bond ≥ $1,000 • Score ≥ 80 • In Custody</h3>
-<div style="overflow-x:auto">
-<table class="leads-table"><thead><tr>
-<th>Name</th><th>County</th><th>Charges</th><th>Bond</th><th>Score</th><th>Booked</th><th>Court</th><th>Address</th><th>Source</th>
-</tr></thead><tbody id="hotBody"></tbody></table>
-</div>
-</div>
-</div>
-
-<!-- DETAIL MODAL -->
-<div class="detail-modal" id="detailModal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
-<div class="detail-card" style="position:relative">
-<button class="close-btn" onclick="document.getElementById('detailModal').style.display='none'">✕</button>
-<div id="detailContent"></div>
-</div>
-</div>
-
-<div class="footer">ShamrockLeads v2.1 — Shamrock Active Software © 2026 — Auto-refreshes every 30s</div>
-
+<header><div class="header-inner"><div class="logo"><span style="font-size:28px">☘️</span><div><h1>ShamrockLeads</h1><p>Florida Arrest Intelligence — Command Center</p></div></div><div style="display:flex;align-items:center;gap:14px"><span class="live-label"><span class="live-dot"></span>LIVE</span><span style="font-size:0.6rem;color:#6ee7b7;background:rgba(0,0,0,0.2);padding:3px 8px;border-radius:12px" id="refreshTimer">30s</span></div></div></header>
+<div class="tabs"><button class="tab-btn active" data-tab="overview">📊 Overview</button><button class="tab-btn" data-tab="leads">🔍 All Leads</button><button class="tab-btn" data-tab="hot">🔥 Hot Leads</button></div>
+<div class="tab-panel active" id="panel-overview"><div class="kpi-bar"><div class="kpi-inner"><div class="kpi"><div class="kpi-value" style="color:var(--green)" id="kA">—</div><div class="kpi-label">Active</div></div><div class="kpi"><div class="kpi-value" style="color:var(--blue)" id="kT">—</div><div class="kpi-label">Records</div></div><div class="kpi"><div class="kpi-value" style="color:var(--orange)" id="kH">—</div><div class="kpi-label">🔥 Hot</div></div><div class="kpi"><div class="kpi-value" style="color:var(--yellow)" id="kW">—</div><div class="kpi-label">🟡 Warm</div></div><div class="kpi"><div class="kpi-value" style="color:var(--purple)" id="kC">—</div><div class="kpi-label">Counties</div></div><div class="kpi"><div class="kpi-value" style="color:var(--red)" id="kE">—</div><div class="kpi-label">Errors</div></div></div></div><div class="main"><div class="county-grid" id="countyGrid"><div class="empty-msg">⏳ Loading...</div></div></div></div>
+<div class="tab-panel" id="panel-leads"><div class="main"><div class="leads-controls"><input type="text" id="leadSearch" placeholder="Search name or charges..."/><select id="leadCounty"><option value="">All Counties</option></select><select id="leadStatus"><option value="">All Statuses</option><option value="Hot">🔥 Hot</option><option value="Warm">🟡 Warm</option><option value="Cold">❄️ Cold</option><option value="Disqualified">❌ Disq</option></select><select id="leadSort"><option value="lead_score">Score ↓</option><option value="bond_amount">Bond ↓</option><option value="booking_date">Date ↓</option><option value="full_name">Name</option></select><select id="leadCustody"><option value="">All</option><option value="true">In Custody Only</option></select></div><div style="overflow-x:auto"><table class="leads-table"><thead><tr><th>Name</th><th>County</th><th>Charges</th><th>Bond</th><th>Type</th><th>Score</th><th>Status</th><th>Booked</th><th>Court</th><th>Source</th></tr></thead><tbody id="leadsBody"></tbody></table></div><div class="pagination" id="pagination"></div></div></div>
+<div class="tab-panel" id="panel-hot"><div class="main"><h3 style="color:var(--orange);margin-bottom:12px;font-size:0.9rem">🔥 Hot Leads — Score ≥ 80</h3><div style="overflow-x:auto"><table class="leads-table"><thead><tr><th>Name</th><th>County</th><th>Charges</th><th>Bond</th><th>Score</th><th>Booked</th><th>Court</th><th>Address</th><th>Source</th></tr></thead><tbody id="hotBody"></tbody></table></div></div></div>
+<div class="detail-modal" id="detailModal" style="display:none" onclick="if(event.target===this)this.style.display='none'"><div class="detail-card" style="position:relative"><button class="close-btn" onclick="document.getElementById('detailModal').style.display='none'">✕</button><div id="detailContent"></div></div></div>
+<div class="footer">ShamrockLeads v2.1 — Shamrock Active Software © 2026</div>
 <script>
-const API=window.location.origin;
-let scraperData={},mongoData={},leadsPage=1;
-
-// Tabs
-document.querySelectorAll('.tab-btn').forEach(b=>{
-  b.addEventListener('click',()=>{
-    document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    document.getElementById('panel-'+b.dataset.tab).classList.add('active');
-    if(b.dataset.tab==='leads'){leadsPage=1;fetchLeads()}
-    if(b.dataset.tab==='hot')fetchHotLeads();
-  });
-});
-
-// Fetch overview data
-async function fetchOverview(){
-  try{
-    const[s,m]=await Promise.all([fetch(API+'/api/status').then(r=>r.json()),fetch(API+'/api/mongo-stats').then(r=>r.json())]);
-    scraperData=s;mongoData=m;renderOverview();
-  }catch(e){console.error(e)}
-}
-
-function renderOverview(){
-  const sc=scraperData.scrapers||{},by=mongoData.by_county||{},scores=mongoData.scores||{};
-  const ok=Object.values(sc).filter(s=>s.status==='ok').length;
-  document.getElementById('kA').textContent=ok;
-  document.getElementById('kT').textContent=(mongoData.total_records||0).toLocaleString();
-  document.getElementById('kH').textContent=scores.hot||0;
-  document.getElementById('kW').textContent=scores.warm||0;
-  document.getElementById('kC').textContent=Object.keys(by).length;
-  document.getElementById('kE').textContent=Object.values(sc).filter(s=>s.status!=='ok').length;
-
-  const ALL=["Lee","Collier","Charlotte","Manatee","Sarasota","DeSoto","Hendry","Hillsborough","Pinellas","Seminole","Orange","Pasco","Lake","Hernando","Polk","Osceola","Citrus","Sumter","Broward","Palm Beach","Martin","St. Lucie","Indian River","Highlands","Glades","Volusia","Brevard","Alachua","Marion","Putnam","Escambia","Okaloosa","Bay","Leon","Duval","St. Johns","Taylor","Dixie"];
-  const grid=document.getElementById('countyGrid');
-  grid.innerHTML=ALL.map(name=>{
-    const d=sc[name]||null,mc=(by[name]||0),st=d?d.status:'pending',ago=d?.last_run?timeAgo(d.last_run):'—';
-    return`<div class="county-card ${st==='ok'?'':st==='error'?'error':'pending'}"><div class="card-header"><span class="county-name">${name}</span><span class="badge badge-${st==='ok'?'ok':st==='error'?'error':'pending'}">${st==='ok'?'OK':st}</span></div><div class="card-stats"><div class="mini-stat"><div class="mini-stat-val" style="color:var(--blue)">${mc.toLocaleString()}</div><div class="mini-stat-lbl">DB</div></div><div class="mini-stat"><div class="mini-stat-val" style="color:var(--orange)">${d?.hot_leads||0}</div><div class="mini-stat-lbl">Hot</div></div><div class="mini-stat"><div class="mini-stat-val" style="color:var(--yellow)">${d?.warm_leads||0}</div><div class="mini-stat-lbl">Warm</div></div></div><div class="card-meta"><span>${ago}</span><span>${d?.duration_seconds||'—'}s</span><span>Runs:${d?.run_count||0}</span></div>${d?.error?`<div class="card-error">⚠️ ${d.error}</div>`:''}</div>`;
-  }).join('');
-}
-
-// Fetch leads
-async function fetchLeads(){
-  const search=document.getElementById('leadSearch').value;
-  const county=document.getElementById('leadCounty').value;
-  const status=document.getElementById('leadStatus').value;
-  const sort=document.getElementById('leadSort').value;
-  const custody=document.getElementById('leadCustody').value;
-  const params=new URLSearchParams({page:leadsPage,limit:50,sort,order:'desc'});
-  if(search)params.set('search',search);
-  if(county)params.set('county',county);
-  if(status)params.set('status',status);
-  if(custody)params.set('custody',custody);
-  try{
-    const r=await fetch(API+'/api/leads?'+params);
-    const d=await r.json();
-    renderLeadsTable(d,'leadsBody');
-    renderPagination(d);
-    // Populate county dropdown
-    const sel=document.getElementById('leadCounty');
-    if(sel.options.length<=1&&d.counties){d.counties.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;sel.appendChild(o)})}
-  }catch(e){console.error(e)}
-}
-
-async function fetchHotLeads(){
-  try{
-    const r=await fetch(API+'/api/leads?status=Hot&sort=bond_amount&order=desc&limit=100');
-    const d=await r.json();
-    renderLeadsTable(d,'hotBody',true);
-  }catch(e){console.error(e)}
-}
-
-function renderLeadsTable(data,tbodyId,showAddr){
-  const tbody=document.getElementById(tbodyId);
-  const leads=data.leads||[];
-  if(!leads.length){tbody.innerHTML='<tr><td colspan="10" class="empty-msg">No leads found</td></tr>';return}
-  tbody.innerHTML=leads.map(l=>{
-    const sc=l.lead_score||0;const cls=sc>=80?'score-hot':sc>=50?'score-warm':sc>=30?'score-cold':'score-disq';
-    const charges=(l.charges||'').replace(/\|/g,'<br>');
-    const bond=l.bond_amount?'$'+Number(l.bond_amount).toLocaleString():'—';
-    const custTag=l.status==='In Custody'?'<span class="custody-tag">In Custody</span>':'<span class="released-tag">'+(l.status||'—')+'</span>';
-    const src=l.detail_url?`<a class="source-link" href="${l.detail_url}" target="_blank">View↗</a>`:'—';
-    const bn=l.booking_number||'';
-    return`<tr onclick="showDetail('${bn}')" style="cursor:pointer"><td><strong>${l.full_name||'—'}</strong><br><span style="font-size:0.6rem;color:var(--muted)">${l.dob||''} ${l.sex||''} ${l.race||''}</span></td><td>${l.county||'—'}</td><td class="charges-cell">${charges||'—'}</td><td class="bond-val">${bond}</td><td style="font-size:0.65rem">${l.bond_type||'—'}</td><td><span class="score-pill ${cls}">${sc}</span></td><td>${custTag}</td><td style="font-size:0.65rem">${l.booking_date||l.arrest_date||'—'}</td><td style="font-size:0.65rem">${l.court_date||'—'}</td>${showAddr?`<td style="font-size:0.6rem">${l.address||'—'}</td>`:`<td>${src}</td>`}</tr>`;
-  }).join('');
-}
-
-function renderPagination(data){
-  const div=document.getElementById('pagination');
-  const{page,pages,total}=data;
-  if(pages<=1){div.innerHTML=`<span class="page-info">${total} results</span>`;return}
-  let html=`<button class="page-btn" ${page<=1?'disabled':''} onclick="leadsPage=${page-1};fetchLeads()">← Prev</button>`;
-  html+=`<span class="page-info">Page ${page} of ${pages} (${total} results)</span>`;
-  html+=`<button class="page-btn" ${page>=pages?'disabled':''} onclick="leadsPage=${page+1};fetchLeads()">Next →</button>`;
-  div.innerHTML=html;
-}
-
-async function showDetail(bn){
-  if(!bn)return;
-  try{
-    const r=await fetch(API+'/api/leads/'+bn);
-    const d=await r.json();
-    if(d.error){return}
-    const sc=d.lead_score||0;const cls=sc>=80?'score-hot':sc>=50?'score-warm':sc>=30?'score-cold':'score-disq';
-    const charges=(d.charges||'').split('|').map(c=>c.trim()).filter(Boolean);
-    let h=`<h2><span class="score-pill ${cls}">${sc}</span> ${d.full_name||'Unknown'}</h2>`;
-    h+=`<div class="detail-grid">`;
-    const fields=[['County',d.county],['Booking #',d.booking_number],['Case #',d.case_number],['Status',d.status],['Bond','$'+(d.bond_amount||0).toLocaleString()],['Bond Type',d.bond_type],['Arrest Date',d.arrest_date],['Booking Date',d.booking_date],['Court Date',d.court_date],['Court',d.court_location],['DOB',d.dob],['Sex / Race',(d.sex||'')+' / '+(d.race||'')],['Address',d.address],['Facility',d.facility]];
-    fields.forEach(([lbl,val])=>{if(val)h+=`<div class="detail-field"><div class="lbl">${lbl}</div><div class="val">${val}</div></div>`});
-    h+=`</div>`;
-    if(charges.length){h+=`<div class="detail-charges"><div class="lbl">Charges (${charges.length})</div>${charges.map(c=>`<div class="charge-item">${c}</div>`).join('')}</div>`}
-    if(d.detail_url)h+=`<div style="margin-top:12px;text-align:center"><a href="${d.detail_url}" target="_blank" class="source-link" style="font-size:0.8rem">View on County Website ↗</a></div>`;
-    document.getElementById('detailContent').innerHTML=h;
-    document.getElementById('detailModal').style.display='flex';
-  }catch(e){console.error(e)}
-}
-
-function timeAgo(iso){const d=(Date.now()-new Date(iso).getTime())/1000;if(d<60)return Math.round(d)+'s ago';if(d<3600)return Math.round(d/60)+'m ago';if(d<86400)return Math.round(d/3600)+'h ago';return Math.round(d/86400)+'d ago'}
-
-// Search/filter events
-['leadSearch','leadCounty','leadStatus','leadSort','leadCustody'].forEach(id=>{
-  document.getElementById(id).addEventListener('change',()=>{leadsPage=1;fetchLeads()});
-});
-document.getElementById('leadSearch').addEventListener('input',debounce(()=>{leadsPage=1;fetchLeads()},400));
-function debounce(fn,ms){let t;return function(){clearTimeout(t);t=setTimeout(fn,ms)}}
-
-// Refresh
-let cd=30;
-setInterval(()=>{cd--;document.getElementById('refreshTimer').textContent=cd+'s';if(cd<=0){cd=30;fetchOverview()}},1000);
-fetchOverview();
+const API=window.location.origin;let scraperData={},mongoData={},leadsPage=1;
+document.querySelectorAll('.tab-btn').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-panel').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.getElementById('panel-'+b.dataset.tab).classList.add('active');if(b.dataset.tab==='leads'){leadsPage=1;fetchLeads()}if(b.dataset.tab==='hot')fetchHotLeads()})});
+async function fetchOverview(){try{const[s,m]=await Promise.all([fetch(API+'/api/status').then(r=>r.json()),fetch(API+'/api/mongo-stats').then(r=>r.json())]);scraperData=s;mongoData=m;renderOverview()}catch(e){console.error(e)}}
+function renderOverview(){const sc=scraperData.scrapers||{},by=mongoData.by_county||{},scores=mongoData.scores||{};document.getElementById('kA').textContent=Object.values(sc).filter(s=>s.status==='ok').length;document.getElementById('kT').textContent=(mongoData.total_records||0).toLocaleString();document.getElementById('kH').textContent=scores.hot||0;document.getElementById('kW').textContent=scores.warm||0;document.getElementById('kC').textContent=Object.keys(by).length;document.getElementById('kE').textContent=Object.values(sc).filter(s=>s.status!=='ok').length;const ALL=["Lee","Collier","Charlotte","Manatee","Sarasota","DeSoto","Hendry","Hillsborough","Pinellas","Seminole","Orange","Pasco","Lake","Hernando","Polk","Osceola","Citrus","Sumter","Broward","Palm Beach","Martin","St. Lucie","Indian River","Highlands","Glades","Volusia","Brevard","Alachua","Marion","Putnam","Escambia","Okaloosa","Bay","Leon","Duval","St. Johns","Taylor","Dixie"];document.getElementById('countyGrid').innerHTML=ALL.map(name=>{const d=sc[name]||null,mc=(by[name]||0),st=d?d.status:'pending',ago=d&&d.last_run?timeAgo(d.last_run):'—';return'<div class="county-card '+(st==='ok'?'':st==='error'?'error':'pending')+'"><div class="card-header"><span class="county-name">'+name+'</span><span class="badge badge-'+(st==='ok'?'ok':st==='error'?'error':'pending')+'">'+(st==='ok'?'OK':st)+'</span></div><div class="card-stats"><div class="mini-stat"><div class="mini-stat-val" style="color:var(--blue)">'+mc.toLocaleString()+'</div><div class="mini-stat-lbl">DB</div></div><div class="mini-stat"><div class="mini-stat-val" style="color:var(--orange)">'+(d?d.hot_leads||0:0)+'</div><div class="mini-stat-lbl">Hot</div></div><div class="mini-stat"><div class="mini-stat-val" style="color:var(--yellow)">'+(d?d.warm_leads||0:0)+'</div><div class="mini-stat-lbl">Warm</div></div></div><div class="card-meta"><span>'+ago+'</span><span>'+(d?d.duration_seconds||'—':'—')+'s</span><span>Runs:'+(d?d.run_count||0:0)+'</span></div>'+(d&&d.error?'<div class="card-error">'+d.error+'</div>':'')+'</div>'}).join('')}
+async function fetchLeads(){const search=document.getElementById('leadSearch').value,county=document.getElementById('leadCounty').value,status=document.getElementById('leadStatus').value,sort=document.getElementById('leadSort').value,custody=document.getElementById('leadCustody').value,params=new URLSearchParams({page:leadsPage,limit:50,sort:sort,order:'desc'});if(search)params.set('search',search);if(county)params.set('county',county);if(status)params.set('status',status);if(custody)params.set('custody',custody);try{const r=await fetch(API+'/api/leads?'+params),d=await r.json();renderLeadsTable(d,'leadsBody',false);renderPagination(d);const sel=document.getElementById('leadCounty');if(sel.options.length<=1&&d.counties){d.counties.forEach(function(c){var o=document.createElement('option');o.value=c;o.textContent=c;sel.appendChild(o)})}}catch(e){console.error(e)}}
+async function fetchHotLeads(){try{const r=await fetch(API+'/api/leads?status=Hot&sort=bond_amount&order=desc&limit=100'),d=await r.json();renderLeadsTable(d,'hotBody',true)}catch(e){console.error(e)}}
+function renderLeadsTable(data,tbodyId,showAddr){var tbody=document.getElementById(tbodyId),leads=data.leads||[];if(!leads.length){tbody.innerHTML='<tr><td colspan="10" class="empty-msg">No leads found</td></tr>';return}tbody.innerHTML=leads.map(function(l){var sc=l.lead_score||0,cls=sc>=80?'score-hot':sc>=50?'score-warm':sc>=30?'score-cold':'score-disq',charges=(l.charges||'').replace(/\|/g,'<br>'),bond=l.bond_amount?'$'+Number(l.bond_amount).toLocaleString():'—',custTag=l.status==='In Custody'?'<span class="custody-tag">In Custody</span>':'<span class="released-tag">'+(l.status||'—')+'</span>',src=l.detail_url?'<a class="source-link" href="'+l.detail_url+'" target="_blank" onclick="event.stopPropagation()">View↗</a>':'—',bn=l.booking_number||'';return'<tr onclick="showDetail(\''+bn+'\')" style="cursor:pointer"><td><strong>'+( l.full_name||'—')+'</strong><br><span style="font-size:0.6rem;color:var(--muted)">'+(l.dob||'')+' '+(l.sex||'')+' '+(l.race||'')+'</span></td><td>'+(l.county||'—')+'</td><td class="charges-cell">'+(charges||'—')+'</td><td class="bond-val">'+bond+'</td><td style="font-size:0.65rem">'+(l.bond_type||'—')+'</td><td><span class="score-pill '+cls+'">'+sc+'</span></td><td>'+custTag+'</td><td style="font-size:0.65rem">'+(l.booking_date||l.arrest_date||'—')+'</td><td style="font-size:0.65rem">'+(l.court_date||'—')+'</td>'+(showAddr?'<td style="font-size:0.6rem">'+(l.address||'—')+'</td>':'<td>'+src+'</td>')+'</tr>'}).join('')}
+function renderPagination(data){var div=document.getElementById('pagination'),page=data.page,pages=data.pages,total=data.total;if(pages<=1){div.innerHTML='<span class="page-info">'+total+' results</span>';return}div.innerHTML='<button class="page-btn" '+(page<=1?'disabled':'')+' onclick="leadsPage='+(page-1)+';fetchLeads()">← Prev</button><span class="page-info">Page '+page+' of '+pages+' ('+total.toLocaleString()+' results)</span><button class="page-btn" '+(page>=pages?'disabled':'')+' onclick="leadsPage='+(page+1)+';fetchLeads()">Next →</button>'}
+async function showDetail(bn){if(!bn)return;try{var r=await fetch(API+'/api/leads/'+bn),d=await r.json();if(d.error)return;var sc=d.lead_score||0,cls=sc>=80?'score-hot':sc>=50?'score-warm':sc>=30?'score-cold':'score-disq',charges=(d.charges||'').split('|').map(function(c){return c.trim()}).filter(Boolean);var h='<h2><span class="score-pill '+cls+'">'+sc+'</span> '+(d.full_name||'Unknown')+'</h2><div class="detail-grid">';[['County',d.county],['Booking #',d.booking_number],['Case #',d.case_number],['Status',d.status],['Bond','$'+(d.bond_amount||0).toLocaleString()],['Bond Type',d.bond_type],['Arrest Date',d.arrest_date],['Booking Date',d.booking_date],['Court Date',d.court_date],['Court',d.court_location],['DOB',d.dob],['Sex / Race',(d.sex||'')+' / '+(d.race||'')],['Address',d.address],['Facility',d.facility]].forEach(function(pair){if(pair[1])h+='<div class="detail-field"><div class="lbl">'+pair[0]+'</div><div class="val">'+pair[1]+'</div></div>'});h+='</div>';if(charges.length)h+='<div class="detail-charges"><div class="lbl">Charges ('+charges.length+')</div>'+charges.map(function(c){return'<div class="charge-item">'+c+'</div>'}).join('')+'</div>';if(d.detail_url)h+='<div style="margin-top:12px;text-align:center"><a href="'+d.detail_url+'" target="_blank" class="source-link" style="font-size:0.8rem">View on County Website ↗</a></div>';document.getElementById('detailContent').innerHTML=h;document.getElementById('detailModal').style.display='flex'}catch(e){console.error(e)}}
+function timeAgo(iso){var d=(Date.now()-new Date(iso).getTime())/1000;if(d<60)return Math.round(d)+'s ago';if(d<3600)return Math.round(d/60)+'m ago';if(d<86400)return Math.round(d/3600)+'h ago';return Math.round(d/86400)+'d ago'}
+['leadSearch','leadCounty','leadStatus','leadSort','leadCustody'].forEach(function(id){document.getElementById(id).addEventListener('change',function(){leadsPage=1;fetchLeads()})});
+document.getElementById('leadSearch').addEventListener('input',(function(){var t;return function(){clearTimeout(t);t=setTimeout(function(){leadsPage=1;fetchLeads()},400)}})());
+var cd=30;setInterval(function(){cd--;document.getElementById('refreshTimer').textContent=cd+'s';if(cd<=0){cd=30;fetchOverview()}},1000);fetchOverview();
 </script>
 </body>
 </html>

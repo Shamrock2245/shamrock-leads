@@ -1,20 +1,32 @@
 """
-Brevard County Arrest Scraper — POST-Based Inmate Search.
-
+Brevard County Arrest Scraper — inmatesearch.brevardsheriff.org
 Source: Brevard County Sheriff's Office
-URL: https://www.brevardcounty.us/JailCompliance/SubSearch
-Method: requests + BeautifulSoup (POST form search)
+URL: https://inmatesearch.brevardsheriff.org/Results
+Method: requests POST (date-range form) + DrissionPage fallback for JS rendering
+Proven pattern from: swfl-arrest-scrapers/counties/brevard/solver.py
 """
-
-import logging, re, time, string
-from datetime import datetime
+import logging
+import re
+import time
+import os
+from datetime import datetime, timedelta
 from typing import List
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-SEARCH_URL = "https://www.brevardcounty.us/JailCompliance/SubSearch"
+
+BASE_URL = "https://inmatesearch.brevardsheriff.org"
+SEARCH_URL = f"{BASE_URL}/Results"
 FACILITY = "Brevard County Jail Complex"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": BASE_URL,
+}
 
 
 class BrevardCountyScraper(BaseScraper):
@@ -27,81 +39,225 @@ class BrevardCountyScraper(BaseScraper):
             import requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("requests/bs4 not installed")
+            return []
 
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        })
-        seen, all_records = set(), []
+        session.headers.update(HEADERS)
 
-        for letter in string.ascii_uppercase:
-            try:
-                resp = session.post(SEARCH_URL, data={"LastName": letter, "FirstName": ""}, timeout=30)
-                if resp.status_code != 200: continue
-                soup = BeautifulSoup(resp.text, "html.parser")
-                records = self._parse_results(soup)
-                for r in records:
-                    key = r.Booking_Number or r.Full_Name
-                    if key and key not in seen:
-                        seen.add(key)
-                        all_records.append(r)
-            except Exception as e:
-                logger.warning(f"Brevard letter {letter}: {e}")
-            time.sleep(0.3)
+        # Load home page first (sets session cookies / anti-bot tokens)
+        try:
+            session.get(BASE_URL, timeout=20)
+        except Exception:
+            pass
 
-        logger.info(f"✅ Brevard: {len(all_records)} records")
-        return all_records
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=7)
+        form_data = {
+            "SearchForm.FromDate": from_date.strftime("%Y-%m-%d"),
+            "SearchForm.ToDate": to_date.strftime("%Y-%m-%d"),
+            "SearchForm.LastName": "",
+            "SearchForm.FirstName": "",
+            "SearchForm.SubjectNumber": "",
+            "SearchForm.BookingNumber": "",
+            "SearchForm.Facility": "",
+            "SearchForm.PageSize": "100",
+            "SearchForm.PageNumber": "1",
+        }
 
-    def _parse_results(self, soup) -> List[ArrestRecord]:
         records = []
+        seen = set()
+        page_num = 1
+
+        while page_num <= 25:
+            try:
+                if page_num == 1:
+                    resp = session.post(SEARCH_URL, data=form_data, timeout=30)
+                else:
+                    form_data["SearchForm.PageNumber"] = str(page_num)
+                    resp = session.post(SEARCH_URL, data=form_data, timeout=30)
+                resp.raise_for_status()
+            except Exception as e:
+                logger.warning(f"Brevard page {page_num}: {e}")
+                break
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Check if page is JS shell (Angular/React — only ~7KB)
+            if len(resp.text) < 10000 and not soup.find("table"):
+                # Fall back to DrissionPage
+                logger.info("Brevard: JS-rendered page detected, switching to DrissionPage")
+                return self._scrape_drission()
+
+            batch = self._parse_page(soup, seen)
+            if not batch:
+                break
+            records.extend(batch)
+
+            # Check for next page
+            next_link = soup.find("a", string=re.compile(r"Next|›|»", re.I))
+            if not next_link:
+                break
+            page_num += 1
+            time.sleep(0.4)
+
+        if not records:
+            return self._scrape_drission()
+
+        logger.info(f"Brevard: {len(records)} records")
+        return records
+
+    def _scrape_drission(self) -> List[ArrestRecord]:
+        """DrissionPage fallback for JS-rendered content."""
+        try:
+            from DrissionPage import ChromiumPage, ChromiumOptions
+        except ImportError:
+            logger.warning("Brevard: DrissionPage not available")
+            return []
+
+        co = ChromiumOptions()
+        co.auto_port()
+        co.headless(True)
+        co.set_argument("--no-sandbox")
+        co.set_argument("--disable-dev-shm-usage")
+        co.set_argument("--disable-gpu")
+        if os.getenv("CHROME_PATH"):
+            co.set_browser_path(os.getenv("CHROME_PATH"))
+
+        page = ChromiumPage(addr_or_opts=co)
+        records = []
+        seen = set()
+
+        try:
+            to_date = datetime.now()
+            from_date = to_date - timedelta(days=7)
+
+            page.get(SEARCH_URL)
+            time.sleep(3)
+
+            # Fill date fields
+            try:
+                from_el = page.ele("@name=SearchForm.FromDate", timeout=5)
+                if from_el:
+                    from_el.clear()
+                    from_el.input(from_date.strftime("%Y-%m-%d"))
+                to_el = page.ele("@name=SearchForm.ToDate", timeout=5)
+                if to_el:
+                    to_el.clear()
+                    to_el.input(to_date.strftime("%Y-%m-%d"))
+                submit = page.ele("tag:button@@text():Search", timeout=5)
+                if submit:
+                    submit.click()
+                    time.sleep(3)
+            except Exception:
+                pass
+
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(page.html, "html.parser")
+            records = self._parse_page(soup, seen)
+
+        except Exception as e:
+            logger.warning(f"Brevard DrissionPage: {e}")
+        finally:
+            try:
+                page.quit()
+            except Exception:
+                pass
+
+        logger.info(f"Brevard (DrissionPage): {len(records)} records")
+        return records
+
+    def _parse_page(self, soup, seen: set) -> List[ArrestRecord]:
+        from bs4 import BeautifulSoup
+        records = []
+
+        # Try table rows first
         for table in soup.find_all("table"):
-            for row in table.find_all("tr")[1:]:
+            rows = table.find_all("tr")[1:]  # skip header
+            for row in rows:
                 cells = row.find_all("td")
-                if len(cells) < 3: continue
+                if len(cells) < 2:
+                    continue
                 texts = [c.get_text(strip=True) for c in cells]
+                full_name = texts[0] if texts else ""
+                booking_num = texts[1] if len(texts) > 1 else ""
+                booking_date = texts[2] if len(texts) > 2 else ""
+                charges = texts[3] if len(texts) > 3 else ""
+                bond_raw = texts[4] if len(texts) > 4 else "0"
 
-                full_name = ""
-                booking_number = ""
-                booking_date = ""
-                bond_amount = "0"
-                charges = ""
-                dob = ""
-
-                for t in texts:
-                    if "," in t and not full_name and len(t) > 3 and not t.replace(",","").replace(" ","").isdigit():
-                        full_name = t
-                    elif re.match(r"^\d{4,}$", t.strip()) and not booking_number:
-                        booking_number = t.strip()
-                    elif re.match(r"\d{1,2}/\d{1,2}/\d{2,4}", t) and not booking_date:
-                        booking_date = t
-
-                rt = row.get_text(" ", strip=True)
-                bm = re.search(r"\$([\d,]+\.?\d*)", rt)
-                if bm: bond_amount = bm.group(1).replace(",", "")
-
-                if not full_name and not booking_number: continue
-                f, m, l = self._pn(full_name)
+                key = (full_name, booking_num)
+                if not full_name or key in seen:
+                    continue
+                seen.add(key)
 
                 link = row.find("a", href=True)
                 detail_url = ""
                 if link:
                     h = link["href"]
-                    if not h.startswith("http"): h = "https://www.brevardcounty.us" + h
-                    detail_url = h
+                    detail_url = h if h.startswith("http") else f"{BASE_URL}{h}"
 
+                f, m, l = _pn(full_name)
                 records.append(ArrestRecord(
-                    County=self.county, Booking_Number=booking_number,
-                    Full_Name=full_name, First_Name=f, Middle_Name=m, Last_Name=l,
-                    Booking_Date=booking_date, Bond_Amount=bond_amount,
+                    County=self.county,
+                    Booking_Number=booking_num,
+                    Full_Name=full_name,
+                    First_Name=f, Middle_Name=m, Last_Name=l,
+                    Booking_Date=booking_date,
                     Status="In Custody", Facility=FACILITY,
-                    Detail_URL=detail_url, LastCheckedMode="INITIAL"))
+                    Charges=charges,
+                    Bond_Amount=_parse_bond(bond_raw),
+                    Detail_URL=detail_url,
+                    LastCheckedMode="INITIAL",
+                ))
+
+        # Try detail links if no table
+        if not records:
+            for link in soup.find_all("a", href=re.compile(r"/Details/|/Booking/", re.I)):
+                href = link.get("href", "")
+                detail_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+                key = detail_url
+                if key in seen:
+                    continue
+                seen.add(key)
+                row = link.find_parent("tr") or link.find_parent("div")
+                cells = row.find_all("td") if row else []
+                texts = [c.get_text(strip=True) for c in cells]
+                full_name = texts[0] if texts else link.get_text(strip=True)
+                if not full_name:
+                    continue
+                f, m, l = _pn(full_name)
+                records.append(ArrestRecord(
+                    County=self.county,
+                    Full_Name=full_name,
+                    First_Name=f, Middle_Name=m, Last_Name=l,
+                    Status="In Custody", Facility=FACILITY,
+                    Detail_URL=detail_url,
+                    LastCheckedMode="INITIAL",
+                ))
+
         return records
 
-    @staticmethod
-    def _pn(n):
-        if not n: return "","",""
-        if "," in n:
-            p = n.split(",",1); l = p[0].strip(); fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm)>1 else ""), l
-        p = n.split(); return p[0], "", p[-1] if len(p)>=2 else ""
+
+def _pn(n):
+    if not n:
+        return "", "", ""
+    n = " ".join(n.strip().split())
+    if "," in n:
+        p = n.split(",", 1)
+        l = p[0].strip()
+        fm = p[1].strip().split()
+        return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
+    p = n.split()
+    return p[0], (" ".join(p[1:-1]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
+
+
+def _parse_bond(bond_str):
+    if not bond_str:
+        return "0"
+    cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+    if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD", "NO"]):
+        return "0"
+    try:
+        return str(float(cleaned))
+    except (ValueError, TypeError):
+        return "0"

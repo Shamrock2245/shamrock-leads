@@ -9,10 +9,6 @@ Architecture (2-phase):
   Phase 1: HTTP GET to OCV S3 JSON -> all inmates with demographics (~0.1s)
   Phase 2: DrissionPage visits detail pages for recent inmates -> charges + bonds
 
-The OCV JSON feed provides name, address, demographics, mugshot, and booking
-date for all ~278 inmates. Charges and bond amounts are only available on
-individual detail pages at /inmateSearch/{id}.
-
 Self-healing: If Phase 2 (browser) fails, Phase 1 data is still returned
 with all demographics. Bond amounts default to "0" if enrichment fails.
 """

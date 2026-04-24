@@ -45,9 +45,9 @@ class ScraperScheduler:
                 }
             },
             job_defaults={
-                "coalesce": True,  # Combine missed runs
-                "max_instances": 1,  # No overlapping runs per county
-                "misfire_grace_time": 300,  # 5 min grace
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 300,
             },
         )
         self._scrapers: Dict[str, BaseScraper] = {}
@@ -55,7 +55,6 @@ class ScraperScheduler:
         self._job_history: List[Dict] = []
         self._registration_count: int = 0
 
-        # Listen for job events
         self.scheduler.add_listener(
             self._on_job_executed, EVENT_JOB_EXECUTED
         )
@@ -117,7 +116,6 @@ class ScraperScheduler:
             "result": result,
         })
 
-        # Keep history bounded
         if len(self._job_history) > 1000:
             self._job_history = self._job_history[-500:]
 

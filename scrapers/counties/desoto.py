@@ -61,7 +61,6 @@ class DeSotoCountyScraper(BaseScraper):
         cutoff_date = datetime.now() - timedelta(days=DAYS_BACK)
 
         try:
-            # Phase 1: Load roster and collect all inmate detail links
             detail_urls = self._collect_roster_links(page)
 
             if not detail_urls:
@@ -70,7 +69,6 @@ class DeSotoCountyScraper(BaseScraper):
 
             logger.info(f"📋 Collected {len(detail_urls)} inmate detail links")
 
-            # Phase 2: Visit each detail page and extract data
             records: List[ArrestRecord] = []
 
             for idx, url in enumerate(detail_urls, 1):
@@ -86,7 +84,6 @@ class DeSotoCountyScraper(BaseScraper):
                     if not record:
                         continue
 
-                    # Date cutoff check
                     if record.Booking_Date:
                         try:
                             for fmt in ["%m/%d/%Y", "%Y-%m-%d", "%m/%d/%Y %I:%M %p"]:
@@ -127,11 +124,8 @@ class DeSotoCountyScraper(BaseScraper):
             except Exception:
                 pass
 
-    # ── Browser Setup ──
-
     @staticmethod
     def _setup_browser():
-        """Configure and launch DrissionPage Chromium browser."""
         from DrissionPage import ChromiumPage, ChromiumOptions
 
         co = ChromiumOptions()
@@ -149,26 +143,19 @@ class DeSotoCountyScraper(BaseScraper):
         )
         return ChromiumPage(addr_or_opts=co)
 
-    # ── Phase 1: Roster Link Collection ──
-
     def _collect_roster_links(self, page) -> List[str]:
-        """Load the roster, sort by Admit Date DESC, and collect all detail links."""
         logger.info(f"📡 Loading roster: {INMATES_URL}")
         page.get(INMATES_URL)
         time.sleep(3)
 
-        # Sort by Admit Date descending (newest first)
         self._sort_by_admit_date(page)
 
-        # Collect links from page 1
         all_links = self._extract_links_from_page(page)
         logger.info(f"📄 Page 1: {len(all_links)} links")
 
-        # Paginate through remaining pages
         page_num = 2
         while page_num <= MAX_PAGES:
             try:
-                # Look for DevExpress pager buttons
                 next_btn = None
                 pager_btns = page.eles('css:.dxp-num')
                 for btn in pager_btns:
@@ -177,7 +164,6 @@ class DeSotoCountyScraper(BaseScraper):
                         break
 
                 if not next_btn:
-                    # Try the "next page" button
                     try:
                         next_btn = page.ele('#gvInmates_DXPagerBottom_PBN')
                     except Exception:
@@ -193,7 +179,6 @@ class DeSotoCountyScraper(BaseScraper):
                 if not new_links:
                     break
 
-                # Add only unique links
                 added = 0
                 for link in new_links:
                     if link not in all_links:
@@ -214,7 +199,6 @@ class DeSotoCountyScraper(BaseScraper):
         return all_links
 
     def _sort_by_admit_date(self, page):
-        """Click Admit Date column header twice for descending sort."""
         try:
             headers = page.eles('tag:th')
             admit_header = None
@@ -228,7 +212,6 @@ class DeSotoCountyScraper(BaseScraper):
                 logger.warning("⚠️ Could not find Admit Date column header, skipping sort")
                 return
 
-            # Click twice: once for ASC, once for DESC
             logger.debug("Sorting by Admit Date descending...")
             admit_header.click()
             time.sleep(2)
@@ -241,7 +224,6 @@ class DeSotoCountyScraper(BaseScraper):
 
     @staticmethod
     def _extract_links_from_page(page) -> List[str]:
-        """Extract inmate detail links from the current page view."""
         html = page.html
         soup = BeautifulSoup(html, 'html.parser')
 
@@ -254,22 +236,17 @@ class DeSotoCountyScraper(BaseScraper):
                     links.append(full_url)
         return links
 
-    # ── Phase 2: Detail Extraction ──
-
     def _extract_detail(self, page, detail_url: str) -> Optional[ArrestRecord]:
-        """Extract structured arrest data from a DeSoto detail page."""
         page.get(detail_url)
         time.sleep(1.5)
 
         html = page.html
         soup = BeautifulSoup(html, 'html.parser')
 
-        # Extract Booking ID from URL parameter (?bid=...)
         parsed = urlparse(detail_url)
         qs = parse_qs(parsed.query)
         booking_number = unquote(qs.get('bid', [''])[0])
 
-        # Extract name from header
         full_name = ""
         first_name = ""
         middle_name = ""
@@ -294,7 +271,6 @@ class DeSotoCountyScraper(BaseScraper):
                 if len(first_parts) > 1:
                     middle_name = ' '.join(first_parts[1:])
 
-        # Extract detail table fields
         dob = ""
         sex = ""
         race = ""
@@ -349,7 +325,6 @@ class DeSotoCountyScraper(BaseScraper):
                             state = addr_match.group(2)
                             zipcode = addr_match.group(3)
 
-        # Extract charges from ChargeGrid
         charges = []
         total_bond = 0.0
         bond_type = ""
@@ -362,7 +337,6 @@ class DeSotoCountyScraper(BaseScraper):
                 if charge_text and 'Drag a column' not in charge_text:
                     charges.append(charge_text)
 
-                # Bond amount (column index 5)
                 if len(cells) > 5:
                     bond_text = cells[5].get_text(strip=True)
                     if bond_text:
@@ -372,13 +346,11 @@ class DeSotoCountyScraper(BaseScraper):
                         except ValueError:
                             pass
 
-                # Bond type (column index 6)
                 if len(cells) > 6 and not bond_type:
                     bond_type = cells[6].get_text(strip=True)
 
         charges_str = ' | '.join(charges) if charges else ''
 
-        # Extract mugshot
         mugshot_url = ""
         for img in soup.find_all('img'):
             src = img.get('src', '')

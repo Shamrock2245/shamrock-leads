@@ -1,70 +1,55 @@
 """
 Volusia County Arrest Scraper — VCSO Inmate Search.
-
-Source: Volusia County Sheriff's Office  
-URL: https://vcso.us/jail-info/inmate-search/
+Source: Volusia County Sheriff's Office
+URL: https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml
 Method: DrissionPage browser (Cloudflare-protected)
+Note: Old URL vcso.us was wrong — site moved to volusia.org
 """
-
 import logging, json, re, time
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-BASE_URL = "https://vcso.us/jail-info/inmate-search/"
+BASE_URL = "https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml"
+SEARCH_URL = "https://www.volusia.org/services/public-protection/corrections/inmate-information-search.stml"
 FACILITY = "Volusia County Branch Jail"
-
 
 class VolusiaCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
         return "Volusia"
-
     def scrape(self) -> List[ArrestRecord]:
         try:
             from DrissionPage import ChromiumPage, ChromiumOptions
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("DrissionPage/bs4 not installed")
-            return []
-
-        co = ChromiumOptions()
-        co.auto_port(); co.headless(True)
+            logger.error("DrissionPage/bs4 not installed"); return []
+        co = ChromiumOptions(); co.auto_port(); co.headless(True)
         co.set_argument("--no-sandbox"); co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
         page = ChromiumPage(addr_or_opts=co)
         records = []
-
         try:
-            page.listen.start("json")
+            page.listen.start("api")
             page.get(BASE_URL)
             for i in range(15):
-                if any(k in (page.title or "").lower() for k in ["just a moment", "security"]):
-                    time.sleep(3)
-                else:
-                    break
-            time.sleep(5)
-
-            # Try search
+                if any(k in (page.title or "").lower() for k in ["just a moment", "security"]): time.sleep(3)
+                else: break
+            time.sleep(8)  # Wait for JS to fully render
             try:
                 inp = page.ele("tag:input@@type=text", timeout=5)
                 if inp: inp.input("a"); time.sleep(1)
                 btn = page.ele("tag:button@@text():Search", timeout=3)
                 if btn: btn.click(); time.sleep(5)
-            except Exception: pass
-
-            # Capture API
-            for pkt in page.listen.steps(timeout=15):
+            except: pass
+            for pkt in page.listen.steps(timeout=20):
                 try:
                     body = pkt.response.body if hasattr(pkt, "response") and pkt.response else None
                     if isinstance(body, str) and body.strip().startswith(("{","[")): body = json.loads(body)
-                    if isinstance(body, (dict, list)):
-                        records.extend(self._parse_api(body))
-                except Exception: pass
-
-            # DOM fallback
+                    if isinstance(body, (dict, list)): records.extend(self._parse_api(body))
+                except: pass
             if not records:
                 soup = BeautifulSoup(page.html, "html.parser")
                 for row in soup.select("table tr"):
@@ -80,15 +65,13 @@ class VolusiaCountyScraper(BaseScraper):
                             Full_Name=nm.group(1), First_Name=f, Middle_Name=m, Last_Name=l,
                             Bond_Amount=bd.group(1).replace(",","") if bd else "0",
                             Status="In Custody", Facility=FACILITY, LastCheckedMode="INITIAL"))
-
-            logger.info(f"✅ Volusia: {len(records)} records")
+            logger.info(f"Volusia: {len(records)} records")
             return records
         except Exception as e:
             logger.error(f"Volusia error: {e}"); return []
         finally:
             try: page.listen.stop(); page.quit()
             except: pass
-
     def _parse_api(self, data) -> List[ArrestRecord]:
         entries = data if isinstance(data, list) else []
         if isinstance(data, dict):
@@ -111,7 +94,6 @@ class VolusiaCountyScraper(BaseScraper):
                 Charges=charges, Bond_Amount=str(e.get("bond", e.get("bondAmount","0"))),
                 Status="In Custody", Facility=FACILITY, LastCheckedMode="INITIAL"))
         return out
-
     @staticmethod
     def _pn(n):
         if not n: return "","",""

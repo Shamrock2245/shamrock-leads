@@ -171,6 +171,7 @@ class BaseScraper(ABC):
             except Exception as slack_err:
                 logger.warning(f"⚠️ Slack notification failed: {slack_err}")
 
+
             # ── Step 5: Update dashboard ──
             if _dashboard_available:
                 try:
@@ -200,6 +201,7 @@ class BaseScraper(ABC):
                 _slack.notify_scraper_error(self.county, str(e))
             except:
                 pass
+
 
             # Update dashboard with error status
             if _dashboard_available:

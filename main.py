@@ -11,7 +11,6 @@ import logging
 import time
 from pathlib import Path
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config.settings import settings
@@ -19,7 +18,14 @@ from core.scheduler import ScraperScheduler
 from core.dedup import DedupEngine
 from writers.mongo_writer import MongoWriter
 
-# Import county scrapers
+# Dashboard server
+try:
+    from dashboard.server import start_dashboard_server
+    DASHBOARD_AVAILABLE = True
+except ImportError:
+    DASHBOARD_AVAILABLE = False
+
+# ── Wave 1 — SWFL Core ──────────────────────────────────────────────────────
 from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
 from scrapers.counties.charlotte import CharlotteCountyScraper
@@ -28,154 +34,172 @@ from scrapers.counties.desoto import DeSotoCountyScraper
 from scrapers.counties.manatee import ManateeCountyScraper
 from scrapers.counties.sarasota import SarasotaCountyScraper
 
-# Tier 4: Central & East FL expansion
+# ── Wave 1 — Tampa Bay / Central FL ─────────────────────────────────────────
 from scrapers.counties.orange import OrangeCountyScraper
 from scrapers.counties.pinellas import PinellasCountyScraper
 from scrapers.counties.polk import PolkCountyScraper
 from scrapers.counties.osceola import OsceolaCountyScraper
 from scrapers.counties.seminole import SeminoleCountyScraper
-from scrapers.counties.palm_beach import PalmBeachCountyScraper
-
-# Tier 5: Statewide expansion — High-Pop (batch 1)
 from scrapers.counties.hillsborough import HillsboroughCountyScraper
+from scrapers.counties.pasco import PascoCountyScraper
+from scrapers.counties.hernando import HernandoCountyScraper
+from scrapers.counties.citrus import CitrusCountyScraper
+from scrapers.counties.sumter import SumterCountyScraper
+from scrapers.counties.lake import LakeCountyScraper
+
+# ── Wave 1 — South FL / Metro ────────────────────────────────────────────────
+from scrapers.counties.palm_beach import PalmBeachCountyScraper
 from scrapers.counties.broward import BrowardCountyScraper
-from scrapers.counties.duval import DuvalCountyScraper
+from scrapers.counties.martin import MartinCountyScraper
+from scrapers.counties.st_lucie import StLucieCountyScraper
+from scrapers.counties.indian_river import IndianRiverCountyScraper
+from scrapers.counties.glades import GladesCountyScraper
+from scrapers.counties.highlands import HighlandsCountyScraper
+
+# ── Wave 1 — North Central FL ────────────────────────────────────────────────
+from scrapers.counties.alachua import AlachuaCountyScraper
+from scrapers.counties.marion import MarionCountyScraper
 from scrapers.counties.volusia import VolusiaCountyScraper
 from scrapers.counties.brevard import BrevardCountyScraper
-from scrapers.counties.pasco import PascoCountyScraper
-from scrapers.counties.escambia import EscambiaCountyScraper
+from scrapers.counties.putnam import PutnamCountyScraper
 
-# ── Logging ──
+# ── Wave 1 — Panhandle / NW FL ───────────────────────────────────────────────
+from scrapers.counties.escambia import EscambiaCountyScraper
+from scrapers.counties.okaloosa import OkaloosaCountyScraper
+from scrapers.counties.bay import BayCountyScraper
+from scrapers.counties.leon import LeonCountyScraper
+
+# ── Wave 1 — NE FL / First Coast ─────────────────────────────────────────────
+from scrapers.counties.duval import DuvalCountyScraper
+from scrapers.counties.st_johns import StJohnsCountyScraper
+
+# ── Wave 1 — North FL / Rural ────────────────────────────────────────────────
+from scrapers.counties.taylor import TaylorCountyScraper
+from scrapers.counties.dixie import DixieCountyScraper
+
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s │ %(levelname)-7s │ %(name)s │ %(message)s",
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("shamrock-leads")
+scheduler = None
 
-# ── Globals ──
-scheduler: ScraperScheduler = None
-
-
-def build_writers() -> list:
-    """Initialize configured data writers."""
+def build_writers():
     writers = []
-
     if settings.ENABLE_MONGO_WRITER and settings.mongo_configured():
         try:
             mongo = MongoWriter()
             writers.append(mongo)
-            logger.info("✅ MongoDB writer initialized")
+            logger.info("MongoDB writer initialized")
         except Exception as e:
-            logger.error(f"❌ MongoDB writer failed to initialize: {e}")
-
+            logger.error(f"MongoDB writer failed: {e}")
     if settings.ENABLE_SHEETS_WRITER and settings.sheets_configured():
         try:
-            # Lazy import — gspread is optional
             from writers.sheets_writer import SheetsWriter
-            sheets = SheetsWriter(
-                spreadsheet_id=settings.GOOGLE_SPREADSHEET_ID,
-                credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS
-            )
+            sheets = SheetsWriter(spreadsheet_id=settings.GOOGLE_SPREADSHEET_ID, credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS)
             writers.append(sheets)
-            logger.info("✅ Google Sheets writer initialized")
+            logger.info("Sheets writer initialized")
         except ImportError:
-            logger.warning("⚠️ gspread not installed, Sheets writer disabled")
+            logger.warning("gspread not installed")
         except Exception as e:
-            logger.error(f"❌ Sheets writer failed: {e}")
-
+            logger.error(f"Sheets writer failed: {e}")
     if not writers:
-        logger.warning("⚠️ No writers configured! Records will only be logged.")
-
+        logger.warning("No writers configured!")
     return writers
 
-
-def register_scrapers(sched: ScraperScheduler):
-    """Register all county scrapers with their schedules."""
-
-    # ── Tier 1: Core SWFL counties (API-based, high frequency) ──
+def register_scrapers(sched):
+    # ── SWFL Core (highest priority) ──────────────────────────────────────────
     sched.register_scraper(LeeCountyScraper(), interval_minutes=20)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=30)
-
-    # ── Tier 2: Browser-automated counties (lower frequency) ──
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
-    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
-
-    # ── Tier 3: Expanded SWFL coverage (browser-automated) ──
-    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
     sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
-    # ── Tier 4: Central & East FL expansion (browser-automated, lower freq) ──
-    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    # ── Tampa Bay / Central FL ─────────────────────────────────────────────────
+    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
     sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
+    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
+    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(LakeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(HernandoCountyScraper(), interval_minutes=90)
     sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
     sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
+    sched.register_scraper(CitrusCountyScraper(), interval_minutes=120)
+    sched.register_scraper(SumterCountyScraper(), interval_minutes=180)
 
-    # ── Tier 5: Statewide High-Pop expansion (batch 1) ──
-    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
+    # ── South FL / Metro ───────────────────────────────────────────────────────
     sched.register_scraper(BrowardCountyScraper(), interval_minutes=60)
-    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
+    sched.register_scraper(MartinCountyScraper(), interval_minutes=120)
+    sched.register_scraper(StLucieCountyScraper(), interval_minutes=90)
+    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=120)
+    sched.register_scraper(HighlandsCountyScraper(), interval_minutes=120)
+    sched.register_scraper(GladesCountyScraper(), interval_minutes=180)
+
+    # ── North Central FL ───────────────────────────────────────────────────────
     sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
     sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
-    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
-    sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
 
+    # ── Panhandle / NW FL ──────────────────────────────────────────────────────
+    sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(BayCountyScraper(), interval_minutes=120)
+    sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
+
+    # ── NE FL / First Coast ────────────────────────────────────────────────────
+    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(StJohnsCountyScraper(), interval_minutes=120)
+
+    # ── North FL / Rural ───────────────────────────────────────────────────────
+    sched.register_scraper(TaylorCountyScraper(), interval_minutes=240)
+    sched.register_scraper(DixieCountyScraper(), interval_minutes=240)
 
 def handle_shutdown(signum, frame):
-    """Graceful shutdown handler."""
-    logger.info("🛑 Shutdown signal received")
+    logger.info("Shutdown signal received")
     if scheduler:
         scheduler.stop()
     sys.exit(0)
 
-
 def main():
-    """Main entry point."""
     global scheduler
-
-    logger.info("═" * 60)
-    logger.info("🍀 ShamrockLeads — Florida Arrest Intelligence Platform")
-    logger.info("═" * 60)
-
-    # Register signal handlers
+    logger.info("=" * 60)
+    logger.info("ShamrockLeads - Florida Arrest Intelligence Platform")
+    logger.info("=" * 60)
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
-
-    # Initialize writers
     writers = build_writers()
-
-    # Initialize scheduler
     scheduler = ScraperScheduler()
     scheduler.set_writers(writers)
-
-    # Register scrapers
     register_scrapers(scheduler)
-
-    # Check for one-shot mode
     if len(sys.argv) > 1:
         county = sys.argv[1]
-        logger.info(f"⚡ One-shot mode: running {county} scraper")
+        logger.info(f"One-shot mode: running {county} scraper")
         result = scheduler.run_now(county)
         if result:
-            logger.info(f"📊 Result: {result}")
+            logger.info(f"Result: {result}")
         else:
-            logger.error(f"❌ No scraper found for county: {county}")
+            logger.error(f"No scraper found for county: {county}")
         return
-
-    # Start scheduled mode
     scheduler.start()
-    logger.info("✅ Scheduler running. Press Ctrl+C to stop.")
-
-    # Keep main thread alive
+    # Start dashboard server on port 8088
+    if DASHBOARD_AVAILABLE:
+        try:
+            start_dashboard_server(port=8088)
+        except Exception as e:
+            logger.warning(f"Dashboard server failed to start: {e}")
+    logger.info("Scheduler running. Press Ctrl+C to stop.")
     try:
         while True:
             time.sleep(60)
     except (KeyboardInterrupt, SystemExit):
         handle_shutdown(None, None)
-
 
 if __name__ == "__main__":
     main()
