@@ -7,7 +7,7 @@ import os
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from flask import Flask, send_from_directory, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -54,16 +54,27 @@ def update_scraper_status(county, records, hot, warm, cold=0,
         _status["cycle_count"] += 1
 
 
+def _get_mongo_db():
+    """Return a pymongo db handle (caller must close client)."""
+    from pymongo import MongoClient
+    client = MongoClient(os.getenv("MONGODB_URI"), serverSelectionTimeoutMS=5000)
+    db = client[os.getenv("MONGODB_DB_NAME", "shamrock_leads")]
+    return client, db
+
+
+# ── Static routes ──────────────────────────────────────────────
+
 @app.route("/")
 def index():
     return send_from_directory(".", "index.html")
-
 
 @app.route("/mobile")
 @app.route("/mobile.html")
 def mobile():
     return send_from_directory(".", "mobile.html")
 
+
+# ── Health / Status ────────────────────────────────────────────
 
 @app.route("/health")
 def health():
@@ -77,12 +88,10 @@ def health():
         "errored_scrapers": errored,
     })
 
-
 @app.route("/api/status")
 def api_status():
     with _lock:
         return jsonify(_status)
-
 
 @app.route("/api/scrapers")
 def api_scrapers():
@@ -98,13 +107,13 @@ def api_scrapers():
         })
 
 
+# ── MongoDB Stats ──────────────────────────────────────────────
+
 @app.route("/api/mongo-stats")
 def api_mongo_stats():
     """Live MongoDB stats - county record counts and lead scores."""
     try:
-        from pymongo import MongoClient
-        client = MongoClient(os.getenv("MONGODB_URI"), serverSelectionTimeoutMS=3000)
-        db = client[os.getenv("MONGODB_DB_NAME", "shamrock_leads")]
+        client, db = _get_mongo_db()
 
         total = db.arrests.count_documents({})
 
@@ -119,11 +128,11 @@ def api_mongo_stats():
         cold = db.arrests.count_documents({"lead_score": {"$gte": 30, "$lt": 50}})
         disq = db.arrests.count_documents({"lead_score": {"$lt": 30}})
 
-        from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         recent_hot = list(db.arrests.find(
             {"lead_score": {"$gte": 80}, "scraped_at": {"$gte": cutoff.isoformat()}},
-            {"_id": 0, "full_name": 1, "county": 1, "charges": 1, "bond_amount": 1, "lead_score": 1}
+            {"_id": 0, "full_name": 1, "county": 1, "charges": 1,
+             "bond_amount": 1, "lead_score": 1, "bond_type": 1}
         ).sort("lead_score", -1).limit(20))
 
         client.close()
@@ -135,6 +144,157 @@ def api_mongo_stats():
             "recent_hot_leads": recent_hot,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Leads Detail API ───────────────────────────────────────────
+
+@app.route("/api/leads")
+def api_leads():
+    """
+    Full leads endpoint with filtering, sorting, and pagination.
+    Query params:
+      - status: Hot|Warm|Cold|Disqualified (default: all)
+      - county: filter by county name
+      - search: text search on full_name or charges
+      - sort: lead_score|bond_amount|booking_date|full_name (default: lead_score)
+      - order: desc|asc (default: desc)
+      - page: 1-indexed page number (default: 1)
+      - limit: records per page (default: 50, max: 200)
+      - min_bond: minimum bond amount filter
+      - custody: true to show only "In Custody"
+    """
+    try:
+        client, db = _get_mongo_db()
+
+        # Build query
+        query = {}
+
+        # Status filter
+        status_filter = request.args.get("status", "").strip()
+        if status_filter:
+            query["lead_status"] = status_filter
+
+        # County filter
+        county_filter = request.args.get("county", "").strip()
+        if county_filter:
+            query["county"] = county_filter
+
+        # Custody filter
+        if request.args.get("custody", "").lower() == "true":
+            query["status"] = "In Custody"
+
+        # Min bond filter
+        min_bond = request.args.get("min_bond", "").strip()
+        if min_bond:
+            try:
+                query["bond_amount"] = {"$gte": float(min_bond)}
+            except ValueError:
+                pass
+
+        # Text search on name or charges
+        search = request.args.get("search", "").strip()
+        if search:
+            import re
+            pattern = re.compile(re.escape(search), re.IGNORECASE)
+            query["$or"] = [
+                {"full_name": {"$regex": pattern}},
+                {"charges": {"$regex": pattern}},
+            ]
+
+        # Sorting
+        sort_field = request.args.get("sort", "lead_score").strip()
+        sort_order = -1 if request.args.get("order", "desc").strip() == "desc" else 1
+        sort_map = {
+            "lead_score": "lead_score",
+            "bond_amount": "bond_amount",
+            "booking_date": "booking_date",
+            "full_name": "full_name",
+            "county": "county",
+        }
+        mongo_sort = sort_map.get(sort_field, "lead_score")
+
+        # Pagination
+        page = max(1, int(request.args.get("page", 1)))
+        limit = min(200, max(1, int(request.args.get("limit", 50))))
+        skip = (page - 1) * limit
+
+        # Project only needed fields (fast)
+        projection = {
+            "_id": 0,
+            "full_name": 1,
+            "first_name": 1,
+            "last_name": 1,
+            "booking_number": 1,
+            "county": 1,
+            "charges": 1,
+            "bond_amount": 1,
+            "bond_type": 1,
+            "lead_score": 1,
+            "lead_status": 1,
+            "status": 1,
+            "arrest_date": 1,
+            "booking_date": 1,
+            "court_date": 1,
+            "court_location": 1,
+            "case_number": 1,
+            "dob": 1,
+            "sex": 1,
+            "race": 1,
+            "address": 1,
+            "detail_url": 1,
+            "facility": 1,
+            "mugshot_url": 1,
+            "scraped_at": 1,
+        }
+
+        # Execute
+        total_matching = db.arrests.count_documents(query)
+        cursor = db.arrests.find(query, projection).sort(mongo_sort, sort_order).skip(skip).limit(limit)
+        leads = list(cursor)
+
+        # Get available counties for filter dropdown
+        counties_list = sorted(db.arrests.distinct("county"))
+
+        client.close()
+
+        return jsonify({
+            "leads": leads,
+            "total": total_matching,
+            "page": page,
+            "limit": limit,
+            "pages": (total_matching + limit - 1) // limit,
+            "counties": counties_list,
+            "query": {
+                "status": status_filter,
+                "county": county_filter,
+                "search": search,
+                "sort": sort_field,
+                "order": "desc" if sort_order == -1 else "asc",
+            },
+        })
+    except Exception as e:
+        logger.error(f"Leads API error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leads/<booking_number>")
+def api_lead_detail(booking_number):
+    """Get full detail for a single lead by booking number."""
+    try:
+        client, db = _get_mongo_db()
+        doc = db.arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        if not doc:
+            # Try as integer
+            try:
+                doc = db.arrests.find_one({"booking_number": int(booking_number)}, {"_id": 0})
+            except (ValueError, TypeError):
+                pass
+        client.close()
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(doc)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
