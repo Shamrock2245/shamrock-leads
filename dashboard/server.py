@@ -104,7 +104,7 @@ def api_mongo_stats():
     try:
         from pymongo import MongoClient
         client = MongoClient(os.getenv("MONGODB_URI"), serverSelectionTimeoutMS=3000)
-        db = client[os.getenv("MONGODB_DB_NAME", "shamrock_leads")]
+        db = client[os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")]
 
         total = db.arrests.count_documents({})
 
@@ -114,15 +114,15 @@ def api_mongo_stats():
         ]
         by_county = {doc["_id"]: doc["count"] for doc in db.arrests.aggregate(county_pipeline)}
 
-        hot = db.arrests.count_documents({"lead_score": {"$gte": 80}})
-        warm = db.arrests.count_documents({"lead_score": {"$gte": 50, "$lt": 80}})
-        cold = db.arrests.count_documents({"lead_score": {"$gte": 30, "$lt": 50}})
-        disq = db.arrests.count_documents({"lead_score": {"$lt": 30}})
+        hot = db.arrests.count_documents({"lead_score": {"$gte": 70}})
+        warm = db.arrests.count_documents({"lead_score": {"$gte": 40, "$lt": 70}})
+        cold = db.arrests.count_documents({"lead_score": {"$gte": 20, "$lt": 40}})
+        disq = db.arrests.count_documents({"lead_score": {"$lt": 20}})
 
         from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         recent_hot = list(db.arrests.find(
-            {"lead_score": {"$gte": 80}, "scraped_at": {"$gte": cutoff.isoformat()}},
+            {"lead_score": {"$gte": 70}, "scraped_at": {"$gte": cutoff.isoformat()}},
             {"_id": 0, "full_name": 1, "county": 1, "charges": 1, "bond_amount": 1, "lead_score": 1}
         ).sort("lead_score", -1).limit(20))
 

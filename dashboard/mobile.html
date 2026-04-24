@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>ShamrockLeads — Mobile Pulse</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+      --blue: #3b82f6; --orange: #f97316; --purple: #a855f7;
+      --bg: #0a0f1a; --card: #111827; --border: #1f2937;
+      --text: #f1f5f9; --muted: #9ca3af; --surface: #151c2c;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+
+    /* Header */
+    .header { background: linear-gradient(135deg, #064e3b, #047857); padding: 16px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 6px; }
+    .live-pill { font-size: 0.6rem; background: rgba(34,197,94,0.2); color: var(--green); padding: 3px 8px; border-radius: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px; }
+    .live-pill::before { content: ''; width: 6px; height: 6px; background: var(--green); border-radius: 50%; animation: blink 2s infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* KPI Grid */
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
+    .kpi-card { background: var(--card); border-radius: 12px; padding: 12px; text-align: center; border: 1px solid var(--border); }
+    .kpi-num { font-size: 1.8rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    .kpi-lbl { font-size: 0.55rem; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
+    /* Sections */
+    .section { padding: 0 12px 12px; }
+    .section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 8px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+
+    /* County List */
+    .county-list { display: flex; flex-direction: column; gap: 4px; }
+    .county-row { background: var(--card); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border); border-left: 3px solid var(--green); }
+    .county-row.error { border-left-color: var(--red); }
+    .county-row.pending { border-left-color: var(--muted); opacity: 0.6; }
+    .county-row .name { font-weight: 700; font-size: 0.85rem; }
+    .county-row .stats { display: flex; gap: 10px; font-size: 0.7rem; }
+    .county-row .stats span { font-weight: 600; }
+    .stat-db { color: var(--blue); }
+    .stat-hot { color: var(--orange); }
+    .stat-time { color: var(--muted); }
+
+    /* Hot Leads */
+    .lead-card { background: var(--card); border-radius: 8px; padding: 10px 12px; margin-bottom: 4px; border: 1px solid var(--border); border-left: 3px solid var(--orange); }
+    .lead-card .name { font-weight: 700; font-size: 0.85rem; }
+    .lead-card .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; font-size: 0.7rem; }
+    .lead-card .county-tag { color: var(--muted); }
+    .lead-card .bond { color: var(--green); font-weight: 700; }
+    .lead-card .score { background: var(--orange); color: #fff; padding: 1px 6px; border-radius: 10px; font-weight: 700; font-size: 0.65rem; }
+
+    /* Tab bar */
+    .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; padding: 8px 0; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+    .tab { flex: 1; text-align: center; font-size: 0.6rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 0; cursor: pointer; }
+    .tab.active { color: var(--green); }
+    .tab-icon { font-size: 1.2rem; display: block; margin-bottom: 2px; }
+
+    /* Tabs content */
+    .tab-content { display: none; padding-bottom: 70px; }
+    .tab-content.active { display: block; }
+
+    /* Pull to refresh indicator */
+    .refresh-bar { text-align: center; padding: 6px; font-size: 0.6rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>☘️ ShamrockLeads</h1>
+    <span class="live-pill">LIVE</span>
+  </div>
+
+  <!-- Tab: Pulse -->
+  <div class="tab-content active" id="tabPulse">
+    <div class="kpi-grid">
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--green)" id="mActive">—</div><div class="kpi-lbl">Active</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--blue)" id="mRecords">—</div><div class="kpi-lbl">Records</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--orange)" id="mHot">—</div><div class="kpi-lbl">🔥 Hot</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--yellow)" id="mWarm">—</div><div class="kpi-lbl">🟡 Warm</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--purple)" id="mCounties">—</div><div class="kpi-lbl">Counties</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="mErrors">—</div><div class="kpi-lbl">Errors</div></div>
+    </div>
+    <div class="section">
+      <div class="section-title">Top Counties by Records</div>
+      <div class="county-list" id="topCounties"></div>
+    </div>
+  </div>
+
+  <!-- Tab: Fleet -->
+  <div class="tab-content" id="tabFleet">
+    <div class="section" style="padding-top:8px;">
+      <div class="section-title">All Scrapers</div>
+      <div class="county-list" id="allCounties"></div>
+    </div>
+  </div>
+
+  <!-- Tab: Leads -->
+  <div class="tab-content" id="tabLeads">
+    <div class="section" style="padding-top:8px;">
+      <div class="section-title">🔥 Hot Leads (24h)</div>
+      <div id="mobileLeads"></div>
+    </div>
+  </div>
+
+  <div class="refresh-bar" id="refreshBar">Auto-refresh in 30s</div>
+
+  <div class="tab-bar">
+    <div class="tab active" data-tab="tabPulse"><span class="tab-icon">📊</span>Pulse</div>
+    <div class="tab" data-tab="tabFleet"><span class="tab-icon">🗺️</span>Fleet</div>
+    <div class="tab" data-tab="tabLeads"><span class="tab-icon">🔥</span>Leads</div>
+  </div>
+
+<script>
+const API = window.location.origin;
+let scraperData = {}, mongoData = {};
+
+async function fetchData() {
+  try {
+    const [s, m] = await Promise.all([
+      fetch(`${API}/api/status`).then(r => r.json()),
+      fetch(`${API}/api/mongo-stats`).then(r => r.json()),
+    ]);
+    scraperData = s; mongoData = m;
+    render();
+  } catch (e) { console.error(e); }
+}
+
+function render() {
+  const sc = scraperData.scrapers || {};
+  const by = mongoData.by_county || {};
+  const scores = mongoData.scores || {};
+  const ok = Object.values(sc).filter(s => s.status === "ok").length;
+  const err = Object.values(sc).filter(s => s.status !== "ok").length;
+
+  document.getElementById("mActive").textContent = ok;
+  document.getElementById("mRecords").textContent = fmt(mongoData.total_records || 0);
+  document.getElementById("mHot").textContent = scores.hot || 0;
+  document.getElementById("mWarm").textContent = scores.warm || 0;
+  document.getElementById("mCounties").textContent = Object.keys(by).length;
+  document.getElementById("mErrors").textContent = err;
+
+  // Top counties
+  const sorted = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  document.getElementById("topCounties").innerHTML = sorted.map(([c, n]) => {
+    const d = sc[c]; const hot = d?.hot_leads || 0;
+    return `<div class="county-row"><span class="name">${c}</span><div class="stats"><span class="stat-db">${fmt(n)}</span><span class="stat-hot">🔥${hot}</span></div></div>`;
+  }).join('');
+
+  // All scrapers
+  const all = Object.entries(sc).sort((a, b) => a[0].localeCompare(b[0]));
+  document.getElementById("allCounties").innerHTML = all.map(([c, d]) => {
+    const cls = d.status !== "ok" ? "error" : "";
+    const ago = d.last_run ? timeAgo(d.last_run) : "—";
+    return `<div class="county-row ${cls}"><span class="name">${c}</span><div class="stats"><span class="stat-db">${d.records}</span><span class="stat-time">${ago}</span></div></div>`;
+  }).join('');
+
+  // Hot leads
+  const leads = mongoData.recent_hot_leads || [];
+  document.getElementById("mobileLeads").innerHTML = leads.length === 0
+    ? '<div style="text-align:center;color:var(--muted);padding:20px;">No hot leads in last 24h</div>'
+    : leads.map(l => `
+      <div class="lead-card">
+        <div class="name">${l.full_name || 'Unknown'}</div>
+        <div class="meta">
+          <span class="county-tag">${l.county || '—'}</span>
+          <span class="bond">${l.bond_amount ? '$' + Number(l.bond_amount).toLocaleString() : '—'}</span>
+          <span class="score">${l.lead_score}</span>
+        </div>
+      </div>
+    `).join('');
+}
+
+function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'K' : n; }
+function timeAgo(iso) {
+  const d = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (d < 60) return Math.round(d) + 's';
+  if (d < 3600) return Math.round(d / 60) + 'm';
+  return Math.round(d / 3600) + 'h';
+}
+
+// Tabs
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(t.dataset.tab).classList.add('active');
+  });
+});
+
+// Refresh
+let cd = 30;
+setInterval(() => { cd--; document.getElementById('refreshBar').textContent = `Auto-refresh in ${cd}s`; if (cd <= 0) { cd = 30; fetchData(); } }, 1000);
+fetchData();
+</script>
+</body>
+</html>

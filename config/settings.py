@@ -17,7 +17,7 @@ class Settings:
 
     # --- MongoDB ---
     MONGODB_URI: str = os.getenv("MONGODB_URI", "")
-    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "shamrock_leads")
+    MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
 
     # --- Google Sheets (legacy/optional) ---
     GOOGLE_SPREADSHEET_ID: str = os.getenv(
