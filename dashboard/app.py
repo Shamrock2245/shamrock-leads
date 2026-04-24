@@ -6,12 +6,15 @@ Run:  python dashboard/app.py
 Then: open http://localhost:5050
 """
 
+import csv
+import io
 import os
+import re as re_mod
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, send_from_directory, request
+from flask import Flask, jsonify, send_from_directory, request, Response
 from pymongo import MongoClient, DESCENDING
 from dotenv import load_dotenv
 
@@ -49,6 +52,272 @@ def serve_file(filename):
     if filename.endswith((".css", ".js", ".png", ".ico", ".svg")):
         return send_from_directory(".", filename)
     return send_from_directory(".", "index.html")
+
+
+# ── API: Compatibility endpoints (used by index.html) ──
+
+@app.route("/api/status")
+def api_status_compat():
+    """Compatibility endpoint for index.html — returns scraper-style status from MongoDB."""
+    try:
+        pipeline = [
+            {"$group": {
+                "_id": "$county",
+                "records": {"$sum": 1},
+                "latest": {"$max": "$created_at"},
+            }},
+        ]
+        results = list(arrests.aggregate(pipeline))
+        scrapers = {}
+        total_scraped = 0
+        for r in results:
+            county = r["_id"]
+            count = r["records"]
+            total_scraped += count
+            # Estimate hot/warm from lead_score if available
+            hot = arrests.count_documents({"county": county, "lead_score": {"$gte": 70}})
+            warm = arrests.count_documents({"county": county, "lead_score": {"$gte": 40, "$lt": 70}})
+            latest = r.get("latest")
+            scrapers[county] = {
+                "last_run": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
+                "records": count,
+                "hot_leads": hot,
+                "warm_leads": warm,
+                "cold_leads": 0,
+                "disqualified": 0,
+                "duration_seconds": 0,
+                "status": "ok",
+                "error": None,
+                "run_count": 1,
+                "total_records": count,
+            }
+        return jsonify({
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "scrapers": scrapers,
+            "total_scraped": total_scraped,
+            "total_hot_leads": sum(s["hot_leads"] for s in scrapers.values()),
+            "total_warm_leads": sum(s["warm_leads"] for s in scrapers.values()),
+            "cycle_count": 0,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/mongo-stats")
+def api_mongo_stats_compat():
+    """Compatibility endpoint for index.html — MongoDB record stats."""
+    try:
+        total = arrests.count_documents({})
+        county_pipeline = [
+            {"$group": {"_id": "$county", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        by_county = {doc["_id"]: doc["count"] for doc in arrests.aggregate(county_pipeline)}
+        hot = arrests.count_documents({"lead_score": {"$gte": 70}})
+        warm = arrests.count_documents({"lead_score": {"$gte": 40, "$lt": 70}})
+        cold = arrests.count_documents({"lead_score": {"$gte": 20, "$lt": 40}})
+        disq = arrests.count_documents({"lead_score": {"$lt": 20}})
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        recent_hot = list(arrests.find(
+            {"lead_score": {"$gte": 70}, "scraped_at": {"$gte": cutoff.isoformat()}},
+            {"_id": 0, "full_name": 1, "county": 1, "charges": 1,
+             "bond_amount": 1, "lead_score": 1, "bond_type": 1}
+        ).sort("lead_score", -1).limit(20))
+
+        return jsonify({
+            "total_records": total,
+            "by_county": by_county,
+            "scores": {"hot": hot, "warm": warm, "cold": cold, "disqualified": disq},
+            "recent_hot_leads": recent_hot,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _build_leads_query():
+    """Shared query builder for /api/leads and /api/leads/export."""
+    query = {}
+
+    # Status (lead_status: Hot / Warm / Cold / Disqualified)
+    status_filter = request.args.get("status", "").strip()
+    if status_filter:
+        query["lead_status"] = status_filter
+
+    # Multi-county support: county=Lee,Collier,Charlotte
+    county_filter = request.args.get("county", "").strip()
+    if county_filter:
+        counties = [c.strip() for c in county_filter.split(",") if c.strip()]
+        if len(counties) == 1:
+            query["county"] = counties[0]
+        elif len(counties) > 1:
+            query["county"] = {"$in": counties}
+
+    # Custody filter: true = In Custody only, false = Released only, empty = all
+    custody_param = request.args.get("custody", "").strip().lower()
+    if custody_param == "true":
+        query["status"] = {"$regex": "custody|confined|held", "$options": "i"}
+    elif custody_param == "released":
+        query["status"] = {"$regex": "released|bonded|rts", "$options": "i"}
+
+    # Date range: days=1..5 filters booking_date relative to today
+    days_param = request.args.get("days", "").strip()
+    if days_param:
+        try:
+            days_int = int(days_param)
+            if 1 <= days_int <= 30:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days_int)
+                # booking_date can be a string or datetime, handle both
+                cutoff_str = cutoff.strftime("%m/%d/%Y")
+                query["$or"] = query.get("$or", [])  # preserve existing $or
+                # Use created_at (datetime) as the canonical date filter
+                query["created_at"] = {"$gte": cutoff}
+        except (ValueError, TypeError):
+            pass
+
+    # Min bond
+    min_bond = request.args.get("min_bond", "").strip()
+    if min_bond:
+        try:
+            query["bond_amount"] = {"$gte": float(min_bond)}
+        except ValueError:
+            pass
+
+    # Search (name, charges, booking #, case #)
+    search = request.args.get("search", "").strip()
+    if search:
+        pattern = re_mod.compile(re_mod.escape(search), re_mod.IGNORECASE)
+        search_or = [
+            {"full_name": {"$regex": pattern}},
+            {"charges": {"$regex": pattern}},
+            {"booking_number": {"$regex": pattern}},
+            {"case_number": {"$regex": pattern}},
+        ]
+        # Merge with existing $or if date range set one
+        if "$or" in query and query["$or"]:
+            # Can't have two $or at top level; wrap in $and
+            existing_or = query.pop("$or")
+            query["$and"] = [{"$or": existing_or}, {"$or": search_or}]
+        else:
+            query.pop("$or", None)
+            query["$or"] = search_or
+
+    return query, status_filter, county_filter, search
+
+
+@app.route("/api/leads")
+def api_leads_compat():
+    """Filterable, sortable leads list with multi-county and date range support."""
+    try:
+        query, status_filter, county_filter, search = _build_leads_query()
+
+        sort_field = request.args.get("sort", "lead_score").strip()
+        sort_order = -1 if request.args.get("order", "desc").strip() == "desc" else 1
+        sort_map = {
+            "lead_score": "lead_score", "bond_amount": "bond_amount",
+            "booking_date": "booking_date", "full_name": "full_name",
+            "county": "county", "arrest_date": "arrest_date",
+            "created_at": "created_at",
+        }
+        mongo_sort = sort_map.get(sort_field, "lead_score")
+        page = max(1, int(request.args.get("page", 1)))
+        limit = min(200, max(1, int(request.args.get("limit", 50))))
+        skip = (page - 1) * limit
+        projection = {
+            "_id": 0, "full_name": 1, "first_name": 1, "last_name": 1,
+            "booking_number": 1, "county": 1, "charges": 1, "bond_amount": 1,
+            "bond_type": 1, "lead_score": 1, "lead_status": 1, "status": 1,
+            "arrest_date": 1, "booking_date": 1, "court_date": 1,
+            "court_location": 1, "case_number": 1, "dob": 1, "sex": 1,
+            "race": 1, "address": 1, "detail_url": 1, "facility": 1,
+            "mugshot_url": 1, "scraped_at": 1, "created_at": 1,
+        }
+        total_matching = arrests.count_documents(query)
+        cursor = arrests.find(query, projection).sort(mongo_sort, sort_order).skip(skip).limit(limit)
+        leads_list = []
+        for doc in cursor:
+            for k, v in doc.items():
+                if isinstance(v, datetime):
+                    doc[k] = v.isoformat()
+            leads_list.append(doc)
+        counties_list = sorted(arrests.distinct("county"))
+        return jsonify({
+            "leads": leads_list,
+            "total": total_matching,
+            "page": page,
+            "limit": limit,
+            "pages": max(1, (total_matching + limit - 1) // limit),
+            "counties": counties_list,
+            "query": {
+                "status": status_filter, "county": county_filter,
+                "search": search, "sort": sort_field,
+                "order": "desc" if sort_order == -1 else "asc",
+            },
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leads/export")
+def api_leads_export():
+    """CSV export of current filtered leads."""
+    try:
+        query, _, _, _ = _build_leads_query()
+        sort_field = request.args.get("sort", "lead_score").strip()
+        sort_order = -1 if request.args.get("order", "desc").strip() == "desc" else 1
+        sort_map = {
+            "lead_score": "lead_score", "bond_amount": "bond_amount",
+            "booking_date": "booking_date", "full_name": "full_name",
+            "county": "county", "arrest_date": "arrest_date",
+        }
+        mongo_sort = sort_map.get(sort_field, "lead_score")
+        cursor = arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)
+
+        columns = [
+            "full_name", "county", "charges", "bond_amount", "bond_type",
+            "lead_score", "lead_status", "status", "booking_number",
+            "arrest_date", "booking_date", "court_date", "court_location",
+            "case_number", "dob", "sex", "race", "address", "facility",
+            "detail_url",
+        ]
+        output = io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for doc in cursor:
+            for k, v in doc.items():
+                if isinstance(v, datetime):
+                    doc[k] = v.isoformat()
+            writer.writerow(doc)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=shamrock_leads_{timestamp}.csv"},
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/leads/<booking_number>")
+def api_lead_detail_compat(booking_number):
+    """Get full detail for a single lead by booking number."""
+    try:
+        doc = arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        if not doc:
+            try:
+                doc = arrests.find_one({"booking_number": int(booking_number)}, {"_id": 0})
+            except (ValueError, TypeError):
+                pass
+        if not doc:
+            return jsonify({"error": "Not found"}), 404
+        for k, v in doc.items():
+            if isinstance(v, datetime):
+                doc[k] = v.isoformat()
+        return jsonify(doc)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ── API: Overview Stats ──
