@@ -67,18 +67,19 @@ class AlachuaCountyScraper(BaseScraper):
             logger.warning("Alachua: no __VIEWSTATE found — page structure may have changed")
 
         # Step 2: POST with "View All" button
-        # The button name varies — try both the full ContentPlaceHolder prefix and the short form
+        # IMPORTANT: Only send fields that actually exist on the HTML form.
+        # ASP.NET EventValidation will 500 if we send unregistered fields.
+        # Verified fields from live HTML: txtLName, txtFName, txtBookNo, ButtonView,
+        # __VIEWSTATE, __VIEWSTATEGENERATOR, __VIEWSTATEENCRYPTED, __EVENTVALIDATION
         post_data = {
             "__VIEWSTATE": viewstate,
             "__VIEWSTATEGENERATOR": viewstate_gen,
+            "__VIEWSTATEENCRYPTED": "",
             "__EVENTVALIDATION": event_validation,
-            "__EVENTTARGET": "",
-            "__EVENTARGUMENT": "",
-            "ButtonView": "View All",
-            "ctl00$ContentPlaceHolder1$ButtonView": "View All",
             "txtLName": "",
             "txtFName": "",
             "txtBookNo": "",
+            "ButtonView": "View All",
         }
 
         try:

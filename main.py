@@ -144,7 +144,9 @@ def register_scrapers(sched):
     sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
     sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
     sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
-    sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
+    # MarionCountyScraper DISABLED — jail.marionso.com blocks datacenter IPs (403)
+    # Needs residential proxy to re-enable
+    # sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
     sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
 
     # ── Panhandle / NW FL ──────────────────────────────────────────────────────
