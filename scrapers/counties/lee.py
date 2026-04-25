@@ -381,11 +381,15 @@ class LeeCountyScraper(BaseScraper):
         state = self._safe(raw.get("state") or "FL")
         zip_code = self._safe(raw.get("zip") or raw.get("zipcode") or raw.get("postalCode"))
 
-        # Determine status
+        # Determine status and release date
         status = "In Custody"
-        if raw.get("inCustody") is False or raw.get("in_custody") is False:
+        release_date = ""
+        release_raw = raw.get("releaseDate") or raw.get("release_date") or ""
+        if release_raw:
+            rd, _ = self._parse_iso_datetime(str(release_raw))
+            release_date = rd
             status = "Released"
-        if raw.get("releaseDate") or raw.get("release_date"):
+        if raw.get("inCustody") is False or raw.get("in_custody") is False:
             status = "Released"
         if raw.get("currentStatus") or raw.get("status"):
             status = self._safe(raw.get("currentStatus") or raw.get("status"))
@@ -407,6 +411,7 @@ class LeeCountyScraper(BaseScraper):
             "booking_date": b_date,
             "booking_time": b_time,
             "status": status,
+            "release_date": release_date,
             "facility": self._safe(raw.get("housing") or raw.get("facility") or raw.get("location") or "Lee County Jail"),
             "race": self._safe(raw.get("race")),
             "sex": self._safe(raw.get("sex") or raw.get("gender")),
@@ -446,6 +451,7 @@ class LeeCountyScraper(BaseScraper):
             Booking_Date=n.get("booking_date", ""),
             Booking_Time=n.get("booking_time", ""),
             Status=n.get("status", ""),
+            Release_Date=n.get("release_date", ""),
             Facility=n.get("facility", ""),
             Race=n.get("race", ""),
             Sex=n.get("sex", ""),

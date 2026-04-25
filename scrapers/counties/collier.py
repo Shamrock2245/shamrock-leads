@@ -213,6 +213,8 @@ class CollierCountyScraper(BaseScraper):
         charges_list = []
         bond_paid = "NO"
         mugshot_url = ""
+        hair_color = ""
+        eye_color = ""
 
         # Look ahead in tables for detail data
         start_idx = entry["index"] + 1
@@ -242,9 +244,9 @@ class CollierCountyScraper(BaseScraper):
                 elif label == "Weight" and value:
                     weight = value
                 elif label == "Hair Color" and value:
-                    pass  # Not in schema
+                    hair_color = value
                 elif label == "Eye Color" and value:
-                    pass  # Not in schema
+                    eye_color = value
                 elif label == "Booking Date" and value:
                     booking_date = value
                 elif label == "Booking Number" and value and len(value) > 5:
@@ -300,6 +302,13 @@ class CollierCountyScraper(BaseScraper):
 
         charges_str = " | ".join(charges_list) if charges_list else ""
 
+        # Build extra_data for fields not in core schema
+        extra = {}
+        if hair_color:
+            extra["hair_color"] = hair_color
+        if eye_color:
+            extra["eye_color"] = eye_color
+
         return ArrestRecord(
             County=self.county,
             Booking_Number=booking_number,
@@ -315,6 +324,7 @@ class CollierCountyScraper(BaseScraper):
             Sex=sex,
             Height=height,
             Weight=weight,
+            Age_At_Arrest=age,
             Address=address,
             City=city,
             State=state,
@@ -325,6 +335,7 @@ class CollierCountyScraper(BaseScraper):
             Bond_Paid=bond_paid,
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
+            extra_data=extra,
         )
 
     # ── HTTP Helpers ──

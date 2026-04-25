@@ -1,7 +1,7 @@
 # Surety Policy
 
 > **Status:** `[ACTIVE — Enforced from Phase 5]`
-> **Sureties:** OSI (Old Southern Indemnity), Palmetto Surety Corporation
+> **Sureties:** OSI (O'Shaughnahill Surety & Insurance, Inc.), Palmetto Surety Corporation
 
 ---
 
@@ -13,7 +13,7 @@ This policy governs surety selection, POA assignment, premium calculation, and r
 
 ## Surety Profiles
 
-### OSI — Old Southern Indemnity
+### OSI — O'Shaughnahill Surety & Insurance, Inc.
 
 | Property | Value |
 |----------|-------|
@@ -22,7 +22,7 @@ This policy governs surety selection, POA assignment, premium calculation, and r
 | Premium to Surety | **$7.50 per $100 in premium** |
 | Build-Up Fund (BUF) | **$5.00 per $100 in premium** |
 | Agent Retention | Remainder after surety + BUF |
-| POA Prefixes | `OSI3`, `OSI6`, `OSI51`, `OSI101`, `OSI251` |
+| POA Prefixes | `OSI3`, `OSI6`, `OSI16`, `OSI51`, `OSI101`, `OSI251` |
 
 ### Palmetto Surety Corporation
 
@@ -33,7 +33,7 @@ This policy governs surety selection, POA assignment, premium calculation, and r
 | Premium to Surety | **$10.00 per $100 in premium** |
 | Build-Up Fund (BUF) | **$5.00 per $100 in premium** |
 | Agent Retention | Remainder after surety + BUF |
-| POA Prefixes | `PSC5`, `PSC15`, `PSC25`, `PSC50`, `PSC75`, `PSC101`, `PSC200`, `PSC250` |
+| POA Prefixes | `PSC5`, `PSC15`, `PSC25`, `PSC50`, `PSC75`, `PSC105`, `PSC200`, `PSC250` |
 
 ### Premium Split Example
 
@@ -48,44 +48,68 @@ For a **$10,000 bond** at standard 10% premium ($1,000 collected):
 
 ---
 
+## POA Number Format
+
+POA numbers follow the pattern: `{PREFIX} - {SERIAL}`
+
+Examples:
+- OSI: `OSI3 - 20134323`
+- Palmetto: `PSC15 - 2644778`
+
+The **prefix** indicates the surety and tier. The **serial number** is unique per POA.
+
+---
+
 ## POA Prefix Tiers
 
-POA prefixes correspond to maximum bond amount tiers. Each prefix is a separate physical POA form with a specific bond limit.
+POA prefixes correspond to maximum bond amount tiers. Each prefix is a separate physical POA form with a specific bond limit. Always use the **smallest tier that covers the bond amount**.
 
 ### OSI POA Prefixes
-| Prefix | Inferred Tier |
-|--------|---------------|
-| `OSI3` | Low-tier bonds |
-| `OSI6` | Mid-low tier |
-| `OSI51` | Mid tier |
-| `OSI101` | High tier |
-| `OSI251` | Maximum tier |
+| Prefix | Max Bond Amount |
+|--------|----------------|
+| `OSI3` | $3,000 |
+| `OSI6` | $6,000 |
+| `OSI16` | $16,000 |
+| `OSI51` | $51,000 |
+| `OSI101` | $101,000 |
+| `OSI251` | $251,000 |
 
 ### Palmetto POA Prefixes
-| Prefix | Inferred Tier |
-|--------|---------------|
-| `PSC5` | $5K and under |
-| `PSC15` | $15K and under |
-| `PSC25` | $25K and under |
-| `PSC50` | $50K and under |
-| `PSC75` | $75K and under |
-| `PSC101` | $100K and under |
-| `PSC200` | $200K and under |
-| `PSC250` | $250K and under |
-
-> **Note:** Exact tier-to-amount mappings will be confirmed from surety documentation. The prefix naming convention strongly implies bond amount ceilings.
+| Prefix | Max Bond Amount |
+|--------|----------------|
+| `PSC5` | $5,000 |
+| `PSC15` | $15,000 |
+| `PSC25` | $25,000 |
+| `PSC50` | $50,000 |
+| `PSC75` | $75,000 |
+| `PSC105` | $105,000 |
+| `PSC200` | $200,000 |
+| `PSC250` | $250,000 |
 
 ---
 
 ## Surety Selection Rules
 
-### When to Use Which Surety
+### Decision Logic
 
-1. **Default**: Use the surety specified by `DEFAULT_SURETY` environment variable (if set)
-2. **Out-of-State**: If defendant's case is outside Florida, **must use Palmetto** (multi-state license)
-3. **POA Availability**: If the needed POA tier is out of stock for one surety, use the other
-4. **Agent Preference**: Human bondsman may override surety selection for any business reason
-5. **Never auto-select**: System proposes, human confirms. No automated surety assignment.
+The surety selection is made by the bondsman based on:
+
+1. **OSI is preferred** when possible (better agent retention: $875 vs $850 per $10K)
+2. **Available POA inventory** — if OSI is out of stock in the needed tier, use Palmetto
+3. **Bond amount** — the bond must fit within an available tier for the selected surety
+4. **Out-of-State** — if the defendant's case is outside Florida, **must use Palmetto** (multi-state license: FL, SC, NC, TN, TX, CT, LA, MS)
+5. **Never auto-select** — system proposes the optimal surety, human confirms
+
+### Selection Algorithm (for system proposals)
+
+```
+1. If case state ≠ FL → Palmetto (only option)
+2. Check OSI inventory for smallest tier covering bond_amount
+3. If OSI tier available → propose OSI
+4. Else check Palmetto inventory for smallest tier covering bond_amount
+5. If Palmetto tier available → propose Palmetto
+6. Else → ESCALATE (no available POAs for this bond amount)
+```
 
 ### Validation Rules
 
@@ -93,6 +117,18 @@ POA prefixes correspond to maximum bond amount tiers. Each prefix is a separate 
 - Selected POA prefix must belong to the selected surety
 - POA must be in `available` status in the POAInventory
 - Assigned POA's tier must cover the bond amount
+- POA serial must match the pattern for the prefix
+
+---
+
+## Writing Agents
+
+Currently, **Brendan** is the sole writing agent handling all bond executions. Sub-agents will be added in the future. When sub-agents are added:
+
+- Each sub-agent will have their own POA book assignments
+- POA inventory will be partitioned by writing agent
+- Commission tracking will be per-agent
+- The `WritingAgent` entity in the data model supports this expansion
 
 ---
 
@@ -137,6 +173,6 @@ Escalate immediately if:
 - POA number from wrong surety's inventory
 - POA already assigned to another active case
 - No available POAs in needed tier for either surety
-- Premium split rates change (update this policy immediately)
+- Premium split rates change (update this policy AND `core/models.py` immediately)
 - New surety company added
 - Surety license status changes

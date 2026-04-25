@@ -124,13 +124,13 @@ def get_surety(surety_id: str) -> SuretyConfig:
 @dataclass
 class ArrestRecord:
     """
-    Universal arrest record — 39-column canonical schema v3.0.
+    Universal arrest record — 41-column canonical schema v3.1.
 
     Dual-write capable: outputs both MongoDB documents and Sheet rows.
     Dedup key: County + Booking_Number.
     """
 
-    # === Master Schema (39 Columns) ===
+    # === Master Schema (41 Columns) ===
     Scrape_Timestamp: str = ""
     County: str = ""
     Booking_Number: str = ""
@@ -145,12 +145,14 @@ class ArrestRecord:
     Booking_Date: str = ""
     Booking_Time: str = ""
     Status: str = ""
+    Release_Date: str = ""           # v3.1 — available from Lee, DeSoto, Hillsborough+
     Facility: str = ""
     Agency: str = ""
     Race: str = ""
     Sex: str = ""
     Height: str = ""
     Weight: str = ""
+    Age_At_Arrest: str = ""          # v3.1 — available from Collier+
     Address: str = ""
     City: str = ""
     State: str = "FL"
@@ -207,12 +209,14 @@ class ArrestRecord:
             "booking_date": self.Booking_Date,
             "booking_time": self.Booking_Time,
             "status": self.Status,
+            "release_date": self.Release_Date,
             "facility": self.Facility,
             "agency": self.Agency,
             "race": self.Race,
             "sex": self.Sex,
             "height": self.Height,
             "weight": self.Weight,
+            "age_at_arrest": self.Age_At_Arrest,
             "address": self.Address,
             "city": self.City,
             "state": self.State,
@@ -257,12 +261,14 @@ class ArrestRecord:
             Booking_Date=doc.get("booking_date", ""),
             Booking_Time=doc.get("booking_time", ""),
             Status=doc.get("status", ""),
+            Release_Date=doc.get("release_date", ""),
             Facility=doc.get("facility", ""),
             Agency=doc.get("agency", ""),
             Race=doc.get("race", ""),
             Sex=doc.get("sex", ""),
             Height=doc.get("height", ""),
             Weight=doc.get("weight", ""),
+            Age_At_Arrest=doc.get("age_at_arrest", ""),
             Address=doc.get("address", ""),
             City=doc.get("city", ""),
             State=doc.get("state", "FL"),
@@ -287,13 +293,13 @@ class ArrestRecord:
 
     # ── Google Sheets serialization (backward compat) ──
     def to_sheet_row(self) -> list:
-        """Returns the 39 fields in canonical column order."""
+        """Returns the 41 fields in canonical column order."""
         return [
             self.Scrape_Timestamp, self.County, self.Booking_Number, self.Person_ID,
             self.Full_Name, self.First_Name, self.Middle_Name, self.Last_Name,
             self.DOB, self.Arrest_Date, self.Arrest_Time, self.Booking_Date,
-            self.Booking_Time, self.Status, self.Facility, self.Agency,
-            self.Race, self.Sex, self.Height, self.Weight,
+            self.Booking_Time, self.Status, self.Release_Date, self.Facility, self.Agency,
+            self.Race, self.Sex, self.Height, self.Weight, self.Age_At_Arrest,
             self.Address, self.City, self.State, self.ZIP,
             self.Mugshot_URL, self.Charges, self.Bond_Amount, self.Bond_Paid,
             self.Bond_Type, self.Court_Type, self.Case_Number, self.Court_Date,
@@ -306,8 +312,9 @@ class ArrestRecord:
         return [
             "Scrape_Timestamp", "County", "Booking_Number", "Person_ID", "Full_Name",
             "First_Name", "Middle_Name", "Last_Name", "DOB", "Arrest_Date", "Arrest_Time",
-            "Booking_Date", "Booking_Time", "Status", "Facility", "Agency",
-            "Race", "Sex", "Height", "Weight", "Address", "City", "State", "ZIP",
+            "Booking_Date", "Booking_Time", "Status", "Release_Date", "Facility", "Agency",
+            "Race", "Sex", "Height", "Weight", "Age_At_Arrest",
+            "Address", "City", "State", "ZIP",
             "Mugshot_URL", "Charges", "Bond_Amount", "Bond_Paid", "Bond_Type",
             "Court_Type", "Case_Number", "Court_Date", "Court_Time", "Court_Location",
             "Detail_URL", "Lead_Score", "Lead_Status", "LastChecked", "LastCheckedMode",
@@ -330,3 +337,185 @@ class ArrestRecord:
             return float(cleaned)
         except (ValueError, TypeError):
             return 0.0
+
+
+# ══════════════════════════════════════════════════════════════
+# DefendantRecord — Phase 2 (Scaffold)
+#
+# A Defendant is a PERSON, not an event. One defendant can have
+# multiple ArrestRecords across multiple counties.
+# Primary key: defendant_id (UUID)
+# Natural dedup: normalized(last_name + first_name + dob)
+# ══════════════════════════════════════════════════════════════
+
+@dataclass
+class DefendantRecord:
+    """
+    Normalized person record derived from one or more ArrestRecords.
+
+    Phase 2 scaffold — created by the defendant normalizer from
+    incoming ArrestRecords. Dedup key: normalized name + DOB.
+
+    One Defendant ↔ many ArrestRecords (via arrest_ids list).
+    """
+
+    # === Identity ===
+    defendant_id: str = ""           # UUID — generated on creation
+    first_name: str = ""             # Canonical first name (title-cased)
+    middle_name: str = ""
+    last_name: str = ""              # Canonical last name (title-cased)
+    full_name: str = ""              # "Last, First Middle"
+    dob: str = ""                    # YYYY-MM-DD
+    sex: str = ""                    # M or F
+    race: str = ""
+
+    # === Physical Description ===
+    height: str = ""
+    weight: str = ""
+
+    # === Contact (Phase 9 — The Finder) ===
+    phone: str = ""                  # Discovered phone number
+    email: str = ""                  # Discovered email
+    address: str = ""                # Last known address
+    city: str = ""
+    state: str = "FL"
+    zip_code: str = ""
+
+    # === Arrest History ===
+    arrest_ids: List[str] = field(default_factory=list)      # List of ArrestRecord booking keys
+    counties: List[str] = field(default_factory=list)         # Counties with arrests
+    total_arrests: int = 0
+    first_seen: str = ""             # ISO timestamp of first scrape
+    last_seen: str = ""              # ISO timestamp of most recent scrape
+
+    # === Mugshot ===
+    mugshot_url: str = ""            # Most recent mugshot
+
+    # === Metadata ===
+    created_at: str = ""
+    updated_at: str = ""
+    source: str = "scraper"          # How this record was created
+
+    def __post_init__(self):
+        if not self.defendant_id:
+            import uuid
+            self.defendant_id = str(uuid.uuid4())
+        if not self.created_at:
+            self.created_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        if self.sex:
+            self.sex = self.sex.upper()[:1]
+
+    def get_dedup_key(self) -> str:
+        """Natural dedup key: normalized name + DOB."""
+        name = f"{self.last_name.lower().strip()}:{self.first_name.lower().strip()}"
+        return f"{name}:{self.dob}"
+
+    def merge_arrest(self, record: ArrestRecord) -> None:
+        """Merge data from an ArrestRecord into this defendant."""
+        booking_key = record.get_dedup_key()
+        if booking_key not in self.arrest_ids:
+            self.arrest_ids.append(booking_key)
+        if record.County and record.County not in self.counties:
+            self.counties.append(record.County)
+
+        self.total_arrests = len(self.arrest_ids)
+        self.last_seen = datetime.now(timezone.utc).isoformat()
+        self.updated_at = self.last_seen
+
+        # Update physical info if we have newer/better data
+        if record.Mugshot_URL and not self.mugshot_url:
+            self.mugshot_url = record.Mugshot_URL
+        if record.Address and not self.address:
+            self.address = record.Address
+            self.city = record.City
+            self.state = record.State
+            self.zip_code = record.ZIP
+
+    def to_mongo_doc(self) -> Dict[str, Any]:
+        """Convert to a MongoDB-ready document."""
+        return {
+            "defendant_id": self.defendant_id,
+            "first_name": self.first_name,
+            "middle_name": self.middle_name,
+            "last_name": self.last_name,
+            "full_name": self.full_name,
+            "dob": self.dob,
+            "sex": self.sex,
+            "race": self.race,
+            "height": self.height,
+            "weight": self.weight,
+            "phone": self.phone,
+            "email": self.email,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "zip_code": self.zip_code,
+            "arrest_ids": self.arrest_ids,
+            "counties": self.counties,
+            "total_arrests": self.total_arrests,
+            "first_seen": self.first_seen,
+            "last_seen": self.last_seen,
+            "mugshot_url": self.mugshot_url,
+            "created_at": self.created_at,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_mongo_doc(cls, doc: Dict[str, Any]) -> "DefendantRecord":
+        """Reconstruct from a MongoDB document."""
+        return cls(
+            defendant_id=doc.get("defendant_id", ""),
+            first_name=doc.get("first_name", ""),
+            middle_name=doc.get("middle_name", ""),
+            last_name=doc.get("last_name", ""),
+            full_name=doc.get("full_name", ""),
+            dob=doc.get("dob", ""),
+            sex=doc.get("sex", ""),
+            race=doc.get("race", ""),
+            height=doc.get("height", ""),
+            weight=doc.get("weight", ""),
+            phone=doc.get("phone", ""),
+            email=doc.get("email", ""),
+            address=doc.get("address", ""),
+            city=doc.get("city", ""),
+            state=doc.get("state", "FL"),
+            zip_code=doc.get("zip_code", ""),
+            arrest_ids=doc.get("arrest_ids", []),
+            counties=doc.get("counties", []),
+            total_arrests=doc.get("total_arrests", 0),
+            first_seen=doc.get("first_seen", ""),
+            last_seen=doc.get("last_seen", ""),
+            mugshot_url=doc.get("mugshot_url", ""),
+            created_at=doc.get("created_at", ""),
+            updated_at=doc.get("updated_at", ""),
+            source=doc.get("source", "scraper"),
+        )
+
+    @classmethod
+    def from_arrest_record(cls, record: ArrestRecord) -> "DefendantRecord":
+        """Create a new DefendantRecord from an ArrestRecord."""
+        now = datetime.now(timezone.utc).isoformat()
+        return cls(
+            first_name=record.First_Name,
+            middle_name=record.Middle_Name,
+            last_name=record.Last_Name,
+            full_name=record.Full_Name,
+            dob=record.DOB,
+            sex=record.Sex,
+            race=record.Race,
+            height=record.Height,
+            weight=record.Weight,
+            address=record.Address,
+            city=record.City,
+            state=record.State,
+            zip_code=record.ZIP,
+            arrest_ids=[record.get_dedup_key()],
+            counties=[record.County] if record.County else [],
+            total_arrests=1,
+            first_seen=now,
+            last_seen=now,
+            mugshot_url=record.Mugshot_URL,
+        )
+
