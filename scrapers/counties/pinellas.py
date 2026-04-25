@@ -1,7 +1,7 @@
 """
 Pinellas County Arrest Scraper — Sheriff's Inmate Booking via DrissionPage.
 Source: Pinellas County Sheriff's Office
-URL: https://www.pinellassheriff.gov/InmateBooking
+URL: https://www.pcsoweb.com/InmateBooking/
 Method: DrissionPage browser automation (date search + table parsing)
 """
 import logging, re, time
@@ -11,8 +11,8 @@ from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-BASE_URL = "https://www.pinellassheriff.gov"
-SEARCH_URL = f"{BASE_URL}/InmateBooking"
+BASE_URL = "https://www.pcsoweb.com"
+SEARCH_URL = f"{BASE_URL}/InmateBooking/"
 DAYS_BACK = 3
 
 class PinellasCountyScraper(BaseScraper):

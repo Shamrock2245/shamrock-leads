@@ -199,11 +199,17 @@ class SheetsWriter:
         try:
             return self.spreadsheet.worksheet(sheet_name)
         except gspread.WorksheetNotFound:
-            return self.spreadsheet.add_worksheet(
-                title=sheet_name,
-                rows=1000,
-                cols=41
-            )
+            try:
+                return self.spreadsheet.add_worksheet(
+                    title=sheet_name,
+                    rows=1000,
+                    cols=41
+                )
+            except Exception as e:
+                # Sheet may have been created by another process — retry get
+                if "already exists" in str(e).lower():
+                    return self.spreadsheet.worksheet(sheet_name)
+                raise
 
     def _ensure_header_row(self, sheet: gspread.Worksheet) -> None:
         """Ensure the sheet has the correct 41-column header row (v3.1)."""

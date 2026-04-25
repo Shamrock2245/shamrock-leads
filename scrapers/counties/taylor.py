@@ -2,10 +2,11 @@
 Taylor County Arrest Scraper — SmartCOP ASP.NET.
 Source: Taylor County Sheriff's Office
 URL: https://smartcop.taylorsheriff.org/smartwebclient/Jail.aspx
-Method: requests + BeautifulSoup — ASP.NET ViewState form
+Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
 """
 import logging
 import re
+import time
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -15,11 +16,15 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://smartcop.taylorsheriff.org"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
 FACILITY = "Taylor County Jail"
+IMPERSONATE = "chrome131"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
 
 
@@ -30,18 +35,17 @@ class TaylorCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
+            from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("curl_cffi/bs4 not installed"); return []
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = cffi_requests.Session()
 
         try:
-            resp = session.get(SEARCH_URL, timeout=30)
-            time.sleep(1)  # Rate limit
-            resp.raise_for_status()
+            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            if resp.status_code != 200:
+                raise Exception(f"{resp.status_code} error")
         except Exception as e:
             logger.error(f"Taylor: failed to load page: {e}"); return []
 
@@ -67,8 +71,9 @@ class TaylorCountyScraper(BaseScraper):
                 break
 
         try:
-            resp2 = session.post(SEARCH_URL, data=post_data, timeout=60)
-            resp2.raise_for_status()
+            resp2 = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
+            if resp2.status_code != 200:
+                raise Exception(f"{resp2.status_code} error")
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
             logger.warning(f"Taylor: POST failed ({e}), using initial page")
