@@ -17,11 +17,20 @@ SEARCH_URL = "https://smartweb.pcso.us/smartwebclient/Jail.aspx"
 FACILITY = "Putnam County Jail"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Content-Type": "application/x-www-form-urlencoded",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": SEARCH_URL,
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
+IMPERSONATE = "chrome131"
 
 
 class PutnamCountyScraper(BaseScraper):
@@ -31,19 +40,19 @@ class PutnamCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
+            from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed")
+            logger.error("curl_cffi/bs4 not installed")
             return []
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = cffi_requests.Session()
 
         # GET to get ViewState
         try:
-            resp = session.get(SEARCH_URL, timeout=30)
-            resp.raise_for_status()
+            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            if resp.status_code != 200:
+                raise Exception(f"{resp.status_code} error")
         except Exception as e:
             logger.error(f"Putnam: GET failed: {e}")
             return []
@@ -63,8 +72,9 @@ class PutnamCountyScraper(BaseScraper):
         }
 
         try:
-            resp = session.post(SEARCH_URL, data=post_data, timeout=60)
-            resp.raise_for_status()
+            resp = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
+            if resp.status_code != 200:
+                raise Exception(f"{resp.status_code} error")
         except Exception as e:
             logger.error(f"Putnam: POST failed: {e}")
             return []

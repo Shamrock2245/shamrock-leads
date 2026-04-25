@@ -5,7 +5,7 @@ Dual-write support: writes arrest records to Google Sheets for backward
 compatibility while MongoDB is the primary data store.
 
 Features:
-- 39-column output matching canonical schema
+- 41-column output matching canonical schema v3.1
 - Auto-creates county tabs
 - Dedup by County + Booking_Number
 - Qualified arrest cross-posting
@@ -27,7 +27,7 @@ class SheetsWriter:
     """
     Google Sheets writer for arrest records.
 
-    Writes ArrestRecord instances to Google Sheets with full 39-column schema
+    Writes ArrestRecord instances to Google Sheets with full 41-column schema v3.1
     including lead scoring fields.
     """
 
@@ -202,11 +202,11 @@ class SheetsWriter:
             return self.spreadsheet.add_worksheet(
                 title=sheet_name,
                 rows=1000,
-                cols=39
+                cols=41
             )
 
     def _ensure_header_row(self, sheet: gspread.Worksheet) -> None:
-        """Ensure the sheet has the correct 39-column header row."""
+        """Ensure the sheet has the correct 41-column header row (v3.1)."""
         try:
             existing_headers = sheet.row_values(1)
             if existing_headers == ArrestRecord.get_header_row():
@@ -215,9 +215,9 @@ class SheetsWriter:
             pass
 
         headers = ArrestRecord.get_header_row()
-        sheet.update('A1:AM1', [headers], value_input_option='USER_ENTERED')
+        sheet.update('A1:AO1', [headers], value_input_option='USER_ENTERED')
 
-        sheet.format('A1:AM1', {
+        sheet.format('A1:AO1', {
             'textFormat': {'bold': True},
             'backgroundColor': {'red': 0.0, 'green': 0.66, 'blue': 0.42}
         })
@@ -306,7 +306,7 @@ class SheetsWriter:
             sheet = self.spreadsheet.worksheet(sheet_name)
 
             if keep_header:
-                sheet.batch_clear(['A2:AM10000'])
+                sheet.batch_clear(['A2:AO10000'])
             else:
                 sheet.clear()
 

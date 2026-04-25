@@ -17,11 +17,19 @@ BASE_URL = "https://jail.marionso.com"
 SEARCH_URL = f"{BASE_URL}/"
 FACILITY = "Marion County Jail"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": BASE_URL,
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
+IMPERSONATE = "chrome131"
 
 
 class MarionCountyScraper(BaseScraper):
@@ -31,19 +39,19 @@ class MarionCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
+            from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("curl_cffi/bs4 not installed"); return []
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = cffi_requests.Session()
 
         # Step 1: GET the search page
         try:
-            resp = session.get(SEARCH_URL, timeout=30)
+            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
             time.sleep(1)  # Rate limit
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                raise Exception(f"{resp.status_code} Client Error")
         except Exception as e:
             logger.error(f"Marion: failed to load page: {e}"); return []
 
@@ -67,8 +75,9 @@ class MarionCountyScraper(BaseScraper):
         }
 
         try:
-            resp2 = session.post(SEARCH_URL, data=post_data, timeout=60)
-            resp2.raise_for_status()
+            resp2 = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
+            if resp2.status_code != 200:
+                raise Exception(f"{resp2.status_code} Server Error")
         except Exception as e:
             logger.error(f"Marion: POST failed: {e}"); return []
 
