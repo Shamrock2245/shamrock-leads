@@ -95,16 +95,19 @@ class MongoWriter:
                 "sheet_name": county,
             }
 
+        now = datetime.now(timezone.utc)
         operations = []
         for record in records:
             doc = record.to_mongo_doc()
+            doc["updated_at"] = now  # Track when record was last refreshed
+            doc["scraped_at"] = now.isoformat()  # ISO string for dashboard
             operations.append(
                 UpdateOne(
                     {"county": record.County, "booking_number": record.Booking_Number},
                     {
                         "$set": doc,
                         "$setOnInsert": {
-                            "created_at": datetime.now(timezone.utc),
+                            "created_at": now,
                         },
                     },
                     upsert=True,

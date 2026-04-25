@@ -385,7 +385,7 @@ class CharlotteCountyScraper(BaseScraper):
             ZIP=self._clean(js_data.get("Zip Code", "")),
             Mugshot_URL=js_data.get("__Mugshot", ""),
             Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
+            Bond_Amount=str(total_bond) if total_bond > 0 else "",
             Bond_Paid="NO",
             Detail_URL=detail_url,
             LastCheckedMode="INITIAL",

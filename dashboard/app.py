@@ -64,7 +64,7 @@ def api_status_compat():
             {"$group": {
                 "_id": "$county",
                 "records": {"$sum": 1},
-                "latest": {"$max": "$created_at"},
+                "latest": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
             }},
         ]
         results = list(arrests.aggregate(pipeline))

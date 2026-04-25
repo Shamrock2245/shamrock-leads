@@ -13,6 +13,7 @@ Features:
 """
 
 import logging
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -34,11 +35,14 @@ DETAIL_PAGE = "/booking/"
 DAYS_BACK = 7
 PAGE_SIZE = 200
 MAX_PAGES = 50
-MAX_ENRICH = 100
-DETAIL_DELAY_S = 0.4
-RETRY_LIMIT = 4
-BACKOFF_BASE_S = 0.4
+MAX_ENRICH = 25                # Cap per run — spread across 20-min cycles
+DETAIL_DELAY_S = 3.0           # Base delay between charges API calls
+DETAIL_JITTER_S = 1.5          # Random jitter added to delay
+RETRY_LIMIT = 4                # Fewer retries, longer backoff
+BACKOFF_BASE_S = 2.0           # Much harder backoff on 429/503
 MAX_EXECUTION_S = 330
+CIRCUIT_BREAKER_THRESHOLD = 3  # Consecutive failures before cooldown
+CIRCUIT_BREAKER_COOLDOWN_S = 45  # Pause this long after breaker trips
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (ShamrockLeads/1.0)",
@@ -188,9 +192,16 @@ class LeeCountyScraper(BaseScraper):
     def _enrich_with_charges(
         self, items: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Call the per-booking charges API to get bond/court/case data."""
+        """Call the per-booking charges API to get bond/court/case data.
+
+        Uses a circuit breaker pattern: if CIRCUIT_BREAKER_THRESHOLD
+        consecutive failures occur, pause for CIRCUIT_BREAKER_COOLDOWN_S
+        before continuing. This prevents rate-limit death spirals where
+        rapid retries just make the 429 situation worse.
+        """
         enriched = []
         ok = fail = 0
+        consecutive_failures = 0
 
         for i, base in enumerate(items):
             bn = base.get("booking_number", "")
@@ -204,7 +215,9 @@ class LeeCountyScraper(BaseScraper):
                     f"(success: {ok}, fail: {fail})"
                 )
 
-            time.sleep(DETAIL_DELAY_S)
+            # Delay with jitter to avoid predictable request patterns
+            delay = DETAIL_DELAY_S + random.uniform(0, DETAIL_JITTER_S)
+            time.sleep(delay)
 
             try:
                 url = f"{BASE_URL}{CHARGES_API.format(booking_id=bn)}"
@@ -217,12 +230,23 @@ class LeeCountyScraper(BaseScraper):
                     )
                     enriched.append(base)
                     fail += 1
+                    consecutive_failures += 1
+
+                    # Circuit breaker: if too many consecutive failures, cool down
+                    if consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                        logger.warning(
+                            f"🔌 Circuit breaker tripped ({consecutive_failures} consecutive failures). "
+                            f"Cooling down {CIRCUIT_BREAKER_COOLDOWN_S}s..."
+                        )
+                        time.sleep(CIRCUIT_BREAKER_COOLDOWN_S)
+                        consecutive_failures = 0  # Reset after cooldown
                     continue
 
                 charges_json = resp.json()
                 if not isinstance(charges_json, list):
                     enriched.append(base)
                     fail += 1
+                    consecutive_failures += 1
                     continue
 
                 parsed = self._parse_charges(charges_json)
@@ -245,11 +269,13 @@ class LeeCountyScraper(BaseScraper):
                 })
                 enriched.append(base)
                 ok += 1
+                consecutive_failures = 0  # Reset on success
 
             except Exception as e:
                 logger.warning(f"⚠️ Charges API error for {bn}: {e}")
                 enriched.append(base)
                 fail += 1
+                consecutive_failures += 1
 
         logger.info(f"✅ Enrichment complete: {ok} success, {fail} failed")
         return enriched
@@ -489,7 +515,7 @@ class LeeCountyScraper(BaseScraper):
                 if resp.status_code == 200:
                     return resp
                 if resp.status_code in (429, 500, 502, 503):
-                    sleep_s = BACKOFF_BASE_S * (2**attempt)
+                    sleep_s = BACKOFF_BASE_S * (2**attempt) + random.uniform(0, BACKOFF_BASE_S)
                     logger.warning(
                         f"⏳ HTTP {resp.status_code} retry in {sleep_s:.1f}s"
                     )

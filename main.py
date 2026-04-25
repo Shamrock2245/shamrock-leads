@@ -110,7 +110,7 @@ def build_writers():
 
 def register_scrapers(sched):
     # ── SWFL Core (highest priority) ──────────────────────────────────────────
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=20)
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=30)
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
     sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
