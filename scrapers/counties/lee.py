@@ -19,7 +19,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Set, Tuple
 
-import requests
+try:
+    from curl_cffi import requests as cffi_requests
+    HAS_CFFI = True
+except ImportError:
+    import requests as cffi_requests
+    HAS_CFFI = False
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -35,7 +40,7 @@ DETAIL_PAGE = "/booking/"
 DAYS_BACK = 7
 PAGE_SIZE = 200
 MAX_PAGES = 50
-MAX_ENRICH = 25                # Cap per run — spread across 20-min cycles
+MAX_ENRICH = 25                # Cap per run — spread across 30-min cycles
 DETAIL_DELAY_S = 3.0           # Base delay between charges API calls
 DETAIL_JITTER_S = 1.5          # Random jitter added to delay
 RETRY_LIMIT = 4                # Fewer retries, longer backoff
@@ -43,12 +48,23 @@ BACKOFF_BASE_S = 2.0           # Much harder backoff on 429/503
 MAX_EXECUTION_S = 330
 CIRCUIT_BREAKER_THRESHOLD = 3  # Consecutive failures before cooldown
 CIRCUIT_BREAKER_COOLDOWN_S = 45  # Pause this long after breaker trips
+VARIANT_DELAY_S = 15           # Wait between API variant attempts
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (ShamrockLeads/1.0)",
-    "Accept": "application/json, text/html, */*",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html, */*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Referer": "https://www.sheriffleefl.org/",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
 }
+
+# Chrome TLS impersonation fingerprint
+IMPERSONATE = "chrome131"
 
 
 class LeeCountyScraper(BaseScraper):
@@ -120,6 +136,9 @@ class LeeCountyScraper(BaseScraper):
         ]
 
         for i, params in enumerate(variants):
+            if i > 0:
+                logger.info(f"⏳ Waiting {VARIANT_DELAY_S}s before next variant...")
+                time.sleep(VARIANT_DELAY_S)
             logger.info(f"🔄 Trying API variant {i + 1}/{len(variants)}")
             results = self._fetch_with_pagination(params)
             if results:
@@ -505,13 +524,19 @@ class LeeCountyScraper(BaseScraper):
 
     def _http_fetch(
         self, url: str, params: Dict[str, Any] = None
-    ) -> Optional[requests.Response]:
-        """HTTP GET with retries + exponential backoff."""
+    ):
+        """HTTP GET with curl_cffi browser impersonation + retries + exponential backoff."""
         for attempt in range(RETRY_LIMIT):
             try:
-                resp = requests.get(
-                    url, params=params, headers=HEADERS, timeout=30
-                )
+                kwargs = {
+                    "headers": HEADERS,
+                    "timeout": 30,
+                }
+                if params:
+                    kwargs["params"] = params
+                if HAS_CFFI:
+                    kwargs["impersonate"] = IMPERSONATE
+                resp = cffi_requests.get(url, **kwargs)
                 if resp.status_code == 200:
                     return resp
                 if resp.status_code in (429, 500, 502, 503):
@@ -522,7 +547,7 @@ class LeeCountyScraper(BaseScraper):
                     time.sleep(sleep_s)
                     continue
                 return resp
-            except requests.RequestException as e:
+            except Exception as e:
                 sleep_s = BACKOFF_BASE_S * (2**attempt)
                 if attempt < RETRY_LIMIT - 1:
                     logger.warning(f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {e}")
