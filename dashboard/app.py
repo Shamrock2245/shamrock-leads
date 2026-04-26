@@ -1390,7 +1390,9 @@ def api_appearance_bond_pdf():
 
 # ════════════════════════════════════════════════════════════════════════════════
 # MAINTENANCE & HEALTH ENDPOINTS
-# ════════════════════════════════════════════════════════════════════════════════app.route("/api/cleanup", methods=["POST"])
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/cleanup", methods=["POST"])
 def api_cleanup():
     """Trigger manual data cleanup. Returns purge statistics."""
     try:
