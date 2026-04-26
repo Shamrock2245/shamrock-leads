@@ -28,6 +28,13 @@ except ImportError:
     _dashboard_available = False
 
 from writers.slack_notifier import SlackNotifier
+try:
+    from scrapers.poison_pill import PoisonPillDetector, get_scraper_headers  # noqa: F401 — re-exported for subclasses
+    _pill_detector = PoisonPillDetector()
+except ImportError:
+    _pill_detector = None
+    def get_scraper_headers(**kwargs):  # noqa: E302
+        return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 logger = logging.getLogger(__name__)
 

@@ -47,7 +47,7 @@ COPY . .
 
 # Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8088/health || exit 1
+    CMD curl -f http://localhost:5050/health || exit 1
 
 # Entry point
 CMD ["python", "main.py"]

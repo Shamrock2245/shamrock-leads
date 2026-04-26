@@ -1241,7 +1241,13 @@ def api_active_bonds_process_missed():
 
 # ── Appearance Bond PDF Generator ────────────────────────────────────────────────
 
-@app.route("/api/appearance-bond-pdf")
+@app.route("/health")
+def health_check():
+    """Docker/Hetzner healthcheck endpoint."""
+    return jsonify({"status": "ok", "service": "shamrock-dashboard"})
+
+
+@app.route("/api/appearance-bond-pdf", methods=["GET", "POST"])
 def api_appearance_bond_pdf():
     """
     Generate a pre-populated blank Appearance Bond PDF.
@@ -1256,15 +1262,23 @@ def api_appearance_bond_pdf():
         from reportlab.lib.enums import TA_CENTER, TA_LEFT
         import io as _io
 
-        name = request.args.get("name", "")
-        booking = request.args.get("booking", "")
-        county = request.args.get("county", "")
-        bond_amount = request.args.get("bond", "0")
-        charge = request.args.get("charge", "")
-        surety = request.args.get("surety", "osi").upper()
-        bond_date = request.args.get("date", datetime.now().strftime("%m/%d/%Y"))
-        dob = request.args.get("dob", "")
-        address = request.args.get("address", "")
+        # Accept both GET query params and POST JSON body
+        if request.method == "POST" and request.is_json:
+            d = request.get_json(force=True) or {}
+            def _p(key, default=""):
+                return d.get(key, request.args.get(key, default))
+        else:
+            def _p(key, default=""):
+                return request.args.get(key, default)
+        name = _p("name") or _p("defendant_name")
+        booking = _p("booking") or _p("booking_number")
+        county = _p("county")
+        bond_amount = _p("bond") or _p("bond_amount", "0")
+        charge = _p("charge")
+        surety = (_p("surety", "osi") or "osi").upper()
+        bond_date = _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y")
+        dob = _p("dob") or _p("date_of_birth")
+        address = _p("address")
 
         surety_full = "O'Shaughnahill Surety & Insurance, Inc." if surety == "OSI" else "Palmetto Surety Corporation"
         surety_state = "Florida" if surety == "OSI" else "South Carolina"
