@@ -17,6 +17,7 @@ from config.settings import settings
 from core.scheduler import ScraperScheduler
 from core.dedup import DedupEngine
 from writers.mongo_writer import MongoWriter
+from maintenance.cleanup import run_cleanup
 
 # Dashboard server
 try:
@@ -169,6 +170,15 @@ def handle_shutdown(signum, frame):
         scheduler.stop()
     sys.exit(0)
 
+def _run_scheduled_cleanup():
+    """Wrapper for APScheduler to run MongoDB + data cleanup."""
+    logger.info("🧹 Running scheduled data cleanup...")
+    try:
+        result = run_cleanup()
+        logger.info(f"🧹 Cleanup complete: {result}")
+    except Exception as e:
+        logger.error(f"🧹 Cleanup failed: {e}")
+
 def main():
     global scheduler
     logger.info("=" * 60)
@@ -180,6 +190,18 @@ def main():
     scheduler = ScraperScheduler()
     scheduler.set_writers(writers)
     register_scrapers(scheduler)
+
+    # ── Register maintenance jobs ─────────────────────────────────────────
+    # Auto-purge stale data every 6 hours to keep MongoDB lean
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler.scheduler.add_job(
+        _run_scheduled_cleanup,
+        trigger=IntervalTrigger(hours=6),
+        id="maintenance_cleanup",
+        name="Data Cleanup & Purge",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
     if len(sys.argv) > 1:
         county = sys.argv[1]
         logger.info(f"One-shot mode: running {county} scraper")

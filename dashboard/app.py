@@ -890,7 +890,71 @@ def api_write_bond():
     })
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MAINTENANCE & HEALTH ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/cleanup", methods=["POST"])
+def api_cleanup():
+    """Trigger manual data cleanup. Returns purge statistics."""
+    try:
+        # Import here to avoid circular deps in dashboard-only mode
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from maintenance.cleanup import run_cleanup
+        result = run_cleanup()
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/db-health")
+def api_db_health():
+    """MongoDB Atlas storage health — monitors against 512MB M0 limit."""
+    try:
+        db_stats = db.command("dbStats")
+        data_size_mb = round(db_stats.get("dataSize", 0) / (1024 * 1024), 2)
+        storage_size_mb = round(db_stats.get("storageSize", 0) / (1024 * 1024), 2)
+        index_size_mb = round(db_stats.get("indexSize", 0) / (1024 * 1024), 2)
+
+        M0_LIMIT_MB = 512
+        usage_pct = round(storage_size_mb / M0_LIMIT_MB * 100, 1)
+
+        # Per-collection breakdown
+        collections_info = []
+        for coll_name in ["arrests", "leads", "ingestion_log"]:
+            try:
+                coll_stats = db.command("collStats", coll_name)
+                collections_info.append({
+                    "name": coll_name,
+                    "documents": coll_stats.get("count", 0),
+                    "data_size_mb": round(coll_stats.get("size", 0) / (1024 * 1024), 2),
+                    "storage_size_mb": round(coll_stats.get("storageSize", 0) / (1024 * 1024), 2),
+                    "index_size_mb": round(coll_stats.get("totalIndexSize", 0) / (1024 * 1024), 2),
+                })
+            except Exception:
+                collections_info.append({"name": coll_name, "error": "not found"})
+
+        status = "healthy"
+        if usage_pct > 85:
+            status = "critical"
+        elif usage_pct > 70:
+            status = "warning"
+
+        return jsonify({
+            "status": status,
+            "limit_mb": M0_LIMIT_MB,
+            "data_size_mb": data_size_mb,
+            "storage_size_mb": storage_size_mb,
+            "index_size_mb": index_size_mb,
+            "usage_pct": usage_pct,
+            "collections": collections_info,
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     print("\n🍀 ShamrockLeads Intelligence Dashboard")
     print("   http://localhost:5050\n")
     app.run(host="0.0.0.0", port=5050, debug=True)
+
