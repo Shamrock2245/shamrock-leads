@@ -39,6 +39,19 @@ leads = db["leads"]
 
 print(f"✅ Connected to MongoDB: {MONGO_DB}")
 
+# ── Master list of all registered scraper counties ──
+# This ensures the dropdown always shows all counties even before data arrives.
+REGISTERED_COUNTIES = sorted([
+    "Alachua", "Bay", "Brevard", "Broward", "Charlotte", "Citrus", "Clay",
+    "Collier", "Columbia", "DeSoto", "Dixie", "Duval", "Escambia", "Flagler",
+    "Gadsden", "Glades", "Hardee", "Hendry", "Hernando", "Highlands",
+    "Hillsborough", "Indian River", "Jackson", "Lake", "Lee", "Leon",
+    "Manatee", "Martin", "Monroe", "Nassau", "Okaloosa", "Okeechobee",
+    "Orange", "Osceola", "Palm Beach", "Pasco", "Pinellas", "Polk",
+    "Putnam", "Santa Rosa", "Sarasota", "Seminole", "St. Johns", "St. Lucie",
+    "Sumter", "Suwannee", "Taylor", "Volusia", "Walton",
+])
+
 
 # ── Serve Frontend ──
 @app.route("/")
@@ -112,7 +125,9 @@ def api_mongo_stats_compat():
             {"$group": {"_id": "$county", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}}
         ]
-        by_county = {doc["_id"]: doc["count"] for doc in arrests.aggregate(county_pipeline)}
+        by_county = {c: 0 for c in REGISTERED_COUNTIES}  # Start with all registered
+        for doc in arrests.aggregate(county_pipeline):
+            by_county[doc["_id"]] = doc["count"]  # Override with actual counts
         hot = arrests.count_documents({"lead_score": {"$gte": 70}})
         warm = arrests.count_documents({"lead_score": {"$gte": 40, "$lt": 70}})
         cold = arrests.count_documents({"lead_score": {"$gte": 20, "$lt": 40}})
@@ -295,7 +310,8 @@ def api_leads_compat():
                 if isinstance(v, datetime):
                     doc[k] = v.isoformat()
             leads_list.append(doc)
-        counties_list = sorted(arrests.distinct("county"))
+        db_counties = arrests.distinct("county")
+        counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
         return jsonify({
             "leads": leads_list,
             "total": total_matching,
@@ -1250,8 +1266,8 @@ def api_appearance_bond_pdf():
         dob = request.args.get("dob", "")
         address = request.args.get("address", "")
 
-        surety_full = "Ohio Security Insurance Company" if surety == "OSI" else "Palmetto Surety Corporation"
-        surety_state = "Ohio" if surety == "OSI" else "South Carolina"
+        surety_full = "O'Shaughnahill Surety & Insurance, Inc." if surety == "OSI" else "Palmetto Surety Corporation"
+        surety_state = "Florida" if surety == "OSI" else "South Carolina"
 
         buf = _io.BytesIO()
         doc = SimpleDocTemplate(buf, pagesize=letter,

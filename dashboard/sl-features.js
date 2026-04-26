@@ -115,7 +115,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
       <div class="wb-section-label">Select Surety Company</div>
       <div class="insurer-selector">
         <button class="insurer-pill active" id="suretyOSI" onclick="selectSurety('osi')">
-          <span class="insurer-pill-icon">🛡️</span><span class="insurer-pill-name">OSI</span><span class="insurer-pill-full">Ohio Security Insurance</span>
+          <span class="insurer-pill-icon">🛡️</span><span class="insurer-pill-name">OSI</span><span class="insurer-pill-full">O'Shaughnahill S&I</span>
         </button>
         <button class="insurer-pill" id="suretyPalmetto" onclick="selectSurety('palmetto')">
           <span class="insurer-pill-icon">🌴</span><span class="insurer-pill-name">Palmetto</span><span class="insurer-pill-full">Palmetto Surety Corp.</span>
