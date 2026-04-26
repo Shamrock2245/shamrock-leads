@@ -27,6 +27,12 @@ try:
 except ImportError:
     _dashboard_available = False
 
+try:
+    from scrapers.poison_pill import PoisonPillDetector
+    _poison_pill = PoisonPillDetector()
+except ImportError:
+    _poison_pill = None
+
 from writers.slack_notifier import SlackNotifier
 try:
     from scrapers.poison_pill import PoisonPillDetector, get_scraper_headers  # noqa: F401 — re-exported for subclasses
@@ -112,6 +118,73 @@ class BaseScraper(ABC):
             Any exception — handled by run().
         """
         ...
+
+    def _check_for_poison_pill(self, html: str, url: str = "") -> bool:
+        """
+        Check if an HTTP response body is a WAF/CAPTCHA/block page.
+
+        Returns True if the content is poisoned (not real data).
+        Logs the detection details and notifies Slack on persistent blocks.
+
+        Usage in county scrapers:
+            html = page.html
+            if self._check_for_poison_pill(html, url=roster_url):
+                return []  # Abort — WAF intercepted the request
+        """
+        if not _poison_pill:
+            return False
+        result = _poison_pill.check_html(html, url=url)
+        if result.is_poisoned:
+            logger.warning(
+                f"🛡️ {self.county}: Poison pill detected — "
+                f"{result.detection_type} ({result.vendor}) "
+                f"confidence={result.confidence:.0%}: {result.detail}"
+            )
+            if not result.should_retry:
+                try:
+                    _slack.notify_scraper_error(
+                        self.county,
+                        f"WAF/Anti-bot block: {result.detection_type} "
+                        f"({result.vendor}) — {result.detail}"
+                    )
+                except Exception:
+                    pass
+            return True
+        return False
+
+    def _check_response_for_poison_pill(
+        self, status_code: int, headers: dict, body: str, url: str = ""
+    ) -> bool:
+        """
+        Check a full HTTP response (status + headers + body) for WAF/block indicators.
+
+        Usage with requests library:
+            resp = requests.get(url)
+            if self._check_response_for_poison_pill(
+                resp.status_code, dict(resp.headers), resp.text, url
+            ):
+                return []
+        """
+        if not _poison_pill:
+            return False
+        result = _poison_pill.check_response(status_code, headers, body, url)
+        if result.is_poisoned:
+            logger.warning(
+                f"🛡️ {self.county}: Poison pill detected — "
+                f"{result.detection_type} ({result.vendor}) "
+                f"confidence={result.confidence:.0%}: {result.detail}"
+            )
+            if not result.should_retry:
+                try:
+                    _slack.notify_scraper_error(
+                        self.county,
+                        f"WAF/Anti-bot block: {result.detection_type} "
+                        f"({result.vendor}) — {result.detail}"
+                    )
+                except Exception:
+                    pass
+            return True
+        return False
 
     @property
     def scraper_id(self) -> str:

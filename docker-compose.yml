@@ -40,7 +40,7 @@ services:
     depends_on:
       - shamrock-leads
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5050/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -1419,8 +1419,35 @@ def api_appearance_bond_pdf():
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# MAINTENANCE & HEALTH ENDPOINTS
+# HEALTH & MAINTENANCE ENDPOINTS
 # ════════════════════════════════════════════════════════════════════════════════
+
+@app.route("/health")
+def health():
+    """Health check endpoint for Docker HEALTHCHECK and external monitors."""
+    try:
+        # Quick ping to verify MongoDB is reachable
+        db.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+
+    total_arrests = 0
+    active_counties = 0
+    try:
+        total_arrests = arrests.estimated_document_count()
+        active_counties = len(arrests.distinct("county"))
+    except Exception:
+        pass
+
+    status = "ok" if mongo_ok else "degraded"
+    return jsonify({
+        "status": status,
+        "mongodb": "connected" if mongo_ok else "disconnected",
+        "total_arrests": total_arrests,
+        "active_counties": active_counties,
+        "uptime_check": datetime.now(timezone.utc).isoformat(),
+    }), 200 if mongo_ok else 503
 
 @app.route("/api/cleanup", methods=["POST"])
 def api_cleanup():
