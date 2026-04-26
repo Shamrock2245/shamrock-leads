@@ -1,0 +1,83 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# ShamrockLeads — Auto-Deploy to Hetzner VPS
+# ════════════════════════════════════════════════════════════════════════════════
+# Triggers on push to main. SSHes into the VPS, pulls latest code,
+# rebuilds Docker images, and restarts all services.
+#
+# Required GitHub Secrets:
+#   HETZNER_SSH_KEY  — Private SSH key for root@178.156.179.237
+#
+# ════════════════════════════════════════════════════════════════════════════════
+
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    name: Deploy ShamrockLeads
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 178.156.179.237
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          command_timeout: 10m
+          script: |
+            set -e
+
+            echo "═══════════════════════════════════════════════════"
+            echo "  ShamrockLeads Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "═══════════════════════════════════════════════════"
+
+            cd /opt/shamrock-leads
+
+            # ── Pull latest code ──────────────────────────────────
+            echo "📥 Pulling latest from GitHub..."
+            git fetch origin main
+            git reset --hard origin/main
+
+            echo ""
+            echo "📋 Latest commit:"
+            git log --oneline -1
+
+            # ── Rebuild Docker images ─────────────────────────────
+            echo ""
+            echo "🐳 Rebuilding Docker images..."
+            docker compose build --no-cache shamrock-leads dashboard
+
+            # ── Restart services ──────────────────────────────────
+            echo ""
+            echo "🔄 Restarting services..."
+            docker compose up -d
+
+            # ── Verify ────────────────────────────────────────────
+            echo ""
+            echo "⏳ Waiting 15s for containers to stabilize..."
+            sleep 15
+
+            echo ""
+            echo "📊 Container Status:"
+            docker compose ps
+
+            echo ""
+            echo "🏥 Health Check:"
+            curl -sf http://localhost:8088/health && echo " ✅ Scraper engine healthy" || echo " ⚠️ Scraper engine health check failed"
+            curl -sf http://localhost:5050/api/stats && echo " ✅ Dashboard healthy" || echo " ⚠️ Dashboard health check failed"
+
+            echo ""
+            echo "📜 Last 10 log lines (scraper):"
+            docker logs shamrock-leads --tail 10 2>&1
+
+            echo ""
+            echo "═══════════════════════════════════════════════════"
+            echo "  ✅ Deploy complete!"
+            echo "═══════════════════════════════════════════════════"
