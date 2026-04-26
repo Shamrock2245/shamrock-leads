@@ -10,6 +10,7 @@ LABEL maintainer="Shamrock Active Software"
 LABEL description="Florida Arrest Intelligence Platform"
 
 # System deps — includes Chromium for DrissionPage browser automation
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     chromium \

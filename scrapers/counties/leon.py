@@ -1,7 +1,7 @@
 """
 Leon County Arrest Scraper — DNN CMS A-Z Letter Iteration
 Source: Leon County Sheriff's Office
-URL: https://www.leoncountyso.com/inmate-search
+URL: https://www.leoncountyso.com/About-us/Departments/Detention-Facility/Inmate-search
 Method: requests POST — A-Z last name letter iteration to get all inmates
 Proven pattern: swfl-arrest-scrapers/counties/leon/solver.py
 """
@@ -16,7 +16,8 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.leoncountyso.com"
-SEARCH_URL = f"{BASE_URL}/inmate-search"
+# Correct URL path — confirmed live 2026-04-25
+SEARCH_URL = f"{BASE_URL}/About-us/Departments/Detention-Facility/Inmate-search"
 FACILITY = "Leon County Jail"
 
 HEADERS = {
@@ -24,7 +25,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": SEARCH_URL,
+    "Referer": f"{BASE_URL}/About-us/Departments/Detention-Facility/Inmate-search",
 }
 
 

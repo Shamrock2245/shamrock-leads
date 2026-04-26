@@ -113,8 +113,8 @@ def register_scrapers(sched):
     sched.register_scraper(LeeCountyScraper(), interval_minutes=10)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=15)
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=10)
-    sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
-    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
+    sched.register_scraper(ManateeCountyScraper(), interval_minutes=10)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=10)
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=10)
 

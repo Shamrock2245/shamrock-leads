@@ -1,9 +1,11 @@
 """
-Indian River County Arrest Scraper — Custom HTML Table
+Indian River County Arrest Scraper — Card-Based Layout Parser
 Source: Indian River County Sheriff's Office
-URL: https://www.ircsheriff.org/inmate-search (SSL cert issues — use verify=False)
-Method: requests with SSL verification disabled + BeautifulSoup
-Note: ircsheriff.org has an expired/invalid SSL cert — verify=False required
+URL: https://www.ircsheriff.org/inmate-search
+Method: requests + BeautifulSoup — parse card/list layout with booking-details links
+Note: Site uses card layout (not tables). Each inmate is a link to /booking-details/{id}
+      with DOB, bond amount, and status shown inline. SSL cert issues — verify=False.
+Updated: 2026-04-25 — rewrote parser for card layout (was looking for tables, site has none)
 """
 import logging
 import re
@@ -46,18 +48,21 @@ class IndianRiverCountyScraper(BaseScraper):
 
         session = requests.Session()
         session.headers.update(HEADERS)
-        session.verify = False  # SSL cert issue on ircsheriff.org
+        session.verify = False
 
         records = []
         seen = set()
 
-        # Try main inmate search page first
         for url in [SEARCH_URL, TODAYS_URL]:
             try:
                 resp = session.get(url, timeout=30)
                 if resp.status_code == 200 and len(resp.text) > 1000:
                     soup = BeautifulSoup(resp.text, "html.parser")
-                    batch = self._parse_html(soup, seen)
+                    # Try card-based parsing first (current site layout)
+                    batch = self._parse_cards(soup, seen)
+                    # Fallback to table parsing
+                    if not batch:
+                        batch = self._parse_tables(soup, seen)
                     records.extend(batch)
                     if records:
                         break
@@ -65,14 +70,89 @@ class IndianRiverCountyScraper(BaseScraper):
                 logger.warning(f"Indian River: {url} failed: {e}")
                 continue
 
-        # If no records, try DrissionPage fallback
         if not records:
             records = self._browser_fallback(seen)
 
         logger.info(f"Indian River: {len(records)} records")
         return records
 
-    def _parse_html(self, soup, seen: set) -> List[ArrestRecord]:
+    def _parse_cards(self, soup, seen: set) -> List[ArrestRecord]:
+        """Parse card/list layout — each inmate is a link to /booking-details/{id}."""
+        records = []
+
+        # Find all links to booking details
+        booking_links = soup.find_all("a", href=re.compile(r"/booking-details/\d+"))
+        if not booking_links:
+            return []
+
+        for link in booking_links:
+            try:
+                href = link.get("href", "")
+                full_name = link.get_text(strip=True)
+                if not full_name:
+                    continue
+
+                detail_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+
+                # Extract booking ID from URL
+                bid_match = re.search(r"/booking-details/(\d+)", href)
+                booking_id = bid_match.group(1) if bid_match else ""
+
+                key = booking_id or full_name
+                if key in seen:
+                    continue
+                seen.add(key)
+
+                # Get parent container for metadata
+                container = link.find_parent(["li", "div", "article", "section"])
+                container_text = container.get_text(" ", strip=True) if container else ""
+
+                # Extract status
+                status = "In Custody"
+                if "released" in container_text.lower():
+                    status = "Released"
+                elif "incarcerated" in container_text.lower():
+                    status = "In Custody"
+
+                # Extract DOB
+                dob = ""
+                dob_match = re.search(r"DOB:\s*(\d{1,2}/\d{1,2}/\d{4})", container_text)
+                if dob_match:
+                    dob = dob_match.group(1)
+
+                # Extract bond amount
+                bond_raw = "0"
+                bond_match = re.search(r"Bond:\s*\$?([\d,]+\.?\d*)", container_text)
+                if bond_match:
+                    bond_raw = bond_match.group(1)
+                elif "no bond" in container_text.lower():
+                    bond_raw = "0"
+
+                f, m, l = self._pn(full_name)
+                bond_amount = self._parse_bond(bond_raw)
+
+                records.append(ArrestRecord(
+                    County=self.county,
+                    Booking_Number=booking_id,
+                    Full_Name=full_name,
+                    First_Name=f,
+                    Middle_Name=m,
+                    Last_Name=l,
+                    DOB=dob,
+                    Status=status,
+                    Facility=FACILITY,
+                    Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                    Detail_URL=detail_url,
+                    LastCheckedMode="INITIAL",
+                ))
+            except Exception as e:
+                logger.debug(f"Indian River card parse error: {e}")
+                continue
+
+        return records
+
+    def _parse_tables(self, soup, seen: set) -> List[ArrestRecord]:
+        """Fallback: parse HTML tables if they exist."""
         records = []
         for table in soup.find_all("table"):
             rows = table.find_all("tr")
@@ -90,31 +170,18 @@ class IndianRiverCountyScraper(BaseScraper):
                 if not full_name:
                     continue
                 booking_num = texts[1] if len(texts) > 1 else ""
-                booking_date = texts[2] if len(texts) > 2 else ""
-                charges = texts[3] if len(texts) > 3 else ""
-                bond_raw = texts[4] if len(texts) > 4 else "0"
                 key = booking_num or full_name
                 if key in seen:
                     continue
                 seen.add(key)
-                detail_url = ""
-                link = row.find("a", href=True)
-                if link:
-                    href = link["href"]
-                    detail_url = href if href.startswith("http") else f"{BASE_URL}/{href.lstrip('/')}"
                 f, m, l = self._pn(full_name)
-                bond_amount = self._parse_bond(bond_raw)
                 records.append(ArrestRecord(
                     County=self.county,
                     Booking_Number=booking_num,
                     Full_Name=full_name,
                     First_Name=f, Middle_Name=m, Last_Name=l,
-                    Booking_Date=booking_date,
                     Status="In Custody",
                     Facility=FACILITY,
-                    Charges=charges,
-                    Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                    Detail_URL=detail_url,
                     LastCheckedMode="INITIAL",
                 ))
             if records:
@@ -139,7 +206,10 @@ class IndianRiverCountyScraper(BaseScraper):
             page.get(SEARCH_URL)
             page.wait(5)
             soup = BeautifulSoup(page.html, "html.parser")
-            return self._parse_html(soup, seen)
+            records = self._parse_cards(soup, seen)
+            if not records:
+                records = self._parse_tables(soup, seen)
+            return records
         except Exception as e:
             logger.error(f"Indian River browser fallback: {e}")
             return []
