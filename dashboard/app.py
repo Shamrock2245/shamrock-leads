@@ -889,12 +889,508 @@ def api_write_bond():
         "note": "GAS_WEB_APP_URL not configured — payload logged to console. Set GAS_WEB_APP_URL in .env to enable forwarding.",
     })
 
+# ════════════════════════════════════════════════════════════════════════════════
+# ACTIVE BONDS — GEOLOCATION & RISK MITIGATION
+# ════════════════════════════════════════════════════════════════════════════════
 
-# ══════════════════════════════════════════════════════════════════════════════
+active_bonds = db["active_bonds"]
+
+# Ensure indexes on active_bonds collection
+try:
+    active_bonds.create_index("booking_number", unique=True, sparse=True)
+    active_bonds.create_index("status")
+    active_bonds.create_index("next_check_in_due")
+    active_bonds.create_index("bond_date")
+except Exception:
+    pass
+
+
+def _compute_risk_score(bond_doc: dict) -> int:
+    """
+    Compute a 0-100 risk score for an active bond.
+    Higher = higher risk of FTA (failure to appear).
+    """
+    score = 50  # baseline
+
+    # Missed check-ins increase risk
+    missed = bond_doc.get("missed_check_ins", 0)
+    score += min(missed * 10, 30)
+
+    # Out-of-area pings increase risk
+    out_of_area = bond_doc.get("out_of_area_count", 0)
+    score += min(out_of_area * 8, 24)
+
+    # High bond amount = higher risk
+    bond_amount = float(bond_doc.get("bond_amount", 0) or 0)
+    if bond_amount >= 50000:
+        score += 10
+    elif bond_amount >= 25000:
+        score += 5
+
+    # Violent/drug charges increase risk
+    charges_raw = (bond_doc.get("charges_raw", "") or "").upper()
+    high_risk_keywords = ["MURDER", "HOMICIDE", "ROBBERY", "TRAFFICKING", "ASSAULT",
+                          "WEAPON", "FIREARM", "FLEE", "ESCAPE", "FUGITIVE"]
+    for kw in high_risk_keywords:
+        if kw in charges_raw:
+            score += 5
+            break
+
+    # Recent location history reduces risk
+    loc_history = bond_doc.get("location_history", [])
+    if len(loc_history) >= 3:
+        score -= 5
+
+    return max(0, min(100, score))
+
+
+@app.route("/api/active-bonds", methods=["GET"])
+def api_active_bonds_list():
+    """List all active bonds with risk scores and check-in status."""
+    try:
+        status_filter = request.args.get("status", "").strip()
+        query = {}
+        if status_filter:
+            query["status"] = status_filter
+        else:
+            query["status"] = {"$in": ["active", "monitoring", "alert"]}
+
+        bonds = list(active_bonds.find(query, {"_id": 0}).sort("bond_date", -1).limit(200))
+        now = datetime.now(timezone.utc)
+
+        for b in bonds:
+            for k, v in b.items():
+                if isinstance(v, datetime):
+                    b[k] = v.isoformat()
+            # Compute live risk score
+            b["risk_score"] = _compute_risk_score(b)
+            # Check if overdue
+            next_due_str = b.get("next_check_in_due", "")
+            if next_due_str:
+                try:
+                    from dateutil import parser as dateparser
+                    next_due = dateparser.parse(next_due_str)
+                    if next_due and next_due.tzinfo is None:
+                        next_due = next_due.replace(tzinfo=timezone.utc)
+                    b["check_in_overdue"] = next_due < now if next_due else False
+                    b["hours_overdue"] = round((now - next_due).total_seconds() / 3600, 1) if b["check_in_overdue"] else 0
+                except Exception:
+                    b["check_in_overdue"] = False
+                    b["hours_overdue"] = 0
+            else:
+                b["check_in_overdue"] = False
+                b["hours_overdue"] = 0
+
+        # Summary stats
+        total = len(bonds)
+        alerts = sum(1 for b in bonds if b.get("check_in_overdue") or b.get("risk_score", 0) >= 75)
+        high_risk = sum(1 for b in bonds if b.get("risk_score", 0) >= 75)
+
+        return jsonify({
+            "bonds": bonds,
+            "total": total,
+            "alerts": alerts,
+            "high_risk": high_risk,
+            "updated_at": now.isoformat(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/active-bonds", methods=["POST"])
+def api_active_bonds_create():
+    """Register a new active bond after Write Bond is clicked."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "No payload"}), 400
+
+        booking_number = data.get("booking_number", "")
+        if not booking_number:
+            return jsonify({"success": False, "error": "booking_number required"}), 400
+
+        now = datetime.now(timezone.utc)
+        check_in_hours = int(data.get("check_in_interval_hours", 24))
+
+        doc = {
+            "booking_number": booking_number,
+            "defendant_name": data.get("defendant_name", ""),
+            "county": data.get("county", ""),
+            "bond_amount": float(data.get("bond_amount", 0) or 0),
+            "premium": float(data.get("premium", 0) or 0),
+            "surety": data.get("surety", "osi").upper(),
+            "charges": data.get("charges", []),
+            "charges_raw": data.get("charges_raw", ""),
+            "bond_date": data.get("bond_date", now.isoformat()),
+            "status": "active",
+            "risk_score": 50,
+            "check_in_required": True,
+            "check_in_interval_hours": check_in_hours,
+            "last_check_in": None,
+            "next_check_in_due": (now + timedelta(hours=check_in_hours)).isoformat(),
+            "missed_check_ins": 0,
+            "out_of_area_count": 0,
+            "geolocation_enabled": True,
+            "location_history": [],
+            "alerts": [],
+            "defendant_info": data.get("defendant_info", {}),
+            "created_at": now,
+            "updated_at": now,
+        }
+        doc["risk_score"] = _compute_risk_score(doc)
+
+        # Upsert by booking_number
+        result = active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": doc},
+            upsert=True,
+        )
+
+        return jsonify({
+            "success": True,
+            "message": f"Active bond registered for {doc['defendant_name']}",
+            "booking_number": booking_number,
+            "risk_score": doc["risk_score"],
+            "upserted": result.upserted_id is not None,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/active-bonds/<booking_number>/check-in", methods=["POST"])
+def api_active_bond_check_in(booking_number):
+    """Record a geolocation check-in for an active bond."""
+    try:
+        data = request.get_json() or {}
+        now = datetime.now(timezone.utc)
+
+        bond = active_bonds.find_one({"booking_number": booking_number})
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+
+        lat = data.get("lat")
+        lng = data.get("lng")
+        accuracy = data.get("accuracy", 0)
+        source = data.get("source", "manual")  # manual | gps | ip
+
+        location_entry = {
+            "timestamp": now.isoformat(),
+            "lat": lat,
+            "lng": lng,
+            "accuracy": accuracy,
+            "source": source,
+            "county": data.get("county", ""),
+            "address": data.get("address", ""),
+        }
+
+        check_in_hours = bond.get("check_in_interval_hours", 24)
+        next_due = (now + timedelta(hours=check_in_hours)).isoformat()
+
+        # Determine if out of area (simple county check)
+        home_county = bond.get("county", "").lower()
+        checkin_county = data.get("county", "").lower()
+        out_of_area = bool(checkin_county and home_county and checkin_county != home_county)
+
+        update = {
+            "$set": {
+                "last_check_in": now.isoformat(),
+                "next_check_in_due": next_due,
+                "updated_at": now,
+            },
+            "$push": {
+                "location_history": {
+                    "$each": [location_entry],
+                    "$slice": -100,  # keep last 100 pings
+                }
+            },
+        }
+        if out_of_area:
+            update["$inc"] = {"out_of_area_count": 1}
+            alert = {
+                "type": "out_of_area",
+                "message": f"Check-in from {checkin_county.title()} (home: {home_county.title()})",
+                "timestamp": now.isoformat(),
+                "location": location_entry,
+            }
+            update["$push"]["alerts"] = alert
+
+        active_bonds.update_one({"booking_number": booking_number}, update)
+
+        # Recompute risk score
+        updated = active_bonds.find_one({"booking_number": booking_number})
+        new_risk = _compute_risk_score(updated) if updated else 50
+        active_bonds.update_one({"booking_number": booking_number}, {"$set": {"risk_score": new_risk}})
+
+        return jsonify({
+            "success": True,
+            "message": "Check-in recorded",
+            "booking_number": booking_number,
+            "next_check_in_due": next_due,
+            "risk_score": new_risk,
+            "out_of_area": out_of_area,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/active-bonds/<booking_number>/alert", methods=["POST"])
+def api_active_bond_alert(booking_number):
+    """Manually add an alert to an active bond (e.g. FTA, warrant issued)."""
+    try:
+        data = request.get_json() or {}
+        now = datetime.now(timezone.utc)
+        alert = {
+            "type": data.get("type", "manual"),
+            "message": data.get("message", "Manual alert"),
+            "severity": data.get("severity", "medium"),  # low | medium | high | critical
+            "timestamp": now.isoformat(),
+        }
+        result = active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$push": {"alerts": alert}, "$set": {"status": "alert", "updated_at": now}}
+        )
+        if result.matched_count == 0:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+        return jsonify({"success": True, "alert": alert})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/active-bonds/<booking_number>/status", methods=["PATCH"])
+def api_active_bond_status(booking_number):
+    """Update bond status (active | monitoring | alert | exonerated | forfeited)."""
+    try:
+        data = request.get_json() or {}
+        new_status = data.get("status", "active")
+        valid_statuses = ["active", "monitoring", "alert", "exonerated", "forfeited", "surrendered"]
+        if new_status not in valid_statuses:
+            return jsonify({"success": False, "error": f"Invalid status. Use: {valid_statuses}"}), 400
+        now = datetime.now(timezone.utc)
+        result = active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": {"status": new_status, "updated_at": now}}
+        )
+        if result.matched_count == 0:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+        return jsonify({"success": True, "status": new_status})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/active-bonds/missed-checkins", methods=["POST"])
+def api_active_bonds_process_missed():
+    """Cron-style endpoint: scan for overdue check-ins and increment missed count."""
+    try:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        # Find active bonds where next_check_in_due is in the past
+        overdue = list(active_bonds.find({
+            "status": {"$in": ["active", "monitoring"]},
+            "check_in_required": True,
+            "next_check_in_due": {"$lt": now_iso},
+        }))
+        updated = 0
+        for bond in overdue:
+            booking_number = bond.get("booking_number", "")
+            missed = bond.get("missed_check_ins", 0) + 1
+            check_in_hours = bond.get("check_in_interval_hours", 24)
+            next_due = (now + timedelta(hours=check_in_hours)).isoformat()
+            alert = {
+                "type": "missed_check_in",
+                "message": f"Missed check-in #{missed} for {bond.get('defendant_name', 'Unknown')}",
+                "severity": "high" if missed >= 2 else "medium",
+                "timestamp": now.isoformat(),
+            }
+            new_status = "alert" if missed >= 2 else bond.get("status", "active")
+            new_risk = _compute_risk_score({**bond, "missed_check_ins": missed})
+            active_bonds.update_one(
+                {"booking_number": booking_number},
+                {
+                    "$set": {
+                        "missed_check_ins": missed,
+                        "next_check_in_due": next_due,
+                        "status": new_status,
+                        "risk_score": new_risk,
+                        "updated_at": now,
+                    },
+                    "$push": {"alerts": alert},
+                }
+            )
+            updated += 1
+
+        return jsonify({"success": True, "processed": updated, "timestamp": now_iso})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── Appearance Bond PDF Generator ────────────────────────────────────────────────
+
+@app.route("/api/appearance-bond-pdf")
+def api_appearance_bond_pdf():
+    """
+    Generate a pre-populated blank Appearance Bond PDF.
+    Query params: name, booking, county, bond, charge, surety, date, dob, address
+    """
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT
+        import io as _io
+
+        name = request.args.get("name", "")
+        booking = request.args.get("booking", "")
+        county = request.args.get("county", "")
+        bond_amount = request.args.get("bond", "0")
+        charge = request.args.get("charge", "")
+        surety = request.args.get("surety", "osi").upper()
+        bond_date = request.args.get("date", datetime.now().strftime("%m/%d/%Y"))
+        dob = request.args.get("dob", "")
+        address = request.args.get("address", "")
+
+        surety_full = "Ohio Security Insurance Company" if surety == "OSI" else "Palmetto Surety Corporation"
+        surety_state = "Ohio" if surety == "OSI" else "South Carolina"
+
+        buf = _io.BytesIO()
+        doc = SimpleDocTemplate(buf, pagesize=letter,
+                                leftMargin=0.75*inch, rightMargin=0.75*inch,
+                                topMargin=0.75*inch, bottomMargin=0.75*inch)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('title', parent=styles['Heading1'],
+                                     fontSize=14, alignment=TA_CENTER, spaceAfter=4)
+        sub_style = ParagraphStyle('sub', parent=styles['Normal'],
+                                   fontSize=10, alignment=TA_CENTER, spaceAfter=2)
+        label_style = ParagraphStyle('label', parent=styles['Normal'],
+                                     fontSize=9, textColor=colors.grey)
+        value_style = ParagraphStyle('value', parent=styles['Normal'],
+                                     fontSize=11, spaceBefore=2, spaceAfter=8)
+        body_style = ParagraphStyle('body', parent=styles['Normal'],
+                                    fontSize=9, leading=14, spaceAfter=6)
+        sig_style = ParagraphStyle('sig', parent=styles['Normal'],
+                                   fontSize=9, spaceAfter=2)
+
+        story = []
+
+        # Header
+        story.append(Paragraph("APPEARANCE BOND", title_style))
+        story.append(Paragraph(f"State of Florida — {county} County", sub_style))
+        story.append(Paragraph(f"Surety: {surety_full} ({surety_state})", sub_style))
+        story.append(HRFlowable(width="100%", thickness=1.5, color=colors.black, spaceAfter=10))
+
+        # Defendant Info Table
+        def_data = [
+            [Paragraph("<b>Defendant Full Name</b>", label_style),
+             Paragraph("<b>Date of Birth</b>", label_style),
+             Paragraph("<b>Booking Number</b>", label_style)],
+            [Paragraph(name or "_" * 30, value_style),
+             Paragraph(dob or "_" * 15, value_style),
+             Paragraph(booking or "_" * 15, value_style)],
+            [Paragraph("<b>Address</b>", label_style),
+             Paragraph("<b>County</b>", label_style),
+             Paragraph("<b>Bond Date</b>", label_style)],
+            [Paragraph(address or "_" * 30, value_style),
+             Paragraph(county or "_" * 15, value_style),
+             Paragraph(bond_date or "_" * 15, value_style)],
+        ]
+        def_table = Table(def_data, colWidths=[3*inch, 2*inch, 2*inch])
+        def_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
+            ('BACKGROUND', (0, 2), (-1, 2), colors.HexColor('#f0f0f0')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(def_table)
+        story.append(Spacer(1, 10))
+
+        # Charge Section
+        story.append(Paragraph("<b>CRIMINAL CHARGE</b>", label_style))
+        charge_data = [
+            [Paragraph("<b>Charge Description</b>", label_style),
+             Paragraph("<b>Bond Amount</b>", label_style)],
+            [Paragraph(charge or "_" * 50, value_style),
+             Paragraph(f"${float(bond_amount or 0):,.2f}", value_style)],
+        ]
+        charge_table = Table(charge_data, colWidths=[5*inch, 2*inch])
+        charge_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(charge_table)
+        story.append(Spacer(1, 12))
+
+        # Bond Conditions
+        story.append(Paragraph("<b>CONDITIONS OF BOND</b>", label_style))
+        conditions = [
+            "1. The above-named defendant shall appear before the court as required and shall not depart without leave of court.",
+            "2. The defendant shall notify the surety of any change of address within 24 hours.",
+            "3. The defendant shall not leave the State of Florida without prior written consent of the court and surety.",
+            "4. The defendant shall report to the surety as directed and comply with all check-in requirements.",
+            "5. The defendant shall not commit any criminal offense during the period of this bond.",
+            "6. Failure to appear shall result in forfeiture of this bond and issuance of a warrant for arrest.",
+        ]
+        for cond in conditions:
+            story.append(Paragraph(cond, body_style))
+        story.append(Spacer(1, 12))
+
+        # Surety Statement
+        story.append(Paragraph(
+            f"We, the undersigned, as surety, hereby acknowledge ourselves bound to the State of Florida "
+            f"in the sum of <b>${float(bond_amount or 0):,.2f}</b> for the appearance of the above-named defendant "
+            f"before the court at the time and place required, and at all subsequent times and places to which "
+            f"the case may be continued, and to answer the charge of: <b>{charge or 'as charged'}</b>.",
+            body_style
+        ))
+        story.append(Spacer(1, 20))
+
+        # Signature Lines
+        sig_data = [
+            [Paragraph("_" * 35, sig_style), Paragraph("_" * 35, sig_style)],
+            [Paragraph("Bail Bond Agent / Surety Representative", sig_style),
+             Paragraph("Date", sig_style)],
+            [Paragraph(" ", sig_style), Paragraph(" ", sig_style)],
+            [Paragraph("_" * 35, sig_style), Paragraph("_" * 35, sig_style)],
+            [Paragraph("License Number", sig_style), Paragraph("County", sig_style)],
+        ]
+        sig_table = Table(sig_data, colWidths=[3.5*inch, 3.5*inch])
+        sig_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(sig_table)
+        story.append(Spacer(1, 10))
+        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
+        story.append(Paragraph(
+            f"<i>Generated by ShamrockLeads Intelligence Platform — {bond_date} — {surety_full}</i>",
+            ParagraphStyle('footer', parent=styles['Normal'], fontSize=7,
+                           alignment=TA_CENTER, textColor=colors.grey)
+        ))
+
+        doc.build(story)
+        buf.seek(0)
+
+        safe_name = re_mod.sub(r'[^A-Za-z0-9_-]', '_', name or 'defendant')
+        safe_charge = re_mod.sub(r'[^A-Za-z0-9_-]', '_', charge[:20] if charge else 'charge')
+        filename = f"AppearanceBond_{safe_name}_{safe_charge}_{bond_date.replace('/', '-')}.pdf"
+
+        return Response(
+            buf.read(),
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # MAINTENANCE & HEALTH ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.route("/api/cleanup", methods=["POST"])
+# ════════════════════════════════════════════════════════════════════════════════app.route("/api/cleanup", methods=["POST"])
 def api_cleanup():
     """Trigger manual data cleanup. Returns purge statistics."""
     try:

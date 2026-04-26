@@ -90,8 +90,64 @@ def health():
 
 @app.route("/api/status")
 def api_status():
+    """Return scraper status. Uses in-memory dict if populated; falls back to live MongoDB."""
     with _lock:
-        return jsonify(_status)
+        has_data = bool(_status["scrapers"])
+
+    if has_data:
+        with _lock:
+            return jsonify(_status)
+
+    # In-memory is empty (e.g. fresh restart) — pull live from MongoDB
+    try:
+        client, db = _get_mongo_db()
+        pipeline = [
+            {"$group": {
+                "_id": "$county",
+                "records": {"$sum": 1},
+                "latest": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
+                "hot_leads": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
+                "warm_leads": {"$sum": {"$cond": [{"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]}, 1, 0]}},
+            }},
+            {"$sort": {"records": -1}},
+        ]
+        results = list(db.arrests.aggregate(pipeline))
+        scrapers = {}
+        total_scraped = 0
+        for r in results:
+            county = r["_id"]
+            if not county:
+                continue
+            count = r["records"]
+            total_scraped += count
+            latest = r.get("latest")
+            scrapers[county] = {
+                "last_run": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
+                "records": count,
+                "hot_leads": r.get("hot_leads", 0),
+                "warm_leads": r.get("warm_leads", 0),
+                "cold_leads": 0,
+                "disqualified": 0,
+                "duration_seconds": 0,
+                "status": "ok",
+                "error": None,
+                "run_count": 1,
+                "total_records": count,
+            }
+        client.close()
+        return jsonify({
+            "started_at": _status["started_at"],
+            "scrapers": scrapers,
+            "total_scraped": total_scraped,
+            "total_hot_leads": sum(s["hot_leads"] for s in scrapers.values()),
+            "total_warm_leads": sum(s["warm_leads"] for s in scrapers.values()),
+            "cycle_count": _status["cycle_count"],
+            "source": "mongodb",
+        })
+    except Exception as e:
+        logger.warning(f"MongoDB status fallback failed: {e}")
+        with _lock:
+            return jsonify(_status)
 
 @app.route("/api/scrapers")
 def api_scrapers():

@@ -33,6 +33,7 @@
   <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">🔍 Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">👤 Defendants</button>
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
+  <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -277,6 +278,121 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 5: ACTIVE BONDS
+     ═══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabActiveBonds">
+  <div class="container">
+
+    <!-- KPI Row -->
+    <div class="stats-grid" id="abKpis">
+      <div class="stat-card">
+        <div class="stat-label">🔒 Active Bonds</div>
+        <div class="stat-value" id="abKpiTotal">—</div>
+        <div class="stat-sub">currently tracked</div>
+      </div>
+      <div class="stat-card" style="border-color:var(--danger)">
+        <div class="stat-label">🚨 Alerts</div>
+        <div class="stat-value" id="abKpiAlerts" style="color:var(--danger)">—</div>
+        <div class="stat-sub">overdue or high-risk</div>
+      </div>
+      <div class="stat-card" style="border-color:var(--warning)">
+        <div class="stat-label">⚠️ High Risk</div>
+        <div class="stat-value" id="abKpiHighRisk" style="color:var(--warning)">—</div>
+        <div class="stat-sub">risk score ≥ 75</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">📍 Check-Ins Today</div>
+        <div class="stat-value" id="abKpiCheckins">—</div>
+        <div class="stat-sub">geolocation pings</div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters" style="margin-bottom:12px">
+      <div class="btn-group" id="abStatusFilter">
+        <button class="active" onclick="filterActiveBonds('all')">All</button>
+        <button onclick="filterActiveBonds('active')">Active</button>
+        <button onclick="filterActiveBonds('alert')">Alerts</button>
+        <button onclick="filterActiveBonds('monitoring')">Monitoring</button>
+        <button onclick="filterActiveBonds('exonerated')">Exonerated</button>
+      </div>
+      <button class="btn-export" onclick="loadActiveBonds()" style="margin-left:auto">↻ Refresh</button>
+      <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000">⏰ Process Missed Check-Ins</button>
+    </div>
+
+    <!-- Active Bonds Table -->
+    <div class="panel">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>🔒 Active Bond Portfolio — Geolocation &amp; Risk Tracking</span>
+        <span class="meta" id="abMeta"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Defendant</th>
+              <th>County</th>
+              <th>Bond</th>
+              <th>Surety</th>
+              <th>Charges</th>
+              <th>Risk Score</th>
+              <th>Last Check-In</th>
+              <th>Next Due</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="abTableBody"><tr><td colspan="10" class="loading">Loading active bonds…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Location History Panel (shown on row click) -->
+    <div class="panel" id="abLocationPanel" style="display:none;margin-top:18px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span id="abLocationTitle">📍 Location History</span>
+        <button class="btn-cancel" onclick="document.getElementById('abLocationPanel').style.display='none'">✕ Close</button>
+      </div>
+      <div id="abLocationBody"></div>
+    </div>
+
+    <!-- Manual Check-In Modal -->
+    <div class="modal-overlay" id="abCheckinModal">
+      <div class="modal">
+        <div class="modal-header"><h2>📍 Record Check-In</h2><button class="modal-close" onclick="closeCheckinModal()">&#x2715;</button></div>
+        <div class="modal-body">
+          <div id="abCheckinDefName" style="font-size:16px;font-weight:700;margin-bottom:12px"></div>
+          <div style="display:grid;gap:10px">
+            <label style="font-size:12px;color:var(--muted)">Latitude (optional)
+              <input type="number" id="abCheckinLat" step="0.000001" placeholder="e.g. 26.1224" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Longitude (optional)
+              <input type="number" id="abCheckinLng" step="0.000001" placeholder="e.g. -80.1373" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">County (optional)
+              <input type="text" id="abCheckinCounty" placeholder="e.g. Broward" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Source
+              <select id="abCheckinSource" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+                <option value="manual">Manual (office visit)</option>
+                <option value="phone">Phone call</option>
+                <option value="gps">GPS ping</option>
+                <option value="ip">IP geolocation</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick="closeCheckinModal()">Cancel</button>
+          <button class="btn-primary" onclick="submitCheckin()">📍 Record Check-In</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
 <!-- ═══ WRITE BOND MODAL ═══ -->
 <div class="modal-overlay" id="bondModal">
   <div class="modal modal-lg">
@@ -301,5 +417,6 @@
 <script src="/sl-core.js"></script>
 <script src="/sl-data.js"></script>
 <script src="/sl-features.js"></script>
+<script src="/sl-active-bonds.js"></script>
 </body>
 </html>

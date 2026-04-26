@@ -70,13 +70,27 @@ from scrapers.counties.okaloosa import OkaloosaCountyScraper
 from scrapers.counties.bay import BayCountyScraper
 from scrapers.counties.leon import LeonCountyScraper
 
-# ── Wave 1 — NE FL / First Coast ─────────────────────────────────────────────
+# ── Wave 1 — NE FL / First Coast ─────────────────────────────────────────
 from scrapers.counties.duval import DuvalCountyScraper
 from scrapers.counties.st_johns import StJohnsCountyScraper
 
 # ── Wave 1 — North FL / Rural ────────────────────────────────────────────────
 from scrapers.counties.taylor import TaylorCountyScraper
 from scrapers.counties.dixie import DixieCountyScraper
+
+# ── Phase 1 Priority Expansion ───────────────────────────────────────────────
+from scrapers.counties.flagler import FlaglerCountyScraper
+from scrapers.counties.nassau import NassauCountyScraper
+from scrapers.counties.clay import ClayCountyScraper
+from scrapers.counties.columbia import ColumbiaCountyScraper
+from scrapers.counties.suwannee import SuwanneeCountyScraper
+from scrapers.counties.santa_rosa import SantaRosaCountyScraper
+from scrapers.counties.walton import WaltonCountyScraper
+from scrapers.counties.jackson import JacksonCountyScraper
+from scrapers.counties.gadsden import GadsdenCountyScraper
+from scrapers.counties.monroe import MonroeCountyScraper
+from scrapers.counties.okeechobee import OkeechobeeCountyScraper
+from scrapers.counties.hardee import HardeeCountyScraper
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
@@ -163,6 +177,20 @@ def register_scrapers(sched):
     # ── North FL / Rural ───────────────────────────────────────────────────────
     sched.register_scraper(TaylorCountyScraper(), interval_minutes=240)
     sched.register_scraper(DixieCountyScraper(), interval_minutes=240)
+
+    # ── Phase 1 Priority Expansion ────────────────────────────────────────────
+    sched.register_scraper(FlaglerCountyScraper(), interval_minutes=120)   # New World
+    sched.register_scraper(NassauCountyScraper(), interval_minutes=120)    # New World
+    sched.register_scraper(ClayCountyScraper(), interval_minutes=120)      # Custom HTML
+    sched.register_scraper(ColumbiaCountyScraper(), interval_minutes=120)  # P2C
+    sched.register_scraper(SuwanneeCountyScraper(), interval_minutes=180)  # SmartWeb
+    sched.register_scraper(SantaRosaCountyScraper(), interval_minutes=120) # SmartWeb
+    sched.register_scraper(WaltonCountyScraper(), interval_minutes=120)    # New World
+    sched.register_scraper(JacksonCountyScraper(), interval_minutes=360)   # Stub — no public roster
+    sched.register_scraper(GadsdenCountyScraper(), interval_minutes=180)   # Needs recon
+    sched.register_scraper(MonroeCountyScraper(), interval_minutes=120)    # Keys SO
+    sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)# Custom HTML
+    sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)    # OCV API
 
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")

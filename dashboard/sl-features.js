@@ -25,6 +25,10 @@ async function loadDefendants() {
 
     document.getElementById('defResultsMeta').textContent = `${total.toLocaleString()} defendants · Page ${SL_STATE.defPage}/${pages}`;
 
+    // Store leads in a map for lookup by booking number
+    window._leadMap = window._leadMap || {};
+    leads.forEach(l => { if (l.booking_number) window._leadMap[l.booking_number] = l; });
+
     const grid = document.getElementById('defendantGrid');
     grid.innerHTML = leads.map(l => {
       const bond = l.bond_amount||0;
@@ -32,15 +36,16 @@ async function loadDefendants() {
       const stBadge = (l.status||'').toLowerCase().includes('custody')?'custody':(l.status||'').toLowerCase().includes('release')?'released':'other';
       const sc = (l.lead_status||'').toLowerCase();
       const scoreCls = sc==='hot'?'score-hot':sc==='warm'?'score-warm':'score-cold';
+      const bkSafe = (l.booking_number||'').replace(/'/g,"\\'");
       return `<div class="def-card">
-        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'—'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
+        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
         <div class="def-body">
-          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'—'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'—'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'—'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div></div></div>
-          <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'—'}</div></div></div>
+          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'\u2014'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div></div></div>
+          <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
         </div>
         <div class="def-card-footer">
-          <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
-          <button class="btn-write-bond" onclick="openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write Bond</button>
+          <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">\ud83d\udd17 Source</button>
+          <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">\u270d\ufe0f Write Bond</button>
         </div>
       </div>`;
     }).join('') || '<div class="loading">No defendants found</div>';
@@ -68,10 +73,28 @@ function renderHealth() {
 }
 
 // ── Write Bond Modal ──
-function openBondModal(name, bond, county, booking) {
+// openBondModal accepts a full lead object OR individual fields for backwards compat
+function openBondModal(nameOrLead, bond, county, booking) {
+  let lead = {};
+  if (typeof nameOrLead === 'object' && nameOrLead !== null) {
+    lead = nameOrLead;
+  } else {
+    // Legacy call: openBondModal(name, bond, county, booking)
+    lead = { full_name: nameOrLead, bond_amount: bond, county: county, booking_number: booking };
+  }
+
+  const name = lead.full_name || 'Unknown';
+  const bondAmt = parseFloat(lead.bond_amount || bond || 0);
+  const cnty = lead.county || county || '';
+  const bkNum = lead.booking_number || booking || '';
+  const premium = Math.max(100, bondAmt * 0.1);
+  const transferFee = (bondAmt > 25000 || ['Lee','Charlotte'].includes(cnty)) ? 0 : 125;
+
+  // Parse charges into individual bonds (one per charge)
+  const chargesRaw = lead.charges || '';
+  const chargeList = chargesRaw ? chargesRaw.split('|').map(c => c.trim()).filter(Boolean) : ['Unspecified Charge'];
+
   document.getElementById('bondModal').classList.add('show');
-  const premium = Math.max(100, bond * 0.1);
-  const transferFee = (bond > 25000 || ['Lee','Charlotte'].includes(county)) ? 0 : 125;
 
   document.getElementById('bondModalBody').innerHTML = `
     <div class="wb-section">
@@ -79,9 +102,9 @@ function openBondModal(name, bond, county, booking) {
       <div class="wb-defendant-summary">
         <div class="wb-name">${name}</div>
         <div class="wb-meta-grid">
-          <div><span class="wb-meta-label">County</span>${county}</div>
-          <div><span class="wb-meta-label">Booking #</span>${booking}</div>
-          <div><span class="wb-meta-label">Bond Amount</span>$${bond.toLocaleString()}</div>
+          <div><span class="wb-meta-label">County</span>${cnty}</div>
+          <div><span class="wb-meta-label">Booking #</span>${bkNum}</div>
+          <div><span class="wb-meta-label">Bond Amount</span>$${bondAmt.toLocaleString()}</div>
           <div><span class="wb-meta-label">Est. Premium</span><strong style="color:var(--success)">$${premium.toLocaleString()}</strong></div>
           <div><span class="wb-meta-label">Transfer Fee</span>${transferFee ? '$'+transferFee : '<span style="color:var(--success)">Waived</span>'}</div>
           <div><span class="wb-meta-label">Total Due</span><strong>$${(premium + transferFee).toLocaleString()}</strong></div>
@@ -100,40 +123,164 @@ function openBondModal(name, bond, county, booking) {
       </div>
     </div>
     <div class="wb-section">
-      <div class="wb-section-label">Appearance Bond PDF</div>
-      <div id="pdfPreviewArea" style="background:var(--panel);border-radius:8px;padding:16px;text-align:center">
-        <p style="color:var(--muted);margin:0 0 12px">Select a surety above, then download the blank Appearance Bond to fill out.</p>
-        <div style="display:flex;gap:12px;justify-content:center">
-          <a href="/osi-appearance-bond.pdf" target="_blank" class="btn-export" id="pdfLinkOSI">📄 OSI Appearance Bond</a>
-          <a href="/palmetto-appearance-bond.pdf" target="_blank" class="btn-export" id="pdfLinkPalmetto" style="display:none">📄 Palmetto Appearance Bond</a>
+      <div class="wb-section-label">Appearance Bonds — One Per Charge (${chargeList.length})</div>
+      <div id="pdfPreviewArea" style="background:var(--panel);border-radius:8px;padding:16px">
+        <p style="color:var(--muted);margin:0 0 12px;font-size:12px">One blank Appearance Bond will be generated per charge, pre-populated with defendant info.</p>
+        <div id="chargeBondList" style="display:flex;flex-direction:column;gap:8px">
+          ${chargeList.map((ch, i) => `
+            <div class="charge-bond-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
+              <span class="charge-bond-num" style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
+              <span class="charge-bond-desc" style="flex:1;font-size:12px">${ch}</span>
+              <button class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadBond('${encodeURIComponent(ch)}', ${i+1})">📄 Bond</button>
+            </div>`).join('')}
+        </div>
+        <div style="margin-top:12px;text-align:center">
+          <button class="btn-export" onclick="downloadAllBonds()">Download All (${chargeList.length}) Bonds</button>
         </div>
       </div>
     </div>
-    <div class="wb-poa-notice"><span class="wb-poa-icon">📋</span><div><div class="wb-poa-title">Power of Attorney Required</div><div class="wb-poa-text">A POA will be assigned from your available inventory for this surety company.</div></div></div>`;
+    <div class="wb-poa-notice"><span class="wb-poa-icon">📋</span><div><div class="wb-poa-title">Power of Attorney Required</div><div class="wb-poa-text">A POA will be assigned from your available inventory for the selected surety company.</div></div></div>
+    <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>`;
 
-  // Store modal state
-  window._bondModalData = { name, bond, county, booking, surety: 'osi' };
+  // Store full lead data for submit
+  window._bondModalData = {
+    lead,
+    name, bond: bondAmt, county: cnty, booking: bkNum,
+    charges: chargesRaw, chargeList,
+    surety: 'osi',
+    date: new Date().toLocaleDateString('en-US')
+  };
+}
+
+function downloadBond(chargeEncoded, idx) {
+  const data = window._bondModalData;
+  if (!data) return;
+  const charge = decodeURIComponent(chargeEncoded);
+  const surety = data.surety;
+  const params = new URLSearchParams({
+    name: data.name, booking: data.booking, county: data.county,
+    bond: data.bond, charge, surety, date: data.date,
+    dob: data.lead.dob || '', address: data.lead.address || '',
+  });
+  window.open(`${API}/api/appearance-bond-pdf?${params}`, '_blank');
+}
+
+function downloadAllBonds() {
+  const data = window._bondModalData;
+  if (!data) return;
+  data.chargeList.forEach((ch, i) => {
+    setTimeout(() => downloadBond(encodeURIComponent(ch), i+1), i * 400);
+  });
 }
 
 function selectSurety(s) {
   window._bondModalData.surety = s;
   document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
   document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');
-  document.getElementById('pdfLinkOSI').style.display = s === 'osi' ? '' : 'none';
-  document.getElementById('pdfLinkPalmetto').style.display = s === 'palmetto' ? '' : 'none';
 }
 
 function closeModal() { document.getElementById('bondModal').classList.remove('show'); }
 
-function submitBond() {
+async function submitBond() {
   const data = window._bondModalData;
   if (!data) { toast('No bond data', 'error'); return; }
-  // Format for Slack copy
-  const msg = `☘️ *BOND WRITTEN*\n• Defendant: ${data.name}\n• County: ${data.county}\n• Booking: ${data.booking}\n• Bond: $${data.bond.toLocaleString()}\n• Premium: $${Math.max(100, data.bond * 0.1).toLocaleString()}\n• Surety: ${data.surety === 'osi' ? 'Ohio Security Insurance' : 'Palmetto Surety'}`;
-  navigator.clipboard.writeText(msg).then(() => {
-    toast('Bond info copied to clipboard — paste in Slack #new-cases!', 'success');
-  }).catch(() => toast('Bond info ready', 'info'));
-  closeModal();
+
+  const statusEl = document.getElementById('bondSubmitStatus');
+  if (statusEl) { statusEl.style.display = 'block'; statusEl.style.background = 'var(--panel)'; statusEl.textContent = 'Writing bond...'; }
+
+  const lead = data.lead;
+  const payload = {
+    insurance_company: data.surety,
+    defendant: {
+      full_name: data.name,
+      first_name: lead.first_name || '',
+      last_name: lead.last_name || '',
+      middle_name: lead.middle_name || '',
+      dob: lead.dob || '',
+      address: lead.address || '',
+      sex: lead.sex || '',
+      race: lead.race || '',
+      height: lead.height || '',
+      weight: lead.weight || '',
+    },
+    booking: {
+      booking_number: data.booking,
+      county: data.county,
+      facility: lead.facility || '',
+      arrest_date: lead.arrest_date || lead.booking_date || '',
+      booking_date: lead.booking_date || '',
+    },
+    bond: {
+      amount: data.bond,
+      premium: Math.max(100, data.bond * 0.1),
+      type: lead.bond_type || 'Surety',
+      paid: 'NO',
+    },
+    charges: data.charges,
+    charge_list: data.chargeList,
+    court: {
+      date: lead.court_date || '',
+      location: lead.court_location || '',
+      case_number: lead.case_number || '',
+    },
+  };
+
+  try {
+    const r = await fetch(`${API}/api/write-bond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await r.json();
+
+    if (result.success) {
+      // Register in Active Bonds tracking
+      await registerActiveBond(data, result);
+
+      if (statusEl) { statusEl.style.background = 'rgba(34,197,94,0.15)'; statusEl.style.color = 'var(--success)'; statusEl.textContent = `✅ Bond written for ${data.name} via ${data.surety.toUpperCase()}. Registered in Active Bonds.`; }
+      toast(`Bond written for ${data.name}`, 'success');
+      setTimeout(() => { closeModal(); if (typeof loadActiveBonds === 'function') loadActiveBonds(); }, 2000);
+    } else {
+      if (statusEl) { statusEl.style.background = 'rgba(239,68,68,0.15)'; statusEl.style.color = 'var(--danger)'; statusEl.textContent = `❌ ${result.error || 'Bond write failed'}`; }
+      toast(result.error || 'Bond write failed', 'error');
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.style.background = 'rgba(239,68,68,0.15)'; statusEl.style.color = 'var(--danger)'; statusEl.textContent = `❌ Network error: ${e.message}`; }
+    toast('Network error writing bond', 'error');
+  }
+}
+
+async function registerActiveBond(data, bondResult) {
+  try {
+    const activeBondPayload = {
+      defendant_name: data.name,
+      booking_number: data.booking,
+      county: data.county,
+      bond_amount: data.bond,
+      premium: Math.max(100, data.bond * 0.1),
+      surety: data.surety,
+      charges: data.chargeList,
+      charges_raw: data.charges,
+      bond_date: new Date().toISOString(),
+      status: 'active',
+      risk_score: 50,  // default; updated by risk engine
+      check_in_required: true,
+      check_in_interval_hours: 24,
+      last_check_in: null,
+      next_check_in_due: new Date(Date.now() + 24*3600*1000).toISOString(),
+      geolocation_enabled: true,
+      location_history: [],
+      alerts: [],
+      defendant_info: data.lead,
+    };
+    await fetch(`${API}/api/active-bonds`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(activeBondPayload),
+    });
+  } catch(e) {
+    console.warn('Active bond registration failed (non-fatal):', e);
+  }
 }
 
 // ── Export ──
@@ -182,7 +329,7 @@ if (/Mobi|Android/i.test(navigator.userAgent) && !location.pathname.includes('mo
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
-  clearAll, refresh, toast, loadDefendants };
+  clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond };
 
 // ── Init ──
 loadDashboard();
