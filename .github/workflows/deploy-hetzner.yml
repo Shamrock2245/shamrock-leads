@@ -70,8 +70,7 @@ jobs:
 
             echo ""
             echo "🏥 Health Check:"
-            curl -sf http://localhost:8088/health && echo " ✅ Scraper engine healthy" || echo " ⚠️ Scraper engine health check failed"
-            curl -sf http://localhost:5050/api/stats && echo " ✅ Dashboard healthy" || echo " ⚠️ Dashboard health check failed"
+            curl -sf http://localhost:8088/api/stats > /dev/null && echo " ✅ Dashboard healthy (port 8088)" || echo " ⚠️ Dashboard health check failed"
 
             echo ""
             echo "📜 Last 10 log lines (scraper):"

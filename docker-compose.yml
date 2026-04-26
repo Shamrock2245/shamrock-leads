@@ -1,8 +1,8 @@
 # ============================================
 # ShamrockLeads — Docker Compose
-# Runs: Scraper Engine + Dashboard + Node-RED
+# Runs: Scraper Engine + Dashboard
+# Node-RED: only on VPS (use --profile ops)
 # ============================================
-version: "3.9"
 
 services:
   # ── Core: Scraper + Scoring Engine ──
@@ -52,18 +52,21 @@ services:
         max-file: "3"
 
   # ── Ops Dashboard: Node-RED ──
+  # Only starts with: docker compose --profile ops up -d
+  # On VPS (Hetzner), managed by the shamrock-node-red repo separately.
+  # Included here for convenience if you want everything in one stack.
   node-red:
     image: nodered/node-red:latest
     container_name: shamrock-node-red
     restart: unless-stopped
+    profiles:
+      - ops                             # Won't start by default
     environment:
       - TZ=America/New_York
     volumes:
       - node-red-data:/data             # Persistent flows + config
     ports:
       - "1880:1880"                     # Node-RED dashboard
-    depends_on:
-      - shamrock-leads
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1880/"]
       interval: 30s
