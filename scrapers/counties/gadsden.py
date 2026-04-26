@@ -59,12 +59,8 @@ class GadsdenCountyScraper(BaseScraper):
 
         # Browser fallback for JS-rendered content
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-            co = ChromiumOptions()
-            co.auto_port()
-            co.headless(True)
-            co.set_argument("--no-sandbox")
-            co.set_argument("--disable-dev-shm-usage")
+            from DrissionPage import ChromiumPage
+            co = self._get_browser_options()
             page = ChromiumPage(addr_or_opts=co)
             try:
                 page.get(ROSTER_URL)

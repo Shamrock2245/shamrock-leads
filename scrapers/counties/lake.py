@@ -37,22 +37,13 @@ class LakeCountyScraper(BaseScraper):
 
     def _browser_scrape(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("DrissionPage not installed")
             return []
 
-        opts = ChromiumOptions()
-        opts.headless(True)
-        opts.set_argument("--no-sandbox")
-        opts.set_argument("--disable-dev-shm-usage")
-        opts.set_argument("--disable-gpu")
-        opts.set_argument("--disable-blink-features=AutomationControlled")
-        opts.set_user_agent(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-        )
+        opts = self._get_browser_options()
 
         page = None
         records = []

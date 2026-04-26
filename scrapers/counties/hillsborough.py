@@ -60,14 +60,9 @@ class HillsboroughCountyScraper(BaseScraper):
             try: page.quit()
             except: pass
 
-    @staticmethod
-    def _setup_browser():
-        from DrissionPage import ChromiumPage, ChromiumOptions
-        co = ChromiumOptions(); co.auto_port(); co.headless(True)
-        co.set_argument("--no-sandbox"); co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-gpu"); co.set_argument("--window-size=1920,1080")
-        co.set_argument("--disable-blink-features=AutomationControlled")
-        co.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+    def _setup_browser(self):
+        from DrissionPage import ChromiumPage
+        co = self._get_browser_options()
         return ChromiumPage(addr_or_opts=co)
 
     def _login(self, page, email, password):

@@ -182,15 +182,11 @@ class LeonCountyScraper(BaseScraper):
 
     def _browser_fallback(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
             from bs4 import BeautifulSoup
         except ImportError:
             return []
-        opts = ChromiumOptions()
-        opts.headless(True)
-        opts.set_argument("--no-sandbox")
-        opts.set_argument("--disable-dev-shm-usage")
-        opts.set_argument("--disable-gpu")
+        opts = self._get_browser_options()
         page = None
         seen = set()
         records = []

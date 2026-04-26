@@ -13,6 +13,7 @@ The scheduler calls run() which handles:
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -52,6 +53,38 @@ class BaseScraper(ABC):
         self.last_error: Optional[str] = None
         self.total_runs: int = 0
         self.total_records_scraped: int = 0
+
+    @classmethod
+    def _get_browser_options(cls):
+        """
+        Create ChromiumOptions with correct browser path for Docker/VPS.
+
+        DrissionPage does NOT auto-detect the CHROME_PATH env var —
+        you MUST call set_browser_path() explicitly. Without this,
+        every DrissionPage scraper silently fails inside Docker.
+
+        Usage in any county scraper:
+            co = self._get_browser_options()
+            page = ChromiumPage(addr_or_opts=co)
+        """
+        from DrissionPage import ChromiumOptions
+        co = ChromiumOptions()
+        co.auto_port()
+        co.headless(True)
+        co.set_argument("--no-sandbox")
+        co.set_argument("--disable-dev-shm-usage")
+        co.set_argument("--disable-gpu")
+        co.set_argument("--disable-blink-features=AutomationControlled")
+        co.set_argument("--window-size=1920,1080")
+        co.set_user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        # Critical: set browser path for Docker where chromium lives at /usr/bin/chromium
+        chrome_path = os.getenv("CHROME_PATH")
+        if chrome_path:
+            co.set_browser_path(chrome_path)
+        return co
 
     @property
     @abstractmethod

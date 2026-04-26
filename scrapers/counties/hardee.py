@@ -169,15 +169,7 @@ class HardeeCountyScraper(BaseScraper):
 
         page = None
         try:
-            co = ChromiumOptions()
-            co.auto_port()
-            co.headless(True)
-            co.set_argument("--no-sandbox")
-            co.set_argument("--disable-dev-shm-usage")
-            co.set_argument("--disable-blink-features=AutomationControlled")
-            co.set_argument("--window-size=1920,1080")
-            co.set_argument("--disable-gpu")
-            co.set_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+            co = self._get_browser_options()
             page = ChromiumPage(addr_or_opts=co)
             enriched = 0
 

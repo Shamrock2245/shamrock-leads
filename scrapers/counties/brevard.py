@@ -110,19 +110,12 @@ class BrevardCountyScraper(BaseScraper):
     def _scrape_drission(self) -> List[ArrestRecord]:
         """DrissionPage fallback for JS-rendered content."""
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
         except ImportError:
             logger.warning("Brevard: DrissionPage not available")
             return []
 
-        co = ChromiumOptions()
-        co.auto_port()
-        co.headless(True)
-        co.set_argument("--no-sandbox")
-        co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-gpu")
-        if os.getenv("CHROME_PATH"):
-            co.set_browser_path(os.getenv("CHROME_PATH"))
+        co = self._get_browser_options()
 
         page = ChromiumPage(addr_or_opts=co)
         records = []

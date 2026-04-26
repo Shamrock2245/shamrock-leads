@@ -27,7 +27,7 @@ class CitrusCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
         except ImportError:
             logger.error("DrissionPage not installed")
             return []
@@ -38,11 +38,7 @@ class CitrusCountyScraper(BaseScraper):
             logger.warning("pdfplumber not installed — install with: pip install pdfplumber")
             pdfplumber = None
 
-        opts = ChromiumOptions()
-        opts.headless(True)
-        opts.set_argument("--no-sandbox")
-        opts.set_argument("--disable-dev-shm-usage")
-        opts.set_argument("--disable-gpu")
+        opts = self._get_browser_options()
 
         page = None
         pdf_url = None

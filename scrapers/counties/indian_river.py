@@ -190,16 +190,12 @@ class IndianRiverCountyScraper(BaseScraper):
 
     def _browser_fallback(self, seen: set) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
             from bs4 import BeautifulSoup
         except ImportError:
             return []
-        opts = ChromiumOptions()
-        opts.headless(True)
-        opts.set_argument("--no-sandbox")
-        opts.set_argument("--disable-dev-shm-usage")
-        opts.set_argument("--ignore-certificate-errors")
-        opts.set_argument("--disable-gpu")
+        opts = self._get_browser_options()
+        opts.set_argument("--ignore-certificate-errors")  # Indian River-specific
         page = None
         try:
             page = ChromiumPage(addr_or_opts=opts)
