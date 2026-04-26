@@ -36,8 +36,67 @@ client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
 db = client[MONGO_DB]
 arrests = db["arrests"]
 leads = db["leads"]
-
+poa_inventory = db["poa_inventory"]
 print(f"✅ Connected to MongoDB: {MONGO_DB}")
+
+# ── POA Inventory — Seed from receipt data if collection is empty ──────────────
+# Based on actual inventory receipts dated 04/20/2026.
+# OSI: 75 powers  |  Palmetto: 146 powers  |  Grand total: 221
+_POA_RECEIPT_DATA = [
+    # OSI — Receipt dated 04/20/2026, exp 31-Dec-26
+    {"surety_id": "osi", "prefix": "OSI3",   "max_bond": 3_000,   "start": 20134295, "end": 20134324, "exp": "2026-12-31"},
+    {"surety_id": "osi", "prefix": "OSI6",   "max_bond": 6_000,   "start": 20132136, "end": 20132150, "exp": "2026-12-31"},
+    {"surety_id": "osi", "prefix": "OSI16",  "max_bond": 16_000,  "start": 20136624, "end": 20136639, "exp": "2026-12-31"},
+    {"surety_id": "osi", "prefix": "OSI51",  "max_bond": 51_000,  "start": 20127651, "end": 20127660, "exp": "2026-12-31"},
+    {"surety_id": "osi", "prefix": "OSI101", "max_bond": 101_000, "start": 20128283, "end": 20128284, "exp": "2026-12-31"},
+    {"surety_id": "osi", "prefix": "OSI251", "max_bond": 251_000, "start": 20129019, "end": 20129020, "exp": "2026-12-30"},
+    # Palmetto — Package #192184, dated 04/20/2026
+    {"surety_id": "palmetto", "prefix": "PSC5",   "max_bond": 5_000,   "start": 2644670, "end": 2644777, "exp": None},
+    {"surety_id": "palmetto", "prefix": "PSC15",  "max_bond": 15_000,  "start": 2644778, "end": 2644790, "exp": None},
+    {"surety_id": "palmetto", "prefix": "PSC25",  "max_bond": 25_000,  "start": 2644791, "end": 2644809, "exp": None},
+    {"surety_id": "palmetto", "prefix": "PSC50",  "max_bond": 50_000,  "start": 2644810, "end": 2644813, "exp": None},
+    {"surety_id": "palmetto", "prefix": "PSC75",  "max_bond": 75_000,  "start": 2644814, "end": 2644814, "exp": None},
+    {"surety_id": "palmetto", "prefix": "PSC105", "max_bond": 105_000, "start": 2644815, "end": 2644815, "exp": None},
+]
+
+def _seed_poa_inventory():
+    """Seed poa_inventory collection from receipt data if it's empty."""
+    try:
+        if poa_inventory.count_documents({}) > 0:
+            return  # Already seeded
+        docs = []
+        for tier in _POA_RECEIPT_DATA:
+            for serial in range(tier["start"], tier["end"] + 1):
+                docs.append({
+                    "poa_number": str(serial),
+                    "poa_prefix": tier["prefix"],
+                    "poa_full": f"{tier['prefix']} {serial}",
+                    "surety_id": tier["surety_id"],
+                    "max_bond_value": tier["max_bond"],
+                    "status": "available",
+                    "expiration": tier["exp"],
+                    "book_number": "receipt_2026-04-20",
+                    "assigned_to_agent": "Brendan",
+                    "received_at": "2026-04-20T00:00:00Z",
+                    "bond_case_id": None,
+                    "used_at": None,
+                    "voided_at": None,
+                    "void_reason": None,
+                    "reported_at": None,
+                })
+        if docs:
+            poa_inventory.create_index("poa_number", unique=True)
+            poa_inventory.create_index([("surety_id", 1), ("status", 1)])
+            poa_inventory.create_index([("poa_prefix", 1), ("status", 1)])
+            poa_inventory.insert_many(docs, ordered=False)
+            print(f"✅ POA inventory seeded: {len(docs)} powers ({sum(1 for d in docs if d['surety_id']=='osi')} OSI + {sum(1 for d in docs if d['surety_id']=='palmetto')} Palmetto)")
+    except Exception as e:
+        print(f"⚠️  POA inventory seed warning: {e}")
+
+try:
+    _seed_poa_inventory()
+except Exception:
+    pass
 
 # ── Master list of all registered scraper counties ──
 # This ensures the dropdown always shows all counties even before data arrives.
@@ -1237,6 +1296,161 @@ def api_active_bonds_process_missed():
         return jsonify({"success": True, "processed": updated, "timestamp": now_iso})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── POA Inventory API ────────────────────────────────────────────────────────────
+
+def _get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
+    """
+    Return the smallest POA prefix that covers the bond amount for the given surety.
+    OSI tiers:     OSI3→$3k, OSI6→$6k, OSI16→$16k, OSI51→$51k, OSI101→$101k, OSI251→$251k
+    Palmetto tiers: PSC5→$5k, PSC15→$15k, PSC25→$25k, PSC50→$50k, PSC75→$75k, PSC105→$105k
+    """
+    tiers = {
+        "osi":     [(3000, "OSI3"), (6000, "OSI6"), (16000, "OSI16"),
+                    (51000, "OSI51"), (101000, "OSI101"), (251000, "OSI251")],
+        "palmetto": [(5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
+                     (50000, "PSC50"), (75000, "PSC75"), (105000, "PSC105")],
+    }
+    for cap, prefix in tiers.get(surety_id.lower(), []):
+        if bond_amount <= cap:
+            return prefix
+    # Bond exceeds all tiers — return highest available
+    return tiers.get(surety_id.lower(), [(0, "UNKNOWN")])[-1][1]
+
+
+@app.route("/api/poa/next", methods=["GET"])
+def api_poa_next():
+    """
+    Suggest the next available POA number(s) for a given surety + bond amount.
+    Query params:
+      surety      — "osi" or "palmetto" (required)
+      bond_amount — numeric bond value (required)
+      count       — how many POAs to suggest (default 1, use for multi-charge)
+    Returns:
+      { surety, prefix, available, suggested: [{poa_full, poa_number, poa_prefix}] }
+    """
+    surety = (request.args.get("surety") or "").lower().strip()
+    if surety not in ("osi", "palmetto"):
+        return jsonify({"error": "surety must be 'osi' or 'palmetto'"}), 400
+    try:
+        bond_amount = float(request.args.get("bond_amount", 0) or 0)
+    except ValueError:
+        bond_amount = 0.0
+    count = max(1, int(request.args.get("count", 1) or 1))
+
+    prefix = _get_poa_tier_for_bond(surety, bond_amount)
+
+    # Find next `count` available POAs in this prefix, ordered by serial number
+    available_cursor = poa_inventory.find(
+        {"surety_id": surety, "poa_prefix": prefix, "status": "available"},
+        {"poa_number": 1, "poa_prefix": 1, "poa_full": 1, "_id": 0}
+    ).sort("poa_number", 1).limit(count)
+    suggested = list(available_cursor)
+
+    total_available = poa_inventory.count_documents(
+        {"surety_id": surety, "poa_prefix": prefix, "status": "available"}
+    )
+    total_surety = poa_inventory.count_documents(
+        {"surety_id": surety, "status": "available"}
+    )
+
+    return jsonify({
+        "surety": surety,
+        "prefix": prefix,
+        "bond_amount": bond_amount,
+        "available_in_tier": total_available,
+        "available_total": total_surety,
+        "suggested": suggested,
+        "warning": ("Low inventory in this tier" if total_available <= 3 else None),
+    })
+
+
+@app.route("/api/poa/assign", methods=["POST"])
+def api_poa_assign():
+    """
+    Mark a POA as assigned to a bond case.
+    Body: { poa_number, poa_prefix, surety_id, bond_case_id, booking_number }
+    Returns: { success, poa_full, remaining_in_tier }
+    """
+    body = request.get_json(force=True) or {}
+    poa_number = str(body.get("poa_number", "")).strip()
+    poa_prefix = str(body.get("poa_prefix", "")).strip()
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+    bond_case_id = body.get("bond_case_id") or body.get("booking_number", "")
+
+    if not poa_number or not surety_id:
+        return jsonify({"error": "poa_number and surety_id are required"}), 400
+
+    # Find the POA
+    doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
+    if not doc:
+        return jsonify({"error": f"POA {poa_number} not found for surety {surety_id}"}), 404
+    if doc.get("status") != "available":
+        return jsonify({"error": f"POA {poa_number} is already {doc.get('status')} — cannot assign"}), 409
+
+    # Mark as assigned
+    poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety_id},
+        {"$set": {
+            "status": "assigned",
+            "bond_case_id": str(bond_case_id),
+            "used_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+
+    remaining = poa_inventory.count_documents(
+        {"surety_id": surety_id, "poa_prefix": doc.get("poa_prefix", poa_prefix), "status": "available"}
+    )
+
+    return jsonify({
+        "success": True,
+        "poa_number": poa_number,
+        "poa_prefix": doc.get("poa_prefix", poa_prefix),
+        "poa_full": doc.get("poa_full", f"{poa_prefix} {poa_number}"),
+        "surety_id": surety_id,
+        "bond_case_id": str(bond_case_id),
+        "remaining_in_tier": remaining,
+    })
+
+
+@app.route("/api/poa/inventory", methods=["GET"])
+def api_poa_inventory():
+    """
+    Return a summary of available POA inventory by surety and tier.
+    Optional query param: surety=osi|palmetto
+    """
+    surety_filter = (request.args.get("surety") or "").lower().strip()
+    match = {"status": "available"}
+    if surety_filter in ("osi", "palmetto"):
+        match["surety_id"] = surety_filter
+
+    pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": {"surety_id": "$surety_id", "poa_prefix": "$poa_prefix", "max_bond_value": "$max_bond_value"},
+            "available": {"$sum": 1},
+            "next_serial": {"$min": "$poa_number"},
+        }},
+        {"$sort": {"_id.surety_id": 1, "_id.max_bond_value": 1}},
+    ]
+    rows = list(poa_inventory.aggregate(pipeline))
+    result = []
+    for r in rows:
+        result.append({
+            "surety_id": r["_id"]["surety_id"],
+            "poa_prefix": r["_id"]["poa_prefix"],
+            "max_bond_value": r["_id"]["max_bond_value"],
+            "available": r["available"],
+            "next_serial": r["next_serial"],
+            "next_poa_full": f"{r['_id']['poa_prefix']} {r['next_serial']}",
+        })
+
+    totals = {
+        "osi": sum(r["available"] for r in result if r["surety_id"] == "osi"),
+        "palmetto": sum(r["available"] for r in result if r["surety_id"] == "palmetto"),
+    }
+    return jsonify({"tiers": result, "totals": totals})
 
 
 # ── Appearance Bond PDF Generator ────────────────────────────────────────────────

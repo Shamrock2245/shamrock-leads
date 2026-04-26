@@ -139,7 +139,18 @@ function openBondModal(nameOrLead, bond, county, booking) {
         </div>
       </div>
     </div>
-    <div class="wb-poa-notice"><span class="wb-poa-icon">📋</span><div><div class="wb-poa-title">Power of Attorney Required</div><div class="wb-poa-text">A POA will be assigned from your available inventory for the selected surety company.</div></div></div>
+    <div class="wb-section" id="poaSection">
+      <div class="wb-section-label">Power of Attorney (POA) Numbers</div>
+      <div id="poaLoadingMsg" style="color:var(--muted);font-size:12px;padding:8px 0">⏳ Looking up available powers from inventory...</div>
+      <div id="poaAssignmentArea" style="display:none">
+        <div id="poaChargeList" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div style="margin-top:10px;padding:8px;background:var(--bg);border-radius:6px;font-size:11px;color:var(--muted)">
+          <strong>Auto-assigned from your inventory.</strong> You can override any number by typing in the field.
+          <span id="poaInventoryBadge" style="margin-left:8px"></span>
+        </div>
+      </div>
+      <div id="poaErrorMsg" style="display:none;color:var(--danger);font-size:12px;padding:8px 0"></div>
+    </div>
     <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>`;
 
   // Store full lead data for submit
@@ -148,8 +159,115 @@ function openBondModal(nameOrLead, bond, county, booking) {
     name, bond: bondAmt, county: cnty, booking: bkNum,
     charges: chargesRaw, chargeList,
     surety: 'osi',
-    date: new Date().toLocaleDateString('en-US')
+    date: new Date().toLocaleDateString('en-US'),
+    poaNumbers: [],  // will be populated by fetchPoaNumbers()
   };
+
+  // Auto-fetch POA numbers for the default surety (osi) and charge count
+  fetchPoaNumbers('osi', bondAmt, chargeList);
+}
+
+// ── POA Auto-Population ──
+async function fetchPoaNumbers(surety, bondAmt, chargeList) {
+  const loadEl = document.getElementById('poaLoadingMsg');
+  const areaEl = document.getElementById('poaAssignmentArea');
+  const errEl  = document.getElementById('poaErrorMsg');
+  const badgeEl = document.getElementById('poaInventoryBadge');
+  const listEl = document.getElementById('poaChargeList');
+  if (!loadEl) return;
+
+  loadEl.style.display = 'block';
+  if (areaEl) areaEl.style.display = 'none';
+  if (errEl) errEl.style.display = 'none';
+
+  try {
+    const count = chargeList.length;
+    const res = await fetch(`${API}/api/poa/next?surety=${surety}&bond_amount=${bondAmt}&count=${count}`);
+    const data = await res.json();
+
+    if (data.error) throw new Error(data.error);
+
+    const suggested = data.suggested || [];
+    const prefix = data.prefix || '';
+    const availInTier = data.available_in_tier || 0;
+    const availTotal = data.available_total || 0;
+
+    // Build per-charge POA input rows
+    // If we have fewer suggestions than charges, fill remaining with empty inputs
+    const poaRows = chargeList.map((ch, i) => {
+      const sug = suggested[i];
+      const poaFull = sug ? sug.poa_full : '';
+      const poaNum  = sug ? sug.poa_number : '';
+      const poaPfx  = sug ? sug.poa_prefix : prefix;
+      return `
+        <div class="poa-charge-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
+          <span style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
+          <span style="flex:1;font-size:11px;color:var(--text)">${ch.length > 50 ? ch.slice(0,50)+'…' : ch}</span>
+          <div style="display:flex;flex-direction:column;gap:2px;min-width:160px">
+            <label style="font-size:10px;color:var(--muted)">POA Number</label>
+            <input
+              class="poa-input"
+              id="poaInput_${i}"
+              data-charge-idx="${i}"
+              data-poa-prefix="${poaPfx}"
+              data-poa-number="${poaNum}"
+              value="${poaFull}"
+              placeholder="${prefix} ______"
+              style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:monospace;width:140px"
+              oninput="onPoaInputChange(this, ${i})"
+            />
+          </div>
+        </div>`;
+    });
+
+    listEl.innerHTML = poaRows.join('');
+
+    // Store in modal data
+    window._bondModalData.poaNumbers = chargeList.map((_, i) => {
+      const sug = suggested[i];
+      return sug ? { poa_full: sug.poa_full, poa_number: sug.poa_number, poa_prefix: sug.poa_prefix } : { poa_full: '', poa_number: '', poa_prefix: prefix };
+    });
+
+    // Inventory badge
+    const warnColor = availInTier <= 3 ? 'var(--danger)' : availInTier <= 10 ? 'var(--warning, #f59e0b)' : 'var(--success)';
+    if (badgeEl) badgeEl.innerHTML = `<span style="color:${warnColor};font-weight:600">${availInTier} remaining in ${prefix} tier · ${availTotal} total ${surety.toUpperCase()}</span>`;
+    if (data.warning) {
+      if (badgeEl) badgeEl.innerHTML += ` <span style="color:var(--danger)">⚠️ ${data.warning}</span>`;
+    }
+
+    loadEl.style.display = 'none';
+    if (areaEl) areaEl.style.display = 'block';
+
+  } catch(e) {
+    loadEl.style.display = 'none';
+    if (errEl) {
+      errEl.style.display = 'block';
+      errEl.innerHTML = `⚠️ Could not load inventory: ${e.message}. <a href="#" onclick="fetchPoaNumbers('${surety}',${bondAmt},window._bondModalData.chargeList);return false">Retry</a> or enter POA numbers manually below.`;
+    }
+    // Show empty manual inputs as fallback
+    if (listEl) {
+      listEl.innerHTML = chargeList.map((ch, i) => `
+        <div class="poa-charge-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
+          <span style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
+          <span style="flex:1;font-size:11px">${ch.length>50?ch.slice(0,50)+'…':ch}</span>
+          <input id="poaInput_${i}" class="poa-input" data-charge-idx="${i}" placeholder="Enter POA #" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:monospace;width:140px" oninput="onPoaInputChange(this,${i})" />
+        </div>`).join('');
+    }
+    if (areaEl) areaEl.style.display = 'block';
+    window._bondModalData.poaNumbers = chargeList.map(() => ({ poa_full: '', poa_number: '', poa_prefix: '' }));
+  }
+}
+
+function onPoaInputChange(input, idx) {
+  // Update the stored poa number when user manually edits
+  const val = input.value.trim();
+  if (window._bondModalData && window._bondModalData.poaNumbers) {
+    window._bondModalData.poaNumbers[idx] = {
+      poa_full: val,
+      poa_number: val.includes(' ') ? val.split(' ').pop() : val,
+      poa_prefix: val.includes(' ') ? val.split(' ')[0] : (input.dataset.poaPrefix || ''),
+    };
+  }
 }
 
 function downloadBond(chargeEncoded, idx) {
@@ -157,10 +275,15 @@ function downloadBond(chargeEncoded, idx) {
   if (!data) return;
   const charge = decodeURIComponent(chargeEncoded);
   const surety = data.surety;
+  const poaEntry = (data.poaNumbers && data.poaNumbers[idx - 1]) || {};
+  // Read live value from input in case user overrode it
+  const inputEl = document.getElementById(`poaInput_${idx - 1}`);
+  const poaFull = (inputEl ? inputEl.value.trim() : '') || poaEntry.poa_full || '';
   const params = new URLSearchParams({
     name: data.name, booking: data.booking, county: data.county,
     bond: data.bond, charge, surety, date: data.date,
     dob: data.lead.dob || '', address: data.lead.address || '',
+    poa_number: poaFull,
   });
   window.open(`${API}/api/appearance-bond-pdf?${params}`, '_blank');
 }
@@ -177,6 +300,9 @@ function selectSurety(s) {
   window._bondModalData.surety = s;
   document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
   document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');
+  // Re-fetch POA numbers for the newly selected surety
+  const data = window._bondModalData;
+  if (data) fetchPoaNumbers(s, data.bond, data.chargeList);
 }
 
 function closeModal() { document.getElementById('bondModal').classList.remove('show'); }
@@ -189,8 +315,22 @@ async function submitBond() {
   if (statusEl) { statusEl.style.display = 'block'; statusEl.style.background = 'var(--panel)'; statusEl.textContent = 'Writing bond...'; }
 
   const lead = data.lead;
+  // Collect final POA values from inputs (user may have overridden)
+  const finalPoaNumbers = (data.chargeList || []).map((_, i) => {
+    const inputEl = document.getElementById(`poaInput_${i}`);
+    const val = inputEl ? inputEl.value.trim() : '';
+    const stored = (data.poaNumbers && data.poaNumbers[i]) || {};
+    return {
+      poa_full: val || stored.poa_full || '',
+      poa_number: val ? (val.includes(' ') ? val.split(' ').pop() : val) : stored.poa_number || '',
+      poa_prefix: val ? (val.includes(' ') ? val.split(' ')[0] : stored.poa_prefix) : stored.poa_prefix || '',
+    };
+  });
+  data.poaNumbers = finalPoaNumbers;
+
   const payload = {
     insurance_company: data.surety,
+    poa_numbers: finalPoaNumbers,
     defendant: {
       full_name: data.name,
       first_name: lead.first_name || '',
@@ -234,6 +374,8 @@ async function submitBond() {
     const result = await r.json();
 
     if (result.success) {
+      // Mark each POA as assigned in inventory
+      await assignPoaNumbers(finalPoaNumbers, data.surety, data.booking);
       // Register in Active Bonds tracking
       await registerActiveBond(data, result);
 
@@ -250,11 +392,33 @@ async function submitBond() {
   }
 }
 
+async function assignPoaNumbers(poaNumbers, surety, bookingNumber) {
+  // Fire-and-forget: mark each used POA as assigned in MongoDB inventory
+  for (const poa of (poaNumbers || [])) {
+    if (!poa.poa_number) continue;
+    try {
+      await fetch(`${API}/api/poa/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          poa_number: poa.poa_number,
+          poa_prefix: poa.poa_prefix,
+          surety_id: surety,
+          booking_number: bookingNumber,
+        }),
+      });
+    } catch(e) {
+      console.warn('POA assign failed (non-fatal):', poa.poa_number, e);
+    }
+  }
+}
+
 async function registerActiveBond(data, bondResult) {
   try {
     const activeBondPayload = {
       defendant_name: data.name,
       booking_number: data.booking,
+      poa_numbers: data.poaNumbers || [],
       county: data.county,
       bond_amount: data.bond,
       premium: Math.max(100, data.bond * 0.1),
