@@ -11,8 +11,11 @@ import io
 import os
 import re as re_mod
 import sys
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+import requests as http_requests
 
 from flask import Flask, jsonify, send_from_directory, request, Response
 from pymongo import MongoClient, DESCENDING
@@ -37,7 +40,12 @@ db = client[MONGO_DB]
 arrests = db["arrests"]
 leads = db["leads"]
 poa_inventory = db["poa_inventory"]
+imessage_outreach = db["imessage_outreach"]
 print(f"✅ Connected to MongoDB: {MONGO_DB}")
+
+# ── BlueBubbles iMessage Config ──
+BB_URL = os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
+BB_PASSWORD = os.getenv("BLUEBUBBLES_PASSWORD", "")
 
 # ── POA Inventory — Seed from receipt data if collection is empty ──────────────
 # Based on actual inventory receipts dated 04/20/2026.
@@ -1613,8 +1621,151 @@ def api_db_health():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BlueBubbles iMessage Outreach Proxy
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _format_phone(raw):
+    """Normalize a US phone number to +1XXXXXXXXXX."""
+    digits = re_mod.sub(r"\D", "", str(raw))
+    if len(digits) == 10:
+        digits = "1" + digits
+    if len(digits) == 11 and digits.startswith("1"):
+        return "+" + digits
+    return None  # invalid
+
+
+@app.route("/api/imessage/status")
+def imessage_status():
+    """Check if the BlueBubbles server is reachable."""
+    if not BB_URL:
+        return jsonify({"connected": False, "reason": "BLUEBUBBLES_URL not configured in .env"})
+    try:
+        r = http_requests.get(
+            f"{BB_URL}/api/v1/server/info",
+            params={"password": BB_PASSWORD},
+            timeout=5,
+        )
+        data = r.json()
+        return jsonify({
+            "connected": r.status_code == 200,
+            "os_version": data.get("data", {}).get("os_version", ""),
+            "server_version": data.get("data", {}).get("server_version", ""),
+            "private_api": data.get("data", {}).get("private_api", False),
+        })
+    except Exception as e:
+        return jsonify({"connected": False, "reason": str(e)})
+
+
+@app.route("/api/imessage/send", methods=["POST"])
+def imessage_send():
+    """Send an iMessage via BlueBubbles server. Stores record in MongoDB."""
+    if not BB_URL or not BB_PASSWORD:
+        return jsonify({"error": "BlueBubbles not configured. Set BLUEBUBBLES_URL and BLUEBUBBLES_PASSWORD in .env"}), 503
+
+    body = request.get_json(force=True)
+    phone_raw = body.get("phone", "")
+    message = body.get("message", "").strip()
+    booking_number = body.get("booking_number", "")
+    defendant_name = body.get("defendant_name", "")
+    county = body.get("county", "")
+    recipient_label = body.get("recipient_label", "Unknown")
+    agent_name = body.get("agent_name", "Brendan")
+    from_number = body.get("from_number", "2399550178")
+
+    if not phone_raw or not message:
+        return jsonify({"error": "phone and message are required"}), 400
+
+    phone = _format_phone(phone_raw)
+    if not phone:
+        return jsonify({"error": f"Invalid phone number: {phone_raw}"}), 400
+
+    # Build BlueBubbles payload
+    chat_guid = f"iMessage;-;{phone}"
+    temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
+
+    try:
+        r = http_requests.post(
+            f"{BB_URL}/api/v1/message/text",
+            params={"password": BB_PASSWORD},
+            json={
+                "chatGuid": chat_guid,
+                "tempGuid": temp_guid,
+                "message": message,
+            },
+            timeout=15,
+        )
+        bb_resp = r.json()
+        success = r.status_code in (200, 201)
+
+        # Log to MongoDB
+        doc = {
+            "booking_number": booking_number,
+            "defendant_name": defendant_name,
+            "county": county,
+            "recipient_phone": phone,
+            "recipient_label": recipient_label,
+            "message": message,
+            "chat_guid": chat_guid,
+            "temp_guid": temp_guid,
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "status": "sent" if success else "failed",
+            "bb_status_code": r.status_code,
+            "bb_error": bb_resp.get("message", "") if not success else "",
+            "sent_by": "dashboard",
+            "agent_name": agent_name,
+            "from_number": from_number,
+        }
+        imessage_outreach.insert_one(doc)
+        doc.pop("_id", None)
+
+        if success:
+            return jsonify({"success": True, "record": doc})
+        else:
+            return jsonify({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}), 502
+
+    except http_requests.exceptions.ConnectionError:
+        return jsonify({"error": "Cannot reach BlueBubbles server. Is it running?"}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/imessage/history/<booking_number>")
+def imessage_history(booking_number):
+    """Get outreach message history for a defendant."""
+    docs = list(
+        imessage_outreach.find(
+            {"booking_number": booking_number},
+            {"_id": 0},
+        ).sort("sent_at", -1).limit(50)
+    )
+    return jsonify({"messages": docs, "count": len(docs)})
+
+
+@app.route("/api/imessage/templates")
+def imessage_templates():
+    """Return available outreach message templates."""
+    templates = [
+        {
+            "id": "standard",
+            "name": "Standard Outreach",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds. I see that {name} is currently in custody in the {county} County Jail. We were wondering if you'd like some help bonding them out of jail.",
+        },
+        {
+            "id": "urgent",
+            "name": "Urgent / High Bond",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds. I see that {name} is currently being held in {county} County on a significant bond. We specialize in getting people home fast with flexible payment plans. Would you like some help?",
+        },
+        {
+            "id": "followup",
+            "name": "Follow-Up",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds, just following up about {name} in {county} County. We're still available to help if you'd like to get them out. No obligation to chat.",
+        },
+    ]
+    return jsonify({"templates": templates})
+
+
 if __name__ == "__main__":
     print("\n🍀 ShamrockLeads Intelligence Dashboard")
     print("   http://localhost:5050\n")
     app.run(host="0.0.0.0", port=5050, debug=True)
-

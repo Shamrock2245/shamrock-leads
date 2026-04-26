@@ -151,7 +151,71 @@ function openBondModal(nameOrLead, bond, county, booking) {
       </div>
       <div id="poaErrorMsg" style="display:none;color:var(--danger);font-size:12px;padding:8px 0"></div>
     </div>
-    <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>`;
+    <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>
+
+    <div class="wb-section" id="outreachSection">
+      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px">
+        📱 Text Outreach <span id="bbStatusDot" class="outreach-status-dot offline"></span><span id="bbStatusText" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Checking...</span>
+      </div>
+      <div class="outreach-card">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label class="outreach-label">Agent Name</label>
+            <input type="text" id="outreachAgent" class="outreach-select" placeholder="Your name" value="Brendan" style="padding:8px 12px" />
+          </div>
+          <div>
+            <label class="outreach-label">Send From</label>
+            <select id="outreachFromNumber" class="outreach-select">
+              <option value="2399550178">(239) 955-0178</option>
+              <option value="2399550314">(239) 955-0314</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label class="outreach-label">Recipient Phone</label>
+            <div class="outreach-phone-wrap">
+              <span class="outreach-phone-prefix">+1</span>
+              <input type="tel" id="outreachPhone" class="outreach-phone" placeholder="(239) 555-0123" maxlength="14" oninput="formatPhoneInput(this)" />
+            </div>
+          </div>
+          <div>
+            <label class="outreach-label">Relationship</label>
+            <select id="outreachRelation" class="outreach-select">
+              <option value="Mother">Mother</option>
+              <option value="Father">Father</option>
+              <option value="Spouse">Spouse</option>
+              <option value="Sibling">Sibling</option>
+              <option value="Friend">Friend</option>
+              <option value="Attorney">Attorney</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label class="outreach-label">Template</label>
+          <select id="outreachTemplate" class="outreach-select" onchange="applyOutreachTemplate()">
+            <option value="standard">Standard Outreach</option>
+            <option value="urgent">Urgent / High Bond</option>
+            <option value="followup">Follow-Up</option>
+            <option value="custom">Custom Message</option>
+          </select>
+        </div>
+        <div style="margin-bottom:12px">
+          <label class="outreach-label">Message</label>
+          <textarea id="outreachMessage" class="outreach-textarea" rows="4"></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="outreach-send-btn" id="btnSendOutreach" onclick="sendOutreach()">📱 Send Text</button>
+          <span id="outreachSendStatus" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div id="outreachHistory" style="margin-top:14px;display:none">
+          <div class="outreach-label" style="margin-bottom:6px">📋 Sent Messages</div>
+          <div id="outreachHistoryList"></div>
+        </div>
+      </div>
+    </div>`;
+
 
   // Store full lead data for submit
   window._bondModalData = {
@@ -165,6 +229,11 @@ function openBondModal(nameOrLead, bond, county, booking) {
 
   // Auto-fetch POA numbers for the default surety (osi) and charge count
   fetchPoaNumbers('osi', bondAmt, chargeList);
+
+  // Check BlueBubbles status + load outreach template + history
+  checkBBStatus();
+  applyOutreachTemplate();
+  loadOutreachHistory(bkNum);
 }
 
 // ── POA Auto-Population ──
@@ -306,6 +375,137 @@ function selectSurety(s) {
 }
 
 function closeModal() { document.getElementById('bondModal').classList.remove('show'); }
+
+// ── BlueBubbles Outreach ──
+async function checkBBStatus() {
+  const dot = document.getElementById('bbStatusDot');
+  const txt = document.getElementById('bbStatusText');
+  if (!dot) return;
+  try {
+    const r = await fetch(`${API}/api/imessage/status`);
+    const d = await r.json();
+    if (d.connected) {
+      dot.className = 'outreach-status-dot online';
+      txt.textContent = `Connected${d.private_api ? ' · Private API' : ''}`;
+      txt.style.color = 'var(--accent)';
+    } else {
+      dot.className = 'outreach-status-dot offline';
+      txt.textContent = d.reason || 'Not connected';
+      txt.style.color = 'var(--muted)';
+    }
+  } catch(e) {
+    dot.className = 'outreach-status-dot offline';
+    txt.textContent = 'Server unreachable';
+    txt.style.color = 'var(--muted)';
+  }
+}
+
+function formatPhoneInput(el) {
+  let v = el.value.replace(/\D/g, '').slice(0, 10);
+  if (v.length > 6) v = `(${v.slice(0,3)}) ${v.slice(3,6)}-${v.slice(6)}`;
+  else if (v.length > 3) v = `(${v.slice(0,3)}) ${v.slice(3)}`;
+  else if (v.length > 0) v = `(${v}`;
+  el.value = v;
+}
+
+function applyOutreachTemplate() {
+  const sel = document.getElementById('outreachTemplate');
+  const area = document.getElementById('outreachMessage');
+  const agentEl = document.getElementById('outreachAgent');
+  const data = window._bondModalData;
+  if (!sel || !area || !data) return;
+  const agent = agentEl?.value?.trim() || 'Brendan';
+  const templates = {
+    standard: `Hi, this is ${agent}, with Shamrock Bail Bonds. I see that ${data.name} is currently in custody in the ${data.county} County Jail. We were wondering if you'd like some help bonding them out of jail.`,
+    urgent: `Hi, this is ${agent} with Shamrock Bail Bonds. I see that ${data.name} is currently being held in ${data.county} County on a significant bond. We specialize in getting people home fast with flexible payment plans. Would you like some help?`,
+    followup: `Hi, this is ${agent} with Shamrock Bail Bonds, just following up about ${data.name} in ${data.county} County. We're still available to help if you'd like to get them out. No obligation to chat.`,
+    custom: '',
+  };
+  area.value = templates[sel.value] || '';
+}
+
+async function sendOutreach() {
+  const data = window._bondModalData;
+  const phoneEl = document.getElementById('outreachPhone');
+  const msgEl = document.getElementById('outreachMessage');
+  const relEl = document.getElementById('outreachRelation');
+  const btn = document.getElementById('btnSendOutreach');
+  const statusEl = document.getElementById('outreachSendStatus');
+  if (!data || !phoneEl || !msgEl) return;
+
+  const rawPhone = phoneEl.value.replace(/\D/g, '');
+  const message = msgEl.value.trim();
+  if (!rawPhone || rawPhone.length < 10) { toast('Enter a valid phone number', 'error'); return; }
+  if (!message) { toast('Message cannot be empty', 'error'); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span> Sending...';
+  statusEl.textContent = '';
+
+  try {
+    const r = await fetch(`${API}/api/imessage/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: rawPhone,
+        message,
+        booking_number: data.booking,
+        defendant_name: data.name,
+        county: data.county,
+        recipient_label: relEl?.value || 'Unknown',
+        agent_name: document.getElementById('outreachAgent')?.value?.trim() || 'Brendan',
+        from_number: document.getElementById('outreachFromNumber')?.value || '2399550178',
+      }),
+    });
+    const result = await r.json();
+    if (result.success) {
+      statusEl.innerHTML = '<span style="color:var(--accent)">\u2713 Sent successfully</span>';
+      toast(`Text sent to ${relEl?.value || 'recipient'}`, 'success');
+      phoneEl.value = '';
+      loadOutreachHistory(data.booking);
+    } else {
+      statusEl.innerHTML = `<span style="color:var(--red)">\u26a0 ${result.error || 'Send failed'}</span>`;
+      toast(result.error || 'Send failed', 'error');
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<span style="color:var(--red)">\u26a0 Network error</span>`;
+    toast('Network error sending text', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '\ud83d\udcf1 Send Text';
+  }
+}
+
+async function loadOutreachHistory(bookingNumber) {
+  const container = document.getElementById('outreachHistory');
+  const list = document.getElementById('outreachHistoryList');
+  if (!container || !list || !bookingNumber) return;
+
+  try {
+    const r = await fetch(`${API}/api/imessage/history/${encodeURIComponent(bookingNumber)}`);
+    const d = await r.json();
+    if (d.count > 0) {
+      container.style.display = 'block';
+      list.innerHTML = d.messages.map(m => {
+        const t = new Date(m.sent_at).toLocaleString();
+        const icon = m.status === 'sent' ? '\u2713' : '\u2717';
+        const color = m.status === 'sent' ? 'var(--accent)' : 'var(--red)';
+        return `<div class="outreach-history-row">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:12px;font-weight:600">${m.recipient_label} · ${m.recipient_phone}</span>
+            <span style="font-size:10px;color:${color};font-weight:600">${icon} ${m.status}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);line-height:1.4">${m.message.slice(0,120)}${m.message.length > 120 ? '…' : ''}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">${t}</div>
+        </div>`;
+      }).join('');
+    } else {
+      container.style.display = 'none';
+    }
+  } catch(e) {
+    container.style.display = 'none';
+  }
+}
 
 async function submitBond() {
   const data = window._bondModalData;
@@ -493,7 +693,8 @@ if (/Mobi|Android/i.test(navigator.userAgent) && !location.pathname.includes('mo
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
-  clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond };
+  clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
+  sendOutreach, loadOutreachHistory, checkBBStatus };
 
 // ── Init ──
 loadDashboard();

@@ -433,6 +433,30 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 .county-row:last-child{border:none}
 .county-name{font-weight:600;font-size:13px}
 .court-soon{color:var(--red) !important;font-weight:700}
+
+/* ═══════════════════════════════════════════════════════
+   TEXT OUTREACH (BlueBubbles)
+   ═══════════════════════════════════════════════════════ */
+.outreach-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:16px}
+.outreach-label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:4px;font-weight:600}
+.outreach-status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 4px;vertical-align:middle;flex-shrink:0}
+.outreach-status-dot.online{background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 2s infinite}
+.outreach-status-dot.offline{background:var(--muted);opacity:.5}
+.outreach-phone-wrap{display:flex;align-items:center;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--input-bg);overflow:hidden;transition:border-color .2s}
+.outreach-phone-wrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+.outreach-phone-prefix{padding:0 10px;font-size:13px;font-weight:600;color:var(--muted);background:rgba(0,0,0,.05);border-right:1px solid var(--border);user-select:none}
+[data-theme="dark"] .outreach-phone-prefix{background:rgba(255,255,255,.03)}
+.outreach-phone{flex:1;border:none;background:transparent;color:var(--text);padding:8px 10px;font-size:14px;font-family:'Inter',system-ui,sans-serif;outline:none}
+.outreach-select{width:100%;background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-family:inherit;transition:var(--transition);cursor:pointer}
+.outreach-select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+.outreach-textarea{width:100%;background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:var(--radius-sm);font-size:13px;font-family:inherit;resize:vertical;min-height:80px;line-height:1.5;transition:border-color .2s}
+.outreach-textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+.outreach-send-btn{display:inline-flex;align-items:center;gap:6px;padding:9px 20px;border-radius:var(--radius-sm);border:1px solid rgba(16,185,129,.3);background:rgba(16,185,129,.1);color:var(--accent-light);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;transition:var(--transition);letter-spacing:.2px}
+.outreach-send-btn:hover{background:rgba(16,185,129,.2);border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 16px rgba(16,185,129,.15)}
+.outreach-send-btn:disabled{opacity:.6;cursor:not-allowed;transform:none;box-shadow:none}
+.outreach-history-row{padding:10px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;transition:var(--transition)}
+.outreach-history-row:hover{border-color:var(--border-accent)}
+
 @media(max-width:768px){
   .wb-meta-grid{grid-template-columns:1fr 1fr}
   .insurer-selector{flex-direction:column}
