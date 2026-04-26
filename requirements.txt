@@ -33,6 +33,7 @@ flask>=3.0.0
 # Active Bonds PDF generation & date parsing
 reportlab>=4.0.0
 python-dateutil>=2.8.0
+PyMuPDF>=1.24.0
 
 # Development
 pytest>=8.0.0

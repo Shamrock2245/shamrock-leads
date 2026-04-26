@@ -1250,17 +1250,19 @@ def health_check():
 @app.route("/api/appearance-bond-pdf", methods=["GET", "POST"])
 def api_appearance_bond_pdf():
     """
-    Generate a pre-populated blank Appearance Bond PDF.
-    Query params: name, booking, county, bond, charge, surety, date, dob, address
+    Generate a pre-populated Appearance Bond PDF using the official
+    OSI or Palmetto surety-approved templates.
+
+    Accepts GET query params or POST JSON body:
+        name, booking, county, bond, charge, surety, date, dob, address,
+        court_date, court_time, case_number, poa_number, court_type,
+        first_name, last_name, indemnitor_name
     """
     try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.lib import colors
-        from reportlab.lib.units import inch
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.enums import TA_CENTER, TA_LEFT
-        import io as _io
+        try:
+            from bond_pdf_service import generate_appearance_bond, generate_safe_filename
+        except ImportError:
+            from dashboard.bond_pdf_service import generate_appearance_bond, generate_safe_filename
 
         # Accept both GET query params and POST JSON body
         if request.method == "POST" and request.is_json:
@@ -1270,151 +1272,40 @@ def api_appearance_bond_pdf():
         else:
             def _p(key, default=""):
                 return request.args.get(key, default)
-        name = _p("name") or _p("defendant_name")
-        booking = _p("booking") or _p("booking_number")
-        county = _p("county")
-        bond_amount = _p("bond") or _p("bond_amount", "0")
-        charge = _p("charge")
-        surety = (_p("surety", "osi") or "osi").upper()
-        bond_date = _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y")
-        dob = _p("dob") or _p("date_of_birth")
-        address = _p("address")
 
-        surety_full = "O'Shaughnahill Surety & Insurance, Inc." if surety == "OSI" else "Palmetto Surety Corporation"
-        surety_state = "Florida" if surety == "OSI" else "South Carolina"
+        data = {
+            "name": _p("name") or _p("defendant_name", ""),
+            "first_name": _p("first_name", ""),
+            "last_name": _p("last_name", ""),
+            "booking_number": _p("booking") or _p("booking_number", ""),
+            "county": _p("county", ""),
+            "bond_amount": _p("bond") or _p("bond_amount", "0"),
+            "charge": _p("charge", ""),
+            "surety": _p("surety", "osi"),
+            "bond_date": _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y"),
+            "dob": _p("dob") or _p("date_of_birth", ""),
+            "address": _p("address", ""),
+            "court_date": _p("court_date", ""),
+            "court_time": _p("court_time", ""),
+            "case_number": _p("case_number", ""),
+            "poa_number": _p("poa_number", ""),
+            "court_type": _p("court_type", ""),
+            "indemnitor_name": _p("indemnitor_name", ""),
+        }
 
-        buf = _io.BytesIO()
-        doc = SimpleDocTemplate(buf, pagesize=letter,
-                                leftMargin=0.75*inch, rightMargin=0.75*inch,
-                                topMargin=0.75*inch, bottomMargin=0.75*inch)
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle('title', parent=styles['Heading1'],
-                                     fontSize=14, alignment=TA_CENTER, spaceAfter=4)
-        sub_style = ParagraphStyle('sub', parent=styles['Normal'],
-                                   fontSize=10, alignment=TA_CENTER, spaceAfter=2)
-        label_style = ParagraphStyle('label', parent=styles['Normal'],
-                                     fontSize=9, textColor=colors.grey)
-        value_style = ParagraphStyle('value', parent=styles['Normal'],
-                                     fontSize=11, spaceBefore=2, spaceAfter=8)
-        body_style = ParagraphStyle('body', parent=styles['Normal'],
-                                    fontSize=9, leading=14, spaceAfter=6)
-        sig_style = ParagraphStyle('sig', parent=styles['Normal'],
-                                   fontSize=9, spaceAfter=2)
-
-        story = []
-
-        # Header
-        story.append(Paragraph("APPEARANCE BOND", title_style))
-        story.append(Paragraph(f"State of Florida — {county} County", sub_style))
-        story.append(Paragraph(f"Surety: {surety_full} ({surety_state})", sub_style))
-        story.append(HRFlowable(width="100%", thickness=1.5, color=colors.black, spaceAfter=10))
-
-        # Defendant Info Table
-        def_data = [
-            [Paragraph("<b>Defendant Full Name</b>", label_style),
-             Paragraph("<b>Date of Birth</b>", label_style),
-             Paragraph("<b>Booking Number</b>", label_style)],
-            [Paragraph(name or "_" * 30, value_style),
-             Paragraph(dob or "_" * 15, value_style),
-             Paragraph(booking or "_" * 15, value_style)],
-            [Paragraph("<b>Address</b>", label_style),
-             Paragraph("<b>County</b>", label_style),
-             Paragraph("<b>Bond Date</b>", label_style)],
-            [Paragraph(address or "_" * 30, value_style),
-             Paragraph(county or "_" * 15, value_style),
-             Paragraph(bond_date or "_" * 15, value_style)],
-        ]
-        def_table = Table(def_data, colWidths=[3*inch, 2*inch, 2*inch])
-        def_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
-            ('BACKGROUND', (0, 2), (-1, 2), colors.HexColor('#f0f0f0')),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        story.append(def_table)
-        story.append(Spacer(1, 10))
-
-        # Charge Section
-        story.append(Paragraph("<b>CRIMINAL CHARGE</b>", label_style))
-        charge_data = [
-            [Paragraph("<b>Charge Description</b>", label_style),
-             Paragraph("<b>Bond Amount</b>", label_style)],
-            [Paragraph(charge or "_" * 50, value_style),
-             Paragraph(f"${float(bond_amount or 0):,.2f}", value_style)],
-        ]
-        charge_table = Table(charge_data, colWidths=[5*inch, 2*inch])
-        charge_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f0f0f0')),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        story.append(charge_table)
-        story.append(Spacer(1, 12))
-
-        # Bond Conditions
-        story.append(Paragraph("<b>CONDITIONS OF BOND</b>", label_style))
-        conditions = [
-            "1. The above-named defendant shall appear before the court as required and shall not depart without leave of court.",
-            "2. The defendant shall notify the surety of any change of address within 24 hours.",
-            "3. The defendant shall not leave the State of Florida without prior written consent of the court and surety.",
-            "4. The defendant shall report to the surety as directed and comply with all check-in requirements.",
-            "5. The defendant shall not commit any criminal offense during the period of this bond.",
-            "6. Failure to appear shall result in forfeiture of this bond and issuance of a warrant for arrest.",
-        ]
-        for cond in conditions:
-            story.append(Paragraph(cond, body_style))
-        story.append(Spacer(1, 12))
-
-        # Surety Statement
-        story.append(Paragraph(
-            f"We, the undersigned, as surety, hereby acknowledge ourselves bound to the State of Florida "
-            f"in the sum of <b>${float(bond_amount or 0):,.2f}</b> for the appearance of the above-named defendant "
-            f"before the court at the time and place required, and at all subsequent times and places to which "
-            f"the case may be continued, and to answer the charge of: <b>{charge or 'as charged'}</b>.",
-            body_style
-        ))
-        story.append(Spacer(1, 20))
-
-        # Signature Lines
-        sig_data = [
-            [Paragraph("_" * 35, sig_style), Paragraph("_" * 35, sig_style)],
-            [Paragraph("Bail Bond Agent / Surety Representative", sig_style),
-             Paragraph("Date", sig_style)],
-            [Paragraph(" ", sig_style), Paragraph(" ", sig_style)],
-            [Paragraph("_" * 35, sig_style), Paragraph("_" * 35, sig_style)],
-            [Paragraph("License Number", sig_style), Paragraph("County", sig_style)],
-        ]
-        sig_table = Table(sig_data, colWidths=[3.5*inch, 3.5*inch])
-        sig_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ]))
-        story.append(sig_table)
-        story.append(Spacer(1, 10))
-        story.append(HRFlowable(width="100%", thickness=0.5, color=colors.lightgrey))
-        story.append(Paragraph(
-            f"<i>Generated by ShamrockLeads Intelligence Platform — {bond_date} — {surety_full}</i>",
-            ParagraphStyle('footer', parent=styles['Normal'], fontSize=7,
-                           alignment=TA_CENTER, textColor=colors.grey)
-        ))
-
-        doc.build(story)
-        buf.seek(0)
-
-        safe_name = re_mod.sub(r'[^A-Za-z0-9_-]', '_', name or 'defendant')
-        safe_charge = re_mod.sub(r'[^A-Za-z0-9_-]', '_', charge[:20] if charge else 'charge')
-        filename = f"AppearanceBond_{safe_name}_{safe_charge}_{bond_date.replace('/', '-')}.pdf"
+        pdf_bytes = generate_appearance_bond(data)
+        filename = generate_safe_filename(data)
 
         return Response(
-            buf.read(),
+            pdf_bytes,
             mimetype="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
+    except FileNotFoundError as e:
+        return jsonify({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}), 404
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
 
