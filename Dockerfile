@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Tell DrissionPage / Chromium where to find the browser
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROME_PATH=/usr/bin/chromium
 
 # Working directory
 WORKDIR /app
