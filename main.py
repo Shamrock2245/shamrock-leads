@@ -112,11 +112,11 @@ def register_scrapers(sched):
     # ── SWFL Core (highest priority) ──────────────────────────────────────────
     sched.register_scraper(LeeCountyScraper(), interval_minutes=10)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=15)
-    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=45)
+    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=10)
     sched.register_scraper(ManateeCountyScraper(), interval_minutes=45)
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
-    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=10)
 
     # ── Tampa Bay / Central FL ─────────────────────────────────────────────────
     sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
