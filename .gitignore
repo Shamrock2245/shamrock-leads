@@ -32,3 +32,4 @@ Thumbs.db
 venv/
 .venv/
 env/
+scripts/gmail_token.json
