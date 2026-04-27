@@ -43,10 +43,16 @@ def get_collection(name: str):
 
 BB_SERVERS = {}
 
+# Runtime URL overrides (updated dynamically by iMac sync script)
+_BB_URL_OVERRIDES = {}
+
 _BB_PHONES = [
     ("0178", "(239) 955-0178", "shamrockbailoffice@gmail.com"),
     ("0314", "(239) 955-0314", "admin@shamrockbailbonds.biz"),
 ]
+
+# Shared API key for iMac → VPS config updates
+BB_CONFIG_API_KEY = os.getenv("BB_CONFIG_API_KEY", "shamrock-bb-sync-2245")
 
 
 def init_bluebubbles():
@@ -54,11 +60,12 @@ def init_bluebubbles():
     global BB_SERVERS
     BB_SERVERS = {}
     for suffix, label, email in _BB_PHONES:
-        url = os.getenv(f"BLUEBUBBLES_URL_{suffix}", "").rstrip("/")
+        # Check runtime overrides first, then env vars
+        url = _BB_URL_OVERRIDES.get(suffix, "") or os.getenv(f"BLUEBUBBLES_URL_{suffix}", "").rstrip("/")
         pw = os.getenv(f"BLUEBUBBLES_PASSWORD_{suffix}", "")
         # Legacy single-server fallback for first server
         if not url and suffix == "0178":
-            url = os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
+            url = _BB_URL_OVERRIDES.get("0178", "") or os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
             pw = os.getenv("BLUEBUBBLES_PASSWORD", "")
         if url:
             BB_SERVERS[f"239955{suffix}"] = {
@@ -68,6 +75,14 @@ def init_bluebubbles():
                 "email": email,
                 "suffix": suffix,
             }
+
+
+def update_bb_url(suffix: str, new_url: str):
+    """Update a BlueBubbles server URL at runtime (no restart needed)."""
+    _BB_URL_OVERRIDES[suffix] = new_url.rstrip("/")
+    # Re-init to pick up the change
+    init_bluebubbles()
+    return BB_SERVERS
 
 
 def get_bb_server(from_number: str):

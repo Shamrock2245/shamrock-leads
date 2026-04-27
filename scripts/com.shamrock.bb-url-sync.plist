@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shamrock.bb-url-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/usr/local/bin/bb-url-sync.sh</string>
+    </array>
+
+    <!-- Run once at login, then every 6 hours as a heartbeat -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/bb-url-sync-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/bb-url-sync-stderr.log</string>
+</dict>
+</plist>
