@@ -99,24 +99,32 @@ function sortBy(field) {
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => { SL_STATE.search = document.getElementById('searchInput').value; SL_STATE.page = 1; applyFilters(); }, 350); }
 function debounceDefSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadDefendants, 350); }
 
-// ── SSE Real-time Events ──────────────────────────────────────────────────
-const eventSource = new EventSource('/api/events/stream');
-eventSource.addEventListener('new_arrest', (e) => {
-    const data = JSON.parse(e.data);
-    toast(`🚨 New arrest: ${data.full_name} (${data.county})`, 'info');
-    if (typeof applyFilters === 'function') applyFilters();
-});
-eventSource.addEventListener('hot_lead', (e) => {
-    const data = JSON.parse(e.data);
-    toast(`🔥 Hot lead: ${data.full_name} — Score ${data.lead_score}`, 'info');
-    playHotAlert();
-});
-eventSource.addEventListener('bond_written', (e) => {
-    const data = JSON.parse(e.data);
-    toast(`✅ Bond written: ${data.defendant_name}`, 'success');
-    if (typeof SLTracking !== 'undefined') SLTracking.onBondWritten(data);
-});
-eventSource.onerror = () => { setTimeout(() => location.reload(), 5000); };
+// ── SSE Real-time Events (graceful — no page reload on failure) ───────────
+let _sseRetries = 0;
+function initSSE() {
+  const es = new EventSource('/api/events/stream');
+  es.addEventListener('new_arrest', (e) => {
+      try { const data = JSON.parse(e.data); toast(`🚨 New arrest: ${data.full_name} (${data.county})`, 'info'); } catch(_){}
+  });
+  es.addEventListener('hot_lead', (e) => {
+      try { const data = JSON.parse(e.data); toast(`🔥 Hot lead: ${data.full_name} — Score ${data.lead_score}`, 'info'); playHotAlert(); } catch(_){}
+  });
+  es.addEventListener('bond_written', (e) => {
+      try { const data = JSON.parse(e.data); toast(`✅ Bond written: ${data.defendant_name}`, 'success'); if (typeof SLTracking !== 'undefined') SLTracking.onBondWritten(data); } catch(_){}
+  });
+  es.onerror = () => {
+    es.close();
+    _sseRetries++;
+    // Back off: 10s, 30s, 60s, then stop trying
+    if (_sseRetries <= 3) {
+      const delay = [10000, 30000, 60000][_sseRetries - 1];
+      setTimeout(initSSE, delay);
+    }
+    // Never reload the page — SSE is optional
+  };
+}
+// Only attempt SSE if not on localhost dev
+try { initSSE(); } catch(_) {}
 
 // ── SL namespace (used by index.html onclick attributes) ──────────────────
 const SL = {
