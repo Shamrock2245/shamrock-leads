@@ -1109,7 +1109,11 @@ def api_active_bonds_list():
 
 @app.route("/api/active-bonds", methods=["POST"])
 def api_active_bonds_create():
-    """Register a new active bond after Write Bond is clicked."""
+    """Register a new active bond with POA assignment.
+    
+    Accepts poa_numbers array — each entry: {poa_full, poa_number, poa_prefix, charge, case_number}
+    Auto-marks POAs as 'assigned' in poa_inventory collection.
+    """
     try:
         data = request.get_json()
         if not data:
@@ -1122,13 +1126,19 @@ def api_active_bonds_create():
         now = datetime.now(timezone.utc)
         check_in_hours = int(data.get("check_in_interval_hours", 24))
 
+        # POA numbers with per-charge/case linkage
+        poa_numbers = data.get("poa_numbers", [])
+        surety_id = (data.get("surety", "osi") or "osi").lower()
+
         doc = {
             "booking_number": booking_number,
             "defendant_name": data.get("defendant_name", ""),
             "county": data.get("county", ""),
             "bond_amount": float(data.get("bond_amount", 0) or 0),
             "premium": float(data.get("premium", 0) or 0),
-            "surety": data.get("surety", "osi").upper(),
+            "surety": surety_id.upper(),
+            "poa_numbers": poa_numbers,
+            "case_number": data.get("case_number", ""),
             "charges": data.get("charges", []),
             "charges_raw": data.get("charges_raw", ""),
             "bond_date": data.get("bond_date", now.isoformat()),
@@ -1156,12 +1166,30 @@ def api_active_bonds_create():
             upsert=True,
         )
 
+        # Auto-assign POA numbers in inventory (mark as used)
+        assigned_poas = []
+        for poa in poa_numbers:
+            pn = str(poa.get("poa_number", "")).strip()
+            if not pn:
+                continue
+            poa_result = poa_inventory.update_one(
+                {"poa_number": pn, "surety_id": surety_id, "status": "available"},
+                {"$set": {
+                    "status": "assigned",
+                    "bond_case_id": booking_number,
+                    "used_at": now.isoformat(),
+                }},
+            )
+            if poa_result.modified_count > 0:
+                assigned_poas.append(pn)
+
         return jsonify({
             "success": True,
             "message": f"Active bond registered for {doc['defendant_name']}",
             "booking_number": booking_number,
             "risk_score": doc["risk_score"],
             "upserted": result.upserted_id is not None,
+            "poas_assigned": assigned_poas,
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

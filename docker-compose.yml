@@ -29,7 +29,9 @@ services:
 
   # ── Intelligence Dashboard (Flask) ──
   dashboard:
-    build: .
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
     container_name: shamrock-dashboard
     restart: unless-stopped
     command: python dashboard/app.py
