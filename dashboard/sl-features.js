@@ -157,6 +157,15 @@ function openBondModal(nameOrLead, bond, county, booking) {
     </div>
     <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>
 
+    <div class="wb-section" id="signnowSection">
+      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px">📝 SignNow Packet <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Indemnitor)</button>
+        <button class="btn-export" id="btnPhase2" onclick="triggerSignNowPhase2()" style="background:rgba(34,197,94,0.15);color:var(--success)" disabled>📨 Send Phase 2 (Post-Approval)</button>
+      </div>
+      <div id="sn-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+    </div>
+
     <div class="wb-section" id="outreachSection">
       <div class="wb-section-label" style="display:flex;align-items:center;gap:8px">
         📱 Text Outreach <span id="bbStatusDot" class="outreach-status-dot offline"></span><span id="bbStatusText" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">Checking...</span>
@@ -665,6 +674,104 @@ async function registerActiveBond(data, bondResult) {
   }
 }
 
+// ── SignNow Phase Triggers ──
+async function triggerSignNowPhase1() {
+  const data = window._bondModalData;
+  if (!data) { toast('No bond data', 'error'); return; }
+  const snStatus = document.getElementById('sn-status');
+  const phaseBadge = document.getElementById('sn-phase-badge');
+  if (snStatus) snStatus.textContent = 'Sending Phase 1 packet...';
+  try {
+    let signerEmail = data.lead.indemnitor_email || '';
+    let signerName = data.lead.indemnitor_name || '';
+    if (!signerEmail) {
+      signerEmail = prompt('Enter indemnitor email for Phase 1 packet:') || '';
+      if (!signerEmail) { if (snStatus) snStatus.textContent = 'Cancelled.'; return; }
+      signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
+    }
+    const payload = {
+      signer_email: signerEmail,
+      signer_name: signerName,
+      form_data: {
+        defendant: data.lead,
+        booking_number: data.booking,
+        bond_amount: data.bond,
+        surety: data.surety,
+        charges: data.chargeList,
+      }
+    };
+    const r = await fetch(`${API}/api/bond-lifecycle/phase1/trigger`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await r.json();
+    if (result.status === 'success') {
+      if (snStatus) snStatus.textContent = `✅ Phase 1 sent to ${signerEmail} (${result.manifest_size} docs)`;
+      if (phaseBadge) { phaseBadge.textContent = 'Phase 1 Sent'; phaseBadge.style.background = 'rgba(59,130,246,0.2)'; phaseBadge.style.color = '#60a5fa'; }
+      document.getElementById('btnPhase2').disabled = false;
+      toast('Phase 1 packet sent', 'success');
+    } else {
+      if (snStatus) snStatus.textContent = `❌ ${result.error || 'Phase 1 failed'}`;
+      toast(result.error || 'Phase 1 failed', 'error');
+    }
+  } catch(e) {
+    if (snStatus) snStatus.textContent = `❌ Network error: ${e.message}`;
+    toast('Network error', 'error');
+  }
+}
+
+async function triggerSignNowPhase2() {
+  const data = window._bondModalData;
+  if (!data) { toast('No bond data', 'error'); return; }
+  const snStatus = document.getElementById('sn-status');
+  const phaseBadge = document.getElementById('sn-phase-badge');
+  const poaInput = document.getElementById('poaInput_0');
+  const poaNumber = poaInput ? poaInput.value.trim() : '';
+  if (!poaNumber) { toast('Enter POA number before sending Phase 2', 'error'); return; }
+  if (snStatus) snStatus.textContent = 'Sending Phase 2 packet...';
+  try {
+    let signerEmail = data.lead.indemnitor_email || '';
+    let signerName = data.lead.indemnitor_name || '';
+    if (!signerEmail) {
+      signerEmail = prompt('Enter indemnitor email for Phase 2 packet:') || '';
+      signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
+    }
+    const payload = {
+      signer_email: signerEmail,
+      signer_name: signerName,
+      poa_number: poaNumber,
+      agent_name: 'Brendan Doyle',
+      agent_license: 'W239955',
+      surety_id: data.surety || 'osi',
+      form_data: {
+        defendant: data.lead,
+        booking_number: data.booking,
+        bond_amount: data.bond,
+        surety: data.surety,
+        charges: data.chargeList,
+      }
+    };
+    const r = await fetch(`${API}/api/bond-lifecycle/phase2/trigger`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await r.json();
+    if (result.status === 'success') {
+      if (snStatus) snStatus.textContent = `✅ Phase 2 sent — POA ${poaNumber} (${result.manifest_size} docs)`;
+      if (phaseBadge) { phaseBadge.textContent = 'Phase 2 Sent'; phaseBadge.style.background = 'rgba(34,197,94,0.2)'; phaseBadge.style.color = 'var(--success)'; }
+      toast('Phase 2 packet sent', 'success');
+    } else {
+      if (snStatus) snStatus.textContent = `❌ ${result.error || 'Phase 2 failed'}`;
+      toast(result.error || 'Phase 2 failed', 'error');
+    }
+  } catch(e) {
+    if (snStatus) snStatus.textContent = `❌ Network error: ${e.message}`;
+    toast('Network error', 'error');
+  }
+}
+
 // ── Export ──
 function exportCSV() {
   const p = new URLSearchParams({sort:SL_STATE.sort,order:SL_STATE.order});
@@ -740,7 +847,8 @@ window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
-  sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody };
+  sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody,
+  triggerSignNowPhase1, triggerSignNowPhase2 };
 
 // ── Init ──
 loadDashboard();

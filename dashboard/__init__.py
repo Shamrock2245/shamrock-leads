@@ -1,5 +1,4 @@
 """ShamrockLeads Dashboard — Quart Application Factory"""
-
 from quart import Quart, send_from_directory
 import motor.motor_asyncio
 import os
@@ -26,6 +25,7 @@ def create_app():
     from dashboard.api.tracking import tracking_bp
     from dashboard.api.court_reminders import court_reminders_bp
     from dashboard.api.contacts import contacts_bp
+    from dashboard.api.bond_lifecycle import bond_lifecycle_bp
 
     app.register_blueprint(stats_bp, url_prefix="/api")
     app.register_blueprint(bonds_bp, url_prefix="/api")
@@ -39,6 +39,7 @@ def create_app():
     app.register_blueprint(tracking_bp, url_prefix="/api")
     app.register_blueprint(court_reminders_bp, url_prefix="/api")
     app.register_blueprint(contacts_bp, url_prefix="/api")
+    app.register_blueprint(bond_lifecycle_bp, url_prefix="/api/bond-lifecycle")
 
     # --- PIN Auth (optional, guarded by DASHBOARD_PIN env var) ---
     pin = os.getenv("DASHBOARD_PIN")
