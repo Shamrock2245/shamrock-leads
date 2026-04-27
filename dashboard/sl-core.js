@@ -99,6 +99,43 @@ function sortBy(field) {
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => { SL_STATE.search = document.getElementById('searchInput').value; SL_STATE.page = 1; applyFilters(); }, 350); }
 function debounceDefSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadDefendants, 350); }
 
+// ── SSE Real-time Events ──────────────────────────────────────────────────
+const eventSource = new EventSource('/api/events/stream');
+eventSource.addEventListener('new_arrest', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`🚨 New arrest: ${data.full_name} (${data.county})`, 'info');
+    if (typeof applyFilters === 'function') applyFilters();
+});
+eventSource.addEventListener('hot_lead', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`🔥 Hot lead: ${data.full_name} — Score ${data.lead_score}`, 'info');
+    playHotAlert();
+});
+eventSource.addEventListener('bond_written', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`✅ Bond written: ${data.defendant_name}`, 'success');
+    if (typeof SLTracking !== 'undefined') SLTracking.onBondWritten(data);
+});
+eventSource.onerror = () => { setTimeout(() => location.reload(), 5000); };
+
+// ── SL namespace (used by index.html onclick attributes) ──────────────────
+const SL = {
+  switchTab: (btn) => switchTab(btn),
+  toggleTheme: () => toggleTheme(),
+  refresh: () => { if (typeof applyFilters === 'function') applyFilters(); },
+  applyPreset: (name) => applyPreset(name),
+  applyFilters: () => applyFilters(),
+  setDays: (d) => setDays(d),
+  setBond: (v) => setBond(v),
+  sortBy: (f) => sortBy(f),
+  debounceSearch: () => debounceSearch(),
+  toggleCountyDropdown: () => toggleCountyDropdown(),
+  filterCountyOptions: (v) => filterCountyOptions(v),
+  closeModal: () => { const m = document.getElementById('bondModal'); if (m) m.style.display = 'none'; },
+  submitBond: () => { if (typeof submitBond === 'function') submitBond(); },
+  toast: (msg, type) => toast(msg, type),
+};
+
 // Utilities
 function fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : n.toString(); }
 function timeAgo(iso) { if(!iso) return '—'; const d=(Date.now()-new Date(iso).getTime())/1000; if(d<60) return Math.round(d)+'s ago'; if(d<3600) return Math.round(d/60)+'m ago'; if(d<86400) return Math.round(d/3600)+'h ago'; return Math.round(d/86400)+'d ago'; }

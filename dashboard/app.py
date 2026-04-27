@@ -43,9 +43,36 @@ poa_inventory = db["poa_inventory"]
 imessage_outreach = db["imessage_outreach"]
 print(f"✅ Connected to MongoDB: {MONGO_DB}")
 
-# ── BlueBubbles iMessage Config ──
-BB_URL = os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
-BB_PASSWORD = os.getenv("BLUEBUBBLES_PASSWORD", "")
+# ── BlueBubbles iMessage Config (Multi-Server) ──
+# Each office Mac runs its own BlueBubbles instance tied to a phone number.
+# Env vars: BLUEBUBBLES_URL_0178, BLUEBUBBLES_PASSWORD_0178, etc.
+BB_SERVERS = {}
+for _phone_suffix, _label, _email in [
+    ("0178", "(239) 955-0178", "shamrockbailoffice@gmail.com"),
+    ("0314", "(239) 955-0314", "admin@shamrockbailbonds.biz"),
+]:
+    _url = os.getenv(f"BLUEBUBBLES_URL_{_phone_suffix}", "").rstrip("/")
+    _pw = os.getenv(f"BLUEBUBBLES_PASSWORD_{_phone_suffix}", "")
+    # Also check legacy single-server env vars as fallback for first server
+    if not _url and _phone_suffix == "0178":
+        _url = os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
+        _pw = os.getenv("BLUEBUBBLES_PASSWORD", "")
+    if _url:
+        BB_SERVERS[f"239955{_phone_suffix}"] = {
+            "url": _url, "password": _pw,
+            "label": _label, "email": _email, "suffix": _phone_suffix,
+        }
+
+def _get_bb_server(from_number):
+    """Look up the BlueBubbles server config for a given from_number."""
+    # Try exact match first, then try matching by last 4 digits
+    if from_number in BB_SERVERS:
+        return BB_SERVERS[from_number]
+    for key, srv in BB_SERVERS.items():
+        if key.endswith(from_number[-4:]):
+            return srv
+    # Return first available server as fallback
+    return next(iter(BB_SERVERS.values()), None)
 
 # ── POA Inventory — Seed from receipt data if collection is empty ──────────────
 # Based on actual inventory receipts dated 04/20/2026.
@@ -1637,31 +1664,46 @@ def _format_phone(raw):
 
 @app.route("/api/imessage/status")
 def imessage_status():
-    """Check if the BlueBubbles server is reachable."""
-    if not BB_URL:
-        return jsonify({"connected": False, "reason": "BLUEBUBBLES_URL not configured in .env"})
-    try:
-        r = http_requests.get(
-            f"{BB_URL}/api/v1/server/info",
-            params={"password": BB_PASSWORD},
-            timeout=5,
-        )
-        data = r.json()
-        return jsonify({
-            "connected": r.status_code == 200,
-            "os_version": data.get("data", {}).get("os_version", ""),
-            "server_version": data.get("data", {}).get("server_version", ""),
-            "private_api": data.get("data", {}).get("private_api", False),
-        })
-    except Exception as e:
-        return jsonify({"connected": False, "reason": str(e)})
+    """Check status of all configured BlueBubbles servers."""
+    if not BB_SERVERS:
+        return jsonify({"connected": False, "servers": [], "reason": "No BlueBubbles servers configured in .env"})
+
+    servers = []
+    any_connected = False
+    any_private_api = False
+    for phone_key, srv in BB_SERVERS.items():
+        entry = {"phone": phone_key, "label": srv["label"], "email": srv["email"], "connected": False}
+        try:
+            r = http_requests.get(
+                f"{srv['url']}/api/v1/server/info",
+                params={"password": srv["password"]},
+                timeout=5,
+            )
+            data = r.json()
+            if r.status_code == 200:
+                entry["connected"] = True
+                entry["private_api"] = data.get("data", {}).get("private_api", False)
+                entry["os_version"] = data.get("data", {}).get("os_version", "")
+                any_connected = True
+                if entry.get("private_api"):
+                    any_private_api = True
+        except Exception:
+            entry["error"] = "unreachable"
+        servers.append(entry)
+
+    return jsonify({
+        "connected": any_connected,
+        "private_api": any_private_api,
+        "server_count": len(BB_SERVERS),
+        "servers": servers,
+    })
 
 
 @app.route("/api/imessage/send", methods=["POST"])
 def imessage_send():
-    """Send an iMessage via BlueBubbles server. Stores record in MongoDB."""
-    if not BB_URL or not BB_PASSWORD:
-        return jsonify({"error": "BlueBubbles not configured. Set BLUEBUBBLES_URL and BLUEBUBBLES_PASSWORD in .env"}), 503
+    """Send an iMessage via BlueBubbles server. Routes to correct server based on from_number."""
+    if not BB_SERVERS:
+        return jsonify({"error": "No BlueBubbles servers configured. Set BLUEBUBBLES_URL_0178 and BLUEBUBBLES_PASSWORD_0178 in .env"}), 503
 
     body = request.get_json(force=True)
     phone_raw = body.get("phone", "")
@@ -1680,14 +1722,18 @@ def imessage_send():
     if not phone:
         return jsonify({"error": f"Invalid phone number: {phone_raw}"}), 400
 
-    # Build BlueBubbles payload
+    # Route to the correct BlueBubbles server based on from_number
+    srv = _get_bb_server(from_number)
+    if not srv:
+        return jsonify({"error": f"No BlueBubbles server configured for {from_number}"}), 503
+
     chat_guid = f"iMessage;-;{phone}"
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
 
     try:
         r = http_requests.post(
-            f"{BB_URL}/api/v1/message/text",
-            params={"password": BB_PASSWORD},
+            f"{srv['url']}/api/v1/message/text",
+            params={"password": srv["password"]},
             json={
                 "chatGuid": chat_guid,
                 "tempGuid": temp_guid,
@@ -1715,6 +1761,7 @@ def imessage_send():
             "sent_by": "dashboard",
             "agent_name": agent_name,
             "from_number": from_number,
+            "from_email": srv.get("email", ""),
         }
         imessage_outreach.insert_one(doc)
         doc.pop("_id", None)

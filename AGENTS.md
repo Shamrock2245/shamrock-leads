@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** April 23, 2026
+> **Last Updated:** April 27, 2026
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
 
@@ -96,7 +96,8 @@ Move records safely through this lifecycle:
 │  │   ├── MongoDB        │            │                   │
 │  │   ├── Google Sheets  │            ▼                   │
 │  │   └── Slack          │  ┌──────────────────────────┐ │
-│  └──────────────────────┘  │  Dashboard (Flask :5050)  │ │
+│  └──────────────────────┘  │  Dashboard (Flask :5050   │ │
+│                            │   → external :8088)       │ │
 │                            └──────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
                        │
@@ -273,13 +274,16 @@ Escalate immediately if:
 ## 14. Deployment
 
 ```bash
-# Build and deploy to Hetzner
-docker-compose build
-docker-compose up -d
+# Build and deploy to Hetzner (Docker Compose v2 — use space, NOT hyphen)
+docker compose build --no-cache
+docker compose up -d
 
 # Check health
-docker-compose ps
+docker compose ps
 docker logs shamrock-leads --tail 50
+
+# Dashboard URL: http://178.156.179.237:8088/
+# (Flask listens internally on 5050, Docker maps external 8088 → internal 5050)
 
 # Run one-shot for a specific county
 docker exec shamrock-leads python main.py lee

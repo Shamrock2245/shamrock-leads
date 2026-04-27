@@ -65,6 +65,7 @@ shamrock-leads/
 | Alerts | Slack (webhook blocks) |
 | Scoring | Rule-based (0-100), OpenAI enrichment (future) |
 | Hosting | Hetzner VPS (Docker) |
+| Dashboard | Flask (internal 5050, external 8088 on VPS) |
 | Ops Dashboard | Node-RED (port 1880) |
 | API | Netlify Edge Functions |
 | Frontend | React/Vite SPA on Netlify |

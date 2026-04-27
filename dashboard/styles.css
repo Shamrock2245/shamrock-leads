@@ -462,3 +462,13 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
   .insurer-selector{flex-direction:column}
   .def-grid{grid-template-columns:1fr}
 }
+
+/* ── Risk Badges (Tracking Tab) ── */
+.risk-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;letter-spacing:.3px}
+.risk-high{background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)}
+.risk-med{background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3)}
+.risk-low{background:rgba(16,185,129,.15);color:#10b981;border:1px solid rgba(16,185,129,.3)}
+/* ── Leaflet map dark theme override ── */
+[data-theme="dark"] .leaflet-container{background:#0a1628}
+[data-theme="dark"] .leaflet-popup-content-wrapper{background:var(--card);color:var(--text);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.4)}
+[data-theme="dark"] .leaflet-popup-tip{background:var(--card)}

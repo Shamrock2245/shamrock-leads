@@ -165,9 +165,9 @@ function openBondModal(nameOrLead, bond, county, booking) {
           </div>
           <div>
             <label class="outreach-label">Send From</label>
-            <select id="outreachFromNumber" class="outreach-select">
-              <option value="2399550178">(239) 955-0178</option>
-              <option value="2399550314">(239) 955-0314</option>
+            <select id="outreachFromNumber" class="outreach-select" onchange="checkBBStatus()">
+              <option value="2399550178">📱 (239) 955-0178 · shamrockbailoffice</option>
+              <option value="2399550314">📱 (239) 955-0314 · admin</option>
             </select>
           </div>
         </div>
@@ -385,9 +385,23 @@ async function checkBBStatus() {
     const r = await fetch(`${API}/api/imessage/status`);
     const d = await r.json();
     if (d.connected) {
+      // Check how many servers are connected
+      const onlineCount = (d.servers || []).filter(s => s.connected).length;
+      const totalCount = d.server_count || 0;
       dot.className = 'outreach-status-dot online';
-      txt.textContent = `Connected${d.private_api ? ' · Private API' : ''}`;
+      let label = `${onlineCount}/${totalCount} servers`;
+      if (d.private_api) label += ' · Private API';
+      txt.textContent = label;
       txt.style.color = 'var(--accent)';
+
+      // Highlight the selected server's status
+      const selectedNum = document.getElementById('outreachFromNumber')?.value || '';
+      const selSrv = (d.servers || []).find(s => s.phone === selectedNum);
+      if (selSrv && !selSrv.connected) {
+        dot.className = 'outreach-status-dot offline';
+        txt.textContent = `Selected line offline (${onlineCount}/${totalCount} up)`;
+        txt.style.color = 'var(--muted)';
+      }
     } else {
       dot.className = 'outreach-status-dot offline';
       txt.textContent = d.reason || 'Not connected';
@@ -496,7 +510,7 @@ async function loadOutreachHistory(bookingNumber) {
             <span style="font-size:10px;color:${color};font-weight:600">${icon} ${m.status}</span>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);line-height:1.4">${m.message.slice(0,120)}${m.message.length > 120 ? '…' : ''}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:3px">${t}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">${t} · via ${m.agent_name || 'Unknown'}${m.from_number ? ' · ' + m.from_number.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3') : ''}</div>
         </div>`;
       }).join('');
     } else {
