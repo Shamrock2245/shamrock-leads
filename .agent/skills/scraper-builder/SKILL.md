@@ -74,6 +74,28 @@ Choose the closest template based on JMS vendor:
 | New World | `scrapers/counties/manatee.py` |
 | Custom | `scrapers/base_scraper.py` (start fresh) |
 
+### Step 2.2b — Stealth Package Selection (When DrissionPage Fails)
+
+If a county blocks DrissionPage, try these alternatives **in order of preference**:
+
+| Package | Use Case | Install |
+|---------|----------|---------|
+| **curl_cffi** | TLS/JA3 fingerprint impersonation, fastest | `pip install curl_cffi` |
+| **Stealth-Requests** | High-level curl_cffi wrapper, simplest API | `pip install stealth-requests` |
+| **nodriver** | Full stealth headless browser (replaces undetected-chromedriver) | `pip install nodriver` |
+| **patchright-python** | Undetected Playwright patch, most feature-rich | `pip install patchright` |
+
+### Step 2.2c — Mandatory ArrestRecord Fields
+
+**Every new scraper MUST populate these fields:**
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `Detail_URL` | Scraper's `BASE_URL` | Link to county inmate search. Use individual detail page URL if available. |
+| `DOB` | `""` | Extract from API/HTML if available. Safe to leave empty. |
+| `Release_Date` | `""` | Extract from API/HTML. If populated, set `Status="Released"`. |
+| `Status` | Dynamic | `"Released"` if `Release_Date` is set, otherwise `"In Custody"`. **Never hardcode.** |
+
 ### Step 2.3 — Implement Required Methods
 
 ```python
