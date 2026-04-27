@@ -15,10 +15,11 @@ openai>=1.12.0
 # Slack notifications
 slack-sdk>=3.27.0
 
-# Scraper dependencies — Collier (curl_cffi), Charlotte & Hendry (DrissionPage)
+# Scraper dependencies — Collier (curl_cffi), Charlotte (patchright+xvfb), Hendry (DrissionPage)
 curl-cffi>=0.7.0
 beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
+patchright>=1.50.0  # Charlotte County — Cloudflare Turnstile bypass (also run: patchright install chromium)
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.15.0
