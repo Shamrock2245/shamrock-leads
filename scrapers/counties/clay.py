@@ -116,10 +116,14 @@ class ClayCountyScraper(BaseScraper):
                     Booking_Number=booking_num,
                     Full_Name=full_name,
                     First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                     Booking_Date=booking_date,
                     Court_Date=court_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
+                    Detail_URL=ROSTER_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
 
@@ -143,8 +147,12 @@ class ClayCountyScraper(BaseScraper):
                         Booking_Number="",
                         Full_Name=full_name,
                         First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                         Status="In Custody",
+                        Release_Date="",
                         Facility=FACILITY,
+                        Detail_URL=ROSTER_URL,
+
                         LastCheckedMode="INITIAL",
                     ))
 

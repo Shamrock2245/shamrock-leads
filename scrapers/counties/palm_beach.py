@@ -107,6 +107,7 @@ def _parse_list_row(row) -> dict:
     full_name = get_val("Name:")
     race = get_val("Race:")
     sex = get_val("Gender:")
+    dob_str = get_val("DOB:") or get_val("Date of Birth:")
     facility = get_val("Facility:") or FACILITY
     agency = get_val("Arresting Agency:") or "PBSO"
     jacket_num = get_val("Jacket Number:")
@@ -151,8 +152,10 @@ def _parse_list_row(row) -> dict:
             booking_date = booking_dt_str.strip()
 
     status = "In Custody"
+    release_date = ""
     if release_date_str and "N/A" not in release_date_str and release_date_str.strip():
         status = "Released"
+        release_date = release_date_str.strip()
 
     # Charges and bond
     charges = []
@@ -187,11 +190,13 @@ def _parse_list_row(row) -> dict:
         "jacket_num": jacket_num,
         "race": race,
         "sex": sex,
+        "dob": dob_str,
         "facility": facility,
         "agency": agency,
         "booking_date": booking_date,
         "booking_time": booking_time,
         "status": status,
+        "release_date": release_date,
         "charges": " | ".join(charges),
         "bond_amount": f"{total_bond:.2f}" if total_bond > 0 else "0",
         "mug_url": mug_url,
@@ -296,6 +301,7 @@ class PalmBeachCountyScraper(BaseScraper):
                         Last_Name=row["last_name"],
                         Booking_Number=row["booking_num"],
                         Person_ID=row["jacket_num"],
+                        DOB=row.get("dob", ""),
                         Race=row["race"],
                         Sex=row["sex"],
                         Booking_Date=row["booking_date"],
@@ -303,9 +309,11 @@ class PalmBeachCountyScraper(BaseScraper):
                         Arrest_Date=row["booking_date"],
                         Arrest_Time=row["booking_time"],
                         Status=row["status"],
+                        Release_Date=row.get("release_date", ""),
                         Charges=row["charges"],
                         Bond_Amount=row["bond_amount"],
                         Mugshot_URL=row["mug_url"],
+                        Detail_URL=BLOTTER_URL,
                         Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
                         LastChecked=datetime.now(timezone.utc).isoformat(),
                         LastCheckedMode="scrape",

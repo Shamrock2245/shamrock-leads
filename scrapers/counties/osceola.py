@@ -98,6 +98,7 @@ class OsceolaCountyScraper(BaseScraper):
                 Full_Name=basic["name"], First_Name=f, Middle_Name=m, Last_Name=l,
                 DOB=detail.get("dob") or basic["dob"], Arrest_Date=basic["arrest_date"],
                 Booking_Date=basic["arrest_date"], Agency=basic["agency"], Status="In Custody",
+                        Release_Date="",
                 Facility="Osceola County Jail", Race=detail.get("race",""), Sex=detail.get("sex",""),
                 Height=detail.get("height",""), Weight=detail.get("weight",""),
                 Charges=basic["charges_summary"], Bond_Amount=detail.get("bond_amount","0"),

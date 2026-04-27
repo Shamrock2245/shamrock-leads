@@ -162,7 +162,11 @@ class EscambiaCountyScraper(BaseScraper):
             bond_raw = _get("bondAmount", "bond_amount", "bond", "totalBond")
             race = _get("race")
             sex = _get("sex", "gender")
+            dob = _get("dob", "dateOfBirth", "date_of_birth", "DOB")
+            release_date = _get("releaseDate", "release_date", "releasedDate")
             status = _get("status", "inmateStatus") or "In Custody"
+            if release_date and release_date.strip():
+                status = "Released"
 
             if not full_name and last_name:
                 full_name = f"{last_name}, {first_name}"
@@ -187,8 +191,11 @@ class EscambiaCountyScraper(BaseScraper):
                 First_Name=f or first_name,
                 Middle_Name=m or middle_name,
                 Last_Name=l or last_name,
+                DOB=dob,
                 Booking_Date=booking_date,
                 Status=status,
+                Release_Date=release_date,
+                Detail_URL=BASE_URL,
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,

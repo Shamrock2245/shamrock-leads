@@ -262,6 +262,7 @@ class ManateeCountyScraper(BaseScraper):
             DOB=self._clean(js_data.get("Date of Birth", "")),
             Booking_Date=booking_date,
             Status="In Custody",
+                        Release_Date="",
             Facility="Manatee County Jail",
             Race=self._clean(js_data.get("Race", "")),
             Sex=self._clean(js_data.get("Gender", js_data.get("Sex", ""))),

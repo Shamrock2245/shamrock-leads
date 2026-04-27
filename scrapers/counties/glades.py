@@ -108,11 +108,15 @@ class GladesCountyScraper(BaseScraper):
                         Booking_Number=booking_num,
                         Full_Name=full_name,
                         First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                         Booking_Date=booking_date,
                         Status="In Custody",
+                        Release_Date="",
                         Facility=FACILITY,
                         Charges=charges,
                         Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                        Detail_URL=SEARCH_URL,
+
                         LastCheckedMode="INITIAL",
                     ))
                 if records:
@@ -143,10 +147,14 @@ class GladesCountyScraper(BaseScraper):
                     Booking_Number=booking_num,
                     Full_Name=full_name,
                     First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                     Booking_Date=booking_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
                     Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                    Detail_URL=SEARCH_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
 

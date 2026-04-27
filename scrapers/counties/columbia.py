@@ -141,6 +141,8 @@ class ColumbiaCountyScraper(BaseScraper):
                     Address=str(address) if address else "",
                     Charges=charges_str,
                     Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                    Detail_URL=BASE_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             except Exception as e:
@@ -176,7 +178,10 @@ class ColumbiaCountyScraper(BaseScraper):
                     First_Name=f, Middle_Name=m, Last_Name=l,
                     Booking_Date=booking_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
+                    Detail_URL=BASE_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             if records:

@@ -424,6 +424,7 @@ if __name__ == "__main__":
             DOB=self._clean(js_data.get("Date of Birth", "")),
             Booking_Date=booking_date,
             Status=status,
+                        Release_Date="",
             Facility="Charlotte County Jail",
             Race=self._clean(js_data.get("Race", "")),
             Sex=self._clean(js_data.get("Sex", js_data.get("Gender", ""))),

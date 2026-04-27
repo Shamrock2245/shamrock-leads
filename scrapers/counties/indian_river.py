@@ -140,6 +140,7 @@ class IndianRiverCountyScraper(BaseScraper):
                     Last_Name=l,
                     DOB=dob,
                     Status=status,
+                        Release_Date="",
                     Facility=FACILITY,
                     Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
                     Detail_URL=detail_url,
@@ -181,6 +182,7 @@ class IndianRiverCountyScraper(BaseScraper):
                     Full_Name=full_name,
                     First_Name=f, Middle_Name=m, Last_Name=l,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
                     LastCheckedMode="INITIAL",
                 ))

@@ -182,6 +182,7 @@ class OkaloosaCountyScraper(BaseScraper):
                 Height=height,
                 Weight=weight,
                 Status="In Custody",
+                        Release_Date="",
                 Facility=FACILITY,
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",

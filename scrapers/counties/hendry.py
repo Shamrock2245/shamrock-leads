@@ -158,6 +158,7 @@ class HendryCountyScraper(BaseScraper):
             DOB="",
             Booking_Date=booking_date,
             Status=demos.get("custody_status", "In Custody"),
+            Release_Date=demos.get("release_date", ""),
             Facility=FACILITY,
             Race=demos.get("race", ""),
             Sex=demos.get("gender", ""),

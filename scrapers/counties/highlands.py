@@ -177,14 +177,18 @@ class HighlandsCountyScraper(BaseScraper):
                 First_Name=f or first_name,
                 Middle_Name=m or middle_name,
                 Last_Name=l or last_name,
+                        DOB="",
                 Booking_Date=booking_date,
                 Status="In Custody",
+                        Release_Date="",
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
                 Charges=charges,
                 Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
                 Mugshot_URL=mugshot_url,
+                Detail_URL=SEARCH_URL,
+
                 LastCheckedMode="INITIAL",
             ))
 
@@ -226,11 +230,15 @@ class HighlandsCountyScraper(BaseScraper):
                     First_Name=f,
                     Middle_Name=m,
                     Last_Name=l,
+                        DOB="",
                     Booking_Date=booking_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
                     Charges=charges,
                     Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                    Detail_URL=SEARCH_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             break

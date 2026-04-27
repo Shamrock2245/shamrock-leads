@@ -370,6 +370,7 @@ class SarasotaCountyScraper(BaseScraper):
             DOB=extracted.get('DOB', ''),
             Booking_Date=booking_date,
             Status="In Custody",
+                        Release_Date="",
             Facility=extracted.get('Facility', 'Sarasota County Jail'),
             Agency=extracted.get('Agency', ''),
             Race=extracted.get('Race', ''),

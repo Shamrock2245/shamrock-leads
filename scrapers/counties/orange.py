@@ -127,6 +127,10 @@ class OrangeCountyScraper(BaseScraper):
             bd = self._parse_date(detail)
             bds = bd.strftime("%m/%d/%Y") if bd else ""
             bts = bd.strftime("%I:%M %p") if bd else ""
+            release_date = ""
+            for rk in ["RELEASED_DATE", "RELEASE_DATE", "ReleaseDate", "releaseDate"]:
+                if rk in detail and detail[rk]:
+                    release_date = str(detail[rk]).strip(); break
             return ArrestRecord(
                 County="Orange", Booking_Number=bn, First_Name=first, Last_Name=last,
                 Full_Name=f"{first} {last}".strip(), Booking_Date=bds, Booking_Time=bts,
@@ -139,7 +143,9 @@ class OrangeCountyScraper(BaseScraper):
                 State=state, ZIP=zc,
                 Agency=aa.title() if aa else "Orange County Sheriff Office",
                 Facility="Orange County Jail",
-                Status="In Custody",
+                Status="Released" if release_date else "In Custody",
+                Release_Date=release_date,
+                Detail_URL=BASE_URL
             )
         except Exception as e:
             logger.warning(f"Orange build error {bn}: {e}"); return None

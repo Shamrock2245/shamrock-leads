@@ -135,13 +135,17 @@ class SuwanneeCountyScraper(BaseScraper):
                 Booking_Number=booking_num,
                 Full_Name=full_name,
                 First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                 Booking_Date=booking_date,
                 Status=status,
+                        Release_Date="",
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
                 Charges=charges_str,
                 Bond_Amount=str(self._parse_bond(bond_raw)) if bond_raw else "0",
+                Detail_URL=SEARCH_URL,
+
                 LastCheckedMode="INITIAL",
             ))
 
@@ -172,9 +176,13 @@ class SuwanneeCountyScraper(BaseScraper):
                             Booking_Number=booking_num,
                             Full_Name=full_name,
                             First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                             Booking_Date=texts[2] if len(texts) > 2 else "",
                             Status="In Custody",
+                        Release_Date="",
                             Facility=FACILITY,
+                            Detail_URL=SEARCH_URL,
+
                             LastCheckedMode="INITIAL",
                         ))
                     if records:

@@ -112,6 +112,8 @@ class OkeechobeeCountyScraper(BaseScraper):
                     Sex=str(sex) if sex else "",
                     Charges=str(charges_raw) if charges_raw else "",
                     Bond_Amount=str(self._parse_bond(str(bond_raw))),
+                    Detail_URL=ROSTER_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             except Exception as e:
@@ -182,9 +184,12 @@ class OkeechobeeCountyScraper(BaseScraper):
                     First_Name=f, Middle_Name=m, Last_Name=l,
                     Booking_Date=booking_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
                     Charges=charges,
                     Bond_Amount=str(self._parse_bond(bond_raw)),
+                    Detail_URL=ROSTER_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             if records:

@@ -358,6 +358,7 @@ class DeSotoCountyScraper(BaseScraper):
             DOB=dob,
             Booking_Date=booking_date,
             Status=status,
+                        Release_Date="",
             Facility=facility or "DeSoto County Jail",
             Race=race,
             Sex=sex,

@@ -1,8 +1,9 @@
 """
-Duval County (Jacksonville) Arrest Scraper — API Interception.
-Source: Jacksonville Sheriff's Office
+Duval County (Jacksonville) Arrest Scraper — Duval County Inmate Search.
+Source: Duval County Jail (JSO)
 URL: https://inmatesearch.jaxsheriff.org/
-Method: DrissionPage browser — intercept Angular SPA internal API traffic
+Method: requests GET — API interception pattern
+Detail URL: https://inmatesearch.jaxsheriff.org/ (search page)
 """
 import logging, json, re, time
 from datetime import datetime, timezone
@@ -116,10 +117,16 @@ class DuvalCountyScraper(BaseScraper):
                 if key in entry: booking_date = str(entry[key]).strip(); break
             race = entry.get("race", entry.get("Race", ""))
             sex = entry.get("sex", entry.get("gender", entry.get("Sex", "")))
+            release_date = ""
+            for key in ["releaseDate","release_date","releasedDate","dateReleased"]:
+                if key in entry and entry[key]:
+                    release_date = str(entry[key]).strip(); break
+            status = "Released" if release_date else "In Custody"
             records.append(ArrestRecord(County=self.county, Booking_Number=booking_number,
                 Full_Name=full_name, First_Name=first_name, Middle_Name=middle_name, Last_Name=last_name,
                 Booking_Date=booking_date, DOB=dob, Race=race, Sex=sex, Charges=charges,
-                Bond_Amount=bond_amount, Status="In Custody", Facility="Duval County Pre-Trial Detention Facility",
+                Bond_Amount=bond_amount, Status=status, Release_Date=release_date,
+                Detail_URL=BASE_URL, Facility="Duval County Pre-Trial Detention Facility",
                 LastCheckedMode="INITIAL"))
         return records
 

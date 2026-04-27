@@ -239,11 +239,14 @@ class CitrusCountyScraper(BaseScraper):
                         DOB=dob,
                         Booking_Date=booking_date,
                         Status="In Custody",
+                        Release_Date="",
                         Facility=FACILITY,
                         Race=race,
                         Sex=sex,
                         Charges=charges,
                         Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                        Detail_URL=BASE_URL,
+
                         LastCheckedMode="INITIAL",
                     ))
 

@@ -143,6 +143,7 @@ class MarionCountyScraper(BaseScraper):
                 DOB=self._clean(dob),
                 Booking_Date=self._clean(booking_date),
                 Status=status,
+                        Release_Date="",
                 Facility=FACILITY,
                 Race=self._clean(race),
                 Sex=self._clean(sex)[:1].upper() if sex else "",

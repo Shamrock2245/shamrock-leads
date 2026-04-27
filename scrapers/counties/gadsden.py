@@ -130,9 +130,13 @@ class GadsdenCountyScraper(BaseScraper):
                     Booking_Number=booking_num,
                     Full_Name=full_name,
                     First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                     Booking_Date=booking_date,
                     Status="In Custody",
+                        Release_Date="",
                     Facility=FACILITY,
+                    Detail_URL=ROSTER_URL,
+
                     LastCheckedMode="INITIAL",
                 ))
             if records:

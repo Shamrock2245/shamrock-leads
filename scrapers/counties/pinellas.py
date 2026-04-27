@@ -156,7 +156,9 @@ class PinellasCountyScraper(BaseScraper):
         except: pass
         return ArrestRecord(County=self.county, Booking_Number=self._clean(booking_num),
             Full_Name=name, First_Name=f, Middle_Name=m, Last_Name=l,
-            Booking_Date=booking_date, Status="In Custody", Facility="Pinellas County Jail",
+                        DOB="",
+            Booking_Date=booking_date, Status="In Custody",
+                        Release_Date="", Facility="Pinellas County Jail",
             Race=self._clean(race), Sex=self._clean(sex), Charges=self._clean(charges),
             Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
             Detail_URL=detail_url, LastCheckedMode="INITIAL")

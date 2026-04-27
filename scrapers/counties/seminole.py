@@ -113,6 +113,10 @@ def _fetch_detail(driver, person_id: str) -> dict:
                     detail["bond_amount"] = val
                 elif "status" in label:
                     detail["status"] = val
+                elif "dob" in label or "date of birth" in label or "birth" in label:
+                    detail["dob"] = val
+                elif "release" in label and "date" in label:
+                    detail["release_date"] = val
         charges = []
         for row in soup.find_all("tr"):
             cells = row.find_all("td")
@@ -174,6 +178,11 @@ class SeminoleCountyScraper(BaseScraper):
                 person_id = row["person_id"]
                 detail = _fetch_detail(driver, person_id) if person_id else {}
 
+                status = detail.get("status", "In Custody")
+                release_date = detail.get("release_date", "")
+                if release_date and release_date.strip():
+                    status = "Released"
+
                 records.append(ArrestRecord(
                     County=COUNTY,
                     State="FL",
@@ -183,17 +192,20 @@ class SeminoleCountyScraper(BaseScraper):
                     Middle_Name=row["middle_name"],
                     Last_Name=row["last_name"],
                     Person_ID=person_id,
+                    DOB=detail.get("dob", ""),
                     Booking_Number=detail.get("booking_number", person_id),
                     Booking_Date=detail.get("booking_date", ""),
                     Arrest_Date=detail.get("booking_date", ""),
                     Agency=detail.get("agency", "Seminole County SO"),
-                    Status=detail.get("status", "In Custody"),
+                    Status=status,
+                    Release_Date=release_date,
                     Charges=detail.get("charges", ""),
                     Bond_Amount=detail.get("bond_amount", "0"),
                     Race=row["race"],
                     Sex=row["sex"],
                     Height=row["height"],
                     Weight=row["weight"],
+                    Detail_URL=PORTAL_URL,
                     Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
                     LastChecked=datetime.now(timezone.utc).isoformat(),
                     LastCheckedMode="scrape",

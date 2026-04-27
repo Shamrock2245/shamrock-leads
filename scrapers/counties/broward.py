@@ -95,6 +95,7 @@ class BrowardCountyScraper(BaseScraper):
         return ArrestRecord(County=self.county, Booking_Number=str(jms_id), Full_Name=name,
             First_Name=first_name, Middle_Name=middle_name, Last_Name=last_name,
             Booking_Date=booking_date, DOB=dob, Race=race, Sex=sex, Status="In Custody",
+                        Release_Date="",
             Facility="Broward County Main Jail", Charges=" | ".join(charges) if charges else "",
             Bond_Amount=str(total_bond) if total_bond > 0 else "0",
             Agency=agency, Detail_URL=f"{DETAIL_URL}/{jms_id}", LastCheckedMode="INITIAL")

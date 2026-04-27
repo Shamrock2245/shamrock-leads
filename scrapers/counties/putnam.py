@@ -140,12 +140,16 @@ class PutnamCountyScraper(BaseScraper):
                 Booking_Number=booking_num,
                 Full_Name=full_name,
                 First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                 Booking_Date=booking_date,
                 Status=status,
+                        Release_Date="",
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
                 Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+                Detail_URL=SEARCH_URL,
+
                 LastCheckedMode="INITIAL",
             ))
 
@@ -177,9 +181,13 @@ class PutnamCountyScraper(BaseScraper):
                             Booking_Number=booking_num,
                             Full_Name=full_name,
                             First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB="",
                             Booking_Date=booking_date,
                             Status="In Custody",
+                        Release_Date="",
                             Facility=FACILITY,
+                            Detail_URL=SEARCH_URL,
+
                             LastCheckedMode="INITIAL",
                         ))
                     if records:

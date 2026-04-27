@@ -169,7 +169,8 @@ class HillsboroughCountyScraper(BaseScraper):
         if not booking_number: return None
         return ArrestRecord(County=self.county, Booking_Number=booking_number,
             Full_Name=full_name, First_Name=first_name, Middle_Name=middle_name, Last_Name=last_name,
-            Booking_Date=booking_date, Arrest_Date=arrest_date, Status=status, Facility="Falkenburg Road Jail",
+            Booking_Date=booking_date, Arrest_Date=arrest_date, Status=status,
+                        Release_Date="", Facility="Falkenburg Road Jail",
             Race=race, Sex=sex, DOB=dob, Address=address, Charges=" | ".join(charges_list),
             Bond_Amount=str(total_bond) if total_bond > 0 else "0", Case_Number=case_number,
             Detail_URL=href, LastCheckedMode="INITIAL")

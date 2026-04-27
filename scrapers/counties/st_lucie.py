@@ -108,6 +108,7 @@ class StLucieCountyScraper(BaseScraper):
                 DOB=dob,
                 Booking_Date=booking_date,
                 Status=status,
+                        Release_Date="",
                 Facility=FACILITY,
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",

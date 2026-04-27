@@ -139,16 +139,22 @@ class BayCountyScraper(BaseScraper):
                 booking_match = re.search(r"(?:Booking|Book)\s*#?\s*:?\s*([A-Z0-9-]+)", booking_text, re.I)
                 booking_num = booking_match.group(1) if booking_match else ""
 
-                dob_match = re.search(r"(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", booking_text, re.I)
-                dob = dob_match.group(1) if dob_match else ""
-
-                date_match = re.search(r"(?:Booking Date|Booked)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", booking_text, re.I)
-                booking_date = date_match.group(1) if date_match else ""
-
+                dob = ""
+                dob_m = re.search(r'(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', detail_text)
+                if dob_m:
+                    dob = dob_m.group(1)
+                
+                release_date = ""
+                rel_m = re.search(r'(?:Release Date|Released)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', detail_text)
+                if rel_m:
+                    release_date = rel_m.group(1)
+                
+                status = "Released" if release_date else "In Custody"
+                
                 charges_text = cell_texts[-1] if len(cell_texts) > 2 else ""
 
-                bond_match = re.search(r"\$[\d,]+\.?\d*", booking_text)
-                bond_amount = bond_match.group(0) if bond_match else ""
+                bd = re.search(r'\$([\d,]+)', detail_text)
+                bond_amount = bd.group(1).replace(',','') if bd else '0'
 
                 key = (last_name, booking_num)
                 if key in seen:
@@ -160,12 +166,14 @@ class BayCountyScraper(BaseScraper):
                     First_Name=first_name,
                     Last_Name=last_name,
                     Booking_Number=booking_num,
-                    Booking_Date=booking_date,
+                    Booking_Date="",
                     DOB=dob,
                     Charges=charges_text[:500],
                     Bond_Amount=bond_amount,
                     Facility=FACILITY,
-                    Status="In Custody",
+                    Status=status,
+                    Release_Date=release_date,
+                    Detail_URL=BASE_URL,
                     LastCheckedMode="INITIAL",
                 ))
 

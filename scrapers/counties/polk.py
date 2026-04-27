@@ -44,10 +44,13 @@ class PolkCountyScraper(BaseScraper):
                     bk = cells[1].get_text(strip=True) if len(cells) > 1 else ""
                     f, m, l = self._pn(name)
                     bd = re.search(r"\$([\d,]+)", row.get_text())
+                    dob_m = re.search(r'(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', row.get_text())
                     records.append(ArrestRecord(County=self.county, Booking_Number=bk,
                         Full_Name=name, First_Name=f, Middle_Name=m, Last_Name=l,
+                        DOB=dob_m.group(1) if dob_m else "",
                         Bond_Amount=bd.group(1).replace(",","") if bd else "0",
-                        Status="In Custody", Facility=FACILITY, LastCheckedMode="INITIAL"))
+                        Status="In Custody", Detail_URL=SEARCH_URL,
+                        Facility=FACILITY, LastCheckedMode="INITIAL"))
             logger.info(f"Polk: {len(records)} records")
             return records
         except Exception as e:
@@ -73,12 +76,18 @@ class PolkCountyScraper(BaseScraper):
             f, m, l = self._pn(name)
             ch = e.get("charges", e.get("charge", ""))
             charges = " | ".join(str(c) for c in ch) if isinstance(ch, list) else str(ch) if ch else ""
+            release_date = ""
+            for rk in ["releaseDate", "release_date", "releasedDate"]:
+                if rk in e and e[rk]:
+                    release_date = str(e[rk]).strip(); break
+            status = "Released" if release_date else "In Custody"
             out.append(ArrestRecord(County=self.county, Booking_Number=bk, Full_Name=name,
                 First_Name=f, Middle_Name=m, Last_Name=l, DOB=str(e.get("dob","")),
                 Booking_Date=str(e.get("bookingDate","")), Race=str(e.get("race","")),
                 Sex=str(e.get("sex","")), Charges=charges,
                 Bond_Amount=str(e.get("bond", e.get("bondAmount","0"))),
-                Status="In Custody", Facility=FACILITY, LastCheckedMode="INITIAL"))
+                Status=status, Release_Date=release_date, Detail_URL=SEARCH_URL,
+                Facility=FACILITY, LastCheckedMode="INITIAL"))
         return out
     @staticmethod
     def _pn(n):

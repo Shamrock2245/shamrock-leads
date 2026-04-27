@@ -226,12 +226,14 @@ class WaltonCountyScraper(BaseScraper):
             DOB=dob,
             Booking_Date=booking_date,
             Status=status,
+                        Release_Date="",
             Facility=FACILITY,
             Sex=gender,
             Height=height,
             Weight=weight,
             Bond_Amount=str(self._parse_bond(bond_str)),
-            LastCheckedMode="INITIAL",
+            Detail_URL=BASE_URL,
+                        LastCheckedMode="INITIAL",
         )
 
     @staticmethod

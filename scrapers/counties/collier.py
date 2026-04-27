@@ -318,6 +318,7 @@ class CollierCountyScraper(BaseScraper):
             DOB=entry.get("dob", ""),
             Booking_Date=booking_date,
             Status=status,
+                        Release_Date="",
             Facility="Collier County Jail",
             Agency=agency,
             Race=race,
