@@ -99,6 +99,7 @@ function sortBy(field) {
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => { SL_STATE.search = document.getElementById('searchInput').value; SL_STATE.page = 1; applyFilters(); }, 350); }
 function debounceDefSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadDefendants, 350); }
 
+<<<<<<< HEAD
 // ── SSE Real-time Events ──────────────────────────────────────────────────
 const eventSource = new EventSource('/api/events/stream');
 eventSource.addEventListener('new_arrest', (e) => {
@@ -110,6 +111,18 @@ eventSource.addEventListener('hot_lead', (e) => {
     const data = JSON.parse(e.data);
     toast(`🔥 Hot lead: ${data.full_name} — Score ${data.lead_score}`, 'info');
     playHotAlert();
+=======
+// Replace polling with SSE
+const eventSource = new EventSource('/api/events/stream');
+eventSource.addEventListener('new_arrest', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`New arrest: ${data.full_name} (${data.county})`, 'info');
+    if (typeof applyFilters === 'function') applyFilters(); // trigger existing data refresh
+});
+eventSource.addEventListener('hot_lead', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`🔥 HOT LEAD: ${data.full_name} - $${data.bond_amount}`, 'warning');
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
 });
 eventSource.addEventListener('bond_written', (e) => {
     const data = JSON.parse(e.data);
@@ -133,7 +146,11 @@ const SL = {
   filterCountyOptions: (v) => filterCountyOptions(v),
   closeModal: () => { const m = document.getElementById('bondModal'); if (m) m.style.display = 'none'; },
   submitBond: () => { if (typeof submitBond === 'function') submitBond(); },
+<<<<<<< HEAD
   toast: (msg, type) => toast(msg, type),
+=======
+  toast: (msg, type) => toast(msg, type)
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
 };
 
 // Utilities

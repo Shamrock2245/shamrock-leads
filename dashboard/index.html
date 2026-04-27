@@ -8,6 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 </head>
 <body>
 <!-- ═══ HEADER ═══ -->
@@ -395,6 +396,7 @@
   </div>
 </div>
 
+<<<<<<< HEAD
 <!-- ═══════════════════════════════════════════════════════
      TAB 6: DEFENDANT TRACKING
      ═══════════════════════════════════════════════════════ -->
@@ -427,6 +429,40 @@
 
     <!-- Map / List Toggle -->
     <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
+=======
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 6: TRACKING
+     ═══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabTracking">
+  <div class="container">
+
+    <!-- Summary KPI Row -->
+    <div class="stats-grid" id="trackingKpis">
+      <div class="stat-card">
+        <div class="stat-label">📍 Active Bonds</div>
+        <div class="stat-value" id="trkKpiTotal">—</div>
+        <div class="stat-sub">currently tracked</div>
+      </div>
+      <div class="stat-card" style="border-color:var(--danger)">
+        <div class="stat-label">🚨 Overdue</div>
+        <div class="stat-value" id="trkKpiOverdue" style="color:var(--danger)">—</div>
+        <div class="stat-sub">missed check-in</div>
+      </div>
+      <div class="stat-card" style="border-color:var(--warning)">
+        <div class="stat-label">⚠️ High Risk</div>
+        <div class="stat-value" id="trkKpiHighRisk" style="color:var(--warning)">—</div>
+        <div class="stat-sub">risk score ≥ 75</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">📏 Out of Area</div>
+        <div class="stat-value" id="trkKpiOutOfArea">—</div>
+        <div class="stat-sub">geofence violations</div>
+      </div>
+    </div>
+
+    <!-- View Toggle -->
+    <div class="filters" style="margin-bottom:12px">
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
       <div class="btn-group">
         <button class="active" id="trkBtnMap" onclick="SLTracking.showView('map')">🗺️ Map View</button>
         <button id="trkBtnList" onclick="SLTracking.showView('list')">📋 List View</button>
@@ -449,19 +485,39 @@
           <table>
             <thead>
               <tr>
+<<<<<<< HEAD
                 <th>Name</th><th>County</th><th>Bond</th><th>Risk</th>
                 <th>Last Check-In</th><th>Next Due</th><th>Status</th>
                 <th>Missed</th><th>Actions</th>
               </tr>
             </thead>
             <tbody id="trkListBody"></tbody>
+=======
+                <th>Defendant</th>
+                <th>County</th>
+                <th>Bond</th>
+                <th>Risk Score</th>
+                <th>Last Check-In</th>
+                <th>Next Due</th>
+                <th>Status</th>
+                <th>Missed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="trkListBody"><tr><td colspan="9" class="loading">Loading…</td></tr></tbody>
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
           </table>
         </div>
       </div>
     </div>
 
+<<<<<<< HEAD
     <!-- Detail Panel (shown on marker/row click) -->
     <div id="trkDetailPanel" class="panel" style="display:none;margin-top:18px">
+=======
+    <!-- Detail Panel (shown when defendant selected) -->
+    <div class="panel" id="trkDetailPanel" style="display:none;margin-top:18px">
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
         <span id="trkDetailTitle">📍 Defendant Detail</span>
         <button class="btn-cancel" onclick="SLTracking.closeDetail()">✕ Close</button>
@@ -469,6 +525,7 @@
       <div id="trkDetailBody"></div>
     </div>
 
+<<<<<<< HEAD
     <!-- Court Reminder Scheduler -->
     <div class="panel" style="margin-top:24px">
       <div class="panel-title">📅 Schedule Court Reminders (4-Touch SMS)</div>
@@ -501,6 +558,36 @@
         </div>
       </div>
       <button class="btn-primary" onclick="SLTracking.scheduleReminders()">📅 Schedule 4-Touch Reminders</button>
+=======
+    <!-- Court Reminders Panel -->
+    <div class="panel" style="margin-top:18px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>📅 Schedule Court Reminders</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px 0">
+        <label style="font-size:12px;color:var(--muted)">Booking Number
+          <input type="text" id="crBookingNum" placeholder="e.g. 2025-001234" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Defendant Name
+          <input type="text" id="crDefName" placeholder="Full name" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Phone Number
+          <input type="text" id="crPhone" placeholder="+12395551234" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Court Date
+          <input type="datetime-local" id="crCourtDate" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Court Location
+          <input type="text" id="crCourtLocation" placeholder="Lee County Courthouse" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Case Number
+          <input type="text" id="crCaseNumber" placeholder="26-CF-001234" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px">
+        </label>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px">
+        <button class="btn-primary" onclick="SLTracking.scheduleReminders()">📅 Schedule 4-Touch Reminders</button>
+      </div>
+>>>>>>> 2e1d28a2da552164e560f9a79c48f5af7efb50de
       <div id="crResult" style="margin-top:10px;font-size:13px"></div>
     </div>
 

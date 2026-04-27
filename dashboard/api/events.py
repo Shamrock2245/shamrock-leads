@@ -1,8 +1,3 @@
-"""
-ShamrockLeads — SSE Events Blueprint (Phase D — Manus)
-Provides /api/events/stream for real-time Server-Sent Events.
-"""
-
 from quart import Blueprint, Response
 import asyncio
 import json
@@ -12,7 +7,6 @@ events_bp = Blueprint('events', __name__)
 # Global event queue (use Redis pub/sub in production)
 event_queues = set()
 
-
 async def publish_event(event_type: str, data: dict):
     """Call this from other blueprints when something happens."""
     msg = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
@@ -20,10 +14,9 @@ async def publish_event(event_type: str, data: dict):
     for q in event_queues:
         try:
             await q.put(msg)
-        except Exception:
+        except:
             dead.add(q)
     event_queues -= dead
-
 
 @events_bp.route('/events/stream')
 async def event_stream():
