@@ -99,6 +99,23 @@ function sortBy(field) {
 function debounceSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(() => { SL_STATE.search = document.getElementById('searchInput').value; SL_STATE.page = 1; applyFilters(); }, 350); }
 function debounceDefSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(loadDefendants, 350); }
 
+// Replace polling with SSE
+const eventSource = new EventSource('/api/events/stream');
+eventSource.addEventListener('new_arrest', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`New arrest: ${data.full_name} (${data.county})`, 'info');
+    if (typeof applyFilters === 'function') applyFilters(); // trigger existing data refresh
+});
+eventSource.addEventListener('hot_lead', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`🔥 HOT LEAD: ${data.full_name} - $${data.bond_amount}`, 'warning');
+});
+eventSource.addEventListener('bond_written', (e) => {
+    const data = JSON.parse(e.data);
+    toast(`✅ Bond written: ${data.defendant_name}`, 'success');
+});
+eventSource.onerror = () => { setTimeout(() => location.reload(), 5000); };
+
 // Utilities
 function fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : n.toString(); }
 function timeAgo(iso) { if(!iso) return '—'; const d=(Date.now()-new Date(iso).getTime())/1000; if(d<60) return Math.round(d)+'s ago'; if(d<3600) return Math.round(d/60)+'m ago'; if(d<86400) return Math.round(d/3600)+'h ago'; return Math.round(d/86400)+'d ago'; }
