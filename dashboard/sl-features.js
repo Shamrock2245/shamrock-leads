@@ -33,14 +33,18 @@ async function loadDefendants() {
     grid.innerHTML = leads.map(l => {
       const bond = l.bond_amount||0;
       const bc = bond>=10000?'high':bond>=2500?'mid':'low';
-      const stBadge = (l.status||'').toLowerCase().includes('custody')?'custody':(l.status||'').toLowerCase().includes('release')?'released':'other';
+      const stVal = (l.status||'').trim();
+      const stLower = stVal.toLowerCase();
+      const stBadge = stLower.includes('custody')?'custody':stLower.includes('release')||stLower.includes('bonded')?'released':stLower.includes('not in')?'released':'other';
       const sc = (l.lead_status||'').toLowerCase();
       const scoreCls = sc==='hot'?'score-hot':sc==='warm'?'score-warm':'score-cold';
       const bkSafe = (l.booking_number||'').replace(/'/g,"\\'");
+      const bkEscD = (l.booking_number||'').replace(/"/g,'&quot;');
+      const custDrop = `<select class="def-status-badge ${stBadge}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEscD}',this.value,this)"><option value="" ${!stVal?'selected':''}>${stVal||'\u2014'}</option><option value="In Custody" ${'In Custody'===stVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===stVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===stVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===stVal?'selected':''}>Bonded Out</option></select>`;
       return `<div class="def-card">
         <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
         <div class="def-body">
-          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'\u2014'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div></div></div>
+          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div></div></div>
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
         </div>
         <div class="def-card-footer">
@@ -167,7 +171,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
             <label class="outreach-label">Send From</label>
             <select id="outreachFromNumber" class="outreach-select" onchange="checkBBStatus()">
               <option value="2399550178">📱 (239) 955-0178 · shamrockbailoffice</option>
-              <option value="2399550314">📱 (239) 955-0314 · admin</option>
+              <option value="2399550314">📱 (239) 955-0314 · brendanoneal99</option>
             </select>
           </div>
         </div>
@@ -703,12 +707,40 @@ if (/Mobi|Android/i.test(navigator.userAgent) && !location.pathname.includes('mo
   if (confirm('Switch to mobile view?')) location.href = mobilePath;
 }
 
+// ── Custody Status Override ──
+async function updateCustody(bookingNumber, newStatus, selectEl) {
+  if (!newStatus || !bookingNumber) return;
+  try {
+    const r = await fetch(`${API}/api/leads/update-custody`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: bookingNumber,
+        custody_status: newStatus,
+        changed_by: document.getElementById('outreachAgent')?.value || 'dashboard_user',
+      }),
+    });
+    const d = await r.json();
+    if (d.success) {
+      toast(`${bookingNumber}: ${d.old_status} → ${d.new_status}`, 'success');
+      // Update dropdown class for color
+      const cls = newStatus.toLowerCase().includes('custody') && !newStatus.toLowerCase().includes('not') ? 'custody' : 'released';
+      selectEl.className = `def-status-badge ${cls}`;
+      selectEl.style.cssText = 'cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px';
+    } else {
+      toast(d.error || 'Update failed', 'error');
+    }
+  } catch(e) {
+    toast('Network error updating custody', 'error');
+  }
+}
+
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
-  sendOutreach, loadOutreachHistory, checkBBStatus };
+  sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody };
 
 // ── Init ──
 loadDashboard();

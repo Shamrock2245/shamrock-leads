@@ -49,7 +49,7 @@ print(f"✅ Connected to MongoDB: {MONGO_DB}")
 BB_SERVERS = {}
 for _phone_suffix, _label, _email in [
     ("0178", "(239) 955-0178", "shamrockbailoffice@gmail.com"),
-    ("0314", "(239) 955-0314", "admin@shamrockbailbonds.biz"),
+    ("0314", "(239) 955-0314", "brendanoneal99@gmail.com"),
 ]:
     _url = os.getenv(f"BLUEBUBBLES_URL_{_phone_suffix}", "").rstrip("/")
     _pw = os.getenv(f"BLUEBUBBLES_PASSWORD_{_phone_suffix}", "")
@@ -1646,6 +1646,73 @@ def api_db_health():
         })
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Manual Custody Status Override
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/leads/update-custody", methods=["POST"])
+def update_custody():
+    """Manually override custody status for a defendant.
+
+    Used when a county scraper can't detect release/bond status programmatically.
+    Stores audit trail of who changed it and when.
+    """
+    body = request.get_json(force=True)
+    booking_number = body.get("booking_number", "").strip()
+    new_status = body.get("custody_status", "").strip()
+
+    if not booking_number:
+        return jsonify({"error": "booking_number is required"}), 400
+
+    valid_statuses = ["In Custody", "Not In Custody", "Released", "Bonded Out"]
+    if new_status not in valid_statuses:
+        return jsonify({"error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
+
+    try:
+        # Get current record for audit trail
+        existing = arrests.find_one({"booking_number": booking_number}, {"status": 1, "custody_overrides": 1})
+        if not existing:
+            return jsonify({"error": f"No record found for booking {booking_number}"}), 404
+
+        old_status = existing.get("status", "Unknown")
+
+        # Build audit entry
+        override_entry = {
+            "old_status": old_status,
+            "new_status": new_status,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+            "changed_by": body.get("changed_by", "dashboard_user"),
+        }
+
+        # Update the record
+        result = arrests.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": new_status,
+                    "custody_override": True,
+                    "custody_override_at": datetime.now(timezone.utc).isoformat(),
+                },
+                "$push": {
+                    "custody_overrides": override_entry,
+                },
+            },
+        )
+
+        if result.modified_count == 0:
+            return jsonify({"error": "Record found but not modified"}), 500
+
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "old_status": old_status,
+            "new_status": new_status,
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

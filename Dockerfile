@@ -1,7 +1,7 @@
 # ============================================
 # ShamrockLeads — Docker Image
 # Python 3.12 + APScheduler + MongoDB
-# + Chromium for DrissionPage (Charlotte, Hendry)
+# + Chromium for DrissionPage + patchright (Charlotte)
 # ============================================
 FROM python:3.12-slim
 
@@ -9,10 +9,11 @@ FROM python:3.12-slim
 LABEL maintainer="Shamrock Active Software"
 LABEL description="Florida Arrest Intelligence Platform"
 
-# System deps — includes Chromium for DrissionPage browser automation
+# System deps — Chromium for DrissionPage, xvfb for patchright (Charlotte)
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    xvfb \
     chromium \
     chromium-driver \
     fonts-liberation \
@@ -41,6 +42,9 @@ WORKDIR /app
 # Install Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install patchright's Chromium browser (for Charlotte County Cloudflare bypass)
+RUN python -m patchright install chromium || true
 
 # Copy application
 COPY . .

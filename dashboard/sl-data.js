@@ -31,7 +31,11 @@ function renderLeads() {
     const sc = (l.lead_status||'').toLowerCase();
     const scoreCls = sc === 'hot' ? 'score-hot' : sc === 'warm' ? 'score-warm' : sc === 'disqualified' ? 'score-disq' : 'score-cold';
     const charges = (l.charges||'').length > 50 ? (l.charges||'').slice(0,47)+'…' : (l.charges||'—');
-    const custBadge = (l.status||'').toLowerCase().includes('custody') ? '<span class="def-status-badge custody">In Custody</span>' : (l.status||'').toLowerCase().includes('release') ? '<span class="def-status-badge released">Released</span>' : `<span class="def-status-badge other">${l.status||'—'}</span>`;
+    const custVal = (l.status||'').trim();
+    const custLower = custVal.toLowerCase();
+    const custClass = custLower.includes('custody') ? 'custody' : custLower.includes('release') || custLower.includes('bonded') ? 'released' : custLower.includes('not in') ? 'released' : 'other';
+    const bkEsc = (l.booking_number||'').replace(/"/g,'&quot;');
+    const custDropdown = `<select class="def-status-badge ${custClass}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEsc}',this.value,this)"><option value="" ${!custVal?'selected':''}>${custVal||'—'}</option><option value="In Custody" ${'In Custody'===custVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===custVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===custVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===custVal?'selected':''}>Bonded Out</option></select>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
@@ -39,7 +43,7 @@ function renderLeads() {
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></td>
-      <td>${custBadge}</td>
+      <td>${custDropdown}</td>
       <td>${fmtDate(l.arrest_date || l.booking_date)}</td>
       <td class="${courtCls}">${l.court_date || '—'}</td>
       <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : '—'}</td>
