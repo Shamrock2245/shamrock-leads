@@ -34,11 +34,9 @@ async def log_payment():
         "notes": data.get('notes', '')
     }
 
-    # Insert into MongoDB
     result = await payments.insert_one(payment_doc)
     payment_doc['_id'] = str(result.inserted_id)
 
-    # Publish SSE event
     await publish_event('payment_received', payment_doc)
 
     return jsonify({"success": True, "payment_id": payment_doc['_id']}), 201

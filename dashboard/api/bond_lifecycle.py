@@ -104,9 +104,7 @@ async def signnow_completion_webhook():
 
 @bond_lifecycle_bp.route('/court-email/process', methods=['POST'])
 async def process_court_email():
-    """
-    Endpoint to manually trigger or receive parsed court email data.
-    """
+    """Endpoint to manually trigger or receive parsed court email data."""
     data = await request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400

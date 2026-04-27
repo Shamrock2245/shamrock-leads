@@ -11,6 +11,7 @@ Endpoints:
   /api/imessage/send     — Send iMessage via BlueBubbles
   /api/imessage/history/<booking_number> — iMessage outreach history
   /api/imessage/templates — Outreach templates
+  /api/config/bluebubbles-url — Dynamic URL sync from iMac
 """
 
 import re as re_mod
