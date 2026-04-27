@@ -1,18 +1,27 @@
-"""ShamrockLeads Dashboard — Quart Application Factory"""
+"""ShamrockLeads Dashboard — Quart Application Factory
+
+Production entry point for the async dashboard API.
+All blueprints use Motor (async MongoDB) via extensions.get_collection().
+"""
 from quart import Quart, send_from_directory
-import motor.motor_asyncio
+from quart_cors import cors
 import os
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def create_app():
     app = Quart(__name__, static_folder=os.path.dirname(__file__), static_url_path="")
 
-    # MongoDB (async via Motor)
-    mongo_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
-    client = motor.motor_asyncio.AsyncIOMotorClient(mongo_uri)
-    app.db = client[db_name]
+    # ── CORS — allow dashboard frontend and external callers ──
+    app = cors(app, allow_origin="*")
 
-    # --- Register ALL API Blueprints ---
+    # ── Initialize extensions (Motor, BlueBubbles, POA seed, secret key) ──
+    from dashboard.extensions import init_app
+    init_app(app)
+
+    # ── Register ALL API Blueprints ──
     from dashboard.api.stats import stats_bp
     from dashboard.api.bonds import bonds_bp
     from dashboard.api.poa import poa_bp
@@ -41,19 +50,30 @@ def create_app():
     app.register_blueprint(contacts_bp, url_prefix="/api")
     app.register_blueprint(bond_lifecycle_bp, url_prefix="/api/bond-lifecycle")
 
-    # --- PIN Auth (optional, guarded by DASHBOARD_PIN env var) ---
+    # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
+    from dashboard.api.legacy import legacy_bp
+    app.register_blueprint(legacy_bp, url_prefix="/api")
+
+    # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
     if pin:
         from dashboard.auth.pin_auth import pin_auth_bp
         app.register_blueprint(pin_auth_bp)
 
-    # --- Static file routes ---
+    # ── Static file routes ──
     @app.route("/")
     async def index():
         return await send_from_directory(app.static_folder, "index.html")
 
     @app.route("/health")
     async def health():
-        return {"status": "ok"}
+        from dashboard.extensions import get_collection
+        try:
+            arrests = get_collection("arrests")
+            total = await arrests.estimated_document_count()
+            return {"status": "ok", "total_arrests": total}
+        except Exception:
+            return {"status": "degraded"}, 503
 
+    logger.info("☘️  Quart app factory initialized — all blueprints registered")
     return app

@@ -27,14 +27,14 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Intelligence Dashboard (Flask) ──
+  # ── Intelligence Dashboard (Quart + Hypercorn) ──
   dashboard:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
     container_name: shamrock-dashboard
     restart: unless-stopped
-    command: python dashboard/app.py
+    command: hypercorn "dashboard:create_app()" --bind 0.0.0.0:5050 --access-logfile -
     env_file:
       - .env
     ports:
