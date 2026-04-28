@@ -192,7 +192,9 @@ class ManateeCountyScraper(BaseScraper):
             tables.forEach(table => {
                 const headers = Array.from(table.querySelectorAll('th')).map(th => th.textContent.trim());
                 if (headers.some(h => h.includes('Statute') || h.includes('Desc'))) {
-                    const rows = table.querySelectorAll('tbody tr, tr');
+                    // Use only 'tbody tr' (not 'tbody tr, tr') to avoid double-counting
+                    // rows that appear in both tbody and the full table selector.
+                    const rows = table.querySelectorAll('tbody tr');
                     rows.forEach(row => {
                         const cells = row.querySelectorAll('td');
                         if (cells.length >= 6) {
@@ -230,12 +232,21 @@ class ManateeCountyScraper(BaseScraper):
         charges_list = []
         total_bond = 0.0
         booking_date = ""
+        seen_charges = set()  # dedup guard: prevent double-counting identical rows
 
         for entry in js_data.get("__CHARGES", []):
             desc = self._clean(entry.get("desc", ""))
             statute = self._clean(entry.get("statute", ""))
+            obts = self._clean(entry.get("obts", ""))
             bond_str = self._clean(entry.get("bond_amt", "0"))
             arr_date = self._clean(entry.get("arrest_date", ""))
+
+            # Build a dedup key from OBTS number + statute; fall back to desc if OBTS absent
+            dedup_key = f"{obts}:{statute}:{desc}" if obts else f"{statute}:{desc}:{bond_str}"
+            if dedup_key in seen_charges:
+                logger.debug(f"Skipping duplicate charge row: {dedup_key}")
+                continue
+            seen_charges.add(dedup_key)
 
             if not booking_date and arr_date:
                 booking_date = arr_date
@@ -262,7 +273,7 @@ class ManateeCountyScraper(BaseScraper):
             DOB=self._clean(js_data.get("Date of Birth", "")),
             Booking_Date=booking_date,
             Status="In Custody",
-                        Release_Date="",
+            Release_Date="",
             Facility="Manatee County Jail",
             Race=self._clean(js_data.get("Race", "")),
             Sex=self._clean(js_data.get("Gender", js_data.get("Sex", ""))),
