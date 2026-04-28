@@ -49,6 +49,13 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
+            # ── Clean up disk space (prevents build failures) ────
+            echo ""
+            echo "🧹 Cleaning up disk space..."
+            docker system prune -f --all
+            apt-get clean
+            echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
+
             # ── Rebuild Docker images ─────────────────────────────
             echo ""
             echo "🐳 Rebuilding Docker images..."
