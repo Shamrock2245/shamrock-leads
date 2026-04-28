@@ -497,7 +497,7 @@ except ImportError:
 def main():
     detail_url = {detail_url!r}
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        browser = p.chromium.launch(headless=False, args=["--no-sandbox","--disable-dev-shm-usage"])  # Must be False for Cloudflare Turnstile + xvfb-run
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         page = context.new_page()
         try:

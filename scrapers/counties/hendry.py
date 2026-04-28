@@ -343,17 +343,16 @@ class HendryCountyScraper(BaseScraper):
         try:
             page = self._setup_browser()
             page.get(detail_url)
-            import time as _time
-            _time.sleep(2)
+            time.sleep(2)
             body_el = page.ele('tag:body', timeout=5)
             if not body_el:
                 return None
             text = body_el.text
             if not text or 'Record Details' not in text:
-                _time.sleep(2)
+                time.sleep(2)
                 text = body_el.text if body_el else ''
             charges, total_bond = self._extract_charges_from_text(text)
-            from core.models import ArrestRecord
+
             record = ArrestRecord(
                 County=self.county,
                 Booking_Number=booking_id,
@@ -367,8 +366,7 @@ class HendryCountyScraper(BaseScraper):
             )
             return record
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Hendry _fetch_single_booking error ({booking_id}): {e}")
+            logger.warning(f"Hendry _fetch_single_booking error ({booking_id}): {e}")
             return None
         finally:
             if page:

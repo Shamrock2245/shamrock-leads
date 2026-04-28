@@ -430,8 +430,7 @@ class SarasotaCountyScraper(BaseScraper):
                 record.LastCheckedMode = "UPDATE"
             return record
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Sarasota _fetch_single_booking error ({booking_id}): {e}")
+            logger.warning(f"Sarasota _fetch_single_booking error ({booking_id}): {e}")
             return None
         finally:
             if page:
