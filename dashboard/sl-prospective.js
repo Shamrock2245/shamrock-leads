@@ -512,45 +512,67 @@ const SLProspective = (() => {
     const panel = $('autoReplyPanel');
     if (!panel) return;
     const cfg = _autoReplyConfig;
+    const isLive = cfg.enabled;
+    // Auto-expand when agent is live
+    if (isLive && !panel.classList.contains('expanded')) panel.classList.add('expanded');
+
     panel.innerHTML = `
-      <div class="auto-reply-header" onclick="this.parentElement.classList.toggle('expanded')">
-        <span>🤖 AI Outreach Agent ${cfg.enabled ? '<span class="ar-status on">LIVE</span>' : '<span class="ar-status off">OFF</span>'}</span>
-        <span class="ar-toggle-arrow">▼</span>
+      <div class="auto-reply-header ${isLive ? 'agent-live' : ''}" onclick="this.parentElement.classList.toggle('expanded')">
+        <span style="display:flex;align-items:center;gap:8px">
+          🤖 AI Outreach Agent
+          ${isLive
+            ? '<span class="ar-status on"><span class="ar-pulse"></span>LIVE</span>'
+            : '<span class="ar-status off">OFF</span>'}
+          ${isLive && cfg.ai_enabled ? '<span class="ar-mode-badge">GPT-4o</span>' : ''}
+          ${isLive && cfg.conversational_mode !== false ? '<span class="ar-mode-badge">Multi-Turn</span>' : ''}
+          ${cfg.last_poll_at ? '<span style="font-size:10px;color:var(--text-muted);font-weight:400">Polled ' + timeAgo(cfg.last_poll_at) + '</span>' : ''}
+        </span>
+        <span style="display:flex;align-items:center;gap:8px">
+          <label class="ar-switch" onclick="event.stopPropagation()">
+            <input type="checkbox" ${cfg.enabled?'checked':''} onchange="SLProspective.updateAutoReply({enabled:this.checked})">
+            <span class="ar-slider"></span>
+          </label>
+          <span class="ar-toggle-arrow">▼</span>
+        </span>
       </div>
       <div class="auto-reply-body">
-        <div class="ar-row">
-          <label>Enable Agent</label>
-          <input type="checkbox" id="arEnabled" ${cfg.enabled?'checked':''} onchange="SLProspective.updateAutoReply({enabled:this.checked})">
+        <div class="ar-grid">
+          <div class="ar-row">
+            <label>AI-Powered (GPT-4o)</label>
+            <input type="checkbox" id="arAI" ${cfg.ai_enabled?'checked':''} onchange="SLProspective.updateAutoReply({ai_enabled:this.checked})">
+          </div>
+          <div class="ar-row">
+            <label>Conversational Mode</label>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" id="arConvo" ${cfg.conversational_mode!==false?'checked':''} onchange="SLProspective.updateAutoReply({conversational_mode:this.checked})">
+              <small style="color:var(--text-muted);font-size:10px">Keeps talking & gathering info</small>
+            </div>
+          </div>
+          <div class="ar-row">
+            <label>Simulate Typing</label>
+            <input type="checkbox" id="arTyping" ${cfg.simulate_typing?'checked':''} onchange="SLProspective.updateAutoReply({simulate_typing:this.checked})">
+          </div>
+          <div class="ar-row">
+            <label>Auto Mark Read</label>
+            <input type="checkbox" id="arMarkRead" ${cfg.auto_mark_read?'checked':''} onchange="SLProspective.updateAutoReply({auto_mark_read:this.checked})">
+          </div>
+          <div class="ar-row">
+            <label>Auto ❤️ Interested</label>
+            <input type="checkbox" id="arReact" ${cfg.auto_react_interested?'checked':''} onchange="SLProspective.updateAutoReply({auto_react_interested:this.checked})">
+          </div>
+          <div class="ar-row">
+            <label>Reply Cooldown</label>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" id="arCooldown" value="${cfg.cooldown_minutes||5}" min="1" max="120" style="width:60px" onchange="SLProspective.updateAutoReply({cooldown_minutes:parseInt(this.value)})">
+              <span style="font-size:11px;color:var(--text-muted)">min</span>
+            </div>
+          </div>
         </div>
-        <div class="ar-row">
-          <label>AI-Powered (GPT-4o)</label>
-          <input type="checkbox" id="arAI" ${cfg.ai_enabled?'checked':''} onchange="SLProspective.updateAutoReply({ai_enabled:this.checked})">
-        </div>
-        <div class="ar-row">
-          <label>Conversational Mode</label>
-          <input type="checkbox" id="arConvo" ${cfg.conversational_mode!==false?'checked':''} onchange="SLProspective.updateAutoReply({conversational_mode:this.checked})">
-          <small style="color:var(--text-muted);font-size:11px;margin-left:4px">Keeps talking &amp; gathering info</small>
-        </div>
-        <div class="ar-row">
-          <label>Simulate Typing</label>
-          <input type="checkbox" id="arTyping" ${cfg.simulate_typing?'checked':''} onchange="SLProspective.updateAutoReply({simulate_typing:this.checked})">
-        </div>
-        <div class="ar-row">
-          <label>Auto Mark Read</label>
-          <input type="checkbox" id="arMarkRead" ${cfg.auto_mark_read?'checked':''} onchange="SLProspective.updateAutoReply({auto_mark_read:this.checked})">
-        </div>
-        <div class="ar-row">
-          <label>Auto ❤️ on Interested</label>
-          <input type="checkbox" id="arReact" ${cfg.auto_react_interested?'checked':''} onchange="SLProspective.updateAutoReply({auto_react_interested:this.checked})">
-        </div>
-        <div class="ar-row">
-          <label>Reply Cooldown (min)</label>
-          <input type="number" id="arCooldown" value="${cfg.cooldown_minutes||5}" min="1" max="120" style="width:80px" onchange="SLProspective.updateAutoReply({cooldown_minutes:parseInt(this.value)})">
-        </div>
-        <div class="ar-row">
-          <label>Last Polled</label>
-          <span class="ar-last-poll">${cfg.last_poll_at ? timeAgo(cfg.last_poll_at) : 'never'}</span>
-          <button class="comm-action-btn" onclick="SLProspective.manualPoll()" title="Poll Now">🔄</button>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+          <button class="btn-poll" onclick="SLProspective.manualPoll()">🔄 Poll Inbox Now</button>
+          <span style="font-size:11px;color:var(--text-muted)">
+            Last: ${cfg.last_poll_at ? timeAgo(cfg.last_poll_at) : 'never'} · Every ${cfg.poll_interval_seconds||30}s
+          </span>
         </div>
       </div>
     `;

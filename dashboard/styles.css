@@ -638,23 +638,49 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .btn-officialize:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(16,185,129,.3)}
 
 /* ═══════════════════════════════════════════════════════════
-   AUTO-REPLY AGENT PANEL
+   AI OUTREACH AGENT PANEL
    ═══════════════════════════════════════════════════════════ */
 .auto-reply-panel{margin-bottom:12px}
-.auto-reply-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:var(--transition);font-size:13px;font-weight:600}
+.auto-reply-header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:var(--transition);font-size:14px;font-weight:600}
 .auto-reply-header:hover{border-color:var(--accent)}
+.auto-reply-header.agent-live{border-color:rgba(16,185,129,.35);background:linear-gradient(135deg,rgba(16,185,129,.04) 0%,var(--card) 100%);box-shadow:0 0 20px rgba(16,185,129,.06)}
 .ar-toggle-arrow{font-size:10px;color:var(--muted);transition:transform .2s}
 .auto-reply-panel.expanded .ar-toggle-arrow{transform:rotate(180deg)}
-.auto-reply-body{display:none;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius-sm) var(--radius-sm)}
+.auto-reply-body{display:none;padding:16px 18px;background:var(--surface);border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius-sm) var(--radius-sm)}
 .auto-reply-panel.expanded .auto-reply-body{display:block;animation:fadeIn .2s ease-out}
+
+/* Grid layout for settings */
+.ar-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 32px}
 .ar-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
-.ar-row:last-child{border:none}
+.ar-row:last-child,.ar-row:nth-last-child(2):nth-child(odd){border:none}
 .ar-row label{color:var(--text-secondary);font-weight:500}
 .ar-row input[type="checkbox"]{accent-color:var(--accent);width:18px;height:18px;cursor:pointer}
 .ar-row input[type="number"]{background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:6px;font-family:inherit;font-size:13px}
-.ar-status{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.5px;margin-left:6px}
+
+/* Status badges */
+.ar-status{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:.5px}
 .ar-status.on{background:rgba(16,185,129,.15);color:#34d399}
 .ar-status.off{background:rgba(239,68,68,.1);color:#f87171}
+
+/* Pulse animation for LIVE status */
+.ar-pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:#34d399;animation:arPulseGlow 2s ease-in-out infinite}
+@keyframes arPulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(52,211,153,.5)}50%{box-shadow:0 0 0 5px rgba(52,211,153,0)}}
+
+/* Mode badges (GPT-4o, Multi-Turn) */
+.ar-mode-badge{padding:2px 8px;border-radius:6px;font-size:9px;font-weight:700;letter-spacing:.3px;background:rgba(139,92,246,.1);color:#a78bfa;border:1px solid rgba(139,92,246,.15)}
+
+/* Toggle switch */
+.ar-switch{position:relative;display:inline-block;width:36px;height:20px;cursor:pointer}
+.ar-switch input{opacity:0;width:0;height:0}
+.ar-slider{position:absolute;top:0;left:0;right:0;bottom:0;background:#374151;border-radius:20px;transition:.3s}
+.ar-slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#9ca3af;border-radius:50%;transition:.3s}
+.ar-switch input:checked+.ar-slider{background:rgba(16,185,129,.3)}
+.ar-switch input:checked+.ar-slider::before{transform:translateX(16px);background:#34d399}
+
+/* Poll button */
+.btn-poll{padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:var(--transition)}
+.btn-poll:hover{border-color:var(--accent);color:var(--accent);background:rgba(16,185,129,.04)}
+
 .ar-last-poll{font-size:12px;color:var(--muted)}
 
 /* ── Reply Badges (Pipeline Cards) ── */

@@ -34,7 +34,7 @@
   <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">📊 Command Center</button>
   <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">🔍 Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">👤 Defendants</button>
-  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📋 In Progress <span class="badge" id="prospectiveBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📱 Outreach <span class="badge" id="prospectiveBadge">—</span></button>
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
@@ -265,16 +265,20 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
-     TAB: IN PROGRESS (PROSPECTIVE BONDS PIPELINE)
+     TAB: OUTREACH PIPELINE (AI Agent + Lead Management)
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabProspective">
   <div class="container">
+
+    <!-- Agent Status Panel (always visible at top, rendered by sl-prospective.js) -->
+    <div id="autoReplyPanel" class="auto-reply-panel expanded" style="margin-bottom:16px"></div>
+
     <!-- KPI Row -->
-    <div class="stats-grid" id="prospKpis">
-      <div class="stat-card">
-        <div class="stat-label">📋 In Progress</div>
-        <div class="stat-value" id="prospKpiTotal">—</div>
-        <div class="stat-sub">active pipeline</div>
+    <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:18px">
+      <div class="stat-card" style="border-color:#10b981">
+        <div class="stat-label">📱 Pipeline</div>
+        <div class="stat-value" id="prospKpiTotal" style="color:#10b981">—</div>
+        <div class="stat-sub">active leads</div>
       </div>
       <div class="stat-card" style="border-color:#3b82f6">
         <div class="stat-label">📞 Contacted</div>
@@ -316,9 +320,6 @@
       </select>
       <button class="btn-export" onclick="SLProspective.load()" style="margin-left:auto">↻ Refresh</button>
     </div>
-
-    <!-- Auto-Reply Agent Panel (rendered by sl-prospective.js) -->
-    <div id="autoReplyPanel" class="auto-reply-panel"></div>
 
     <!-- Pipeline Board -->
     <div class="pipeline-board" id="pipelineBoard">
