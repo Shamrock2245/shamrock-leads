@@ -465,7 +465,7 @@ Respond with ONLY the JSON object, nothing else."""
 async def process_inbound(phone: str, message_text: str,
                           chat_guid: str, message_guid: str,
                           bond_doc: dict, db, config: dict,
-                          bb_client=None) -> dict:
+                          bb_client=None, content_hash: str = "") -> dict:
     """Full inbound message processing pipeline.
 
     1. Get lead context
@@ -500,6 +500,7 @@ async def process_inbound(phone: str, message_text: str,
         "message": message_text,
         "chat_guid": chat_guid,
         "bb_message_guid": message_guid,
+        "content_hash": content_hash,
         "direction": "inbound",
         "intent": intent,
         "sent_at": datetime.now(timezone.utc).isoformat(),

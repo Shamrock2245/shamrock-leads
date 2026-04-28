@@ -22,6 +22,7 @@ Background:
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
@@ -38,6 +39,28 @@ from dashboard.api.agent_brain import process_inbound
 logger = logging.getLogger(__name__)
 
 imessage_auto_bp = Blueprint("imessage_automation", __name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Content-Hash Dedup (protects against BB Issue #765 — re-emitted messages)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _content_hash(sender: str, text: str, timestamp_ms: int | None = None,
+                  window_seconds: int = 60) -> str:
+    """Generate a dedup hash from sender + normalized text + time bucket.
+
+    BlueBubbles can re-emit old messages with brand-new GUIDs (Issue #765).
+    This catches duplicates by hashing the *content* instead of trusting the GUID.
+    The timestamp is bucketed into `window_seconds` intervals so that the same
+    message arriving within the window produces the same hash.
+    """
+    normalized = text.strip().lower()
+    # Bucket the timestamp (default: 60s window)
+    if timestamp_ms:
+        bucket = timestamp_ms // (window_seconds * 1000)
+    else:
+        bucket = int(datetime.now(timezone.utc).timestamp()) // window_seconds
+    raw = f"{sender}|{normalized}|{bucket}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Default Config
@@ -154,6 +177,8 @@ async def manual_poll():
     """Manually trigger one inbox poll cycle."""
     result = await _poll_inbox_once()
     return jsonify(result)
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -447,9 +472,12 @@ async def _poll_inbox_once() -> dict:
     bonds_coll = db["prospective_bonds"]
     outreach_coll = db["imessage_outreach"]
 
+    dedup_skipped = 0
+
     for msg in inbound:
         msg_text = msg.get("text", "") or ""
         msg_guid = msg.get("guid", "")
+        msg_date_ms = msg.get("dateCreated")  # epoch ms from BB
         chat_guid = msg.get("chats", [{}])[0].get("guid", "") if msg.get("chats") else ""
 
         # Extract sender phone from handle
@@ -463,9 +491,21 @@ async def _poll_inbox_once() -> dict:
         if not sender_phone or not msg_text.strip():
             continue
 
-        # Check if we already processed this message (dedup by BB GUID)
+        # ── Layer 1: GUID dedup (original check) ──
         existing = await outreach_coll.find_one({"bb_message_guid": msg_guid})
         if existing:
+            continue
+
+        # ── Layer 2: Content-hash dedup (catches BB Issue #765) ──
+        # Same sender + same text + same 60s window = duplicate even with new GUID
+        chash = _content_hash(sender_phone, msg_text, msg_date_ms)
+        existing_content = await outreach_coll.find_one({"content_hash": chash})
+        if existing_content:
+            dedup_skipped += 1
+            logger.info(
+                "🔁 Content-hash dedup caught duplicate from ...%s (GUID %s, hash %s)",
+                sender_phone[-4:], msg_guid[:12], chash[:8]
+            )
             continue
 
         processed += 1
@@ -501,6 +541,7 @@ async def _poll_inbox_once() -> dict:
                 db=db,
                 config=config,
                 bb_client=client,
+                content_hash=chash,
             )
             if agent_result.get("responded"):
                 replied += 1
@@ -514,6 +555,7 @@ async def _poll_inbox_once() -> dict:
                 "message": msg_text,
                 "chat_guid": chat_guid,
                 "bb_message_guid": msg_guid,
+                "content_hash": chash,
                 "direction": "inbound",
                 "status": "unmatched",
                 "sent_at": datetime.now(timezone.utc).isoformat(),
@@ -524,9 +566,14 @@ async def _poll_inbox_once() -> dict:
     # Update poll timestamp
     await _update_config({"last_poll_at": datetime.now(timezone.utc).isoformat()})
 
+    if dedup_skipped:
+        logger.warning(
+            "🔁 Content-hash dedup blocked %d duplicate(s) this cycle", dedup_skipped
+        )
+
     logger.info(
-        "📬 Inbox poll: %d messages, %d inbound, %d matched, %d replied",
-        len(messages), len(inbound), matched, replied
+        "📬 Inbox poll: %d messages, %d inbound, %d processed, %d dedup-blocked, %d matched, %d replied",
+        len(messages), len(inbound), processed, dedup_skipped, matched, replied
     )
 
     return {
@@ -534,6 +581,7 @@ async def _poll_inbox_once() -> dict:
         "total_messages": len(messages),
         "inbound_count": len(inbound),
         "processed": processed,
+        "dedup_blocked": dedup_skipped,
         "matched": matched,
         "replied": replied,
     }
@@ -589,6 +637,15 @@ async def start_inbox_poller(app):
 
     # Wait for app to be fully initialized
     await asyncio.sleep(5)
+
+    # Ensure indexes for dedup lookups (idempotent — safe to call every startup)
+    try:
+        outreach_coll = get_collection("imessage_outreach")
+        await outreach_coll.create_index("bb_message_guid", sparse=True)
+        await outreach_coll.create_index("content_hash", sparse=True)
+        logger.info("📬 Dedup indexes ensured on imessage_outreach")
+    except Exception as e:
+        logger.warning("📬 Index creation failed (non-critical): %s", e)
 
     while True:
         try:
