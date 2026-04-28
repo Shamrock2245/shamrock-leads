@@ -257,7 +257,27 @@
         <button onclick="SL.setDefBond(5000)">$5K+</button>
         <button onclick="SL.setDefBond(10000)">$10K+</button>
       </div>
-      <span class="meta" id="defResultsMeta"></span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="custody-recheck-btn" id="custodyRecheckBtn" onclick="SL.triggerCustodyRecheck()" title="Re-check custody status for selected county against live jail roster">
+          <span class="recheck-icon">🔍</span>
+          <span class="recheck-label">Verify Custody</span>
+          <span class="recheck-pulse" id="recheckPulse" style="display:none"></span>
+        </button>
+        <span class="meta" id="defResultsMeta"></span>
+      </div>
+    </div>
+
+    <!-- Custody Recheck Results Banner -->
+    <div class="custody-recheck-banner" id="custodyRecheckBanner" style="display:none">
+      <div class="recheck-banner-header">
+        <div class="recheck-banner-title">
+          <span class="recheck-status-icon" id="recheckStatusIcon">🔍</span>
+          <span id="recheckBannerTitle">Verifying custody...</span>
+        </div>
+        <div class="recheck-banner-stats" id="recheckBannerStats"></div>
+        <button class="recheck-banner-close" onclick="SL.closeRecheckBanner()">✕</button>
+      </div>
+      <div class="recheck-diff-list" id="recheckDiffList"></div>
     </div>
 
     <div class="def-grid" id="defendantGrid"></div>

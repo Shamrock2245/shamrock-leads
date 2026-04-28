@@ -315,3 +315,156 @@ async def api_scraper_config():
         "total": len(result),
         "disabled_count": sum(1 for r in result if not r["enabled"]),
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  POST /api/scraper/custody-recheck
+# ─────────────────────────────────────────────────────────────────────────────
+@scraper_control_bp.route("/scraper/custody-recheck", methods=["POST"])
+async def api_custody_recheck():
+    """
+    Trigger an on-demand custody verification for a county or single booking.
+    The scraper engine re-checks each in-custody defendant against the live
+    jail roster and writes diffs to the custody_rechecks collection.
+
+    POST body:
+      { "county": "Lee" }                    — recheck all in-custody for county
+      { "booking_number": "2025-001234" }     — recheck a single defendant
+    """
+    data = await request.get_json(silent=True) or {}
+    county = (data.get("county") or "").strip()
+    booking_number = (data.get("booking_number") or "").strip()
+
+    if not county and not booking_number:
+        return jsonify({"error": "county or booking_number is required"}), 400
+
+    # Resolve county name
+    if county:
+        matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
+        if not matched:
+            matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
+        if not matched:
+            return jsonify({"error": f"County '{county}' not found"}), 404
+        county = matched
+
+    # If only booking_number provided, look up its county
+    if booking_number and not county:
+        arrests = get_collection("arrests")
+        doc = await arrests.find_one(
+            {"booking_number": booking_number},
+            {"county": 1}
+        )
+        if doc:
+            county = doc.get("county", "")
+        if not county:
+            return jsonify({"error": f"No record found for booking {booking_number}"}), 404
+
+    triggers = get_collection("scraper_triggers")
+    now = datetime.now(timezone.utc)
+
+    trigger_doc = {
+        "county": county,
+        "type": "custody_recheck",
+        "requested_at": now,
+        "status": "pending",
+        "requested_by": "dashboard_custody_recheck",
+    }
+    if booking_number:
+        trigger_doc["booking_number"] = booking_number
+        trigger_doc["mode"] = "single"
+    else:
+        trigger_doc["mode"] = "county"
+
+    result = await triggers.insert_one(trigger_doc)
+    trigger_id = str(result.inserted_id)
+
+    return jsonify({
+        "ok": True,
+        "trigger_id": trigger_id,
+        "county": county,
+        "mode": trigger_doc["mode"],
+        "message": f"Custody recheck queued for {county}. Results will appear within 30–120 seconds.",
+        "requested_at": now.isoformat(),
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GET /api/scraper/custody-recheck/results
+# ─────────────────────────────────────────────────────────────────────────────
+@scraper_control_bp.route("/scraper/custody-recheck/results")
+async def api_custody_recheck_results():
+    """
+    Poll for custody recheck results.
+    Query params:
+      ?trigger_id=...   — specific trigger
+      ?county=Lee       — latest results for county
+    Returns trigger status + list of diffs.
+    """
+    trigger_id = request.args.get("trigger_id", "").strip()
+    county = request.args.get("county", "").strip()
+
+    if not trigger_id and not county:
+        return jsonify({"error": "trigger_id or county is required"}), 400
+
+    triggers = get_collection("scraper_triggers")
+    rechecks = get_collection("custody_rechecks")
+
+    # Get the trigger status
+    trigger_doc = None
+    if trigger_id:
+        try:
+            from bson import ObjectId
+            trigger_doc = await triggers.find_one(
+                {"_id": ObjectId(trigger_id)},
+                {"_id": 0}
+            )
+        except Exception:
+            pass
+    elif county:
+        matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
+        if matched:
+            county = matched
+        trigger_doc = await triggers.find_one(
+            {"county": county, "type": "custody_recheck"},
+            {"_id": 0},
+            sort=[("requested_at", -1)],
+        )
+
+    if not trigger_doc:
+        return jsonify({"status": "not_found", "diffs": [], "total_checked": 0})
+
+    # Serialize datetimes
+    for k, v in list(trigger_doc.items()):
+        if isinstance(v, datetime):
+            trigger_doc[k] = v.isoformat()
+
+    trigger_status = trigger_doc.get("status", "pending")
+
+    # Get diff results
+    query = {"county": trigger_doc.get("county", county)}
+    if trigger_id:
+        query["trigger_id"] = trigger_id
+
+    diffs = []
+    async for doc in rechecks.find(
+        query,
+        {"_id": 0}
+    ).sort("checked_at", -1).limit(200):
+        for k, v in list(doc.items()):
+            if isinstance(v, datetime):
+                doc[k] = v.isoformat()
+        diffs.append(doc)
+
+    # Summary stats
+    changes_found = sum(1 for d in diffs if d.get("changes"))
+    not_found = sum(1 for d in diffs if not d.get("source_found", True))
+
+    return jsonify({
+        "status": trigger_status,
+        "trigger": trigger_doc,
+        "diffs": diffs,
+        "total_checked": trigger_doc.get("total_checked", 0),
+        "changes_found": changes_found,
+        "not_found_count": not_found,
+        "county": trigger_doc.get("county", ""),
+    })

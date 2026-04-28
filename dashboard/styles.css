@@ -886,3 +886,191 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
   .inv-surety-name{flex-direction:column;text-align:center}
 }
 
+/* ═══════════════════════════════════════════════════════
+   CUSTODY RE-CHECK AGENT — Glassmorphic Design
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Verify Custody Button ── */
+.custody-recheck-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  background:linear-gradient(135deg,rgba(59,130,246,.15),rgba(139,92,246,.12));
+  color:#93c5fd;border:1px solid rgba(59,130,246,.2);
+  padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;
+  cursor:pointer;transition:var(--transition);font-family:inherit;
+  backdrop-filter:blur(8px);position:relative;overflow:hidden;
+  letter-spacing:.3px;
+}
+.custody-recheck-btn::before{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(90deg,transparent,rgba(59,130,246,.08),transparent);
+  transform:translateX(-100%);transition:transform .6s ease;
+}
+.custody-recheck-btn:hover{
+  background:linear-gradient(135deg,rgba(59,130,246,.25),rgba(139,92,246,.2));
+  transform:translateY(-1px);box-shadow:0 4px 16px rgba(59,130,246,.25);
+  border-color:rgba(59,130,246,.4);color:#bfdbfe;
+}
+.custody-recheck-btn:hover::before{transform:translateX(100%)}
+.custody-recheck-btn:active{transform:translateY(0);box-shadow:none}
+.custody-recheck-btn.checking{
+  background:linear-gradient(135deg,rgba(245,158,11,.15),rgba(234,179,8,.12));
+  color:#fcd34d;border-color:rgba(245,158,11,.3);
+  pointer-events:none;
+}
+.recheck-icon{font-size:13px}
+.recheck-label{white-space:nowrap}
+
+/* ── Pulse indicator (active scan) ── */
+.recheck-pulse{
+  width:6px;height:6px;border-radius:50%;
+  background:#f59e0b;animation:recheckPulse 1.5s ease-in-out infinite;
+  box-shadow:0 0 8px rgba(245,158,11,.5);
+}
+@keyframes recheckPulse{
+  0%,100%{opacity:1;transform:scale(1)}
+  50%{opacity:.3;transform:scale(.6)}
+}
+
+/* ── Results Banner ── */
+.custody-recheck-banner{
+  background:linear-gradient(135deg,rgba(59,130,246,.06),rgba(139,92,246,.04));
+  border:1px solid rgba(59,130,246,.15);border-radius:var(--radius);
+  margin-bottom:14px;overflow:hidden;
+  animation:bannerSlideIn .35s cubic-bezier(.4,0,.2,1);
+}
+@keyframes bannerSlideIn{
+  from{opacity:0;transform:translateY(-8px);max-height:0}
+  to{opacity:1;transform:translateY(0);max-height:600px}
+}
+.recheck-banner-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;gap:12px;
+}
+.recheck-banner-title{
+  display:flex;align-items:center;gap:8px;
+  font-size:13px;font-weight:600;color:var(--text);
+}
+.recheck-status-icon{font-size:16px}
+.recheck-banner-stats{
+  display:flex;gap:16px;font-size:11px;font-weight:600;
+  letter-spacing:.3px;color:var(--text-secondary);
+}
+.recheck-banner-stats .stat-pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 10px;border-radius:20px;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);
+}
+.recheck-banner-stats .stat-pill.changes{color:#f59e0b;border-color:rgba(245,158,11,.2);background:rgba(245,158,11,.06)}
+.recheck-banner-stats .stat-pill.released{color:#ef4444;border-color:rgba(239,68,68,.2);background:rgba(239,68,68,.06)}
+.recheck-banner-stats .stat-pill.verified{color:#10b981;border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.06)}
+.recheck-banner-close{
+  background:none;border:none;color:var(--muted);
+  cursor:pointer;font-size:14px;padding:4px 8px;border-radius:6px;
+  transition:var(--transition);
+}
+.recheck-banner-close:hover{color:var(--text);background:rgba(255,255,255,.06)}
+
+/* ── Diff List inside banner ── */
+.recheck-diff-list{
+  max-height:300px;overflow-y:auto;
+  border-top:1px solid rgba(59,130,246,.08);
+}
+.recheck-diff-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;gap:12px;
+  border-bottom:1px solid rgba(255,255,255,.03);
+  transition:background .15s;
+}
+.recheck-diff-item:hover{background:rgba(59,130,246,.04)}
+.recheck-diff-item:last-child{border-bottom:none}
+.recheck-diff-name{
+  font-size:12px;font-weight:600;color:var(--text);
+  min-width:160px;
+}
+.recheck-diff-booking{
+  font-size:10px;color:var(--muted);font-family:'SF Mono',monospace;
+}
+.recheck-diff-changes{
+  display:flex;gap:6px;flex-wrap:wrap;flex:1;justify-content:flex-end;
+}
+.recheck-diff-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 8px;border-radius:12px;font-size:10px;font-weight:600;
+}
+.recheck-diff-chip.status-change{
+  background:rgba(239,68,68,.1);color:#fca5a5;
+  border:1px solid rgba(239,68,68,.15);
+}
+.recheck-diff-chip.bond-change{
+  background:rgba(245,158,11,.1);color:#fcd34d;
+  border:1px solid rgba(245,158,11,.15);
+}
+.recheck-diff-chip.charge-change{
+  background:rgba(139,92,246,.1);color:#c4b5fd;
+  border:1px solid rgba(139,92,246,.15);
+}
+.recheck-diff-chip.not-found{
+  background:rgba(239,68,68,.12);color:#fca5a5;
+  border:1px solid rgba(239,68,68,.2);
+}
+.recheck-diff-chip .old-val{text-decoration:line-through;opacity:.6}
+.recheck-diff-chip .arrow{opacity:.5;font-size:9px}
+.recheck-diff-chip .new-val{font-weight:700}
+
+/* ── Diff Badge on Defendant Cards ── */
+.def-card .custody-diff-badge{
+  position:absolute;top:8px;right:8px;
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;
+  letter-spacing:.3px;z-index:5;
+  animation:diffBadgeGlow 2s ease-in-out infinite alternate;
+}
+.custody-diff-badge.changed{
+  background:rgba(245,158,11,.15);color:#fcd34d;
+  border:1px solid rgba(245,158,11,.25);
+  box-shadow:0 0 12px rgba(245,158,11,.2);
+}
+.custody-diff-badge.released{
+  background:rgba(239,68,68,.15);color:#fca5a5;
+  border:1px solid rgba(239,68,68,.25);
+  box-shadow:0 0 12px rgba(239,68,68,.2);
+}
+.custody-diff-badge.verified{
+  background:rgba(16,185,129,.12);color:#6ee7b7;
+  border:1px solid rgba(16,185,129,.2);
+}
+@keyframes diffBadgeGlow{
+  from{box-shadow:0 0 8px rgba(245,158,11,.15)}
+  to{box-shadow:0 0 20px rgba(245,158,11,.3)}
+}
+
+/* ── Verified timestamp on card ── */
+.custody-verified-ts{
+  font-size:9px;color:var(--muted);font-style:italic;
+  margin-top:4px;opacity:.7;
+}
+
+/* ── Banner pending state shimmer ── */
+.custody-recheck-banner.pending .recheck-banner-header{
+  background:linear-gradient(90deg,
+    rgba(245,158,11,.04),rgba(245,158,11,.08),rgba(245,158,11,.04));
+  background-size:200% 100%;
+  animation:bannerShimmer 2s linear infinite;
+}
+@keyframes bannerShimmer{
+  0%{background-position:200% 0}
+  100%{background-position:-200% 0}
+}
+
+[data-theme="light"] .custody-recheck-btn{
+  background:linear-gradient(135deg,rgba(59,130,246,.08),rgba(139,92,246,.06));
+  color:#2563eb;border-color:rgba(59,130,246,.2);
+}
+[data-theme="light"] .custody-recheck-btn:hover{
+  background:linear-gradient(135deg,rgba(59,130,246,.15),rgba(139,92,246,.1));
+  color:#1d4ed8;
+}
+[data-theme="light"] .custody-recheck-banner{
+  background:linear-gradient(135deg,rgba(59,130,246,.04),rgba(139,92,246,.03));
+  border-color:rgba(59,130,246,.12);
+}

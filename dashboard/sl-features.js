@@ -1012,13 +1012,244 @@ window.SLContact = (function() {
   return { openModal, closeModal, fillTemplate: _fillTemplate, sendText };
 })();
 
+// ═══════════════════════════════════════════════════════
+//  CUSTODY RE-CHECK AGENT — Dashboard UI Controller
+// ═══════════════════════════════════════════════════════
+let _recheckPollTimer = null;
+let _recheckDiffs = {};  // booking_number → diff data
+
+async function triggerCustodyRecheck() {
+  const county = document.getElementById('defCountyFilter')?.value || '';
+  if (!county) {
+    SL.toast('Select a county first to verify custody', 'error');
+    return;
+  }
+
+  // Update button to checking state
+  const btn = document.getElementById('custodyRecheckBtn');
+  if (btn) {
+    btn.classList.add('checking');
+    btn.querySelector('.recheck-label').textContent = 'Checking...';
+    document.getElementById('recheckPulse').style.display = 'inline-block';
+  }
+
+  // Show banner in pending state
+  const banner = document.getElementById('custodyRecheckBanner');
+  if (banner) {
+    banner.style.display = 'block';
+    banner.classList.add('pending');
+    banner.classList.remove('done');
+    document.getElementById('recheckStatusIcon').textContent = '⏳';
+    document.getElementById('recheckBannerTitle').textContent = `Verifying custody for ${county} County...`;
+    document.getElementById('recheckBannerStats').innerHTML = '<span class="stat-pill">Queuing scraper agent...</span>';
+    document.getElementById('recheckDiffList').innerHTML = '';
+  }
+
+  try {
+    const r = await fetch(`${API}/api/scraper/custody-recheck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ county }),
+    });
+    const data = await r.json();
+
+    if (!data.ok) {
+      SL.toast(data.error || 'Failed to trigger recheck', 'error');
+      _resetRecheckButton();
+      return;
+    }
+
+    SL.toast(`Custody recheck queued for ${county}`, 'success');
+
+    // Start polling for results
+    _pollRecheckResults(data.trigger_id, county);
+
+  } catch (e) {
+    console.error('Custody recheck error:', e);
+    SL.toast('Network error triggering recheck', 'error');
+    _resetRecheckButton();
+  }
+}
+
+function _pollRecheckResults(triggerId, county) {
+  if (_recheckPollTimer) clearInterval(_recheckPollTimer);
+
+  let attempts = 0;
+  const maxAttempts = 36; // 3 minutes @ 5s intervals
+
+  _recheckPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) {
+      clearInterval(_recheckPollTimer);
+      _recheckPollTimer = null;
+      _updateRecheckBanner('timeout', county, {});
+      _resetRecheckButton();
+      return;
+    }
+
+    try {
+      const r = await fetch(`${API}/api/scraper/custody-recheck/results?trigger_id=${triggerId}`);
+      const data = await r.json();
+
+      // Update banner with progress
+      const titleEl = document.getElementById('recheckBannerTitle');
+      if (titleEl && data.status === 'running') {
+        titleEl.textContent = `Scanning ${county} County roster...`;
+        document.getElementById('recheckStatusIcon').textContent = '🔍';
+      }
+
+      if (data.status === 'done' || data.status === 'error') {
+        clearInterval(_recheckPollTimer);
+        _recheckPollTimer = null;
+        _updateRecheckBanner(data.status, county, data);
+        _highlightChangedCards(data.diffs || []);
+        _resetRecheckButton();
+
+        if (data.status === 'done') {
+          const summary = `${data.total_checked} checked · ${data.changes_found} changes · ${data.not_found_count} not found`;
+          SL.toast(`Custody verification complete: ${summary}`, 'success');
+        } else {
+          SL.toast('Custody verification encountered an error', 'error');
+        }
+      }
+    } catch (e) {
+      console.debug('Poll error (will retry):', e);
+    }
+  }, 5000);
+}
+
+function _updateRecheckBanner(status, county, data) {
+  const banner = document.getElementById('custodyRecheckBanner');
+  if (!banner) return;
+
+  banner.classList.remove('pending');
+  banner.classList.add('done');
+
+  const iconEl = document.getElementById('recheckStatusIcon');
+  const titleEl = document.getElementById('recheckBannerTitle');
+  const statsEl = document.getElementById('recheckBannerStats');
+  const diffListEl = document.getElementById('recheckDiffList');
+
+  if (status === 'done') {
+    const checked = data.total_checked || 0;
+    const changes = data.changes_found || 0;
+    const notFound = data.not_found_count || 0;
+    const verified = checked - changes - notFound;
+
+    iconEl.textContent = changes > 0 || notFound > 0 ? '⚠️' : '✅';
+    titleEl.textContent = `${county} County — Custody Verified`;
+
+    statsEl.innerHTML = `
+      <span class="stat-pill verified">✓ ${verified} verified</span>
+      ${changes > 0 ? `<span class="stat-pill changes">🔄 ${changes} changed</span>` : ''}
+      ${notFound > 0 ? `<span class="stat-pill released">🚪 ${notFound} not found</span>` : ''}
+    `;
+
+    // Render diff items
+    const diffs = (data.diffs || []).filter(d => d.changes && d.changes.length > 0);
+    if (diffs.length > 0) {
+      diffListEl.innerHTML = diffs.map(d => {
+        const chips = d.changes.map(c => {
+          const chipClass = c.field === 'status' ? 'status-change'
+            : c.field === 'bond_amount' ? 'bond-change'
+            : c.field === 'charges' ? 'charge-change'
+            : 'status-change';
+          const label = c.field.replace('_', ' ');
+          const oldStr = typeof c.old === 'number' ? `$${c.old.toLocaleString()}` : (c.old || '—');
+          const newStr = typeof c.new === 'number' ? `$${c.new.toLocaleString()}` : (c.new || '—');
+          return `<span class="recheck-diff-chip ${chipClass}">
+            <span class="old-val">${oldStr}</span>
+            <span class="arrow">→</span>
+            <span class="new-val">${newStr}</span>
+          </span>`;
+        }).join('');
+
+        return `<div class="recheck-diff-item">
+          <div>
+            <div class="recheck-diff-name">${d.full_name || 'Unknown'}</div>
+            <div class="recheck-diff-booking">${d.booking_number || ''}</div>
+          </div>
+          <div class="recheck-diff-changes">${chips}</div>
+        </div>`;
+      }).join('');
+    } else {
+      diffListEl.innerHTML = '<div style="padding:12px 16px;text-align:center;color:var(--muted);font-size:12px">All records verified — no changes detected</div>';
+    }
+
+  } else if (status === 'timeout') {
+    iconEl.textContent = '⏱️';
+    titleEl.textContent = `${county} County — Verification timed out`;
+    statsEl.innerHTML = '<span class="stat-pill changes">Scraper may still be running. Try again later.</span>';
+    diffListEl.innerHTML = '';
+  } else {
+    iconEl.textContent = '❌';
+    titleEl.textContent = `${county} County — Verification error`;
+    statsEl.innerHTML = '<span class="stat-pill released">The scraper encountered an error</span>';
+    diffListEl.innerHTML = '';
+  }
+}
+
+function _highlightChangedCards(diffs) {
+  // Build a lookup map
+  _recheckDiffs = {};
+  diffs.forEach(d => {
+    if (d.booking_number) _recheckDiffs[d.booking_number] = d;
+  });
+
+  // Find all defendant cards and overlay badges
+  document.querySelectorAll('.def-card').forEach(card => {
+    const bookingEl = card.querySelector('.def-booking');
+    if (!bookingEl) return;
+    const bk = bookingEl.textContent.trim();
+    const diff = _recheckDiffs[bk];
+    if (!diff) return;
+
+    // Remove existing badge if any
+    card.querySelectorAll('.custody-diff-badge').forEach(b => b.remove());
+
+    if (!diff.source_found) {
+      // Not found on roster
+      card.insertAdjacentHTML('afterbegin',
+        '<div class="custody-diff-badge released">🚪 Not on Roster</div>'
+      );
+      card.style.position = 'relative';
+    } else if (diff.changes && diff.changes.length > 0) {
+      // Has changes
+      const label = diff.changes.map(c => c.field.replace('_',' ')).join(', ');
+      card.insertAdjacentHTML('afterbegin',
+        `<div class="custody-diff-badge changed">🔄 ${label}</div>`
+      );
+      card.style.position = 'relative';
+    }
+  });
+}
+
+function closeRecheckBanner() {
+  const banner = document.getElementById('custodyRecheckBanner');
+  if (banner) {
+    banner.style.display = 'none';
+    banner.classList.remove('pending', 'done');
+  }
+}
+
+function _resetRecheckButton() {
+  const btn = document.getElementById('custodyRecheckBtn');
+  if (btn) {
+    btn.classList.remove('checking');
+    btn.querySelector('.recheck-label').textContent = 'Verify Custody';
+    document.getElementById('recheckPulse').style.display = 'none';
+  }
+}
+
+
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody,
-  triggerSignNowPhase1, triggerSignNowPhase2 };
+  triggerSignNowPhase1, triggerSignNowPhase2,
+  triggerCustodyRecheck, closeRecheckBanner };
 
 // ── Init ──
 loadDashboard();
