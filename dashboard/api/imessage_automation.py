@@ -47,8 +47,8 @@ DEFAULT_CONFIG = {
     "type": "auto_reply",
     "enabled": False,  # Off by default — user enables via dashboard
     "ai_enabled": True,
-    "cooldown_minutes": 60,
-    "first_reply_only": True,
+    "cooldown_minutes": 5,  # Per-message cooldown (not per-lead)
+    "conversational_mode": True,  # Keep talking across multiple exchanges
     "business_hours_only": False,
     "business_hours": {"start": 8, "end": 20},
     "simulate_typing": True,
@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
         "first_response": (
             "Hi! This is Shamrock Bail Bonds. Thanks for reaching out — "
             "we're here to help get your loved one home. "
-            "A bondsman will be with you shortly. 🍀"
+            "Are you looking to get them bonded out? 🍀"
         ),
         "after_hours": (
             "Thanks for your message! Our office is currently closed but "

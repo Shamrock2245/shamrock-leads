@@ -74,6 +74,11 @@ const SLProspective = (() => {
         const lastComm = comms.length ? comms[comms.length-1] : null;
         const lastMsg = lastComm ? `${channelIcon(lastComm.channel)} ${timeAgo(lastComm.timestamp)}` : 'No messages';
         const indName = b.indemnitor?.name || '';
+        const indRelation = b.indemnitor?.relationship || '';
+        const indCallback = b.indemnitor?.callback_phone || '';
+        // Count conversation turns
+        const turnCount = comms.filter(c => c.channel === 'imessage').length;
+        const turnBadge = turnCount > 0 ? `<span class="turn-badge" title="${turnCount} messages">${turnCount}💬</span>` : '';
         // Inbound reply badge
         const hasInbound = comms.some(c => c.direction === 'inbound');
         const hasNewReply = comms.length && comms[comms.length-1].direction === 'inbound';
@@ -87,8 +92,10 @@ const SLProspective = (() => {
           <div class="pipeline-card-meta">
             <span>${b.county||'—'} County</span>
             <span class="score-pill ${scoreCls}">${b.lead_score||0}</span>
+            ${turnBadge}
           </div>
-          ${indName ? `<div class="pipeline-card-ind">👤 ${indName}</div>` : ''}
+          ${indName ? `<div class="pipeline-card-ind">👤 ${indName}${indRelation ? ' ('+indRelation+')' : ''}</div>` : ''}
+          ${indCallback ? `<div class="pipeline-card-ind" style="font-size:11px">📞 ${indCallback}</div>` : ''}
           <div class="pipeline-card-comm">${replyBadge} ${lastMsg}</div>
           ${lastComm?.message ? `<div class="pipeline-card-preview">${(lastComm.message||'').substring(0,50)}${(lastComm.message||'').length>50?'...':''}</div>` : ''}
           ${stage==='ready'?'<button class="btn-officialize-sm" onclick="event.stopPropagation();SLProspective.officialize(\''+b.booking_number+'\')">☘️ Officialize</button>':''}
@@ -507,17 +514,22 @@ const SLProspective = (() => {
     const cfg = _autoReplyConfig;
     panel.innerHTML = `
       <div class="auto-reply-header" onclick="this.parentElement.classList.toggle('expanded')">
-        <span>🤖 Auto-Reply Agent ${cfg.enabled ? '<span class="ar-status on">ON</span>' : '<span class="ar-status off">OFF</span>'}</span>
+        <span>🤖 AI Outreach Agent ${cfg.enabled ? '<span class="ar-status on">LIVE</span>' : '<span class="ar-status off">OFF</span>'}</span>
         <span class="ar-toggle-arrow">▼</span>
       </div>
       <div class="auto-reply-body">
         <div class="ar-row">
-          <label>Enable Auto-Replies</label>
+          <label>Enable Agent</label>
           <input type="checkbox" id="arEnabled" ${cfg.enabled?'checked':''} onchange="SLProspective.updateAutoReply({enabled:this.checked})">
         </div>
         <div class="ar-row">
-          <label>AI-Powered Responses (GPT-4o)</label>
+          <label>AI-Powered (GPT-4o)</label>
           <input type="checkbox" id="arAI" ${cfg.ai_enabled?'checked':''} onchange="SLProspective.updateAutoReply({ai_enabled:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>Conversational Mode</label>
+          <input type="checkbox" id="arConvo" ${cfg.conversational_mode!==false?'checked':''} onchange="SLProspective.updateAutoReply({conversational_mode:this.checked})">
+          <small style="color:var(--text-muted);font-size:11px;margin-left:4px">Keeps talking &amp; gathering info</small>
         </div>
         <div class="ar-row">
           <label>Simulate Typing</label>
@@ -532,8 +544,8 @@ const SLProspective = (() => {
           <input type="checkbox" id="arReact" ${cfg.auto_react_interested?'checked':''} onchange="SLProspective.updateAutoReply({auto_react_interested:this.checked})">
         </div>
         <div class="ar-row">
-          <label>Cooldown (min)</label>
-          <input type="number" id="arCooldown" value="${cfg.cooldown_minutes||60}" min="5" max="1440" style="width:80px" onchange="SLProspective.updateAutoReply({cooldown_minutes:parseInt(this.value)})">
+          <label>Reply Cooldown (min)</label>
+          <input type="number" id="arCooldown" value="${cfg.cooldown_minutes||5}" min="1" max="120" style="width:80px" onchange="SLProspective.updateAutoReply({cooldown_minutes:parseInt(this.value)})">
         </div>
         <div class="ar-row">
           <label>Last Polled</label>

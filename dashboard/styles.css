@@ -661,6 +661,7 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .reply-badge{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border-radius:8px;font-size:9px;font-weight:700;letter-spacing:.3px;background:rgba(59,130,246,.1);color:#60a5fa;border:1px solid rgba(59,130,246,.15)}
 .reply-badge.new{background:rgba(245,158,11,.15);color:#fbbf24;border-color:rgba(245,158,11,.25);animation:replyPulse 2s ease-in-out infinite}
 @keyframes replyPulse{0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.3)}50%{box-shadow:0 0 0 4px rgba(245,158,11,0)}}
+.turn-badge{display:inline-flex;align-items:center;padding:1px 6px;border-radius:6px;font-size:9px;font-weight:600;background:rgba(16,185,129,.1);color:#34d399;border:1px solid rgba(16,185,129,.15)}
 
 /* ── Card New Reply Highlight ── */
 .pipeline-card.has-new-reply{border-color:rgba(245,158,11,.4) !important;box-shadow:0 0 12px rgba(245,158,11,.1)}
