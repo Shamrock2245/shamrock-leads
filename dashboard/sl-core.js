@@ -125,25 +125,37 @@ function initSSE() {
 }
 // Only attempt SSE if not on localhost dev
 try { initSSE(); } catch(_) {}
-
-// ── SL namespace (used by index.html onclick attributes) ──────────────────
-const SL = {
+// ── SL namespace bootstrap (used by index.html onclick attributes) ──────────────
+// BUG FIX: sl-core.js previously declared `const SL = {...}` which shadowed
+// the full `window.SL` object built by sl-features.js (35 functions).
+// Fix: bootstrap window.SL with the core-only functions here; sl-features.js
+// will OVERWRITE window.SL with the complete 35-function namespace after it loads.
+// This guarantees onclick handlers work even if sl-features.js hasn't loaded yet,
+// and the full namespace is available once all scripts are parsed.
+window.SL = window.SL || {};
+// Seed core functions so they are available immediately
+Object.assign(window.SL, {
   switchTab: (btn) => switchTab(btn),
   toggleTheme: () => toggleTheme(),
   refresh: () => { if (typeof applyFilters === 'function') applyFilters(); },
   applyPreset: (name) => applyPreset(name),
-  applyFilters: () => applyFilters(),
+  applyFilters: () => { if (typeof applyFilters === 'function') applyFilters(); },
   setDays: (d) => setDays(d),
   setBond: (v) => setBond(v),
+  setDefBond: (v) => { if (typeof setDefBond === 'function') setDefBond(v); },
   sortBy: (f) => sortBy(f),
   debounceSearch: () => debounceSearch(),
+  debounceDefSearch: () => { if (typeof debounceDefSearch === 'function') debounceDefSearch(); },
   toggleCountyDropdown: () => toggleCountyDropdown(),
   filterCountyOptions: (v) => filterCountyOptions(v),
-  closeModal: () => { const m = document.getElementById('bondModal'); if (m) m.style.display = 'none'; },
+  toggleCounty: (c, chk) => { if (typeof toggleCounty === 'function') toggleCounty(c, chk); },
+  closeModal: () => { const m = document.getElementById('bondModal'); if (m) m.classList.remove('show'); },
   submitBond: () => { if (typeof submitBond === 'function') submitBond(); },
   toast: (msg, type) => toast(msg, type),
-};
-
+});
+// Note: sl-features.js runs after this file and calls:
+//   window.SL = { ...all 35 functions... };
+// which replaces the seed above with the complete namespace.
 // Utilities
 function fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : n.toString(); }
 function timeAgo(iso) { if(!iso) return '—'; const d=(Date.now()-new Date(iso).getTime())/1000; if(d<60) return Math.round(d)+'s ago'; if(d<3600) return Math.round(d/60)+'m ago'; if(d<86400) return Math.round(d/3600)+'h ago'; return Math.round(d/86400)+'d ago'; }

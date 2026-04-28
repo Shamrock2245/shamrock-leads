@@ -246,13 +246,16 @@ const SLIntake = (() => {
   }
 
   // ── Write bond from current intake ────────────────────────────────────────
+  // BUG FIX: snapshot hydration state BEFORE closeModal() clears it.
   function writeBondFromIntake() {
     if (!_currentHydration) return;
+    // Snapshot BEFORE closeModal() nulls _currentHydration
     const h = _currentHydration;
+    const savedIntakeId = _currentIntakeId;
     const ind = h.indemnitor || {};
     const def = h.defendant || {};
 
-    // Close intake modal
+    // Close intake modal (this nulls _currentHydration and _currentIntakeId)
     closeModal();
 
     // Pre-populate the Write Bond modal via SL.openWriteBond
@@ -275,7 +278,7 @@ const SLIntake = (() => {
         },
         charges: def.charges,
         indemnitors: [ind],
-        intake_id: _currentIntakeId,
+        intake_id: savedIntakeId,   // use snapshot — _currentIntakeId is null after closeModal()
         intake_source: h.source,
       });
     } else {
