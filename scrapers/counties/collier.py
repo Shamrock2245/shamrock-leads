@@ -389,3 +389,70 @@ class CollierCountyScraper(BaseScraper):
                     return None
 
         return None
+
+    # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
+    def _fetch_single_booking(
+        self, booking_id: str, detail_url: str
+    ) -> "Optional[ArrestRecord]":
+        """
+        Re-fetch a single Collier County booking by booking number.
+
+        Collier uses an ASP.NET ViewState grid — there is no per-booking
+        detail URL, so we re-run the full AJAX POST and filter the parsed
+        records for the matching booking number.
+
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id:
+            return None
+        try:
+            from curl_cffi import requests as cffi_requests
+            from bs4 import BeautifulSoup
+        except ImportError:
+            return None
+        try:
+            session = cffi_requests.Session()
+            resp = self._fetch_with_retry(session, "GET", SEARCH_URL, headers=HEADERS)
+            if resp is None or resp.status_code != 200:
+                return None
+            soup = BeautifulSoup(resp.text, "html.parser")
+            viewstate = self._extract_field(soup, "__VIEWSTATE")
+            viewstategen = self._extract_field(soup, "__VIEWSTATEGENERATOR")
+            if not viewstate or not viewstategen:
+                return None
+            post_headers = {
+                **HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "X-MicrosoftAjax": "Delta=true",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": BASE_URL,
+                "Referer": SEARCH_URL,
+            }
+            data = {
+                "ScriptManager1": "UpdatePanel1|timerLoad",
+                "__EVENTTARGET": "timerLoad",
+                "__EVENTARGUMENT": "",
+                "__VIEWSTATE": viewstate,
+                "__VIEWSTATEGENERATOR": viewstategen,
+                "__ASYNCPOST": "true",
+            }
+            resp = self._fetch_with_retry(
+                session, "POST", SEARCH_URL, headers=post_headers, data=data
+            )
+            if resp is None or resp.status_code != 200:
+                return None
+            soup = BeautifulSoup(resp.text, "html.parser")
+            tables = soup.find_all("table")
+            records = self._parse_arrest_tables(tables, soup)
+            # Find the matching record by booking number
+            for record in records:
+                if record.Booking_Number == booking_id:
+                    record.LastCheckedMode = "UPDATE"
+                    return record
+            logger.debug(
+                f"Collier _fetch_single_booking: booking {booking_id} not found in current roster"
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"Collier _fetch_single_booking error ({booking_id}): {e}")
+            return None

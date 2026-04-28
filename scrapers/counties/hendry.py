@@ -323,3 +323,56 @@ class HendryCountyScraper(BaseScraper):
             result["booking_date"] = m.group(1)
 
         return result
+
+
+    # -- FirstAppearanceWatcher hook ------------------------------------------
+    def _fetch_single_booking(self, booking_id: str, detail_url: str):
+        """
+        Re-fetch a single Hendry County booking by navigating directly to
+        its detail URL via DrissionPage and re-running charge extraction.
+
+        Hendry detail pages use a text-based layout parsed by
+        _extract_charges_from_text(). We navigate to the stored detail_url
+        and re-extract charges + bond amount.
+
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not detail_url:
+            return None
+        page = None
+        try:
+            page = self._setup_browser()
+            page.get(detail_url)
+            import time as _time
+            _time.sleep(2)
+            body_el = page.ele('tag:body', timeout=5)
+            if not body_el:
+                return None
+            text = body_el.text
+            if not text or 'Record Details' not in text:
+                _time.sleep(2)
+                text = body_el.text if body_el else ''
+            charges, total_bond = self._extract_charges_from_text(text)
+            from core.models import ArrestRecord
+            record = ArrestRecord(
+                County=self.county,
+                Booking_Number=booking_id,
+                Charges=charges,
+                Bond_Amount=str(total_bond) if total_bond > 0 else '0',
+                Bond_Paid='NO',
+                Detail_URL=detail_url,
+                Status='In Custody',
+                Facility='Hendry County Jail',
+                LastCheckedMode='UPDATE',
+            )
+            return record
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Hendry _fetch_single_booking error ({booking_id}): {e}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass

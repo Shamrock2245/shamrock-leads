@@ -641,3 +641,58 @@ class LeeCountyScraper(BaseScraper):
         if len(t) < 4:
             return True
         return any(re.match(p, t, re.IGNORECASE) for p in patterns)
+
+    # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
+    def _fetch_single_booking(
+        self, booking_id: str, detail_url: str
+    ) -> "Optional[ArrestRecord]":
+        """
+        Re-fetch a single booking by ID from the Lee County charges API.
+
+        Called by FirstAppearanceWatcher every 30 minutes for no-bond records
+        within 3 days of arrest, so bond set at first appearance is detected
+        and re-alerted promptly.
+
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id:
+            return None
+        try:
+            url = f"{BASE_URL}{CHARGES_API.format(booking_id=booking_id)}"
+            resp = self._http_fetch(url)
+            if resp is None or resp.status_code != 200:
+                logger.debug(
+                    f"Lee _fetch_single_booking: charges API returned "
+                    f"{resp.status_code if resp else 'None'} for {booking_id}"
+                )
+                return None
+            charges_json = resp.json()
+            if not isinstance(charges_json, list):
+                return None
+            parsed = self._parse_charges(charges_json)
+            base = {
+                "booking_number": booking_id,
+                "detail_url": detail_url or f"{BASE_URL}{DETAIL_PAGE}?id={booking_id}",
+                "charges": parsed.get("charges", []),
+                "bond_amount": parsed.get("bond_amount", "0"),
+                "bond_paid": parsed.get("bond_paid", "NO"),
+                "bond_type": parsed.get("bond_type", ""),
+                "court_type": parsed.get("court_type", ""),
+                "case_number": parsed.get("case_number", ""),
+                "court_date": parsed.get("court_date", ""),
+                "court_time": parsed.get("court_time", ""),
+                "court_location": parsed.get("court_location", ""),
+                "full_name": "", "first_name": "", "middle_name": "", "last_name": "",
+                "dob": "", "booking_date": "", "booking_time": "", "status": "In Custody",
+                "release_date": "", "facility": "Lee County Jail",
+                "race": "", "sex": "", "height": "", "weight": "",
+                "address": "", "city": "", "state": "FL", "zip": "",
+                "mugshot_url": "", "person_id": "",
+            }
+            record = self._to_arrest_record(base)
+            record.County = self.county
+            record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            logger.warning(f"Lee _fetch_single_booking error ({booking_id}): {e}")
+            return None

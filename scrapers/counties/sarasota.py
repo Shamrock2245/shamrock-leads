@@ -408,3 +408,34 @@ class SarasotaCountyScraper(BaseScraper):
             description = re.sub(r'^[\d.]+[a-z]*\s*-\s*', '', description)
             return description.strip()
         return text.strip()
+
+
+    # -- FirstAppearanceWatcher hook ------------------------------------------
+    def _fetch_single_booking(self, booking_id: str, detail_url: str):
+        """
+        Re-fetch a single Sarasota County booking by navigating directly to
+        its Revize detail URL via DrissionPage.
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id and not detail_url:
+            return None
+        if not detail_url:
+            detail_url = f"{BASE_URL}booking.php?id={booking_id}"
+        page = None
+        try:
+            page = self._setup_browser()
+            self._wait_for_cloudflare(page)
+            record = self._extract_detail(page, booking_id, detail_url)
+            if record:
+                record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Sarasota _fetch_single_booking error ({booking_id}): {e}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass

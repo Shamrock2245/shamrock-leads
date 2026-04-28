@@ -463,3 +463,109 @@ if __name__ == "__main__":
             description = re.sub(r"^[\d.]+[a-z]*\s*-\s*", "", description)
             return description.strip()
         return text.strip()
+
+    # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
+    def _fetch_single_booking(
+        self, booking_id: str, detail_url: str
+    ) -> "Optional[ArrestRecord]":
+        """
+        Re-fetch a single Charlotte County booking by navigating directly to
+        its Revize detail URL via the patchright subprocess worker.
+
+        Charlotte uses Cloudflare Turnstile, so we reuse the existing
+        subprocess-based patchright worker and pass the specific detail URL.
+
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id and not detail_url:
+            return None
+        # Build the detail URL if not provided
+        if not detail_url:
+            detail_url = (
+                f"https://inmates.charlottecountyfl.revize.com/bookings/{booking_id}"
+            )
+        try:
+            worker_script = "/tmp/charlotte_single_booking_worker.py"
+            script_content = f'''#!/usr/bin/env python3
+"""One-shot Charlotte single-booking fetcher for FirstAppearanceWatcher."""
+import json, sys, time
+try:
+    from patchright.sync_api import sync_playwright
+except ImportError:
+    print(json.dumps([]))
+    sys.exit(0)
+def main():
+    detail_url = {detail_url!r}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        page = context.new_page()
+        try:
+            page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
+            js_data = page.evaluate("""() => {{
+                const result = {{}};
+                document.querySelectorAll('label').forEach(label => {{
+                    const text = label.textContent.trim().replace(/:$/, '');
+                    const forId = label.getAttribute('for');
+                    let value = null;
+                    if (forId) {{ const inp = document.getElementById(forId); if (inp) value = inp.value || inp.textContent; }}
+                    if (!value) {{ const next = label.nextElementSibling; if (next) value = next.textContent || next.value; }}
+                    if (value && value.trim()) result[text] = value.trim();
+                }});
+                document.querySelectorAll('dt').forEach(dt => {{
+                    const dd = dt.nextElementSibling;
+                    if (dd && dd.tagName === 'DD') result[dt.textContent.trim().replace(/:$/, '')] = dd.textContent.trim();
+                }});
+                document.querySelectorAll('table tr').forEach(row => {{
+                    const cells = row.querySelectorAll('td, th');
+                    if (cells.length === 2) {{ const key = cells[0].textContent.trim().replace(/:$/, ''); const val = cells[1].textContent.trim(); if (key && val) result[key] = val; }}
+                }});
+                const charges = [];
+                document.querySelectorAll('table').forEach(table => {{
+                    const headers = Array.from(table.querySelectorAll('th')).map(h => h.textContent.trim());
+                    if (headers.some(h => h.includes('Statute') || h.includes('Charge') || h.includes('Desc'))) {{
+                        table.querySelectorAll('tbody tr').forEach(row => {{
+                            const cells = row.querySelectorAll('td');
+                            if (cells.length >= 3) charges.push({{date: cells[0]?cells[0].textContent.trim():'', statute: cells[1]?cells[1].textContent.trim():'', desc: cells[2]?cells[2].textContent.trim():'', sec_desc: cells[3]?cells[3].textContent.trim():'', level: cells[4]?cells[4].textContent.trim():'', bond: cells[5]?cells[5].textContent.trim():''}});
+                        }});
+                    }}
+                }});
+                result['__CHARGES'] = charges;
+                result['__Detail_URL'] = {detail_url!r};
+                result['__Booking_ID'] = {booking_id!r};
+                const img = document.querySelector('img[src*="photo"], img[src*="mugshot"], img[src*="image"], img[src*="booking"]');
+                if (img && img.src && !img.src.startsWith('data:')) result['__Mugshot'] = img.src;
+                return result;
+            }}""")
+            if js_data:
+                print(json.dumps([js_data]))
+            else:
+                print(json.dumps([]))
+        except Exception as e:
+            print(json.dumps([]), file=sys.stderr)
+            print(json.dumps([]))
+        finally:
+            browser.close()
+main()
+'''
+            with open(worker_script, "w") as f:
+                f.write(script_content)
+            import os, subprocess
+            os.chmod(worker_script, 0o755)
+            result = subprocess.run(
+                ["xvfb-run", "--auto-servernum", "python3", worker_script],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            records_raw = json.loads(result.stdout.strip())
+            if not records_raw:
+                return None
+            record = self._convert_to_record(records_raw[0])
+            if record:
+                record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            logger.warning(f"Charlotte _fetch_single_booking error ({booking_id}): {e}")
+            return None

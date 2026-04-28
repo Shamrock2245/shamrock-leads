@@ -296,3 +296,69 @@ class ManateeCountyScraper(BaseScraper):
         if not text:
             return ""
         return " ".join(str(text).strip().split())
+
+    # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
+    def _fetch_single_booking(
+        self, booking_id: str, detail_url: str
+    ) -> "Optional[ArrestRecord]":
+        """
+        Re-fetch a single Manatee County booking by navigating directly to
+        its Revize detail URL via DrissionPage.
+
+        Reuses the existing _extract_detail() method which already handles
+        the JS extraction and dedup logic.
+
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id and not detail_url:
+            return None
+        if not detail_url:
+            detail_url = f"{BASE_URL}/bookings/{booking_id}"
+        page = None
+        try:
+            page = self._setup_browser()
+            self._wait_for_cloudflare(page)
+            record = self._extract_detail(page, booking_id, detail_url)
+            if record:
+                record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            logger.warning(f"Manatee _fetch_single_booking error ({booking_id}): {e}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass
+
+
+    # -- FirstAppearanceWatcher hook ------------------------------------------
+    def _fetch_single_booking(self, booking_id: str, detail_url: str):
+        """
+        Re-fetch a single Manatee County booking by navigating directly to
+        its Revize detail URL via DrissionPage.
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id and not detail_url:
+            return None
+        if not detail_url:
+            detail_url = f"{BASE_URL}/bookings/{booking_id}"
+        page = None
+        try:
+            page = self._setup_browser()
+            self._wait_for_cloudflare(page)
+            record = self._extract_detail(page, booking_id, detail_url)
+            if record:
+                record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Manatee _fetch_single_booking error ({booking_id}): {e}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass
