@@ -790,6 +790,82 @@
   </div>
 </div>
 
+<!-- ═══ CONTACT INDEMNITOR MODAL ═══ -->
+<div class="modal-overlay" id="contactIndemModal" onclick="if(event.target===this)SLContact.closeModal()">
+  <div class="modal" style="max-width:520px;width:95vw">
+    <div class="modal-header">
+      <h2>📞 Contact Indemnitor</h2>
+      <button class="modal-close" onclick="SLContact.closeModal()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <div class="ci-def-bar">
+        <span class="ci-name" id="ciDefName">—</span>
+        <span class="ci-county" id="ciDefCounty">—</span>
+        <span class="ci-bond" id="ciDefBond">—</span>
+      </div>
+      <div class="ci-field-row">
+        <div>
+          <div class="ci-label">Indemnitor Phone</div>
+          <input id="ciPhone" class="ci-input" type="tel" placeholder="(239) 555-0100" autocomplete="tel">
+        </div>
+        <div>
+          <div class="ci-label">Relationship</div>
+          <select id="ciRelation" class="ci-select">
+            <option value="Indemnitor">Indemnitor</option>
+            <option value="Spouse">Spouse</option>
+            <option value="Parent">Parent</option>
+            <option value="Sibling">Sibling</option>
+            <option value="Friend">Friend</option>
+            <option value="Employer">Employer</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="ci-field-row">
+        <div>
+          <div class="ci-label">Agent Name</div>
+          <input id="ciAgent" class="ci-input" type="text" placeholder="Brendan" value="Brendan">
+        </div>
+        <div>
+          <div class="ci-label">Send From</div>
+          <select id="ciFromNumber" class="ci-select">
+            <option value="2399550178">(239) 955-0178</option>
+            <option value="2399550314">(239) 955-0314</option>
+          </select>
+        </div>
+      </div>
+      <div class="ci-lang-row">
+        <span class="ci-lang-label">Language:</span>
+        <button class="ci-lang-btn active" onclick="document.getElementById('ciLang').value='en';document.querySelectorAll('.ci-lang-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');SLContact.fillTemplate()">🇺🇸 English</button>
+        <button class="ci-lang-btn" onclick="document.getElementById('ciLang').value='es';document.querySelectorAll('.ci-lang-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');SLContact.fillTemplate()">🇲🇽 Español</button>
+        <input type="hidden" id="ciLang" value="en">
+      </div>
+      <div class="ci-field-row single" style="margin-bottom:8px">
+        <div>
+          <div class="ci-label">Message Template</div>
+          <select id="ciTemplate" class="ci-select" onchange="SLContact.fillTemplate()">
+            <option value="standard">Standard Introduction</option>
+            <option value="urgent">Urgent — Significant Bond</option>
+            <option value="followup">Follow-Up</option>
+            <option value="payment">Payment Plan Offer</option>
+          </select>
+        </div>
+      </div>
+      <div class="ci-field-row single">
+        <div>
+          <div class="ci-label">Message</div>
+          <textarea id="ciMessage" class="ci-textarea" rows="4" placeholder="Message will auto-populate from template…"></textarea>
+        </div>
+      </div>
+      <div class="ci-send-status" id="ciSendStatus"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="SLContact.closeModal()">Cancel</button>
+      <button class="btn-primary" id="ciSendBtn" onclick="SLContact.sendText()">📱 Send Text</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ TOAST ═══ -->
 <div class="toast-notification" id="toast"><span class="toast-icon"></span><span class="toast-message"></span></div>
 

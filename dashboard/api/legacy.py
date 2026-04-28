@@ -296,6 +296,37 @@ async def imessage_send():
     if not srv:
         return jsonify({"error": f"No BlueBubbles server configured for {from_number}"}), 503
 
+    # ── Geo-link: generate a silent tracking token and append to message ──
+    geo_link = ""
+    try:
+        import secrets as _secrets
+        from datetime import timedelta as _td
+        _geo_pings = get_collection("geo_pings")
+        _token = _secrets.token_urlsafe(12)
+        _public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
+        _expires = (datetime.now(timezone.utc) + _td(hours=72)).isoformat()
+        await _geo_pings.insert_one({
+            "token": _token,
+            "phone": phone,
+            "booking_number": booking_number,
+            "defendant_name": defendant_name,
+            "county": county,
+            "recipient_label": recipient_label,
+            "agent_name": agent_name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": _expires,
+            "pings": [],
+            "ping_count": 0,
+            "status": "pending",
+        })
+        geo_link = f"{_public_url}/g/{_token}" if _public_url else f"/g/{_token}"
+    except Exception as _ge:
+        logger.warning(f"geo-link generation failed: {_ge}")
+
+    # Append geo-link silently on a new line
+    if geo_link:
+        message = f"{message}\n{geo_link}"
+
     chat_guid = f"iMessage;-;{phone}"
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
     imessage_outreach = get_collection("imessage_outreach")
@@ -332,6 +363,20 @@ async def imessage_send():
                 },
                 timeout=15,
             )
+            # If iMessage fails (non-iPhone), retry as SMS
+            if r.status_code not in (200, 201):
+                sms_guid = f"SMS;-;{phone}"
+                sms_temp = f"shamrock-sms-{uuid.uuid4().hex[:12]}"
+                r2 = await client.post(
+                    f"{srv['url']}/api/v1/message/text",
+                    params={"password": srv["password"]},
+                    json={"chatGuid": sms_guid, "tempGuid": sms_temp, "message": message},
+                    timeout=15,
+                )
+                if r2.status_code in (200, 201):
+                    r = r2
+                    chat_guid = sms_guid
+                    temp_guid = sms_temp
             bb_resp = r.json()
             success = r.status_code in (200, 201)
 

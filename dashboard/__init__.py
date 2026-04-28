@@ -38,6 +38,7 @@ def create_app():
     from dashboard.api.intake import intake_bp          # ← Indemnitor Intake Queue
     from dashboard.api.scraper_control import scraper_control_bp  # ← Run-Now Control
     from dashboard.api.prospective_bonds import prospective_bonds_bp  # ← In Progress Pipeline
+    from dashboard.api.geo import geo_bp  # ← Silent Geo-Link Capture
 
     app.register_blueprint(stats_bp, url_prefix="/api")
     app.register_blueprint(bonds_bp, url_prefix="/api")
@@ -55,6 +56,7 @@ def create_app():
     app.register_blueprint(intake_bp, url_prefix="/api")  # ← Indemnitor Intake Queue
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
+    app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
 
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp

@@ -163,6 +163,7 @@ function renderDefCard(d){
     <!-- Footer Actions -->
     <div class="def-card-footer">
       ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail">🔗 Source</a>`:''}
+      <button class="btn-contact-indem" onclick='SLContact.openModal("${d.booking_number||""}",${JSON.stringify(d.full_name||"")},"${(d.county||"").replace(/"/g,"&quot;")}",${d.bond_amount||0},"${d.booking_number||""}")'>📞 Contact Indem</button>
       <button onclick='trackAsInProgress(${JSON.stringify(d).replace(/'/g,"&#39;")})' style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track In Progress</button>
       <button class="btn-write-bond" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'>✅ Write Bond</button>
     </div>

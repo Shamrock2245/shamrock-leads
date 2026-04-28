@@ -48,7 +48,8 @@ async function loadDefendants() {
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
         </div>
         <div class="def-card-footer">
-          <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">\ud83d\udd17 Source</button>
+          <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
+          <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact Indem</button>
           <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track Lead</button>
           <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">\u270d\ufe0f Write Bond</button>
         </div>
@@ -900,6 +901,116 @@ function openWriteBond(opts) {
     }, 200);
   }
 }
+
+// ── Contact Indemnitor Module ──
+window.SLContact = (function() {
+  const TEMPLATES_EN = {
+    standard: (name, county, agent) =>
+      `Hi, this is ${agent} with Shamrock Bail Bonds. I see that ${name} is currently in custody in ${county} County. We can help get them home fast with flexible payment plans. Give us a call or reply here.`,
+    urgent: (name, county, agent) =>
+      `Hi, this is ${agent} with Shamrock Bail Bonds. ${name} is currently being held in ${county} County on a significant bond. We specialize in quick releases and flexible payment options. Would you like help?`,
+    followup: (name, county, agent) =>
+      `Hi, this is ${agent} with Shamrock Bail Bonds, just following up about ${name} in ${county} County. We're still available to help if you'd like to get them home. No obligation to chat.`,
+    payment: (name, county, agent) =>
+      `Hi, this is ${agent} with Shamrock Bail Bonds. We can help bond ${name} out of ${county} County Jail today. We offer flexible payment plans and fast service. Reply or call us anytime.`,
+  };
+  const TEMPLATES_ES = {
+    standard: (name, county, agent) =>
+      `Hola, soy ${agent} de Shamrock Bail Bonds. Veo que ${name} está detenido/a en la cárcel del condado de ${county}. Podemos ayudarle a salir rápido con planes de pago flexibles. Llámenos o responda aquí.`,
+    urgent: (name, county, agent) =>
+      `Hola, soy ${agent} de Shamrock Bail Bonds. ${name} está detenido/a en el condado de ${county} con una fianza significativa. Nos especializamos en liberaciones rápidas y opciones de pago flexibles. ¿Le gustaría ayuda?`,
+    followup: (name, county, agent) =>
+      `Hola, soy ${agent} de Shamrock Bail Bonds, haciendo seguimiento sobre ${name} en el condado de ${county}. Todavía estamos disponibles para ayudar si desea que salga. Sin compromiso de hablar.`,
+    payment: (name, county, agent) =>
+      `Hola, soy ${agent} de Shamrock Bail Bonds. Podemos sacar a ${name} de la cárcel del condado de ${county} hoy mismo. Ofrecemos planes de pago flexibles y servicio rápido. Responda o llámenos cuando quiera.`,
+  };
+
+  let _current = {};
+
+  function openModal(booking, name, county, bond, bookingNum) {
+    _current = { booking: booking || bookingNum || '', name: name || '', county: (county||'').trim(), bond: bond || 0 };
+    const modal = document.getElementById('contactIndemModal');
+    if (!modal) return;
+    document.getElementById('ciDefName').textContent = name || '—';
+    document.getElementById('ciDefCounty').textContent = (county||'').trim() || '—';
+    document.getElementById('ciDefBond').textContent = bond ? '$' + Number(bond).toLocaleString() : '—';
+    document.getElementById('ciPhone').value = '';
+    document.getElementById('ciRelation').value = 'Indemnitor';
+    document.getElementById('ciAgent').value = document.getElementById('outreachAgent')?.value || 'Brendan';
+    document.getElementById('ciFromNumber').value = '2399550178';
+    document.getElementById('ciLang').value = 'en';
+    document.getElementById('ciTemplate').value = 'standard';
+    document.getElementById('ciSendStatus').textContent = '';
+    _fillTemplate();
+    modal.classList.add('show');
+  }
+
+  function closeModal() {
+    document.getElementById('contactIndemModal')?.classList.remove('show');
+  }
+
+  function _fillTemplate() {
+    const lang = document.getElementById('ciLang')?.value || 'en';
+    const tpl = document.getElementById('ciTemplate')?.value || 'standard';
+    const agent = document.getElementById('ciAgent')?.value?.trim() || 'Brendan';
+    const templates = lang === 'es' ? TEMPLATES_ES : TEMPLATES_EN;
+    const fn = templates[tpl] || templates.standard;
+    document.getElementById('ciMessage').value = fn(_current.name, _current.county, agent);
+  }
+
+  async function sendText() {
+    const phone = (document.getElementById('ciPhone')?.value || '').replace(/\D/g, '');
+    const message = (document.getElementById('ciMessage')?.value || '').trim();
+    const relation = document.getElementById('ciRelation')?.value || 'Indemnitor';
+    const agent = document.getElementById('ciAgent')?.value?.trim() || 'Brendan';
+    const fromNum = document.getElementById('ciFromNumber')?.value || '2399550178';
+    const statusEl = document.getElementById('ciSendStatus');
+    const btn = document.getElementById('ciSendBtn');
+
+    if (!phone || phone.length < 10) { SL.toast('Enter a valid phone number', 'error'); return; }
+    if (!message) { SL.toast('Message cannot be empty', 'error'); return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="btn-spinner"></span> Sending…';
+    if (statusEl) statusEl.textContent = '';
+
+    try {
+      const r = await fetch(`${API}/api/imessage/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          message,
+          booking_number: _current.booking,
+          defendant_name: _current.name,
+          county: _current.county,
+          recipient_label: relation,
+          agent_name: agent,
+          from_number: fromNum,
+          inject_geo: true,
+        }),
+      });
+      const result = await r.json();
+      if (result.success) {
+        if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent)">\u2713 Sent</span>';
+        SL.toast(`Text sent to ${relation}`, 'success');
+        document.getElementById('ciPhone').value = '';
+        setTimeout(closeModal, 1200);
+      } else {
+        if (statusEl) statusEl.innerHTML = `<span style="color:var(--red)">⚠ ${result.error || 'Send failed'}</span>`;
+        SL.toast(result.error || 'Send failed', 'error');
+      }
+    } catch(e) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--red)">⚠ Network error</span>';
+      SL.toast('Network error', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '\ud83d\udcf1 Send Text';
+    }
+  }
+
+  return { openModal, closeModal, fillTemplate: _fillTemplate, sendText };
+})();
 
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
