@@ -212,6 +212,7 @@ class CollierCountyScraper(BaseScraper):
         status = "In Custody"
         charges_list = []
         bond_paid = "NO"
+        total_bond = 0.0
         mugshot_url = ""
         hair_color = ""
         eye_color = ""
@@ -269,17 +270,59 @@ class CollierCountyScraper(BaseScraper):
                         offense = row_cells[2]
                         if offense and offense != "\xa0":
                             charges_list.append(offense)
+                    # Extract bond amount from charge row cells
+                    for cell_text in row_cells:
+                        bond_match = re.search(
+                            r'\$\s*([\d,]+(?:\.\d{2})?)', cell_text
+                        )
+                        if bond_match:
+                            try:
+                                total_bond += float(
+                                    bond_match.group(1).replace(",", "")
+                                )
+                            except (ValueError, TypeError):
+                                pass
 
-            # Bond data
-            bond_span = table.find(
-                "span", id=lambda x: x and "lblBondSummary" in x
-            )
-            if bond_span:
-                bond_text = bond_span.get_text(strip=True)
-                if "BONDED" in bond_text.upper():
-                    bond_paid = "BONDED"
-                elif bond_text and bond_text != "No information available.":
-                    bond_paid = bond_text
+            # Bond data from lblBondSummary or lblBondAmount spans
+            for span_keyword in ["lblBondSummary", "lblBondAmount", "lblBond"]:
+                bond_span = table.find(
+                    "span", id=lambda x: x and span_keyword in str(x)
+                )
+                if bond_span:
+                    bond_text = bond_span.get_text(strip=True)
+                    if "BONDED" in bond_text.upper():
+                        bond_paid = "BONDED"
+                    elif bond_text and bond_text != "No information available.":
+                        bond_paid = bond_text
+                    # Extract dollar amount from bond summary text
+                    bond_amt_match = re.search(
+                        r'\$\s*([\d,]+(?:\.\d{2})?)', bond_text
+                    )
+                    if bond_amt_match and total_bond == 0.0:
+                        try:
+                            total_bond = float(
+                                bond_amt_match.group(1).replace(",", "")
+                            )
+                        except (ValueError, TypeError):
+                            pass
+
+            # Fallback: scan all cells for dollar amounts if we still have 0
+            if total_bond == 0.0:
+                for td in table.find_all("td"):
+                    td_text = td.get_text(strip=True)
+                    if "$" in td_text:
+                        amt_match = re.search(
+                            r'\$\s*([\d,]+(?:\.\d{2})?)', td_text
+                        )
+                        if amt_match:
+                            try:
+                                amt = float(
+                                    amt_match.group(1).replace(",", "")
+                                )
+                                if amt > 0:
+                                    total_bond += amt
+                            except (ValueError, TypeError):
+                                pass
 
             # Stop looking if we have the booking number and checked enough tables
             if booking_number and j > start_idx + 5:
@@ -294,11 +337,6 @@ class CollierCountyScraper(BaseScraper):
             src = img.get("src", "")
             if src:
                 mugshot_url = urljoin(SEARCH_URL, src)
-
-        # Calculate total bond from charges (if extractable)
-        total_bond = 0.0
-        # Bond amount isn't cleanly available from the grid structure,
-        # but bond_paid status is captured from lblBondSummary
 
         charges_str = " | ".join(charges_list) if charges_list else ""
 

@@ -112,8 +112,21 @@ class OsceolaCountyScraper(BaseScraper):
     def _scrape_detail(self, page, inmate_id):
         result = {"bond_amount":"0","mugshot_url":"","race":"","sex":"","dob":"","height":"","weight":"","case_numbers":[]}
         try:
-            page.get(DETAIL_URL_TPL.format(inmate_id)); time.sleep(1)
-            html = page.html or ""
+            page.get(DETAIL_URL_TPL.format(inmate_id))
+            time.sleep(1)
+
+            # Poll for rendered content (ASP.NET may be slow)
+            html = ""
+            for wait_i in range(8):  # Up to ~10s
+                html = page.html or ""
+                if 'Race:' in html or 'Total Bond:' in html or 'DOB:' in html:
+                    break
+                time.sleep(1)
+
+            if not html:
+                logger.warning(f"[Osceola] Detail page empty for {inmate_id}")
+                return result
+
             bm = re.search(r'Total Bond:\s*\$?([\d,]+(?:\.\d{2})?)', html)
             if bm: result["bond_amount"] = bm.group(1).replace(",","")
             for field, pattern in [("race",r'Race:\s*</td>\s*<td[^>]*>\s*(\w+)'),("sex",r'Sex:\s*</td>\s*<td[^>]*>\s*(\w+)'),

@@ -121,7 +121,21 @@ class CharlotteCountyScraper(BaseScraper):
             co.set_argument("--disable-features=IsolateOrigins,site-per-process")
             co.set_argument("--disable-web-security")
             co.set_argument("--lang=en-US,en;q=0.9")
-            return ChromiumPage(addr_or_opts=co)
+            # Critical anti-detection flags for Cloudflare
+            co.set_argument("--disable-blink-features=AutomationControlled")
+            co.set_argument("--window-size=1920,1080")
+            co.set_argument("--disable-infobars")
+            page = ChromiumPage(addr_or_opts=co)
+            # Inject stealth JS to hide automation markers
+            try:
+                page.run_js("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                    window.chrome = {runtime: {}};
+                """)
+            except Exception:
+                pass  # Non-fatal if JS injection fails
+            return page
         except Exception as e:
             logger.error(f"[Charlotte] Browser setup failed: {e}")
             return None

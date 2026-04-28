@@ -202,22 +202,30 @@ class HendryCountyScraper(BaseScraper):
             for i, record in enumerate(to_enrich):
                 try:
                     page.get(record.Detail_URL)
-                    time.sleep(2)
+                    time.sleep(1)  # Initial settle
 
                     body_el = page.ele('tag:body', timeout=5)
                     if not body_el:
                         continue
 
-                    text = body_el.text
+                    # Poll for JS-hydrated charge data (OCV SPA renders async)
+                    text = ""
+                    charge_found = False
+                    for wait_i in range(12):  # Up to ~15s total
+                        text = body_el.text if body_el else ""
+                        if not text:
+                            time.sleep(1.2)
+                            continue
+                        if 'Charge Description' in text or 'Bond Amount' in text or 'Charge Code' in text:
+                            charge_found = True
+                            break
+                        time.sleep(1.2)
+
                     if not text:
                         logger.warning(f"[Hendry] Detail page empty for {record.Full_Name}: {record.Detail_URL}")
-                        time.sleep(2)
-                        text = body_el.text if body_el else ""
-                    elif 'Charge Description' not in text and 'Bond Amount' not in text:
-                        # Page may not have loaded JS content yet
-                        logger.debug(f"[Hendry] No charge markers in text for {record.Full_Name}, retrying...")
-                        time.sleep(3)
-                        text = body_el.text if body_el else ""
+                        continue
+                    if not charge_found:
+                        logger.warning(f"[Hendry] No charge markers after 15s for {record.Full_Name}")
 
                     charges, total_bond = self._extract_charges_from_text(text)
 
@@ -353,14 +361,21 @@ class HendryCountyScraper(BaseScraper):
         try:
             page = self._setup_browser()
             page.get(detail_url)
-            time.sleep(2)
+            time.sleep(1)
             body_el = page.ele('tag:body', timeout=5)
             if not body_el:
                 return None
-            text = body_el.text
-            if not text or 'Record Details' not in text:
-                time.sleep(2)
-                text = body_el.text if body_el else ''
+
+            # Poll for JS-hydrated charge data (same as Phase 2)
+            text = ""
+            for wait_i in range(12):
+                text = body_el.text if body_el else ""
+                if text and ('Charge Description' in text or 'Bond Amount' in text or 'Charge Code' in text):
+                    break
+                time.sleep(1.2)
+
+            if not text:
+                return None
             charges, total_bond = self._extract_charges_from_text(text)
 
             record = ArrestRecord(
