@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://apps.osceola.org/Apps/CorrectionsReports"
 DAILY_URL = f"{BASE_URL}/Report/Daily/"
 DETAIL_URL_TPL = f"{BASE_URL}/Report/Details/{{}}"
-DAYS_BACK = 3
+DAYS_BACK = 14  # Extended from 3 to 14 (date-search based; 90 days would be too slow)
 
 class OsceolaCountyScraper(BaseScraper):
     @property

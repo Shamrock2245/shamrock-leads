@@ -14,7 +14,7 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 LOGIN_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/Account/Login"
 SEARCH_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/Home/Search"
-DAYS_BACK = 3
+DAYS_BACK = 90  # Extended: capture all in-custody inmates
 MAX_PAGES = 20
 
 class HillsboroughCountyScraper(BaseScraper):

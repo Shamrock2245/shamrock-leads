@@ -18,7 +18,7 @@ DETAIL_DELAY_S = 0.15
 LETTER_DELAY_S = 0.1
 REQUEST_TIMEOUT = 15
 CURRENT_YEAR_PREFIX = str(datetime.now().year)[-2:]
-DAYS_BACK = 3
+DAYS_BACK = 90  # Extended: capture all in-custody inmates
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
     "Accept": "application/json, text/javascript, */*; q=0.01",

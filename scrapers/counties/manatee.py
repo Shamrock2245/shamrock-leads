@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://manatee-sheriff.revize.com"
 BOOKINGS_URL = f"{BASE_URL}/bookings"
-DAYS_BACK = 21
+DAYS_BACK = 90  # Extended: capture all in-custody inmates
 MAX_PAGES = 10
 DETAIL_DELAY_S = 1.5
 

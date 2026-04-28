@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # ── Config ──
 BASE_URL = "https://jail.desotosheriff.org"
 INMATES_URL = f"{BASE_URL}/DCN/inmates"
-DAYS_BACK = 14
+DAYS_BACK = 90  # Extended: capture all in-custody inmates (some booked weeks/months ago)
 MAX_PAGES = 10
 DETAIL_DELAY_S = 1.0
 

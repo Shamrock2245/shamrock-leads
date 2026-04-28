@@ -26,7 +26,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 STATE_DIR = os.path.join(os.path.dirname(__file__), ".state")
 
 class BrowardCountyScraper(BaseScraper):
-    DAYS_BACK = 2
+    DAYS_BACK = 14  # Extended from 2 to 14 (ID-scan based; captures longer-held inmates)
     @property
     def county(self) -> str:
         return "Broward"

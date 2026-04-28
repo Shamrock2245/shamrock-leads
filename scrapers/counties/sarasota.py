@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 PARENT_URL = "https://sarasotasheriff.org/arrest-reports/index.php"
 BASE_URL = "https://cms.revize.com/revize/apps/sarasota/"
-DAYS_BACK = 3
+DAYS_BACK = 14  # Extended from 3 to 14 days (date-search based, more = slower)
 MAX_PAGES_PER_DATE = 30
 WORKER_TIMEOUT = 600  # 10 minutes max for the patchright subprocess
 

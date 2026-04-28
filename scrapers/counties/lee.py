@@ -37,7 +37,7 @@ BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
 
-DAYS_BACK = 7
+DAYS_BACK = 90  # Extended: capture all in-custody inmates (some booked weeks/months ago)
 PAGE_SIZE = 200
 MAX_PAGES = 50
 MAX_ENRICH = 25                # Cap per run — spread across 30-min cycles
@@ -129,6 +129,11 @@ class LeeCountyScraper(BaseScraper):
         e = end_date.strftime("%Y-%m-%d")
 
         variants = [
+            # Variant 0: inCustody filter — most efficient, returns only current inmates
+            {"inCustody": "true"},
+            {"inCustody": "1"},
+            {"status": "IN_CUSTODY"},
+            # Variant 3-6: date-range fallbacks (90-day window)
             {"startBooking": s, "endBooking": e},
             {"startBooking": f"{s}T00:00:00", "endBooking": f"{e}T23:59:59"},
             {"bookingStart": s, "bookingEnd": e},
