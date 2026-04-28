@@ -330,9 +330,14 @@ const SLProspective = (() => {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
-            to: phone,
+            phone: phone,
             message: message,
             from_number: '2399550178',
+            booking_number: bk,
+            defendant_name: bond?.defendant_name || '',
+            county: bond?.county || '',
+            recipient_label: bond?.indemnitor?.name || 'Indemnitor',
+            agent_name: 'Brendan',
           })
         });
         const d = await r.json();
