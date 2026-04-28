@@ -606,20 +606,13 @@ async def api_scraper_health():
                 continue
             seen.add(county)
             latest = r.get("latest_record") or r.get("latest_scrape")
-<<<<<<< Updated upstream
+            # Normalize to UTC-aware — MongoDB may return naive datetimes
             if isinstance(latest, datetime):
-                # Normalize to UTC-aware — MongoDB may return naive datetimes
                 if latest.tzinfo is None:
                     latest = latest.replace(tzinfo=timezone.utc)
                 hours_since = (now - latest).total_seconds() / 3600
             else:
                 hours_since = 999
-=======
-            # Normalize naive UTC datetimes from MongoDB to tz-aware before comparison
-            if isinstance(latest, datetime) and latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone.utc)
-            hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
->>>>>>> Stashed changes
             base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
             live = live_status.get(county, {})
             cfg = config_map.get(county, {})
