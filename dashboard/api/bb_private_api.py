@@ -365,3 +365,292 @@ class BlueBubblesClient:
             await self.mark_read(chat_guid)
 
         return result
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Webhook Management (Real-time event delivery)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def list_webhooks(self) -> dict:
+        """List all registered webhooks on this BlueBubbles server."""
+        return await self._request("GET", "/api/v1/webhook")
+
+    async def create_webhook(self, url: str, events: list[str] | None = None) -> dict:
+        """Register a webhook endpoint to receive real-time BB events.
+
+        Args:
+            url:    The HTTPS URL to POST events to (e.g. VPS /api/webhooks/bluebubbles)
+            events: List of event types to subscribe to. Defaults to all.
+                    Common events:
+                      - "new-message"          — inbound or outbound message
+                      - "updated-message"      — delivery/read receipt update
+                      - "chat-read-status-changed"
+                      - "typing-indicator"
+                      - "contact-updated"
+                      - "new-server"
+        """
+        body = {"url": url}
+        if events:
+            body["events"] = events
+        return await self._request("POST", "/api/v1/webhook", json_body=body)
+
+    async def delete_webhook(self, webhook_id: int) -> dict:
+        """Remove a registered webhook by its numeric ID."""
+        return await self._request("DELETE", f"/api/v1/webhook/{webhook_id}")
+
+    async def ensure_webhook(self, url: str,
+                              events: list[str] | None = None) -> dict:
+        """Idempotent: register the webhook only if it is not already registered.
+
+        Checks existing webhooks first; if the URL is already registered it
+        returns the existing record without creating a duplicate.
+        """
+        existing = await self.list_webhooks()
+        if existing.get("success"):
+            for wh in (existing.get("data") or []):
+                if wh.get("url") == url:
+                    logger.info("BB webhook already registered: %s", url)
+                    return {"success": True, "data": wh, "already_existed": True}
+        return await self.create_webhook(url, events)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  iMessage Availability Check (iPhone vs SMS detection)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def check_imessage_availability(self, phone: str) -> dict:
+        """Check whether a phone number is registered on iMessage.
+
+        Returns:
+            { success: bool, available: bool, phone: str }
+        Requires Private API.  If unavailable, caller should fall back to Twilio.
+        """
+        result = await self._request(
+            "GET", "/api/v1/handle/availability/imessage",
+            params={"address": phone}
+        )
+        available = False
+        if result.get("success"):
+            data = result.get("data", {})
+            available = bool(data.get("available") or data.get("iMessageAvailable"))
+        return {
+            "success": result.get("success", False),
+            "available": available,
+            "phone": phone,
+        }
+
+    async def check_facetime_availability(self, phone: str) -> dict:
+        """Check whether a phone number is registered on FaceTime."""
+        result = await self._request(
+            "GET", "/api/v1/handle/availability/facetime",
+            params={"address": phone}
+        )
+        available = False
+        if result.get("success"):
+            data = result.get("data", {})
+            available = bool(data.get("available"))
+        return {"success": result.get("success", False), "available": available, "phone": phone}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Group Chat Management (Multi-Indemnitor Coordination)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def create_group_chat(self, participants: list[str],
+                                display_name: str | None = None) -> dict:
+        """Create a new iMessage group chat.
+
+        Args:
+            participants: List of phone numbers / email addresses
+                          e.g. ["+12395550178", "+12395550314"]
+            display_name: Optional group name shown in Messages.app
+        Returns:
+            { success: bool, data: { guid: str, ... } }
+        """
+        body = {"addresses": participants}
+        if display_name:
+            body["displayName"] = display_name
+        return await self._request("POST", "/api/v1/chat/new", json_body=body)
+
+    async def add_participant(self, chat_guid: str, participant: str) -> dict:
+        """Add a participant to an existing group chat."""
+        return await self._request(
+            "POST", f"/api/v1/chat/{chat_guid}/participant/add",
+            json_body={"address": participant}
+        )
+
+    async def remove_participant(self, chat_guid: str, participant: str) -> dict:
+        """Remove a participant from a group chat."""
+        return await self._request(
+            "POST", f"/api/v1/chat/{chat_guid}/participant/remove",
+            json_body={"address": participant}
+        )
+
+    async def rename_group_chat(self, chat_guid: str, new_name: str) -> dict:
+        """Rename a group chat."""
+        return await self._request(
+            "POST", f"/api/v1/chat/{chat_guid}/rename",
+            json_body={"newName": new_name}
+        )
+
+    async def get_chat_participants(self, chat_guid: str) -> dict:
+        """Get all participants in a chat."""
+        return await self._request("GET", f"/api/v1/chat/{chat_guid}/participants")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Scheduled Messages (BlueBubbles Server-side scheduling)
+    # ─────────────────────────────────────────────────────────────────────────
+    async def schedule_message(self, chat_guid: str, message: str,
+                               scheduled_date_ms: int,
+                               schedule_type: str = "once") -> dict:
+        """Schedule a message to be sent at a future time.
+
+        Args:
+            chat_guid:          Target chat GUID
+            message:            Message text
+            scheduled_date_ms:  Unix timestamp in milliseconds (epoch ms)
+            schedule_type:      "once" | "recurring"
+        Returns:
+            { success: bool, data: { id: int, ... } }
+        """
+        body = {
+            "chatGuid": chat_guid,
+            "type": "send-message",
+            "payload": {"chatGuid": chat_guid, "message": message},
+            "scheduledFor": scheduled_date_ms,
+            "schedule": {"type": schedule_type},
+        }
+        return await self._request("POST", "/api/v1/message/schedule", json_body=body)
+
+    async def list_scheduled_messages(self) -> dict:
+        """List all pending scheduled messages."""
+        return await self._request("GET", "/api/v1/message/schedule")
+
+    async def delete_scheduled_message(self, schedule_id: int) -> dict:
+        """Cancel a scheduled message by its ID."""
+        return await self._request("DELETE", f"/api/v1/message/schedule/{schedule_id}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Attachment / Media Sending
+    # ─────────────────────────────────────────────────────────────────────────
+    async def send_attachment_url(self, chat_guid: str, attachment_url: str,
+                                  filename: str | None = None) -> dict:
+        """Send a file attachment by providing a publicly accessible URL.
+
+        The BlueBubbles server will download the file and send it via iMessage.
+        Useful for sending signed bond documents, PDFs, or images.
+
+        Args:
+            chat_guid:       Target chat GUID
+            attachment_url:  Public HTTPS URL of the file to send
+            filename:        Optional display filename
+        """
+        body = {
+            "chatGuid": chat_guid,
+            "attachmentUrl": attachment_url,
+        }
+        if filename:
+            body["attachmentName"] = filename
+        return await self._request("POST", "/api/v1/message/attachment/url", json_body=body)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Contact Management
+    # ─────────────────────────────────────────────────────────────────────────
+    async def get_contacts(self) -> dict:
+        """Retrieve all contacts from the Mac's Contacts.app."""
+        return await self._request("GET", "/api/v1/contact")
+
+    async def create_contact(self, first_name: str, last_name: str,
+                              phone: str | None = None,
+                              email: str | None = None) -> dict:
+        """Create a new contact in Contacts.app on the Mac.
+
+        Useful for adding defendants/indemnitors so their name shows in Messages.
+        """
+        contact = {"firstName": first_name, "lastName": last_name}
+        if phone:
+            contact["phoneNumbers"] = [{"address": phone}]
+        if email:
+            contact["emails"] = [{"address": email}]
+        return await self._request("POST", "/api/v1/contact", json_body=contact)
+
+    async def query_contacts(self, addresses: list[str]) -> dict:
+        """Look up contacts by phone number or email address."""
+        return await self._request(
+            "POST", "/api/v1/contact/query",
+            json_body={"addresses": addresses}
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Handle (Conversation Partner) Utilities
+    # ─────────────────────────────────────────────────────────────────────────
+    async def get_handle_focus_status(self, handle_guid: str) -> dict:
+        """Check if a contact has Focus/DND active (Private API required).
+
+        Returns:
+            { success: bool, focused: bool }
+        """
+        result = await self._request("GET", f"/api/v1/handle/{handle_guid}/focus")
+        focused = False
+        if result.get("success"):
+            focused = bool((result.get("data") or {}).get("focused"))
+        return {"success": result.get("success", False), "focused": focused}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Server Diagnostics
+    # ─────────────────────────────────────────────────────────────────────────
+    async def get_server_logs(self, count: int = 100) -> dict:
+        """Retrieve recent server logs for diagnostics."""
+        return await self._request(
+            "GET", "/api/v1/server/logs",
+            params={"count": str(count)}
+        )
+
+    async def restart_messages_app(self) -> dict:
+        """Restart the Messages.app on the Mac (Private API).
+
+        Useful for recovering from stuck send queues.
+        """
+        return await self._request("POST", "/api/v1/server/restart/soft")
+
+    async def restart_server(self) -> dict:
+        """Restart the BlueBubbles server process itself."""
+        return await self._request("POST", "/api/v1/server/restart/hard")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    #  Batch / Convenience Helpers
+    # ─────────────────────────────────────────────────────────────────────────
+    async def send_to_phones(self, phones: list[str], message: str,
+                              check_imessage: bool = True,
+                              typing_delay: float = 2.0) -> list[dict]:
+        """Send the same message to multiple phone numbers.
+
+        If check_imessage=True, each number is checked for iMessage availability
+        first. Numbers that are not on iMessage are returned in the result with
+        available=False so the caller can fall back to Twilio.
+
+        Returns:
+            List of { phone, chat_guid, available, success, message_guid }
+        """
+        results = []
+        for phone in phones:
+            chat_guid = f"iMessage;-;{phone}"
+            available = True
+            if check_imessage:
+                avail_result = await self.check_imessage_availability(phone)
+                available = avail_result.get("available", True)
+            if available:
+                result = await self.send_human_like(
+                    chat_guid, message, typing_delay=typing_delay
+                )
+                results.append({
+                    "phone": phone,
+                    "chat_guid": chat_guid,
+                    "available": True,
+                    "success": result.get("success", False),
+                    "message_guid": (result.get("data") or {}).get("guid", ""),
+                })
+            else:
+                results.append({
+                    "phone": phone,
+                    "chat_guid": chat_guid,
+                    "available": False,
+                    "success": False,
+                    "message_guid": "",
+                    "fallback_needed": True,
+                })
+        return results

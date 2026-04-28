@@ -66,11 +66,66 @@ def create_app():
     from dashboard.api.imessage_automation import imessage_auto_bp, start_inbox_poller
     app.register_blueprint(imessage_auto_bp, url_prefix="/api")
 
-    # Start background inbox poller
+    # ── BlueBubbles Enhancement Suite (Phase 2) ──────────────────────────────
+    from dashboard.api.bb_webhook_receiver import bb_webhook_bp
+    from dashboard.api.rearrest_notifier import rearrest_bp
+    from dashboard.api.bb_prospecting import bb_prospecting_bp
+    from dashboard.api.bb_scheduled_messages import bb_schedule_bp
+    from dashboard.api.bb_document_delivery import bb_docs_bp
+    from dashboard.api.bb_contact_sync import bb_contacts_bp
+    from dashboard.api.bb_health_monitor import bb_health_bp
+    app.register_blueprint(bb_webhook_bp, url_prefix="/api")
+    app.register_blueprint(rearrest_bp, url_prefix="/api")
+    app.register_blueprint(bb_prospecting_bp, url_prefix="/api")
+    app.register_blueprint(bb_schedule_bp, url_prefix="/api")
+    app.register_blueprint(bb_docs_bp, url_prefix="/api")
+    app.register_blueprint(bb_contacts_bp, url_prefix="/api")
+    app.register_blueprint(bb_health_bp, url_prefix="/api")
+
+    # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving
     async def _start_inbox_poller():
         import asyncio
         asyncio.ensure_future(start_inbox_poller(app))
+
+    # Auto-register BB webhooks with both iMac servers on startup
+    @app.before_serving
+    async def _register_bb_webhooks():
+        """Register our VPS URL as a webhook on all BlueBubbles servers."""
+        import asyncio
+        vps_url = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
+        if not vps_url:
+            logger.warning("BB_WEBHOOK_PUBLIC_URL not set — skipping auto webhook registration")
+            return
+        from dashboard.api.bb_private_api import BlueBubblesClient
+        from dashboard.extensions import BB_SERVERS
+        from dashboard.api.bb_webhook_receiver import BB_WEBHOOK_EVENTS
+        webhook_url = f"{vps_url}/api/webhooks/bluebubbles"
+        for suffix, server in BB_SERVERS.items():
+            try:
+                client = BlueBubblesClient(server["url"], server["password"])
+                result = await client.ensure_webhook(webhook_url, BB_WEBHOOK_EVENTS)
+                logger.info(
+                    "BB webhook auto-registered for %s: success=%s already_existed=%s",
+                    server["label"], result.get("success"), result.get("already_existed")
+                )
+            except Exception as e:
+                logger.warning("BB webhook auto-registration failed for %s: %s", server["label"], e)
+
+    # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
+    @app.before_serving
+    async def _start_bb_health_monitor():
+        import asyncio
+        from dashboard.api.bb_health_monitor import run_health_check_all
+        async def _health_loop():
+            await asyncio.sleep(30)  # Initial delay — let servers start first
+            while True:
+                try:
+                    await run_health_check_all()
+                except Exception as e:
+                    logger.warning("BB health check error: %s", e)
+                await asyncio.sleep(600)  # Every 10 minutes
+        asyncio.ensure_future(_health_loop())
 
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")

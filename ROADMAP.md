@@ -182,3 +182,35 @@ This system provides discreet IP-based location tracking for active bail bonds. 
 | `GAS_WEB_APP_URL` env var | High | Must be set on VPS for write-bond to forward to GAS |
 | `WIX_WEBHOOK_SECRET` env var | High | Must be set on VPS + Velo for intake webhook auth |
 | Wix Velo webhook config | High | Point CMS webhook to `https://[vps]/api/webhooks/wix-intake` |
+
+
+---
+
+## Phase 11: BlueBubbles Enhancement Suite (2026-04-28)
+
+This phase dramatically expands the BlueBubbles / iMessage automation capabilities
+across the entire bail bond lifecycle — from first outreach to re-arrest follow-up.
+
+### New Modules
+
+| Module | Purpose |
+|--------|---------|
+| bb_private_api.py (extended) | Webhook CRUD, group chats, iMessage check, scheduled messages, attachments, contacts, diagnostics |
+| bb_webhook_receiver.py | Real-time event receiver (replaces 30s polling loop) |
+| rearrest_notifier.py | Re-arrest detection + indemnitor notification (The Loyalty Flow) |
+| bb_prospecting.py | iMessage-first prospecting outreach (The First Mover) |
+| bb_scheduled_messages.py | Court/payment reminders via BB server-side scheduling |
+| bb_document_delivery.py | Send PDFs, signing links, receipts via iMessage |
+| bb_contact_sync.py | Sync Mac Contacts.app with MongoDB |
+| bb_health_monitor.py | Server health checks + Slack alerts |
+
+### Architecture Upgrade: Polling to Webhooks
+Before: VPS polls BB every 30s — ~15s average latency
+After:  BB pushes to VPS instantly — <1s latency
+Polling loop retained as fallback.
+
+### New Environment Variables
+BB_WEBHOOK_PUBLIC_URL — VPS public URL for webhook registration
+BB_WEBHOOK_SECRET     — Optional HMAC secret for webhook verification
+SLACK_WEBHOOK_URL     — Slack webhook for BB health alerts
+SLACK_CHANNEL         — Slack channel (default: #shamrock-alerts)
