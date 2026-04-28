@@ -107,22 +107,21 @@ class CharlotteCountyScraper(BaseScraper):
 
     # ── Browser setup ─────────────────────────────────────────────────────────
     def _setup_browser(self):
+        """Configure DrissionPage browser using base class options + extra stealth.
+
+        CRITICAL: Must use self._get_browser_options() to set Chrome binary path
+        in Docker. The old implementation created raw ChromiumOptions() which
+        silently failed inside Docker containers (Chrome not found).
+        """
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-            opts = ChromiumOptions()
-            opts.set_argument("--no-sandbox")
-            opts.set_argument("--disable-dev-shm-usage")
-            opts.set_argument("--disable-gpu")
-            opts.set_argument("--window-size=1920,1080")
-            opts.set_argument("--disable-blink-features=AutomationControlled")
-            opts.set_argument("--disable-extensions")
-            opts.set_user_agent(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
-            opts.headless(True)
-            return ChromiumPage(addr_or_opts=opts)
+            from DrissionPage import ChromiumPage
+            co = self._get_browser_options()
+            # Extra stealth for Cloudflare bypass on ccso.org + Revize CMS
+            co.set_argument("--disable-extensions")
+            co.set_argument("--disable-features=IsolateOrigins,site-per-process")
+            co.set_argument("--disable-web-security")
+            co.set_argument("--lang=en-US,en;q=0.9")
+            return ChromiumPage(addr_or_opts=co)
         except Exception as e:
             logger.error(f"[Charlotte] Browser setup failed: {e}")
             return None

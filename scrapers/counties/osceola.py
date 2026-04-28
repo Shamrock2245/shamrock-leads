@@ -131,7 +131,7 @@ class OsceolaCountyScraper(BaseScraper):
                     if src.startswith("/"): src = f"https://apps.osceola.org{src}"
                     result["mugshot_url"] = src; break
         except Exception as e:
-            logger.debug(f"Detail error {inmate_id}: {e}")
+            logger.warning(f"[Osceola] Detail error {inmate_id}: {e}")
         return result
 
     @staticmethod

@@ -209,8 +209,14 @@ class HendryCountyScraper(BaseScraper):
                         continue
 
                     text = body_el.text
-                    if not text or 'Record Details' not in text:
+                    if not text:
+                        logger.warning(f"[Hendry] Detail page empty for {record.Full_Name}: {record.Detail_URL}")
                         time.sleep(2)
+                        text = body_el.text if body_el else ""
+                    elif 'Charge Description' not in text and 'Bond Amount' not in text:
+                        # Page may not have loaded JS content yet
+                        logger.debug(f"[Hendry] No charge markers in text for {record.Full_Name}, retrying...")
+                        time.sleep(3)
                         text = body_el.text if body_el else ""
 
                     charges, total_bond = self._extract_charges_from_text(text)
@@ -226,11 +232,15 @@ class HendryCountyScraper(BaseScraper):
                         logger.info(f"Phase 2 progress: {i+1}/{len(to_enrich)}")
 
                 except Exception as e:
-                    logger.debug(f"Enrichment failed for {record.Full_Name}: {e}")
+                    logger.warning(f"[Hendry] Enrichment failed for {record.Full_Name}: {e}")
 
                 time.sleep(0.5)
 
-            logger.info(f"Phase 2 done: enriched {enriched}/{len(to_enrich)} with charges")
+            # Count how many records actually got charge data
+            with_charges = sum(1 for r in to_enrich if r.Charges and r.Charges.strip())
+            logger.info(f"[Hendry] Phase 2 done: visited {enriched}/{len(to_enrich)} detail pages, {with_charges} have charges")
+            if enriched > 0 and with_charges == 0:
+                logger.warning(f"[Hendry] ⚠️ Phase 2 extracted ZERO charges from {enriched} detail pages — charge selectors may be broken")
 
         except Exception as e:
             logger.warning(f"Phase 2 browser error (Phase 1 data preserved): {e}")
