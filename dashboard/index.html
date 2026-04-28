@@ -37,6 +37,7 @@
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -508,6 +509,145 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════
+     TAB 7: INTAKE QUEUE
+     Receives indemnitor info from all sources:
+     Wix Portal · Telegram · Walk-In · Phone Call · Manual · Bookmarklet
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabIntake">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="margin:0;font-size:20px">📥 Indemnitor Intake Queue</h2>
+      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">All intake sources: Wix Portal · Telegram · Walk-In · Phone Call · Manual Entry · Bookmarklet</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <select id="intakeSourceFilter" onchange="SLIntake.load()" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        <option value="">All Sources</option>
+        <option value="wix_portal">🌐 Wix Portal</option>
+        <option value="telegram">📱 Telegram</option>
+        <option value="walk_in">🚶 Walk-In</option>
+        <option value="phone_call">📞 Phone Call</option>
+        <option value="manual_entry">✏️ Manual Entry</option>
+        <option value="bookmarklet">🔖 Bookmarklet</option>
+      </select>
+      <select id="intakeStatusFilter" onchange="SLIntake.load()" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        <option value="pending">⏳ Pending</option>
+        <option value="in_progress">🔄 In Progress</option>
+        <option value="all">📋 All</option>
+        <option value="archived">✅ Archived</option>
+      </select>
+      <button class="btn-primary" onclick="SLIntake.openManualEntry()" style="font-size:13px;padding:8px 14px">+ Manual Entry</button>
+      <button class="btn-export" onclick="SLIntake.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
+    </div>
+  </div>
+
+  <!-- Stats Row -->
+  <div id="intakeStatsRow" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px"></div>
+
+  <!-- Queue Table -->
+  <div class="panel">
+    <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>📋 Intake Queue</span>
+      <span class="meta" id="intakeQueueMeta"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Received</th>
+            <th>Indemnitor</th>
+            <th>Phone</th>
+            <th>Defendant</th>
+            <th>County</th>
+            <th>Booking #</th>
+            <th>AI Risk</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="intakeQueueBody">
+          <tr><td colspan="10" class="loading">Loading intake queue…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ INTAKE DETAIL / PROCESS MODAL ═══ -->
+<div class="modal-overlay" id="intakeModal">
+  <div class="modal modal-lg" style="max-width:820px">
+    <div class="modal-header">
+      <h2>📥 Process Intake</h2>
+      <button class="modal-close" onclick="SLIntake.closeModal()">✕</button>
+    </div>
+    <div class="modal-body" id="intakeModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="SLIntake.closeModal()">Close</button>
+      <button class="btn-secondary" id="btnArchiveIntake" onclick="SLIntake.archiveCurrent()" style="background:var(--muted);color:#fff">✅ Archive</button>
+      <button class="btn-primary" id="btnWriteBondFromIntake" onclick="SLIntake.writeBondFromIntake()">✍️ Write Bond</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MANUAL INTAKE ENTRY MODAL ═══ -->
+<div class="modal-overlay" id="manualIntakeModal">
+  <div class="modal modal-lg" style="max-width:820px">
+    <div class="modal-header">
+      <h2>✏️ Manual Intake Entry</h2>
+      <button class="modal-close" onclick="SLIntake.closeManualModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <!-- Source -->
+        <div style="grid-column:1/-1">
+          <label class="field-label">Intake Source</label>
+          <select id="miSource" style="width:100%;padding:8px 12px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+            <option value="walk_in">🚶 Walk-In</option>
+            <option value="phone_call">📞 Phone Call</option>
+            <option value="manual_entry">✏️ Manual Entry</option>
+          </select>
+        </div>
+        <!-- Defendant -->
+        <div style="grid-column:1/-1"><h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">Defendant</h4></div>
+        <div><label class="field-label">Defendant Name</label><input type="text" id="miDefName" placeholder="Full name" class="field-input"></div>
+        <div><label class="field-label">Booking Number</label><input type="text" id="miBookingNum" placeholder="e.g. 2025-00012345" class="field-input"></div>
+        <div><label class="field-label">County</label><input type="text" id="miCounty" placeholder="e.g. Lee" class="field-input"></div>
+        <div><label class="field-label">Facility</label><input type="text" id="miFacility" placeholder="e.g. Lee County Jail" class="field-input"></div>
+        <div><label class="field-label">Bond Amount ($)</label><input type="number" id="miBondAmount" placeholder="e.g. 5000" class="field-input"></div>
+        <div><label class="field-label">Charges</label><input type="text" id="miCharges" placeholder="e.g. Battery" class="field-input"></div>
+        <!-- Indemnitor -->
+        <div style="grid-column:1/-1"><h4 style="margin:12px 0 8px;font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">Indemnitor</h4></div>
+        <div><label class="field-label">First Name</label><input type="text" id="miIndFirst" placeholder="First" class="field-input"></div>
+        <div><label class="field-label">Last Name</label><input type="text" id="miIndLast" placeholder="Last" class="field-input"></div>
+        <div><label class="field-label">Phone</label><input type="tel" id="miIndPhone" placeholder="+1 (239) 555-0000" class="field-input"></div>
+        <div><label class="field-label">Email</label><input type="email" id="miIndEmail" placeholder="email@example.com" class="field-input"></div>
+        <div><label class="field-label">Relationship to Defendant</label><input type="text" id="miIndRelation" placeholder="e.g. Mother" class="field-input"></div>
+        <div><label class="field-label">DOB</label><input type="date" id="miIndDOB" class="field-input"></div>
+        <div style="grid-column:1/-1"><label class="field-label">Address</label><input type="text" id="miIndAddress" placeholder="Street address" class="field-input"></div>
+        <div><label class="field-label">City</label><input type="text" id="miIndCity" placeholder="City" class="field-input"></div>
+        <div><label class="field-label">Zip</label><input type="text" id="miIndZip" placeholder="ZIP" class="field-input"></div>
+        <div><label class="field-label">Employer</label><input type="text" id="miIndEmployer" placeholder="Employer name" class="field-input"></div>
+        <div><label class="field-label">Employer Phone</label><input type="tel" id="miIndEmployerPhone" placeholder="Employer phone" class="field-input"></div>
+        <!-- References -->
+        <div style="grid-column:1/-1"><h4 style="margin:12px 0 8px;font-size:13px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">References</h4></div>
+        <div><label class="field-label">Ref 1 Name</label><input type="text" id="miRef1Name" placeholder="Reference 1 name" class="field-input"></div>
+        <div><label class="field-label">Ref 1 Phone</label><input type="tel" id="miRef1Phone" placeholder="Reference 1 phone" class="field-input"></div>
+        <div><label class="field-label">Ref 1 Relation</label><input type="text" id="miRef1Relation" placeholder="e.g. Aunt" class="field-input"></div>
+        <div><label class="field-label">Ref 1 Address</label><input type="text" id="miRef1Address" placeholder="Reference 1 address" class="field-input"></div>
+        <div><label class="field-label">Ref 2 Name</label><input type="text" id="miRef2Name" placeholder="Reference 2 name" class="field-input"></div>
+        <div><label class="field-label">Ref 2 Phone</label><input type="tel" id="miRef2Phone" placeholder="Reference 2 phone" class="field-input"></div>
+        <div><label class="field-label">Ref 2 Relation</label><input type="text" id="miRef2Relation" placeholder="e.g. Friend" class="field-input"></div>
+        <div><label class="field-label">Ref 2 Address</label><input type="text" id="miRef2Address" placeholder="Reference 2 address" class="field-input"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="SLIntake.closeManualModal()">Cancel</button>
+      <button class="btn-primary" onclick="SLIntake.submitManualEntry()">📥 Submit Intake</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ WRITE BOND MODAL ═══ -->
 <div class="modal-overlay" id="bondModal">
   <div class="modal modal-lg">
@@ -535,5 +675,6 @@
 <script src="/sl-features.js"></script>
 <script src="/sl-active-bonds.js"></script>
 <script src="/sl-tracking.js"></script>
+<script src="/sl-intake.js"></script>
 </body>
 </html>

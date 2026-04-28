@@ -35,6 +35,7 @@ def create_app():
     from dashboard.api.court_reminders import court_reminders_bp
     from dashboard.api.contacts import contacts_bp
     from dashboard.api.bond_lifecycle import bond_lifecycle_bp
+    from dashboard.api.intake import intake_bp          # ← Indemnitor Intake Queue
 
     app.register_blueprint(stats_bp, url_prefix="/api")
     app.register_blueprint(bonds_bp, url_prefix="/api")
@@ -49,6 +50,7 @@ def create_app():
     app.register_blueprint(court_reminders_bp, url_prefix="/api")
     app.register_blueprint(contacts_bp, url_prefix="/api")
     app.register_blueprint(bond_lifecycle_bp, url_prefix="/api/bond-lifecycle")
+    app.register_blueprint(intake_bp, url_prefix="/api")  # ← Indemnitor Intake Queue
 
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp

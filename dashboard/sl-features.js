@@ -590,6 +590,10 @@ async function submitBond() {
       location: lead.court_location || '',
       case_number: lead.case_number || '',
     },
+    // Indemnitor(s) — from intake pre-population or manually entered in modal
+    indemnitors: data.indemnitors || [],
+    intake_id: data.intake_id || '',
+    intake_source: data.intake_source || 'shamrock-leads-dashboard',
   };
 
   try {
@@ -842,10 +846,64 @@ async function updateCustody(bookingNumber, newStatus, selectEl) {
   }
 }
 
+// ── openWriteBond ──
+// Pre-populate the Write Bond modal from an intake record.
+// Called by SLIntake.writeBondFromIntake() when staff clicks 'Write Bond' in the Intake Queue.
+function openWriteBond(opts) {
+  opts = opts || {};
+  const def = opts.defendant || {};
+  const booking = opts.booking || {};
+  const bond = opts.bond || {};
+  const indemnitors = opts.indemnitors || [];
+
+  // Build a synthetic lead object that openBondModal() expects
+  const syntheticLead = {
+    full_name:      def.full_name || def.name || '',
+    bond_amount:    bond.amount || 0,
+    county:         booking.county || def.county || '',
+    booking_number: booking.booking_number || def.bookingNumber || '',
+    charges:        opts.charges || '',
+    _intake_indemnitors: indemnitors,
+    _intake_id:     opts.intake_id || '',
+    _intake_source: opts.intake_source || '',
+  };
+
+  openBondModal(syntheticLead);
+
+  // After modal renders, pre-fill indemnitor fields
+  if (indemnitors.length > 0) {
+    setTimeout(() => {
+      const ind = indemnitors[0];
+      const fieldMap = [
+        ['indemnitorFirstName', ind.firstName],
+        ['indemnitorLastName',  ind.lastName],
+        ['indemnitorPhone',     ind.phone],
+        ['indemnitorEmail',     ind.email],
+        ['indemnitorRelation',  ind.relationship],
+        ['indemnitorDOB',       ind.dob],
+        ['indemnitorAddress',   ind.address],
+        ['indemnitorCity',      ind.city],
+        ['indemnitorZip',       ind.zip],
+        ['indemnitorEmployer',  ind.employer],
+        ['indemnitorEmployerPhone', ind.employerPhone],
+      ];
+      fieldMap.forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el && val) el.value = val;
+      });
+      if (window._bondModalData) {
+        window._bondModalData.indemnitors = indemnitors;
+        window._bondModalData.intake_id = opts.intake_id || '';
+        window._bondModalData.intake_source = opts.intake_source || '';
+      }
+    }, 200);
+  }
+}
+
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
-  goPage, goDefPage, openBondModal, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
+  goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody,
   triggerSignNowPhase1, triggerSignNowPhase2 };

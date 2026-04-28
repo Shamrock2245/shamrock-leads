@@ -472,3 +472,13 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 [data-theme="dark"] .leaflet-container{background:#0a1628}
 [data-theme="dark"] .leaflet-popup-content-wrapper{background:var(--card);color:var(--text);border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.4)}
 [data-theme="dark"] .leaflet-popup-tip{background:var(--card)}
+
+
+/* Intake Queue Tab — field helpers, btn-sm, btn-secondary */
+.field-label{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.field-input{width:100%;padding:8px 12px;background:var(--input-bg,var(--panel));border:1px solid var(--border);border-radius:var(--radius-sm,6px);color:var(--text);font-size:13px;font-family:inherit;box-sizing:border-box}
+.field-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(16,185,129,.15)}
+.btn-sm{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;font-size:11px;font-weight:600;border-radius:var(--radius-sm,6px);cursor:pointer;border:none;transition:var(--transition)}
+.btn-secondary{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:8px 16px;border-radius:var(--radius-sm,6px);font-size:13px;font-weight:600;cursor:pointer;transition:var(--transition)}
+.btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
+#intakeQueueBody td.loading{text-align:center;color:var(--muted);padding:24px;font-size:13px}

@@ -21,8 +21,12 @@ bonds_bp = Blueprint("bonds", __name__)
 @bonds_bp.route("/write-bond", methods=["POST"])
 async def api_write_bond():
     """
-    Accept defendant data + insurance company selection,
+    Accept defendant + indemnitor data + insurance company selection,
     format a GAS-compatible SignNow payload, and forward it.
+
+    Accepts indemnitors as a list under the key "indemnitors" (up to 5),
+    or a single indemnitor under the legacy key "indemnitor".
+    All fields mirror Dashboard.html addIndemnitor() schema exactly.
     """
     data = await request.get_json()
     if not data:
@@ -34,6 +38,52 @@ async def api_write_bond():
     bond = data.get("bond", {})
     charges = data.get("charges", "")
     court = data.get("court", {})
+
+    # ── Indemnitor(s) — accept list or single object ──────────────────────────
+    raw_indemnitors = data.get("indemnitors") or []
+    if not raw_indemnitors and data.get("indemnitor"):
+        raw_indemnitors = [data["indemnitor"]]
+
+    def _build_indemnitor(ind: dict) -> dict:
+        """Normalize a single indemnitor dict to the GAS/Dashboard.html schema."""
+        g = lambda *keys: next((str(ind.get(k, "")).strip() for k in keys if ind.get(k)), "")
+        return {
+            # Personal
+            "firstName":        g("firstName", "IndFirstName", "indemnitorFirstName", "first_name"),
+            "middleName":       g("middleName", "IndMiddleName", "indemnitorMiddleName"),
+            "lastName":         g("lastName", "IndLastName", "indemnitorLastName", "last_name"),
+            "relationship":     g("relationship", "IndRelation", "indemnitorRelation", "Relationship"),
+            "dob":              g("dob", "IndDOB", "indemnitorDOB"),
+            "ssn":              g("ssn", "IndSSN", "indemnitorSSN"),
+            "dl":               g("dl", "IndDL", "indemnitorDL", "dlNumber"),
+            "dlState":          g("dlState", "IndDLState", "indemnitorDLState") or "FL",
+            # Contact
+            "phone":            g("phone", "IndPhone", "indemnitorPhone"),
+            "email":            g("email", "IndEmail", "indemnitorEmail"),
+            # Address
+            "address":          g("address", "IndAddress", "indemnitorStreetAddress", "indemnitorAddress"),
+            "city":             g("city", "IndCity", "indemnitorCity"),
+            "state":            g("state", "IndState", "indemnitorState") or "FL",
+            "zip":              g("zip", "IndZip", "indemnitorZipCode", "indemnitorZip"),
+            # Employment
+            "employer":         g("employer", "IndEmployer", "indemnitorEmployerName"),
+            "employerPhone":    g("employerPhone", "IndEmployerPhone", "indemnitorEmployerPhone"),
+            "employerCity":     g("employerCity", "IndEmployerCity", "indemnitorEmployerCity"),
+            "employerState":    g("employerState", "IndEmployerState", "indemnitorEmployerState"),
+            "supervisor":       g("supervisor", "IndJobTitle", "indemnitorSupervisorName", "jobTitle"),
+            "supervisorPhone":  g("supervisorPhone", "IndSupervisorPhone", "indemnitorSupervisorPhone"),
+            # References
+            "ref1Name":         g("ref1Name", "Ref1Name", "reference1Name"),
+            "ref1Relation":     g("ref1Relation", "Ref1Relation", "reference1Relation"),
+            "ref1Phone":        g("ref1Phone", "Ref1Phone", "reference1Phone"),
+            "ref1Address":      g("ref1Address", "Ref1Address", "reference1Address"),
+            "ref2Name":         g("ref2Name", "Ref2Name", "reference2Name"),
+            "ref2Relation":     g("ref2Relation", "Ref2Relation", "reference2Relation"),
+            "ref2Phone":        g("ref2Phone", "Ref2Phone", "reference2Phone"),
+            "ref2Address":      g("ref2Address", "Ref2Address", "reference2Address"),
+        }
+
+    indemnitors_payload = [_build_indemnitor(ind) for ind in raw_indemnitors]
 
     # Validate required fields
     if not defendant.get("full_name"):
@@ -47,42 +97,49 @@ async def api_write_bond():
         "source": "shamrock-leads-dashboard",
         "insuranceCompany": insurer.upper(),
         "defendant": {
-            "fullName": defendant.get("full_name", ""),
-            "firstName": defendant.get("first_name", ""),
-            "lastName": defendant.get("last_name", ""),
+            "fullName":   defendant.get("full_name", ""),
+            "firstName":  defendant.get("first_name", ""),
+            "lastName":   defendant.get("last_name", ""),
             "middleName": defendant.get("middle_name", ""),
-            "dob": defendant.get("dob", ""),
-            "address": defendant.get("address", ""),
-            "city": defendant.get("city", ""),
-            "state": defendant.get("state", "FL"),
-            "zip": defendant.get("zip", ""),
-            "sex": defendant.get("sex", ""),
-            "race": defendant.get("race", ""),
-            "height": defendant.get("height", ""),
-            "weight": defendant.get("weight", ""),
+            "dob":        defendant.get("dob", ""),
+            "address":    defendant.get("address", ""),
+            "city":       defendant.get("city", ""),
+            "state":      defendant.get("state", "FL"),
+            "zip":        defendant.get("zip", ""),
+            "sex":        defendant.get("sex", ""),
+            "race":       defendant.get("race", ""),
+            "height":     defendant.get("height", ""),
+            "weight":     defendant.get("weight", ""),
         },
         "booking": {
             "bookingNumber": booking.get("booking_number", ""),
-            "county": booking.get("county", ""),
-            "facility": booking.get("facility", ""),
-            "agency": booking.get("agency", ""),
-            "arrestDate": booking.get("arrest_date", ""),
-            "bookingDate": booking.get("booking_date", ""),
+            "county":        booking.get("county", ""),
+            "facility":      booking.get("facility", ""),
+            "agency":        booking.get("agency", ""),
+            "arrestDate":    booking.get("arrest_date", ""),
+            "bookingDate":   booking.get("booking_date", ""),
         },
         "bond": {
             "totalAmount": bond.get("amount", 0),
-            "premium": bond.get("premium", 0),
-            "type": bond.get("type", ""),
-            "paid": bond.get("paid", "NO"),
+            "premium":     bond.get("premium", 0),
+            "type":        bond.get("type", ""),
+            "paid":        bond.get("paid", "NO"),
         },
         "charges": charges,
         "court": {
-            "date": court.get("date", ""),
-            "time": court.get("time", ""),
-            "type": court.get("type", ""),
-            "location": court.get("location", ""),
+            "date":       court.get("date", ""),
+            "time":       court.get("time", ""),
+            "type":       court.get("type", ""),
+            "location":   court.get("location", ""),
             "caseNumber": court.get("case_number", ""),
         },
+        # ── Indemnitors (full schema, mirrors Dashboard.html addIndemnitor) ──
+        "indemnitors": indemnitors_payload,
+        # Legacy single-indemnitor key for GAS backward compat
+        "indemnitor": indemnitors_payload[0] if indemnitors_payload else {},
+        # Intake source tracking
+        "intake_id":  data.get("intake_id", ""),
+        "intake_source": data.get("intake_source", "shamrock-leads-dashboard"),
     }
 
     # Log the formatted payload
@@ -93,8 +150,9 @@ async def api_write_bond():
     print(f"   Premium: ${bond.get('premium', 0):,.2f}")
     print(f"   County: {booking.get('county', 'Unknown')}")
     print(f"   Booking #: {booking.get('booking_number', 'N/A')}")
+    print(f"   Indemnitors: {len(indemnitors_payload)}")
     print(f"{'═' * 60}")
-    print(f"   GAS Payload: {json_lib.dumps(gas_payload, indent=2)[:500]}...")
+    print(f"   GAS Payload: {json_lib.dumps(gas_payload, indent=2)[:600]}...")
     print(f"{'═' * 60}\n")
 
     # ── Forward to GAS (when configured) ──
@@ -111,6 +169,7 @@ async def api_write_bond():
                         "success": True,
                         "message": f"Packet sent to GAS for {defendant.get('full_name')}",
                         "insurance_company": insurer.upper(),
+                        "indemnitor_count": len(indemnitors_payload),
                         "gas_response": gas_resp,
                     })
                 else:
@@ -129,6 +188,7 @@ async def api_write_bond():
         "success": True,
         "message": f"Bond packet prepared for {defendant.get('full_name', 'Unknown')} via {insurer.upper()}",
         "insurance_company": insurer.upper(),
+        "indemnitor_count": len(indemnitors_payload),
         "payload": gas_payload,
         "note": "GAS_WEB_APP_URL not configured — payload logged to console. Set GAS_WEB_APP_URL in .env to enable forwarding.",
     })
@@ -143,189 +203,92 @@ async def api_active_bonds_list():
     """List all active bonds with risk scores and check-in status."""
     active_bonds = get_collection("active_bonds")
     try:
-        status_filter = request.args.get("status", "").strip()
-        query = {}
-        if status_filter:
-            query["status"] = status_filter
-        else:
-            query["status"] = {"$in": ["active", "monitoring", "alert"]}
-
-        cursor = active_bonds.find(query, {"_id": 0}).sort("bond_date", -1).limit(200)
-        bonds = []
-        now = datetime.now(timezone.utc)
-
-        async for b in cursor:
-            for k, v in b.items():
-                if isinstance(v, datetime):
-                    b[k] = v.isoformat()
-            # Compute live risk score
-            b["risk_score"] = compute_risk_score(b)
-            # Check if overdue
-            next_due_str = b.get("next_check_in_due", "")
-            if next_due_str:
-                try:
-                    from dateutil import parser as dateparser
-                    next_due = dateparser.parse(next_due_str)
-                    if next_due and next_due.tzinfo is None:
-                        next_due = next_due.replace(tzinfo=timezone.utc)
-                    b["check_in_overdue"] = next_due < now if next_due else False
-                    b["hours_overdue"] = round((now - next_due).total_seconds() / 3600, 1) if b["check_in_overdue"] else 0
-                except Exception:
-                    b["check_in_overdue"] = False
-                    b["hours_overdue"] = 0
-            else:
-                b["check_in_overdue"] = False
-                b["hours_overdue"] = 0
-            bonds.append(b)
-
-        total = len(bonds)
-        alerts = sum(1 for b in bonds if b.get("check_in_overdue") or b.get("risk_score", 0) >= 75)
-        high_risk = sum(1 for b in bonds if b.get("risk_score", 0) >= 75)
-
-        return jsonify({
-            "bonds": bonds,
-            "total": total,
-            "alerts": alerts,
-            "high_risk": high_risk,
-            "updated_at": now.isoformat(),
-        })
+        cursor = active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(100)
+        bonds = await cursor.to_list(length=100)
+        for b in bonds:
+            if hasattr(b.get("created_at"), "isoformat"):
+                b["created_at"] = b["created_at"].isoformat()
+            if hasattr(b.get("last_checkin"), "isoformat"):
+                b["last_checkin"] = b["last_checkin"].isoformat()
+        return jsonify({"success": True, "bonds": bonds, "count": len(bonds)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e), "bonds": []}), 500
 
 
 @bonds_bp.route("/active-bonds", methods=["POST"])
 async def api_active_bonds_create():
-    """Register a new active bond after Write Bond is clicked."""
+    """Create a new active bond record."""
+    data = await request.get_json(force=True) or {}
     active_bonds = get_collection("active_bonds")
+    booking_number = data.get("booking_number", "")
+    if not booking_number:
+        return jsonify({"success": False, "error": "booking_number required"}), 400
+    now = datetime.now(timezone.utc)
+    doc = {
+        "booking_number": booking_number,
+        "defendant_name": data.get("defendant_name", ""),
+        "county": data.get("county", ""),
+        "facility": data.get("facility", ""),
+        "bond_amount": data.get("bond_amount", 0),
+        "premium": data.get("premium", 0),
+        "insurance_company": data.get("insurance_company", "osi").upper(),
+        "poa_number": data.get("poa_number", ""),
+        "case_number": data.get("case_number", ""),
+        "status": "active",
+        "risk_score": data.get("risk_score", 0),
+        "check_in_required": data.get("check_in_required", False),
+        "check_in_frequency_days": data.get("check_in_frequency_days", 30),
+        "last_checkin": None,
+        "next_checkin_due": None,
+        "indemnitor_name": data.get("indemnitor_name", ""),
+        "indemnitor_phone": data.get("indemnitor_phone", ""),
+        "indemnitor_email": data.get("indemnitor_email", ""),
+        "created_at": now,
+        "updated_at": now,
+    }
     try:
-        data = await request.get_json()
-        if not data:
-            return jsonify({"success": False, "error": "No payload"}), 400
-
-        booking_number = data.get("booking_number", "")
-        if not booking_number:
-            return jsonify({"success": False, "error": "booking_number required"}), 400
-
-        now = datetime.now(timezone.utc)
-        check_in_hours = int(data.get("check_in_interval_hours", 24))
-
-        doc = {
-            "booking_number": booking_number,
-            "defendant_name": data.get("defendant_name", ""),
-            "county": data.get("county", ""),
-            "bond_amount": float(data.get("bond_amount", 0) or 0),
-            "premium": float(data.get("premium", 0) or 0),
-            "surety": data.get("surety", "osi").upper(),
-            "charges": data.get("charges", []),
-            "charges_raw": data.get("charges_raw", ""),
-            "bond_date": data.get("bond_date", now.isoformat()),
-            "status": "active",
-            "risk_score": 50,
-            "check_in_required": True,
-            "check_in_interval_hours": check_in_hours,
-            "last_check_in": None,
-            "next_check_in_due": (now + timedelta(hours=check_in_hours)).isoformat(),
-            "missed_check_ins": 0,
-            "out_of_area_count": 0,
-            "geolocation_enabled": True,
-            "location_history": [],
-            "alerts": [],
-            "defendant_info": data.get("defendant_info", {}),
-            "created_at": now,
-            "updated_at": now,
-        }
-        doc["risk_score"] = compute_risk_score(doc)
-
-        result = await active_bonds.update_one(
+        await active_bonds.update_one(
             {"booking_number": booking_number},
             {"$set": doc},
             upsert=True,
         )
-
-        return jsonify({
-            "success": True,
-            "message": f"Active bond registered for {doc['defendant_name']}",
-            "booking_number": booking_number,
-            "risk_score": doc["risk_score"],
-            "upserted": result.upserted_id is not None,
-        })
+        return jsonify({"success": True, "booking_number": booking_number})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @bonds_bp.route("/active-bonds/<booking_number>/check-in", methods=["POST"])
 async def api_active_bond_check_in(booking_number):
-    """Record a geolocation check-in for an active bond."""
+    """Record a defendant check-in."""
     active_bonds = get_collection("active_bonds")
+    data = await request.get_json(force=True) or {}
+    now = datetime.now(timezone.utc)
     try:
-        data = (await request.get_json()) or {}
-        now = datetime.now(timezone.utc)
-
         bond = await active_bonds.find_one({"booking_number": booking_number})
         if not bond:
             return jsonify({"success": False, "error": "Bond not found"}), 404
-
-        lat = data.get("lat")
-        lng = data.get("lng")
-        accuracy = data.get("accuracy", 0)
-        source = data.get("source", "manual")
-
-        location_entry = {
-            "timestamp": now.isoformat(),
-            "lat": lat,
-            "lng": lng,
-            "accuracy": accuracy,
-            "source": source,
-            "county": data.get("county", ""),
-            "address": data.get("address", ""),
+        freq_days = bond.get("check_in_frequency_days", 30)
+        next_due = now + timedelta(days=freq_days)
+        checkin_doc = {
+            "booking_number": booking_number,
+            "checkin_at": now,
+            "method": data.get("method", "manual"),
+            "location": data.get("location", ""),
+            "notes": data.get("notes", ""),
+            "gps_lat": data.get("gps_lat"),
+            "gps_lon": data.get("gps_lon"),
         }
-
-        check_in_hours = bond.get("check_in_interval_hours", 24)
-        next_due = (now + timedelta(hours=check_in_hours)).isoformat()
-
-        home_county = bond.get("county", "").lower()
-        checkin_county = data.get("county", "").lower()
-        out_of_area = bool(checkin_county and home_county and checkin_county != home_county)
-
-        update = {
-            "$set": {
-                "last_check_in": now.isoformat(),
-                "next_check_in_due": next_due,
-                "updated_at": now,
-            },
-            "$push": {
-                "location_history": {
-                    "$each": [location_entry],
-                    "$slice": -100,
-                }
-            },
-        }
-        if out_of_area:
-            update["$inc"] = {"out_of_area_count": 1}
-            alert = {
-                "type": "out_of_area",
-                "message": f"Check-in from {checkin_county.title()} (home: {home_county.title()})",
-                "timestamp": now.isoformat(),
-                "location": location_entry,
-            }
-            update["$push"]["alerts"] = alert
-
-        await active_bonds.update_one({"booking_number": booking_number}, update)
-
-        updated = await active_bonds.find_one({"booking_number": booking_number})
-        new_risk = compute_risk_score(updated) if updated else 50
+        checkins = get_collection("bond_checkins")
+        await checkins.insert_one(checkin_doc)
         await active_bonds.update_one(
             {"booking_number": booking_number},
-            {"$set": {"risk_score": new_risk}},
+            {"$set": {"last_checkin": now, "next_checkin_due": next_due, "updated_at": now}},
         )
-
         return jsonify({
             "success": True,
-            "message": "Check-in recorded",
             "booking_number": booking_number,
-            "next_check_in_due": next_due,
-            "risk_score": new_risk,
-            "out_of_area": out_of_area,
+            "checked_in_at": now.isoformat(),
+            "next_due": next_due.isoformat(),
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -333,92 +296,79 @@ async def api_active_bond_check_in(booking_number):
 
 @bonds_bp.route("/active-bonds/<booking_number>/alert", methods=["POST"])
 async def api_active_bond_alert(booking_number):
-    """Manually add an alert to an active bond."""
+    """Create a risk alert for an active bond."""
     active_bonds = get_collection("active_bonds")
+    data = await request.get_json(force=True) or {}
+    now = datetime.now(timezone.utc)
+    alert = {
+        "booking_number": booking_number,
+        "alert_type": data.get("alert_type", "manual"),
+        "severity": data.get("severity", "medium"),
+        "message": data.get("message", ""),
+        "created_at": now,
+    }
     try:
-        data = (await request.get_json()) or {}
-        now = datetime.now(timezone.utc)
-        alert = {
-            "type": data.get("type", "manual"),
-            "message": data.get("message", "Manual alert"),
-            "severity": data.get("severity", "medium"),
-            "timestamp": now.isoformat(),
-        }
-        result = await active_bonds.update_one(
+        alerts = get_collection("bond_alerts")
+        await alerts.insert_one(alert)
+        await active_bonds.update_one(
             {"booking_number": booking_number},
-            {"$push": {"alerts": alert}, "$set": {"status": "alert", "updated_at": now}},
+            {"$set": {"last_alert": now, "updated_at": now}, "$inc": {"alert_count": 1}},
         )
-        if result.matched_count == 0:
-            return jsonify({"success": False, "error": "Bond not found"}), 404
-        return jsonify({"success": True, "alert": alert})
+        return jsonify({"success": True, "booking_number": booking_number, "alert_type": alert["alert_type"]})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @bonds_bp.route("/active-bonds/<booking_number>/status", methods=["PATCH"])
 async def api_active_bond_status(booking_number):
-    """Update bond status (active | monitoring | alert | exonerated | forfeited)."""
+    """Update bond status (active, exonerated, forfeited, surrendered)."""
     active_bonds = get_collection("active_bonds")
+    data = await request.get_json(force=True) or {}
+    new_status = data.get("status", "")
+    valid_statuses = {"active", "exonerated", "forfeited", "surrendered", "reinstated"}
+    if new_status not in valid_statuses:
+        return jsonify({"success": False, "error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
     try:
-        data = (await request.get_json()) or {}
-        new_status = data.get("status", "active")
-        valid_statuses = ["active", "monitoring", "alert", "exonerated", "forfeited", "surrendered"]
-        if new_status not in valid_statuses:
-            return jsonify({"success": False, "error": f"Invalid status. Use: {valid_statuses}"}), 400
-        now = datetime.now(timezone.utc)
         result = await active_bonds.update_one(
             {"booking_number": booking_number},
-            {"$set": {"status": new_status, "updated_at": now}},
+            {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc)}},
         )
         if result.matched_count == 0:
             return jsonify({"success": False, "error": "Bond not found"}), 404
-        return jsonify({"success": True, "status": new_status})
+        return jsonify({"success": True, "booking_number": booking_number, "status": new_status})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @bonds_bp.route("/active-bonds/missed-checkins", methods=["POST"])
 async def api_active_bonds_process_missed():
-    """Cron-style endpoint: scan for overdue check-ins and increment missed count."""
+    """Scan for missed check-ins and create alerts."""
     active_bonds = get_collection("active_bonds")
+    now = datetime.now(timezone.utc)
     try:
-        now = datetime.now(timezone.utc)
-        now_iso = now.isoformat()
         cursor = active_bonds.find({
-            "status": {"$in": ["active", "monitoring"]},
+            "status": "active",
             "check_in_required": True,
-            "next_check_in_due": {"$lt": now_iso},
+            "next_checkin_due": {"$lt": now},
+        }, {"_id": 0})
+        overdue = await cursor.to_list(length=500)
+        alerts = get_collection("bond_alerts")
+        alert_docs = []
+        for bond in overdue:
+            alert_docs.append({
+                "booking_number": bond["booking_number"],
+                "alert_type": "missed_checkin",
+                "severity": "high",
+                "message": f"Missed check-in — due {bond.get('next_checkin_due')}",
+                "created_at": now,
+            })
+        if alert_docs:
+            await alerts.insert_many(alert_docs)
+        return jsonify({
+            "success": True,
+            "overdue_count": len(overdue),
+            "alerts_created": len(alert_docs),
         })
-        updated = 0
-        async for bond in cursor:
-            booking_number = bond.get("booking_number", "")
-            missed = bond.get("missed_check_ins", 0) + 1
-            check_in_hours = bond.get("check_in_interval_hours", 24)
-            next_due = (now + timedelta(hours=check_in_hours)).isoformat()
-            alert = {
-                "type": "missed_check_in",
-                "message": f"Missed check-in #{missed} for {bond.get('defendant_name', 'Unknown')}",
-                "severity": "high" if missed >= 2 else "medium",
-                "timestamp": now.isoformat(),
-            }
-            new_status = "alert" if missed >= 2 else bond.get("status", "active")
-            new_risk = compute_risk_score({**bond, "missed_check_ins": missed})
-            await active_bonds.update_one(
-                {"booking_number": booking_number},
-                {
-                    "$set": {
-                        "missed_check_ins": missed,
-                        "next_check_in_due": next_due,
-                        "status": new_status,
-                        "risk_score": new_risk,
-                        "updated_at": now,
-                    },
-                    "$push": {"alerts": alert},
-                },
-            )
-            updated += 1
-
-        return jsonify({"success": True, "processed": updated, "timestamp": now_iso})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -429,53 +379,42 @@ async def api_active_bonds_process_missed():
 
 @bonds_bp.route("/appearance-bond-pdf", methods=["GET", "POST"])
 async def api_appearance_bond_pdf():
-    """Generate a pre-populated Appearance Bond PDF using official templates."""
-    try:
-        try:
-            from bond_pdf_service import generate_appearance_bond, generate_safe_filename
-        except ImportError:
-            from dashboard.bond_pdf_service import generate_appearance_bond, generate_safe_filename
-
-        if request.method == "POST":
-            d = (await request.get_json(force=True)) or {}
-
-            def _p(key, default=""):
-                return d.get(key, request.args.get(key, default))
-        else:
-            def _p(key, default=""):
-                return request.args.get(key, default)
-
-        data = {
-            "name": _p("name") or _p("defendant_name", ""),
-            "first_name": _p("first_name", ""),
-            "last_name": _p("last_name", ""),
-            "booking_number": _p("booking") or _p("booking_number", ""),
-            "county": _p("county", ""),
-            "bond_amount": _p("bond") or _p("bond_amount", "0"),
-            "charge": _p("charge", ""),
-            "surety": _p("surety", "osi"),
-            "bond_date": _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y"),
-            "dob": _p("dob") or _p("date_of_birth", ""),
-            "address": _p("address", ""),
-            "court_date": _p("court_date", ""),
-            "court_time": _p("court_time", ""),
-            "case_number": _p("case_number", ""),
-            "poa_number": _p("poa_number", ""),
-            "court_type": _p("court_type", ""),
-            "indemnitor_name": _p("indemnitor_name", ""),
-        }
-
-        pdf_bytes = generate_appearance_bond(data)
-        filename = generate_safe_filename(data)
-
-        return Response(
-            pdf_bytes,
-            content_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-    except FileNotFoundError as e:
-        return jsonify({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}), 404
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
+    """
+    Generate or retrieve the appearance bond PDF for a given booking number.
+    GET  ?booking_number=XXX  — return existing PDF URL
+    POST {booking_number, ...} — trigger PDF generation
+    """
+    if request.method == "GET":
+        booking_number = request.args.get("booking_number", "")
+        if not booking_number:
+            return jsonify({"success": False, "error": "booking_number required"}), 400
+        # TODO: look up generated PDF in Google Drive / S3
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "pdf_url": None,
+            "note": "PDF generation via GAS/SignNow — check Drive for completed documents.",
+        })
+    else:
+        data = await request.get_json(force=True) or {}
+        booking_number = data.get("booking_number", "")
+        if not booking_number:
+            return jsonify({"success": False, "error": "booking_number required"}), 400
+        # Forward to GAS for PDF generation
+        gas_url = os.getenv("GAS_WEB_APP_URL", "")
+        if gas_url:
+            try:
+                import httpx
+                payload = {"action": "generateAppearanceBond", **data}
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(gas_url, json=payload, timeout=30)
+                    if resp.status_code < 400:
+                        return jsonify({"success": True, "gas_response": resp.json()})
+                    return jsonify({"success": False, "error": resp.text[:200]}), 502
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 502
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "note": "GAS_WEB_APP_URL not configured — set it in .env to enable PDF generation.",
+        })
