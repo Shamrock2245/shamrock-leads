@@ -20,6 +20,7 @@
   <div class="header-right">
     <span class="live">LIVE</span>
     <span class="meta" id="refreshMeta">Auto-refresh in 30s</span>
+    <button class="refresh-btn" onclick="SLInventory.open()" style="background:rgba(245,158,11,.15);color:#fbbf24;border-color:rgba(245,158,11,.2)">📋 Inventory</button>
     <button class="refresh-btn" onclick="SL.refresh()">↻ Refresh</button>
     <div class="theme-toggle" onclick="SL.toggleTheme()">
       <span>☀️</span>
@@ -866,6 +867,112 @@
   </div>
 </div>
 
+<!-- ═══ POA INVENTORY MODAL ═══ -->
+<div class="modal-overlay" id="inventoryModal" onclick="if(event.target===this)SLInventory.close()">
+  <div class="modal" style="max-width:900px;width:95vw">
+    <div class="modal-header">
+      <h2>📋 POA Inventory Management</h2>
+      <button class="modal-close" onclick="SLInventory.close()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px 20px">
+      <!-- KPI Bar -->
+      <div class="inv-kpi-bar" id="invKpis"></div>
+
+      <!-- Tab Buttons -->
+      <div class="inv-tab-bar">
+        <button class="inv-tab-btn active" data-tab="summary" onclick="SLInventory.switchTab('summary')">📊 Summary</button>
+        <button class="inv-tab-btn" data-tab="detail" onclick="SLInventory.switchTab('detail')">📃 All Powers</button>
+        <button class="inv-tab-btn" data-tab="add" onclick="SLInventory.switchTab('add')">➕ Add Stock</button>
+      </div>
+
+      <!-- Tab: Summary -->
+      <div class="inv-tab-pane" id="invPane_summary" style="display:block">
+        <div id="invSummaryBody"></div>
+      </div>
+
+      <!-- Tab: Detail (All Powers) -->
+      <div class="inv-tab-pane" id="invPane_detail" style="display:none">
+        <div class="inv-detail-filters">
+          <select class="inv-filter-select" onchange="SLInventory.applyFilter('surety',this.value)">
+            <option value="all">All Sureties</option>
+            <option value="osi">🛡️ OSI</option>
+            <option value="palmetto">🌴 Palmetto</option>
+          </select>
+          <select class="inv-filter-select" onchange="SLInventory.applyFilter('status',this.value)">
+            <option value="all">All Statuses</option>
+            <option value="available">✅ Available</option>
+            <option value="assigned">📌 Assigned</option>
+            <option value="voided">🗑️ Voided</option>
+          </select>
+          <div class="inv-search-wrap">
+            <input type="text" id="invSearchInput" class="inv-search" placeholder="Search POA # or case..." onkeyup="if(event.key==='Enter')SLInventory.searchFilter()">
+            <button class="inv-search-btn" onclick="SLInventory.searchFilter()">🔍</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>POA #</th><th>Surety</th><th>Tier</th><th>Max Bond</th><th>Status</th><th>Case</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="invDetailBody"></tbody>
+          </table>
+        </div>
+        <div class="pagination" id="invDetailPagination" style="margin-top:12px"></div>
+      </div>
+
+      <!-- Tab: Add Stock -->
+      <div class="inv-tab-pane" id="invPane_add" style="display:none">
+        <div class="inv-add-form">
+          <div class="inv-add-header">
+            <span>📦 Add New Powers to Inventory</span>
+            <span style="font-size:11px;color:var(--muted)">Receive a new book of powers? Enter the serial range below.</span>
+          </div>
+          <div class="inv-form-grid">
+            <div>
+              <label class="inv-form-label">Surety Company</label>
+              <select id="addSurety" class="inv-form-input" onchange="SLInventory.updatePrefixOptions()">
+                <option value="osi">🛡️ OSI — Old Southern Indemnity</option>
+                <option value="palmetto">🌴 Palmetto Surety Corp.</option>
+              </select>
+            </div>
+            <div>
+              <label class="inv-form-label">POA Tier (Prefix)</label>
+              <select id="addPrefix" class="inv-form-input" onchange="SLInventory.autoFillMaxBond()">
+                <option value="OSI3">OSI3 (≤$3K)</option>
+                <option value="OSI6">OSI6 (≤$6K)</option>
+                <option value="OSI16">OSI16 (≤$16K)</option>
+                <option value="OSI51">OSI51 (≤$51K)</option>
+                <option value="OSI101">OSI101 (≤$101K)</option>
+                <option value="OSI251">OSI251 (≤$251K)</option>
+              </select>
+            </div>
+            <div>
+              <label class="inv-form-label">Start Serial #</label>
+              <input id="addStart" class="inv-form-input" type="text" placeholder="e.g. 20134295">
+            </div>
+            <div>
+              <label class="inv-form-label">End Serial # (or same for single)</label>
+              <input id="addEnd" class="inv-form-input" type="text" placeholder="e.g. 20134324">
+            </div>
+            <div>
+              <label class="inv-form-label">Max Bond Value ($)</label>
+              <input id="addMaxBond" class="inv-form-input" type="number" value="3000">
+            </div>
+            <div>
+              <label class="inv-form-label">Expiration Date</label>
+              <input id="addExpiration" class="inv-form-input" type="date">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:16px">
+            <button class="btn-primary" onclick="SLInventory.submitAdd()">📥 Add to Inventory</button>
+            <span id="addStatus" style="font-size:12px"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ TOAST ═══ -->
 <div class="toast-notification" id="toast"><span class="toast-icon"></span><span class="toast-message"></span></div>
 
@@ -883,5 +990,6 @@
 <script src="/sl-intake.js"></script>
 <script src="/sl-health.js"></script>
 <script src="/sl-prospective.js"></script>
+<script src="/sl-inventory.js"></script>
 </body>
 </html>
