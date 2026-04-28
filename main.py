@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config.settings import settings
 from core.scheduler import ScraperScheduler
 from core.dedup import DedupEngine
+from core.first_appearance_watcher import FirstAppearanceWatcher
 from writers.mongo_writer import MongoWriter
 from maintenance.cleanup import run_cleanup
 
@@ -192,10 +193,16 @@ def register_scrapers(sched):
     sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)# Custom HTML
     sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)    # OCV API
 
+# Global watcher instance (set in main)
+_fa_watcher: "FirstAppearanceWatcher | None" = None
+
+
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")
     if scheduler:
         scheduler.stop()
+    if _fa_watcher:
+        _fa_watcher.close()
     sys.exit(0)
 
 def _run_scheduled_cleanup():
@@ -207,8 +214,26 @@ def _run_scheduled_cleanup():
     except Exception as e:
         logger.error(f"🧹 Cleanup failed: {e}")
 
+
+def _run_first_appearance_watcher():
+    """
+    Wrapper for APScheduler to run the FirstAppearanceWatcher cycle.
+    Re-checks no-bond / disqualified records up to 3 days after arrest
+    so that bond set at first appearance is detected and re-alerted.
+    """
+    if _fa_watcher is None:
+        return
+    try:
+        stats = _fa_watcher.run()
+        if stats.get("bond_set", 0) > 0:
+            logger.info(
+                f"🔔 FirstAppearanceWatcher: {stats['bond_set']} bond(s) set this cycle"
+            )
+    except Exception as e:
+        logger.error(f"FirstAppearanceWatcher run failed: {e}")
+
 def main():
-    global scheduler
+    global scheduler, _fa_watcher
     logger.info("=" * 60)
     logger.info("ShamrockLeads - Florida Arrest Intelligence Platform")
     logger.info("=" * 60)
@@ -218,6 +243,22 @@ def main():
     scheduler = ScraperScheduler()
     scheduler.set_writers(writers)
     register_scrapers(scheduler)
+
+    # ── Build scraper registry for FirstAppearanceWatcher ─────────────────
+    # Maps county name → scraper instance so the watcher can call
+    # _fetch_single_booking() on the appropriate county scraper.
+    scraper_registry = {
+        s.county: s for s in scheduler._scrapers.values()
+    }
+
+    # ── Initialize FirstAppearanceWatcher ─────────────────────────────────
+    # Watches no-bond / disqualified records for up to 3 days post-arrest
+    # and re-alerts when bond is set at first appearance.
+    _fa_watcher = FirstAppearanceWatcher(
+        writers=writers,
+        scraper_registry=scraper_registry,
+    )
+    logger.info("🔔 FirstAppearanceWatcher initialized")
 
     # ── Register maintenance jobs ─────────────────────────────────────────
     # Auto-purge stale data every 6 hours to keep MongoDB lean
@@ -230,6 +271,23 @@ def main():
         replace_existing=True,
         misfire_grace_time=600,
     )
+
+    # ── First Appearance Watcher — every 30 minutes ───────────────────────
+    # Catches no-bond records that get bond set at first appearance
+    # (within 24–72 hours of arrest per Fla. R. Crim. P. 3.130).
+    # Runs 5 minutes after startup to let scrapers populate data first.
+    from datetime import datetime, timezone, timedelta
+    fa_first_run = datetime.now(timezone.utc) + timedelta(minutes=5)
+    scheduler.scheduler.add_job(
+        _run_first_appearance_watcher,
+        trigger=IntervalTrigger(minutes=30),
+        id="first_appearance_watcher",
+        name="First Appearance Bond Watcher",
+        replace_existing=True,
+        next_run_time=fa_first_run,
+        misfire_grace_time=300,
+    )
+    logger.info("🔔 FirstAppearanceWatcher scheduled (every 30 min, first run in 5 min)")
     if len(sys.argv) > 1:
         county = sys.argv[1]
         logger.info(f"One-shot mode: running {county} scraper")

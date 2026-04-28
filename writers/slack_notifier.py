@@ -181,6 +181,67 @@ class SlackNotifier:
             ]
         })
 
+    # ── Bond Set Alert (First Appearance) ──
+    def notify_bond_set(self, record: ArrestRecord) -> bool:
+        """
+        Send a 🔔 BOND SET alert when a previously no-bond record has had
+        bond set at first appearance.
+
+        Routes to the leads webhook so agents see it immediately alongside
+        other hot leads.
+        """
+        bond_val   = record._parse_bond_numeric()
+        score      = record.Lead_Score
+        status_lbl = record.Lead_Status
+        arrest_dt  = record.Arrest_Date or record.Booking_Date or "unknown"
+
+        # Choose urgency emoji based on new lead status
+        if status_lbl == "Hot":
+            urgency = "🔥 HOT"
+        elif status_lbl == "Warm":
+            urgency = "🟡 WARM"
+        else:
+            urgency = "🔔"
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"🔔 BOND SET — {record.County} County ({urgency})",
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Name:* {record.Full_Name}"},
+                    {"type": "mrkdwn", "text": f"*Bond:* ${bond_val:,.0f}"},
+                    {"type": "mrkdwn", "text": f"*Score:* {score} — {status_lbl}"},
+                    {"type": "mrkdwn", "text": f"*Arrested:* {arrest_dt}"},
+                    {"type": "mrkdwn", "text": f"*Charges:* {record.Charges[:120]}"},
+                    {"type": "mrkdwn", "text": f"*Booking #:* {record.Booking_Number}"},
+                ],
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"_Bond set at first appearance — detected by ShamrockLeads watcher • "
+                            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+                        ),
+                    }
+                ],
+            },
+        ]
+
+        # Also fire the standard hot-lead alert if bond qualifies
+        if status_lbl == "Hot" and bond_val >= 2500:
+            self.notify_hot_lead(record)
+
+        return self._post(self.webhook_leads, {"blocks": blocks})
+
     # ── Health Report ──
     def notify_health_report(self, report: Dict[str, Any]) -> bool:
         """Send a periodic health report."""
