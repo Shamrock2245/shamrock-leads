@@ -247,43 +247,87 @@ const SLIntake = (() => {
 
   // ── Write bond from current intake ────────────────────────────────────────
   function writeBondFromIntake() {
-    if (!_currentHydration) return;
+    if (!_currentHydration) {
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No intake data loaded — re-open the intake first', 'warn');
+      return;
+    }
+
+    // Capture data BEFORE closeModal() clears _currentHydration / _currentIntakeId
     const h = _currentHydration;
     const ind = h.indemnitor || {};
     const def = h.defendant || {};
+    const intakeId = _currentIntakeId;
 
-    // Close intake modal
+    // Close intake modal (this nulls _currentHydration + _currentIntakeId)
     closeModal();
 
-    // Pre-populate the Write Bond modal via SL.openWriteBond
+    // Build the bond options payload
+    const bondOpts = {
+      defendant: {
+        full_name:  def.name,
+        first_name: def.firstName,
+        last_name:  def.lastName,
+        county:     def.county,
+        facility:   def.facility,
+      },
+      booking: {
+        booking_number: def.bookingNumber,
+        county:         def.county,
+        facility:       def.facility,
+      },
+      bond: {
+        amount:  def.bondAmount || 0,
+      },
+      charges: def.charges,
+      indemnitors: [ind],
+      intake_id: intakeId,
+      intake_source: h.source,
+    };
+
+    // Pre-populate the Write Bond modal
     if (typeof SL !== 'undefined' && typeof SL.openWriteBond === 'function') {
-      SL.openWriteBond({
-        defendant: {
-          full_name:  def.name,
-          first_name: def.firstName,
-          last_name:  def.lastName,
-          county:     def.county,
-          facility:   def.facility,
-        },
-        booking: {
-          booking_number: def.bookingNumber,
-          county:         def.county,
-          facility:       def.facility,
-        },
-        bond: {
-          amount:  def.bondAmount || 0,
-        },
-        charges: def.charges,
-        indemnitors: [ind],
-        intake_id: _currentIntakeId,
-        intake_source: h.source,
-      });
-    } else {
-      // Fallback: open the bond modal and let staff fill it
-      if (typeof SL !== 'undefined' && typeof SL.openModal === 'function') {
-        SL.openModal('bondModal');
+      SL.openWriteBond(bondOpts);
+    } else if (typeof SL !== 'undefined' && typeof SL.openBondModal === 'function') {
+      // Fallback: use openBondModal directly with a synthetic lead
+      const syntheticLead = {
+        full_name:      bondOpts.defendant.full_name || 'Unknown',
+        bond_amount:    bondOpts.bond.amount || 0,
+        county:         bondOpts.booking.county || '',
+        booking_number: bondOpts.booking.booking_number || '',
+        charges:        bondOpts.charges || '',
+        _intake_indemnitors: bondOpts.indemnitors,
+        _intake_id:     bondOpts.intake_id || '',
+        _intake_source: bondOpts.intake_source || '',
+      };
+      SL.openBondModal(syntheticLead);
+
+      // Pre-fill indemnitor fields after modal renders
+      if (bondOpts.indemnitors.length > 0) {
+        setTimeout(() => {
+          const i0 = bondOpts.indemnitors[0];
+          const fm = [
+            ['indemnitorFirstName', i0.firstName],
+            ['indemnitorLastName',  i0.lastName],
+            ['indemnitorPhone',     i0.phone],
+            ['indemnitorEmail',     i0.email],
+            ['indemnitorRelation',  i0.relationship],
+            ['indemnitorDOB',       i0.dob],
+            ['indemnitorAddress',   i0.address],
+            ['indemnitorCity',      i0.city],
+            ['indemnitorZip',       i0.zip],
+            ['indemnitorEmployer',  i0.employer],
+            ['indemnitorEmployerPhone', i0.employerPhone],
+          ];
+          fm.forEach(([id, val]) => {
+            const el = document.getElementById(id);
+            if (el && val) el.value = val;
+          });
+        }, 200);
       }
-      SL.toast('⚠️ Bond form opened — indemnitor data ready in intake queue', 'warn');
+
+      SL.toast('✍️ Bond form pre-populated from intake', 'success');
+    } else {
+      SL.toast('⚠️ Bond modal not available', 'warn');
     }
   }
 
