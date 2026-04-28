@@ -14,9 +14,13 @@ Endpoints:
   /api/config/bluebubbles-url — Dynamic URL sync from iMac
 """
 
+import logging
+import os
 import re as re_mod
 import uuid
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 from quart import Blueprint, jsonify, request
 from dashboard.extensions import (
@@ -441,18 +445,23 @@ async def imessage_templates():
     templates = [
         {
             "id": "standard",
-            "name": "Standard Outreach",
-            "body": "Hi, this is {agent} with Shamrock Bail Bonds. I see that {name} is currently in custody in the {county} County Jail. We were wondering if you'd like some help bonding them out of jail.",
+            "name": "Standard Introduction",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds. I see that {name} is currently in custody in the {county} County Jail. We can help get them home fast with flexible payment plans. Give us a call or reply here.",
         },
         {
             "id": "urgent",
-            "name": "Urgent / High Bond",
-            "body": "Hi, this is {agent} with Shamrock Bail Bonds. I see that {name} is currently being held in {county} County on a significant bond. We specialize in getting people home fast with flexible payment plans. Would you like some help?",
+            "name": "Urgent — Significant Bond",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds. {name} is currently being held in {county} County on a significant bond. We specialize in quick releases and flexible payment options. Would you like help?",
         },
         {
             "id": "followup",
             "name": "Follow-Up",
-            "body": "Hi, this is {agent} with Shamrock Bail Bonds, just following up about {name} in {county} County. We're still available to help if you'd like to get them out. No obligation to chat.",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds, just following up about {name} in {county} County. We're still available to help if you'd like to get them home. No obligation to chat.",
+        },
+        {
+            "id": "payment",
+            "name": "Payment Plan Offer",
+            "body": "Hi, this is {agent} with Shamrock Bail Bonds. We can help bond {name} out of {county} County Jail today. We offer flexible payment plans and fast service. Reply or call us anytime.",
         },
     ]
     return jsonify({"templates": templates})
