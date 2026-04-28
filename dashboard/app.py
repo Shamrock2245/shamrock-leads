@@ -764,8 +764,10 @@ def api_scraper_health():
         county = r["_id"]
         latest = r.get("latest_record") or r.get("latest_scrape")
 
-        # Calculate staleness
+        # Calculate staleness — normalize naive datetimes from MongoDB to UTC-aware
         if isinstance(latest, datetime):
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
             hours_since = (now - latest).total_seconds() / 3600
         else:
             hours_since = 999

@@ -1,33 +1,33 @@
 """
-Sarasota County Arrest Scraper — Revize CMS with DrissionPage.
-
+Sarasota County Arrest Scraper — Revize CMS with patchright (undetected Playwright).
 Source: Sarasota County Sheriff's Office via Revize-hosted bookings
-URL: https://cms.revize.com/revize/apps/sarasota/
-Method: DrissionPage browser automation (Chromium headless)
-
-Architecture (3-Phase):
-1. Date search URL -> collect all unique PINs (paginated)
-2. PIN pages -> resolve to booking detail URLs
-3. Booking detail pages -> extract structured data
-
-Ported from: swfl-arrest-scrapers/python_scrapers/scrapers/sarasota_solver.py
+URL: https://sarasotasheriff.org/arrest-reports/index.php (iframe: cms.revize.com/revize/apps/sarasota/)
+Method: patchright subprocess via xvfb-run (same approach as Charlotte County)
+Reason for patchright: cms.revize.com returns 403 to datacenter IPs; navigating via the
+  parent sarasotasheriff.org page with a real browser context bypasses the block.
+Architecture (2-Phase):
+1. Navigate to parent page -> enter Revize iframe -> collect booking detail URLs (paginated by date)
+2. Visit each detail URL -> extract structured arrest data
 """
-
+import json
 import logging
 import re
+import subprocess
+import sys
 import time
 import datetime as dt
-from typing import List, Optional, Set, Tuple, Dict
+from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
+PARENT_URL = "https://sarasotasheriff.org/arrest-reports/index.php"
 BASE_URL = "https://cms.revize.com/revize/apps/sarasota/"
 DAYS_BACK = 3
 MAX_PAGES_PER_DATE = 30
-DETAIL_DELAY_S = 1.0
+WORKER_TIMEOUT = 600  # 10 minutes max for the patchright subprocess
 
 
 class SarasotaCountyScraper(BaseScraper):
@@ -36,359 +36,410 @@ class SarasotaCountyScraper(BaseScraper):
     def county(self) -> str:
         return "Sarasota"
 
+    # ── Main scrape entry point ───────────────────────────────────────────────
     def scrape(self) -> List[ArrestRecord]:
+        worker_script = "/tmp/sarasota_patchright_worker.py"
+        self._write_worker_script(worker_script)
+
+        cmd = ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1920x1080x24",
+               sys.executable, worker_script, str(DAYS_BACK), str(MAX_PAGES_PER_DATE)]
+
+        logger.info(f"[{self.county}] Starting patchright worker (days_back={DAYS_BACK})")
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-        except ImportError:
-            logger.error("DrissionPage not installed.")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=WORKER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            logger.error(f"[{self.county}] Worker timed out after {WORKER_TIMEOUT}s")
             return []
-
-        page = self._setup_browser()
-        today = dt.datetime.now()
-        target_dates = set()
-        date_list = []
-        for i in range(DAYS_BACK):
-            d = today - dt.timedelta(days=i)
-            date_str = d.strftime('%m/%d/%Y')
-            target_dates.add(date_str)
-            date_list.append(date_str)
-
-        logger.info(f"Target dates: {', '.join(date_list)}")
-
-        try:
-            logger.info("Phase 1: Collecting PINs from date searches")
-            all_pins = {}
-
-            for date_str in date_list:
-                logger.info(f"Searching: {date_str}")
-                pins = self._collect_pins_for_date(page, date_str)
-                for pin in pins:
-                    if pin not in all_pins:
-                        all_pins[pin] = set()
-                    all_pins[pin].add(date_str)
-                time.sleep(1)
-
-            logger.info(f"Phase 1 complete: {len(all_pins)} unique PINs")
-
-            if not all_pins:
-                logger.warning("No inmates found for any target date")
-                return []
-
-            logger.info("Phase 2: Resolving PINs to booking URLs")
-            booking_set = set()
-            booking_list = []
-
-            for idx, (pin, pin_dates) in enumerate(all_pins.items(), 1):
-                logger.info(f"[{idx}/{len(all_pins)}] PIN: {pin}")
-                bookings = self._resolve_bookings_for_pin(page, pin, pin_dates)
-                for b in bookings:
-                    if b[1] not in booking_set:
-                        booking_set.add(b[1])
-                        booking_list.append(b)
-                time.sleep(1)
-
-            logger.info(f"Phase 2 complete: {len(booking_list)} booking URLs")
-
-            if not booking_list:
-                logger.warning("No bookings from PIN resolution. Trying direct links...")
-                for date_str in date_list:
-                    search_url = f"{BASE_URL}personSearch.php?type=date&date={date_str}"
-                    page.get(search_url)
-                    time.sleep(2)
-                    if self._wait_for_cloudflare(page):
-                        direct_links = page.eles('css:a[href*="viewInmate.php"]') or page.eles('css:a[href*="booking.php"]')
-                        for link in direct_links:
-                            href = (link.attr('href') or '').replace('%20', '').strip()
-                            if not href.startswith('http'):
-                                href = BASE_URL + href
-                            if href not in booking_set:
-                                booking_set.add(href)
-                                bid = href.split('=')[-1] if '=' in href else ''
-                                booking_list.append((bid, href))
-
-            if not booking_list:
-                logger.warning("No booking links found at all")
-                return []
-
-            logger.info(f"Phase 3: Extracting details from {len(booking_list)} bookings")
-            records = []
-
-            for idx, (booking_id, detail_url) in enumerate(booking_list, 1):
-                if idx % 10 == 0:
-                    logger.info(f"Progress: {idx}/{len(booking_list)} ({len(records)} records)")
-
-                try:
-                    record = self._extract_detail(page, booking_id, detail_url)
-                    if record and record.Full_Name:
-                        records.append(record)
-                except Exception as e:
-                    logger.warning(f"Error on {booking_id}: {e}")
-
-                time.sleep(DETAIL_DELAY_S)
-
-            logger.info(f"Scraped {len(records)} records from Sarasota")
-            return records
-
-        except Exception as e:
-            logger.error(f"Sarasota scraper fatal error: {e}")
-            return []
-        finally:
+        except FileNotFoundError:
+            logger.warning(f"[{self.county}] xvfb-run not found, trying direct patchright")
+            cmd = [sys.executable, worker_script, str(DAYS_BACK), str(MAX_PAGES_PER_DATE)]
             try:
-                page.quit()
-            except Exception:
-                pass
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=WORKER_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                logger.error(f"[{self.county}] Worker timed out")
+                return []
 
-    def _setup_browser(self):
-        from DrissionPage import ChromiumPage
-        co = self._get_browser_options()
-        co.set_argument("--ignore-certificate-errors")  # Sarasota-specific
-        return ChromiumPage(addr_or_opts=co)
+        if result.stderr:
+            for line in result.stderr.strip().split("\n")[-30:]:
+                logger.debug(f"[sarasota-worker] {line}")
 
-    @staticmethod
-    def _wait_for_cloudflare(page, max_wait=30):
-        waited = 0
-        while waited < max_wait:
-            title = page.title.lower() if page.title else ''
-            if 'just a moment' not in title and 'checking' not in title and 'security challenge' not in title:
-                return True
-            time.sleep(1)
-            waited += 1
-        return False
+        if result.returncode != 0:
+            logger.error(f"[{self.county}] Worker exited {result.returncode}")
+            return []
 
-    def _collect_pins_for_date(self, page, date_str):
-        pins = set()
-        page_num = 1
-
-        while page_num <= MAX_PAGES_PER_DATE:
-            search_url = f"{BASE_URL}personSearch.php?type=date&date={date_str}"
-            if page_num > 1:
-                search_url += f"&page={page_num}"
-
-            page.get(search_url)
-            time.sleep(2)
-
-            if not self._wait_for_cloudflare(page):
-                break
-
-            pin_links = page.eles('css:a[href*="pinSearch.php"]')
-            if not pin_links:
-                break
-
-            new_count = 0
-            for link in pin_links:
-                href = link.attr('href') or ''
-                if 'pin=' in href:
-                    pin = href.split('pin=')[1].split('&')[0].strip().replace('%20', '')
-                    if pin and pin not in pins:
-                        pins.add(pin)
-                        new_count += 1
-
-            if new_count == 0:
-                break
-
-            next_page_links = page.eles(f'css:a[href*="page={page_num + 1}"]')
-            if not next_page_links:
-                break
-
-            page_num += 1
-            time.sleep(1)
-
-        return pins
-
-    def _resolve_bookings_for_pin(self, page, pin, target_dates):
-        bookings = []
-        pin_url = f"{BASE_URL}pinSearch.php?pin={pin}"
-
+        raw_records = []
         try:
-            page.get(pin_url)
-            time.sleep(2)
+            raw_records = json.loads(result.stdout.strip())
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"[{self.county}] JSON parse error: {e} | stdout[:200]: {result.stdout[:200]}")
+            return []
 
-            if not self._wait_for_cloudflare(page):
-                return bookings
+        logger.info(f"[{self.county}] Worker returned {len(raw_records)} raw records")
+        records = []
+        for raw in raw_records:
+            rec = self._build_record(raw)
+            if rec and rec.Full_Name:
+                records.append(rec)
 
-            rows = page.eles('css:tr.search-row') or page.eles('css:tr')
-            for row in rows:
-                cells = row.eles('tag:td')
-                if len(cells) >= 3:
-                    arrest_date = self._clean(cells[0].text)
-                    if arrest_date in target_dates:
-                        booking_link = row.ele('css:a[href*="booking.php"]') or row.ele('css:a[href*="viewInmate.php"]')
-                        if booking_link:
-                            href = (booking_link.attr('href') or '').replace('%20', '').strip()
-                            if not href.startswith('http'):
-                                href = BASE_URL + href
-                            booking_id = ''
-                            if 'id=' in href:
-                                booking_id = href.split('id=')[1].split('&')[0]
-                            elif 'pin=' in href:
-                                booking_id = href.split('pin=')[1].split('&')[0]
-                            bookings.append((booking_id or pin, href))
+        logger.info(f"[{self.county}] Parsed {len(records)} valid ArrestRecords")
+        return records
 
-            if not bookings:
-                all_links = page.eles('css:a[href*="booking.php"]') or page.eles('css:a[href*="viewInmate.php"]')
-                for link in all_links:
-                    href = (link.attr('href') or '').replace('%20', '').strip()
-                    if not href.startswith('http'):
-                        href = BASE_URL + href
-                    booking_id = ''
-                    if 'id=' in href:
-                        booking_id = href.split('id=')[1].split('&')[0]
-                    bookings.append((booking_id or pin, href))
+    # ── Build ArrestRecord from raw worker dict ───────────────────────────────
+    def _build_record(self, raw: dict) -> Optional[ArrestRecord]:
+        try:
+            full_name = raw.get("full_name", "").strip()
+            if not full_name:
+                return None
 
-        except Exception as e:
-            logger.warning(f"Error resolving PIN {pin}: {e}")
-
-        return bookings
-
-    def _extract_detail(self, page, booking_id, detail_url):
-        page.get(detail_url)
-        time.sleep(2)
-
-        if not self._wait_for_cloudflare(page):
-            return None
-
-        full_name = ""
-        first_name = ""
-        last_name = ""
-
-        h1 = page.ele('css:h1.page-title')
-        if h1:
-            raw_name = h1.text.split('Print')[0].strip()
-            full_name = raw_name
-            if ',' in raw_name:
-                parts = raw_name.split(',', 1)
+            first_name = raw.get("first_name", "")
+            last_name = raw.get("last_name", "")
+            if not first_name and not last_name and "," in full_name:
+                parts = full_name.split(",", 1)
                 last_name = parts[0].strip()
                 first_name = parts[1].strip()
 
-        field_map = {
-            'dob': 'DOB', 'date of birth': 'DOB',
-            'race': 'Race', 'sex': 'Sex', 'gender': 'Sex',
-            'height': 'Height', 'weight': 'Weight',
-            'address': 'Address', 'city': 'City', 'state': 'State',
-            'zip code': 'Zipcode', 'zip': 'Zipcode',
-            'facility': 'Facility', 'agency': 'Agency',
-            'arrest date': 'Booking_Date', 'arrested': 'Booking_Date',
-            'date arrested': 'Booking_Date', 'booking date': 'Booking_Date',
-            'intake date': 'Booking_Date',
-        }
+            charges_list = raw.get("charges", [])
+            charges_str = " | ".join(c for c in charges_list if c) if charges_list else ""
 
-        extracted = {}
-        label_divs = page.eles('css:div.text-right')
-        for ld in label_divs:
-            key = ld.text.replace(':', '').strip()
-            key_lower = key.lower()
-            try:
-                val_div = ld.next()
-                if val_div:
-                    val = self._clean(val_div.text)
-                    if val and key_lower in field_map:
-                        schema_key = field_map[key_lower]
-                        if schema_key not in extracted or not extracted[schema_key]:
-                            extracted[schema_key] = val
-            except Exception:
-                pass
-
-        charges = []
-        total_bond = 0.0
-        booking_date = extracted.get('Booking_Date', '')
-
-        charge_rows = page.eles('css:#data-table tr')
-        for row in charge_rows:
-            cells = row.eles('tag:td')
-            if len(cells) > 4:
-                if not booking_id:
-                    bn = self._clean(cells[0].text)
-                    if bn:
-                        booking_id = bn
-
-                charge_desc = self._clean(cells[1].text)
-                if charge_desc:
-                    clean_desc = self._clean_charge_text(charge_desc)
-                    if clean_desc:
-                        charges.append(clean_desc)
-
-                bond_str = cells[4].text.replace('$', '').replace(',', '').strip()
+            total_bond = 0.0
+            for c in raw.get("charges_raw", []):
+                bond_str = str(c.get("bond", "0")).replace("$", "").replace(",", "").strip()
                 try:
-                    if bond_str:
-                        total_bond += float(bond_str)
+                    total_bond += float(bond_str)
+                except ValueError:
+                    pass
+            if total_bond == 0 and raw.get("total_bond"):
+                try:
+                    total_bond = float(str(raw["total_bond"]).replace("$", "").replace(",", ""))
                 except ValueError:
                     pass
 
-                if len(cells) > 6 and not booking_date:
-                    intake = self._clean(cells[6].text)
-                    if intake and ('/' in intake or '-' in intake):
-                        booking_date = intake
-
-        if not charges:
-            offense_divs = page.eles('css:div.offense')
-            for off_div in offense_divs:
-                charge_data = {}
-                label_pairs = off_div.eles('css:div.text-right')
-                for lp in label_pairs:
-                    lbl = lp.text.replace(':', '').strip()
-                    try:
-                        vp = lp.next()
-                        if vp:
-                            charge_data[lbl] = self._clean(vp.text)
-                    except Exception:
-                        pass
-
-                desc = charge_data.get('Charge Description', '') or charge_data.get('Offense', '')
-                if desc:
-                    charges.append(self._clean_charge_text(desc))
-
-                bond_val = charge_data.get('Bond Amount', '0').replace('$', '').replace(',', '')
-                try:
-                    total_bond += float(bond_val)
-                except ValueError:
-                    pass
-
-                if not booking_date:
-                    for dk in ['Arrest Date', 'Date Arrested', 'Booking Date', 'Intake Date']:
-                        if charge_data.get(dk):
-                            booking_date = charge_data[dk]
-                            break
-
-        mugshot_url = ""
-        mug = page.ele('css:.mug img') or page.ele('css:img[alt*="mugshot"]')
-        if mug:
-            src = mug.attr('src')
-            if src and not src.startswith('data:'):
-                if not src.startswith('http'):
-                    src = BASE_URL + src
-                mugshot_url = src
-
-        if not full_name:
+            return ArrestRecord(
+                County=self.county,
+                Booking_Number=raw.get("booking_id", ""),
+                Full_Name=full_name,
+                First_Name=first_name,
+                Last_Name=last_name,
+                DOB=raw.get("dob", ""),
+                Booking_Date=raw.get("booking_date", ""),
+                Status="In Custody",
+                Release_Date="",
+                Facility=raw.get("facility", "Sarasota County Jail"),
+                Agency=raw.get("agency", ""),
+                Race=raw.get("race", ""),
+                Sex=raw.get("sex", ""),
+                Height=raw.get("height", ""),
+                Weight=raw.get("weight", ""),
+                Address=raw.get("address", ""),
+                City=raw.get("city", ""),
+                State=raw.get("state", "FL"),
+                ZIP=raw.get("zip", ""),
+                Mugshot_URL=raw.get("mugshot_url", ""),
+                Charges=charges_str,
+                Bond_Amount=str(total_bond) if total_bond > 0 else "0",
+                Bond_Paid="NO",
+                Detail_URL=raw.get("detail_url", ""),
+                LastCheckedMode="INITIAL",
+            )
+        except Exception as e:
+            logger.warning(f"[{self.county}] _build_record error: {e}")
             return None
 
-        return ArrestRecord(
-            County=self.county,
-            Booking_Number=booking_id,
-            Full_Name=full_name,
-            First_Name=first_name,
-            Last_Name=last_name,
-            DOB=extracted.get('DOB', ''),
-            Booking_Date=booking_date,
-            Status="In Custody",
-                        Release_Date="",
-            Facility=extracted.get('Facility', 'Sarasota County Jail'),
-            Agency=extracted.get('Agency', ''),
-            Race=extracted.get('Race', ''),
-            Sex=extracted.get('Sex', ''),
-            Height=extracted.get('Height', ''),
-            Weight=extracted.get('Weight', ''),
-            Address=extracted.get('Address', ''),
-            City=extracted.get('City', ''),
-            State=extracted.get('State', 'FL'),
-            ZIP=extracted.get('Zipcode', ''),
-            Mugshot_URL=mugshot_url,
-            Charges=" | ".join(charges) if charges else "",
-            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Bond_Paid="NO",
-            Detail_URL=detail_url,
-            LastCheckedMode="INITIAL",
-        )
+    # ── Patchright worker script ──────────────────────────────────────────────
+    @staticmethod
+    def _write_worker_script(path: str):
+        script = r'''"""
+Standalone patchright worker for Sarasota County.
+Navigates via the parent sarasotasheriff.org page to bypass cms.revize.com 403.
+Prints logs to stderr, final JSON array to stdout.
+"""
+import json
+import sys
+import time
+import re
+from datetime import datetime, timedelta
 
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+def clean_charge(raw):
+    if not raw:
+        return ""
+    text = re.sub(r"^(New Charge:|Weekender:)\s*", "", raw, flags=re.IGNORECASE)
+    m = re.search(r"[\d.]+[a-z]*\s*-\s*([^(]+)", text, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    if "(" in text:
+        desc = text.split("(")[0].strip()
+        desc = re.sub(r"^[\d.]+[a-z]*\s*-\s*", "", desc)
+        return desc.strip()
+    return text.strip()
+
+def main():
+    try:
+        from patchright.sync_api import sync_playwright
+    except ImportError:
+        eprint("ERROR: patchright not installed.")
+        sys.exit(1)
+
+    days_back = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+
+    parent_url = "https://sarasotasheriff.org/arrest-reports/index.php"
+    base_url = "https://cms.revize.com/revize/apps/sarasota/"
+
+    today = datetime.now()
+    target_dates = []
+    for i in range(days_back):
+        d = today - timedelta(days=i)
+        target_dates.append(d.strftime("%m/%d/%Y"))
+
+    eprint(f"Sarasota worker starting. Target dates: {target_dates}")
+    all_raw_records = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=False,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+                  "--window-size=1920,1080", "--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="en-US",
+        )
+        page = context.new_page()
+
+        # Navigate to parent page first to establish Referer/cookie context
+        eprint(f"Navigating to parent: {parent_url}")
+        try:
+            page.goto(parent_url, wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            eprint(f"Parent nav error: {e}")
+            browser.close()
+            sys.exit(1)
+
+        for i in range(30):
+            time.sleep(1)
+            title = page.title()
+            if title and "just a moment" not in title.lower():
+                eprint(f"Parent page ready: {title}")
+                break
+
+        # Collect booking links by date
+        booking_links = []
+
+        for date_str in target_dates:
+            search_url = f"{base_url}personSearch.php?type=date&date={date_str}"
+            eprint(f"Searching date: {date_str}")
+            try:
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                eprint(f"Search nav error for {date_str}: {e}")
+                continue
+
+            for i in range(30):
+                time.sleep(1)
+                title = page.title()
+                if title and "just a moment" not in title.lower() and "403" not in title:
+                    break
+
+            page_num = 1
+            while page_num <= max_pages:
+                try:
+                    page.wait_for_selector(
+                        "a[href*='viewInmate.php'], a[href*='booking.php'], a[href*='pinSearch.php']",
+                        timeout=8000
+                    )
+                except Exception:
+                    eprint(f"  No links on page {page_num} for {date_str}")
+                    break
+
+                links = page.query_selector_all("a[href*='viewInmate.php'], a[href*='booking.php']")
+                existing_urls = {b["detail_url"] for b in booking_links}
+                new_count = 0
+                for link in links:
+                    href = link.get_attribute("href") or ""
+                    if not href.startswith("http"):
+                        href = base_url + href.lstrip("/")
+                    if href not in existing_urls:
+                        bid = href.split("id=")[-1].split("&")[0] if "id=" in href else ""
+                        booking_links.append({"booking_id": bid, "detail_url": href})
+                        existing_urls.add(href)
+                        new_count += 1
+
+                eprint(f"  Page {page_num}: +{new_count} bookings (total: {len(booking_links)})")
+
+                next_link = page.query_selector(f"a[href*='page={page_num + 1}']")
+                if not next_link:
+                    break
+                try:
+                    next_link.click()
+                    page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    time.sleep(1)
+                except Exception:
+                    break
+                page_num += 1
+
+        eprint(f"Phase 1 complete: {len(booking_links)} booking URLs")
+
+        if not booking_links:
+            eprint("No bookings found")
+            browser.close()
+            print(json.dumps([]))
+            return
+
+        # Phase 2: Extract detail for each booking
+        for idx, b in enumerate(booking_links, 1):
+            detail_url = b["detail_url"]
+            booking_id = b["booking_id"]
+            eprint(f"[{idx}/{len(booking_links)}] {detail_url}")
+            try:
+                page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(1.5)
+
+                for i in range(20):
+                    title = page.title()
+                    if title and "just a moment" not in title.lower():
+                        break
+                    time.sleep(1)
+
+                raw = page.evaluate("""
+                    () => {
+                        const result = {};
+                        const h1 = document.querySelector('h1.page-title, h1');
+                        if (h1) {
+                            let name = h1.textContent.split('Print')[0].trim();
+                            result.full_name = name;
+                            if (name.includes(',')) {
+                                const parts = name.split(',');
+                                result.last_name = parts[0].trim();
+                                result.first_name = parts[1].trim();
+                            }
+                        }
+                        const fieldMap = {
+                            'dob': 'dob', 'date of birth': 'dob',
+                            'race': 'race', 'sex': 'sex', 'gender': 'sex',
+                            'height': 'height', 'weight': 'weight',
+                            'address': 'address', 'city': 'city', 'state': 'state',
+                            'zip code': 'zip', 'zip': 'zip',
+                            'facility': 'facility', 'agency': 'agency',
+                            'arrest date': 'booking_date', 'arrested': 'booking_date',
+                            'date arrested': 'booking_date', 'booking date': 'booking_date',
+                            'intake date': 'booking_date',
+                        };
+                        document.querySelectorAll('div.text-right').forEach(ld => {
+                            const key = ld.textContent.replace(':', '').trim().toLowerCase();
+                            const mapped = fieldMap[key];
+                            if (mapped) {
+                                const next = ld.nextElementSibling;
+                                if (next) {
+                                    const val = next.textContent.trim();
+                                    if (val && !result[mapped]) result[mapped] = val;
+                                }
+                            }
+                        });
+                        const chargesRaw = [];
+                        let totalBond = 0;
+                        document.querySelectorAll('#data-table tr').forEach(row => {
+                            const cells = row.querySelectorAll('td');
+                            if (cells.length > 4) {
+                                const desc = cells[1] ? cells[1].textContent.trim() : '';
+                                const bondStr = cells[4] ? cells[4].textContent.replace(/[$,]/g,'').trim() : '0';
+                                const bond = parseFloat(bondStr) || 0;
+                                if (desc) { chargesRaw.push({desc, bond}); totalBond += bond; }
+                            }
+                        });
+                        result.charges_raw = chargesRaw;
+                        result.total_bond = totalBond;
+                        const img = document.querySelector('.mug img, img[alt*="mugshot"], img[src*="photo"]');
+                        if (img && img.src && !img.src.startsWith('data:')) result.mugshot_url = img.src;
+                        return result;
+                    }
+                """)
+
+                if raw and raw.get("full_name"):
+                    raw["booking_id"] = booking_id
+                    raw["detail_url"] = detail_url
+                    raw["charges"] = [clean_charge(c.get("desc", "")) for c in raw.get("charges_raw", [])]
+                    all_raw_records.append(raw)
+                    eprint(f"  -> {raw.get('full_name','?')} bond=${raw.get('total_bond',0)}")
+                else:
+                    eprint(f"  -> No data extracted")
+
+            except Exception as e:
+                eprint(f"  -> Error: {e}")
+                continue
+
+        browser.close()
+
+    eprint(f"Worker complete: {len(all_raw_records)} records")
+    print(json.dumps(all_raw_records))
+
+if __name__ == "__main__":
+    main()
+'''
+        with open(path, "w") as f:
+            f.write(script)
+
+    # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
+    def _fetch_single_booking(self, booking_id: str, detail_url: str):
+        """
+        Re-fetch a single Sarasota County booking via patchright.
+        Returns None on any failure (watcher falls back to generic HTTP).
+        """
+        if not booking_id and not detail_url:
+            return None
+        if not detail_url:
+            detail_url = f"{BASE_URL}booking.php?id={booking_id}"
+
+        worker_script = "/tmp/sarasota_single_patchright.py"
+        single_script = f"""
+import json, sys, time
+from patchright.sync_api import sync_playwright
+detail_url = {json.dumps(detail_url)}
+booking_id = {json.dumps(booking_id)}
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=False, args=["--no-sandbox","--disable-dev-shm-usage","--disable-gpu"])
+    context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    page = context.new_page()
+    page.goto("https://sarasotasheriff.org/arrest-reports/index.php", wait_until="domcontentloaded", timeout=20000)
+    time.sleep(2)
+    page.goto(detail_url, wait_until="domcontentloaded", timeout=20000)
+    time.sleep(2)
+    raw = page.evaluate(\"\"\"() => {{
+        const r = {{}};
+        const h1 = document.querySelector('h1.page-title,h1');
+        if (h1) r.full_name = h1.textContent.split('Print')[0].trim();
+        let bond = 0;
+        document.querySelectorAll('#data-table tr').forEach(row => {{
+            const cells = row.querySelectorAll('td');
+            if (cells.length > 4) {{
+                const b = parseFloat((cells[4].textContent||'0').replace(/[$,]/g,'')) || 0;
+                bond += b;
+            }}
+        }});
+        r.total_bond = bond;
+        r.booking_id = '{booking_id}';
+        r.detail_url = detail_url;
+        return r;
+    }}\"\"\")
+    browser.close()
+    print(json.dumps(raw or {{}}))
+"""
+        try:
+            with open(worker_script, "w") as f:
+                f.write(single_script)
+            cmd = ["xvfb-run", "--auto-servernum", sys.executable, worker_script]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and result.stdout.strip():
+                raw = json.loads(result.stdout.strip())
+                return self._build_record(raw) if raw.get("full_name") else None
+        except Exception as e:
+            logger.warning(f"[{self.county}] _fetch_single_booking error: {e}")
+        return None
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
     @staticmethod
     def _clean(text):
         if not text:
@@ -398,43 +449,13 @@ class SarasotaCountyScraper(BaseScraper):
     @staticmethod
     def _clean_charge_text(raw_charge):
         if not raw_charge:
-            return ''
-        text = re.sub(r'^(New Charge:|Weekender:)\s*', '', raw_charge, flags=re.IGNORECASE)
-        match = re.search(r'[\d.]+[a-z]*\s*-\s*([^(]+)', text, re.IGNORECASE)
+            return ""
+        text = re.sub(r"^(New Charge:|Weekender:)\s*", "", raw_charge, flags=re.IGNORECASE)
+        match = re.search(r"[\d.]+[a-z]*\s*-\s*([^(]+)", text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
-        if '(' in text:
-            description = text.split('(')[0].strip()
-            description = re.sub(r'^[\d.]+[a-z]*\s*-\s*', '', description)
-            return description.strip()
+        if "(" in text:
+            desc = text.split("(")[0].strip()
+            desc = re.sub(r"^[\d.]+[a-z]*\s*-\s*", "", desc)
+            return desc.strip()
         return text.strip()
-
-
-    # -- FirstAppearanceWatcher hook ------------------------------------------
-    def _fetch_single_booking(self, booking_id: str, detail_url: str):
-        """
-        Re-fetch a single Sarasota County booking by navigating directly to
-        its Revize detail URL via DrissionPage.
-        Returns None on any failure (watcher falls back to generic HTTP).
-        """
-        if not booking_id and not detail_url:
-            return None
-        if not detail_url:
-            detail_url = f"{BASE_URL}booking.php?id={booking_id}"
-        page = None
-        try:
-            page = self._setup_browser()
-            self._wait_for_cloudflare(page)
-            record = self._extract_detail(page, booking_id, detail_url)
-            if record:
-                record.LastCheckedMode = "UPDATE"
-            return record
-        except Exception as e:
-            logger.warning(f"Sarasota _fetch_single_booking error ({booking_id}): {e}")
-            return None
-        finally:
-            if page:
-                try:
-                    page.quit()
-                except Exception:
-                    pass
