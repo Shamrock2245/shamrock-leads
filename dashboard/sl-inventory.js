@@ -91,7 +91,7 @@ const SLInventory = (() => {
     body.innerHTML = `
       <div class="inv-surety-section">
         <div class="inv-surety-header">
-          <span>🛡️ Old Southern Indemnity (OSI)</span>
+          <span>🛡️ O'Shaughnahill Surety & Ins. (OSI)</span>
           <span class="inv-surety-total">${_data.totals?.osi || 0} available</span>
         </div>
         <div class="inv-tier-grid">${renderTierCards(osi, 'OSI', '🛡️')}</div>

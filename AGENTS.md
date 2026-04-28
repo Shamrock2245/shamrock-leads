@@ -146,7 +146,7 @@ Shamrock represents **two** insurance/surety companies. Every bonded case must s
 
 | Surety | ID | Key Difference |
 |--------|-----|----------------|
-| **Old Southern Indemnity (OSI)** | `osi` | Primary Florida surety |
+| **O'Shaughnahill Surety & Insurance (OSI)** | `osi` | Primary Florida surety (West Palm Beach, FL) |
 | **Palmetto Surety Corporation** | `palmetto` | Multi-state: FL, SC, NC, TN, TX, CT, LA, MS |
 
 The surety determines: POA book assignment, SignNow template set, commission rate, build-up fund %, monthly reporting format, and compliance requirements.
