@@ -126,23 +126,8 @@ function initSSE() {
 // Only attempt SSE if not on localhost dev
 try { initSSE(); } catch(_) {}
 
-// ── SL namespace (used by index.html onclick attributes) ──────────────────
-const SL = {
-  switchTab: (btn) => switchTab(btn),
-  toggleTheme: () => toggleTheme(),
-  refresh: () => { if (typeof applyFilters === 'function') applyFilters(); },
-  applyPreset: (name) => applyPreset(name),
-  applyFilters: () => applyFilters(),
-  setDays: (d) => setDays(d),
-  setBond: (v) => setBond(v),
-  sortBy: (f) => sortBy(f),
-  debounceSearch: () => debounceSearch(),
-  toggleCountyDropdown: () => toggleCountyDropdown(),
-  filterCountyOptions: (v) => filterCountyOptions(v),
-  closeModal: () => { const m = document.getElementById('bondModal'); if (m) m.style.display = 'none'; },
-  submitBond: () => { if (typeof submitBond === 'function') submitBond(); },
-  toast: (msg, type) => toast(msg, type),
-};
+// ── SL namespace is defined in sl-features.js (window.SL = {...}) ─────────
+// Do NOT define SL here — sl-features.js builds the full namespace with 35+ functions.
 
 // Utilities
 function fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : n.toString(); }
