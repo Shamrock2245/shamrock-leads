@@ -34,6 +34,7 @@
   <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">📊 Command Center</button>
   <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">🔍 Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">👤 Defendants</button>
+  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📋 In Progress <span class="badge" id="prospectiveBadge">—</span></button>
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
@@ -260,6 +261,90 @@
 
     <div class="def-grid" id="defendantGrid"></div>
     <div class="pagination" id="defPagination"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: IN PROGRESS (PROSPECTIVE BONDS PIPELINE)
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabProspective">
+  <div class="container">
+    <!-- KPI Row -->
+    <div class="stats-grid" id="prospKpis">
+      <div class="stat-card">
+        <div class="stat-label">📋 In Progress</div>
+        <div class="stat-value" id="prospKpiTotal">—</div>
+        <div class="stat-sub">active pipeline</div>
+      </div>
+      <div class="stat-card" style="border-color:#3b82f6">
+        <div class="stat-label">📞 Contacted</div>
+        <div class="stat-value" id="prospKpiContacted" style="color:#3b82f6">—</div>
+        <div class="stat-sub">initial outreach</div>
+      </div>
+      <div class="stat-card" style="border-color:#f59e0b">
+        <div class="stat-label">🤝 Negotiating</div>
+        <div class="stat-value" id="prospKpiNegotiating" style="color:#f59e0b">—</div>
+        <div class="stat-sub">in discussions</div>
+      </div>
+      <div class="stat-card" style="border-color:#8b5cf6">
+        <div class="stat-label">📄 Paperwork</div>
+        <div class="stat-value" id="prospKpiPaperwork" style="color:#8b5cf6">—</div>
+        <div class="stat-sub">docs in progress</div>
+      </div>
+      <div class="stat-card" style="border-color:var(--success)">
+        <div class="stat-label">✅ Ready</div>
+        <div class="stat-value" id="prospKpiReady" style="color:var(--success)">—</div>
+        <div class="stat-sub">ready to bond</div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters" style="margin-bottom:12px">
+      <div class="btn-group" id="prospStageFilter">
+        <button class="active" onclick="SLProspective.setStage('all',this)">All</button>
+        <button onclick="SLProspective.setStage('contacted',this)">📞 Contacted</button>
+        <button onclick="SLProspective.setStage('negotiating',this)">🤝 Negotiating</button>
+        <button onclick="SLProspective.setStage('paperwork',this)">📄 Paperwork</button>
+        <button onclick="SLProspective.setStage('ready',this)">✅ Ready</button>
+      </div>
+      <input type="text" id="prospSearch" placeholder="🔍 Search pipeline..." style="width:200px" oninput="SLProspective.debounceSearch()">
+      <select id="prospStatusFilter" onchange="SLProspective.load()">
+        <option value="active">Active</option>
+        <option value="all">All (incl. closed)</option>
+        <option value="closed">Closed</option>
+        <option value="promoted">Promoted</option>
+      </select>
+      <button class="btn-export" onclick="SLProspective.load()" style="margin-left:auto">↻ Refresh</button>
+    </div>
+
+    <!-- Pipeline Board -->
+    <div class="pipeline-board" id="pipelineBoard">
+      <div class="pipeline-col" data-stage="contacted">
+        <div class="pipeline-col-header contacted"><span>📞</span> Contacted <span class="pipeline-col-count" id="colCountContacted">0</span></div>
+        <div class="pipeline-col-body" id="colContacted"></div>
+      </div>
+      <div class="pipeline-col" data-stage="negotiating">
+        <div class="pipeline-col-header negotiating"><span>🤝</span> Negotiating <span class="pipeline-col-count" id="colCountNegotiating">0</span></div>
+        <div class="pipeline-col-body" id="colNegotiating"></div>
+      </div>
+      <div class="pipeline-col" data-stage="paperwork">
+        <div class="pipeline-col-header paperwork"><span>📄</span> Paperwork <span class="pipeline-col-count" id="colCountPaperwork">0</span></div>
+        <div class="pipeline-col-body" id="colPaperwork"></div>
+      </div>
+      <div class="pipeline-col" data-stage="ready">
+        <div class="pipeline-col-header ready"><span>✅</span> Ready <span class="pipeline-col-count" id="colCountReady">0</span></div>
+        <div class="pipeline-col-body" id="colReady"></div>
+      </div>
+    </div>
+
+    <!-- Detail Panel (hidden, shown on card click) -->
+    <div class="panel" id="prospDetailPanel" style="display:none;margin-top:18px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span id="prospDetailTitle">📋 Lead Detail</span>
+        <button class="btn-cancel" onclick="SLProspective.closeDetail()">✕ Close</button>
+      </div>
+      <div id="prospDetailBody"></div>
+    </div>
   </div>
 </div>
 
@@ -716,5 +801,6 @@
 <script src="/sl-tracking.js"></script>
 <script src="/sl-intake.js"></script>
 <script src="/sl-health.js"></script>
+<script src="/sl-prospective.js"></script>
 </body>
 </html>

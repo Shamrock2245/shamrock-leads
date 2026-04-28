@@ -1000,6 +1000,412 @@ def api_write_bond():
     })
 
 # ════════════════════════════════════════════════════════════════════════════════
+# PROSPECTIVE BONDS — LEAD PIPELINE TRACKER
+# ════════════════════════════════════════════════════════════════════════════════
+
+prospective_bonds = db["prospective_bonds"]
+
+# Ensure indexes
+try:
+    prospective_bonds.create_index("booking_number", unique=True, sparse=True)
+    prospective_bonds.create_index("stage")
+    prospective_bonds.create_index("status")
+    prospective_bonds.create_index("created_at")
+except Exception:
+    pass
+
+
+@app.route("/api/prospective-bonds", methods=["POST"])
+def api_prospective_create():
+    """Create a prospective bond from an arrest record.
+    
+    Snapshots the defendant data from the arrests collection and
+    creates a pipeline record in the 'contacted' stage.
+    """
+    try:
+        data = request.get_json(force=True)
+        booking_number = (data.get("booking_number") or "").strip()
+        if not booking_number:
+            return jsonify({"success": False, "error": "booking_number is required"}), 400
+
+        # Check if already exists
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if existing:
+            return jsonify({
+                "success": False,
+                "error": "Already tracked as prospective bond",
+                "stage": existing.get("stage", "contacted"),
+            }), 409
+
+        # Snapshot defendant data from arrests collection
+        arrest_doc = arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        if not arrest_doc:
+            # Allow creation even without arrest record (manual entry)
+            arrest_doc = {}
+
+        now = datetime.now(timezone.utc)
+        doc = {
+            "booking_number": booking_number,
+            "defendant_name": data.get("defendant_name") or arrest_doc.get("full_name", "Unknown"),
+            "county": data.get("county") or arrest_doc.get("county", ""),
+            "bond_amount": float(data.get("bond_amount") or arrest_doc.get("bond_amount", 0) or 0),
+            "charges": data.get("charges") or arrest_doc.get("charges", ""),
+            "lead_score": int(data.get("lead_score") or arrest_doc.get("lead_score", 0) or 0),
+            "lead_status": data.get("lead_status") or arrest_doc.get("lead_status", ""),
+            "detail_url": arrest_doc.get("detail_url", ""),
+
+            # Pipeline state
+            "stage": "contacted",
+            "status": "active",
+
+            # Indemnitor / Cosigner (populated later)
+            "indemnitor": {
+                "name": data.get("indemnitor_name", ""),
+                "phone": data.get("indemnitor_phone", ""),
+                "email": data.get("indemnitor_email", ""),
+                "relationship": data.get("indemnitor_relationship", ""),
+            },
+
+            # Communication & timeline
+            "communication_log": [],
+            "timeline": [{
+                "timestamp": now.isoformat(),
+                "event": "created",
+                "detail": data.get("note") or "Marked as prospective bond from Defendants tab",
+                "agent": data.get("agent", "Dashboard"),
+            }],
+
+            # Closure
+            "outcome": None,
+            "outcome_note": "",
+            "closed_at": None,
+
+            # Full arrest snapshot
+            "defendant_snapshot": arrest_doc,
+
+            # Metadata
+            "created_at": now,
+            "updated_at": now,
+            "created_by": data.get("agent", "Dashboard"),
+        }
+
+        prospective_bonds.insert_one(doc)
+        doc.pop("_id", None)
+        # Convert datetime for JSON
+        doc["created_at"] = doc["created_at"].isoformat()
+        doc["updated_at"] = doc["updated_at"].isoformat()
+
+        return jsonify({"success": True, "prospective_bond": doc})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds", methods=["GET"])
+def api_prospective_list():
+    """List prospective bonds with optional stage/status filter."""
+    try:
+        stage = request.args.get("stage", "").strip()
+        status = request.args.get("status", "active").strip()
+        search = request.args.get("search", "").strip()
+
+        query = {}
+        if stage:
+            query["stage"] = stage
+        if status and status != "all":
+            query["status"] = status
+
+        if search:
+            query["$or"] = [
+                {"defendant_name": {"$regex": search, "$options": "i"}},
+                {"booking_number": {"$regex": search, "$options": "i"}},
+                {"county": {"$regex": search, "$options": "i"}},
+                {"indemnitor.name": {"$regex": search, "$options": "i"}},
+            ]
+
+        bonds = list(prospective_bonds.find(query, {"_id": 0}).sort("updated_at", -1).limit(200))
+
+        # Convert datetimes
+        for b in bonds:
+            for k, v in b.items():
+                if isinstance(v, datetime):
+                    b[k] = v.isoformat()
+
+        # Stage counts for KPI
+        stage_counts = {}
+        for s in ["contacted", "negotiating", "paperwork", "ready"]:
+            stage_counts[s] = prospective_bonds.count_documents({"stage": s, "status": "active"})
+
+        total_active = sum(stage_counts.values())
+
+        # Messages sent today
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        msgs_today = 0
+        for b in bonds:
+            for msg in b.get("communication_log", []):
+                try:
+                    ts = msg.get("timestamp", "")
+                    if ts and ts >= today_start.isoformat():
+                        msgs_today += 1
+                except Exception:
+                    pass
+
+        return jsonify({
+            "bonds": bonds,
+            "total": len(bonds),
+            "total_active": total_active,
+            "stage_counts": stage_counts,
+            "messages_today": msgs_today,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds/<booking_number>/stage", methods=["PATCH"])
+def api_prospective_update_stage(booking_number):
+    """Update the pipeline stage. Requires a note explaining the transition."""
+    try:
+        data = request.get_json(force=True)
+        new_stage = (data.get("stage") or "").strip().lower()
+        note = (data.get("note") or "").strip()
+        agent = data.get("agent", "Dashboard")
+
+        valid_stages = ["contacted", "negotiating", "paperwork", "ready"]
+        if new_stage not in valid_stages:
+            return jsonify({"error": f"Invalid stage. Must be one of: {valid_stages}"}), 400
+
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        old_stage = existing.get("stage", "contacted")
+        now = datetime.now(timezone.utc)
+
+        timeline_entry = {
+            "timestamp": now.isoformat(),
+            "event": "stage_change",
+            "detail": f"Stage: {old_stage} → {new_stage}" + (f" — {note}" if note else ""),
+            "agent": agent,
+            "old_stage": old_stage,
+            "new_stage": new_stage,
+        }
+
+        prospective_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {"stage": new_stage, "updated_at": now},
+                "$push": {"timeline": timeline_entry},
+            },
+        )
+
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "old_stage": old_stage,
+            "new_stage": new_stage,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds/<booking_number>/note", methods=["POST"])
+def api_prospective_add_note(booking_number):
+    """Add a note or communication log entry to a prospective bond."""
+    try:
+        data = request.get_json(force=True)
+        note_text = (data.get("note") or data.get("message") or "").strip()
+        channel = (data.get("channel") or "note").strip()
+        direction = (data.get("direction") or "note").strip()
+        agent = data.get("agent", "Dashboard")
+
+        if not note_text:
+            return jsonify({"error": "note/message is required"}), 400
+
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+
+        # Add to communication_log if it's a message, otherwise timeline only
+        updates = {"$set": {"updated_at": now}}
+
+        if channel in ("imessage", "sms", "phone", "left_vm", "sent_text_to", "walk_in", "whatsapp"):
+            comm_entry = {
+                "timestamp": now.isoformat(),
+                "direction": direction,
+                "channel": channel,
+                "message": note_text,
+                "from_number": data.get("from_number", ""),
+                "to_number": data.get("to_number", ""),
+                "agent": agent,
+                "bb_message_id": data.get("bb_message_id", ""),
+            }
+            updates["$push"] = {
+                "communication_log": comm_entry,
+                "timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": f"{direction}_{channel}",
+                    "detail": note_text[:200],
+                    "agent": agent,
+                },
+            }
+        else:
+            updates["$push"] = {
+                "timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "note",
+                    "detail": note_text,
+                    "agent": agent,
+                },
+            }
+
+        prospective_bonds.update_one({"booking_number": booking_number}, updates)
+
+        return jsonify({"success": True, "booking_number": booking_number})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds/<booking_number>/indemnitor", methods=["PATCH"])
+def api_prospective_update_indemnitor(booking_number):
+    """Update the indemnitor/cosigner info on a prospective bond."""
+    try:
+        data = request.get_json(force=True)
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+        indemnitor = existing.get("indemnitor", {})
+        # Merge incoming fields
+        for field in ["name", "phone", "email", "relationship", "address", "dob"]:
+            if data.get(field) is not None:
+                indemnitor[field] = data[field]
+
+        prospective_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {"indemnitor": indemnitor, "updated_at": now},
+                "$push": {"timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "indemnitor_updated",
+                    "detail": f"Indemnitor info updated: {indemnitor.get('name', '')}",
+                    "agent": data.get("agent", "Dashboard"),
+                }},
+            },
+        )
+
+        return jsonify({"success": True, "indemnitor": indemnitor})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds/<booking_number>/close", methods=["POST"])
+def api_prospective_close(booking_number):
+    """Close a prospective bond with an outcome reason."""
+    try:
+        data = request.get_json(force=True)
+        outcome = (data.get("outcome") or "").strip()
+        outcome_note = (data.get("note") or "").strip()
+        agent = data.get("agent", "Dashboard")
+
+        valid_outcomes = ["bonded", "lost_to_competitor", "released_ror", "no_contact",
+                          "declined", "left_vm", "sent_text_to", "other"]
+        if outcome not in valid_outcomes:
+            return jsonify({"error": f"Invalid outcome. Must be one of: {valid_outcomes}"}), 400
+
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+        prospective_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": "closed",
+                    "outcome": outcome,
+                    "outcome_note": outcome_note,
+                    "closed_at": now.isoformat(),
+                    "updated_at": now,
+                },
+                "$push": {"timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "closed",
+                    "detail": f"Closed: {outcome}" + (f" — {outcome_note}" if outcome_note else ""),
+                    "agent": agent,
+                }},
+            },
+        )
+
+        return jsonify({"success": True, "outcome": outcome})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/prospective-bonds/<booking_number>/officialize", methods=["POST"])
+def api_prospective_officialize(booking_number):
+    """Promote a prospective bond to an active bond.
+    
+    This marks the prospective record as 'promoted' and returns the
+    defendant + indemnitor data needed to pre-fill the Write Bond modal.
+    The actual active bond creation happens via the existing /api/write-bond flow.
+    """
+    try:
+        existing = prospective_bonds.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        if existing.get("status") == "promoted":
+            return jsonify({"error": "Already promoted to active bond"}), 409
+
+        now = datetime.now(timezone.utc)
+        prospective_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": "promoted",
+                    "outcome": "bonded",
+                    "closed_at": now.isoformat(),
+                    "updated_at": now,
+                },
+                "$push": {"timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "promoted",
+                    "detail": "Promoted to Active Bond — bond officialized",
+                    "agent": "Dashboard",
+                }},
+            },
+        )
+
+        # Return data needed for Write Bond modal pre-fill
+        snapshot = existing.get("defendant_snapshot", {})
+        indemnitor = existing.get("indemnitor", {})
+        return jsonify({
+            "success": True,
+            "defendant": {
+                "full_name": existing.get("defendant_name", ""),
+                "booking_number": booking_number,
+                "county": existing.get("county", ""),
+                "bond_amount": existing.get("bond_amount", 0),
+                "charges": existing.get("charges", ""),
+                "dob": snapshot.get("dob", ""),
+                "address": snapshot.get("address", ""),
+                **{k: snapshot.get(k, "") for k in [
+                    "first_name", "last_name", "sex", "race", "height", "weight",
+                    "facility", "arrest_date", "booking_date", "bond_type",
+                    "court_date", "court_location", "case_number",
+                ]},
+            },
+            "indemnitor": indemnitor,
+            "communication_log": existing.get("communication_log", []),
+            "timeline": existing.get("timeline", []),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # ACTIVE BONDS — GEOLOCATION & RISK MITIGATION
 # ════════════════════════════════════════════════════════════════════════════════
 

@@ -49,7 +49,8 @@ async function loadDefendants() {
         </div>
         <div class="def-card-footer">
           <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">\ud83d\udd17 Source</button>
-          <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">\u270d\ufe0f Write Bond</button>
+          <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track Lead</button>
+          <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">\u270d\ufe0f Write Bond</button>
         </div>
       </div>`;
     }).join('') || '<div class="loading">No defendants found</div>';
