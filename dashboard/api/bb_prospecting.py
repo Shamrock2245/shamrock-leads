@@ -150,7 +150,7 @@ async def send_prospecting_outreach(
         }
 
     bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-    outreach_coll = get_collection("outreach_messages")
+    outreach_coll = get_collection("imessage_outreach")
     prospective_coll = get_collection("prospective_bonds")
 
     results = []
@@ -441,7 +441,7 @@ async def api_create_group_chat():
 async def api_prospecting_stats():
     """Get outreach statistics broken down by channel."""
     try:
-        outreach_coll = get_collection("outreach_messages")
+        outreach_coll = get_collection("imessage_outreach")
         total = await outreach_coll.count_documents({"source": "prospecting"})
         imessage = await outreach_coll.count_documents({"source": "prospecting", "channel": "imessage", "status": "sent"})
         sms = await outreach_coll.count_documents({"source": "prospecting", "channel": "sms_fallback"})

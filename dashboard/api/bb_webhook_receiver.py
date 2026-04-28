@@ -41,6 +41,7 @@ from quart import Blueprint, jsonify, request
 
 from dashboard.api.agent_brain import process_inbound
 from dashboard.api.bb_private_api import BlueBubblesClient
+from dashboard.api.imessage_automation import _content_hash
 from dashboard.extensions import BB_SERVERS, get_bb_server, get_collection, format_phone
 
 logger = logging.getLogger(__name__)
@@ -113,11 +114,22 @@ async def _handle_new_message(event_data: dict, db) -> dict:
     if not msg_text.strip():
         return {"processed": False, "reason": "empty_message"}
 
-    # Dedup check — avoid processing the same message twice
-    outreach_coll = get_collection("outreach_messages")
+    # ── Layer 1: GUID dedup — avoid processing the same message twice ──
+    outreach_coll = get_collection("imessage_outreach")
     existing = await outreach_coll.find_one({"bb_message_guid": msg_guid})
     if existing:
         return {"processed": False, "reason": "already_processed"}
+
+    # ── Layer 2: Content-hash dedup (catches BB Issue #765 — re-emitted messages) ──
+    msg_date_ms = message.get("dateCreated")
+    chash = _content_hash(sender_phone, msg_text, msg_date_ms)
+    existing_content = await outreach_coll.find_one({"content_hash": chash})
+    if existing_content:
+        logger.info(
+            "🔁 Webhook content-hash dedup caught duplicate from ...%s (GUID %s, hash %s)",
+            sender_phone[-4:], msg_guid[:12], chash[:8]
+        )
+        return {"processed": False, "reason": "content_hash_duplicate"}
 
     # Match to an active prospective bond
     bonds_coll = get_collection("prospective_bonds")
@@ -152,6 +164,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             db=db,
             config=config,
             bb_client=bb_client,
+            content_hash=chash,
         )
 
         # Log the inbound message
@@ -160,6 +173,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "message": msg_text,
             "chat_guid": chat_guid,
             "bb_message_guid": msg_guid,
+            "content_hash": chash,
             "direction": "inbound",
             "status": "processed",
             "booking_number": bond.get("booking_number", ""),
@@ -182,6 +196,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "message": msg_text,
             "chat_guid": chat_guid,
             "bb_message_guid": msg_guid,
+            "content_hash": chash,
             "direction": "inbound",
             "status": "unmatched",
             "sent_at": datetime.now(timezone.utc).isoformat(),
@@ -198,7 +213,7 @@ async def _handle_updated_message(event_data: dict) -> dict:
     if not msg_guid:
         return {"processed": False}
 
-    outreach_coll = get_collection("outreach_messages")
+    outreach_coll = get_collection("imessage_outreach")
     update = {}
     if message.get("dateDelivered") or message.get("isDelivered"):
         update["delivered"] = True
