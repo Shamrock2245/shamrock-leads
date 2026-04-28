@@ -9,6 +9,7 @@ const SLProspective = (() => {
   let _stage = 'all';
   let _searchTimer = null;
   let _currentBk = null; // currently open detail booking_number
+  let _autoReplyConfig = {}; // cached auto-reply config
 
   // ── Helpers ──
   const $ = id => document.getElementById(id);
@@ -69,10 +70,16 @@ const SLProspective = (() => {
       col.innerHTML = cards.length ? cards.map(b => {
         const sc = (b.lead_status||'').toLowerCase();
         const scoreCls = sc==='hot'?'score-hot':sc==='warm'?'score-warm':'score-cold';
-        const lastComm = b.communication_log?.length ? b.communication_log[b.communication_log.length-1] : null;
+        const comms = b.communication_log || [];
+        const lastComm = comms.length ? comms[comms.length-1] : null;
         const lastMsg = lastComm ? `${channelIcon(lastComm.channel)} ${timeAgo(lastComm.timestamp)}` : 'No messages';
         const indName = b.indemnitor?.name || '';
-        return `<div class="pipeline-card" onclick="SLProspective.openDetail('${b.booking_number}')">
+        // Inbound reply badge
+        const hasInbound = comms.some(c => c.direction === 'inbound');
+        const hasNewReply = comms.length && comms[comms.length-1].direction === 'inbound';
+        const replyBadge = hasNewReply ? '<span class="reply-badge new">🔔 New Reply</span>' :
+                           hasInbound ? '<span class="reply-badge">⬅️ Replied</span>' : '';
+        return `<div class="pipeline-card ${hasNewReply?'has-new-reply':''}" onclick="SLProspective.openDetail('${b.booking_number}')">
           <div class="pipeline-card-header">
             <span class="pipeline-card-name">${b.defendant_name||'Unknown'}</span>
             <span class="pipeline-card-bond">${money(b.bond_amount)}</span>
@@ -82,7 +89,8 @@ const SLProspective = (() => {
             <span class="score-pill ${scoreCls}">${b.lead_score||0}</span>
           </div>
           ${indName ? `<div class="pipeline-card-ind">👤 ${indName}</div>` : ''}
-          <div class="pipeline-card-comm">${lastMsg}</div>
+          <div class="pipeline-card-comm">${replyBadge} ${lastMsg}</div>
+          ${lastComm?.message ? `<div class="pipeline-card-preview">${(lastComm.message||'').substring(0,50)}${(lastComm.message||'').length>50?'...':''}</div>` : ''}
           ${stage==='ready'?'<button class="btn-officialize-sm" onclick="event.stopPropagation();SLProspective.officialize(\''+b.booking_number+'\')">☘️ Officialize</button>':''}
         </div>`;
       }).join('') : '<div class="pipeline-empty">No leads</div>';
@@ -176,16 +184,29 @@ const SLProspective = (() => {
       <div class="prosp-comm-section">
         <h4>📱 Messages & Notes</h4>
         <div class="prosp-comm-timeline" id="commTimeline">
-          ${comms.length ? comms.map(c => `
-            <div class="comm-bubble ${c.direction==='outbound'?'outbound':'inbound'}">
+          ${comms.length ? comms.map((c,ci) => {
+            const isOut = c.direction === 'outbound';
+            const isAuto = c.agent === 'auto_reply';
+            const intentBadge = c.intent ? `<span class="intent-badge intent-${c.intent}">${c.intent}</span>` : '';
+            const agentLabel = isAuto ? '🤖 Auto-reply' : (c.agent || '—');
+            // Message action buttons for outbound iMessages
+            const msgActions = (isOut && c.channel === 'imessage') ? `
+              <div class="comm-actions">
+                <button class="comm-action-btn" title="Unsend" onclick="event.stopPropagation();SLProspective.unsendMsg('${bk}',${ci})">🚫</button>
+                <button class="comm-action-btn" title="Edit" onclick="event.stopPropagation();SLProspective.editMsg('${bk}',${ci})">✏️</button>
+                <button class="comm-action-btn" title="React" onclick="event.stopPropagation();SLProspective.reactMsg('${bk}',${ci})">❤️</button>
+              </div>` : '';
+            return `
+            <div class="comm-bubble ${isOut?'outbound':'inbound'} ${isAuto?'auto-reply':''}">
               <div class="comm-bubble-header">
-                <span>${channelIcon(c.channel)} ${c.channel} · ${c.agent||'—'}</span>
+                <span>${channelIcon(c.channel)} ${c.channel} · ${agentLabel} ${intentBadge}</span>
                 <span>${timeAgo(c.timestamp)}</span>
               </div>
               <div class="comm-bubble-body">${c.message||''}</div>
               ${c.to_number?`<div class="comm-bubble-meta">→ ${c.to_number}</div>`:''}
-            </div>
-          `).join('') : '<div class="pipeline-empty" style="padding:16px">No messages yet</div>'}
+              ${msgActions}
+            </div>`;
+          }).join('') : '<div class="pipeline-empty" style="padding:16px">No messages yet</div>'}
         </div>
 
         <!-- Send Message -->
@@ -204,6 +225,15 @@ const SLProspective = (() => {
             <option value="intro">Intro: Hi, this is Shamrock Bail...</option>
             <option value="followup">Follow-up: Just checking in...</option>
             <option value="urgent">Urgent: We can help get them out today...</option>
+          </select>
+          <select id="commEffect">
+            <option value="">No effect</option>
+            <option value="slam">💥 Slam</option>
+            <option value="loud">📢 Loud</option>
+            <option value="gentle">🤫 Gentle</option>
+            <option value="invisible_ink">👻 Invisible Ink</option>
+            <option value="confetti">🎊 Confetti</option>
+            <option value="fireworks">🎆 Fireworks</option>
           </select>
           <textarea id="commMessage" placeholder="Type a message or note..." rows="2"></textarea>
           <div style="display:flex;gap:8px">
@@ -326,22 +356,47 @@ const SLProspective = (() => {
     // If it's an iMessage/SMS channel and we have a phone, send via BlueBubbles
     if (['imessage','sms'].includes(channel) && phone) {
       try {
-        const r = await fetch(`${API}/api/imessage/send`, {
+        const effect = $('commEffect')?.value || '';
+        const sendBody = {
+          phone: phone,
+          message: message,
+          from_number: '2399550178',
+          booking_number: bk,
+          defendant_name: bond?.defendant_name || '',
+          county: bond?.county || '',
+          recipient_label: bond?.indemnitor?.name || 'Indemnitor',
+          agent_name: 'Brendan',
+        };
+
+        // Use effect endpoint if an effect is selected
+        const endpoint = effect ? `${API}/api/imessage/send-effect` : `${API}/api/imessage/send`;
+        if (effect) sendBody.effect = effect;
+
+        const r = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            phone: phone,
-            message: message,
-            from_number: '2399550178',
-            booking_number: bk,
-            defendant_name: bond?.defendant_name || '',
-            county: bond?.county || '',
-            recipient_label: bond?.indemnitor?.name || 'Indemnitor',
-            agent_name: 'Brendan',
-          })
+          body: JSON.stringify(sendBody)
         });
         const d = await r.json();
-        if (!d.success) { toast('BB send failed: '+(d.error||''), 'error'); return; }
+
+        // Handle dedup 409
+        if (r.status === 409 && d.error === 'duplicate') {
+          const forceSend = confirm(
+            `⚠️ Already messaged this lead within 24h.\n\nLast sent: ${d.last_sent || 'recently'}\nPreview: "${d.message_preview || ''}"\n\nSend anyway?`
+          );
+          if (forceSend) {
+            sendBody.force_send = true;
+            const r2 = await fetch(`${API}/api/imessage/send`, {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify(sendBody)
+            });
+            const d2 = await r2.json();
+            if (!d2.success) { toast('Force send failed: '+(d2.error||''), 'error'); return; }
+          } else return;
+        } else if (!d.success) {
+          toast('BB send failed: '+(d.error||''), 'error'); return;
+        }
       } catch(e) { toast('BB error: '+e.message, 'error'); return; }
     }
 
@@ -437,6 +492,166 @@ const SLProspective = (() => {
     } catch(e) { toast('Error: '+e.message, 'error'); }
   }
 
+  // ── Auto-Reply Settings ──
+  async function loadAutoReplyConfig() {
+    try {
+      const r = await fetch(`${API}/api/imessage/auto-reply/config`);
+      _autoReplyConfig = await r.json();
+      renderAutoReplyPanel();
+    } catch(e) { console.warn('Auto-reply config load failed:', e); }
+  }
+
+  function renderAutoReplyPanel() {
+    const panel = $('autoReplyPanel');
+    if (!panel) return;
+    const cfg = _autoReplyConfig;
+    panel.innerHTML = `
+      <div class="auto-reply-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <span>🤖 Auto-Reply Agent ${cfg.enabled ? '<span class="ar-status on">ON</span>' : '<span class="ar-status off">OFF</span>'}</span>
+        <span class="ar-toggle-arrow">▼</span>
+      </div>
+      <div class="auto-reply-body">
+        <div class="ar-row">
+          <label>Enable Auto-Replies</label>
+          <input type="checkbox" id="arEnabled" ${cfg.enabled?'checked':''} onchange="SLProspective.updateAutoReply({enabled:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>AI-Powered Responses (GPT-4o)</label>
+          <input type="checkbox" id="arAI" ${cfg.ai_enabled?'checked':''} onchange="SLProspective.updateAutoReply({ai_enabled:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>Simulate Typing</label>
+          <input type="checkbox" id="arTyping" ${cfg.simulate_typing?'checked':''} onchange="SLProspective.updateAutoReply({simulate_typing:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>Auto Mark Read</label>
+          <input type="checkbox" id="arMarkRead" ${cfg.auto_mark_read?'checked':''} onchange="SLProspective.updateAutoReply({auto_mark_read:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>Auto ❤️ on Interested</label>
+          <input type="checkbox" id="arReact" ${cfg.auto_react_interested?'checked':''} onchange="SLProspective.updateAutoReply({auto_react_interested:this.checked})">
+        </div>
+        <div class="ar-row">
+          <label>Cooldown (min)</label>
+          <input type="number" id="arCooldown" value="${cfg.cooldown_minutes||60}" min="5" max="1440" style="width:80px" onchange="SLProspective.updateAutoReply({cooldown_minutes:parseInt(this.value)})">
+        </div>
+        <div class="ar-row">
+          <label>Last Polled</label>
+          <span class="ar-last-poll">${cfg.last_poll_at ? timeAgo(cfg.last_poll_at) : 'never'}</span>
+          <button class="comm-action-btn" onclick="SLProspective.manualPoll()" title="Poll Now">🔄</button>
+        </div>
+      </div>
+    `;
+  }
+
+  async function updateAutoReply(updates) {
+    try {
+      const r = await fetch(`${API}/api/imessage/auto-reply/config`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(updates)
+      });
+      const d = await r.json();
+      if (d.success) {
+        _autoReplyConfig = d.config;
+        renderAutoReplyPanel();
+        toast('Auto-reply updated', 'success');
+      }
+    } catch(e) { toast('Update failed: '+e.message, 'error'); }
+  }
+
+  async function manualPoll() {
+    try {
+      toast('Polling inbox...', 'info');
+      const r = await fetch(`${API}/api/imessage/inbox/poll`, { method: 'POST' });
+      const d = await r.json();
+      toast(`Poll: ${d.matched||0} matched, ${d.replied||0} replied`, 'success');
+      loadAutoReplyConfig();
+      load();
+    } catch(e) { toast('Poll failed: '+e.message, 'error'); }
+  }
+
+  // ── Message Actions (Unsend, Edit, React) ──
+  async function unsendMsg(bk, commIdx) {
+    const bond = _data.find(b => b.booking_number === bk);
+    const comm = bond?.communication_log?.[commIdx];
+    if (!comm) return;
+    if (!confirm('Unsend this message? It will be retracted from the recipient.')) return;
+
+    // We need the BB message GUID — look it up from outreach log
+    try {
+      const r = await fetch(`${API}/api/imessage/unsend`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ message_guid: comm.bb_message_guid || '' })
+      });
+      const d = await r.json();
+      if (d.success) { toast('Message unsent', 'success'); setTimeout(() => openDetail(bk), 300); }
+      else toast('Unsend failed: '+(d.error||d.message||''), 'error');
+    } catch(e) { toast('Error: '+e.message, 'error'); }
+  }
+
+  async function editMsg(bk, commIdx) {
+    const bond = _data.find(b => b.booking_number === bk);
+    const comm = bond?.communication_log?.[commIdx];
+    if (!comm) return;
+    const newText = prompt('Edit message:', comm.message || '');
+    if (!newText || newText === comm.message) return;
+
+    try {
+      const r = await fetch(`${API}/api/imessage/edit`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ message_guid: comm.bb_message_guid || '', new_text: newText })
+      });
+      const d = await r.json();
+      if (d.success) { toast('Message edited', 'success'); setTimeout(() => openDetail(bk), 300); }
+      else toast('Edit failed: '+(d.error||d.message||''), 'error');
+    } catch(e) { toast('Error: '+e.message, 'error'); }
+  }
+
+  async function reactMsg(bk, commIdx) {
+    const bond = _data.find(b => b.booking_number === bk);
+    const comm = bond?.communication_log?.[commIdx];
+    if (!comm) return;
+    const phone = bond?.indemnitor?.phone || '';
+    if (!phone) { toast('No phone number for chat', 'error'); return; }
+
+    const reactions = ['love','like','dislike','laugh','emphasize','question'];
+    const emojis = ['❤️','👍','👎','😂','❗','❓'];
+    const choice = prompt(
+      'React with:\n' + reactions.map((r,i) => `${i+1}. ${emojis[i]} ${r}`).join('\n') + '\n\nEnter number (1-6):'
+    );
+    if (!choice) return;
+    const idx = parseInt(choice) - 1;
+    if (idx < 0 || idx >= reactions.length) return;
+
+    try {
+      const chatGuid = `iMessage;-;${phone.startsWith('+') ? phone : '+1' + phone.replace(/\D/g,'')}`;
+      const r = await fetch(`${API}/api/imessage/react`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          chat_guid: chatGuid,
+          message_guid: comm.bb_message_guid || '',
+          reaction: reactions[idx]
+        })
+      });
+      const d = await r.json();
+      if (d.success) toast(`${emojis[idx]} Reaction sent`, 'success');
+      else toast('React failed: '+(d.error||''), 'error');
+    } catch(e) { toast('Error: '+e.message, 'error'); }
+  }
+
+  // Load auto-reply config on init
+  setTimeout(loadAutoReplyConfig, 1000);
+
   // Public API
-  return { load, trackLead, setStage, debounceSearch, openDetail, closeDetail, promptStage, saveIndemnitor, sendMessage, addNote, promptClose, officialize };
+  return {
+    load, trackLead, setStage, debounceSearch, openDetail, closeDetail,
+    promptStage, saveIndemnitor, sendMessage, addNote, promptClose, officialize,
+    // New: auto-reply + message actions
+    loadAutoReplyConfig, updateAutoReply, manualPoll,
+    unsendMsg, editMsg, reactMsg,
+  };
 })();

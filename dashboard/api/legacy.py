@@ -16,7 +16,7 @@ Endpoints:
 
 import re as re_mod
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from quart import Blueprint, jsonify, request
 from dashboard.extensions import (
@@ -300,6 +300,26 @@ async def imessage_send():
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
     imessage_outreach = get_collection("imessage_outreach")
 
+    # ── Dedup Guard: block duplicate outreach within 24h ──
+    cooldown_hours = body.get("cooldown_hours", 24)
+    if booking_number and not body.get("force_send", False):
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
+        recent = await imessage_outreach.find_one({
+            "recipient_phone": phone,
+            "booking_number": booking_number,
+            "status": "sent",
+            "direction": {"$ne": "inbound"},
+            "sent_at": {"$gte": cutoff},
+        }, {"_id": 0, "sent_at": 1, "message": 1})
+        if recent:
+            return jsonify({
+                "success": False,
+                "error": "duplicate",
+                "detail": f"Already messaged this number for booking {booking_number} within {cooldown_hours}h",
+                "last_sent": recent.get("sent_at"),
+                "message_preview": (recent.get("message", ""))[:80],
+            }), 409
+
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(
@@ -315,6 +335,13 @@ async def imessage_send():
             bb_resp = r.json()
             success = r.status_code in (200, 201)
 
+        # Extract BB message GUID for unsend/edit capability
+        bb_message_guid = ""
+        if success:
+            bb_data = bb_resp.get("data", {})
+            if isinstance(bb_data, dict):
+                bb_message_guid = bb_data.get("guid", "")
+
         # Log to MongoDB
         doc = {
             "booking_number": booking_number,
@@ -325,6 +352,8 @@ async def imessage_send():
             "message": message,
             "chat_guid": chat_guid,
             "temp_guid": temp_guid,
+            "bb_message_guid": bb_message_guid,
+            "direction": "outbound",
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "status": "sent" if success else "failed",
             "bb_status_code": r.status_code,

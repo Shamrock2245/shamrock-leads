@@ -107,6 +107,18 @@ def format_phone(raw):
     return None
 
 
+# ── Outreach Config Helpers (used by imessage_automation + agent_brain) ──
+
+def is_business_hours(config: dict) -> bool:
+    """Check if current time (US Eastern) is within configured business hours."""
+    from datetime import datetime, timezone, timedelta
+    # US Eastern = UTC-4 (EDT) or UTC-5 (EST) — approximate with -4
+    et_now = datetime.now(timezone.utc) + timedelta(hours=-4)
+    hour = et_now.hour
+    bh = config.get("business_hours", {"start": 8, "end": 20})
+    return bh.get("start", 8) <= hour < bh.get("end", 20)
+
+
 # ── POA Receipt Data (seed inventory on first boot) ──
 
 POA_RECEIPT_DATA = [

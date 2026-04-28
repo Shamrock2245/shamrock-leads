@@ -60,6 +60,16 @@ def create_app():
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
 
+    # ── iMessage Automation (auto-reply, inbox polling, Private API proxy) ──
+    from dashboard.api.imessage_automation import imessage_auto_bp, start_inbox_poller
+    app.register_blueprint(imessage_auto_bp, url_prefix="/api")
+
+    # Start background inbox poller
+    @app.before_serving
+    async def _start_inbox_poller():
+        import asyncio
+        asyncio.ensure_future(start_inbox_poller(app))
+
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
     if pin:
