@@ -77,34 +77,102 @@ def _build_leads_query():
 
 @stats_bp.route("/status")
 async def api_status():
-    """Compatibility endpoint — returns scraper-style status from MongoDB."""
+    """
+    Returns scraper fleet status for the Scraper Health tab.
+
+    Priority order:
+    1. scraper_status collection (written by base_scraper after every run)
+    2. arrests collection aggregate (fallback for counties with records but no status doc)
+    3. REGISTERED_COUNTIES stub (never_run for counties with no data at all)
+
+    This ensures all 49 registered counties always appear in the dashboard.
+    """
+    scraper_status_col = get_collection("scraper_status")
     arrests = get_collection("arrests")
     try:
+        # ── Layer 1: Read from scraper_status collection ──
+        scrapers = {}
+        async for doc in scraper_status_col.find({}, {"_id": 0}):
+            county = doc.get("county")
+            if not county:
+                continue
+            last_run = doc.get("last_run")
+            scrapers[county] = {
+                "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+                "records": doc.get("records", 0),
+                "hot_leads": doc.get("hot_leads", 0),
+                "warm_leads": doc.get("warm_leads", 0),
+                "cold_leads": doc.get("cold_leads", 0),
+                "disqualified": doc.get("disqualified", 0),
+                "duration_seconds": doc.get("duration_seconds", 0),
+                "status": doc.get("status", "ok"),
+                "error": doc.get("error"),
+                "run_count": doc.get("run_count", 1),
+                "total_records": doc.get("records", 0),
+                "source": "live",
+            }
+
+        # ── Layer 2: Fill in counties with arrest records but no status doc ──
         pipeline = [
             {"$group": {
                 "_id": "$county",
                 "records": {"$sum": 1},
                 "latest": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
+                "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
+                "warm": {"$sum": {"$cond": [{"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]}, 1, 0]}},
             }},
         ]
-        scrapers = {}
-        total_scraped = 0
         async for r in arrests.aggregate(pipeline):
             county = r["_id"]
-            count = r["records"]
-            total_scraped += count
-            hot = await arrests.count_documents({"county": county, "lead_score": {"$gte": 70}})
-            warm = await arrests.count_documents({"county": county, "lead_score": {"$gte": 40, "$lt": 70}})
+            if not county or county in scrapers:
+                continue  # Already have live status
             latest = r.get("latest")
             scrapers[county] = {
                 "last_run": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
-                "records": count, "hot_leads": hot, "warm_leads": warm,
-                "cold_leads": 0, "disqualified": 0, "duration_seconds": 0,
-                "status": "ok", "error": None, "run_count": 1, "total_records": count,
+                "records": r["records"],
+                "hot_leads": r["hot"],
+                "warm_leads": r["warm"],
+                "cold_leads": 0,
+                "disqualified": 0,
+                "duration_seconds": 0,
+                "status": "ok",
+                "error": None,
+                "run_count": 1,
+                "total_records": r["records"],
+                "source": "arrests_aggregate",
             }
+
+        # ── Layer 3: Fill in all 49 registered counties with never_run stub ──
+        for county in REGISTERED_COUNTIES:
+            if county not in scrapers:
+                scrapers[county] = {
+                    "last_run": None,
+                    "records": 0,
+                    "hot_leads": 0,
+                    "warm_leads": 0,
+                    "cold_leads": 0,
+                    "disqualified": 0,
+                    "duration_seconds": 0,
+                    "status": "never_run",
+                    "error": None,
+                    "run_count": 0,
+                    "total_records": 0,
+                    "source": "registered",
+                }
+
+        total_scraped = sum(s["total_records"] for s in scrapers.values())
+        active_count = sum(1 for s in scrapers.values() if s["status"] == "ok")
+        error_count = sum(1 for s in scrapers.values() if s["status"] == "error")
+        never_run_count = sum(1 for s in scrapers.values() if s["status"] == "never_run")
+
         return jsonify({
             "started_at": datetime.now(timezone.utc).isoformat(),
-            "scrapers": scrapers, "total_scraped": total_scraped,
+            "scrapers": scrapers,
+            "total_scraped": total_scraped,
+            "total_registered": len(REGISTERED_COUNTIES),
+            "active_count": active_count,
+            "error_count": error_count,
+            "never_run_count": never_run_count,
             "total_hot_leads": sum(s["hot_leads"] for s in scrapers.values()),
             "total_warm_leads": sum(s["warm_leads"] for s in scrapers.values()),
             "cycle_count": 0,
@@ -479,12 +547,14 @@ async def api_timeline():
 
 @stats_bp.route("/scraper-health")
 async def api_scraper_health():
-    """Per-county scraper health metrics."""
+    """Per-county scraper health metrics — always returns all 49 registered counties."""
+    scraper_status_col = get_collection("scraper_status")
     arrests = get_collection("arrests")
     now = datetime.now(timezone.utc)
     h24_ago = now - timedelta(hours=24)
 
-    results = []
+    # Build base from arrests aggregate
+    results_map = {}
     async for r in arrests.aggregate([
         {"$group": {
             "_id": "$county", "total_records": {"$sum": 1},
@@ -497,9 +567,8 @@ async def api_scraper_health():
                 1, 0,
             ]}},
         }},
-        {"$sort": {"total_records": -1}},
     ]):
-        results.append(r)
+        results_map[r["_id"]] = r
 
     counts_24h = {}
     async for r in arrests.aggregate([
@@ -508,20 +577,71 @@ async def api_scraper_health():
     ]):
         counts_24h[r["_id"]] = r["count_24h"]
 
+    # Overlay live run data from scraper_status collection
+    live_status = {}
+    async for doc in scraper_status_col.find({}, {"_id": 0}):
+        county = doc.get("county")
+        if county:
+            live_status[county] = doc
+
     out = []
-    for r in results:
-        county = r["_id"]
+    seen = set()
+
+    # Process counties that have arrest records
+    for county, r in sorted(results_map.items(), key=lambda x: -x[1]["total_records"]):
+        if not county:
+            continue
+        seen.add(county)
         latest = r.get("latest_record") or r.get("latest_scrape")
         hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
-        status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
+        base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
+        live = live_status.get(county, {})
+        if live.get("status") == "error":
+            base_status = "error"
+        elif live.get("status") == "ok" and hours_since < 2:
+            base_status = "healthy"
+        last_run = live.get("last_run")
         out.append({
-            "county": county, "total_records": r["total_records"],
-            "in_custody": r["in_custody"], "records_24h": counts_24h.get(county, 0),
+            "county": county,
+            "total_records": r["total_records"],
+            "in_custody": r["in_custody"],
+            "records_24h": counts_24h.get(county, 0),
             "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
-            "hours_since_update": round(hours_since, 1), "status": status,
-            "avg_bond": round(r["avg_bond"] or 0, 2), "max_bond": round(r["max_bond"] or 0, 2),
+            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+            "hours_since_update": round(hours_since, 1),
+            "status": base_status,
+            "avg_bond": round(r["avg_bond"] or 0, 2),
+            "max_bond": round(r["max_bond"] or 0, 2),
             "total_bond": round(r["total_bond"] or 0, 2),
+            "duration_seconds": live.get("duration_seconds", 0),
+            "run_count": live.get("run_count", 0),
+            "error": live.get("error"),
         })
+
+    # Add registered counties with no arrest records yet
+    for county in sorted(REGISTERED_COUNTIES):
+        if county in seen:
+            continue
+        live = live_status.get(county, {})
+        run_status = live.get("status", "never_run")
+        last_run = live.get("last_run")
+        out.append({
+            "county": county,
+            "total_records": 0,
+            "in_custody": 0,
+            "records_24h": 0,
+            "latest_record": "",
+            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+            "hours_since_update": 999,
+            "status": run_status,
+            "avg_bond": 0,
+            "max_bond": 0,
+            "total_bond": 0,
+            "duration_seconds": live.get("duration_seconds", 0),
+            "run_count": live.get("run_count", 0),
+            "error": live.get("error"),
+        })
+
     return jsonify(out)
 
 

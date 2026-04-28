@@ -268,17 +268,56 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabHealth">
   <div class="container">
+    <!-- KPI Row -->
     <div class="stats-grid" id="healthKpis"></div>
+
+    <!-- Fleet Controls -->
+    <div class="panel" style="padding:14px 18px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-weight:600;color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em">Filter:</span>
+        <button class="health-filter-btn active" data-filter="all" onclick="SLHealth.setFilter('all',this)">All</button>
+        <button class="health-filter-btn" data-filter="ok" onclick="SLHealth.setFilter('ok',this)">&#x2705; Active</button>
+        <button class="health-filter-btn" data-filter="error" onclick="SLHealth.setFilter('error',this)">&#x274C; Errors</button>
+        <button class="health-filter-btn" data-filter="never_run" onclick="SLHealth.setFilter('never_run',this)">&#x23F3; Never Run</button>
+        <button class="health-filter-btn" data-filter="stale" onclick="SLHealth.setFilter('stale',this)">&#x26A0;&#xFE0F; Stale</button>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <input type="text" id="healthSearch" placeholder="Search county..." style="width:160px;padding:6px 10px;background:var(--input-bg,#1a1a2e);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px" oninput="SLHealth.search(this.value)">
+          <button class="btn" onclick="SLHealth.runAll()" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px;font-size:13px">&#x26A1; Run All</button>
+          <button class="btn" onclick="SLHealth.refresh()" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px;font-size:13px">&#x1F504; Refresh</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fleet Table -->
     <div class="panel">
-      <div class="panel-title">🏥 Fleet Status</div>
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>&#x1F3E5; Scraper Fleet &mdash; <span id="healthCountLabel">49 counties</span></span>
+        <span style="font-size:12px;color:var(--text-muted)" id="healthLastRefresh"></span>
+      </div>
       <div class="table-wrap">
-        <table>
-          <thead><tr><th>County</th><th>Status</th><th>Records</th><th>Hot</th><th>Last Run</th><th>Avg Time</th></tr></thead>
+        <table id="healthTable">
+          <thead>
+            <tr>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('county')">County &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('status')">Status &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('total_records')">Records &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('hot_leads')">Hot &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('last_run')">Last Run &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('duration_seconds')">Duration &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('run_count')">Runs &#x21D5;</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
           <tbody id="healthBody"></tbody>
         </table>
       </div>
     </div>
-    <div id="countyDrillPanel" class="panel" style="margin-top:18px;display:none"></div>
+
+    <!-- Error / Drill-Down Panel -->
+    <div id="countyDrillPanel" class="panel" style="margin-top:18px;display:none">
+      <div class="panel-title" id="drillTitle">&#x1F50D; County Detail</div>
+      <div id="drillContent"></div>
+    </div>
   </div>
 </div>
 
@@ -676,5 +715,6 @@
 <script src="/sl-active-bonds.js"></script>
 <script src="/sl-tracking.js"></script>
 <script src="/sl-intake.js"></script>
+<script src="/sl-health.js"></script>
 </body>
 </html>

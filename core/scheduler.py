@@ -127,12 +127,83 @@ class ScraperScheduler:
             f"❌ Job {event.job_id} failed: {event.exception}"
         )
 
+    def _poll_triggers(self):
+        """
+        Poll MongoDB 'scraper_triggers' collection for run-now requests
+        submitted by the dashboard container.
+
+        This is the cross-container bridge: dashboard writes a trigger doc,
+        the scraper engine picks it up here and executes the run.
+        """
+        try:
+            from pymongo import MongoClient
+            from config.settings import settings as _s
+            client = MongoClient(_s.MONGO_URI, serverSelectionTimeoutMS=3000)
+            db = client[_s.MONGO_DB]
+            col = db["scraper_triggers"]
+
+            # Find all pending triggers
+            pending = list(col.find({"status": "pending"}))
+            if not pending:
+                client.close()
+                return
+
+            for doc in pending:
+                county = doc.get("county", "")
+                job_id = f"scraper_{county.lower().replace(' ', '_')}"
+                scraper = self._scrapers.get(job_id)
+
+                if scraper:
+                    logger.info(f"⚡ Trigger poll: running {county} (requested by dashboard)")
+                    # Mark as running before executing
+                    col.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {"status": "running", "started_at": datetime.now(timezone.utc)}}
+                    )
+                    try:
+                        result = scraper.run(writers=self._writers)
+                        col.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {"status": "done", "completed_at": datetime.now(timezone.utc),
+                                      "result": str(result)[:500]}}
+                        )
+                        logger.info(f"✅ Trigger run complete: {county}")
+                    except Exception as e:
+                        col.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {"status": "error", "error": str(e),
+                                      "completed_at": datetime.now(timezone.utc)}}
+                        )
+                        logger.error(f"❌ Trigger run failed: {county}: {e}")
+                else:
+                    logger.warning(f"⚠️ Trigger: no scraper for county '{county}'")
+                    col.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {"status": "not_found"}}
+                    )
+
+            client.close()
+        except Exception as e:
+            logger.debug(f"Trigger poll error (non-fatal): {e}")
+
     def start(self):
         """Start the scheduler."""
         logger.info(
             f"🚀 Starting scheduler with {len(self._scrapers)} scrapers"
         )
         self.scheduler.start()
+
+        # Add trigger polling job — runs every 30 seconds
+        from apscheduler.triggers.interval import IntervalTrigger as _IT
+        self.scheduler.add_job(
+            self._poll_triggers,
+            trigger=_IT(seconds=30),
+            id="trigger_poller",
+            name="Dashboard Run-Now Trigger Poller",
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+        logger.info("🔄 Trigger poller registered (30s interval)")
 
     def stop(self):
         """Gracefully stop the scheduler."""

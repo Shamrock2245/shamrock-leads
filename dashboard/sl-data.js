@@ -88,13 +88,16 @@ async function loadDashboard() {
     ]);
     SL_STATE.scraperData = s; SL_STATE.mongoData = m;
     const sc = s.scrapers||{}, by = m.by_county||{}, scores = m.scores||{};
-    const ok = Object.values(sc).filter(x=>x.status==='ok').length;
-    const err = Object.values(sc).filter(x=>x.status!=='ok').length;
+    // Use server-computed counts if available (new /api/status response with 3-layer logic)
+    const totalReg = s.total_registered || Object.keys(sc).length;
+    const ok = s.active_count != null ? s.active_count : Object.values(sc).filter(x=>x.status==='ok').length;
+    const err = s.error_count != null ? s.error_count : Object.values(sc).filter(x=>x.status==='error').length;
+    const neverRun = s.never_run_count != null ? s.never_run_count : 0;
 
     document.getElementById('kpiRecords').textContent = fmt(m.total_records||0);
     document.getElementById('kpiRecordsSub').textContent = `${Object.keys(by).length} counties`;
-    document.getElementById('kpiActive').textContent = ok;
-    document.getElementById('kpiActiveSub').textContent = `${err} errors`;
+    document.getElementById('kpiActive').textContent = `${ok} / ${totalReg}`;
+    document.getElementById('kpiActiveSub').textContent = `${err} errors · ${neverRun} never run`;
     document.getElementById('kpiHot').textContent = scores.hot||0;
 
     // Command center data

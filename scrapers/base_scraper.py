@@ -285,10 +285,10 @@ class BaseScraper(ABC):
                 logger.warning(f"⚠️ Slack notification failed: {slack_err}")
 
 
-            # ── Step 5: Update dashboard ──
+            # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
+            cold_count = sum(1 for r in records if r.Lead_Status == "Cold")
             if _dashboard_available:
                 try:
-                    cold_count = sum(1 for r in records if r.Lead_Status == "Cold")
                     update_scraper_status(
                         county=self.county,
                         records=len(records),
@@ -301,6 +301,24 @@ class BaseScraper(ABC):
                     )
                 except Exception:
                     pass
+
+            # ── Step 5b: Persist run status to MongoDB scraper_status collection ──
+            for _writer in (writers or []):
+                if hasattr(_writer, 'upsert_scraper_status'):
+                    try:
+                        _writer.upsert_scraper_status(
+                            county=self.county,
+                            records=len(records),
+                            hot=hot_count,
+                            warm=warm_count,
+                            cold=cold_count,
+                            disqualified=disqualified,
+                            duration=elapsed,
+                            status="ok",
+                        )
+                    except Exception as _e:
+                        logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {_e}")
+                    break  # Only need one writer to persist status
 
             return combined_stats
 
@@ -316,7 +334,7 @@ class BaseScraper(ABC):
                 pass
 
 
-            # Update dashboard with error status
+            # Update dashboard with error status (in-memory Flask, legacy)
             if _dashboard_available:
                 try:
                     update_scraper_status(
@@ -325,6 +343,18 @@ class BaseScraper(ABC):
                     )
                 except Exception:
                     pass
+
+            # Persist error status to MongoDB scraper_status collection
+            for _writer in (writers or []):
+                if hasattr(_writer, 'upsert_scraper_status'):
+                    try:
+                        _writer.upsert_scraper_status(
+                            county=self.county, records=0, hot=0, warm=0,
+                            duration=elapsed, status="error", error=str(e),
+                        )
+                    except Exception:
+                        pass
+                    break
 
             return {
                 "county": self.county,

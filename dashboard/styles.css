@@ -482,3 +482,52 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 .btn-secondary{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:8px 16px;border-radius:var(--radius-sm,6px);font-size:13px;font-weight:600;cursor:pointer;transition:var(--transition)}
 .btn-secondary:hover{border-color:var(--accent);color:var(--accent)}
 #intakeQueueBody td.loading{text-align:center;color:var(--muted);padding:24px;font-size:13px}
+
+
+/* ═══════════════════════════════════════════════════════════
+   SCRAPER HEALTH TAB — SLHealth module styles
+   ═══════════════════════════════════════════════════════════ */
+
+/* Status badge variants for health tab */
+.status-badge.status-ok     { background: rgba(0,200,150,.12); color: #00c896; }
+.status-badge.status-warn   { background: rgba(255,165,2,.12);  color: #ffa502; }
+.status-badge.status-error  { background: rgba(255,71,87,.12);  color: #ff4757; }
+.status-badge.status-never  { background: rgba(100,116,139,.12); color: #94a3b8; }
+
+/* Health filter buttons */
+.health-filter-btn {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.health-filter-btn:hover,
+.health-filter-btn.active {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+/* Error row highlight */
+tr.row-error td { background: rgba(255,71,87,.04); }
+tr.row-error:hover td { background: rgba(255,71,87,.08); }
+
+/* Extra-small button */
+.btn-xs {
+  padding: 3px 8px !important;
+  font-size: 11px !important;
+  border-radius: 5px;
+  cursor: pointer;
+  border: none;
+}
+
+/* Toast fade-in animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

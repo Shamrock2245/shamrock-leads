@@ -29,6 +29,7 @@ class MongoWriter:
     - arrests: All scraped arrest records (upserted by dedup key)
     - leads: Scored & qualified leads (tenant-routed)
     - ingestion_log: Run-level statistics per county
+    - scraper_status: One document per county — latest run state (upserted)
     """
 
     def __init__(self, uri: str = None, db_name: str = None):
@@ -45,6 +46,7 @@ class MongoWriter:
         self.arrests: Collection = self.db["arrests"]
         self.leads: Collection = self.db["leads"]
         self.ingestion_log: Collection = self.db["ingestion_log"]
+        self.scraper_status: Collection = self.db["scraper_status"]
 
         # Ensure indexes on first use
         self._ensure_indexes()
@@ -72,6 +74,13 @@ class MongoWriter:
             [("arrest_id", ASCENDING), ("tenant_id", ASCENDING)],
             unique=True,
             name="dedup_lead",
+        )
+
+        # Scraper status index
+        self.scraper_status.create_index(
+            [("county", ASCENDING)],
+            unique=True,
+            name="idx_scraper_status_county",
         )
 
         logger.info("✅ MongoDB indexes ensured")
@@ -189,6 +198,48 @@ class MongoWriter:
             "status": "ERROR" if error else "SUCCESS",
             "error": error,
         })
+
+    def upsert_scraper_status(
+        self,
+        county: str,
+        records: int = 0,
+        hot: int = 0,
+        warm: int = 0,
+        cold: int = 0,
+        disqualified: int = 0,
+        duration: float = 0.0,
+        status: str = "ok",
+        error: str = None,
+        run_count_increment: int = 1,
+    ):
+        """
+        Upsert the latest scraper run state into the scraper_status collection.
+        One document per county — always reflects the most recent run.
+        The dashboard /api/status endpoint reads from this collection.
+        """
+        now = datetime.now(timezone.utc)
+        self.scraper_status.update_one(
+            {"county": county},
+            {
+                "$set": {
+                    "county": county,
+                    "last_run": now,
+                    "last_run_iso": now.isoformat(),
+                    "records": records,
+                    "hot_leads": hot,
+                    "warm_leads": warm,
+                    "cold_leads": cold,
+                    "disqualified": disqualified,
+                    "duration_seconds": round(duration, 1),
+                    "status": status,
+                    "error": error,
+                    "updated_at": now,
+                },
+                "$inc": {"run_count": run_count_increment},
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
 
     def close(self):
         self.client.close()
