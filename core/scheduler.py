@@ -138,8 +138,8 @@ class ScraperScheduler:
         try:
             from pymongo import MongoClient
             from config.settings import settings as _s
-            client = MongoClient(_s.MONGO_URI, serverSelectionTimeoutMS=3000)
-            db = client[_s.MONGO_DB]
+            client = MongoClient(_s.MONGODB_URI, serverSelectionTimeoutMS=3000)
+            db = client[_s.MONGODB_DB_NAME]
             col = db["scraper_triggers"]
 
             # Find all pending triggers
