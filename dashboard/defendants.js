@@ -8,24 +8,76 @@ let defPage=1, defSearchTimeout, selectedDefendant=null;
 function debounceDefSearch(){clearTimeout(defSearchTimeout);defSearchTimeout=setTimeout(()=>loadDefendants(1),300)}
 
 // ── Parse charges string into structured rows ──
+// Handles:
+//   1. Embedded dollar amounts in charge text: "CHARGE DESC - $5,000" or "CHARGE DESC $5000"
+//   2. Pipe / semicolon / newline delimiters
+//   3. Falls back to even distribution when no individual amounts found
 function parseCharges(chargesStr, bondAmount, bondType, caseNumber){
   if(!chargesStr) return [{charge:'No charges listed',bond:'—',type:'—',case:'—'}];
+
   // Try pipe-delimited first, then semicolons, then newlines
   let parts=chargesStr.split(/\s*\|\s*/);
   if(parts.length<=1) parts=chargesStr.split(/\s*;\s*/);
   if(parts.length<=1 && chargesStr.length>80) parts=chargesStr.split(/\n/);
-  
+  parts=parts.filter(p=>p.trim());
+
   if(parts.length===1){
-    return [{charge:parts[0].trim(),bond:money(bondAmount),type:val(bondType),case:val(caseNumber)}];
+    // Single charge — try to extract embedded amount
+    const embedded=_extractAmount(parts[0]);
+    const displayBond=embedded>0?embedded:(bondAmount||0);
+    return [{charge:_stripAmount(parts[0]).trim(),bond:money(displayBond),type:val(bondType),case:val(caseNumber)}];
   }
-  // Distribute bond evenly if we can't parse individual amounts
-  const perCharge=bondAmount>0?bondAmount/parts.length:0;
-  return parts.filter(p=>p.trim()).map(p=>({
-    charge:p.trim(),
+
+  // Multi-charge: try to extract individual amounts from each charge string
+  const rows=parts.map(p=>({
+    raw:p.trim(),
+    amount:_extractAmount(p),
+    clean:_stripAmount(p).trim(),
+  }));
+
+  const embeddedTotal=rows.reduce((s,r)=>s+r.amount,0);
+  const hasEmbedded=rows.some(r=>r.amount>0);
+
+  if(hasEmbedded){
+    // Use embedded amounts; for charges without an amount, show '—'
+    // Warn if embedded total differs significantly from bondAmount
+    return rows.map(r=>({
+      charge:r.clean,
+      bond:r.amount>0?money(r.amount):'—',
+      type:val(bondType),
+      case:val(caseNumber),
+    }));
+  }
+
+  // No embedded amounts — distribute bondAmount evenly
+  const perCharge=bondAmount>0?bondAmount/rows.length:0;
+  return rows.map(r=>({
+    charge:r.clean,
     bond:money(perCharge),
     type:val(bondType),
-    case:val(caseNumber)
+    case:val(caseNumber),
   }));
+}
+
+// Extract a dollar amount embedded in a charge string
+// Matches patterns like: "- $5,000", "$5000", "BOND: $10,000", "10000.00"
+function _extractAmount(str){
+  // Pattern: optional dash/colon, optional $, digits with optional commas/dots
+  const m=str.match(/(?:[-:]\s*)?\$([\d,]+(?:\.\d{1,2})?)/);
+  if(m) return parseFloat(m[1].replace(/,/g,''))||0;
+  // Pattern: bare number at end of string like "5000" or "5,000"
+  const m2=str.match(/\b([\d]{3,}(?:,\d{3})*(?:\.\d{1,2})?)\s*$/);
+  if(m2) return parseFloat(m2[1].replace(/,/g,''))||0;
+  return 0;
+}
+
+// Strip the embedded dollar amount from a charge string for clean display
+function _stripAmount(str){
+  return str
+    .replace(/\s*[-:]\s*\$[\d,]+(?:\.\d{1,2})?/g,'')
+    .replace(/\s+\$[\d,]+(?:\.\d{1,2})?/g,'')
+    .replace(/\s+[\d]{3,}(?:,\d{3})*(?:\.\d{1,2})?\s*$/g,'')
+    .trim();
 }
 
 // ── Status badge helper ──
@@ -111,6 +163,7 @@ function renderDefCard(d){
     <!-- Footer Actions -->
     <div class="def-card-footer">
       ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail">🔗 Source</a>`:''}
+      <button onclick='trackAsInProgress(${JSON.stringify(d).replace(/'/g,"&#39;")})' style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track In Progress</button>
       <button class="btn-write-bond" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'>✅ Write Bond</button>
     </div>
   </div>`;
@@ -355,3 +408,52 @@ async function exportToSignNow() {
 $('writeBondModal').addEventListener('click', e => { if (e.target === $('writeBondModal')) closeModal() });
 // Close modal on Escape
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal() });
+
+// ── Track defendant as In Progress (prospective bond pipeline) ────────────────
+async function trackAsInProgress(defendant) {
+  const stages = ['contacted', 'negotiating', 'paperwork', 'ready'];
+  const stage = prompt(
+    'Track "' + (defendant.full_name || 'Defendant') + '" in the In Progress pipeline.\n\n' +
+    'Choose starting stage:\n' +
+    '  contacted   — Initial contact made\n' +
+    '  negotiating — Actively negotiating terms\n' +
+    '  paperwork   — Paperwork in progress\n' +
+    '  ready       — Ready to post\n\n' +
+    'Enter stage name (default: contacted):',
+    'contacted'
+  );
+  if (stage === null) return; // user cancelled
+  const finalStage = stages.includes((stage || '').trim().toLowerCase())
+    ? (stage || '').trim().toLowerCase()
+    : 'contacted';
+
+  try {
+    const res = await fetch('/api/prospective-bonds', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: defendant.booking_number || '',
+        defendant_name: defendant.full_name || '',
+        county: defendant.county || '',
+        bond_amount: defendant.bond_amount || 0,
+        charges: defendant.charges || '',
+        lead_score: defendant.lead_score || 0,
+        lead_status: defendant.lead_status || '',
+        stage: finalStage,
+        note: 'Tracked from Defendants tab',
+        agent: 'Dashboard',
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast('🟢 Added to In Progress pipeline (' + finalStage + ')', 'success');
+      if (typeof SLProspective !== 'undefined') SLProspective.load();
+    } else if (res.status === 409) {
+      showToast('Already in In Progress pipeline (stage: ' + (data.stage || 'unknown') + ')', 'warn');
+    } else {
+      showToast('Error: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+  }
+}

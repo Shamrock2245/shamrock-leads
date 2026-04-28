@@ -547,102 +547,128 @@ async def api_timeline():
 
 @stats_bp.route("/scraper-health")
 async def api_scraper_health():
-    """Per-county scraper health metrics — always returns all 49 registered counties."""
-    scraper_status_col = get_collection("scraper_status")
-    arrests = get_collection("arrests")
-    now = datetime.now(timezone.utc)
-    h24_ago = now - timedelta(hours=24)
+    """Per-county scraper health metrics — always returns all registered counties."""
+    try:
+        scraper_status_col = get_collection("scraper_status")
+        scraper_config_col = get_collection("scraper_config")
+        arrests = get_collection("arrests")
+        now = datetime.now(timezone.utc)
+        h24_ago = now - timedelta(hours=24)
 
-    # Build base from arrests aggregate
-    results_map = {}
-    async for r in arrests.aggregate([
-        {"$group": {
-            "_id": "$county", "total_records": {"$sum": 1},
-            "latest_record": {"$max": "$created_at"},
-            "latest_scrape": {"$max": "$scrape_timestamp"},
-            "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
-            "max_bond": {"$max": "$bond_amount"}, "total_bond": {"$sum": "$bond_amount"},
-            "in_custody": {"$sum": {"$cond": [
-                {"$regexMatch": {"input": {"$ifNull": ["$status", ""]}, "regex": "custody|confined|held", "options": "i"}},
-                1, 0,
-            ]}},
-        }},
-    ]):
-        results_map[r["_id"]] = r
+        # Build base from arrests aggregate
+        results_map = {}
+        async for r in arrests.aggregate([
+            {"$group": {
+                "_id": "$county",
+                "total_records": {"$sum": 1},
+                "latest_record": {"$max": "$created_at"},
+                "latest_scrape": {"$max": "$scrape_timestamp"},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
+                "max_bond": {"$max": "$bond_amount"},
+                "total_bond": {"$sum": "$bond_amount"},
+                "in_custody": {"$sum": {"$cond": [
+                    {"$in": [{"$toLower": {"$ifNull": ["$custody_status", ""]}}, ["in custody", "in-custody", "incustody", "confined", "held", "booked"]]},
+                    1, 0,
+                ]}},
+                "hot_leads": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
+                "warm_leads": {"$sum": {"$cond": [{"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]}, 1, 0]}},
+            }},
+        ]):
+            results_map[r["_id"]] = r
 
-    counts_24h = {}
-    async for r in arrests.aggregate([
-        {"$match": {"created_at": {"$gte": h24_ago}}},
-        {"$group": {"_id": "$county", "count_24h": {"$sum": 1}}},
-    ]):
-        counts_24h[r["_id"]] = r["count_24h"]
+        counts_24h = {}
+        async for r in arrests.aggregate([
+            {"$match": {"created_at": {"$gte": h24_ago}}},
+            {"$group": {"_id": "$county", "count_24h": {"$sum": 1}}},
+        ]):
+            counts_24h[r["_id"]] = r["count_24h"]
 
-    # Overlay live run data from scraper_status collection
-    live_status = {}
-    async for doc in scraper_status_col.find({}, {"_id": 0}):
-        county = doc.get("county")
-        if county:
-            live_status[county] = doc
+        # Overlay live run data from scraper_status collection
+        live_status = {}
+        async for doc in scraper_status_col.find({}, {"_id": 0}):
+            county = doc.get("county")
+            if county:
+                live_status[county] = doc
 
-    out = []
-    seen = set()
+        # Load enabled/disabled config
+        config_map = {}
+        async for doc in scraper_config_col.find({}, {"_id": 0}):
+            county = doc.get("county")
+            if county:
+                config_map[county] = doc
 
-    # Process counties that have arrest records
-    for county, r in sorted(results_map.items(), key=lambda x: -x[1]["total_records"]):
-        if not county:
-            continue
-        seen.add(county)
-        latest = r.get("latest_record") or r.get("latest_scrape")
-        hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
-        base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
-        live = live_status.get(county, {})
-        if live.get("status") == "error":
-            base_status = "error"
-        elif live.get("status") == "ok" and hours_since < 2:
-            base_status = "healthy"
-        last_run = live.get("last_run")
-        out.append({
-            "county": county,
-            "total_records": r["total_records"],
-            "in_custody": r["in_custody"],
-            "records_24h": counts_24h.get(county, 0),
-            "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
-            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
-            "hours_since_update": round(hours_since, 1),
-            "status": base_status,
-            "avg_bond": round(r["avg_bond"] or 0, 2),
-            "max_bond": round(r["max_bond"] or 0, 2),
-            "total_bond": round(r["total_bond"] or 0, 2),
-            "duration_seconds": live.get("duration_seconds", 0),
-            "run_count": live.get("run_count", 0),
-            "error": live.get("error"),
-        })
+        out = []
+        seen = set()
 
-    # Add registered counties with no arrest records yet
-    for county in sorted(REGISTERED_COUNTIES):
-        if county in seen:
-            continue
-        live = live_status.get(county, {})
-        run_status = live.get("status", "never_run")
-        last_run = live.get("last_run")
-        out.append({
-            "county": county,
-            "total_records": 0,
-            "in_custody": 0,
-            "records_24h": 0,
-            "latest_record": "",
-            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
-            "hours_since_update": 999,
-            "status": run_status,
-            "avg_bond": 0,
-            "max_bond": 0,
-            "total_bond": 0,
-            "duration_seconds": live.get("duration_seconds", 0),
-            "run_count": live.get("run_count", 0),
-            "error": live.get("error"),
-        })
+        # Process counties that have arrest records
+        for county, r in sorted(results_map.items(), key=lambda x: -x[1]["total_records"]):
+            if not county:
+                continue
+            seen.add(county)
+            latest = r.get("latest_record") or r.get("latest_scrape")
+            hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
+            base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
+            live = live_status.get(county, {})
+            cfg = config_map.get(county, {})
+            if cfg.get("enabled") is False:
+                base_status = "disabled"
+            elif live.get("status") == "error":
+                base_status = "error"
+            elif live.get("status") == "ok" and hours_since < 2:
+                base_status = "healthy"
+            last_run = live.get("last_run")
+            out.append({
+                "county": county,
+                "total_records": r["total_records"],
+                "in_custody": r["in_custody"],
+                "records_24h": counts_24h.get(county, 0),
+                "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
+                "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+                "hours_since_update": round(hours_since, 1),
+                "status": base_status,
+                "avg_bond": round(r.get("avg_bond") or 0, 2),
+                "max_bond": round(r.get("max_bond") or 0, 2),
+                "total_bond": round(r.get("total_bond") or 0, 2),
+                "hot_leads": r.get("hot_leads", 0),
+                "warm_leads": r.get("warm_leads", 0),
+                "duration_seconds": live.get("duration_seconds", 0),
+                "run_count": live.get("run_count", 0),
+                "error": live.get("error"),
+                "enabled": cfg.get("enabled", True),
+            })
 
-    return jsonify(out)
+        # Add registered counties with no arrest records yet
+        for county in sorted(REGISTERED_COUNTIES):
+            if county in seen:
+                continue
+            live = live_status.get(county, {})
+            cfg = config_map.get(county, {})
+            run_status = "disabled" if cfg.get("enabled") is False else live.get("status", "never_run")
+            last_run = live.get("last_run")
+            out.append({
+                "county": county,
+                "total_records": 0,
+                "in_custody": 0,
+                "records_24h": 0,
+                "latest_record": "",
+                "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+                "hours_since_update": 999,
+                "status": run_status,
+                "avg_bond": 0,
+                "max_bond": 0,
+                "total_bond": 0,
+                "hot_leads": 0,
+                "warm_leads": 0,
+                "duration_seconds": live.get("duration_seconds", 0),
+                "run_count": live.get("run_count", 0),
+                "error": live.get("error"),
+                "enabled": cfg.get("enabled", True),
+            })
+
+        return jsonify(out)
+    except Exception as exc:
+        import traceback
+        return jsonify({"error": str(exc), "trace": traceback.format_exc()}), 500
 
 
 @stats_bp.route("/counties")

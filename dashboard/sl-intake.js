@@ -424,7 +424,72 @@ const SLIntake = (() => {
     }
   }
 
-  // ── Modal close ────────────────────────────────────────────────────────────
+  // ── Mark intake as In Progress (promote to prospective bonds pipeline) ───────
+  async function markAsInProgress() {
+    if (!_currentIntakeId) {
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No intake loaded — re-open the intake first', 'warn');
+      return;
+    }
+    const h = _currentHydration || {};
+    const def = h.defendant || {};
+    const ind = h.indemnitor || {};
+
+    // Ask which pipeline stage to start at
+    const stage = prompt(
+      'Which pipeline stage should this bond start at?\n\n' +
+      '  contacted   — Initial contact made\n' +
+      '  negotiating — Actively negotiating terms\n' +
+      '  paperwork   — Paperwork in progress\n' +
+      '  ready       — Ready to post\n\n' +
+      'Enter stage name (default: contacted):',
+      'contacted'
+    );
+    if (stage === null) return; // user cancelled
+    const validStages = ['contacted', 'negotiating', 'paperwork', 'ready'];
+    const finalStage = validStages.includes((stage || '').trim().toLowerCase())
+      ? (stage || '').trim().toLowerCase()
+      : 'contacted';
+
+    const intakeId = _currentIntakeId;
+    closeModal();
+
+    try {
+      const res = await fetch('/api/prospective-bonds/from-intake', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intake_id: intakeId,
+          booking_number: def.bookingNumber || '',
+          defendant_name: def.name || '',
+          county: def.county || '',
+          bond_amount: def.bondAmount || 0,
+          charges: def.charges || '',
+          indemnitor_name: [ind.firstName, ind.lastName].filter(Boolean).join(' '),
+          indemnitor_phone: ind.phone || '',
+          indemnitor_email: ind.email || '',
+          indemnitor_relationship: ind.relationship || '',
+          stage: finalStage,
+          agent: 'Dashboard',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof SL !== 'undefined') {
+          SL.toast('🟢 Bond moved to In Progress (' + finalStage + ')', 'success');
+          if (typeof SLProspective !== 'undefined') SLProspective.load();
+        }
+        load(); // refresh intake queue
+      } else if (res.status === 409) {
+        if (typeof SL !== 'undefined') SL.toast('Already in In Progress pipeline (stage: ' + (data.stage || 'unknown') + ')', 'warn');
+      } else {
+        throw new Error(data.error || 'Failed to mark as In Progress');
+      }
+    } catch (err) {
+      if (typeof SL !== 'undefined') SL.toast('Error: ' + err.message, 'error');
+    }
+  }
+
+  // ── Modal close ──────────────────────────────────────────────────────────────────────────────────
   function closeModal() {
     const modal = document.getElementById('intakeModal');
     if (modal) modal.style.display = 'none';
@@ -447,6 +512,7 @@ const SLIntake = (() => {
     load,
     openProcess,
     writeBondFromIntake,
+    markAsInProgress,
     archive,
     archiveCurrent,
     openManualEntry,

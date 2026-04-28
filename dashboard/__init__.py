@@ -37,6 +37,7 @@ def create_app():
     from dashboard.api.bond_lifecycle import bond_lifecycle_bp
     from dashboard.api.intake import intake_bp          # ← Indemnitor Intake Queue
     from dashboard.api.scraper_control import scraper_control_bp  # ← Run-Now Control
+    from dashboard.api.prospective_bonds import prospective_bonds_bp  # ← In Progress Pipeline
 
     app.register_blueprint(stats_bp, url_prefix="/api")
     app.register_blueprint(bonds_bp, url_prefix="/api")
@@ -53,6 +54,7 @@ def create_app():
     app.register_blueprint(bond_lifecycle_bp, url_prefix="/api/bond-lifecycle")
     app.register_blueprint(intake_bp, url_prefix="/api")  # ← Indemnitor Intake Queue
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
+    app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
 
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
