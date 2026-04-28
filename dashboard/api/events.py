@@ -20,7 +20,7 @@ async def publish_event(event_type: str, data: dict):
             await q.put(msg)
         except Exception:
             dead.add(q)
-    event_queues -= dead
+    event_queues.difference_update(dead)
 
 @events_bp.route('/events/stream')
 async def event_stream():
