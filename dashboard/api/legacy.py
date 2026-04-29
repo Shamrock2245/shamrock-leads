@@ -331,7 +331,7 @@ async def imessage_send():
     if geo_link:
         message = f"{message}\n{geo_link}"
 
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
     imessage_outreach = get_collection("imessage_outreach")
 
@@ -367,20 +367,6 @@ async def imessage_send():
                 },
                 timeout=15,
             )
-            # If iMessage fails (non-iPhone), retry as SMS
-            if r.status_code not in (200, 201):
-                sms_guid = f"SMS;-;{phone}"
-                sms_temp = f"shamrock-sms-{uuid.uuid4().hex[:12]}"
-                r2 = await client.post(
-                    f"{srv['url']}/api/v1/message/text",
-                    params={"password": srv["password"]},
-                    json={"chatGuid": sms_guid, "tempGuid": sms_temp, "message": message},
-                    timeout=15,
-                )
-                if r2.status_code in (200, 201):
-                    r = r2
-                    chat_guid = sms_guid
-                    temp_guid = sms_temp
             bb_resp = r.json()
             success = r.status_code in (200, 201)
 

@@ -182,7 +182,7 @@ async def send_prospecting_outreach(
             effective_template = template_key
 
         message = _build_outreach_message(effective_template, context)
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         # Check iMessage availability
         avail = await bb_client.check_imessage_availability(phone)

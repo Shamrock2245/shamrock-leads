@@ -3010,7 +3010,7 @@ def imessage_send():
     if not srv:
         return jsonify({"error": f"No BlueBubbles server configured for {from_number}"}), 503
 
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"
 
     try:

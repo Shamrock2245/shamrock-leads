@@ -201,7 +201,7 @@ async def check_and_notify_rearrest(
         prior_date = prior_bond.get("created_at", prior_bond.get("bond_date", ""))
 
         message = _build_rearrest_message(indemnitor, defendant_name, county, prior_date)
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         # Check iMessage availability
         is_imessage = False
@@ -328,7 +328,7 @@ async def api_rearrest_notify():
             return jsonify({"success": False, "error": "No BlueBubbles server configured"}), 503
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         message = custom_message or _build_rearrest_message(
             {"name": ""}, defendant_name, county, ""

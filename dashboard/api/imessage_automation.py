@@ -388,7 +388,7 @@ async def send_with_effect():
     if not client:
         return jsonify({"error": "BlueBubbles not configured"}), 503
 
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
     temp_guid = f"shamrock-fx-{uuid.uuid4().hex[:12]}"
 
     result = await client.send_with_effect(chat_guid, message, effect, temp_guid)

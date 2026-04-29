@@ -158,7 +158,7 @@ async def schedule_court_reminders_for_case(
         { "scheduled": list[dict], "bb_server_side": bool }
     """
     phone = format_phone(phone)
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
 
     bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
     bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"]) if bb_server else None
@@ -266,7 +266,7 @@ async def process_vps_scheduled_messages() -> dict:
 
     for msg in due_messages:
         phone = msg.get("phone", "")
-        chat_guid = msg.get("chat_guid", f"iMessage;-;{phone}")
+        chat_guid = msg.get("chat_guid", f"any;-;{phone}")
         message = msg.get("message", "")
         channel = msg.get("channel", "sms_fallback")
 
@@ -370,7 +370,7 @@ async def api_schedule_document_ready():
             return jsonify({"success": False, "error": "No BlueBubbles server configured"}), 503
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         context = {
             "name": indemnitor_name.split()[0] if indemnitor_name else "there",

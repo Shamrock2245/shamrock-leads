@@ -61,7 +61,7 @@ class BlueBubblesClient:
     Usage:
         client = BlueBubblesClient("https://xxx.trycloudflare.com", "mypassword")
         info = await client.server_info()
-        await client.send_text("iMessage;-;+12395550178", "Hello!")
+        await client.send_text("any;-;+12395550178", "Hello!")
         await client.unsend_message("msg-guid-here")
     """
 
@@ -130,7 +130,7 @@ class BlueBubblesClient:
         """Send a text message. Supports effects, subjects, and replies.
 
         Args:
-            chat_guid: e.g. "iMessage;-;+12395550178"
+            chat_guid: e.g. "any;-;+12395550178" (auto-selects iMessage or SMS)
             message: The text to send
             temp_guid: Optional client-side dedup GUID
             effect_id: Optional iMessage effect (use EFFECTS dict keys)
@@ -628,7 +628,7 @@ class BlueBubblesClient:
         """
         results = []
         for phone in phones:
-            chat_guid = f"iMessage;-;{phone}"
+            chat_guid = f"any;-;{phone}"
             available = True
             if check_imessage:
                 avail_result = await self.check_imessage_availability(phone)

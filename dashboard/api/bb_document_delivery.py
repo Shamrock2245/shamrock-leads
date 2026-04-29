@@ -57,23 +57,13 @@ async def _send_document_via_bb(
     If a caption is provided, sends the caption text first, then the attachment.
     """
     phone = format_phone(phone)
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
 
     bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
     if not bb_server:
         return {"success": False, "error": "No BlueBubbles server configured"}
 
     bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-
-    # Check iMessage availability
-    avail = await bb_client.check_imessage_availability(phone)
-    if not avail.get("available"):
-        return {
-            "success": False,
-            "error": "Phone not on iMessage",
-            "fallback_needed": True,
-            "phone": phone,
-        }
 
     results = {}
 
@@ -180,7 +170,7 @@ async def api_send_signing_link():
             return jsonify({"success": False, "error": "No BlueBubbles server configured"}), 503
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.5)
 
@@ -242,7 +232,7 @@ async def api_send_receipt():
             return jsonify({"success": False, "error": "No BlueBubbles server configured"}), 503
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
 
         result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.0)
 
