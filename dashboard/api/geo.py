@@ -172,10 +172,23 @@ async def geo_receive_ping(token: str):
             "source": "sms_geo_link",
             "ts": now,
         }
+        # Update active_bonds
         await active_bonds.update_one(
             {"booking_number": booking_number},
             {
                 "$push": {"location_history": location_entry},
+                "$set": {
+                    "latest_location": location_entry,
+                    "last_geo_ping": now,
+                },
+            },
+        )
+        # Also stamp on defendants collection (Phase 2 linkage)
+        defendants = get_collection("defendants")
+        await defendants.update_one(
+            {"arrest_ids": {"$elemMatch": {"booking_number": booking_number}}},
+            {
+                "$push": {"location_history": {"$each": [location_entry], "$slice": -50}},
                 "$set": {
                     "latest_location": location_entry,
                     "last_geo_ping": now,

@@ -295,18 +295,9 @@ async def deliver_packet(packet_id: str):
                 f"Shamrock Bail Bonds — Fort Myers, FL"
             )
 
-        # Append geolocator link (mandatory per project standards)
-        if include_geo:
-            geo_url = f"{base_url}/geo/{intake_id}"
-            message += f"\n\n📍 Confirm your location: {geo_url}"
-
-        # Send via BlueBubbles
-        bb = get_bb_client(phone)
-        if not bb:
-            return jsonify({"error": "BlueBubbles server not configured"}), 503
-
-        chat_guid = f"iMessage;-;{phone}"
-        result = await bb.send_text(chat_guid, message)
+        # Send via universal bridge (iMessage-first, SMS fallback)
+        from dashboard.services.bb_client import send_message_universal
+        result = await send_message_universal(phone, message)
 
         now = datetime.now(timezone.utc)
         packets_col = get_collection("paperwork_packets")

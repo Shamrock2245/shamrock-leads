@@ -323,11 +323,15 @@ async def imessage_send():
             "ping_count": 0,
             "status": "pending",
         })
-        geo_link = f"{_public_url}/g/{_token}" if _public_url else f"/g/{_token}"
+        # Only expose geo link if using a proper domain (never raw IP in customer messages)
+        import re as _re
+        _is_ip = bool(_re.search(r'://\d+\.\d+\.\d+\.\d+', _public_url)) if _public_url else True
+        if _public_url and not _is_ip:
+            geo_link = f"{_public_url}/g/{_token}"
     except Exception as _ge:
         logger.warning(f"geo-link generation failed: {_ge}")
 
-    # Append geo-link silently on a new line
+    # Append geo-link only if it's a proper domain URL
     if geo_link:
         message = f"{message}\n{geo_link}"
 

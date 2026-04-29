@@ -619,38 +619,38 @@ class BlueBubblesClient:
                               typing_delay: float = 2.0) -> list[dict]:
         """Send the same message to multiple phone numbers.
 
-        If check_imessage=True, each number is checked for iMessage availability
-        first. Numbers that are not on iMessage are returned in the result with
-        available=False so the caller can fall back to Twilio.
+        Uses `any;-;` chat GUID prefix so BlueBubbles auto-routes to
+        iMessage or SMS depending on the recipient's device. No external
+        fallback needed.
+
+        If check_imessage=True, each number is checked for availability
+        for **channel reporting only** — delivery always goes through BB.
 
         Returns:
-            List of { phone, chat_guid, available, success, message_guid }
+            List of { phone, chat_guid, channel, success, message_guid }
         """
         results = []
         for phone in phones:
             chat_guid = f"any;-;{phone}"
-            available = True
+            channel = "sms"  # default assumption
             if check_imessage:
-                avail_result = await self.check_imessage_availability(phone)
-                available = avail_result.get("available", True)
-            if available:
-                result = await self.send_human_like(
-                    chat_guid, message, typing_delay=typing_delay
-                )
-                results.append({
-                    "phone": phone,
-                    "chat_guid": chat_guid,
-                    "available": True,
-                    "success": result.get("success", False),
-                    "message_guid": (result.get("data") or {}).get("guid", ""),
-                })
-            else:
-                results.append({
-                    "phone": phone,
-                    "chat_guid": chat_guid,
-                    "available": False,
-                    "success": False,
-                    "message_guid": "",
-                    "fallback_needed": True,
-                })
+                try:
+                    avail_result = await self.check_imessage_availability(phone)
+                    if avail_result.get("available", False):
+                        channel = "imessage"
+                except Exception:
+                    pass  # availability check failed — still send
+
+            # Always send via BB (any;-; handles iMessage/SMS routing)
+            result = await self.send_human_like(
+                chat_guid, message, typing_delay=typing_delay
+            )
+            results.append({
+                "phone": phone,
+                "chat_guid": chat_guid,
+                "channel": channel,
+                "available": channel == "imessage",
+                "success": result.get("success", False),
+                "message_guid": (result.get("data") or {}).get("guid", ""),
+            })
         return results

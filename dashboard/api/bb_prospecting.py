@@ -156,6 +156,7 @@ async def send_prospecting_outreach(
     results = []
     imessage_sent = 0
     imessage_failed = 0
+    sms_sent = 0
     sms_fallback = []
 
     for phone in phones:
@@ -184,9 +185,13 @@ async def send_prospecting_outreach(
         message = _build_outreach_message(effective_template, context)
         chat_guid = f"any;-;{phone}"
 
-        # Check iMessage availability
-        avail = await bb_client.check_imessage_availability(phone)
-        is_imessage = avail.get("available", False)
+        # Check iMessage availability (for channel reporting only — BB routes automatically)
+        try:
+            avail = await bb_client.check_imessage_availability(phone)
+            is_imessage = avail.get("available", False)
+        except Exception:
+            is_imessage = False
+        channel = "imessage" if is_imessage else "sms"
 
         outreach_doc = {
             "booking_number": booking_number,
@@ -198,60 +203,67 @@ async def send_prospecting_outreach(
             "message": message,
             "template_used": effective_template,
             "chat_guid": chat_guid,
-            "channel": "imessage" if is_imessage else "sms_fallback",
+            "channel": channel,
             "direction": "outbound",
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
             "source": "prospecting",
         }
 
-        if is_imessage:
-            result = await bb_client.send_human_like(chat_guid, message, typing_delay=3.0)
-            if result.get("success"):
-                outreach_doc["status"] = "sent"
-                outreach_doc["bb_message_guid"] = (result.get("data") or {}).get("guid", "")
-                imessage_sent += 1
-                logger.info("📤 Prospecting iMessage sent to ...%s for %s", phone[-4:], defendant_name)
+        send_success = False
+        actual_channel = "failed"
 
-                # Create/update prospective bond record
-                await prospective_coll.update_one(
-                    {"booking_number": booking_number},
-                    {
-                        "$setOnInsert": {
-                            "booking_number": booking_number,
-                            "defendant_name": defendant_name,
-                            "county": county,
-                            "bond_amount": bond_amount,
-                            "charges": charges,
-                            "status": "active",
-                            "stage": "contacted",
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                        "$push": {
-                            "outreach_log": {
-                                "phone": phone,
-                                "channel": "imessage",
-                                "message": message,
-                                "sent_at": datetime.now(timezone.utc).isoformat(),
-                            }
-                        },
-                        "$set": {"last_contacted_at": datetime.now(timezone.utc).isoformat()},
-                    },
-                    upsert=True,
-                )
+        # Send via BB with any;-; (auto-routes to iMessage or SMS natively)
+        result = await bb_client.send_human_like(chat_guid, message, typing_delay=3.0)
+        if result.get("success"):
+            outreach_doc["status"] = "sent"
+            outreach_doc["bb_message_guid"] = (result.get("data") or {}).get("guid", "")
+            send_success = True
+            actual_channel = channel
+            if is_imessage:
+                imessage_sent += 1
             else:
-                outreach_doc["status"] = "failed"
-                outreach_doc["error"] = result.get("error", "unknown")
-                imessage_failed += 1
-                sms_fallback.append(phone)
+                sms_sent += 1
+            logger.info("📤 Prospecting %s sent to ...%s for %s", channel, phone[-4:], defendant_name)
         else:
-            outreach_doc["status"] = "fallback_needed"
+            outreach_doc["status"] = "failed"
+            outreach_doc["error"] = result.get("error", "unknown")
+            imessage_failed += 1
             sms_fallback.append(phone)
+            logger.error("❌ BB send failed for ...%s: %s", phone[-4:], result.get("error"))
+
+        # Create/update prospective bond record if any channel succeeded
+        if send_success:
+            await prospective_coll.update_one(
+                {"booking_number": booking_number},
+                {
+                    "$setOnInsert": {
+                        "booking_number": booking_number,
+                        "defendant_name": defendant_name,
+                        "county": county,
+                        "bond_amount": bond_amount,
+                        "charges": charges,
+                        "status": "active",
+                        "stage": "contacted",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    "$push": {
+                        "outreach_log": {
+                            "phone": phone,
+                            "channel": actual_channel,
+                            "message": message,
+                            "sent_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                    "$set": {"last_contacted_at": datetime.now(timezone.utc).isoformat()},
+                },
+                upsert=True,
+            )
 
         await outreach_coll.insert_one(outreach_doc)
         results.append({
             "phone": phone,
-            "channel": outreach_doc["channel"],
+            "channel": actual_channel,
             "status": outreach_doc["status"],
         })
 
@@ -259,6 +271,7 @@ async def send_prospecting_outreach(
         "total": len(phones),
         "imessage_sent": imessage_sent,
         "imessage_failed": imessage_failed,
+        "sms_sent": sms_sent,
         "sms_fallback_needed": sms_fallback,
         "results": results,
     }

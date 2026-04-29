@@ -184,7 +184,6 @@ class OutreachSequencer:
         # Build portal link
         portal_base = "https://shamrockbailbonds.biz"
         portal_link = f"{portal_base}/intake?booking={booking_number}&county={county}"
-        geo_link = f"{portal_base}/geo/{booking_number}"
 
         # Build scheduled steps
         steps_meta = []
@@ -213,7 +212,6 @@ class OutreachSequencer:
             "tier": tier,
             "status": "active",
             "portal_link": portal_link,
-            "geo_link": geo_link,
             "steps": steps_meta,
             "created_at": now,
             "updated_at": now,
@@ -233,7 +231,6 @@ class OutreachSequencer:
                 defendant_name=full_name,
                 county=county,
                 portal_link=portal_link,
-                geo_link=geo_link,
                 contact_name="",
             )
 
@@ -259,13 +256,14 @@ class OutreachSequencer:
         defendant_name: str,
         county: str,
         portal_link: str,
-        geo_link: str,
         contact_name: str = "",
     ) -> Optional[str]:
         """
-        Schedule a single outreach message via BlueBubbles.
-        Uses BB's native scheduling API for reliability.
-        Returns the BB schedule ID or None on failure.
+        Schedule or send a single outreach message.
+        - Immediate sends (delay_hours == 0): use send_message_universal()
+          which sends via BB with `any;-;` prefix (auto-routes iMessage/SMS).
+        - Future sends: use BB's native scheduling API with `any;-;` prefix.
+        Returns the BB schedule ID, "immediate", or None on failure.
         """
         if not phone:
             return None
@@ -277,21 +275,58 @@ class OutreachSequencer:
             county=county,
             portal_link=portal_link,
         )
-        # Append mandatory geolocator link
-        message += f"\n\n📍 {geo_link}"
-
-        chat_guid = f"iMessage;-;{phone}"
-        scheduled_for_ms = int(step["scheduled_for"].timestamp() * 1000)
 
         try:
-            from dashboard.services.bb_client import get_bb_client
-            bb = get_bb_client(phone)
-            if not bb:
-                logger.warning("[outreach] No BB client for phone %s", phone)
-                return None
+            if step["delay_hours"] == 0:
+                # ── Immediate: use universal send (iMessage-first, SMS fallback) ──
+                from dashboard.services.bb_client import send_message_universal
+                result = await send_message_universal(phone, message)
+                channel = result.get("channel", "failed")
+                bb_schedule_id = "immediate" if result.get("success") else None
 
-            # Use BB native scheduling for future messages
-            if step["delay_hours"] > 0:
+                # Update step status
+                await self.outreach_sequences.update_one(
+                    {"sequence_id": sequence_id, "steps.step_id": step["step_id"]},
+                    {"$set": {
+                        "steps.$.bb_schedule_id": bb_schedule_id,
+                        "steps.$.status": "sent" if result.get("success") else "failed",
+                        "steps.$.sent_at": datetime.now(timezone.utc) if result.get("success") else None,
+                        "steps.$.channel": channel,
+                    }},
+                )
+
+                # Log the outreach message
+                await self.outreach_messages.insert_one({
+                    "sequence_id": sequence_id,
+                    "step_id": step["step_id"],
+                    "phone": phone,
+                    "message": message,
+                    "template_key": step["template_key"],
+                    "scheduled_for": step["scheduled_for"],
+                    "bb_schedule_id": bb_schedule_id,
+                    "channel": channel,
+                    "status": "sent" if result.get("success") else "failed",
+                    "created_at": datetime.now(timezone.utc),
+                })
+
+                return bb_schedule_id
+
+            else:
+                # ── Future: use BB native scheduling ──
+                from dashboard.services.bb_client import get_bb_client, check_imessage
+                bb = get_bb_client(phone)
+                if not bb:
+                    logger.warning("[outreach] No BB client for phone %s — future msg not scheduled", phone)
+                    return None
+
+                # Use any;-; prefix — BB auto-selects iMessage or SMS
+                chat_guid = f"any;-;{phone}"
+
+                # Check availability for channel reporting only
+                is_imessage = await check_imessage(phone)
+                channel = "imessage" if is_imessage else "sms"
+
+                scheduled_for_ms = int(step["scheduled_for"].timestamp() * 1000)
                 result = await bb.schedule_message(
                     chat_guid=chat_guid,
                     message=message,
@@ -299,35 +334,31 @@ class OutreachSequencer:
                     schedule_type="once",
                 )
                 bb_schedule_id = result.get("data", {}).get("id") if result.get("success") else None
-            else:
-                # Send immediately
-                result = await bb.send_text(chat_guid, message)
-                bb_schedule_id = "immediate"
 
-            # Update step with BB schedule ID
-            await self.outreach_sequences.update_one(
-                {"sequence_id": sequence_id, "steps.step_id": step["step_id"]},
-                {"$set": {
-                    "steps.$.bb_schedule_id": bb_schedule_id,
-                    "steps.$.status": "sent" if step["delay_hours"] == 0 else "scheduled",
-                    "steps.$.sent_at": datetime.now(timezone.utc) if step["delay_hours"] == 0 else None,
-                }},
-            )
+                # Update step with BB schedule ID
+                await self.outreach_sequences.update_one(
+                    {"sequence_id": sequence_id, "steps.step_id": step["step_id"]},
+                    {"$set": {
+                        "steps.$.bb_schedule_id": bb_schedule_id,
+                        "steps.$.status": "scheduled" if bb_schedule_id else "failed",
+                        "steps.$.channel": channel,
+                    }},
+                )
 
-            # Log the outreach message
-            await self.outreach_messages.insert_one({
-                "sequence_id": sequence_id,
-                "step_id": step["step_id"],
-                "phone": phone,
-                "message": message,
-                "template_key": step["template_key"],
-                "scheduled_for": step["scheduled_for"],
-                "bb_schedule_id": bb_schedule_id,
-                "status": "sent" if step["delay_hours"] == 0 else "scheduled",
-                "created_at": datetime.now(timezone.utc),
-            })
+                await self.outreach_messages.insert_one({
+                    "sequence_id": sequence_id,
+                    "step_id": step["step_id"],
+                    "phone": phone,
+                    "message": message,
+                    "template_key": step["template_key"],
+                    "scheduled_for": step["scheduled_for"],
+                    "bb_schedule_id": bb_schedule_id,
+                    "channel": channel,
+                    "status": "scheduled" if bb_schedule_id else "failed",
+                    "created_at": datetime.now(timezone.utc),
+                })
 
-            return bb_schedule_id
+                return bb_schedule_id
 
         except Exception as exc:
             logger.error("[outreach] _schedule_bb_message error for %s: %s", sequence_id, exc)

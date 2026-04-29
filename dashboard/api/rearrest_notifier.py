@@ -203,11 +203,15 @@ async def check_and_notify_rearrest(
         message = _build_rearrest_message(indemnitor, defendant_name, county, prior_date)
         chat_guid = f"any;-;{phone}"
 
-        # Check iMessage availability
-        is_imessage = False
+        # Check iMessage availability (for channel reporting only)
+        channel = "sms"
         if bb_client:
-            avail = await bb_client.check_imessage_availability(phone)
-            is_imessage = avail.get("available", False)
+            try:
+                avail = await bb_client.check_imessage_availability(phone)
+                if avail.get("available", False):
+                    channel = "imessage"
+            except Exception:
+                pass
 
         notification_doc = {
             "defendant_name": defendant_name,
@@ -219,29 +223,30 @@ async def check_and_notify_rearrest(
             "indemnitor_name": indemnitor.get("name", ""),
             "prior_booking_number": prior_bond.get("booking_number", ""),
             "message": message,
-            "channel": "imessage" if is_imessage else "sms_fallback",
+            "channel": channel,
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "status": "pending",
         }
 
-        if is_imessage and bb_client:
+        if bb_client:
+            # Send via BB with any;-; (auto-routes to iMessage or SMS)
             result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.5)
             if result.get("success"):
                 notification_doc["status"] = "sent"
                 notification_doc["bb_message_guid"] = (result.get("data") or {}).get("guid", "")
                 sent += 1
-                logger.info("✅ Re-arrest notification sent via iMessage to ...%s", phone[-4:])
+                logger.info("✅ Re-arrest notification sent via %s to ...%s", channel, phone[-4:])
             else:
                 notification_doc["status"] = "failed"
                 notification_doc["error"] = result.get("error", "unknown")
                 failed += 1
                 fallback_needed.append(phone)
-                logger.warning("❌ iMessage failed for ...%s — needs Twilio fallback", phone[-4:])
+                logger.warning("❌ BB send failed for ...%s: %s", phone[-4:], result.get("error"))
         else:
-            # Not on iMessage — needs Twilio SMS
-            notification_doc["status"] = "fallback_needed"
+            notification_doc["status"] = "failed"
+            notification_doc["error"] = "no_bb_client"
             fallback_needed.append(phone)
-            logger.info("📱 ...%s not on iMessage — queued for Twilio SMS", phone[-4:])
+            logger.warning("⚠️ No BB client configured — cannot send to ...%s", phone[-4:])
 
         await notifications_coll.insert_one(notification_doc)
 

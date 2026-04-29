@@ -13,7 +13,7 @@ Usage:
 
     bb = get_bb_client("+12395550178")   # resolves to correct BB server
     if bb:
-        await bb.send_text("iMessage;-;+12395550178", "Hello!")
+        await bb.send_text("any;-;+12395550178", "Hello!")  # auto-selects iMessage/SMS
 
     bb = get_default_bb_client()          # always returns first configured server
 """
@@ -95,10 +95,10 @@ async def send_imessage(
     method: str = "private-api",
 ) -> dict:
     """
-    Send an iMessage via BlueBubbles with optional geolocator link.
+    Send a message via BlueBubbles with optional geolocator link.
 
-    All outbound messages in ShamrockLeads must include a geolocator
-    feature per project standards.
+    Uses `any;-;` chat GUID prefix so BlueBubbles auto-selects the best
+    transport: iMessage for iPhones, SMS/RCS for everyone else.
 
     Args:
         phone:    Recipient phone number (E.164 or 10-digit)
@@ -113,16 +113,75 @@ async def send_imessage(
     if not bb:
         return {"success": False, "error": "no_bb_server"}
 
-    # Append geolocator link (mandatory per project standards)
     if geo_url:
         message = f"{message}\n\n📍 {geo_url}"
 
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
     try:
-        return await bb.send_text(chat_guid, message, method=method)
+        return await bb.send_text(chat_guid, message)
     except Exception as exc:
         logger.error("[bb_client] send_imessage error to %s: %s", phone, exc)
         return {"success": False, "error": str(exc)}
+
+
+async def send_message_universal(
+    phone: str,
+    message: str,
+    geo_url: Optional[str] = None,
+    method: str = "private-api",
+) -> dict:
+    """
+    Universal send via BlueBubbles using `any;-;` chat GUID prefix.
+
+    BlueBubbles auto-selects the best transport:
+      - iMessage for iPhones (blue bubble)
+      - SMS for non-iPhones (green bubble via Mac Messages relay)
+      - RCS where supported
+
+    Also checks iMessage availability for **channel reporting only** —
+    the actual routing is handled by BB's `any;-;` prefix.
+
+    This is the standard entry point for ALL outreach messaging.
+
+    Args:
+        phone:    Recipient phone number (E.164 or 10-digit)
+        message:  Message text to send
+        geo_url:  Optional geolocator URL to append
+        method:   BlueBubbles send method ("private-api" or "apple-script")
+
+    Returns:
+        { success: bool, channel: "imessage"|"sms"|"failed", ... }
+    """
+    if geo_url:
+        message = f"{message}\n\n📍 {geo_url}"
+
+    bb = get_bb_client(phone)
+    if not bb:
+        logger.error("[bb_client] No BB server configured for %s", phone)
+        return {"success": False, "channel": "failed", "error": "no_bb_server"}
+
+    # Check iMessage availability for channel reporting (not routing)
+    channel = "sms"  # default assumption
+    try:
+        avail = await bb.check_imessage_availability(phone)
+        if avail.get("available", False):
+            channel = "imessage"
+    except Exception:
+        pass  # availability check failed — still send via any;-;
+
+    # Send via BB with any;-; (auto-routes to iMessage or SMS)
+    chat_guid = f"any;-;{phone}"
+    try:
+        result = await bb.send_text(chat_guid, message)
+        if result.get("success"):
+            logger.info("[bb_client] ✅ Message sent to ...%s via %s", phone[-4:], channel)
+            return {"success": True, "channel": channel, "data": result.get("data")}
+        else:
+            logger.warning("[bb_client] BB send failed for %s: %s", phone, result.get("error"))
+            return {"success": False, "channel": "failed", "error": result.get("error", "bb_send_failed")}
+    except Exception as exc:
+        logger.error("[bb_client] BB send exception for %s: %s", phone, exc)
+        return {"success": False, "channel": "failed", "error": str(exc)}
 
 
 async def send_imessage_with_attachment(
@@ -150,7 +209,7 @@ async def send_imessage_with_attachment(
     if geo_url:
         message = f"{message}\n\n📍 {geo_url}"
 
-    chat_guid = f"iMessage;-;{phone}"
+    chat_guid = f"any;-;{phone}"
     try:
         return await bb.send_attachment_url(chat_guid, file_path, message=message)
     except Exception as exc:

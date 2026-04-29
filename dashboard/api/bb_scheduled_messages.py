@@ -163,11 +163,14 @@ async def schedule_court_reminders_for_case(
     bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
     bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"]) if bb_server else None
 
-    # Check iMessage availability
+    # Check iMessage availability (for channel reporting only)
     is_imessage = False
     if bb_client:
-        avail = await bb_client.check_imessage_availability(phone)
-        is_imessage = avail.get("available", False)
+        try:
+            avail = await bb_client.check_imessage_availability(phone)
+            is_imessage = avail.get("available", False)
+        except Exception:
+            pass
 
     context = {
         "name": indemnitor_name.split()[0] if indemnitor_name else "there",
@@ -201,7 +204,7 @@ async def schedule_court_reminders_for_case(
             "defendant_name": defendant_name,
             "phone": phone,
             "chat_guid": chat_guid,
-            "channel": "imessage" if is_imessage else "sms_fallback",
+            "channel": "imessage" if is_imessage else "sms",
             "template_key": template_key,
             "message": message,
             "send_at": send_at.isoformat(),
@@ -224,7 +227,7 @@ async def schedule_court_reminders_for_case(
             else:
                 schedule_doc["scheduling_method"] = "vps_fallback"
         else:
-            schedule_doc["scheduling_method"] = "vps_fallback" if is_imessage else "sms_fallback"
+            schedule_doc["scheduling_method"] = "vps_fallback"
 
         await scheduled_coll.insert_one(schedule_doc)
         scheduled.append({
@@ -268,16 +271,16 @@ async def process_vps_scheduled_messages() -> dict:
         phone = msg.get("phone", "")
         chat_guid = msg.get("chat_guid", f"any;-;{phone}")
         message = msg.get("message", "")
-        channel = msg.get("channel", "sms_fallback")
+        channel = msg.get("channel", "sms")
 
-        if channel == "imessage" and bb_client:
+        if bb_client:
+            # Send via BB with any;-; (auto-routes iMessage or SMS)
             result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.0)
             success = result.get("success", False)
         else:
-            # Twilio SMS fallback — log for Node-RED / Twilio handler
-            success = False  # Will be handled by Twilio worker
+            success = False
 
-        status = "sent" if success else ("failed" if channel == "imessage" else "queued_for_sms")
+        status = "sent" if success else "failed"
         await scheduled_coll.update_one(
             {"_id": msg["_id"]},
             {"$set": {"status": status, "processed_at": now.isoformat()}}
