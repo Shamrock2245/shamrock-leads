@@ -71,7 +71,12 @@ fi
 # ── Step 4: Test nginx config ─────────────────────────────────────────────────
 echo ""
 echo "🧪 Step 4: Testing nginx config..."
-nginx -t
+if ! nginx -t 2>&1; then
+    echo "   ❌ nginx config test FAILED"
+    echo "      Check the config at ${NGINX_CONF_DEST}"
+    echo "      The HTTPS block should NOT exist yet — certbot will add it."
+    exit 1
+fi
 echo "   ✅ nginx config OK"
 
 # ── Step 5: Reload nginx (HTTP only for ACME challenge) ───────────────────────
