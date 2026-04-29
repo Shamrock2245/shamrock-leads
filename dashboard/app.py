@@ -249,10 +249,29 @@ def api_mongo_stats_compat():
 def api_command_center():
     """Rich command center data — actionable leads, bond-ready queue, revenue pipeline."""
     try:
-        # Top bond-ready defendants: In Custody + High Bond + Hot/Warm score
+        # Bond-ready filter: In Custody + $1K+ Bond + Score >= 40
+        bond_ready_filter = {
+            "status": {"$regex": "custody|confined|held", "$options": "i"},
+            "bond_amount": {"$gte": 1000},
+            "lead_score": {"$gte": 40},
+        }
+
+        # TRUE count & pipeline totals (not capped by table limit)
+        bond_ready_count = arrests.count_documents(bond_ready_filter)
+        pipeline_agg = list(arrests.aggregate([
+            {"$match": bond_ready_filter},
+            {"$group": {
+                "_id": None,
+                "total_bond": {"$sum": "$bond_amount"},
+                "count": {"$sum": 1},
+            }}
+        ]))
+        pipeline_total = pipeline_agg[0]["total_bond"] if pipeline_agg else 0
+        premium_est = max(pipeline_total * 0.1, bond_ready_count * 100) if bond_ready_count else 0
+
+        # Top 25 for the table display
         bond_ready = list(arrests.find(
-            {"status": {"$regex": "custody|confined|held", "$options": "i"},
-             "bond_amount": {"$gte": 1000}, "lead_score": {"$gte": 40}},
+            bond_ready_filter,
             {"_id": 0, "full_name": 1, "county": 1, "charges": 1,
              "bond_amount": 1, "lead_score": 1, "lead_status": 1,
              "status": 1, "booking_number": 1, "dob": 1, "arrest_date": 1,
@@ -262,10 +281,6 @@ def api_command_center():
             for k, v in doc.items():
                 if isinstance(v, datetime):
                     doc[k] = v.isoformat()
-
-        # Revenue pipeline: sum of bondable amounts
-        pipeline_total = sum(d.get("bond_amount", 0) for d in bond_ready)
-        premium_est = sum(max(100, d.get("bond_amount", 0) * 0.1) for d in bond_ready)
 
         # Recent activity: last 10 arrests regardless of score
         recent = list(arrests.find(
@@ -291,7 +306,7 @@ def api_command_center():
             "bond_ready": bond_ready,
             "pipeline_total": pipeline_total,
             "premium_estimate": premium_est,
-            "bond_ready_count": len(bond_ready),
+            "bond_ready_count": bond_ready_count,
             "recent_activity": recent,
             "custody_by_county": [{"county": d["_id"], "count": d["count"],
                                    "total_bond": d.get("total_bond", 0)}

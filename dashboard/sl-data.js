@@ -99,6 +99,9 @@ async function loadDashboard() {
     document.getElementById('kpiActive').textContent = `${ok} / ${totalReg}`;
     document.getElementById('kpiActiveSub').textContent = `${err} errors · ${neverRun} never run`;
     document.getElementById('kpiHot').textContent = scores.hot||0;
+    // Dynamic sub-label with warm count
+    const hotSub = document.querySelector('#kpiHot + .stat-sub') || document.getElementById('kpiHot')?.parentElement?.querySelector('.stat-sub');
+    if (hotSub) hotSub.textContent = `score ≥ 70 · ${scores.warm||0} warm`;
 
     // Command center data
     if (cmd) {
@@ -108,7 +111,9 @@ async function loadDashboard() {
 
       // Bond-ready queue table
       const bq = cmd.bond_ready || [];
-      document.getElementById('bondQueueMeta').textContent = `${bq.length} defendants · $${(cmd.pipeline_total||0).toLocaleString()} total bond`;
+      const totalBondReady = cmd.bond_ready_count || bq.length;
+      const shownLabel = bq.length < totalBondReady ? `showing ${bq.length} of ${totalBondReady}` : `${totalBondReady} defendants`;
+      document.getElementById('bondQueueMeta').textContent = `${shownLabel} · $${(cmd.pipeline_total||0).toLocaleString()} total bond`;
       document.getElementById('bondQueueBody').innerHTML = bq.length ? bq.map(l => {
         const bond = l.bond_amount||0;
         const prem = Math.max(100, bond * 0.1);
