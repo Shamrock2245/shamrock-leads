@@ -285,6 +285,53 @@ class CharlotteCountyScraper(BaseScraper):
 
         time.sleep(2)
 
+        # ── Check if detail page has sub-arrest links to click ──
+        # Some Revize booking pages show a person profile with a list of arrests;
+        # bond/charge data only appears after clicking into a specific arrest.
+        try:
+            arrest_link = page.run_js("""
+                (() => {
+                    // Look for an arrests/bookings sub-table with clickable rows
+                    const tables = document.querySelectorAll('table');
+                    for (const table of tables) {
+                        const headers = Array.from(table.querySelectorAll('th'))
+                            .map(h => h.textContent.trim().toLowerCase());
+                        // Detect arrest history table (usually has "arrest date", "book date", etc.)
+                        const isArrestTable = headers.some(h =>
+                            /arrest|book.*date|booking|charge/.test(h)
+                        );
+                        if (isArrestTable) {
+                            // Click the FIRST (most recent) row link
+                            const firstLink = table.querySelector('tbody tr a, tbody tr td a, tr:nth-child(2) a');
+                            if (firstLink && firstLink.href) {
+                                return firstLink.href;
+                            }
+                        }
+                    }
+                    // Also check for any prominent arrest detail links
+                    const arrestLinks = document.querySelectorAll('a[href*="arrest"], a[href*="booking"]');
+                    for (const a of arrestLinks) {
+                        if (a.href && a.href !== window.location.href && !a.href.includes('#')) {
+                            return a.href;
+                        }
+                    }
+                    return null;
+                })()
+            """)
+
+            if arrest_link:
+                logger.info(f"[Charlotte] Found sub-arrest link for {booking_id}: {arrest_link}")
+                page.get(arrest_link)
+                # Wait for sub-page
+                for _ in range(CF_WAIT_S):
+                    time.sleep(1)
+                    title = page.title or ""
+                    if title and "just a moment" not in title.lower():
+                        break
+                time.sleep(2)
+        except Exception as e:
+            logger.debug(f"[Charlotte] No sub-arrest link for {booking_id}: {e}")
+
         try:
             raw = page.run_js("""
                 (() => {
@@ -306,7 +353,7 @@ class CharlotteCountyScraper(BaseScraper):
                         if (value && value.trim()) result[text] = value.trim();
                     });
 
-                    // Definition lists
+                    // Definition lists (Revize CMS often uses <dl>/<dt>/<dd>)
                     document.querySelectorAll('dt').forEach(dt => {
                         const dd = dt.nextElementSibling;
                         if (dd && dd.tagName === 'DD') {
@@ -314,7 +361,7 @@ class CharlotteCountyScraper(BaseScraper):
                         }
                     });
 
-                    // Two-column table rows
+                    // Two-column table rows (key-value pairs)
                     document.querySelectorAll('table tr').forEach(row => {
                         const cells = row.querySelectorAll('td, th');
                         if (cells.length === 2) {
@@ -324,64 +371,136 @@ class CharlotteCountyScraper(BaseScraper):
                         }
                     });
 
-                    // Charges table
+                    // ── Universal table scanner ──
+                    // Scan ALL tables and capture headers + data for diagnostics
                     const charges = [];
-                    document.querySelectorAll('table').forEach(table => {
+                    const allTableInfo = [];
+                    document.querySelectorAll('table').forEach((table, tIdx) => {
                         const headers = Array.from(table.querySelectorAll('th'))
                             .map(h => h.textContent.trim());
-                        if (headers.some(h =>
-                            h.includes('Statute') || h.includes('Charge') ||
-                            h.includes('Desc') || h.includes('Bond Amt')
-                        )) {
-                            table.querySelectorAll('tbody tr').forEach(row => {
-                                const cells = row.querySelectorAll('td');
-                                if (cells.length >= 3) {
-                                    charges.push({
-                                        desc:     cells[0] ? cells[0].textContent.trim() : '',
-                                        degree:   cells[1] ? cells[1].textContent.trim() : '',
-                                        agency:   cells[2] ? cells[2].textContent.trim() : '',
-                                        location: cells[3] ? cells[3].textContent.trim() : '',
-                                        bond:     cells[4] ? cells[4].textContent.trim() : '',
-                                    });
+                        const rows = table.querySelectorAll('tbody tr, tr');
+                        const tableData = {idx: tIdx, headers: headers, rowCount: rows.length, rows: []};
+
+                        rows.forEach((row, rIdx) => {
+                            const cells = row.querySelectorAll('td');
+                            if (cells.length < 2) return;
+                            const cellTexts = Array.from(cells).map(c => c.textContent.trim());
+                            if (rIdx < 5) tableData.rows.push(cellTexts);
+
+                            // Detect charge/bond table by content patterns
+                            const rowText = cellTexts.join(' ');
+                            const hasDollar = /\$[\d,]+/.test(rowText);
+                            const hasStatute = /\d{3}\.\d+/.test(rowText);
+                            const hasCharge = headers.some(h =>
+                                /charge|offense|statute|desc|bond|bail/i.test(h)
+                            ) || hasStatute;
+
+                            if (hasCharge && cells.length >= 2) {
+                                // Try to extract charge info from this row
+                                const charge = {desc: '', degree: '', agency: '', location: '', bond: ''};
+
+                                // Map cells to fields based on header text
+                                headers.forEach((h, i) => {
+                                    if (i >= cells.length) return;
+                                    const cellVal = cells[i].textContent.trim();
+                                    const hLow = h.toLowerCase();
+                                    if (/charge|desc|offense|statute/.test(hLow)) charge.desc = cellVal;
+                                    else if (/degree|level|class/.test(hLow)) charge.degree = cellVal;
+                                    else if (/bond|bail|amount/.test(hLow)) charge.bond = cellVal;
+                                    else if (/agency|arr.*agency/.test(hLow)) charge.agency = cellVal;
+                                    else if (/case|docket/.test(hLow)) charge.caseNum = cellVal;
+                                });
+
+                                // Fallback: if no header match, scan cells for $ amounts
+                                if (!charge.bond) {
+                                    for (let ci = 0; ci < cells.length; ci++) {
+                                        const ct = cells[ci].textContent.trim();
+                                        if (/^\$?[\d,]+(\.\d{2})?$/.test(ct.replace(/\s/g, '')) && parseFloat(ct.replace(/[$,]/g, '')) > 0) {
+                                            charge.bond = ct;
+                                            break;
+                                        }
+                                    }
                                 }
-                            });
-                        }
+
+                                // Fallback: if no desc from header, use first long text cell
+                                if (!charge.desc) {
+                                    for (let ci = 0; ci < cells.length; ci++) {
+                                        const ct = cells[ci].textContent.trim();
+                                        if (ct.length > 10 && !/^\$/.test(ct) && !/^\d{2}[/-]\d{2}/.test(ct)) {
+                                            charge.desc = ct;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (charge.desc || charge.bond) {
+                                    charges.push(charge);
+                                }
+                            }
+                        });
+
+                        allTableInfo.push(tableData);
                     });
                     result['__CHARGES'] = charges;
+                    result['__TABLE_DIAG'] = allTableInfo;
 
-                    // Bookings table — get booking number, book date, release date
+                    // ── Scan entire page text for bond amounts (fallback) ──
+                    const bodyText = document.body.textContent || '';
+                    const bondPatterns = bodyText.match(/(?:bond|bail|total)[^$]*\$[\d,]+(?:\.\d{2})?/gi) || [];
+                    if (bondPatterns.length > 0) {
+                        result['__BondTextMatches'] = bondPatterns.map(m => m.substring(0, 80));
+                    }
+
+                    // Scan for any dollar amounts on the page
+                    const dollarMatches = bodyText.match(/\$[\d,]+(?:\.\d{2})?/g) || [];
+                    if (dollarMatches.length > 0) {
+                        result['__AllDollarAmounts'] = dollarMatches;
+                    }
+
+                    // ── Bookings table — booking number, book date, release date ──
                     document.querySelectorAll('table').forEach(table => {
                         const headers = Array.from(table.querySelectorAll('th'))
                             .map(h => h.textContent.trim().toLowerCase());
-                        if (headers.some(h => h.includes('book') && (h.includes('#') || h.includes('num')))) {
-                            const firstRow = table.querySelector('tbody tr');
+                        // Match booking table by various header patterns
+                        if (headers.some(h => (h.includes('book') && (h.includes('#') || h.includes('num') || h.includes('date'))) || h.includes('arrest date'))) {
+                            const rows = table.querySelectorAll('tbody tr');
+                            // Take the FIRST (most recent) row
+                            const firstRow = rows[0] || table.querySelector('tr:nth-child(2)');
                             if (firstRow) {
                                 const cells = firstRow.querySelectorAll('td');
                                 if (cells.length >= 2) {
-                                    result['__BookNum']  = cells[0] ? cells[0].textContent.trim() : '';
-                                    result['__Agency']   = cells[1] ? cells[1].textContent.trim() : '';
-                                    result['__BookDate'] = cells[2] ? cells[2].textContent.trim() : '';
-                                    result['__RelDate']  = cells[3] ? cells[3].textContent.trim() : '';
-                                    result['__RelReason']= cells[4] ? cells[4].textContent.trim() : '';
+                                    // Map by headers if available
+                                    headers.forEach((h, i) => {
+                                        if (i >= cells.length) return;
+                                        const val = cells[i].textContent.trim();
+                                        if (/book.*#|book.*num/.test(h)) result['__BookNum'] = val;
+                                        else if (/agency/.test(h)) result['__Agency'] = val;
+                                        else if (/book.*date|arrest.*date/.test(h)) result['__BookDate'] = val;
+                                        else if (/release|rel.*date/.test(h)) result['__RelDate'] = val;
+                                        else if (/reason/.test(h)) result['__RelReason'] = val;
+                                    });
+                                    // Fallback positional if no header match
+                                    if (!result['__BookNum'] && cells[0]) result['__BookNum'] = cells[0].textContent.trim();
+                                    if (!result['__BookDate'] && cells[2]) result['__BookDate'] = cells[2].textContent.trim();
                                 }
                             }
                         }
                     });
 
                     // ICE hold / immigration detainer
-                    const bodyText = document.body.textContent;
                     result['__HAS_ICE'] = bodyText.includes('ICE HOLD') ||
                                           bodyText.includes('IMMIGRATION DETAINER');
 
-                    // Mugshot
+                    // Mugshot — try multiple image selectors
                     const img = document.querySelector(
-                        'img[src*="photo"], img[src*="mugshot"], img[src*="image"], img[src*="booking"]'
+                        'img[src*="photo"], img[src*="mugshot"], img[src*="image"], img[src*="booking"], img[src*="inmate"], .inmate-photo img, .booking-photo img'
                     );
                     if (img && img.src && !img.src.startsWith('data:')) {
                         result['__Mugshot'] = img.src;
                     }
 
                     result['__Detail_URL'] = window.location.href;
+                    result['__PageTitle'] = document.title || '';
                     return result;
                 })()
             """)
@@ -391,6 +510,35 @@ class CharlotteCountyScraper(BaseScraper):
 
         if not raw:
             return None
+
+        # ── Diagnostic logging for debugging bond extraction ──
+        page_title = raw.get('__PageTitle', '')
+        table_diag = raw.get('__TABLE_DIAG', [])
+        dollar_amounts = raw.get('__AllDollarAmounts', [])
+        bond_matches = raw.get('__BondTextMatches', [])
+        charges_found = raw.get('__CHARGES', [])
+
+        logger.info(f"[Charlotte] Detail page '{page_title}' for {booking_id}: "
+                     f"{len(table_diag)} tables, {len(charges_found)} charges, "
+                     f"{len(dollar_amounts)} $ amounts on page")
+
+        if table_diag:
+            for t in table_diag[:5]:  # Log first 5 tables
+                logger.debug(f"[Charlotte]   Table {t.get('idx')}: "
+                             f"headers={t.get('headers', [])}, "
+                             f"rows={t.get('rowCount', 0)}, "
+                             f"sample={t.get('rows', [])[:2]}")
+
+        if dollar_amounts:
+            logger.info(f"[Charlotte]   Dollar amounts found: {dollar_amounts[:10]}")
+        if bond_matches:
+            logger.info(f"[Charlotte]   Bond text matches: {bond_matches[:5]}")
+        if not charges_found:
+            logger.warning(f"[Charlotte]   ⚠ No charges extracted for {booking_id}")
+
+        # Clean up diagnostic keys before passing to record converter
+        for diag_key in ('__TABLE_DIAG', '__AllDollarAmounts', '__BondTextMatches', '__PageTitle'):
+            raw.pop(diag_key, None)
 
         raw['__Booking_ID'] = booking_id
         raw['__Detail_URL'] = raw.get('__Detail_URL') or detail_url
