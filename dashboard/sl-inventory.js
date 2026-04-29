@@ -354,10 +354,81 @@ const SLInventory = (() => {
     document.getElementById('addMaxBond').value = bondMap[prefix] || 0;
   }
 
+  // ── Image Upload for OCR-based POA Ingestion ──
+  function handleDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    document.getElementById('invUploadZone').classList.remove('dragover');
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) processUpload(files[0]);
+  }
+
+  function handleUpload(input) {
+    if (input.files && input.files.length > 0) processUpload(input.files[0]);
+  }
+
+  async function processUpload(file) {
+    const resultEl = document.getElementById('invUploadResult');
+    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Analyzing ${file.name}…</span></div>`;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const surety = document.getElementById('addSurety')?.value || 'osi';
+      formData.append('surety_id', surety);
+
+      const r = await fetch(`${API}/api/poa/upload-image`, { method: 'POST', body: formData });
+      const d = await r.json();
+      if (d.error) {
+        resultEl.innerHTML = `<div class="inv-upload-error">❌ ${d.error}</div>`;
+        return;
+      }
+      const extracted = d.extracted || [];
+      if (extracted.length === 0) {
+        resultEl.innerHTML = `<div class="inv-upload-warn">⚠️ No POA serial numbers could be extracted from this image. Try a clearer image or use manual entry.</div>`;
+        return;
+      }
+      resultEl.innerHTML = `
+        <div class="inv-upload-success">
+          <div class="inv-upload-count">✅ Found ${extracted.length} POA serial number(s)</div>
+          <div class="inv-extracted-list">${extracted.map(e => `<span class="inv-extracted-num">${e}</span>`).join('')}</div>
+          <div class="inv-upload-confirm-row">
+            <button class="inv-btn-submit" onclick="SLInventory.confirmUploadedPOAs(${JSON.stringify(extracted).replace(/"/g, '&quot;')}, '${surety}')">✅ Add All to Inventory</button>
+            <button class="inv-btn-cancel" onclick="document.getElementById('invUploadResult').innerHTML=''">Cancel</button>
+          </div>
+        </div>`;
+    } catch (e) {
+      resultEl.innerHTML = `<div class="inv-upload-error">❌ Upload failed: ${e.message}</div>`;
+    }
+  }
+
+  async function confirmUploadedPOAs(serials, surety) {
+    const resultEl = document.getElementById('invUploadResult');
+    const prefix = document.getElementById('addPrefix')?.value || 'OSI3';
+    const maxBond = parseInt(document.getElementById('addMaxBond')?.value || '3000');
+    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Adding ${serials.length} powers…</span></div>`;
+    let added = 0;
+    for (const serial of serials) {
+      try {
+        const r = await fetch(`${API}/api/poa/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ surety_id: surety, poa_prefix: prefix, start: serial, end: serial, max_bond_value: maxBond }),
+        });
+        const d = await r.json();
+        if (d.count) added += d.count;
+      } catch (_) { /* skip */ }
+    }
+    resultEl.innerHTML = `<div class="inv-upload-success">✅ Added ${added} of ${serials.length} power(s) to inventory</div>`;
+    toast('success', `Added ${added} OCR-extracted POAs`);
+    loadSummary();
+    setTimeout(() => { resultEl.innerHTML = ''; }, 5000);
+  }
+
   return {
     open, close, switchTab, loadSummary, loadDetailView,
     applyFilter, searchFilter, detailPage,
     showAddForm, submitAdd, updatePrefixOptions, autoFillMaxBond,
     openAssignDialog, voidPower, reassignPower, restorePower,
+    handleUpload, handleDrop, confirmUploadedPOAs,
   };
 })();

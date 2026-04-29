@@ -1268,9 +1268,55 @@ def api_prospective_add_note(booking_number):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Full indemnitor field whitelist (mirrors GAS indemnity agreement) ──
+INDEMNITOR_FIELDS = [
+    # Personal
+    "name", "firstName", "middleName", "lastName", "relationship",
+    "dob", "ssn", "dl", "dlState", "sex", "race", "height", "weight",
+    # Contact
+    "phone", "email", "callback_phone",
+    # Address
+    "address", "city", "state", "zip",
+    # Employment
+    "employer", "employerPhone", "employerAddress", "employerCity",
+    "employerState", "supervisor", "supervisorPhone", "occupation",
+    "monthlyIncome",
+    # Spouse
+    "spouseName", "spousePhone", "spouseEmployer", "spouseEmployerPhone",
+    "spouseAddress", "spouseDob", "spouseRelationship",
+    # References ("people who could get a message to you")
+    "ref1Name", "ref1Phone", "ref1Address", "ref1Relationship",
+    "ref2Name", "ref2Phone", "ref2Address", "ref2Relationship",
+]
+
+# ── 14-document packet: Shamrock (universal) + OSI + Palmetto ──
+DOCUMENT_CHECKLIST = {
+    "shamrock": [
+        {"key": "indemnity_agreement", "label": "Indemnity Agreement"},
+        {"key": "bail_bond_application", "label": "Bail Bond Application"},
+        {"key": "receipt", "label": "Premium Receipt"},
+        {"key": "notice_to_indemnitor", "label": "Notice to Indemnitor"},
+        {"key": "privacy_notice", "label": "Privacy Notice"},
+        {"key": "gps_consent", "label": "GPS Monitoring Consent"},
+        {"key": "payment_plan", "label": "Payment Plan Agreement"},
+        {"key": "collateral_receipt", "label": "Collateral Receipt"},
+    ],
+    "osi": [
+        {"key": "osi_appearance_bond", "label": "OSI Appearance Bond"},
+        {"key": "osi_power_of_attorney", "label": "OSI Power of Attorney"},
+        {"key": "osi_agent_affidavit", "label": "OSI Agent Affidavit"},
+    ],
+    "palmetto": [
+        {"key": "palmetto_appearance_bond", "label": "Palmetto Appearance Bond"},
+        {"key": "palmetto_power_of_attorney", "label": "Palmetto Power of Attorney"},
+        {"key": "palmetto_agent_affidavit", "label": "Palmetto Agent Affidavit"},
+    ],
+}
+
+
 @app.route("/api/prospective-bonds/<booking_number>/indemnitor", methods=["PATCH"])
 def api_prospective_update_indemnitor(booking_number):
-    """Update the indemnitor/cosigner info on a prospective bond."""
+    """Update the indemnitor/cosigner info on a prospective bond (full field set)."""
     try:
         data = request.get_json(force=True)
         existing = prospective_bonds.find_one({"booking_number": booking_number})
@@ -1279,8 +1325,8 @@ def api_prospective_update_indemnitor(booking_number):
 
         now = datetime.now(timezone.utc)
         indemnitor = existing.get("indemnitor", {})
-        # Merge incoming fields
-        for field in ["name", "phone", "email", "relationship", "address", "dob"]:
+        # Merge ALL incoming indemnitor fields
+        for field in INDEMNITOR_FIELDS:
             if data.get(field) is not None:
                 indemnitor[field] = data[field]
 
@@ -1291,13 +1337,318 @@ def api_prospective_update_indemnitor(booking_number):
                 "$push": {"timeline": {
                     "timestamp": now.isoformat(),
                     "event": "indemnitor_updated",
-                    "detail": f"Indemnitor info updated: {indemnitor.get('name', '')}",
+                    "detail": f"Indemnitor info updated: {indemnitor.get('name', '') or ' '.join(filter(None, [indemnitor.get('firstName',''), indemnitor.get('lastName','')]))}"[:200],
                     "agent": data.get("agent", "Dashboard"),
                 }},
             },
         )
 
         return jsonify({"success": True, "indemnitor": indemnitor})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# INDEMNITOR MANAGEMENT — Unified tab across prospective + active bonds
+# ════════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/indemnitors", methods=["GET"])
+def api_indemnitors_list():
+    """List all indemnitors across prospective_bonds AND active_bonds."""
+    try:
+        search = request.args.get("search", "").strip()
+        source_filter = request.args.get("source", "").strip()
+        stage_filter = request.args.get("stage", "").strip()
+        limit = min(int(request.args.get("limit", 100)), 500)
+
+        results = []
+
+        # ── Pull from prospective_bonds ──
+        p_query = {"indemnitor": {"$exists": True}}
+        if search:
+            p_query["$or"] = [
+                {"indemnitor.name": {"$regex": search, "$options": "i"}},
+                {"indemnitor.firstName": {"$regex": search, "$options": "i"}},
+                {"indemnitor.lastName": {"$regex": search, "$options": "i"}},
+                {"indemnitor.phone": {"$regex": search, "$options": "i"}},
+                {"defendant_name": {"$regex": search, "$options": "i"}},
+                {"booking_number": {"$regex": search, "$options": "i"}},
+            ]
+        if stage_filter:
+            p_query["stage"] = stage_filter
+
+        for doc in prospective_bonds.find(p_query).sort("updated_at", -1).limit(limit):
+            ind = doc.get("indemnitor", {})
+            # Skip empty indemnitors
+            ind_name = ind.get("name") or " ".join(filter(None, [ind.get("firstName", ""), ind.get("lastName", "")])) or ""
+            if not ind_name and not ind.get("phone") and not ind.get("email"):
+                continue
+            results.append({
+                "booking_number": doc.get("booking_number", ""),
+                "defendant_name": doc.get("defendant_name", ""),
+                "county": doc.get("county", ""),
+                "bond_amount": doc.get("bond_amount", 0),
+                "stage": doc.get("stage", ""),
+                "status": doc.get("status", ""),
+                "bond_type": "prospective",
+                "indemnitor": ind,
+                "indemnitor_name": ind_name,
+                "indemnitor_phone": ind.get("phone", ""),
+                "indemnitor_email": ind.get("email", ""),
+                "indemnitor_relationship": ind.get("relationship", ""),
+                "source": doc.get("source", "dashboard"),
+                "documents": doc.get("documents", {}),
+                "created_at": doc["created_at"].isoformat() if hasattr(doc.get("created_at"), "isoformat") else str(doc.get("created_at", "")),
+                "updated_at": doc["updated_at"].isoformat() if hasattr(doc.get("updated_at"), "isoformat") else str(doc.get("updated_at", "")),
+            })
+
+        # ── Pull from active_bonds ──
+        a_query = {"indemnitor": {"$exists": True}}
+        if search:
+            a_query["$or"] = [
+                {"indemnitor.name": {"$regex": search, "$options": "i"}},
+                {"indemnitor.firstName": {"$regex": search, "$options": "i"}},
+                {"indemnitor.lastName": {"$regex": search, "$options": "i"}},
+                {"defendant_name": {"$regex": search, "$options": "i"}},
+                {"booking_number": {"$regex": search, "$options": "i"}},
+            ]
+
+        for doc in active_bonds.find(a_query).sort("created_at", -1).limit(limit):
+            ind = doc.get("indemnitor", {})
+            ind_name = ind.get("name") or " ".join(filter(None, [ind.get("firstName", ""), ind.get("lastName", "")])) or ""
+            if not ind_name and not ind.get("phone") and not ind.get("email"):
+                continue
+            # Avoid dups if same booking_number already from prospective
+            if any(r["booking_number"] == doc.get("booking_number") for r in results):
+                continue
+            results.append({
+                "booking_number": doc.get("booking_number", ""),
+                "defendant_name": doc.get("defendant_name", ""),
+                "county": doc.get("county", ""),
+                "bond_amount": doc.get("bond_amount", 0),
+                "stage": "bonded",
+                "status": doc.get("status", "active"),
+                "bond_type": "active",
+                "indemnitor": ind,
+                "indemnitor_name": ind_name,
+                "indemnitor_phone": ind.get("phone", ""),
+                "indemnitor_email": ind.get("email", ""),
+                "indemnitor_relationship": ind.get("relationship", ""),
+                "source": doc.get("source", "dashboard"),
+                "documents": doc.get("documents", {}),
+                "created_at": doc["created_at"].isoformat() if hasattr(doc.get("created_at"), "isoformat") else str(doc.get("created_at", "")),
+                "updated_at": doc.get("updated_at", doc.get("created_at", "")),
+            })
+
+        # Sort by updated_at descending
+        results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+
+        return jsonify({
+            "success": True,
+            "indemnitors": results[:limit],
+            "total": len(results),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indemnitors/<booking_number>", methods=["GET"])
+def api_indemnitor_detail(booking_number):
+    """Get full indemnitor profile for a booking number."""
+    try:
+        # Check prospective first, then active
+        doc = prospective_bonds.find_one({"booking_number": booking_number})
+        bond_type = "prospective"
+        if not doc:
+            doc = active_bonds.find_one({"booking_number": booking_number})
+            bond_type = "active"
+        if not doc:
+            return jsonify({"error": "Bond not found"}), 404
+
+        ind = doc.get("indemnitor", {})
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "bond_type": bond_type,
+            "defendant_name": doc.get("defendant_name", ""),
+            "county": doc.get("county", ""),
+            "bond_amount": doc.get("bond_amount", 0),
+            "stage": doc.get("stage", ""),
+            "charges": doc.get("charges", ""),
+            "surety": doc.get("surety", "osi"),
+            "indemnitor": ind,
+            "documents": doc.get("documents", {}),
+            "communication_log": doc.get("communication_log", []),
+            "timeline": doc.get("timeline", []),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indemnitors/<booking_number>", methods=["PATCH"])
+def api_indemnitor_update(booking_number):
+    """Update full indemnitor profile (searches both collections)."""
+    try:
+        data = request.get_json(force=True)
+        now = datetime.now(timezone.utc)
+
+        # Try prospective first
+        doc = prospective_bonds.find_one({"booking_number": booking_number})
+        collection = prospective_bonds
+        if not doc:
+            doc = active_bonds.find_one({"booking_number": booking_number})
+            collection = active_bonds
+        if not doc:
+            return jsonify({"error": "Bond not found"}), 404
+
+        indemnitor = doc.get("indemnitor", {})
+        for field in INDEMNITOR_FIELDS:
+            if data.get(field) is not None:
+                indemnitor[field] = data[field]
+
+        # Build display name
+        ind_name = indemnitor.get("name") or " ".join(
+            filter(None, [indemnitor.get("firstName", ""), indemnitor.get("lastName", "")])
+        )
+
+        update_ops = {
+            "$set": {"indemnitor": indemnitor, "updated_at": now},
+        }
+        # Only push timeline for prospective_bonds (active_bonds may not have it)
+        if collection == prospective_bonds:
+            update_ops["$push"] = {"timeline": {
+                "timestamp": now.isoformat(),
+                "event": "indemnitor_profile_updated",
+                "detail": f"Full profile updated: {ind_name}"[:200],
+                "agent": data.get("agent", "Dashboard"),
+            }}
+
+        collection.update_one({"booking_number": booking_number}, update_ops)
+        return jsonify({"success": True, "indemnitor": indemnitor})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indemnitors/<booking_number>/documents", methods=["GET"])
+def api_indemnitor_documents(booking_number):
+    """Get document checklist for an indemnitor's bond."""
+    try:
+        doc = prospective_bonds.find_one({"booking_number": booking_number})
+        bond_type = "prospective"
+        if not doc:
+            doc = active_bonds.find_one({"booking_number": booking_number})
+            bond_type = "active"
+        if not doc:
+            return jsonify({"error": "Bond not found"}), 404
+
+        saved_docs = doc.get("documents", {})
+        surety = doc.get("surety", "osi")
+
+        # Build checklist with saved status
+        checklist = {}
+        for section, items in DOCUMENT_CHECKLIST.items():
+            checklist[section] = []
+            for item in items:
+                checklist[section].append({
+                    **item,
+                    "signed": saved_docs.get(item["key"], {}).get("signed", False),
+                    "signed_at": saved_docs.get(item["key"], {}).get("signed_at", ""),
+                    "signnow_id": saved_docs.get(item["key"], {}).get("signnow_id", ""),
+                })
+
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "bond_type": bond_type,
+            "surety": surety,
+            "checklist": checklist,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indemnitors/<booking_number>/documents", methods=["PATCH"])
+def api_indemnitor_documents_update(booking_number):
+    """Toggle document signed status."""
+    try:
+        data = request.get_json(force=True)
+        doc_key = data.get("doc_key", "")
+        signed = data.get("signed", False)
+
+        if not doc_key:
+            return jsonify({"error": "doc_key required"}), 400
+
+        doc = prospective_bonds.find_one({"booking_number": booking_number})
+        collection = prospective_bonds
+        if not doc:
+            doc = active_bonds.find_one({"booking_number": booking_number})
+            collection = active_bonds
+        if not doc:
+            return jsonify({"error": "Bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+        collection.update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                f"documents.{doc_key}.signed": signed,
+                f"documents.{doc_key}.signed_at": now.isoformat() if signed else "",
+                "updated_at": now,
+            }},
+        )
+
+        return jsonify({"success": True, "doc_key": doc_key, "signed": signed})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/indemnitors/<booking_number>/payment-link", methods=["POST"])
+def api_indemnitor_payment_link(booking_number):
+    """Generate or return a SwipeSimple payment link for this bond."""
+    try:
+        doc = prospective_bonds.find_one({"booking_number": booking_number})
+        collection = prospective_bonds
+        if not doc:
+            doc = active_bonds.find_one({"booking_number": booking_number})
+            collection = active_bonds
+        if not doc:
+            return jsonify({"error": "Bond not found"}), 404
+
+        ind = doc.get("indemnitor", {})
+        ind_name = ind.get("name") or " ".join(
+            filter(None, [ind.get("firstName", ""), ind.get("lastName", "")])
+        ) or "Indemnitor"
+        bond_amount = doc.get("bond_amount", 0)
+        premium = round(float(bond_amount) * 0.10, 2) if bond_amount else 0
+
+        # Build SwipeSimple payment link (configurable base URL)
+        base_url = os.environ.get("SWIPESIMPLE_URL", "https://shamrockbailbonds.biz/payment")
+        params = {
+            "amount": str(premium),
+            "name": ind_name,
+            "booking": booking_number,
+            "county": doc.get("county", ""),
+        }
+        from urllib.parse import urlencode
+        payment_url = f"{base_url}?{urlencode(params)}"
+
+        # Store payment link on the bond record
+        now = datetime.now(timezone.utc)
+        collection.update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                "payment_link": payment_url,
+                "payment_premium": premium,
+                "updated_at": now,
+            }},
+        )
+
+        return jsonify({
+            "success": True,
+            "payment_link": payment_url,
+            "premium": premium,
+            "bond_amount": bond_amount,
+            "indemnitor_name": ind_name,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1922,6 +2273,435 @@ def api_poa_inventory():
         "palmetto": sum(r["available"] for r in result if r["surety_id"] == "palmetto"),
     }
     return jsonify({"tiers": result, "totals": totals})
+
+
+# ── POA Detail CRUD ──────────────────────────────────────────────────────────────
+
+@app.route("/api/poa/list", methods=["GET"])
+def api_poa_list():
+    """
+    Paginated list of all POA powers with filtering.
+    Query params: page, limit, surety, status, search
+    """
+    page = max(1, int(request.args.get("page", 1) or 1))
+    limit = min(200, max(1, int(request.args.get("limit", 50) or 50)))
+    surety = (request.args.get("surety") or "").lower().strip()
+    status = (request.args.get("status") or "").lower().strip()
+    search = (request.args.get("search") or "").strip()
+
+    match = {}
+    if surety in ("osi", "palmetto"):
+        match["surety_id"] = surety
+    if status in ("available", "assigned", "voided"):
+        match["status"] = status
+    if search:
+        match["$or"] = [
+            {"poa_number": {"$regex": search, "$options": "i"}},
+            {"poa_full": {"$regex": search, "$options": "i"}},
+            {"bond_case_id": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = poa_inventory.count_documents(match)
+    pages = max(1, -(-total // limit))
+    skip = (page - 1) * limit
+
+    powers = list(poa_inventory.find(
+        match,
+        {"_id": 0}
+    ).sort([("surety_id", 1), ("poa_prefix", 1), ("poa_number", 1)]).skip(skip).limit(limit))
+
+    return jsonify({"powers": powers, "total": total, "page": page, "pages": pages, "limit": limit})
+
+
+@app.route("/api/poa/add", methods=["POST"])
+def api_poa_add():
+    """
+    Add new POA powers to inventory (range or single).
+    Body: { surety_id, poa_prefix, start, end, max_bond_value, expiration }
+    """
+    body = request.get_json(force=True) or {}
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+    prefix = str(body.get("poa_prefix", "")).strip()
+    start = str(body.get("start", "")).strip()
+    end = str(body.get("end", start)).strip()
+    max_bond = float(body.get("max_bond_value", 0) or 0)
+    expiration = body.get("expiration")
+
+    if not surety_id or surety_id not in ("osi", "palmetto"):
+        return jsonify({"error": "surety_id must be 'osi' or 'palmetto'"}), 400
+    if not prefix or not start:
+        return jsonify({"error": "poa_prefix and start are required"}), 400
+
+    # Handle numeric range
+    try:
+        start_num = int(start)
+        end_num = int(end)
+    except ValueError:
+        return jsonify({"error": "start and end must be numeric"}), 400
+
+    if end_num < start_num:
+        start_num, end_num = end_num, start_num
+
+    count = 0
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for num in range(start_num, end_num + 1):
+        poa_number = str(num)
+        poa_full = f"{prefix} {poa_number}"
+        # Skip if already exists
+        if poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id, "poa_prefix": prefix}):
+            continue
+        poa_inventory.insert_one({
+            "poa_number": poa_number,
+            "poa_prefix": prefix,
+            "poa_full": poa_full,
+            "surety_id": surety_id,
+            "max_bond_value": max_bond,
+            "status": "available",
+            "bond_case_id": None,
+            "used_at": None,
+            "voided_at": None,
+            "expiration": expiration,
+            "created_at": now_iso,
+        })
+        count += 1
+
+    return jsonify({"success": True, "count": count, "surety_id": surety_id, "prefix": prefix})
+
+
+@app.route("/api/poa/void", methods=["POST"])
+def api_poa_void():
+    """Mark a POA as voided (unusable)."""
+    body = request.get_json(force=True) or {}
+    poa_number = str(body.get("poa_number", "")).strip()
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+    reason = body.get("reason", "")
+
+    if not poa_number or not surety_id:
+        return jsonify({"error": "poa_number and surety_id required"}), 400
+
+    doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
+    if not doc:
+        return jsonify({"error": f"POA {poa_number} not found"}), 404
+
+    poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety_id},
+        {"$set": {
+            "status": "voided",
+            "voided_at": datetime.now(timezone.utc).isoformat(),
+            "void_reason": reason,
+        }}
+    )
+    return jsonify({"success": True, "poa_number": poa_number, "message": f"POA {poa_number} voided"})
+
+
+@app.route("/api/poa/restore", methods=["POST"])
+def api_poa_restore():
+    """Restore a voided POA back to available."""
+    body = request.get_json(force=True) or {}
+    poa_number = str(body.get("poa_number", "")).strip()
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+
+    if not poa_number or not surety_id:
+        return jsonify({"error": "poa_number and surety_id required"}), 400
+
+    doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
+    if not doc:
+        return jsonify({"error": f"POA {poa_number} not found"}), 404
+    if doc.get("status") != "voided":
+        return jsonify({"error": f"POA {poa_number} is {doc.get('status')}, not voided"}), 409
+
+    poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety_id},
+        {"$set": {"status": "available", "voided_at": None, "void_reason": None, "bond_case_id": None}}
+    )
+    return jsonify({"success": True, "poa_number": poa_number, "message": f"POA {poa_number} restored to available"})
+
+
+@app.route("/api/poa/release", methods=["POST"])
+def api_poa_release():
+    """Release an assigned POA back to available status."""
+    body = request.get_json(force=True) or {}
+    poa_number = str(body.get("poa_number", "")).strip()
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+
+    if not poa_number or not surety_id:
+        return jsonify({"error": "poa_number and surety_id required"}), 400
+
+    doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
+    if not doc:
+        return jsonify({"error": f"POA {poa_number} not found"}), 404
+    if doc.get("status") != "assigned":
+        return jsonify({"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}), 409
+
+    poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety_id},
+        {"$set": {"status": "available", "bond_case_id": None, "used_at": None}}
+    )
+    return jsonify({"success": True, "poa_number": poa_number, "message": f"POA {poa_number} released back to available"})
+
+
+@app.route("/api/poa/reassign", methods=["POST"])
+def api_poa_reassign():
+    """Reassign an assigned POA to a different bond case."""
+    body = request.get_json(force=True) or {}
+    poa_number = str(body.get("poa_number", "")).strip()
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+    new_booking = str(body.get("new_booking_number", "")).strip()
+
+    if not poa_number or not surety_id or not new_booking:
+        return jsonify({"error": "poa_number, surety_id, and new_booking_number required"}), 400
+
+    doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
+    if not doc:
+        return jsonify({"error": f"POA {poa_number} not found"}), 404
+    if doc.get("status") != "assigned":
+        return jsonify({"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}), 409
+
+    old_case = doc.get("bond_case_id", "")
+    poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety_id},
+        {"$set": {"bond_case_id": new_booking, "used_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return jsonify({
+        "success": True, "poa_number": poa_number,
+        "message": f"POA {poa_number} reassigned from {old_case} to {new_booking}",
+        "old_case": old_case, "new_case": new_booking,
+    })
+
+
+# ── POA Image Upload (OCR Extraction) ───────────────────────────────────────────
+
+@app.route("/api/poa/upload-image", methods=["POST"])
+def api_poa_upload_image():
+    """
+    Upload an image of a POA power sheet. Extracts serial numbers via OCR.
+    Returns list of extracted serial numbers for user confirmation before adding.
+    """
+    import re
+    import tempfile
+
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files['file']
+    surety_id = request.form.get('surety_id', 'osi').lower().strip()
+
+    if not file.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    # Save to temp file
+    suffix = os.path.splitext(file.filename)[1].lower()
+    if suffix not in ('.jpg', '.jpeg', '.png', '.pdf', '.webp'):
+        return jsonify({"error": f"Unsupported file type: {suffix}. Use JPG, PNG, or PDF."}), 400
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+
+        extracted = []
+
+        # Try pytesseract if available (preferred OCR path)
+        try:
+            from PIL import Image
+            import pytesseract
+            img = Image.open(tmp_path)
+            text = pytesseract.image_to_string(img)
+            # Extract serial numbers — patterns like: 6-8 digit numbers, possibly with prefix letters
+            matches = re.findall(r'\b(\d{5,8})\b', text)
+            extracted = list(dict.fromkeys(matches))  # dedupe while preserving order
+        except ImportError:
+            # Fallback: extract from filename if it contains serial patterns
+            fname = os.path.splitext(file.filename)[0]
+            matches = re.findall(r'(\d{5,8})', fname)
+            extracted = list(dict.fromkeys(matches))
+            if not extracted:
+                return jsonify({
+                    "error": "OCR not available on server (install pytesseract + tesseract-ocr). Use manual entry.",
+                    "extracted": [],
+                    "ocr_available": False,
+                }), 200
+
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        return jsonify({
+            "success": True,
+            "extracted": extracted[:100],  # cap at 100
+            "count": len(extracted),
+            "surety_id": surety_id,
+            "ocr_available": True,
+        })
+    except Exception as e:
+        return jsonify({"error": f"Processing failed: {str(e)}"}), 500
+
+
+# ── Bond Finalization (Two-Step) ─────────────────────────────────────────────────
+
+@app.route("/api/finalize-bond/step1/<booking_number>", methods=["POST"])
+def api_finalize_bond_step1(booking_number):
+    """
+    Step 1: Validate data and return a review summary.
+    Body: { insurance_company, poa_number, indemnitor_name, indemnitor_phone, agent, notes }
+    """
+    try:
+        body = request.get_json(force=True) or {}
+
+        # Find the defendant record
+        defendant = db["arrests"].find_one({"booking_number": booking_number})
+        if not defendant:
+            defendant = db["prospective_bonds"].find_one({"booking_number": booking_number})
+        if not defendant:
+            return jsonify({"success": False, "error": "Defendant not found"}), 404
+
+        # Get existing notes
+        notes_doc = db.get_collection("defendant_notes").find_one({"booking_number": booking_number}) or {}
+
+        # Build review object
+        import uuid
+        review_token = str(uuid.uuid4())[:8]
+
+        insurance = body.get("insurance_company", "osi")
+        insurance_names = {
+            "osi": "O'Shaughnahill Surety & Insurance (OSI)",
+            "palmetto": "Palmetto Surety Corporation",
+            "accredited": "Accredited Surety", "allegheny": "Allegheny Casualty",
+            "bankers": "Bankers Insurance", "other": "Other",
+        }
+
+        bond_amount = float(defendant.get("bond_amount", 0) or 0)
+        charges = defendant.get("charges", "") or defendant.get("charges_raw", "")
+        if isinstance(charges, list):
+            charges = "; ".join(charges)
+
+        review = {
+            "booking_number": booking_number,
+            "defendant_name": defendant.get("defendant_name", defendant.get("name", "Unknown")),
+            "county": defendant.get("county", ""),
+            "bond_amount": bond_amount,
+            "premium": round(bond_amount * 0.10),
+            "insurance_company": insurance_names.get(insurance, insurance),
+            "surety_id": insurance,
+            "poa_number": body.get("poa_number", notes_doc.get("poa_number", "")),
+            "indemnitor_name": body.get("indemnitor_name", notes_doc.get("indemnitor_name", "")),
+            "indemnitor_phone": body.get("indemnitor_phone", notes_doc.get("indemnitor_phone", "")),
+            "court_date": defendant.get("court_date", ""),
+            "case_number": defendant.get("case_number", ""),
+            "charges": charges,
+            "agent": body.get("agent", ""),
+            "notes": body.get("notes", ""),
+            "review_token": review_token,
+        }
+
+        return jsonify({"success": True, "review": review})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/finalize-bond/step2/<booking_number>", methods=["POST"])
+def api_finalize_bond_step2(booking_number):
+    """
+    Step 2: Confirm and post bond to Active Bonds collection.
+    Body: { review_token, confirmed_by, poa_number, notes }
+    """
+    try:
+        body = request.get_json(force=True) or {}
+        now = datetime.now(timezone.utc)
+
+        # Find the defendant record
+        defendant = db["arrests"].find_one({"booking_number": booking_number})
+        if not defendant:
+            defendant = db["prospective_bonds"].find_one({"booking_number": booking_number})
+        if not defendant:
+            return jsonify({"success": False, "error": "Defendant not found"}), 404
+
+        notes_doc = db.get_collection("defendant_notes").find_one({"booking_number": booking_number}) or {}
+        bond_amount = float(defendant.get("bond_amount", 0) or 0)
+        charges = defendant.get("charges", "") or defendant.get("charges_raw", "")
+        if isinstance(charges, list):
+            charges_list = charges
+            charges = "; ".join(charges)
+        else:
+            charges_list = [c.strip() for c in charges.split(";") if c.strip()] if charges else []
+
+        surety_id = notes_doc.get("surety_id", "osi")
+        poa_number = body.get("poa_number", notes_doc.get("poa_number", ""))
+
+        # Create active bond record
+        active_bond = {
+            "booking_number": booking_number,
+            "defendant_name": defendant.get("defendant_name", defendant.get("name", "Unknown")),
+            "county": defendant.get("county", ""),
+            "bond_amount": bond_amount,
+            "premium": round(bond_amount * 0.10),
+            "surety": surety_id,
+            "poa_number": poa_number,
+            "case_number": defendant.get("case_number", ""),
+            "charges": charges_list,
+            "charges_raw": charges,
+            "court_date": defendant.get("court_date", ""),
+            "indemnitor_name": notes_doc.get("indemnitor_name", ""),
+            "indemnitor_phone": notes_doc.get("indemnitor_phone", ""),
+            "agent": body.get("confirmed_by", ""),
+            "status": "active",
+            "risk_score": 50,
+            "check_in_required": True,
+            "check_in_interval_hours": 24,
+            "missed_check_ins": 0,
+            "location_history": [],
+            "alerts": [],
+            "bonded_at": now.isoformat(),
+            "next_check_in_due": (now + timedelta(hours=24)).isoformat(),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        # Upsert into active_bonds
+        active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": active_bond},
+            upsert=True
+        )
+
+        # Mark POA as assigned if provided
+        if poa_number:
+            poa_inventory.update_one(
+                {"poa_number": poa_number, "surety_id": surety_id, "status": "available"},
+                {"$set": {
+                    "status": "assigned",
+                    "bond_case_id": booking_number,
+                    "used_at": now.isoformat(),
+                }}
+            )
+
+        # Update defendant notes to reflect bonded status
+        db.get_collection("defendant_notes").update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                "shamrock_status": "bonded",
+                "bond_finalized": True,
+                "finalized_at": now.isoformat(),
+                "finalized_by": body.get("confirmed_by", ""),
+                "poa_number": poa_number,
+                "surety_id": surety_id,
+            }},
+            upsert=True
+        )
+
+        # Update prospective bond status if exists
+        db["prospective_bonds"].update_one(
+            {"booking_number": booking_number},
+            {"$set": {"stage": "bonded", "updated_at": now.isoformat()}}
+        )
+
+        return jsonify({"success": True, "booking_number": booking_number, "status": "bonded"})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ── Appearance Bond PDF Generator ────────────────────────────────────────────────

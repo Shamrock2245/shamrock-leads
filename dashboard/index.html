@@ -39,6 +39,8 @@
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
+  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📋 POA Inventory</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -702,6 +704,40 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════
+     TAB: INDEMNITOR MANAGEMENT
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabIndemnitor">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="margin:0;font-size:20px">🤝 Indemnitor Management</h2>
+      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">All cosigners across prospective &amp; active bonds — Profile · Payment · Documents</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="indSearch" type="text" placeholder="🔍 Search name, phone, booking#…" oninput="SLIndemnitor.debounceSearch()" style="padding:8px 14px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;min-width:220px">
+      <button class="btn-export" onclick="SLIndemnitor.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
+    </div>
+  </div>
+
+  <!-- Indemnitor List -->
+  <div class="panel">
+    <div class="panel-title">📋 Indemnitors <span class="meta" id="indListMeta"></span></div>
+    <div id="indemnitorList" class="ind-list">
+      <div class="loading">Loading indemnitors…</div>
+    </div>
+  </div>
+
+  <!-- Detail Panel (hidden until card clicked) -->
+  <div id="indDetailPanel" style="display:none" class="panel ind-detail-panel">
+    <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span id="indDetailTitle">🤝 Indemnitor Detail</span>
+      <button class="btn-cancel" onclick="SLIndemnitor.closeDetail()" style="font-size:12px;padding:4px 10px">✕ Close</button>
+    </div>
+    <div id="indSubTabs" class="ind-sub-tabs"></div>
+    <div id="indSubContent" class="ind-sub-content"></div>
+  </div>
+</div>
+
 <!-- ═══ INTAKE DETAIL / PROCESS MODAL ═══ -->
 <div class="modal-overlay" id="intakeModal">
   <div class="modal modal-lg" style="max-width:820px">
@@ -874,6 +910,135 @@
   <source src="data:audio/wav;base64,UklGRl9vT19telephones..." type="audio/wav">
 </audio>
 
+<!-- ═══ POA INVENTORY MODAL ═══ -->
+<div class="inv-overlay" id="inventoryModal">
+  <div class="inv-modal">
+    <div class="inv-header">
+      <div class="inv-header-left">
+        <span class="inv-header-icon">📋</span>
+        <div>
+          <div class="inv-header-title">POA Inventory Management</div>
+          <div class="inv-header-subtitle">Power of Attorney tracking · OSI & Palmetto</div>
+        </div>
+      </div>
+      <button class="inv-close" onclick="SLInventory.close()">✕</button>
+    </div>
+
+    <!-- KPI Bar -->
+    <div class="inv-kpi-bar" id="invKpis"></div>
+
+    <!-- Tabs -->
+    <div class="inv-tabs">
+      <button class="inv-tab-btn active" data-tab="summary" onclick="SLInventory.switchTab('summary')">📊 Summary</button>
+      <button class="inv-tab-btn" data-tab="detail" onclick="SLInventory.switchTab('detail')">📋 All Powers</button>
+      <button class="inv-tab-btn" data-tab="add" onclick="SLInventory.switchTab('add')">➕ Add Powers</button>
+    </div>
+
+    <!-- Summary Pane -->
+    <div class="inv-tab-pane" id="invPane_summary" style="display:block">
+      <div id="invSummaryBody"></div>
+    </div>
+
+    <!-- Detail Pane -->
+    <div class="inv-tab-pane" id="invPane_detail" style="display:none">
+      <div class="inv-detail-controls">
+        <div class="inv-filter-row">
+          <select class="inv-filter-select" onchange="SLInventory.applyFilter('surety',this.value)">
+            <option value="all">All Sureties</option>
+            <option value="osi">🛡️ OSI</option>
+            <option value="palmetto">🌴 Palmetto</option>
+          </select>
+          <select class="inv-filter-select" onchange="SLInventory.applyFilter('status',this.value)">
+            <option value="all">All Statuses</option>
+            <option value="available">✅ Available</option>
+            <option value="assigned">📌 Assigned</option>
+            <option value="voided">🗑️ Voided</option>
+          </select>
+          <input class="inv-search-input" id="invSearchInput" placeholder="Search POA #, case…" oninput="SLInventory.searchFilter()">
+        </div>
+      </div>
+      <div class="inv-table-wrap">
+        <table class="inv-table">
+          <thead>
+            <tr>
+              <th>POA #</th>
+              <th>Surety</th>
+              <th>Tier</th>
+              <th>Max Bond</th>
+              <th>Status</th>
+              <th>Case / Booking</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="invDetailBody"></tbody>
+        </table>
+      </div>
+      <div class="inv-pagination" id="invDetailPagination"></div>
+    </div>
+
+    <!-- Add Pane -->
+    <div class="inv-tab-pane" id="invPane_add" style="display:none">
+      <div class="inv-add-section">
+        <div class="inv-add-title">✏️ Manual Entry</div>
+        <div class="inv-add-grid">
+          <div class="inv-add-field">
+            <label>Surety</label>
+            <select id="addSurety" class="inv-add-input" onchange="SLInventory.updatePrefixOptions()">
+              <option value="osi">🛡️ OSI — O'Shaughnahill</option>
+              <option value="palmetto">🌴 Palmetto Surety</option>
+            </select>
+          </div>
+          <div class="inv-add-field">
+            <label>Prefix / Tier</label>
+            <select id="addPrefix" class="inv-add-input" onchange="SLInventory.autoFillMaxBond()">
+              <option value="OSI3">OSI3 — ≤ $3K</option>
+              <option value="OSI6">OSI6 — ≤ $6K</option>
+              <option value="OSI16">OSI16 — ≤ $16K</option>
+              <option value="OSI51">OSI51 — ≤ $51K</option>
+              <option value="OSI101">OSI101 — ≤ $101K</option>
+              <option value="OSI251">OSI251 — ≤ $251K</option>
+            </select>
+          </div>
+          <div class="inv-add-field">
+            <label>Start Serial #</label>
+            <input id="addStart" class="inv-add-input" type="text" placeholder="e.g. 100001">
+          </div>
+          <div class="inv-add-field">
+            <label>End Serial # <span class="inv-hint">(optional, for range)</span></label>
+            <input id="addEnd" class="inv-add-input" type="text" placeholder="e.g. 100050">
+          </div>
+          <div class="inv-add-field">
+            <label>Max Bond Value ($)</label>
+            <input id="addMaxBond" class="inv-add-input" type="number" value="3000">
+          </div>
+          <div class="inv-add-field">
+            <label>Expiration Date <span class="inv-hint">(optional)</span></label>
+            <input id="addExpiration" class="inv-add-input" type="date">
+          </div>
+        </div>
+        <div class="inv-add-actions">
+          <button class="inv-btn-submit" onclick="SLInventory.submitAdd()">➕ Add to Inventory</button>
+          <div id="addStatus" class="inv-add-status"></div>
+        </div>
+      </div>
+
+      <div class="inv-add-divider"></div>
+
+      <div class="inv-add-section">
+        <div class="inv-add-title">📸 Upload Power Sheet Image</div>
+        <div class="inv-upload-zone" id="invUploadZone" onclick="document.getElementById('invFileInput').click()"
+             ondrop="SLInventory.handleDrop(event)" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')">
+          <div class="inv-upload-icon">📄</div>
+          <div class="inv-upload-text">Drop image here or <span class="inv-upload-link">browse files</span></div>
+          <div class="inv-upload-hint">Supports JPG, PNG, PDF — we'll extract POA serial numbers via OCR</div>
+          <input type="file" id="invFileInput" accept="image/*,.pdf" style="display:none" onchange="SLInventory.handleUpload(this)">
+        </div>
+        <div id="invUploadResult" class="inv-upload-result"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/sl-core.js"></script>
 <script src="/sl-data.js"></script>
@@ -884,5 +1049,8 @@
 <script src="/sl-health.js"></script>
 <script src="/sl-prospective.js"></script>
 <script src="/sl-defendant-lifecycle.js"></script>
+<script src="/sl-indemnitor.js"></script>
+<script src="/sl-inventory.js"></script>
 </body>
 </html>
+
