@@ -5,12 +5,30 @@ bond finalization (two-step), and outreach notes.
 
 All data is stored in a separate `defendant_notes` collection keyed by
 booking_number so the core `arrests` collection stays clean.
+
+Lifecycle-to-Pipeline Bridge:
+  When a defendant's status changes to 'contacted' or higher, or when
+  a contact is logged, the system auto-syncs to the prospective_bonds
+  collection so the lead appears on the Outreach Kanban board.
 """
 from datetime import datetime, timezone
 from quart import Blueprint, jsonify, request
 from dashboard.extensions import get_collection
+import logging
+
+logger = logging.getLogger(__name__)
 
 lifecycle_bp = Blueprint("defendant_lifecycle", __name__)
+
+# Statuses that should auto-promote to the outreach pipeline
+_PIPELINE_STATUSES = {"contacted", "negotiating", "paperwork", "ready"}
+_STATUS_TO_STAGE = {
+    "contacted": "contacted",
+    "negotiating": "negotiating",
+    "paperwork": "paperwork",
+    "ready": "ready",
+    "bonded": "ready",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper
@@ -23,6 +41,157 @@ async def _get_notes_doc(booking_number: str):
     col = get_collection("defendant_notes")
     doc = await col.find_one({"booking_number": booking_number}, {"_id": 0})
     return doc or {}
+
+
+async def _sync_to_pipeline(booking_number: str, trigger: str = "auto",
+                            contact_entry: dict = None, stage_override: str = None):
+    """Sync defendant_notes activity to prospective_bonds (outreach pipeline).
+
+    Creates a new prospective_bonds entry if none exists and the defendant
+    has been contacted. If one already exists, syncs contact logs and stage.
+    Returns the prospective bond doc if synced, None otherwise.
+    """
+    try:
+        pb_col = get_collection("prospective_bonds")
+        arrests_col = get_collection("arrests")
+        notes_col = get_collection("defendant_notes")
+
+        notes = await notes_col.find_one({"booking_number": booking_number}, {"_id": 0}) or {}
+        status = notes.get("shamrock_status", "new")
+
+        # Determine the pipeline stage from the lifecycle status
+        stage = stage_override or _STATUS_TO_STAGE.get(status, "contacted")
+
+        existing_pb = await pb_col.find_one({"booking_number": booking_number})
+        now = datetime.now(timezone.utc)
+
+        if existing_pb:
+            # Already tracked — sync contact log and stage
+            updates = {"$set": {"updated_at": now}}
+
+            # Sync stage if lifecycle status advanced
+            if stage and stage != existing_pb.get("stage"):
+                old_stage = existing_pb.get("stage", "")
+                updates["$set"]["stage"] = stage
+                updates.setdefault("$push", {})
+                updates["$push"]["timeline"] = {
+                    "timestamp": now.isoformat(),
+                    "event": "stage_change",
+                    "detail": f"Auto-synced: {old_stage} → {stage} (from Defendant Notes)",
+                    "agent": notes.get("agent", "Lifecycle Sync"),
+                }
+
+            # Sync contact entry to communication_log
+            if contact_entry:
+                comm_entry = {
+                    "timestamp": contact_entry.get("ts", now.isoformat()),
+                    "type": contact_entry.get("method", "note"),
+                    "channel": contact_entry.get("method", "call"),
+                    "direction": contact_entry.get("direction", "outbound"),
+                    "text": contact_entry.get("summary", ""),
+                    "message": contact_entry.get("summary", ""),
+                    "agent": contact_entry.get("agent", "Dashboard"),
+                    "source": "defendant_notes",
+                }
+                updates.setdefault("$push", {})
+                if "timeline" in updates.get("$push", {}):
+                    # Use $each for timeline + communication_log
+                    timeline_entry = updates["$push"]["timeline"]
+                    updates["$push"] = {
+                        "timeline": {"$each": [timeline_entry, {
+                            "timestamp": now.isoformat(),
+                            "event": contact_entry.get("method", "note"),
+                            "detail": contact_entry.get("summary", ""),
+                            "agent": contact_entry.get("agent", "Dashboard"),
+                        }]},
+                        "communication_log": comm_entry,
+                    }
+                else:
+                    updates["$push"]["communication_log"] = comm_entry
+                    updates["$push"]["timeline"] = {
+                        "timestamp": now.isoformat(),
+                        "event": contact_entry.get("method", "note"),
+                        "detail": contact_entry.get("summary", ""),
+                        "agent": contact_entry.get("agent", "Dashboard"),
+                    }
+
+            await pb_col.update_one({"booking_number": booking_number}, updates)
+            logger.info(f"Pipeline synced for {booking_number} (trigger={trigger})")
+            return existing_pb
+
+        else:
+            # Not yet tracked — auto-create if status warrants it
+            if status not in _PIPELINE_STATUSES and not stage_override:
+                return None
+
+            arrest_doc = await arrests_col.find_one(
+                {"booking_number": booking_number}, {"_id": 0}
+            ) or {}
+
+            # Build communication_log from existing contact_log
+            comm_log = []
+            for cl in notes.get("contact_log", []):
+                comm_log.append({
+                    "timestamp": cl.get("ts", now.isoformat()),
+                    "type": cl.get("method", "note"),
+                    "channel": cl.get("method", "call"),
+                    "direction": cl.get("direction", "outbound"),
+                    "text": cl.get("summary", ""),
+                    "message": cl.get("summary", ""),
+                    "agent": cl.get("agent", "Dashboard"),
+                    "source": "defendant_notes",
+                })
+            # Add the new contact entry too
+            if contact_entry:
+                comm_log.append({
+                    "timestamp": contact_entry.get("ts", now.isoformat()),
+                    "type": contact_entry.get("method", "note"),
+                    "channel": contact_entry.get("method", "call"),
+                    "direction": contact_entry.get("direction", "outbound"),
+                    "text": contact_entry.get("summary", ""),
+                    "message": contact_entry.get("summary", ""),
+                    "agent": contact_entry.get("agent", "Dashboard"),
+                    "source": "defendant_notes",
+                })
+
+            doc = {
+                "booking_number": booking_number,
+                "defendant_name": arrest_doc.get("full_name", "Unknown"),
+                "county": arrest_doc.get("county", ""),
+                "bond_amount": float(arrest_doc.get("bond_amount", 0) or 0),
+                "charges": arrest_doc.get("charges", ""),
+                "lead_score": int(arrest_doc.get("lead_score", 0) or 0),
+                "lead_status": arrest_doc.get("lead_status", ""),
+                "detail_url": arrest_doc.get("detail_url", ""),
+                "stage": stage,
+                "status": "active",
+                "indemnitor": {
+                    "name": "", "phone": "", "email": "", "relationship": "",
+                },
+                "communication_log": comm_log,
+                "timeline": [{
+                    "timestamp": now.isoformat(),
+                    "event": "created",
+                    "detail": f"Auto-promoted from Defendant Notes ({trigger})",
+                    "agent": notes.get("agent", "Lifecycle Sync"),
+                }],
+                "outcome": None,
+                "outcome_note": "",
+                "closed_at": None,
+                "defendant_snapshot": arrest_doc,
+                "created_at": now,
+                "updated_at": now,
+                "created_by": notes.get("agent", "Lifecycle Sync"),
+                "source": "defendant_notes",
+            }
+
+            await pb_col.insert_one(doc)
+            logger.info(f"Pipeline entry created for {booking_number} (trigger={trigger})")
+            return doc
+
+    except Exception as exc:
+        logger.warning(f"_sync_to_pipeline error for {booking_number}: {exc}")
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,8 +276,15 @@ async def log_contact(booking_number: str):
         update_ops,
         upsert=True,
     )
+
+    # ── Auto-sync to outreach pipeline ──
+    pipeline_result = await _sync_to_pipeline(
+        booking_number, trigger="contact_logged", contact_entry=entry
+    )
+    synced = pipeline_result is not None
+
     doc = await _get_notes_doc(booking_number)
-    return jsonify({"success": True, "notes": doc})
+    return jsonify({"success": True, "notes": doc, "pipeline_synced": synced})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,3 +461,111 @@ async def get_dnb_list():
     ).sort("updated_at", -1):
         results.append(doc)
     return jsonify({"count": len(results), "records": results})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST  /api/defendant-notes/<booking_number>/promote-to-pipeline
+# Explicitly move a defendant to the Outreach pipeline
+# Body (all optional):
+#   stage   — pipeline stage to start at (default: current shamrock_status or "contacted")
+#   note    — optional note to attach to the timeline
+#   agent   — agent name
+# ─────────────────────────────────────────────────────────────────────────────
+@lifecycle_bp.route("/defendant-notes/<booking_number>/promote-to-pipeline", methods=["POST"])
+async def promote_to_pipeline(booking_number: str):
+    """Explicitly promote a defendant to the outreach (prospective bonds) pipeline."""
+    try:
+        body = await request.get_json(silent=True) or {}
+        stage = body.get("stage", "").strip()
+        note = body.get("note", "").strip()
+        agent = body.get("agent", "Dashboard")
+
+        # Ensure the defendant_notes record exists
+        notes_col = get_collection("defendant_notes")
+        notes = await _get_notes_doc(booking_number)
+
+        # If no status set, default to "contacted"
+        if not notes.get("shamrock_status") or notes.get("shamrock_status") == "new":
+            await notes_col.update_one(
+                {"booking_number": booking_number},
+                {"$set": {"shamrock_status": "contacted", "updated_at": _now(), "agent": agent}},
+                upsert=True,
+            )
+
+        # Check if already tracked
+        pb_col = get_collection("prospective_bonds")
+        existing = await pb_col.find_one({"booking_number": booking_number})
+        if existing and existing.get("status") == "active":
+            return jsonify({
+                "success": False,
+                "error": "Already in outreach pipeline",
+                "stage": existing.get("stage", "contacted"),
+            }), 409
+
+        # Determine stage
+        if not stage:
+            status = notes.get("shamrock_status", "contacted")
+            stage = _STATUS_TO_STAGE.get(status, "contacted")
+
+        # Create via sync helper
+        result = await _sync_to_pipeline(
+            booking_number,
+            trigger="manual_promote",
+            stage_override=stage,
+        )
+
+        if result:
+            # Add the optional note
+            if note:
+                now = datetime.now(timezone.utc)
+                await pb_col.update_one(
+                    {"booking_number": booking_number},
+                    {"$push": {
+                        "timeline": {
+                            "timestamp": now.isoformat(),
+                            "event": "note",
+                            "detail": note,
+                            "agent": agent,
+                        },
+                        "communication_log": {
+                            "timestamp": now.isoformat(),
+                            "type": "note",
+                            "text": note,
+                            "agent": agent,
+                            "source": "promote_action",
+                        },
+                    }},
+                )
+
+            return jsonify({
+                "success": True,
+                "message": f"Promoted to outreach pipeline (stage: {stage})",
+                "stage": stage,
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Could not promote — check defendant exists in arrests collection",
+            }), 400
+
+    except Exception as exc:
+        logger.exception(f"promote_to_pipeline error for {booking_number}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET  /api/defendant-notes/<booking_number>/pipeline-status
+# Quick check: is this defendant tracked in the outreach pipeline?
+# ─────────────────────────────────────────────────────────────────────────────
+@lifecycle_bp.route("/defendant-notes/<booking_number>/pipeline-status", methods=["GET"])
+async def pipeline_status(booking_number: str):
+    """Check if a defendant is in the outreach pipeline."""
+    pb_col = get_collection("prospective_bonds")
+    existing = await pb_col.find_one({"booking_number": booking_number})
+    if existing:
+        return jsonify({
+            "tracked": True,
+            "stage": existing.get("stage", "contacted"),
+            "status": existing.get("status", "active"),
+        })
+    return jsonify({"tracked": False})

@@ -9,6 +9,7 @@
  *  • DNB / DNC badge rendering + filter
  *  • Two-step bond finalization modal (Review → Confirm)
  *  • Bulk notes loader (batch-fetches notes for all visible cards)
+ *  • Lifecycle-to-Pipeline bridge (auto-sync to Outreach/Prospective Bonds)
  *
  * Depends on: defendants.js (renderDefCard, loadDefendants, $, val, money, showToast)
  */
@@ -144,6 +145,13 @@ async function openShamrockNotes(bookingNumber, defendantData) {
 
   const notes = await _fetchNotesDoc(bookingNumber);
 
+  // Check pipeline status
+  let pipelineStatus = null;
+  try {
+    const psRes = await fetch(`/api/defendant-notes/${bookingNumber}/pipeline-status`);
+    pipelineStatus = await psRes.json();
+  } catch { pipelineStatus = { tracked: false }; }
+
   // Build or reuse modal
   let modal = document.getElementById('slcNotesModal');
   if (!modal) {
@@ -171,8 +179,12 @@ async function openShamrockNotes(bookingNumber, defendantData) {
     <div class="slc-modal-box">
       <div class="slc-modal-header">
         <div>
-          <div class="slc-modal-title">📝 Shamrock Notes</div>
+        <div class="slc-modal-title">📝 Shamrock Notes</div>
           <div class="slc-modal-subtitle">Booking #${bookingNumber}</div>
+          ${pipelineStatus?.tracked
+            ? `<div class="slc-pipeline-badge tracked">📋 In Outreach — <strong>${(pipelineStatus.stage||'contacted').charAt(0).toUpperCase()+(pipelineStatus.stage||'contacted').slice(1)}</strong></div>`
+            : `<div class="slc-pipeline-badge not-tracked">Not in outreach pipeline</div>`
+          }
         </div>
         <button class="slc-modal-close" onclick="closeShamrockNotes()">✕</button>
       </div>
@@ -298,6 +310,10 @@ async function openShamrockNotes(bookingNumber, defendantData) {
       </div>
       <div class="slc-modal-footer">
         <button class="slc-btn slc-btn-secondary" onclick="closeShamrockNotes()">Cancel</button>
+        ${pipelineStatus?.tracked
+          ? `<button class="slc-btn slc-btn-pipeline tracked" disabled title="Already in outreach pipeline">📋 In Outreach ✓</button>`
+          : `<button class="slc-btn slc-btn-pipeline" onclick="promoteToPipeline('${bookingNumber}')">📱 Move to Outreach</button>`
+        }
         <button class="slc-btn slc-btn-finalize" onclick="openFinalizeBond('${bookingNumber}')">
           🔒 Finalize Bond
         </button>
@@ -397,9 +413,65 @@ async function logContact(bookingNumber) {
               </div>`).join('')
           : '<div class="slc-log-empty">No contact logged yet</div>';
       }
-      if (typeof showToast === 'function') showToast('Contact logged ✓', 'success');
+      if (typeof showToast === 'function') {
+        if (data.pipeline_synced) {
+          showToast('Contact logged & synced to Outreach ✓', 'success');
+        } else {
+          showToast('Contact logged ✓', 'success');
+        }
+      }
     } else {
       if (typeof showToast === 'function') showToast('Log failed: ' + (data.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Network error: ' + e.message, 'error');
+  }
+}
+
+/**
+ * Promote a defendant to the Outreach (prospective bonds) pipeline
+ */
+async function promoteToPipeline(bookingNumber) {
+  const agent = document.getElementById('slcAgent')?.value || 'Dashboard';
+  const notes = document.getElementById('slcNotes')?.value || '';
+
+  try {
+    const res = await fetch(`/api/defendant-notes/${bookingNumber}/promote-to-pipeline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agent: agent,
+        note: notes ? `Notes at promotion: ${notes.substring(0, 200)}` : '',
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (typeof showToast === 'function') showToast(`📱 Moved to Outreach (${data.stage}) ✓`, 'success');
+      // Update the button in the modal footer
+      const footer = document.querySelector('.slc-modal-footer');
+      if (footer) {
+        const pipeBtn = footer.querySelector('.slc-btn-pipeline');
+        if (pipeBtn) {
+          pipeBtn.textContent = '📋 In Outreach ✓';
+          pipeBtn.disabled = true;
+          pipeBtn.classList.add('tracked');
+        }
+      }
+      // Update pipeline badge
+      const badge = document.querySelector('.slc-pipeline-badge');
+      if (badge) {
+        badge.className = 'slc-pipeline-badge tracked';
+        badge.innerHTML = `📋 In Outreach — <strong>${(data.stage||'contacted').charAt(0).toUpperCase()+(data.stage||'contacted').slice(1)}</strong>`;
+      }
+      // Update prospective badge count if visible
+      const countBadge = document.getElementById('prospectiveBadge');
+      if (countBadge) { const c = parseInt(countBadge.textContent)||0; countBadge.textContent = c+1; }
+    } else {
+      if (res.status === 409) {
+        if (typeof showToast === 'function') showToast(`Already in Outreach (${data.stage||'pipeline'})`, 'info');
+      } else {
+        if (typeof showToast === 'function') showToast('Promote failed: ' + (data.error || 'unknown'), 'error');
+      }
     }
   } catch (e) {
     if (typeof showToast === 'function') showToast('Network error: ' + e.message, 'error');
