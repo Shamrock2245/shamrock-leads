@@ -214,6 +214,22 @@ def init_app(app):
     # Secret key for session cookies
     app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
 
+    # ── Public URL config ─────────────────────────────────────────────────────
+    # DASHBOARD_PUBLIC_URL: the branded public URL of this VPS dashboard.
+    # Used for geo-tracking links (/g/<token>) and BB webhook registration.
+    # Set to https://leads.shamrockbailbonds.biz in production.
+    dashboard_public_url = os.getenv(
+        "DASHBOARD_PUBLIC_URL",
+        os.getenv("BB_WEBHOOK_PUBLIC_URL", "")  # fallback to BB URL if not set
+    ).rstrip("/")
+    app.config["DASHBOARD_PUBLIC_URL"] = dashboard_public_url
+
+    # PORTAL_BASE_URL: the Wix indemnitor portal (for intake magic links).
+    # Defaults to the main website; override if using a custom portal domain.
+    app.config["PORTAL_BASE_URL"] = os.getenv(
+        "PORTAL_BASE_URL", "https://shamrockbailbonds.biz"
+    ).rstrip("/")
+
     # Init BlueBubbles
     init_bluebubbles()
 

@@ -8,15 +8,24 @@ import os
 import uuid
 import secrets
 from datetime import datetime, timezone, timedelta
-from quart import Blueprint, jsonify, request, redirect, make_response
-
+from quart import Blueprint, jsonify, request, redirect, make_response, current_app
 from dashboard.extensions import get_collection
 
 geo_bp = Blueprint("geo", __name__)
 
-# Public-facing base URL for the server (set in .env as DASHBOARD_PUBLIC_URL)
-# e.g. "http://178.156.179.237:8088" or "https://leads.shamrockbailbonds.biz"
-_PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
+# Public-facing base URL for the server.
+# Resolved at request time from app.config["DASHBOARD_PUBLIC_URL"] so that
+# the value set in extensions.init_app() (which falls back through
+# DASHBOARD_PUBLIC_URL → BB_WEBHOOK_PUBLIC_URL) is always used.
+# Production value: https://leads.shamrockbailbonds.biz
+def _get_public_url() -> str:
+    """Return the branded public URL, falling back to env var."""
+    try:
+        url = current_app.config.get("DASHBOARD_PUBLIC_URL", "")
+    except RuntimeError:
+        # Outside app context (e.g. tests)
+        url = os.getenv("DASHBOARD_PUBLIC_URL", "") or os.getenv("BB_WEBHOOK_PUBLIC_URL", "")
+    return url.rstrip("/") if url else ""
 
 # Neutral redirect target after GPS capture — just the home page
 _REDIRECT_AFTER = os.getenv("GEO_REDIRECT_URL", "https://www.shamrockbailbonds.biz")
@@ -61,7 +70,8 @@ async def geo_create_link():
     }
     await geo_pings.insert_one(doc)
 
-    short_url = f"{_PUBLIC_URL}/g/{token}" if _PUBLIC_URL else f"/g/{token}"
+    public_url = _get_public_url()
+    short_url = f"{public_url}/g/{token}" if public_url else f"/g/{token}"
     return jsonify({"token": token, "url": short_url})
 
 

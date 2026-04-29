@@ -281,8 +281,9 @@ async def deliver_packet(packet_id: str):
         intake_id = packet.get("intake_id", "")
 
         # Build the signing magic link
-        base_url = current_app.config.get("PORTAL_BASE_URL", "https://shamrockbailbonds.biz")
-        magic_link = f"{base_url}/sign/{packet_id}"
+        portal_base = current_app.config.get("PORTAL_BASE_URL", "https://shamrockbailbonds.biz")
+        dashboard_url = current_app.config.get("DASHBOARD_PUBLIC_URL", portal_base)
+        magic_link = f"{portal_base}/sign/{packet_id}"
 
         # Build the message
         if custom_message:
@@ -295,9 +296,17 @@ async def deliver_packet(packet_id: str):
                 f"Shamrock Bail Bonds — Fort Myers, FL"
             )
 
-        # Send via universal bridge (iMessage-first, SMS fallback)
-        from dashboard.services.bb_client import send_message_universal
-        result = await send_message_universal(phone, message)
+        # Append geolocator link (mandatory per project standards)
+        if include_geo:
+            geo_url = f"{dashboard_url}/g/{intake_id}"  # branded domain, /g/<token> route
+            message += f"\n\n\U0001f4cd Confirm your location: {geo_url}"
+
+        # Send via BlueBubbles (iMessage-first, universal bridge)
+        bb = get_bb_client(phone)
+        if not bb:
+            return jsonify({"error": "BlueBubbles server not configured"}), 503
+        chat_guid = f"iMessage;-;{phone}"
+        result = await bb.send_text(chat_guid, message)
 
         now = datetime.now(timezone.utc)
         packets_col = get_collection("paperwork_packets")

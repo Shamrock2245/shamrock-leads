@@ -307,7 +307,11 @@ async def imessage_send():
         from datetime import timedelta as _td
         _geo_pings = get_collection("geo_pings")
         _token = _secrets.token_urlsafe(12)
-        _public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
+        try:
+            from quart import current_app as _ca
+            _public_url = _ca.config.get("DASHBOARD_PUBLIC_URL", "").rstrip("/")
+        except RuntimeError:
+            _public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
         _expires = (datetime.now(timezone.utc) + _td(hours=72)).isoformat()
         await _geo_pings.insert_one({
             "token": _token,
