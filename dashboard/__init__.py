@@ -57,6 +57,18 @@ def create_app():
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
+    # ── Phase 4: Matching Engine ─────────────────────────────────────────────
+    from dashboard.api.matching import matching_bp
+    app.register_blueprint(matching_bp, url_prefix="/api")
+
+    # ── Phase 6: Paperwork Generation ────────────────────────────────────────
+    from dashboard.api.paperwork import paperwork_bp
+    app.register_blueprint(paperwork_bp, url_prefix="/api")
+
+    # ── Phase 10: Outreach Sequencing ─────────────────────────────────────────
+    from dashboard.api.outreach import outreach_bp
+    app.register_blueprint(outreach_bp, url_prefix="/api")
+
     # ── Defendant Lifecycle (Notes, DNB/DNC, Contact Log, Bond Finalization) ──
     from dashboard.api.defendant_lifecycle import lifecycle_bp
     app.register_blueprint(lifecycle_bp, url_prefix="/api")
@@ -160,6 +172,59 @@ def create_app():
             logger.info("☘️  Phase 2: defendant indexes ensured")
         except Exception as exc:
             logger.warning("Phase 2 index setup warning: %s", exc)
+
+    # ── Phase 4: Matching Engine — ensure indexes on startup ─────────────────
+    @app.before_serving
+    async def _ensure_matching_indexes():
+        """Create MongoDB indexes for intake_queue matching fields."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            intake_col = db["intake_queue"]
+            await intake_col.create_index(
+                [("matched_booking_number", 1)], name="idx_matched_booking", background=True, sparse=True
+            )
+            await intake_col.create_index(
+                [("match_confidence", -1)], name="idx_match_confidence", background=True, sparse=True
+            )
+            await intake_col.create_index(
+                [("status", 1), ("created_at", -1)], name="idx_status_created", background=True
+            )
+            logger.info("☘️  Phase 4: matching engine indexes ensured")
+        except Exception as exc:
+            logger.warning("Phase 4 index setup warning: %s", exc)
+
+    # ── Phase 10: Outreach Sequencing — ensure indexes on startup ─────────────
+    @app.before_serving
+    async def _ensure_outreach_indexes():
+        """Create MongoDB indexes for outreach_sequences and outreach_messages."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            seqs_col = db["outreach_sequences"]
+            msgs_col = db["outreach_messages"]
+            pkts_col = db["paperwork_packets"]
+            await seqs_col.create_index(
+                [("booking_number", 1), ("county", 1)], name="idx_booking_county", background=True
+            )
+            await seqs_col.create_index(
+                [("status", 1)], name="idx_seq_status", background=True
+            )
+            await seqs_col.create_index(
+                [("phone", 1), ("status", 1)], name="idx_phone_status", background=True
+            )
+            await msgs_col.create_index(
+                [("sequence_id", 1)], name="idx_msg_sequence_id", background=True
+            )
+            await pkts_col.create_index(
+                [("intake_id", 1)], name="idx_pkt_intake_id", background=True
+            )
+            await pkts_col.create_index(
+                [("packet_id", 1)], unique=True, name="idx_pkt_packet_id", background=True
+            )
+            logger.info("☘️  Phase 10: outreach + paperwork indexes ensured")
+        except Exception as exc:
+            logger.warning("Phase 10 index setup warning: %s", exc)
 
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving

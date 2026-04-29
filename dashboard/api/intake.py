@@ -1,9 +1,7 @@
 """
 ShamrockLeads — Indemnitor Intake Queue API Blueprint
-
 Receives indemnitor information from ALL sources that previously fed
 Dashboard.html in the GAS project:
-
   Sources:
     1. wix_portal      — Wix/Velo indemnitor portal (IntakeQueue CMS collection)
     2. telegram        — Telegram Mini App intake form
@@ -11,7 +9,6 @@ Dashboard.html in the GAS project:
     4. walk_in         — Walk-in client (staff enters on their behalf)
     5. phone_call      — Phone intake (staff enters while on call)
     6. bookmarklet     — LCSO bookmarklet auto-scrape
-
   Endpoints:
     POST /api/intake/submit          — Accept new intake from any source
     GET  /api/intake/queue           — List pending intakes (staff dashboard queue)
@@ -20,7 +17,7 @@ Dashboard.html in the GAS project:
     POST /api/intake/<intake_id>/archive  — Archive / mark done
     PATCH /api/intake/<intake_id>    — Update intake fields
     GET  /api/intake/stats           — Queue stats (count by source, status)
-
+    POST /api/intake/<intake_id>/match    — Phase 4: Run matching engine on this intake
   Indemnitor Field Schema (mirrors Dashboard.html addIndemnitor() exactly):
     Personal:   firstName, middleName, lastName, relationship, dob, ssn, dl, dlState
     Contact:    phone, email
@@ -33,16 +30,13 @@ Dashboard.html in the GAS project:
     Meta:       source, platform, timestamp, consentGiven, consentTimestamp,
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
-
 import uuid
 import logging
 from datetime import datetime, timezone
-from quart import Blueprint, request, jsonify
+from quart import Blueprint, request, jsonify, current_app
 from dashboard.extensions import get_collection
-
 logger = logging.getLogger(__name__)
 intake_bp = Blueprint("intake", __name__)
-
 # ── Valid intake sources ──────────────────────────────────────────────────────
 VALID_SOURCES = {
     "wix_portal",
@@ -54,7 +48,6 @@ VALID_SOURCES = {
     "bookmarklet",
     "shamrock-leads-dashboard",
 }
-
 SOURCE_LABELS = {
     "wix_portal": "🌐 Wix Portal",
     "telegram": "📱 Telegram",
@@ -65,8 +58,6 @@ SOURCE_LABELS = {
     "bookmarklet": "🔖 Bookmarklet",
     "shamrock-leads-dashboard": "☘️ Dashboard",
 }
-
-
 def _normalize_source(raw: str) -> str:
     """Normalize source string to a canonical value."""
     raw = (raw or "manual_entry").lower().strip().replace(" ", "_").replace("-", "_")
@@ -156,6 +147,7 @@ async def intake_submit():
     Accept indemnitor intake from any source (Wix, Telegram, manual, walk-in, phone).
     Stores in MongoDB `intake_queue` collection.
     Mirrors handleNewIntake() / storeIntakeInQueue() from GAS WixPortalIntegration.js.
+    After storing, auto-triggers Phase 4 matching engine.
     """
     data = await request.get_json(force=True) or {}
 
@@ -229,6 +221,16 @@ async def intake_submit():
         # GAS sync status
         "gas_sync_status": "pending",
         "gas_sync_timestamp": None,
+        # Matching fields (populated by Phase 4 matching engine)
+        "matched_booking_number": None,
+        "matched_county": None,
+        "matched_defendant_id": None,
+        "match_confidence": None,
+        "match_strategy": None,
+        "match_timestamp": None,
+        # Paperwork fields (populated by Phase 6)
+        "paperwork_packet_id": None,
+        "paperwork_status": None,
         # Raw payload preserved for full hydration
         "_raw": data,
     }
@@ -242,6 +244,23 @@ async def intake_submit():
             upsert=True,
         )
         logger.info(f"[intake] New intake stored: {intake_id} | source={source} | defendant={def_full_name}")
+
+        # ── Phase 4: Auto-trigger matching engine ─────────────────────────
+        match_result = None
+        try:
+            from dashboard.services.matching_engine import MatchingEngine
+            engine = MatchingEngine(current_app.db)
+            match_result = await engine.match_intake(doc)
+            logger.info(
+                "[intake] Auto-match for %s: confidence=%s strategy=%s auto_linked=%s",
+                intake_id,
+                match_result.get("confidence"),
+                match_result.get("strategy"),
+                match_result.get("auto_linked"),
+            )
+        except Exception as match_err:
+            logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
+
         return jsonify({
             "success": True,
             "intake_id": intake_id,
@@ -249,6 +268,7 @@ async def intake_submit():
             "defendant_name": def_full_name,
             "indemnitor_name": ind_full_name,
             "message": f"Intake received from {SOURCE_LABELS.get(source, source)}",
+            "match": match_result,
         })
     except Exception as e:
         logger.error(f"[intake] Failed to store intake {intake_id}: {e}")
@@ -302,6 +322,13 @@ async def intake_queue_list():
                 "SourceLabel": item.get("source_label", ""),
                 "County": item.get("defendant_county", ""),
                 "BookingNumber": item.get("defendant_booking_number", ""),
+                # Matching fields
+                "MatchedBookingNumber": item.get("matched_booking_number"),
+                "MatchConfidence": item.get("match_confidence"),
+                "MatchStrategy": item.get("match_strategy"),
+                # Paperwork fields
+                "PaperworkPacketId": item.get("paperwork_packet_id"),
+                "PaperworkStatus": item.get("paperwork_status"),
                 # AI fields
                 "AI_Risk": item.get("ai_risk", ""),
                 "AI_Score": item.get("ai_score"),
@@ -370,6 +397,31 @@ async def intake_get(intake_id: str):
             item["updated_at"] = item["updated_at"].isoformat()
         return jsonify({"success": True, "intake": item})
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/match
+#  Phase 4: Run the matching engine on a specific intake record
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.route("/intake/<intake_id>/match", methods=["POST"])
+async def intake_match(intake_id: str):
+    """
+    Run the Phase 4 matching engine on a specific intake record.
+    Returns best match + candidates for staff review.
+    """
+    intake_queue = get_collection("intake_queue")
+    try:
+        intake_doc = await intake_queue.find_one({"intake_id": intake_id}, {"_id": 0})
+        if not intake_doc:
+            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+
+        from dashboard.services.matching_engine import MatchingEngine
+        engine = MatchingEngine(current_app.db)
+        result = await engine.match_intake(intake_doc)
+        return jsonify({"success": True, **result})
+    except Exception as e:
+        logger.error(f"[intake] match error for {intake_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -450,6 +502,10 @@ async def intake_process(intake_id: str):
                 "consent_given": result.get("consent_given", False),
                 "gps_latitude": result.get("gps_latitude"),
                 "gps_longitude": result.get("gps_longitude"),
+                # Matching context
+                "matched_booking_number": result.get("matched_booking_number"),
+                "match_confidence": result.get("match_confidence"),
+                "match_strategy": result.get("match_strategy"),
             },
         })
     except Exception as e:
@@ -495,6 +551,7 @@ async def intake_update(intake_id: str):
         "gas_sync_status", "gas_sync_timestamp",
         "defendant_booking_number", "defendant_county",
         "notes", "matched_booking_number",
+        "paperwork_packet_id", "paperwork_status",
     }
     updates = {k: v for k, v in data.items() if k in allowed_fields}
     if not updates:
@@ -533,6 +590,9 @@ async def intake_stats():
 
         total_pending = await intake_queue.count_documents({"status": "pending"})
         total_all = await intake_queue.estimated_document_count()
+        total_matched = await intake_queue.count_documents(
+            {"matched_booking_number": {"$exists": True, "$ne": None}}
+        )
 
         by_source: dict = {}
         by_status: dict = {}
@@ -549,6 +609,7 @@ async def intake_stats():
             "success": True,
             "total": total_all,
             "pending": total_pending,
+            "matched": total_matched,
             "by_source": by_source,
             "by_status": by_status,
         })
