@@ -57,6 +57,9 @@ def create_app():
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
+    # ── Defendant Lifecycle (Notes, DNB/DNC, Contact Log, Bond Finalization) ──
+    from dashboard.api.defendant_lifecycle import lifecycle_bp
+    app.register_blueprint(lifecycle_bp, url_prefix="/api")
 
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
