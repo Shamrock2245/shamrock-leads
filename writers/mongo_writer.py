@@ -83,6 +83,13 @@ class MongoWriter:
             name="idx_scraper_status_county",
         )
 
+        # Phase 2: defendant_id back-reference on arrests (sparse — only set after normalization)
+        self.arrests.create_index(
+            [("defendant_id", ASCENDING)],
+            name="idx_defendant_id",
+            sparse=True,
+        )
+
         logger.info("✅ MongoDB indexes ensured")
 
     def write_records(
