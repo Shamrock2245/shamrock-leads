@@ -43,7 +43,10 @@ Dashboard (`dashboard/index.html`) shows all 67 counties with live status, risk 
 ## Phase 2: Defendant Normalization + Contact Discovery ✅ COMPLETE
 
 **Implemented:**
-- `dashboard/api/defendants.py` — Defendants API blueprint (CRUD, search, normalization)
+- `dashboard/services/defendant_normalizer.py` — Core normalization service (dedup, fuzzy matching, merging)
+- `dashboard/api/defendants.py` — Defendants API blueprint (CRUD, search, normalization hooks, merge)
+- `writers/mongo_writer.py` — Automatic normalization hook on new arrest ingestion
+- `scripts/setup_defendant_indexes.py` — MongoDB index setup for `defendants` and `audit_events`
 - `dashboard/api/contacts.py` — Contact discovery API (`/api/contacts/discover`)
 - `dashboard/services/contact_discovery.py` — OSINT contact discovery service
 - `dashboard/api/court_reminders.py` — Court reminder API

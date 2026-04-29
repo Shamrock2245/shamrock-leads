@@ -115,6 +115,52 @@ def create_app():
             except Exception as e:
                 logger.warning("BB webhook auto-registration failed for %s: %s", server["label"], e)
 
+    # ── Phase 2: Defendant Normalization — ensure indexes on startup ──────────
+    @app.before_serving
+    async def _ensure_defendant_indexes():
+        """Create MongoDB indexes for defendants + audit_events collections."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            defendants_col = db["defendants"]
+            arrests_col = db["arrests"]
+            audit_col = db["audit_events"]
+
+            # defendants indexes
+            await defendants_col.create_index(
+                [("identity_key", 1)], unique=True, name="idx_identity_key_unique", background=True
+            )
+            await defendants_col.create_index(
+                [("defendant_id", 1)], unique=True, name="idx_defendant_id_unique", background=True
+            )
+            await defendants_col.create_index(
+                [("dob", 1)], name="idx_dob", background=True
+            )
+            await defendants_col.create_index(
+                [("counties", 1)], name="idx_counties", background=True
+            )
+            await defendants_col.create_index(
+                [("total_arrests", -1)], name="idx_total_arrests", background=True
+            )
+            await defendants_col.create_index(
+                [("active", 1)], name="idx_active", background=True
+            )
+            # arrests: sparse index for defendant_id back-reference
+            await arrests_col.create_index(
+                [("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True
+            )
+            # audit_events indexes
+            await audit_col.create_index(
+                [("entity_id", 1), ("timestamp", -1)],
+                name="idx_entity_id_timestamp", background=True
+            )
+            await audit_col.create_index(
+                [("event_type", 1)], name="idx_event_type", background=True
+            )
+            logger.info("☘️  Phase 2: defendant indexes ensured")
+        except Exception as exc:
+            logger.warning("Phase 2 index setup warning: %s", exc)
+
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving
     async def _start_bb_health_monitor():
