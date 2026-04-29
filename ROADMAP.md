@@ -1,7 +1,7 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before checking in.
-> **Last Updated:** 2026-04-27
+> **Last Updated:** 2026-04-29
 
 ## Phase Overview
 
@@ -11,9 +11,9 @@
 | 1b | County Expansion (49 active / 67 total) | ✅ Complete |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
-| 4 | Matching Engine | 🔲 Planned |
+| 4 | Matching Engine | ✅ Complete |
 | 5 | Bond Case + Surety + POA | ✅ Complete (API + service layer) |
-| 6 | Paperwork Generation | 🔲 Planned |
+| 6 | Paperwork Generation | ✅ Complete |
 | 7 | Signature Orchestration (SignNow) | ✅ Complete (service layer + webhook) |
 | 8 | Payment Collection | ✅ Complete (log + history API) |
 | 9 | Contact Discovery (OSINT) | ✅ Complete (service layer) |
@@ -82,14 +82,14 @@ All indemnitor intake sources from the legacy GAS `Dashboard.html` are now handl
 
 ---
 
-## Phase 4: Matching Engine 🔲 PLANNED
+## Phase 4: Matching Engine ✅ COMPLETE
 
-Match incoming intake records against existing `ArrestLead` records in MongoDB using County + Booking Number + name fuzzy match. Auto-link indemnitor to defendant record when confidence > threshold.
+Matches incoming intake records against existing `ArrestLead` records in MongoDB using multi-strategy fuzzy matching. Auto-links indemnitor to defendant record when confidence ≥ 85. Triggers automatically on every new intake submission.
 
-**Planned components:**
-- `dashboard/services/matching_engine.py` — fuzzy match + confidence scoring
-- `dashboard/api/matching.py` — `/api/match/intake/<id>` endpoint
-- UI: "Match" button in Intake Queue process modal
+**Implemented:**
+- `dashboard/services/matching_engine.py` — 4-strategy matching pipeline: (1) exact booking number + county, (2) fuzzy name + DOB (Levenshtein ≤ 2), (3) county + name only, (4) defendant_id direct link; confidence scoring 0–100; auto-link at ≥ 85
+- `dashboard/api/matching.py` — `POST /api/match/intake/<id>`, `POST /api/match/intake/<id>/confirm`, `POST /api/match/intake/<id>/override`, `GET /api/match/candidates/<booking_number>/<county>`
+- `dashboard/api/intake.py` — `POST /api/intake/<id>/match` endpoint; auto-match fires on every `POST /api/intake/submit`
 
 ---
 
@@ -103,13 +103,16 @@ Match incoming intake records against existing `ArrestLead` records in MongoDB u
 
 ---
 
-## Phase 6: Paperwork Generation 🔲 PLANNED
+## Phase 6: Paperwork Generation ✅ COMPLETE
 
-Auto-generate bail bond application PDF, indemnitor agreement, and receipt from bond record. Merge with SignNow template for e-signature.
+Auto-generates bail bond application PDF, indemnitor agreement, and receipt from intake/bond record. Delivers completed packet via BlueBubbles iMessage. Integrates with SignNow for e-signature.
 
-**Planned components:**
-- `dashboard/services/paperwork_generator.py` — PDF generation (ReportLab / WeasyPrint)
-- `dashboard/api/paperwork.py` — `/api/paperwork/generate/<bond_id>`
+**Implemented:**
+- `dashboard/api/paperwork.py` — `POST /api/paperwork/generate/<intake_id>`, `GET /api/paperwork/packet/<packet_id>`, `POST /api/paperwork/deliver/<packet_id>`, `GET /api/paperwork/packets`
+- `dashboard/services/bond_pdf_service.py` — PDF field hydration (existing)
+- `paperwork_packets` MongoDB collection — full audit trail per packet
+- BlueBubbles delivery — `send_attachment_url` sends PDF link to indemnitor phone
+- SignNow integration — packet delivery triggers SignNow invite via `signnow_packet_service.py`
 
 ---
 
@@ -177,8 +180,8 @@ This system provides discreet IP-based location tracking for active bail bonds. 
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| Phase 4 Matching Engine | High | Link intake records to ArrestLeads automatically |
-| Phase 6 Paperwork Generation | Medium | PDF generation for bond application + indemnitor agreement |
+| Phase 4 Matching Engine | ✅ Done | Implemented: matching_engine.py + matching.py + intake auto-match |
+| Phase 6 Paperwork Generation | ✅ Done | Implemented: paperwork.py + BB delivery + SignNow integration |
 | Marion County scraper | Medium | File exists, commented out — needs validation |
 | Miami-Dade scraper | Low | reCAPTCHA blocks form scraping; use ArcGIS daily dataset |
 | 16 rural counties | Low | Needs URL recon before scraper can be built |
