@@ -828,3 +828,29 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .slc-dnb-table td{padding:10px;border-bottom:1px solid var(--border);vertical-align:middle}
 .slc-dnb-table tr:hover td{background:var(--surface)}
 @media(max-width:600px){.slc-form-row{grid-template-columns:1fr}.slc-modal-box{max-height:95vh}.slc-modal-footer{flex-wrap:wrap}}
+
+/* ── Pipeline Card Quick-Note Row ── */
+.pipeline-card-notes-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.pipeline-notes-label { font-size: 12px; flex-shrink: 0; }
+.pipeline-notes-input {
+  flex: 1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 5px;
+  color: var(--text, #e2e8f0);
+  font-size: 11px;
+  padding: 3px 8px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.pipeline-notes-input:focus {
+  border-color: rgba(99,179,237,0.5);
+  background: rgba(255,255,255,0.09);
+}

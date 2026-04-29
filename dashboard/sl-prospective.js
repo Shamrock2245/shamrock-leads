@@ -98,7 +98,11 @@ const SLProspective = (() => {
           ${indCallback ? `<div class="pipeline-card-ind" style="font-size:11px">📞 ${indCallback}</div>` : ''}
           <div class="pipeline-card-comm">${replyBadge} ${lastMsg}</div>
           ${lastComm?.message ? `<div class="pipeline-card-preview">${(lastComm.message||'').substring(0,50)}${(lastComm.message||'').length>50?'...':''}</div>` : ''}
-          ${stage==='ready'?'<button class="btn-officialize-sm" onclick="event.stopPropagation();SLProspective.officialize(\''+b.booking_number+'\')">☘️ Officialize</button>':''}
+          <div class="pipeline-card-notes-row" onclick="event.stopPropagation()">
+            <span class="pipeline-notes-label">📝</span>
+            <input class="pipeline-notes-input" type="text" placeholder="Quick note..." value="${(window._notesCache&&window._notesCache[b.booking_number]&&window._notesCache[b.booking_number].shamrock_notes)||''}" onchange="SLLifecycle&&SLLifecycle.quickNote('${b.booking_number}',this.value)" />
+          </div>
+          ${stage==='ready'?'<button class="btn-officialize-sm" onclick="event.stopPropagation();SLProspective.officialize(''+b.booking_number+'')">☘️ Officialize</button>':''}
         </div>`;
       }).join('') : '<div class="pipeline-empty">No leads</div>';
     });
