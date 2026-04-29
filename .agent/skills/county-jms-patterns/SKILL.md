@@ -172,7 +172,60 @@ Manatee, Hillsborough
 3. Fall back to `regex` for very irregular HTML
 
 ### Known Custom Counties
-Charlotte, Pasco, Hernando, Palm Beach, Broward, Alachua, Volusia, Seminole, Orange, Duval, many others
+Orange, Pasco, Hernando, Broward, Alachua, Volusia, Seminole, Duval, many others
+
+---
+
+## Revize CMS (County-Hosted)
+
+### Characteristics
+- **Server-rendered HTML** — Django/CMS-like templates
+- **Cloudflare protected** — requires stealth flags
+- **Two-level detail navigation** — roster → person profile → arrest detail
+- **Variable table headers** — `Statute`/`Charge`/`Bond Amt` labels vary per installation
+- **Bond data on sub-page** — charge/bond table often on a separate arrest detail page
+
+### Navigation Pattern
+```
+Roster page (list) → Person detail page → Click most recent arrest → Arrest detail page (charges + bonds)
+```
+
+### Scraper Strategy
+```python
+def _extract_detail(self, page, url):
+    page.get(url)
+    time.sleep(2)
+    
+    # Check if arrest history table exists (two-level navigation needed)
+    has_arrests = page.run_js('''
+        const tables = document.querySelectorAll('table');
+        for (const t of tables) {
+            const headers = [...t.querySelectorAll('th, thead td')].map(h => h.textContent.toLowerCase());
+            if (headers.some(h => h.includes('arrest') || h.includes('book'))) {
+                const links = t.querySelectorAll('a[href]');
+                if (links.length > 0) { links[0].click(); return true; }
+            }
+        }
+        return false;
+    ''')
+    if has_arrests:
+        time.sleep(2)  # Wait for sub-page
+    
+    # Universal table scanner — detect by content, not headers
+    data = page.run_js('''
+        const tables = document.querySelectorAll('table');
+        for (const t of tables) {
+            const text = t.textContent;
+            if (/\\$[\\d,]+/.test(text) || /\\d{3}\\.\\d{2}/.test(text)) {
+                // Found charge/bond table by content pattern
+                return extract_table_data(t);
+            }
+        }
+    ''')
+```
+
+### Known Revize CMS Counties
+Charlotte, Manatee, Sarasota
 
 ---
 
@@ -181,14 +234,29 @@ Charlotte, Pasco, Hernando, Palm Beach, Broward, Alachua, Volusia, Seminole, Ora
 When `requests` won't cut it (JavaScript rendering, anti-bot):
 
 ```python
-from DrissionPage import ChromiumPage
+from DrissionPage import ChromiumPage, ChromiumOptions
+
+def _get_stealth_page(self):
+    """Create a stealth ChromiumPage that bypasses Cloudflare."""
+    opts = ChromiumOptions()
+    opts.set_argument('--disable-blink-features=AutomationControlled')
+    opts.set_argument('--no-sandbox')
+    opts.set_argument('--disable-dev-shm-usage')
+    opts.set_argument('--headless=new')
+    page = ChromiumPage(addr_or_opts=opts)
+    # Override navigator properties
+    page.run_js('Object.defineProperty(navigator, "webdriver", {get: () => false})')
+    return page
 
 def scrape(self):
-    page = ChromiumPage()
+    page = self._get_stealth_page()
     page.get(self.url)
     
-    # Wait for table to load
-    page.wait.ele_loaded("table.inmateTable")
+    # Content-based wait (preferred over time.sleep):
+    for _ in range(15):  # Max 15 seconds
+        time.sleep(1)
+        if page.run_js("return document.querySelector('table.inmateTable') !== null"):
+            break
     
     rows = page.eles("table.inmateTable tbody tr")
     records = []
@@ -203,6 +271,23 @@ def scrape(self):
     page.quit()
     return records
 ```
+
+### Cloudflare Stealth Checklist
+1. `--disable-blink-features=AutomationControlled`
+2. Override `navigator.webdriver` → `false`
+3. Random/realistic User-Agent string
+4. Wait 30s+ for Cloudflare challenge on first visit
+5. Establish referer chain (visit main site first, then roster)
+
+### Content-Based Wait Pattern
+Prefer polling for expected content over fixed `time.sleep()`:
+```python
+for _ in range(max_seconds):
+    time.sleep(1)
+    if page.run_js("return document.querySelector('expected_selector') !== null"):
+        break
+```
+This avoids both under-waiting (data not loaded) and over-waiting (wasted time).
 
 **Note:** DrissionPage requires Chrome/Chromium installed in the Docker container.
 Add to Dockerfile:
