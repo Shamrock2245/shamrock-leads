@@ -11,10 +11,9 @@ Business Logic
 2. This module checks MongoDB's `bonds` collection for any historical bond
    where the defendant name + DOB matches the newly arrested person.
 3. If a match is found, we extract the previous indemnitor(s)' phone numbers.
-4. We check each phone for iMessage availability (BlueBubbles Private API).
-5. iPhone users get a personalized iMessage via BlueBubbles.
-6. Non-iPhone users get an SMS via Twilio (fallback).
-7. All notifications are logged to `rearrest_notifications` collection.
+4. We send via BlueBubbles using `any;-;` chat GUID prefix, which auto-routes
+   to iMessage for iPhones and SMS for everyone else.
+5. All notifications are logged to `rearrest_notifications` collection.
 
 This serves two purposes:
   a) Genuine customer service — the family already knows us and trusts us.

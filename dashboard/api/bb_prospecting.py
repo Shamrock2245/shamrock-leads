@@ -13,9 +13,9 @@ Architecture
   IRB / Contact Discovery → relative phone numbers
       │
       ▼
-  iMessage Availability Check (BlueBubbles Private API)
-      ├─ iPhone detected → send via BlueBubbles (iMessage)
-      └─ Not iPhone     → queue for Twilio SMS (fallback)
+  BlueBubbles with `any;-;` chat GUID prefix
+      ├─ iPhone detected → iMessage (blue bubble)
+      └─ Not iPhone     → SMS via Mac Messages relay (green bubble)
       │
       ▼
   AI Agent Brain handles replies (same as inbound flow)
