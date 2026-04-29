@@ -325,7 +325,7 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete (50 counties) |
-| 2 | Defendant Lifecycle Management | ✅ Complete |
+| 2 | Defendant Normalization + Lifecycle | ✅ Complete |
 | 3 | Intake Queue Processing | ✅ Complete |
 | 4 | Outreach Pipeline + iMessage Bridge | ✅ Complete |
 | 5 | Bond Case + Surety + POA Inventory | 🟡 In Progress |
