@@ -232,6 +232,12 @@ After fixing, update:
 |--------|------|-------|-----------|-----|
 | Lee | 2026-04 | API empty response for `?type=ALL` | response_format_changed | Added variant queries |
 | Charlotte | 2026-03 | HTTPS required (was HTTP) | url_changed | Updated URL scheme |
+| Charlotte | 2026-04 | Revize CMS charge table headers don't match hardcoded selectors (`Statute`, `Bond Amt`) | parse_error | Universal table scanner — detect by content patterns (statute regex, $ amounts) |
+| Charlotte | 2026-04 | Detail page shows person profile, charges on sub-arrest page | parse_error | Added sub-arrest link detection + click before extraction |
+| Charlotte | 2026-04 | Cloudflare WAF blocking datacenter IPs on Revize CMS | anti_bot | `--disable-blink-features=AutomationControlled` + navigator.webdriver stealth |
+| Hendry | 2026-04 | OCV SPA loads charges asynchronously — `time.sleep(2)` too short | parse_error | Dynamic polling loop (up to 15s) waiting for charge data in DOM |
+| Osceola | 2026-04 | ASP.NET detail pages hydrate slower than 1s sleep | parse_error | Polling loop checking for HTML markers before extraction |
+| Collier | 2026-04 | Sheriff roster has no bond amounts — data lives on Clerk of Court (ShowCaseWeb) | response_format_changed | Cannot fix with current scraper — needs Phase 2 Clerk enrichment worker |
 | Taylor | 2026-04 | Non-standard port :8443 | url_changed | Updated URL with port |
 | Dixie | 2026-04 | HTTP-only (HTTPS not supported) | ssl_error | Use HTTP |
 | Sumter | 2026-04 | Redirect to HTTPS required | url_changed | Follow redirect |

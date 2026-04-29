@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-04-27 | **Active Scrapers:** 49 | **Scheduled Counties:** 49 | **Disabled:** 1 (Marion — commented out in main.py)
+> **Last Updated:** 2026-04-28 | **Active Scrapers:** 49 | **Scheduled Counties:** 49 | **Disabled:** 1 (Marion — commented out in main.py)
 
 ---
 
@@ -20,7 +20,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 1 | **Lee** | curl_cffi GET — sheriffleefl.org | `lee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
-| 3 | **Charlotte** | Custom HTML | `charlotte.py` | ✅ Active | 10 min | 2026-04-27 |
+| 3 | **Charlotte** | DrissionPage — Revize CMS + Cloudflare bypass | `charlotte.py` | ✅ Active | 10 min | 2026-04-28 |
 | 4 | **Manatee** | DrissionPage — Revize CMS | `manatee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 5 | **Sarasota** | DrissionPage — Revize CMS | `sarasota.py` | ✅ Active | 10 min | 2026-04-27 |
 | 6 | **DeSoto** | JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-04-27 |
@@ -188,11 +188,11 @@ Approach:   Download GeoJSON/CSV snapshot, diff vs last snapshot, ingest new boo
 
 ### DrissionPage (Browser Automation)
 - **Pattern**: Chromium headless — JS rendering or Cloudflare bypass required
-- **Active Counties**: Palm Beach, Volusia, Duval, Pasco, Pinellas, Polk, Osceola, Lake, Manatee, Sarasota, Martin
+- **Active Counties**: Charlotte, Palm Beach, Volusia, Duval, Pasco, Pinellas, Polk, Osceola, Lake, Manatee, Sarasota, Martin
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering
-- **Active Counties**: Charlotte, Orange, Seminole, Broward, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns
+- **Active Counties**: Orange, Seminole, Broward, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns
 
 ---
 
