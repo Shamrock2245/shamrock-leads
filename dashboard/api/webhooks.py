@@ -8,12 +8,14 @@ Uses extensions.get_collection() to avoid circular imports from app.py.
 from quart import Blueprint, request, jsonify
 import hmac
 import hashlib
+import logging
 import os
 from datetime import datetime, timezone
 
 from dashboard.extensions import get_collection
 
 webhooks_bp = Blueprint('webhooks', __name__)
+logger = logging.getLogger(__name__)
 
 
 def verify_signnow_signature(payload: bytes, signature: str) -> bool:
@@ -27,7 +29,20 @@ def verify_signnow_signature(payload: bytes, signature: str) -> bool:
 
 @webhooks_bp.route('/webhooks/signnow', methods=['POST'])
 async def signnow_webhook():
-    """Handle document.complete events from SignNow."""
+    """
+    Handle document.complete (and other) events from SignNow.
+
+    On document.complete:
+      1. Verify HMAC signature.
+      2. Log to audit_events.
+      3. Look up the bond case by signnow_document_id.
+      4. Download the signed PDF from SignNow.
+      5. Upload the signed PDF to the Google Drive case folder.
+      6. Update bond_cases: Packet_Status=signed, Signature_Status=signed, signed_at.
+      7. Publish SSE event to dashboard.
+      8. Fire Slack alert.
+    """
+    import httpx
     from dashboard.api.events import publish_event
 
     signature = request.headers.get('x-signnow-signature', '')
@@ -36,30 +51,137 @@ async def signnow_webhook():
     if not verify_signnow_signature(payload, signature):
         return jsonify({"error": "Invalid signature"}), 401
 
-    data = await request.get_json()
-    audit_events = get_collection("audit_events")
+    data = await request.get_json(force=True) or {}
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    # Log to audit_events
-    audit_doc = {
+    # Step 2: Log to audit_events
+    audit_events = get_collection("audit_events")
+    await audit_events.insert_one({
         "source": "signnow_webhook",
         "event_type": data.get('event', 'unknown'),
         "payload": data,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    await audit_events.insert_one(audit_doc)
+        "timestamp": now_iso,
+    })
 
     if data.get('event') == 'document.complete':
-        doc_id = data.get('document_id') or data.get('content', {}).get('document_id')
+        doc_id = (
+            data.get('document_id')
+            or data.get('content', {}).get('document_id')
+            or ""
+        )
+        logger.info("[signnow_webhook] document.complete for doc_id=%s", doc_id)
 
-        # Update relevant MongoDB document
+        # Step 3: Look up bond case
         bond_cases = get_collection("bond_cases")
+        bond_case = await bond_cases.find_one({"signnow_document_id": doc_id})
+
+        # Step 4: Download signed PDF
+        pdf_bytes = None
+        signnow_token = os.getenv("SIGNNOW_API_TOKEN", "")
+        if doc_id and signnow_token:
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    dl_resp = await client.get(
+                        f"https://api.signnow.com/document/{doc_id}/download?type=collapsed",
+                        headers={"Authorization": f"Bearer {signnow_token}"},
+                    )
+                    dl_resp.raise_for_status()
+                    pdf_bytes = dl_resp.content
+                    logger.info(
+                        "[signnow_webhook] Downloaded signed PDF (%d bytes) for doc %s",
+                        len(pdf_bytes), doc_id,
+                    )
+            except Exception as exc:
+                logger.error("[signnow_webhook] PDF download failed: %s", exc)
+
+        # Step 5: Upload to Google Drive case folder
+        drive_file_id = None
+        drive_url = None
+        if pdf_bytes and bond_case:
+            try:
+                from googleapiclient.discovery import build as gdrive_build
+                from googleapiclient.http import MediaIoBaseUpload
+                from google.oauth2 import service_account
+                import io
+
+                creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+                if creds_path and os.path.exists(creds_path):
+                    creds = service_account.Credentials.from_service_account_file(
+                        creds_path,
+                        scopes=["https://www.googleapis.com/auth/drive"],
+                    )
+                    drive_svc = gdrive_build("drive", "v3", credentials=creds)
+
+                    defendant_name = bond_case.get("defendant_name", "Unknown")
+                    booking_number = bond_case.get("booking_number", doc_id[:8])
+                    folder_id = bond_case.get("google_drive_folder_id", "")
+
+                    file_name = f"SIGNED_{defendant_name}_{booking_number}_{doc_id[:8]}.pdf"
+                    file_meta = {"name": file_name}
+                    if folder_id:
+                        file_meta["parents"] = [folder_id]
+
+                    media = MediaIoBaseUpload(
+                        io.BytesIO(pdf_bytes),
+                        mimetype="application/pdf",
+                        resumable=False,
+                    )
+                    uploaded = drive_svc.files().create(
+                        body=file_meta,
+                        media_body=media,
+                        fields="id,webViewLink",
+                    ).execute()
+                    drive_file_id = uploaded.get("id")
+                    drive_url = uploaded.get("webViewLink")
+                    logger.info(
+                        "[signnow_webhook] Filed signed PDF to Google Drive: %s", drive_url
+                    )
+                else:
+                    logger.warning(
+                        "[signnow_webhook] GOOGLE_APPLICATION_CREDENTIALS not set "
+                        "-- skipping Drive upload"
+                    )
+            except Exception as exc:
+                logger.error("[signnow_webhook] Google Drive upload failed: %s", exc)
+
+        # Step 6: Update bond case
+        update_fields = {
+            "Packet_Status": "signed",
+            "Signature_Status": "signed",
+            "signed_at": now_iso,
+        }
+        if drive_file_id:
+            update_fields["signed_pdf_drive_id"] = drive_file_id
+            update_fields["signed_pdf_drive_url"] = drive_url
+
         await bond_cases.update_one(
             {"signnow_document_id": doc_id},
-            {"$set": {"status": "signed", "signed_at": datetime.now(timezone.utc).isoformat()}}
+            {"$set": update_fields},
         )
 
-        # Publish SSE event
-        await publish_event('document_signed', {"document_id": doc_id})
+        # Step 7: Publish SSE event
+        defendant_name = (bond_case or {}).get("defendant_name", "Unknown")
+        await publish_event('document_signed', {
+            "document_id": doc_id,
+            "defendant_name": defendant_name,
+            "drive_url": drive_url,
+            "signed_at": now_iso,
+        })
+
+        # Step 8: Slack alert
+        slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+        if slack_webhook:
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    drive_link = f" -- <{drive_url}|View in Drive>" if drive_url else ""
+                    await client.post(slack_webhook, json={
+                        "text": (
+                            f":white_check_mark: *SignNow Complete* -- "
+                            f"{defendant_name} signed their paperwork.{drive_link}"
+                        )
+                    })
+            except Exception as exc:
+                logger.warning("[signnow_webhook] Slack alert failed: %s", exc)
 
     return jsonify({"success": True}), 200
 

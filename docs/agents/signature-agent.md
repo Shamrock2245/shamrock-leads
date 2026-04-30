@@ -1,7 +1,7 @@
 # Signature Agent
 
-> **Status:** `[PLANNED — Phase 7]`
-> **This agent does not exist in code yet.**
+> **Status:** `[COMPLETE — Phase 7]`
+> **Implementation:** `dashboard/services/signnow_packet_service.py`, `dashboard/services/signnow_service.py`, `dashboard/api/webhooks.py`
 
 ---
 

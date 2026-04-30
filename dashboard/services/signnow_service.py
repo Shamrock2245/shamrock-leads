@@ -118,7 +118,30 @@ class SignNowService:
             return resp.content
 
     async def create_full_packet(self, defendant_data: dict, surety_id: str) -> dict:
-        """Create all 14 documents from templates, prefill, return invite links."""
-        # This is a placeholder for the full packet creation logic
-        # It will use the template IDs and field mappings to generate the full packet
-        pass
+        """
+        Create all documents from templates, prefill, and return invite links.
+        Delegates to SignNowPacketService.create_packet() which handles the full
+        two-phase workflow: template copy, field prefill, document group, embedded invite.
+
+        Args:
+            defendant_data: Intake/defendant record dict (same shape as intake_queue docs).
+            surety_id:       "osi" or "palmetto" -- determines template set.
+
+        Returns:
+            Dict with invite_id, signing_link, group_id, document_ids, manifest_size.
+        """
+        import uuid
+        from dashboard.services.signnow_packet_service import SignNowPacketService
+
+        svc = SignNowPacketService()
+        # Propagate our already-authenticated token so we don't double-auth
+        if self.token:
+            svc.api_token = self.token
+
+        packet_id = defendant_data.get("intake_id") or f"PKT-{uuid.uuid4().hex[:8].upper()}"
+        return await svc.create_packet(
+            intake_doc=defendant_data,
+            packet_id=packet_id,
+            phase=1,
+            surety_id=surety_id,
+        )
