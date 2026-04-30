@@ -12,6 +12,7 @@ Endpoints:
   POST   /api/prospective-bonds/<bk>/officialize — Promote to active bond
   POST   /api/prospective-bonds/from-intake  — Promote an intake queue entry to In Progress
 """
+from __future__ import annotations
 
 from quart import Blueprint, request, jsonify
 from datetime import datetime, timezone

@@ -1,6 +1,7 @@
 """Contact Discovery Service (Phase 2) — OSINT pipeline stub"""
 
 from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
 
 class ContactDiscoveryService:

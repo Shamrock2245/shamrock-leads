@@ -36,6 +36,7 @@ Endpoints
   POST   /api/prospecting/retry-failed     — Retry failed iMessage sends
   GET    /api/prospecting/stats            — Outreach stats by channel
 """
+from __future__ import annotations
 import logging
 import os
 import uuid

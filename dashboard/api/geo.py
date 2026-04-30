@@ -4,6 +4,7 @@ Generates one-time tracking tokens embedded in outbound texts.
 When recipient taps the link, browser submits GPS coordinates silently
 and redirects to a neutral page. Authorized by signed bond paperwork.
 """
+from __future__ import annotations
 import os
 import uuid
 import secrets

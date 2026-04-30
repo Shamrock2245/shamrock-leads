@@ -4,6 +4,7 @@ Endpoints: /api/status, /api/mongo-stats, /api/command, /api/stats,
            /api/bond-distribution, /api/top-charges, /api/bounty-board,
            /api/timeline, /api/scraper-health, /api/leads/<booking_number>
 """
+from __future__ import annotations
 
 import csv
 import io

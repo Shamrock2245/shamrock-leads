@@ -3,6 +3,7 @@ ShamrockLeads Dashboard Server
 Serves the static dashboard HTML and provides a health/status JSON API.
 Runs on port 8088.
 """
+from __future__ import annotations
 import os
 import json
 import logging

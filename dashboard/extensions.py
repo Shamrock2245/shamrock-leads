@@ -3,6 +3,7 @@ ShamrockLeads Dashboard — Extension Initialization
 Centralized init for MongoDB (Motor), Redis, and BlueBubbles config.
 Avoids circular imports by keeping all singletons here.
 """
+from __future__ import annotations
 
 import os
 import re as re_mod

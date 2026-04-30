@@ -1,4 +1,5 @@
 """Tracking API Blueprint (Phase 2) — map data, history, geofence"""
+from __future__ import annotations
 from quart import Blueprint, jsonify, request
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection

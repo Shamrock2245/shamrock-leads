@@ -3,6 +3,7 @@ ShamrockLeads Dashboard — Hypercorn Runner
 Entry point for the modular Quart application.
 Usage: python -m dashboard.run  OR  python dashboard/run.py
 """
+from __future__ import annotations
 
 import os
 import asyncio

@@ -26,6 +26,7 @@ Endpoints
   GET    /api/rearrest/history      — View notification history
   GET    /api/rearrest/stats        — Notification stats (sent, converted, etc.)
 """
+from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone

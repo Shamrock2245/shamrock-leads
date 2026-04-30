@@ -5,6 +5,7 @@ Flask server with MongoDB API endpoints.
 Run:  python dashboard/app.py
 Then: open http://localhost:5050
 """
+from __future__ import annotations
 
 import csv
 import io

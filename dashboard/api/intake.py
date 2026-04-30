@@ -30,6 +30,7 @@ Dashboard.html in the GAS project:
     Meta:       source, platform, timestamp, consentGiven, consentTimestamp,
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
+from __future__ import annotations
 import uuid
 import logging
 from datetime import datetime, timezone

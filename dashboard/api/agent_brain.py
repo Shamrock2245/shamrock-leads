@@ -15,6 +15,7 @@ Borrows conversational patterns from:
   - Shannon (ElevenLabs_AfterHoursAgent.js) — empathetic intake, data extraction
   - Manus Brain (Manus_Brain.js) — system prompt, OpenAI routing, intent classification
 """
+from __future__ import annotations
 
 import logging
 import os

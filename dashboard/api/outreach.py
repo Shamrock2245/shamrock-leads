@@ -9,6 +9,7 @@ Endpoints:
   GET  /api/outreach/sequences                        — List all sequences (paginated)
   POST /api/outreach/reply                            — Handle inbound reply (stop sequence)
 """
+from __future__ import annotations
 import logging
 from quart import Blueprint, jsonify, request, current_app
 from dashboard.services.outreach_sequencer import OutreachSequencer

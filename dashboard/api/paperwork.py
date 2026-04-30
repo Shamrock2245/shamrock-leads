@@ -15,6 +15,7 @@ Endpoints:
   POST /api/paperwork/<packet_id>/signnow      — Push to SignNow for e-signature
   GET  /api/paperwork/list/<intake_id>         — List all packets for an intake
 """
+from __future__ import annotations
 import io
 import logging
 import uuid
@@ -390,11 +391,31 @@ async def push_to_signnow(packet_id: str):
         )
 
         logger.info("[paperwork] Packet %s pushed to SignNow: %s", packet_id, result.get("invite_id"))
+
+        # ── Telegram delivery (if indemnitor has a Telegram chat_id stored) ──
+        signing_link = result.get("signing_link", "")
+        tg_chat_id = intake.get("telegram_chat_id") or data.get("telegram_chat_id")
+        if signing_link and tg_chat_id:
+            try:
+                from dashboard.services.telegram_service import get_telegram_service
+                tg = get_telegram_service()
+                phase = intake.get("phase", 1)
+                await tg.send_signing_link(
+                    chat_id=tg_chat_id,
+                    defendant_name=intake.get("defendant_name", ""),
+                    signing_link=signing_link,
+                    indemnitor_name=intake.get("indemnitor_name", ""),
+                    phase=phase,
+                )
+                logger.info("[paperwork] Telegram signing link sent to chat_id=%s", tg_chat_id)
+            except Exception as tg_exc:
+                logger.warning("[paperwork] Telegram delivery failed: %s", tg_exc)
+
         return jsonify({
             "success": True,
             "packet_id": packet_id,
             "signnow_invite_id": result.get("invite_id"),
-            "signnow_signing_link": result.get("signing_link"),
+            "signnow_signing_link": signing_link,
         })
 
     except Exception as exc:

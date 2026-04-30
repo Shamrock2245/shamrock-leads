@@ -12,6 +12,7 @@ Phase 2 — After bondsman approval + POA entry:
   faq-defendants, defendant-application, surety-terms,
   master-waiver, collateral-receipt, payment-plan
 """
+from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone

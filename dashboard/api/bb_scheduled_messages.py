@@ -43,6 +43,7 @@ Endpoints
   DELETE /api/bb-schedule/<id>               — Cancel a scheduled message
   POST   /api/bb-schedule/send-now           — Send a scheduled message immediately
 """
+from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional

@@ -4,6 +4,7 @@ Handles inbound webhooks from SignNow, Twilio, and SwipeSimple.
 
 Uses extensions.get_collection() to avoid circular imports from app.py.
 """
+from __future__ import annotations
 
 from quart import Blueprint, request, jsonify
 import hmac
@@ -183,6 +184,19 @@ async def signnow_webhook():
             except Exception as exc:
                 logger.warning("[signnow_webhook] Slack alert failed: %s", exc)
 
+        # Step 9: Telegram staff alert
+        try:
+            from dashboard.services.telegram_service import get_telegram_service
+            tg = get_telegram_service()
+            booking_number = (bond_case or {}).get("booking_number", doc_id[:8])
+            await tg.send_document_signed_alert(
+                defendant_name=defendant_name,
+                booking_number=booking_number,
+                drive_url=drive_url or "",
+            )
+        except Exception as tg_exc:
+            logger.warning("[signnow_webhook] Telegram alert failed: %s", tg_exc)
+
     return jsonify({"success": True}), 200
 
 
@@ -215,25 +229,220 @@ async def twilio_webhook():
 
 @webhooks_bp.route('/webhooks/payment', methods=['POST'])
 async def payment_webhook():
-    """Handle SwipeSimple payment confirmation (future)."""
+    """
+    Handle SwipeSimple payment confirmation webhook.
+
+    SwipeSimple sends a POST with JSON payload on payment events.
+    Expected fields (SwipeSimple standard webhook schema):
+        event_type:       "payment.completed" | "payment.failed" | "payment.refunded"
+        transaction_id:   unique SwipeSimple transaction ID
+        amount:           payment amount in dollars (float)
+        status:           "approved" | "declined" | "refunded"
+        card_last4:       last 4 digits of card
+        card_brand:       "Visa" | "Mastercard" etc.
+        customer_name:    cardholder name
+        custom_fields:    { booking_number, county, indemnitor_name, indemnitor_phone }
+        created_at:       ISO timestamp
+
+    On success:
+      1. Validate HMAC signature (if SWIPESIMPLE_WEBHOOK_SECRET is set)
+      2. Parse booking_number from custom_fields or query params
+      3. Update bond case payment status in active_bonds / prospective_bonds
+      4. Log to payments collection
+      5. Send BlueBubbles receipt to indemnitor
+      6. Fire Slack alert
+      7. Publish SSE event
+      8. Log audit event
+    """
+    import httpx
     from dashboard.api.events import publish_event
+    from dashboard.services.bb_client import send_message_universal
 
-    data = await request.get_json()
-    audit_events = get_collection("audit_events")
+    now = datetime.now(timezone.utc)
 
-    # Log to audit_events
-    audit_doc = {
-        "source": "payment_webhook",
-        "event_type": "payment_confirmation",
-        "payload": data,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+    # -- 1. HMAC signature validation (optional -- skip if secret not set) -----
+    webhook_secret = os.getenv("SWIPESIMPLE_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        raw_body = await request.get_data()
+        sig_header = request.headers.get("X-SwipeSimple-Signature", "")
+        expected_sig = hmac.new(
+            webhook_secret.encode(), raw_body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(f"sha256={expected_sig}", sig_header):
+            logger.warning("[payment_webhook] Invalid HMAC signature -- rejecting")
+            return jsonify({"error": "Invalid signature"}), 401
+
+    data = await request.get_json(silent=True) or {}
+    event_type = data.get("event_type", "payment.completed")
+    transaction_id = data.get("transaction_id", "")
+    amount = float(data.get("amount", 0))
+    status = data.get("status", "approved").lower()
+    card_last4 = data.get("card_last4", "")
+    card_brand = data.get("card_brand", "")
+    customer_name = data.get("customer_name", "")
+    created_at = data.get("created_at", now.isoformat())
+
+    # Extract booking_number from custom_fields or top-level
+    custom = data.get("custom_fields", {})
+    booking_number = (
+        custom.get("booking_number")
+        or data.get("booking_number")
+        or request.args.get("booking_number", "")
+    )
+    indemnitor_name = custom.get("indemnitor_name", customer_name)
+    indemnitor_phone = custom.get("indemnitor_phone", "")
+    county = custom.get("county", "")
+
+    logger.info(
+        "[payment_webhook] event=%s txn=%s amount=$%.2f status=%s booking=%s",
+        event_type, transaction_id, amount, status, booking_number
+    )
+
+    # -- 2. Determine payment outcome -----------------------------------------
+    is_success = status in ("approved", "completed", "success")
+    is_refund = event_type == "payment.refunded" or status == "refunded"
+    is_failed = status in ("declined", "failed")
+
+    # -- 3. Update bond case ---------------------------------------------------
+    if booking_number:
+        active_bonds_col = get_collection("active_bonds")
+        prospective_bonds_col = get_collection("prospective_bonds")
+
+        payment_update = {
+            "last_payment_amount": amount,
+            "last_payment_date": now,
+            "last_payment_txn": transaction_id,
+            "last_payment_status": status,
+            "updated_at": now,
+        }
+        if is_success:
+            payment_update["payment_status"] = "paid"
+            payment_update["payment_received"] = True
+        elif is_refund:
+            payment_update["payment_status"] = "refunded"
+        elif is_failed:
+            payment_update["payment_status"] = "failed"
+
+        # Try active_bonds first, then prospective_bonds
+        result = await active_bonds_col.update_one(
+            {"booking_number": booking_number},
+            {"$set": payment_update, "$inc": {"total_paid": amount if is_success else 0}},
+        )
+        if result.matched_count == 0:
+            await prospective_bonds_col.update_one(
+                {"booking_number": booking_number},
+                {"$set": payment_update, "$inc": {"total_paid": amount if is_success else 0}},
+            )
+
+    # -- 4. Log to payments collection ----------------------------------------
+    payments_col = get_collection("payments")
+    payment_doc = {
+        "booking_number": booking_number,
+        "transaction_id": transaction_id,
+        "amount": amount,
+        "status": status,
+        "event_type": event_type,
+        "card_last4": card_last4,
+        "card_brand": card_brand,
+        "customer_name": customer_name,
+        "indemnitor_name": indemnitor_name,
+        "indemnitor_phone": indemnitor_phone,
+        "county": county,
+        "method": "swipesimple",
+        "source": "webhook",
+        "created_at": created_at,
+        "recorded_at": now.isoformat(),
     }
-    await audit_events.insert_one(audit_doc)
+    await payments_col.insert_one(payment_doc)
 
-    # Publish SSE event
-    await publish_event('payment_confirmed', data)
+    # -- 5. BlueBubbles receipt to indemnitor ---------------------------------
+    if is_success and indemnitor_phone:
+        first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
+        defendant_name = ""
+        if booking_number:
+            bond_doc = await get_collection("active_bonds").find_one(
+                {"booking_number": booking_number}, {"defendant_name": 1}
+            )
+            if bond_doc:
+                defendant_name = bond_doc.get("defendant_name", "")
 
-    return jsonify({"success": True}), 200
+        payment_date = now.strftime("%B %d, %Y")
+        card_info = f"{card_brand} ending in {card_last4}" if card_last4 else "card on file"
+        receipt_msg = (
+            f"Hi {first_name}! \u2705 We received your payment of ${amount:,.2f} "
+            f"on {payment_date}"
+            + (f" for {defendant_name}'s bond" if defendant_name else "")
+            + f" via {card_info}.\n\n"
+            f"Thank you! Your receipt has been recorded. "
+            f"Reply anytime if you need anything. \u2014 Shamrock Bail Bonds \U0001f340"
+        )
+        try:
+            bb_result = await send_message_universal(indemnitor_phone, receipt_msg)
+            logger.info(
+                "[payment_webhook] Receipt sent to %s: %s",
+                indemnitor_phone, bb_result.get("success")
+            )
+        except Exception as exc:
+            logger.warning("[payment_webhook] BB receipt failed: %s", exc)
+
+    # -- 6. Slack alert -------------------------------------------------------
+    slack_url = os.getenv("SLACK_WEBHOOK_URL", "")
+    if slack_url:
+        import httpx as _httpx
+        emoji = "\u2705" if is_success else ("\U0001f504" if is_refund else "\u274c")
+        slack_text = (
+            f"{emoji} *SwipeSimple Payment {status.title()}*\n"
+            f"Amount: *${amount:,.2f}*\n"
+            f"Booking: `{booking_number or 'N/A'}`\n"
+            f"Indemnitor: {indemnitor_name or 'Unknown'}\n"
+            f"Card: {card_brand} ****{card_last4}\n"
+            f"TXN: `{transaction_id}`"
+        )
+        try:
+            async with _httpx.AsyncClient(timeout=5) as client:
+                await client.post(slack_url, json={"text": slack_text})
+        except Exception as exc:
+            logger.warning("[payment_webhook] Slack alert failed: %s", exc)
+
+    # -- 7. SSE event ---------------------------------------------------------
+    await publish_event("payment_confirmed", {
+        "booking_number": booking_number,
+        "amount": amount,
+        "status": status,
+        "transaction_id": transaction_id,
+        "indemnitor_name": indemnitor_name,
+    })
+
+    # -- 8. Audit log ---------------------------------------------------------
+    audit_events = get_collection("audit_events")
+    await audit_events.insert_one({
+        "source": "payment_webhook",
+        "event_type": event_type,
+        "booking_number": booking_number,
+        "amount": amount,
+        "status": status,
+        "transaction_id": transaction_id,
+        "indemnitor_name": indemnitor_name,
+        "timestamp": now.isoformat(),
+    })
+
+    # -- 9. Telegram staff alert ----------------------------------------------
+    try:
+        from dashboard.services.telegram_service import get_telegram_service
+        tg = get_telegram_service()
+        emoji = "\u2705" if is_success else ("\U0001f504" if is_refund else "\u274c")
+        tg_msg = (
+            f"{emoji} *SwipeSimple {status.title()}*\n"
+            f"Amount: *${amount:,.2f}*\n"
+            f"Booking: `{booking_number or 'N/A'}`\n"
+            f"Indemnitor: {indemnitor_name or 'Unknown'}\n"
+            f"TXN: `{transaction_id}`"
+        )
+        await tg.send_staff_alert(tg_msg)
+    except Exception as tg_exc:
+        logger.warning("[payment_webhook] Telegram alert failed: %s", tg_exc)
+
+    return jsonify({"success": True, "recorded": True, "booking_number": booking_number}), 200
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

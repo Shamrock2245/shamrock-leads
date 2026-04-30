@@ -15,6 +15,7 @@ dashboard container and the scraper engine container (they share MongoDB but
 not in-process state). The scraper engine polls this collection and executes
 the requested runs.
 """
+from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from quart import Blueprint, jsonify, request
 from dashboard.extensions import get_collection, REGISTERED_COUNTIES

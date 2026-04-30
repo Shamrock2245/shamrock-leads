@@ -1,3 +1,4 @@
+from __future__ import annotations
 import httpx
 import json
 from typing import List, Dict, Any, Optional

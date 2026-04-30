@@ -31,6 +31,7 @@ Endpoints
   GET    /api/webhooks/bluebubbles/status   — List registered webhooks
   DELETE /api/webhooks/bluebubbles/<id>     — Remove a webhook registration
 """
+from __future__ import annotations
 import hashlib
 import hmac
 import logging

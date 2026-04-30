@@ -2,6 +2,7 @@
 ShamrockLeads — PIN Authentication Blueprint
 Staff-only PIN gate (stored in .env as DASHBOARD_PIN).
 """
+from __future__ import annotations
 
 import os
 from functools import wraps

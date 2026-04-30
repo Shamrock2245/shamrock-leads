@@ -25,6 +25,7 @@ Endpoints
   GET    /api/bb-contacts/list          — List all contacts on the Mac
   POST   /api/bb-contacts/check         — Check if a phone is on iMessage
 """
+from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Optional

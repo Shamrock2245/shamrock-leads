@@ -13,6 +13,7 @@ Endpoints:
   /api/imessage/templates — Outreach templates
   /api/config/bluebubbles-url — Dynamic URL sync from iMac
 """
+from __future__ import annotations
 
 import logging
 import os

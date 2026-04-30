@@ -5,6 +5,7 @@ with arrest record data using PyMuPDF (fitz).
 
 One appearance bond per criminal charge.
 """
+from __future__ import annotations
 
 import io
 import os
