@@ -110,9 +110,15 @@ async def check_server_health(suffix: str, server: dict) -> dict:
     else:
         server_info = {}
 
-    version = server_info.get("version", "unknown")
+    version = server_info.get("server_version") or server_info.get("version", "unknown")
     uptime = server_info.get("uptime", 0) or 0
-    private_api = server_info.get("privateApiConnected", False) or server_info.get("private_api_connected", False)
+    # BB API returns "private_api" (bool) + "helper_connected" (bool), NOT camelCase
+    private_api = (
+        server_info.get("private_api", False)
+        or server_info.get("helper_connected", False)
+        or server_info.get("privateApiConnected", False)   # fallback for future versions
+        or server_info.get("private_api_connected", False)
+    )
     messages_running = server_info.get("messagesRunning", True)  # Assume running if not reported
 
     if not private_api:
