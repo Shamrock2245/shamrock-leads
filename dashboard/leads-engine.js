@@ -116,7 +116,11 @@ async function applyFilters() {
   if (state.minBond) params.set('min_bond', state.minBond);
   if (state.search) params.set('search', state.search);
   try {
-    const r = await fetch(`${API}/api/leads?${params}`); const d = await r.json();
+    const r = await fetch(`${API}/api/leads?${params}`);
+    if (!r.ok) { console.warn('[Leads] HTTP', r.status); return; }
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) { console.warn('[Leads] non-JSON response'); return; }
+    const d = await r.json();
     state.leads = d.leads || []; state.total = d.total || 0; state.pages = d.pages || 1;
     if (d.counties && state.counties.length === 0) buildCountyOptions(d.counties);
     document.getElementById('leadsBadge').textContent = state.total.toLocaleString();
@@ -180,7 +184,9 @@ function goPage(p) { state.page = p; applyFilters(); document.getElementById('ta
 // ── Command Center ──
 async function loadDashboard() {
   try {
-    const [s, m] = await Promise.all([fetch(`${API}/api/status`).then(r=>r.json()), fetch(`${API}/api/mongo-stats`).then(r=>r.json())]);
+    const _sf = async (url) => { const r = await fetch(url); if (!r.ok) return null; const ct = r.headers.get('content-type')||''; return ct.includes('application/json') ? r.json() : null; };
+    const [s, m] = await Promise.all([_sf(`${API}/api/status`), _sf(`${API}/api/mongo-stats`)]);
+    if (!s || !m) { console.warn('[Dashboard] core endpoints unavailable'); return; }
     state.scraperData = s; state.mongoData = m;
     const sc = s.scrapers||{}, by = m.by_county||{}, scores = m.scores||{};
     const ok = Object.values(sc).filter(x=>x.status==='ok').length;
@@ -227,7 +233,11 @@ async function loadDefendants() {
   const params = new URLSearchParams({limit:50,sort:'lead_score',order:'desc'});
   if (search) params.set('search', search);
   try {
-    const r = await fetch(`${API}/api/leads?${params}`); const d = await r.json();
+    const r = await fetch(`${API}/api/leads?${params}`);
+    if (!r.ok) { console.warn('[Defendants] HTTP', r.status); return; }
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) { console.warn('[Defendants] non-JSON response'); return; }
+    const d = await r.json();
     const grid = document.getElementById('defendantGrid');
     grid.innerHTML = (d.leads||[]).map(l => {
       const bond = l.bond_amount||0;

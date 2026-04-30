@@ -41,11 +41,20 @@ const PREF_COMM_LABELS = {
    ═══════════════════════════════════════════════════════════════════════════ */
 const _notesCache = {};   // { booking_number: notesDoc }
 
+/** Safe JSON parse — returns null if response isn't valid JSON */
+async function _safeJSON(res) {
+  if (!res.ok) return null;
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) return null;
+  return res.json();
+}
+
 async function _fetchNotesDoc(bookingNumber) {
   if (_notesCache[bookingNumber]) return _notesCache[bookingNumber];
   try {
     const res = await fetch(`/api/defendant-notes/${bookingNumber}`);
-    const doc = await res.json();
+    const doc = await _safeJSON(res);
+    if (!doc) return {};
     _notesCache[bookingNumber] = doc;
     return doc;
   } catch { return {}; }
@@ -62,7 +71,8 @@ async function bulkLoadNotes() {
 
   try {
     const res = await fetch(`/api/defendant-notes/bulk?booking_numbers=${bookingNumbers.join(',')}`);
-    const map = await res.json();
+    const map = await _safeJSON(res);
+    if (!map) return;
     Object.assign(_notesCache, map);
     // Apply borders + badges to all visible cards
     bookingNumbers.forEach(bn => {
@@ -149,7 +159,7 @@ async function openShamrockNotes(bookingNumber, defendantData) {
   let pipelineStatus = null;
   try {
     const psRes = await fetch(`/api/defendant-notes/${bookingNumber}/pipeline-status`);
-    pipelineStatus = await psRes.json();
+    pipelineStatus = await _safeJSON(psRes) || { tracked: false };
   } catch { pipelineStatus = { tracked: false }; }
 
   // Build or reuse modal
@@ -317,6 +327,9 @@ async function openShamrockNotes(bookingNumber, defendantData) {
         <button class="slc-btn slc-btn-finalize" onclick="openFinalizeBond('${bookingNumber}')">
           🔒 Finalize Bond
         </button>
+        <button class="btn-record-bond" onclick="closeShamrockNotes(); window.openRecordBondModal && openRecordBondModal({booking_number:'${bookingNumber}', ..._notesCache['${bookingNumber}']||{}})">
+          ☘️ Record Bond
+        </button>
         <button class="slc-btn slc-btn-primary" onclick="saveShamrockNotes('${bookingNumber}')">
           💾 Save Notes
         </button>
@@ -362,7 +375,8 @@ async function saveShamrockNotes(bookingNumber) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) { if (typeof showToast === 'function') showToast('Save failed: bad response', 'error'); return; }
     if (data.success) {
       _notesCache[bookingNumber] = data.notes;
       _applyCardStyling(bookingNumber, data.notes);
@@ -391,7 +405,8 @@ async function logContact(bookingNumber) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) { if (typeof showToast === 'function') showToast('Log failed: bad response', 'error'); return; }
     if (data.success) {
       _notesCache[bookingNumber] = data.notes;
       _applyCardStyling(bookingNumber, data.notes);
@@ -444,7 +459,8 @@ async function promoteToPipeline(bookingNumber) {
         note: notes ? `Notes at promotion: ${notes.substring(0, 200)}` : '',
       }),
     });
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) { if (typeof showToast === 'function') showToast('Promote failed: bad response', 'error'); return; }
     if (data.success) {
       if (typeof showToast === 'function') showToast(`📱 Moved to Outreach (${data.stage}) ✓`, 'success');
       // Update the button in the modal footer
@@ -579,7 +595,8 @@ async function _finalizeBondStep1(bookingNumber) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) { if (typeof showToast === 'function') showToast('Error: bad response from server', 'error'); return; }
     if (!data.success) {
       if (typeof showToast === 'function') showToast('Error: ' + (data.error || 'unknown'), 'error');
       return;
@@ -668,7 +685,8 @@ async function _finalizeBondStep2(bookingNumber, reviewToken) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) { if (typeof showToast === 'function') showToast('Error: bad response from server', 'error'); return; }
     if (data.success) {
       // Update cache + card
       if (_notesCache[bookingNumber]) {
@@ -731,7 +749,8 @@ function _injectDnbFilter() {
 async function openDnbList() {
   try {
     const res = await fetch('/api/dnb-list');
-    const data = await res.json();
+    const data = await _safeJSON(res);
+    if (!data) return;
     const records = data.records || [];
 
     let modal = document.getElementById('slcDnbListModal');

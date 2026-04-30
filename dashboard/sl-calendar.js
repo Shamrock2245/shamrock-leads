@@ -45,7 +45,11 @@
     if (_filterCounty) params.set('county', _filterCounty);
 
     try {
-      const res = await fetch('/api/calendar/events?' + params.toString()).then(r => r.json());
+      const r = await fetch('/api/calendar/events?' + params.toString());
+      if (!r.ok) { console.warn('[Calendar] HTTP', r.status); return; }
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) { console.warn('[Calendar] non-JSON:', ct.slice(0, 60)); return; }
+      const res = await r.json();
       if (res.success) {
         _events = res.events;
         renderSummaryBadges(res.summary);

@@ -1097,6 +1097,168 @@
   <source src="data:audio/wav;base64,UklGRl9vT19telephones..." type="audio/wav">
 </audio>
 
+<!-- ═══ RECORD BOND MODAL (Retrospective) ═══ -->
+<div class="modal-overlay rb-overlay" id="recordBondModal" onclick="if(event.target===this)SLRecordBond.close()">
+  <div class="rb-modal">
+    <div class="rb-header">
+      <div class="rb-header-left">
+        <span class="rb-icon">☘️</span>
+        <div>
+          <div class="rb-title">Record Bond</div>
+          <div class="rb-subtitle">Retrospective entry · Feeds analytics &amp; liability</div>
+        </div>
+      </div>
+      <button class="rb-close" onclick="SLRecordBond.close()" aria-label="Close">✕</button>
+    </div>
+
+    <div class="rb-body">
+      <!-- Section: Defendant -->
+      <div class="rb-section">
+        <div class="rb-section-label">DEFENDANT</div>
+        <div class="rb-row">
+          <div class="rb-field rb-field-2">
+            <label for="rbDefendantName">Full Name *</label>
+            <input type="text" id="rbDefendantName" placeholder="John Doe" required>
+          </div>
+          <div class="rb-field">
+            <label for="rbBookingNumber">Booking # *</label>
+            <input type="text" id="rbBookingNumber" placeholder="2025-001234">
+          </div>
+        </div>
+        <div class="rb-row">
+          <div class="rb-field">
+            <label for="rbCounty">County</label>
+            <input type="text" id="rbCounty" placeholder="Lee">
+          </div>
+          <div class="rb-field">
+            <label for="rbFacility">Facility</label>
+            <input type="text" id="rbFacility" placeholder="Lee County Jail">
+          </div>
+          <div class="rb-field rb-field-2">
+            <label for="rbCharges">Charges</label>
+            <input type="text" id="rbCharges" placeholder="Battery (DV)">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: Bond Details -->
+      <div class="rb-section">
+        <div class="rb-section-label">BOND DETAILS</div>
+        <div class="rb-row">
+          <div class="rb-field">
+            <label for="rbBondAmount">Bond Amount ($)</label>
+            <input type="number" id="rbBondAmount" placeholder="5000" oninput="SLRecordBond.calcPremium()">
+          </div>
+          <div class="rb-field">
+            <label for="rbPremium">Premium ($)</label>
+            <input type="number" id="rbPremium" placeholder="500" onfocus="SLRecordBond.markPremiumManual()">
+          </div>
+          <div class="rb-field">
+            <label for="rbSurety">Surety *</label>
+            <select id="rbSurety" onchange="SLRecordBond.suggestPOA()">
+              <option value="osi">OSI (O'Shaughnahill)</option>
+              <option value="palmetto">Palmetto</option>
+            </select>
+          </div>
+        </div>
+        <div class="rb-row">
+          <div class="rb-field">
+            <label for="rbPOANumber">POA Number *</label>
+            <input type="text" id="rbPOANumber" placeholder="12345">
+            <div id="rbPOAHint" class="rb-hint"></div>
+          </div>
+          <div class="rb-field">
+            <label for="rbCaseNumber">Case Number</label>
+            <input type="text" id="rbCaseNumber" placeholder="25-CF-001234">
+          </div>
+          <div class="rb-field">
+            <label for="rbBondDate">Bond Date</label>
+            <input type="date" id="rbBondDate">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: Court -->
+      <div class="rb-section">
+        <div class="rb-section-label">COURT</div>
+        <div class="rb-row">
+          <div class="rb-field">
+            <label for="rbCourtDate">Court Date</label>
+            <input type="date" id="rbCourtDate">
+          </div>
+          <div class="rb-field">
+            <label for="rbCourtTime">Time</label>
+            <input type="text" id="rbCourtTime" placeholder="8:30 AM">
+          </div>
+          <div class="rb-field rb-field-2">
+            <label for="rbCourtLocation">Location</label>
+            <input type="text" id="rbCourtLocation" placeholder="Lee County Justice Center">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: Indemnitor -->
+      <div class="rb-section">
+        <div class="rb-section-label">INDEMNITOR</div>
+        <div class="rb-row">
+          <div class="rb-field rb-field-2">
+            <label for="rbIndemnitorName">Indemnitor Name</label>
+            <input type="text" id="rbIndemnitorName" placeholder="Jane Doe">
+          </div>
+          <div class="rb-field">
+            <label for="rbIndemnitorPhone">Phone</label>
+            <input type="tel" id="rbIndemnitorPhone" placeholder="239-555-0000">
+          </div>
+          <div class="rb-field">
+            <label for="rbIndemnitorRelationship">Relationship</label>
+            <input type="text" id="rbIndemnitorRelationship" placeholder="Wife, Mother, etc.">
+          </div>
+        </div>
+        <div class="rb-row">
+          <div class="rb-field rb-field-2">
+            <label for="rbIndemnitorEmail">Email</label>
+            <input type="email" id="rbIndemnitorEmail" placeholder="jane@example.com">
+          </div>
+        </div>
+      </div>
+
+      <!-- Section: Payment & Agent -->
+      <div class="rb-section">
+        <div class="rb-section-label">PAYMENT &amp; AGENT</div>
+        <div class="rb-row">
+          <div class="rb-field">
+            <label for="rbPaymentMethod">Payment Method</label>
+            <select id="rbPaymentMethod">
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="financing">Financing</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="rb-field">
+            <label for="rbAgentName">Agent</label>
+            <input type="text" id="rbAgentName" value="Brendan">
+          </div>
+          <div class="rb-field rb-field-2">
+            <label for="rbNotes">Notes</label>
+            <input type="text" id="rbNotes" placeholder="Walk-in, referral, etc.">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rb-footer">
+      <div id="rbSubmitStatus" class="rb-status"></div>
+      <div class="rb-actions">
+        <button class="rb-btn-cancel" onclick="SLRecordBond.close()">Cancel</button>
+        <button class="rb-btn-submit" id="rbSubmitBtn" onclick="SLRecordBond.submit()">
+          ☘️ Record Bond
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ POA INVENTORY MODAL ═══ -->
 <div class="inv-overlay" id="inventoryModal">
   <div class="inv-modal">
@@ -1256,6 +1418,7 @@
 <script src="/sl-inventory.js"></script>
 <script src="/sl-analytics.js"></script>
 <script src="/sl-calendar.js"></script>
+<script src="/sl-record-bond.js"></script>
 <script src="/sl-utils.js"></script>
 </body>
 </html>

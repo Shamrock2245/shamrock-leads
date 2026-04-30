@@ -149,7 +149,11 @@
     panel.style.display = 'block';
 
     try {
-      const res = await fetch(`/api/leads/${encodeURIComponent(bookingNumber)}/intelligence`).then(r => r.json());
+      const r = await fetch(`/api/leads/${encodeURIComponent(bookingNumber)}/intelligence`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) throw new Error('Non-JSON response');
+      const res = await r.json();
       if (!res.success) throw new Error(res.error || 'Failed');
 
       const { score_explanation, classified_charges, similar_cases, optimal_contact } = res;
@@ -254,7 +258,11 @@
   // ── Trend Stats Loader ──────────────────────────────────────────────────
   async function loadTrendStats() {
     try {
-      const res = await fetch('/api/leads/trend-stats').then(r => r.json());
+      const r = await fetch('/api/leads/trend-stats');
+      if (!r.ok) return;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return;
+      const res = await r.json();
       if (!res.success) return;
       const { trends } = res;
 

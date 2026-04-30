@@ -41,7 +41,6 @@ def main():
     flow = InstalledAppFlow.from_client_config(
         CLIENT_CONFIG,
         scopes=SCOPES,
-        redirect_uri="http://localhost:3000/callback",
     )
 
     # This opens a browser and runs a local server on port 3000

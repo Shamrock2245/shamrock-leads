@@ -8,6 +8,7 @@ APScheduler>=3.10.4
 # Google Sheets (optional legacy writer)
 gspread>=6.0.0
 google-auth>=2.25.0
+google-auth-oauthlib>=0.8.0
 
 # AI / Scoring (future)
 openai>=1.12.0

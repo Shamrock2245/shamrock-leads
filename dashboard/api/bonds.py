@@ -14,10 +14,274 @@ from dashboard.services.risk_engine import compute_risk_score
 
 bonds_bp = Blueprint("bonds", __name__)
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# WRITE BOND — Export to SignNow / GAS
+# RECORD BOND — Retrospective manual bond entry
+# Creates active_bonds + payments + assigns POA + audit log
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@bonds_bp.route("/bonds/record", methods=["POST"])
+async def api_record_bond():
+    """
+    Record a bond retrospectively. This is for bonds that were written
+    manually (in-person, phone, etc.) and need to be logged into the system
+    so they feed into analytics, liability, and revenue tracking.
+
+    Creates:
+      1. active_bonds document (liability tracking)
+      2. payments document (revenue tracking)
+      3. poa_inventory update (marks POA as assigned)
+      4. audit_events document (audit trail)
+
+    Body:
+        {
+            "defendant_name":    "John Doe",
+            "booking_number":    "2025-001234",
+            "county":            "Lee",
+            "bond_amount":       5000,
+            "premium":           500,
+            "surety":            "osi",
+            "poa_number":        "12345",
+            "case_number":       "25-CF-001234",
+            "court_date":        "2025-06-15",
+            "court_time":        "8:30 AM",
+            "court_location":    "Lee County Justice Center",
+            "bond_date":         "2025-04-30",
+            "charges":           "Battery (Domestic Violence)",
+            "facility":          "Lee County Jail",
+            "indemnitor_name":   "Jane Doe",
+            "indemnitor_phone":  "2395550000",
+            "indemnitor_email":  "jane@example.com",
+            "indemnitor_relationship": "Wife",
+            "payment_method":    "cash",
+            "agent_name":        "Brendan",
+            "notes":             "Walk-in client"
+        }
+    """
+    data = await request.get_json(force=True) or {}
+
+    # ── Validate required fields ────────────────────────────────────────────
+    defendant_name = (data.get("defendant_name") or "").strip()
+    booking_number = (data.get("booking_number") or "").strip()
+    poa_number = (data.get("poa_number") or "").strip()
+    surety = (data.get("surety") or "osi").lower().strip()
+
+    errors = []
+    if not defendant_name:
+        errors.append("defendant_name is required")
+    if not booking_number:
+        errors.append("booking_number is required")
+    if not poa_number:
+        errors.append("poa_number is required")
+    if surety not in ("osi", "palmetto"):
+        errors.append("surety must be 'osi' or 'palmetto'")
+    if errors:
+        return jsonify({"success": False, "errors": errors}), 400
+
+    try:
+        bond_amount = float(data.get("bond_amount") or 0)
+    except (ValueError, TypeError):
+        bond_amount = 0.0
+    try:
+        premium = float(data.get("premium") or 0)
+    except (ValueError, TypeError):
+        premium = 0.0
+
+    county = (data.get("county") or "").strip()
+    case_number = (data.get("case_number") or "").strip()
+    court_date = (data.get("court_date") or "").strip()
+    court_time = (data.get("court_time") or "").strip()
+    court_location = (data.get("court_location") or "").strip()
+    bond_date_str = (data.get("bond_date") or "").strip()
+    charges = (data.get("charges") or "").strip()
+    facility = (data.get("facility") or "").strip()
+    indemnitor_name = (data.get("indemnitor_name") or "").strip()
+    indemnitor_phone = (data.get("indemnitor_phone") or "").strip()
+    indemnitor_email = (data.get("indemnitor_email") or "").strip()
+    indemnitor_relationship = (data.get("indemnitor_relationship") or "").strip()
+    payment_method = (data.get("payment_method") or "cash").strip()
+    agent_name = (data.get("agent_name") or "Brendan").strip()
+    notes = (data.get("notes") or "").strip()
+
+    now = datetime.now(timezone.utc)
+
+    # Parse bond_date or default to now
+    bond_date = now
+    if bond_date_str:
+        try:
+            bond_date = datetime.strptime(bond_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass  # Fall back to now
+
+    # ── 1. Create / upsert active_bonds document ────────────────────────────
+    active_bonds = get_collection("active_bonds")
+    bond_doc = {
+        "booking_number": booking_number,
+        "defendant_name": defendant_name,
+        "county": county,
+        "facility": facility,
+        "bond_amount": bond_amount,
+        "premium": premium,
+        "insurance_company": surety.upper(),
+        "poa_number": poa_number,
+        "case_number": case_number,
+        "charges": charges,
+        "court_date": court_date,
+        "court_time": court_time,
+        "court_location": court_location,
+        "bond_date": bond_date.isoformat(),
+        "status": "active",
+        "source": "retrospective_manual",
+        "agent_name": agent_name,
+        "indemnitor_name": indemnitor_name,
+        "indemnitor_phone": indemnitor_phone,
+        "indemnitor_email": indemnitor_email,
+        "indemnitor_relationship": indemnitor_relationship,
+        "payment_method": payment_method,
+        "notes": notes,
+        "check_in_required": False,
+        "created_at": bond_date,
+        "updated_at": now,
+    }
+
+    await active_bonds.update_one(
+        {"booking_number": booking_number},
+        {"$set": bond_doc},
+        upsert=True,
+    )
+    logger.info("[record-bond] Active bond created: %s — %s (%s)", booking_number, defendant_name, surety.upper())
+
+    # ── 2. Create payments document (revenue tracking) ──────────────────────
+    payment_doc = None
+    if premium > 0:
+        payments = get_collection("payments")
+        payment_doc = {
+            "booking_number": booking_number,
+            "defendant_name": defendant_name,
+            "county": county,
+            "amount": premium,
+            "bond_amount": bond_amount,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "method": payment_method,
+            "status": "completed",
+            "source": "retrospective_manual",
+            "agent_name": agent_name,
+            "indemnitor_name": indemnitor_name,
+            "indemnitor_phone": indemnitor_phone,
+            "timestamp": bond_date,
+            "created_at": now,
+        }
+        await payments.update_one(
+            {"booking_number": booking_number, "source": "retrospective_manual"},
+            {"$set": payment_doc},
+            upsert=True,
+        )
+        logger.info("[record-bond] Payment recorded: $%.2f for %s", premium, booking_number)
+
+    # ── 3. Assign POA in inventory ──────────────────────────────────────────
+    poa_result = {"assigned": False}
+    poa_inventory = get_collection("poa_inventory")
+    poa_doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety})
+    if poa_doc:
+        if poa_doc.get("status") == "available":
+            await poa_inventory.update_one(
+                {"poa_number": poa_number, "surety_id": surety},
+                {"$set": {
+                    "status": "assigned",
+                    "bond_case_id": booking_number,
+                    "used_at": now.isoformat(),
+                    "defendant_name": defendant_name,
+                }},
+            )
+            poa_result = {"assigned": True, "poa_number": poa_number, "was": "available"}
+            logger.info("[record-bond] POA %s assigned to %s", poa_number, booking_number)
+        elif poa_doc.get("status") == "assigned":
+            # Already assigned — update the case link
+            await poa_inventory.update_one(
+                {"poa_number": poa_number, "surety_id": surety},
+                {"$set": {"bond_case_id": booking_number, "defendant_name": defendant_name}},
+            )
+            poa_result = {"assigned": True, "poa_number": poa_number, "was": "already_assigned"}
+        else:
+            poa_result = {"assigned": False, "poa_number": poa_number, "reason": f"POA is {poa_doc.get('status')}"}
+    else:
+        # POA not in inventory — create it as assigned (user manually entered a number)
+        await poa_inventory.insert_one({
+            "surety_id": surety,
+            "poa_prefix": "",
+            "poa_number": poa_number,
+            "poa_full": poa_number,
+            "max_bond_value": 0,
+            "status": "assigned",
+            "bond_case_id": booking_number,
+            "defendant_name": defendant_name,
+            "used_at": now.isoformat(),
+            "book_number": "manual_entry",
+            "assigned_to_agent": agent_name,
+            "received_at": now.isoformat(),
+        })
+        poa_result = {"assigned": True, "poa_number": poa_number, "was": "created_and_assigned"}
+        logger.info("[record-bond] POA %s created and assigned (not in inventory)", poa_number)
+
+    # ── 4. Audit event ──────────────────────────────────────────────────────
+    try:
+        audit_col = get_collection("audit_events")
+        await audit_col.insert_one({
+            "event_type": "bond_recorded_retroactive",
+            "entity_id": booking_number,
+            "entity_type": "bond_case",
+            "defendant_name": defendant_name,
+            "county": county,
+            "bond_amount": bond_amount,
+            "premium": premium,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "case_number": case_number,
+            "agent_name": agent_name,
+            "source": "retrospective_manual",
+            "timestamp": now,
+        })
+    except Exception as exc:
+        logger.warning("[record-bond] Audit log error: %s", exc)
+
+    # ── 5. Update arrest record with bond status (if exists) ────────────────
+    try:
+        arrests = get_collection("arrests")
+        await arrests.update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                "bond_written": True,
+                "bond_written_at": now.isoformat(),
+                "bond_poa_number": poa_number,
+                "bond_surety": surety.upper(),
+                "bond_premium": premium,
+            }},
+        )
+    except Exception as exc:
+        logger.warning("[record-bond] Arrest update error: %s", exc)
+
+    print(f"\n{'═' * 60}")
+    print(f"☘️ BOND RECORDED — {defendant_name}")
+    print(f"   Booking: {booking_number} | County: {county}")
+    print(f"   Bond: ${bond_amount:,.2f} | Premium: ${premium:,.2f}")
+    print(f"   Surety: {surety.upper()} | POA: {poa_number}")
+    print(f"   Indemnitor: {indemnitor_name} ({indemnitor_phone})")
+    print(f"{'═' * 60}\n")
+
+    return jsonify({
+        "success": True,
+        "message": f"Bond recorded for {defendant_name}",
+        "booking_number": booking_number,
+        "bond_amount": bond_amount,
+        "premium": premium,
+        "surety": surety.upper(),
+        "poa": poa_result,
+        "payment_recorded": premium > 0,
+    })
 
 @bonds_bp.route("/write-bond", methods=["POST"])
 async def api_write_bond():

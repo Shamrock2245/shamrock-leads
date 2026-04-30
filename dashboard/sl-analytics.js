@@ -92,6 +92,26 @@
     requestAnimationFrame(step);
   }
 
+  // ── Safe fetch wrapper — prevents .json() on non-JSON responses ─────────
+  async function safeFetch(url) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) {
+        console.warn(`[Analytics] ${url} → HTTP ${r.status}`);
+        return { success: false, error: `HTTP ${r.status}` };
+      }
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        console.warn(`[Analytics] ${url} → non-JSON: ${ct.slice(0, 60)}`);
+        return { success: false, error: 'Non-JSON response' };
+      }
+      return await r.json();
+    } catch (e) {
+      console.warn(`[Analytics] ${url} → fetch error:`, e.message);
+      return { success: false, error: e.message };
+    }
+  }
+
   // ── Load all analytics data ──────────────────────────────────────────────
   async function load(days) {
     if (days !== undefined) _currentDays = days;
@@ -103,30 +123,43 @@
       el.innerHTML = '<span class="spinner-sm"></span>';
     });
 
-    try {
-      const [revRes, funnelRes, countyRes, suretyRes, forecastRes, distRes] = await Promise.all([
-        fetch(`/api/analytics/revenue?days=${_currentDays}`).then(r => r.json()),
-        fetch('/api/analytics/funnel').then(r => r.json()),
-        fetch(`/api/analytics/county-performance?days=${_currentDays}`).then(r => r.json()),
-        fetch('/api/analytics/surety-breakdown').then(r => r.json()),
-        fetch('/api/analytics/forecast').then(r => r.json()),
-        fetch('/api/analytics/bond-distribution').then(r => r.json()),
-      ]);
+    const errEl = document.getElementById('analyticsError');
+    if (errEl) errEl.style.display = 'none';
 
-      _data = { revRes, funnelRes, countyRes, suretyRes, forecastRes, distRes };
+    // allSettled: one failing endpoint doesn't crash the whole panel
+    const results = await Promise.allSettled([
+      safeFetch(`/api/analytics/revenue?days=${_currentDays}`),
+      safeFetch('/api/analytics/funnel'),
+      safeFetch(`/api/analytics/county-performance?days=${_currentDays}`),
+      safeFetch('/api/analytics/surety-breakdown'),
+      safeFetch('/api/analytics/forecast'),
+      safeFetch('/api/analytics/bond-distribution'),
+    ]);
 
-      renderKPIs(revRes, forecastRes);
-      renderRevenueChart(revRes);
-      renderFunnelChart(funnelRes);
-      renderCountyChart(countyRes);
-      renderSuretyChart(suretyRes);
-      renderDistributionChart(distRes);
-      renderCountyTable(countyRes);
+    const extract = (i) => results[i].status === 'fulfilled' ? results[i].value : { success: false };
+    const revRes = extract(0), funnelRes = extract(1), countyRes = extract(2);
+    const suretyRes = extract(3), forecastRes = extract(4), distRes = extract(5);
 
-    } catch (err) {
-      console.error('Analytics load error:', err);
-      document.getElementById('analyticsError').textContent = 'Failed to load analytics data. ' + err.message;
-      document.getElementById('analyticsError').style.display = 'block';
+    _data = { revRes, funnelRes, countyRes, suretyRes, forecastRes, distRes };
+
+    // Count failures for user feedback
+    const failures = results.filter(r => r.status !== 'fulfilled' || !r.value?.success).length;
+
+    renderKPIs(revRes, forecastRes);
+    renderRevenueChart(revRes);
+    renderFunnelChart(funnelRes);
+    renderCountyChart(countyRes);
+    renderSuretyChart(suretyRes);
+    renderDistributionChart(distRes);
+    renderCountyTable(countyRes);
+
+    if (failures === results.length) {
+      if (errEl) {
+        errEl.textContent = 'Analytics data unavailable — check server connectivity.';
+        errEl.style.display = 'block';
+      }
+    } else if (failures > 0) {
+      console.warn(`[Analytics] ${failures}/${results.length} endpoints returned errors`);
     }
   }
 

@@ -13,7 +13,11 @@ async function applyFilters() {
   if (SL_STATE.minBond) p.set('min_bond', SL_STATE.minBond);
   if (SL_STATE.search) p.set('search', SL_STATE.search);
   try {
-    const r = await fetch(`${API}/api/leads?${p}`); const d = await r.json();
+    const r = await fetch(`${API}/api/leads?${p}`);
+    if (!r.ok) { console.warn('[Leads] HTTP', r.status); return; }
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) { console.warn('[Leads] non-JSON response'); return; }
+    const d = await r.json();
     SL_STATE.leads = d.leads || []; SL_STATE.total = d.total || 0; SL_STATE.pages = d.pages || 1;
     if (d.counties && SL_STATE.counties.length === 0) buildCountyOptions(d.counties);
     document.getElementById('leadsBadge').textContent = SL_STATE.total.toLocaleString();
@@ -81,11 +85,19 @@ function goPage(p) { SL_STATE.page = p; applyFilters(); document.getElementById(
 // ── Command Center ──
 async function loadDashboard() {
   try {
+    const safeFetchJSON = async (url) => {
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return null;
+      return r.json();
+    };
     const [s, m, cmd] = await Promise.all([
-      fetch(`${API}/api/status`).then(r=>r.json()),
-      fetch(`${API}/api/mongo-stats`).then(r=>r.json()),
-      fetch(`${API}/api/command`).then(r=>r.json()).catch(()=>null)
+      safeFetchJSON(`${API}/api/status`),
+      safeFetchJSON(`${API}/api/mongo-stats`),
+      safeFetchJSON(`${API}/api/command`).catch(()=>null)
     ]);
+    if (!s || !m) { console.warn('[Dashboard] core status endpoints unavailable'); return; }
     SL_STATE.scraperData = s; SL_STATE.mongoData = m;
     const sc = s.scrapers||{}, by = m.by_county||{}, scores = m.scores||{};
     // Use server-computed counts if available (new /api/status response with 3-layer logic)

@@ -222,12 +222,12 @@ async def county_performance():
     try:
         db = get_db()
         days = int(request.args.get("days", 90))
-        cutoff = _utc_now() - timedelta(days=days)
+        cutoff = (_utc_now() - timedelta(days=days)).isoformat()
 
         arrests_col = db["arrests"]
         active_bonds_col = db["active_bonds"]
 
-        # Leads by county
+        # Leads by county (scraped_at is ISO string — use string comparison)
         leads_pipe = await arrests_col.aggregate([
             {"$match": {"scraped_at": {"$gte": cutoff}}},
             {"$group": {"_id": "$county", "leads": {"$sum": 1}}},
@@ -317,15 +317,32 @@ async def arrest_heatmap():
     try:
         db = get_db()
         days = int(request.args.get("days", 30))
-        cutoff = _utc_now() - timedelta(days=days)
+        cutoff = (_utc_now() - timedelta(days=days)).isoformat()
         arrests_col = db["arrests"]
 
+        # scraped_at is ISO string — extract hour via $substr (pos 11, len 2)
         pipe = await arrests_col.aggregate([
             {"$match": {"scraped_at": {"$gte": cutoff}}},
+            {"$addFields": {
+                "_hour": {
+                    "$cond": {
+                        "if": {"$and": [{"$isArray": ["$scraped_at"]}, False]},
+                        "then": 0,
+                        "else": {
+                            "$convert": {
+                                "input": {"$substr": ["$scraped_at", 11, 2]},
+                                "to": "int",
+                                "onError": 0,
+                                "onNull": 0
+                            }
+                        }
+                    }
+                }
+            }},
             {"$group": {
                 "_id": {
                     "county": "$county",
-                    "hour": {"$hour": "$scraped_at"}
+                    "hour": "$_hour"
                 },
                 "count": {"$sum": 1}
             }},

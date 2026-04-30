@@ -1,5 +1,14 @@
 /* ShamrockLeads — Defendants, Health, Bond Modal, Export, Init */
 
+/** Shared safe-fetch: returns parsed JSON or null if response is invalid */
+async function _safeFetch(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) return null;
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) return null;
+  return r.json();
+}
+
 // ── Defendants ──
 async function loadDefendants() {
   const search = document.getElementById('defSearch')?.value || '';
@@ -17,7 +26,8 @@ async function loadDefendants() {
   if (minBond) p.set('min_bond', minBond);
 
   try {
-    const r = await fetch(`${API}/api/leads?${p}`); const d = await r.json();
+    const d = await _safeFetch(`${API}/api/leads?${p}`);
+    if (!d) { console.warn('[Defendants] fetch failed or non-JSON'); return; }
     const leads = d.leads || [];
     const total = d.total || 0;
     const pages = d.pages || 1;
