@@ -273,6 +273,21 @@ class BaseScraper(ABC):
                 combined_stats["qualified_records"] = hot_count
                 combined_stats["total_records"] = len(records)
 
+            # ── Step 3b: Check for repeat offenders ──
+            try:
+                from writers.rearrest_checker import RearrestChecker
+                _rearrest = RearrestChecker()
+                rearrest_results = _rearrest.check_batch(records, self.county)
+                if rearrest_results["matches_found"] > 0:
+                    logger.info(
+                        f"🚨 {self.county}: {rearrest_results['matches_found']} "
+                        f"repeat offender(s) detected!"
+                    )
+                    combined_stats["rearrest_matches"] = rearrest_results["matches_found"]
+                _rearrest.close()
+            except Exception as rearrest_err:
+                logger.debug(f"⚠️ Rearrest check skipped: {rearrest_err}")
+
             # ── Step 4: Slack alerts ──
             try:
                 _slack.notify_new_arrests(records, self.county, combined_stats)

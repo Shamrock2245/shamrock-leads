@@ -19,6 +19,7 @@ from pathlib import Path
 import requests as http_requests
 
 from flask import Flask, jsonify, send_from_directory, request, Response
+from bson import ObjectId
 from pymongo import MongoClient, DESCENDING
 from dotenv import load_dotenv
 
@@ -3109,6 +3110,84 @@ def imessage_templates():
         },
     ]
     return jsonify({"templates": templates})
+
+
+# ── API: Rearrest / Repeat Offender Alerts ──────────────────────────────────
+# These endpoints serve the Repeat Offender Alert panel in the Command Center.
+# Data is written by writers/rearrest_checker.py during the scraper pipeline.
+
+@app.route("/api/rearrest/pending")
+def api_rearrest_pending():
+    """Get unreviewed re-arrest alerts for the dashboard."""
+    try:
+        limit = int(request.args.get("limit", 25))
+        notifications = db["rearrest_notifications"]
+        cursor = notifications.find(
+            {"status": "pending_review"},
+        ).sort("created_at", -1).limit(limit)
+
+        alerts = []
+        for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            for dt_field in ("created_at", "updated_at", "reviewed_at", "contacted_at", "prior_bond_date"):
+                val = doc.get(dt_field)
+                if isinstance(val, datetime):
+                    doc[dt_field] = val.isoformat()
+            alerts.append(doc)
+
+        return jsonify({"success": True, "count": len(alerts), "alerts": alerts})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/rearrest/<notification_id>/dismiss", methods=["PATCH"])
+def api_rearrest_dismiss(notification_id):
+    """Mark a re-arrest alert as reviewed/dismissed."""
+    try:
+        data = request.get_json(silent=True) or {}
+        reviewed_by = data.get("reviewed_by", "staff")
+
+        notifications = db["rearrest_notifications"]
+        result = notifications.update_one(
+            {"_id": ObjectId(notification_id)},
+            {"$set": {
+                "status": "reviewed",
+                "reviewed_by": reviewed_by,
+                "reviewed_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }},
+        )
+        if result.modified_count == 0:
+            return jsonify({"success": False, "error": "Not found"}), 404
+        return jsonify({"success": True, "status": "reviewed"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/rearrest/<notification_id>/contacted", methods=["PATCH"])
+def api_rearrest_contacted(notification_id):
+    """Mark a re-arrest alert as contacted."""
+    try:
+        data = request.get_json(silent=True) or {}
+        contacted_by = data.get("contacted_by", "staff")
+        notes = data.get("notes", "")
+
+        notifications = db["rearrest_notifications"]
+        result = notifications.update_one(
+            {"_id": ObjectId(notification_id)},
+            {"$set": {
+                "status": "contacted",
+                "contacted_by": contacted_by,
+                "contacted_at": datetime.now(timezone.utc),
+                "contact_notes": notes,
+                "updated_at": datetime.now(timezone.utc),
+            }},
+        )
+        if result.modified_count == 0:
+            return jsonify({"success": False, "error": "Not found"}), 404
+        return jsonify({"success": True, "status": "contacted"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == "__main__":

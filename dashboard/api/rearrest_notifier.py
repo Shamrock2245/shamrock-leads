@@ -25,6 +25,9 @@ Endpoints
   POST   /api/rearrest/notify       — Send re-arrest notification (manual trigger)
   GET    /api/rearrest/history      — View notification history
   GET    /api/rearrest/stats        — Notification stats (sent, converted, etc.)
+  GET    /api/rearrest/pending      — Dashboard: fetch unreviewed alerts
+  PATCH  /api/rearrest/<id>/dismiss — Dashboard: mark alert as reviewed
+  PATCH  /api/rearrest/<id>/contacted — Dashboard: mark indemnitor as contacted
 """
 from __future__ import annotations
 import logging
@@ -32,6 +35,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
+from bson import ObjectId
 from quart import Blueprint, jsonify, request
 
 from dashboard.api.bb_private_api import BlueBubblesClient
@@ -416,3 +420,115 @@ async def api_rearrest_stats():
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Dashboard Alert Endpoints (consumed by sl-rearrest.js)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@rearrest_bp.route("/rearrest/pending", methods=["GET"])
+async def api_rearrest_pending():
+    """Get unreviewed re-arrest alerts for the dashboard Command Center.
+
+    Returns rearrest_notifications with status 'pending_review' (written by
+    the synchronous RearrestChecker in the scraper pipeline).
+
+    Query params:
+        limit (default 25)
+    """
+    try:
+        limit = int(request.args.get("limit", 25))
+        notifications_coll = get_collection("rearrest_notifications")
+
+        cursor = notifications_coll.find(
+            {"status": "pending_review"},
+        ).sort("created_at", -1).limit(limit)
+
+        alerts = []
+        async for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            # Ensure datetime fields are serializable
+            for dt_field in ("created_at", "updated_at", "reviewed_at", "contacted_at", "prior_bond_date"):
+                val = doc.get(dt_field)
+                if hasattr(val, "isoformat"):
+                    doc[dt_field] = val.isoformat()
+            alerts.append(doc)
+
+        return jsonify({"success": True, "count": len(alerts), "alerts": alerts})
+
+    except Exception as e:
+        logger.error("Rearrest pending fetch error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@rearrest_bp.route("/rearrest/<notification_id>/dismiss", methods=["PATCH"])
+async def api_rearrest_dismiss(notification_id):
+    """Mark a re-arrest alert as reviewed/dismissed.
+
+    Body (optional):
+        {"reviewed_by": "Agent Name"}
+    """
+    try:
+        data = await request.get_json(silent=True) or {}
+        reviewed_by = data.get("reviewed_by", "staff")
+
+        notifications_coll = get_collection("rearrest_notifications")
+        result = await notifications_coll.update_one(
+            {"_id": ObjectId(notification_id)},
+            {
+                "$set": {
+                    "status": "reviewed",
+                    "reviewed_by": reviewed_by,
+                    "reviewed_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+        if result.modified_count == 0:
+            return jsonify({"success": False, "error": "Notification not found"}), 404
+
+        logger.info("✅ Rearrest alert %s dismissed by %s", notification_id, reviewed_by)
+        return jsonify({"success": True, "status": "reviewed"})
+
+    except Exception as e:
+        logger.error("Rearrest dismiss error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@rearrest_bp.route("/rearrest/<notification_id>/contacted", methods=["PATCH"])
+async def api_rearrest_contacted(notification_id):
+    """Mark a re-arrest alert as 'contacted' — indemnitor was reached.
+
+    Body (optional):
+        {"contacted_by": "Agent Name", "notes": "Called, left voicemail"}
+    """
+    try:
+        data = await request.get_json(silent=True) or {}
+        contacted_by = data.get("contacted_by", "staff")
+        notes = data.get("notes", "")
+
+        notifications_coll = get_collection("rearrest_notifications")
+        result = await notifications_coll.update_one(
+            {"_id": ObjectId(notification_id)},
+            {
+                "$set": {
+                    "status": "contacted",
+                    "contacted_by": contacted_by,
+                    "contacted_at": datetime.now(timezone.utc),
+                    "contact_notes": notes,
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            },
+        )
+
+        if result.modified_count == 0:
+            return jsonify({"success": False, "error": "Notification not found"}), 404
+
+        logger.info("📞 Rearrest alert %s marked contacted by %s", notification_id, contacted_by)
+        return jsonify({"success": True, "status": "contacted"})
+
+    except Exception as e:
+        logger.error("Rearrest contacted error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+

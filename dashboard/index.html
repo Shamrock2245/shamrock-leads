@@ -76,6 +76,26 @@
       </div>
     </div>
 
+    <!-- ═══ REPEAT OFFENDER ALERTS ═══ -->
+    <div class="ra-panel" id="rearrestAlertPanel">
+      <div class="ra-header">
+        <div class="ra-header-left">
+          <span class="ra-header-icon">🚨</span>
+          <span class="ra-header-title">Repeat Offender Alerts</span>
+          <span class="ra-badge" id="rearrestCount">0</span>
+        </div>
+        <div class="ra-header-right">
+          <button class="ra-refresh-btn" onclick="SLRearrest.load()" title="Refresh alerts">↻</button>
+        </div>
+      </div>
+      <div class="ra-body" id="rearrestAlertBody">
+        <div class="ra-empty">
+          <span class="ra-empty-icon">✅</span>
+          <span>No repeat offender alerts — all clear</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Bond-Ready Queue (main actionable widget) -->
     <div class="panel" style="margin-bottom:18px">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
@@ -1040,6 +1060,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/sl-core.js"></script>
+<script src="/sl-rearrest.js"></script>
 <script src="/sl-data.js"></script>
 <script src="/sl-features.js"></script>
 <script src="/sl-active-bonds.js"></script>

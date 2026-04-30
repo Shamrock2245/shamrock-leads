@@ -109,6 +109,9 @@ function initSSE() {
   es.addEventListener('hot_lead', (e) => {
       try { const data = JSON.parse(e.data); toast(`🔥 Hot lead: ${data.full_name} — Score ${data.lead_score}`, 'info'); playHotAlert(); } catch(_){}
   });
+  es.addEventListener('rearrest_detected', (e) => {
+      try { const data = JSON.parse(e.data); if (typeof SLRearrest !== 'undefined') SLRearrest.onSSE(data); } catch(_){}
+  });
   es.addEventListener('bond_written', (e) => {
       try { const data = JSON.parse(e.data); toast(`✅ Bond written: ${data.defendant_name}`, 'success'); if (typeof SLTracking !== 'undefined') SLTracking.onBondWritten(data); } catch(_){}
   });
