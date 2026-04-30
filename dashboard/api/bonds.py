@@ -381,44 +381,63 @@ async def api_active_bonds_process_missed():
 @bonds_bp.route("/appearance-bond-pdf", methods=["GET", "POST"])
 async def api_appearance_bond_pdf():
     """
-    Generate or retrieve the appearance bond PDF for a given booking number.
-    GET  ?booking_number=XXX  — return existing PDF URL
-    POST {booking_number, ...} — trigger PDF generation
+    Generate a pre-populated Appearance Bond PDF using the official
+    OSI or Palmetto surety-approved templates.
+
+    Accepts GET query params or POST JSON body:
+        name, booking, county, bond, charge, surety, date, dob, address,
+        court_date, court_time, case_number, poa_number, court_type,
+        first_name, last_name, indemnitor_name
     """
-    if request.method == "GET":
-        booking_number = request.args.get("booking_number", "")
-        if not booking_number:
-            return jsonify({"success": False, "error": "booking_number required"}), 400
-        # TODO: look up generated PDF in Google Drive / S3
-        return jsonify({
-            "success": True,
-            "booking_number": booking_number,
-            "pdf_url": None,
-            "note": "PDF generation via GAS/SignNow — check Drive for completed documents.",
-        })
-    else:
-        data = await request.get_json(force=True) or {}
-        booking_number = data.get("booking_number", "")
-        if not booking_number:
-            return jsonify({"success": False, "error": "booking_number required"}), 400
-        # Forward to GAS for PDF generation
-        gas_url = os.getenv("GAS_WEB_APP_URL", "")
-        if gas_url:
+    try:
+        from dashboard.bond_pdf_service import generate_appearance_bond, generate_safe_filename
+
+        # Accept both GET query params and POST JSON body
+        if request.method == "POST":
             try:
-                import httpx
-                payload = {"action": "generateAppearanceBond", **data}
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(gas_url, json=payload, timeout=30)
-                    if resp.status_code < 400:
-                        return jsonify({"success": True, "gas_response": resp.json()})
-                    return jsonify({"success": False, "error": resp.text[:200]}), 502
-            except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 502
-        return jsonify({
-            "success": True,
-            "booking_number": booking_number,
-            "note": "GAS_WEB_APP_URL not configured — set it in .env to enable PDF generation.",
-        })
+                d = await request.get_json(force=True) or {}
+            except Exception:
+                d = {}
+            def _p(key, default=""):
+                return d.get(key, request.args.get(key, default))
+        else:
+            def _p(key, default=""):
+                return request.args.get(key, default)
+
+        data = {
+            "name": _p("name") or _p("defendant_name", ""),
+            "first_name": _p("first_name", ""),
+            "last_name": _p("last_name", ""),
+            "booking_number": _p("booking") or _p("booking_number", ""),
+            "county": _p("county", ""),
+            "bond_amount": _p("bond") or _p("bond_amount", "0"),
+            "charge": _p("charge", ""),
+            "surety": _p("surety", "osi"),
+            "bond_date": _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y"),
+            "dob": _p("dob") or _p("date_of_birth", ""),
+            "address": _p("address", ""),
+            "court_date": _p("court_date", ""),
+            "court_time": _p("court_time", ""),
+            "case_number": _p("case_number", ""),
+            "poa_number": _p("poa_number", ""),
+            "court_type": _p("court_type", ""),
+            "indemnitor_name": _p("indemnitor_name", ""),
+        }
+
+        pdf_bytes = generate_appearance_bond(data)
+        filename = generate_safe_filename(data)
+
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except FileNotFoundError as e:
+        return jsonify({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}), 404
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
