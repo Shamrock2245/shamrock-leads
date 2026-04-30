@@ -8,6 +8,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="/styles.css">
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
 <!-- ═══ HEADER ═══ -->
@@ -39,6 +44,8 @@
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
+  <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📋 POA Inventory</button>
 </div>
 
@@ -921,6 +928,167 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════
+     TAB: REVENUE ANALYTICS
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabAnalytics">
+  <div class="container">
+    <!-- Date Range Toggle -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0;font-size:20px">💰 Revenue Intelligence</h2>
+        <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Real-time financial performance across all bond activity</p>
+      </div>
+      <div class="btn-group">
+        <button class="anl-range-btn active" onclick="SLAnalytics.setDays(7,this)">7d</button>
+        <button class="anl-range-btn" onclick="SLAnalytics.setDays(30,this)">30d</button>
+        <button class="anl-range-btn" onclick="SLAnalytics.setDays(90,this)">90d</button>
+        <button class="anl-range-btn" onclick="SLAnalytics.setDays(365,this)">12mo</button>
+      </div>
+    </div>
+    <div id="analyticsError" style="display:none;color:var(--danger);padding:12px;background:var(--panel);border-radius:var(--radius);margin-bottom:18px"></div>
+
+    <!-- KPI Row 1: Revenue -->
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
+      <div class="stat-card accent-card">
+        <div class="stat-label">💰 Total Collected (All Time)</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiCollected">—</div>
+        <div class="stat-sub">lifetime premium revenue</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">📅 Month-to-Date</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiMTD">—</div>
+        <div class="stat-sub" id="anlForecastPct">current month</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">📈 30-Day Revenue</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiCollected30">—</div>
+        <div class="stat-sub">last 30 days</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">⚡ 7-Day Revenue</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiCollected7">—</div>
+        <div class="stat-sub">last 7 days</div>
+      </div>
+    </div>
+
+    <!-- KPI Row 2: Operations -->
+    <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:24px">
+      <div class="stat-card">
+        <div class="stat-label">📊 Monthly Forecast</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiForecast">—</div>
+        <div class="stat-sub">at current pace</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">⚖️ Bond Liability</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiLiability">—</div>
+        <div class="stat-sub">outstanding exposure</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">💵 Avg Premium / Bond</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiAvgPremium">—</div>
+        <div class="stat-sub">per bond written</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">🎯 Conversion Rate</div>
+        <div class="stat-value analytics-kpi-value" id="anlKpiConversion">—</div>
+        <div class="stat-sub">leads → bonded</div>
+      </div>
+    </div>
+
+    <!-- Charts Row 1: Revenue + Funnel -->
+    <div class="grid-2" style="margin-bottom:24px">
+      <div class="panel">
+        <div class="panel-title">📈 Revenue Over Time</div>
+        <div style="height:280px;position:relative"><canvas id="revenueChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🔽 Lead Conversion Funnel</div>
+        <div style="height:280px;position:relative"><canvas id="funnelChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Charts Row 2: County + Surety -->
+    <div class="grid-2" style="margin-bottom:24px">
+      <div class="panel">
+        <div class="panel-title">📍 Revenue by County</div>
+        <div style="height:320px;position:relative"><canvas id="countyRevenueChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🛡️ Surety Split</div>
+        <div style="height:260px;position:relative"><canvas id="suretyChart"></canvas></div>
+        <div id="suretyStats" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- Charts Row 3: Bond Distribution -->
+    <div class="grid-2" style="margin-bottom:24px">
+      <div class="panel">
+        <div class="panel-title">📊 Bond Amount Distribution</div>
+        <div style="height:240px;position:relative"><canvas id="distributionChart"></canvas></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🏆 County Performance Table</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>County</th><th>Leads</th><th>Bonds</th><th>Premium</th><th>Avg Bond</th><th>Conversion</th></tr></thead>
+            <tbody id="countyPerfBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: COURT CALENDAR
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabCalendar">
+  <div class="container">
+    <!-- Header + Controls -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0;font-size:20px">📅 Court Calendar</h2>
+        <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Upcoming court appearances, reminder status, and urgency tracking</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div id="calSummary" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+        <button class="cal-nav-btn" onclick="SLCalendar.prevPeriod()">◀</button>
+        <span id="calMonthTitle" style="font-weight:600;min-width:180px;text-align:center"></span>
+        <button class="cal-nav-btn" onclick="SLCalendar.nextPeriod()">▶</button>
+        <div class="btn-group">
+          <button class="cal-view-btn active" onclick="SLCalendar.setView('month',this)">Month</button>
+          <button class="cal-view-btn" onclick="SLCalendar.setView('week',this)">Week</button>
+          <button class="cal-view-btn" onclick="SLCalendar.setView('list',this)">List</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters" style="margin-bottom:14px">
+      <select id="calCountyFilter" onchange="SLCalendar.setCountyFilter(this.value)" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        <option value="">All Counties</option>
+      </select>
+      <select onchange="SLCalendar.setUrgencyFilter(this.value)" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        <option value="">All Urgency</option>
+        <option value="today">🔴 Today</option>
+        <option value="this_week">🟠 This Week</option>
+        <option value="upcoming">🔵 Upcoming</option>
+        <option value="overdue">🟣 Overdue</option>
+      </select>
+      <button class="btn-export" onclick="SLCalendar.load()" style="margin-left:auto">↻ Refresh</button>
+    </div>
+
+    <!-- Calendar Grid -->
+    <div class="panel" style="padding:0;overflow:hidden">
+      <div id="calGrid" style="padding:16px"></div>
+    </div>
+
+    <!-- Event Detail Panel -->
+    <div id="calDetailPanel" class="panel" style="display:none;margin-top:18px"></div>
+  </div>
+</div>
+
 <!-- ═══ TOAST ═══ -->
 <div class="toast-notification" id="toast"><span class="toast-icon"></span><span class="toast-message"></span></div>
 
@@ -1058,6 +1226,21 @@
   </div>
 </div>
 
+<!-- Chart.js for Revenue Analytics -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<!-- PWA Install Banner -->
+<div id="pwaInstallBanner">
+  <div>
+    <div class="pwa-text">🍀 Install ShamrockLeads</div>
+    <div class="pwa-sub">Add to home screen for instant access</div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="pwa-dismiss-btn" onclick="SLUtils.dismissPWA()">Not now</button>
+    <button class="pwa-install-btn" onclick="SLUtils.installPWA()">⬇️ Install</button>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/sl-core.js"></script>
 <script src="/sl-rearrest.js"></script>
@@ -1071,6 +1254,9 @@
 <script src="/sl-defendant-lifecycle.js"></script>
 <script src="/sl-indemnitor.js"></script>
 <script src="/sl-inventory.js"></script>
+<script src="/sl-analytics.js"></script>
+<script src="/sl-calendar.js"></script>
+<script src="/sl-utils.js"></script>
 </body>
 </html>
 

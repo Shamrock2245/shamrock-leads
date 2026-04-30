@@ -57,6 +57,18 @@ def create_app():
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
+    # ── Revenue Analytics ──────────────────────────────────────────────────────
+    from dashboard.api.analytics import analytics_bp
+    app.register_blueprint(analytics_bp, url_prefix="/api")
+
+    # ── Lead Intelligence (AI scoring explanations, trends, charge severity) ─────
+    from dashboard.api.lead_intelligence import lead_intel_bp
+    app.register_blueprint(lead_intel_bp, url_prefix="/api")
+
+    # ── Court Calendar ─────────────────────────────────────────────────────────
+    from dashboard.api.calendar import calendar_bp
+    app.register_blueprint(calendar_bp, url_prefix="/api")
+
     # ── Phase 4: Matching Engine ─────────────────────────────────────────────
     from dashboard.api.matching import matching_bp
     app.register_blueprint(matching_bp, url_prefix="/api")
