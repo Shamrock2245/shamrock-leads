@@ -1,0 +1,39 @@
+{
+  "name": "ShamrockLeads — Florida Arrest Intelligence",
+  "short_name": "ShamrockLeads",
+  "description": "Real-time arrest intelligence, lead scoring, and bail bond lifecycle management for Florida.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11~mv2.jpg/v1/fill/w_192,h_192,lg_1,usm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11~mv2.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Command Center",
+      "url": "/?tab=command",
+      "description": "KPIs, bond-ready queue, activity feed"
+    },
+    {
+      "name": "Lead Explorer",
+      "url": "/?tab=leads",
+      "description": "Search and filter arrest records"
+    },
+    {
+      "name": "Revenue",
+      "url": "/?tab=analytics",
+      "description": "Revenue analytics and forecasting"
+    },
+    {
+      "name": "Outreach",
+      "url": "/?tab=outreach",
+      "description": "Prospective bond pipeline"
+    }
+  ]
+}
