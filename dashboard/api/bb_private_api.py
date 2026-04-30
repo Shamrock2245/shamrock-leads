@@ -127,23 +127,26 @@ class BlueBubblesClient:
                         temp_guid: str | None = None,
                         effect_id: str | None = None,
                         subject: str | None = None,
-                        selected_message_guid: str | None = None) -> dict:
+                        selected_message_guid: str | None = None,
+                        method: str = "private-api") -> dict:
         """Send a text message. Supports effects, subjects, and replies.
 
         Args:
             chat_guid: e.g. "any;-;+12395550178" (auto-selects iMessage or SMS)
             message: The text to send
-            temp_guid: Optional client-side dedup GUID
+            temp_guid: Optional client-side dedup GUID (auto-generated if omitted)
             effect_id: Optional iMessage effect (use EFFECTS dict keys)
             subject: Optional subject line (renders bold)
             selected_message_guid: Reply to this message GUID
+            method: Send method — "private-api" (default) or "apple-script"
         """
+        import uuid
         body = {
             "chatGuid": chat_guid,
             "message": message,
+            "tempGuid": temp_guid or f"shamrock-{uuid.uuid4()}",
+            "method": method,
         }
-        if temp_guid:
-            body["tempGuid"] = temp_guid
         if effect_id:
             # Resolve friendly name to full effect ID
             body["effectId"] = EFFECTS.get(effect_id, effect_id)
