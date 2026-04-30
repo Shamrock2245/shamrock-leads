@@ -82,3 +82,18 @@ class ContactDiscoveryService:
         )
 
         return {"success": True, "cached": False, "contacts": discovered_contacts}
+
+    async def _search_voter_records(self, full_name: str, county: str) -> List[Dict]:
+        """Stub for Florida voter registration search."""
+        # In production, this would query a public records API
+        return []
+        
+    async def _search_property_records(self, full_name: str, county: str) -> List[Dict]:
+        """Stub for county property appraiser search."""
+        # In production, this would query the county property appraiser API
+        return []
+        
+    async def _reverse_phone_lookup(self, phone: str) -> Dict:
+        """Stub for reverse phone lookup (e.g., TruePeopleSearch/Whitepages)."""
+        # In production, this would query a reverse phone API
+        return {}

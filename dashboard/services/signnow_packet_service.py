@@ -149,3 +149,25 @@ class SignNowPacketService:
             'message': 'Phase 2 packet sent',
             'manifest_size': len(manifest)
         }
+
+    async def create_packet(self, intake_doc: Dict[str, Any], packet_id: str) -> Dict[str, Any]:
+        """
+        Creates a SignNow packet for the given intake document.
+        This is a stub implementation that returns a mock invite ID and signing link
+        to satisfy the paperwork.py push_to_signnow endpoint.
+        """
+        logger.info(f"Creating SignNow packet {packet_id} for intake {intake_doc.get('intake_id')}")
+        
+        # In a real implementation, this would:
+        # 1. Use self.build_packet_manifest() to get the list of templates
+        # 2. Call SignNow API to copy each template
+        # 3. Call SignNow API to prefill fields on each copied document
+        # 4. Call SignNow API to group the documents into a document group
+        # 5. Call SignNow API to create an embedded invite for the group
+        
+        # Return mock data for now
+        return {
+            "invite_id": f"mock_invite_{packet_id}",
+            "signing_link": f"https://signnow.com/s/mock_link_{packet_id}",
+            "status": "success"
+        }

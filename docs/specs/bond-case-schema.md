@@ -1,6 +1,6 @@
 # Bond Case Schema
 
-> **Status:** `[PLANNED — Phase 5]`
+> **Status:** `[COMPLETE — Phase 5]`
 
 ---
 

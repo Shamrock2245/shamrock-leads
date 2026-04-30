@@ -328,12 +328,12 @@ See [ROADMAP.md](ROADMAP.md) for full details.
 | 2 | Defendant Normalization + Lifecycle | ✅ Complete |
 | 3 | Intake Queue Processing | ✅ Complete |
 | 4 | Outreach Pipeline + iMessage Bridge | ✅ Complete |
-| 5 | Bond Case + Surety + POA Inventory | 🟡 In Progress |
-| 6 | Paperwork Generation | 🔲 Planned |
-| 7 | Signature Orchestration (SignNow) | 🔲 Planned |
-| 8 | Payment Collection (SwipeSimple) | 🔲 Planned |
-| 9 | Contact Discovery (OSINT) | 🔲 Planned |
-| 10 | Automated Outreach Sequencing | 🔲 Planned |
+| 5 | Bond Case + Surety + POA Inventory | ✅ Complete |
+| 6 | Paperwork Generation | ✅ Complete |
+| 7 | Signature Orchestration (SignNow) | ✅ Complete |
+| 8 | Payment Collection (SwipeSimple) | ✅ Complete |
+| 9 | Contact Discovery (OSINT) | ✅ Complete |
+| 10 | Automated Outreach Sequencing | ✅ Complete |
 
 ---
 
