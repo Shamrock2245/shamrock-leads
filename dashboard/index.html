@@ -741,12 +741,13 @@
     <!-- Filters -->
     <div class="filters" style="margin-bottom:12px">
       <div class="btn-group" id="abStatusFilter">
-        <button class="active" onclick="filterActiveBonds('all')">All</button>
-        <button onclick="filterActiveBonds('active')">Active</button>
-        <button onclick="filterActiveBonds('alert')">Alerts</button>
-        <button onclick="filterActiveBonds('monitoring')">Monitoring</button>
-        <button onclick="filterActiveBonds('exonerated')">Exonerated</button>
+        <button class="active" data-filter="all" onclick="filterActiveBonds('all')">All</button>
+        <button data-filter="active" onclick="filterActiveBonds('active')">Active</button>
+        <button data-filter="alert" onclick="filterActiveBonds('alert')">Alerts</button>
+        <button data-filter="monitoring" onclick="filterActiveBonds('monitoring')">Monitoring</button>
+        <button data-filter="exonerated" onclick="filterActiveBonds('exonerated')">Exonerated</button>
       </div>
+      <input type="text" id="abSearch" placeholder="🔍 Search bonds..." style="flex:1;min-width:180px;padding:8px 12px;font-size:13px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)" oninput="renderActiveBondsTable()">
       <button class="btn-primary" id="abAddBondBtn" onclick="SLActiveBonds.openAddModal()" style="margin-left:auto;font-size:13px;padding:7px 16px">➕ Add Bond</button>
       <button class="btn-export" onclick="loadActiveBonds()" style="font-size:13px;padding:7px 14px">↻ Refresh</button>
       <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>

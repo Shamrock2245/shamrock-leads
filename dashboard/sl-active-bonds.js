@@ -69,12 +69,27 @@ function renderActiveBondsTable() {
   const tbody = document.getElementById('abTableBody');
   if (!tbody) return;
 
-  const filtered = _abFilter === 'all'       ? _abBonds
+  let filtered = _abFilter === 'all'       ? _abBonds
     : _abFilter === 'active'     ? _abBonds.filter(b => b.status === 'active')
     : _abFilter === 'alerts'     ? _abBonds.filter(b => (b.alert_count || (b.alerts||[]).length) > 0)
     : _abFilter === 'monitoring' ? _abBonds.filter(b => b.status === 'monitoring')
     : _abFilter === 'exonerated' ? _abBonds.filter(b => b.status === 'exonerated')
     : _abBonds;
+
+  // Search filter
+  const searchEl = document.getElementById('abSearch');
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter(b => {
+      const indName = b.indemnitor?.name || b.indemnitor_name || '';
+      return (b.defendant_name || '').toLowerCase().includes(q)
+        || (b.booking_number || '').toLowerCase().includes(q)
+        || (b.county || '').toLowerCase().includes(q)
+        || indName.toLowerCase().includes(q)
+        || (b.charges_raw || b.charges || '').toString().toLowerCase().includes(q)
+        || (b.poa_number || '').toLowerCase().includes(q);
+    });
+  }
 
   if (!filtered.length) {
     tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">No bonds match this filter.<br><button class="btn-export" style="margin-top:12px" onclick="openAddBondModal()">➕ Add First Bond</button></td></tr>`;
