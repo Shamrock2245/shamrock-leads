@@ -89,6 +89,10 @@ def create_app():
     from dashboard.api.defendant_lifecycle import lifecycle_bp
     app.register_blueprint(lifecycle_bp, url_prefix="/api")
 
+    # ── Bond Lifecycle Timeline (unified cross-collection timeline) ──────────
+    from dashboard.api.lifecycle_timeline import lifecycle_timeline_bp
+    app.register_blueprint(lifecycle_timeline_bp, url_prefix="/api")
+
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
