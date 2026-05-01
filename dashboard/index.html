@@ -1475,120 +1475,318 @@
      TAB: REPORTS
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabReports">
-  <div class="container">
-    <!-- Header + Date Range -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+  <!-- ═══ REPORTS: Header ═══ -->
+  <div class="rpt-header">
+    <div class="rpt-header-left">
+      <span class="rpt-header-icon">📋</span>
       <div>
-        <h2 style="margin:0;font-size:20px">📋 Agency Reports</h2>
-        <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Financial compliance, surety liability, agent production &amp; POA management</p>
-      </div>
-      <div class="rpt-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <label style="font-size:12px;color:var(--muted)">From</label>
-        <input type="date" id="rptStartDate" class="rpt-date-input" onchange="SLReports.onDateChange()">
-        <label style="font-size:12px;color:var(--muted)">To</label>
-        <input type="date" id="rptEndDate" class="rpt-date-input" onchange="SLReports.onDateChange()">
-        <select id="rptSuretyFilter" class="rpt-date-input" onchange="SLReports.onDateChange()" style="width:auto">
-          <option value="">All Sureties</option>
-          <option value="osi">OSI</option>
-          <option value="palmetto">Palmetto</option>
-        </select>
+        <div class="rpt-header-title">Agency Reports</div>
+        <div class="rpt-header-sub">Financial compliance · Surety liability · Agent production · POA management</div>
       </div>
     </div>
-
-    <!-- Report Cards Grid -->
-    <div class="rpt-grid" id="rptCardGrid">
-      <div class="rpt-card" data-report="discharged" onclick="SLReports.generate('discharged')">
-        <div class="rpt-card-icon">🏛️</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Discharged Bonds</div>
-          <div class="rpt-card-desc">Exonerated &amp; surrendered bonds</div>
-          <div class="rpt-card-stat" id="rptStatDischarged">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="surety-liability" onclick="SLReports.generate('surety-liability')">
-        <div class="rpt-card-icon">🛡️</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Surety Liability</div>
-          <div class="rpt-card-desc">Insurance company bond statements</div>
-          <div class="rpt-card-stat" id="rptStatLiability">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="forfeitures" onclick="SLReports.generate('forfeitures')">
-        <div class="rpt-card-icon">⚠️</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Forfeitures</div>
-          <div class="rpt-card-desc">Forfeited bonds — liability exposure</div>
-          <div class="rpt-card-stat" id="rptStatForfeitures">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="agent-production" onclick="SLReports.generate('agent-production')">
-        <div class="rpt-card-icon">👤</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Agent Production</div>
-          <div class="rpt-card-desc">Per-agent bond performance</div>
-          <div class="rpt-card-stat" id="rptStatAgents">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="voided-powers" onclick="SLReports.generate('voided-powers')">
-        <div class="rpt-card-icon">❌</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Voided Powers</div>
-          <div class="rpt-card-desc">Manually voided POAs</div>
-          <div class="rpt-card-stat" id="rptStatVoided">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="expired-powers" onclick="SLReports.generate('expired-powers')">
-        <div class="rpt-card-icon">⏰</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Expired Powers</div>
-          <div class="rpt-card-desc">POAs past semi-annual expiration</div>
-          <div class="rpt-card-stat" id="rptStatExpired">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="check-in-compliance" onclick="SLReports.generate('check-in-compliance')">
-        <div class="rpt-card-icon">📍</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">Check-In Compliance</div>
-          <div class="rpt-card-desc">Missed check-ins &amp; overdue defendants</div>
-          <div class="rpt-card-stat" id="rptStatCompliance">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-      <div class="rpt-card" data-report="poa-inventory" onclick="SLReports.generate('poa-inventory')">
-        <div class="rpt-card-icon">📦</div>
-        <div class="rpt-card-body">
-          <div class="rpt-card-title">POA Inventory</div>
-          <div class="rpt-card-desc">Stock by surety, tier &amp; status</div>
-          <div class="rpt-card-stat" id="rptStatPOA">—</div>
-        </div>
-        <div class="rpt-card-arrow">→</div>
-      </div>
-    </div>
-
-    <!-- Results Panel -->
-    <div id="rptResultsPanel" class="panel" style="display:none;margin-top:18px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <div>
-          <h3 id="rptResultsTitle" style="margin:0;font-size:16px">Report</h3>
-          <span id="rptResultsCount" style="font-size:12px;color:var(--muted)"></span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn-export" onclick="SLReports.exportCSV()" id="rptExportBtn" style="display:none">📥 Export CSV</button>
-          <button class="btn-export" onclick="SLReports.closeResults()" style="background:var(--panel);border-color:var(--border)">✕ Close</button>
-        </div>
-      </div>
-      <!-- Summary strip for liability/production reports -->
-      <div id="rptSummaryStrip" style="display:none;margin-bottom:14px"></div>
-      <!-- Data table -->
-      <div id="rptTableWrap" style="overflow-x:auto"></div>
+    <div class="rpt-header-actions">
+      <button class="btn-secondary" onclick="SLReports.scheduleReport()" title="Schedule automated report delivery">⏰ Schedule</button>
+      <button class="btn-secondary" onclick="SLReports.exportPDF()" id="rptPDFBtn" style="display:none">📄 Export PDF</button>
+      <button class="btn-primary" onclick="SLReports.runAll()" id="rptRunAllBtn">▶ Run All</button>
     </div>
   </div>
+
+  <!-- ═══ REPORTS: Global Filter Bar ═══ -->
+  <div class="rpt-filter-bar">
+    <!-- Quick range presets -->
+    <div class="rpt-range-presets">
+      <button class="rpt-preset-btn" data-preset="today" onclick="SLReports.setPreset('today')">Today</button>
+      <button class="rpt-preset-btn" data-preset="week" onclick="SLReports.setPreset('week')">This Week</button>
+      <button class="rpt-preset-btn rpt-preset-active" data-preset="mtd" onclick="SLReports.setPreset('mtd')">MTD</button>
+      <button class="rpt-preset-btn" data-preset="qtd" onclick="SLReports.setPreset('qtd')">QTD</button>
+      <button class="rpt-preset-btn" data-preset="ytd" onclick="SLReports.setPreset('ytd')">YTD</button>
+      <button class="rpt-preset-btn" data-preset="custom" onclick="SLReports.setPreset('custom')">Custom</button>
+    </div>
+    <!-- Date range inputs (shown only for custom) -->
+    <div class="rpt-date-range" id="rptDateRange" style="display:none">
+      <label class="rpt-filter-label">From</label>
+      <input type="date" id="rptStartDate" class="rpt-input" onchange="SLReports.onDateChange()">
+      <label class="rpt-filter-label">To</label>
+      <input type="date" id="rptEndDate" class="rpt-input" onchange="SLReports.onDateChange()">
+    </div>
+    <!-- Surety filter -->
+    <div class="rpt-filter-group">
+      <label class="rpt-filter-label">Surety</label>
+      <select id="rptSuretyFilter" class="rpt-input rpt-select" onchange="SLReports.onDateChange()">
+        <option value="">All Sureties</option>
+        <option value="OSI">OSI</option>
+        <option value="Palmetto">Palmetto</option>
+        <option value="Lexington">Lexington</option>
+        <option value="American Bankers">American Bankers</option>
+      </select>
+    </div>
+    <!-- County filter -->
+    <div class="rpt-filter-group">
+      <label class="rpt-filter-label">County</label>
+      <select id="rptCountyFilter" class="rpt-input rpt-select" onchange="SLReports.onDateChange()">
+        <option value="">All Counties</option>
+        <option value="Lee">Lee</option>
+        <option value="Hendry">Hendry</option>
+        <option value="Charlotte">Charlotte</option>
+        <option value="Collier">Collier</option>
+      </select>
+    </div>
+    <!-- Active date range display -->
+    <div class="rpt-active-range" id="rptActiveRange">
+      <span class="rpt-range-badge">📅 <span id="rptRangeLabel">Month to Date</span></span>
+    </div>
+  </div>
+
+  <!-- ═══ REPORTS: KPI Summary Strip ═══ -->
+  <div class="rpt-kpi-strip" id="rptKpiStrip">
+    <div class="rpt-kpi-item">
+      <div class="rpt-kpi-value" id="rptKpiLiability">—</div>
+      <div class="rpt-kpi-label">Total Liability</div>
+    </div>
+    <div class="rpt-kpi-item">
+      <div class="rpt-kpi-value" id="rptKpiBonds">—</div>
+      <div class="rpt-kpi-label">Bonds Written</div>
+    </div>
+    <div class="rpt-kpi-item">
+      <div class="rpt-kpi-value" id="rptKpiDischarged">—</div>
+      <div class="rpt-kpi-label">Discharged</div>
+    </div>
+    <div class="rpt-kpi-item rpt-kpi-alert">
+      <div class="rpt-kpi-value" id="rptKpiForfeitures">—</div>
+      <div class="rpt-kpi-label">Forfeitures</div>
+    </div>
+    <div class="rpt-kpi-item">
+      <div class="rpt-kpi-value" id="rptKpiCompliance">—</div>
+      <div class="rpt-kpi-label">Check-In Rate</div>
+    </div>
+    <div class="rpt-kpi-item">
+      <div class="rpt-kpi-value" id="rptKpiPOA">—</div>
+      <div class="rpt-kpi-label">POA Stock</div>
+    </div>
+  </div>
+
+  <!-- ═══ REPORTS: Card Grid ═══ -->
+  <div class="rpt-section-label">SELECT A REPORT TO RUN</div>
+  <div class="rpt-grid" id="rptCardGrid">
+
+    <!-- 1: Surety Liability -->
+    <div class="rpt-card" data-report="surety-liability" onclick="SLReports.generate('surety-liability')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-blue">🛡️</div>
+        <div class="rpt-card-badge" id="rptBadgeLiability"></div>
+      </div>
+      <div class="rpt-card-title">Surety Liability</div>
+      <div class="rpt-card-desc">Insurance company bond statements · premium splits · BUF</div>
+      <div class="rpt-card-stat" id="rptStatLiability">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Financial</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 2: Agent Production -->
+    <div class="rpt-card" data-report="agent-production" onclick="SLReports.generate('agent-production')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-green">👤</div>
+        <div class="rpt-card-badge" id="rptBadgeAgents"></div>
+      </div>
+      <div class="rpt-card-title">Agent Production</div>
+      <div class="rpt-card-desc">Per-agent bond count · premium earned · avg bond size</div>
+      <div class="rpt-card-stat" id="rptStatAgents">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Performance</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 3: Discharged Bonds -->
+    <div class="rpt-card" data-report="discharged" onclick="SLReports.generate('discharged')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-cyan">🏛️</div>
+        <div class="rpt-card-badge" id="rptBadgeDischarged"></div>
+      </div>
+      <div class="rpt-card-title">Discharged Bonds</div>
+      <div class="rpt-card-desc">Exonerated &amp; surrendered bonds · discharge timeline</div>
+      <div class="rpt-card-stat" id="rptStatDischarged">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Compliance</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 4: Forfeitures -->
+    <div class="rpt-card rpt-card-danger" data-report="forfeitures" onclick="SLReports.generate('forfeitures')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-red">⚠️</div>
+        <div class="rpt-card-badge rpt-badge-danger" id="rptBadgeForfeitures"></div>
+      </div>
+      <div class="rpt-card-title">Forfeitures</div>
+      <div class="rpt-card-desc">Forfeited bonds · liability exposure · court dates</div>
+      <div class="rpt-card-stat" id="rptStatForfeitures">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag rpt-tag-danger">Risk</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 5: Check-In Compliance -->
+    <div class="rpt-card" data-report="check-in-compliance" onclick="SLReports.generate('check-in-compliance')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-gold">📍</div>
+        <div class="rpt-card-badge" id="rptBadgeCompliance"></div>
+      </div>
+      <div class="rpt-card-title">Check-In Compliance</div>
+      <div class="rpt-card-desc">Missed check-ins · overdue defendants · compliance rate</div>
+      <div class="rpt-card-stat" id="rptStatCompliance">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Tracking</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 6: POA Inventory -->
+    <div class="rpt-card" data-report="poa-inventory" onclick="SLReports.generate('poa-inventory')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-purple">📦</div>
+        <div class="rpt-card-badge" id="rptBadgePOA"></div>
+      </div>
+      <div class="rpt-card-title">POA Inventory</div>
+      <div class="rpt-card-desc">Stock by surety · tier · prefix · available vs used</div>
+      <div class="rpt-card-stat" id="rptStatPOA">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Inventory</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 7: Voided Powers -->
+    <div class="rpt-card" data-report="voided-powers" onclick="SLReports.generate('voided-powers')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-red">❌</div>
+        <div class="rpt-card-badge" id="rptBadgeVoided"></div>
+      </div>
+      <div class="rpt-card-title">Voided Powers</div>
+      <div class="rpt-card-desc">Manually voided POAs · reason codes · agent</div>
+      <div class="rpt-card-stat" id="rptStatVoided">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">POA</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+    <!-- 8: Expired Powers -->
+    <div class="rpt-card" data-report="expired-powers" onclick="SLReports.generate('expired-powers')">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-gold">⏰</div>
+        <div class="rpt-card-badge" id="rptBadgeExpired"></div>
+      </div>
+      <div class="rpt-card-title">Expired Powers</div>
+      <div class="rpt-card-desc">POAs past semi-annual expiration · expiring soon</div>
+      <div class="rpt-card-stat" id="rptStatExpired">Loading…</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">POA</span>
+        <span class="rpt-card-run">Run Report →</span>
+      </div>
+    </div>
+
+  </div><!-- /rpt-grid -->
+
+  <!-- ═══ REPORTS: Results Panel ═══ -->
+  <div id="rptResultsPanel" class="rpt-results" style="display:none">
+    <!-- Results Header -->
+    <div class="rpt-results-header">
+      <div class="rpt-results-title-block">
+        <div class="rpt-results-icon" id="rptResultsIcon">📋</div>
+        <div>
+          <div class="rpt-results-title" id="rptResultsTitle">Report</div>
+          <div class="rpt-results-meta">
+            <span id="rptResultsCount" class="rpt-results-count"></span>
+            <span class="rpt-results-sep">·</span>
+            <span id="rptResultsRange" class="rpt-results-count"></span>
+          </div>
+        </div>
+      </div>
+      <div class="rpt-results-actions">
+        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportCSV()" id="rptExportCSVBtn" style="display:none">⬇ CSV</button>
+        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportPDF()" id="rptExportPDFBtn" style="display:none">📄 PDF</button>
+        <button class="btn-secondary rpt-action-btn" onclick="SLReports.printReport()">🖨 Print</button>
+        <button class="rpt-close-btn" onclick="SLReports.closeResults()">✕ Close</button>
+      </div>
+    </div>
+
+    <!-- Summary KPI strip (for financial reports) -->
+    <div id="rptSummaryStrip" class="rpt-summary-strip" style="display:none"></div>
+
+    <!-- Chart container (for visual reports) -->
+    <div id="rptChartWrap" class="rpt-chart-wrap" style="display:none">
+      <canvas id="rptChart" height="80"></canvas>
+    </div>
+
+    <!-- Loading skeleton -->
+    <div id="rptLoadingSkeleton" class="rpt-skeleton-wrap" style="display:none">
+      <div class="rpt-skeleton rpt-skeleton-wide"></div>
+      <div class="rpt-skeleton rpt-skeleton-medium"></div>
+      <div class="rpt-skeleton rpt-skeleton-wide"></div>
+      <div class="rpt-skeleton rpt-skeleton-narrow"></div>
+    </div>
+
+    <!-- Data table -->
+    <div id="rptTableWrap" style="overflow-x:auto"></div>
+
+    <!-- Empty state -->
+    <div id="rptEmptyState" class="rpt-empty" style="display:none">
+      <div class="rpt-empty-icon">📭</div>
+      <div class="rpt-empty-title">No records found</div>
+      <div class="rpt-empty-sub">Try adjusting the date range or filters above</div>
+    </div>
+  </div><!-- /rptResultsPanel -->
+
+  <!-- ═══ REPORTS: Schedule Modal ═══ -->
+  <div class="modal-overlay" id="rptScheduleModal" onclick="if(event.target===this)SLReports.closeSchedule()" style="display:none">
+    <div class="rpt-schedule-modal">
+      <div class="rpt-schedule-header">
+        <div class="rpt-schedule-title">⏰ Schedule Report Delivery</div>
+        <button class="modal-close" onclick="SLReports.closeSchedule()">✕</button>
+      </div>
+      <div class="rpt-schedule-body">
+        <div class="form-group">
+          <label class="form-label">Report Type</label>
+          <select id="schedRptType" class="rpt-input rpt-select">
+            <option value="surety-liability">Surety Liability Statement</option>
+            <option value="agent-production">Agent Production</option>
+            <option value="discharged">Discharged Bonds</option>
+            <option value="forfeitures">Forfeitures</option>
+            <option value="check-in-compliance">Check-In Compliance</option>
+            <option value="poa-inventory">POA Inventory</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Frequency</label>
+          <select id="schedFrequency" class="rpt-input rpt-select">
+            <option value="daily">Daily (7am)</option>
+            <option value="weekly">Weekly (Monday 7am)</option>
+            <option value="monthly" selected>Monthly (1st of month)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Deliver To (email)</label>
+          <input type="email" id="schedEmail" class="rpt-input" placeholder="admin@shamrockbailbonds.biz">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Format</label>
+          <div style="display:flex;gap:10px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="schedFmtCSV" checked> CSV</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="schedFmtPDF"> PDF</label>
+          </div>
+        </div>
+      </div>
+      <div class="rpt-schedule-footer">
+        <button class="btn-secondary" onclick="SLReports.closeSchedule()">Cancel</button>
+        <button class="btn-primary" onclick="SLReports.saveSchedule()">Save Schedule</button>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ═══ TOAST ═══ -->

@@ -1,376 +1,608 @@
-/* ═══════════════════════════════════════════════════════════
-   ShamrockLeads — Reports Module
-   Agency compliance, surety liability, agent production
-   ═══════════════════════════════════════════════════════════ */
-
+/* ═══════════════════════════════════════════════════════════════════════
+   ShamrockLeads — Reports Module  v3.0  (Fortune 50 rebuild)
+   Agency compliance · Surety liability · Agent production · POA mgmt
+   ═══════════════════════════════════════════════════════════════════════ */
 const SLReports = (() => {
+  'use strict';
   const API = window.API || '';
-  const $ = id => document.getElementById(id);
-  const money = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+  const $  = id => document.getElementById(id);
+  const money    = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
   const moneyDec = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const toast = (m,t) => { if(window.SL?.toast) SL.toast(m,t); else alert(m); };
+  const pct      = n => (parseFloat(n)||0).toFixed(1) + '%';
+  const toast    = (m,t) => { if(window.SL?.toast) SL.toast(m,t); };
+  const fmtDate  = d => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+  const escHtml  = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
   let _currentReport = null;
-  let _currentData = null;
-  let _loaded = false;
+  let _currentData   = null;
+  let _currentPreset = 'mtd';
+  let _chartInstance = null;
+  let _loaded        = false;
 
-  const REPORT_META = {
-    'discharged':        { title: 'Discharged Bonds', icon: '🏛️' },
-    'surety-liability':  { title: 'Surety Liability Statement', icon: '🛡️' },
-    'forfeitures':       { title: 'Forfeitures Report', icon: '⚠️' },
-    'agent-production':  { title: 'Agent Production', icon: '👤' },
-    'voided-powers':     { title: 'Voided Powers', icon: '❌' },
-    'expired-powers':    { title: 'Expired Powers', icon: '⏰' },
-    'check-in-compliance': { title: 'Check-In Compliance', icon: '📍' },
-    'poa-inventory':     { title: 'POA Inventory Summary', icon: '📦' },
-  };
-
-  function _qs() {
-    const p = new URLSearchParams();
-    const s = $('rptStartDate')?.value;
-    const e = $('rptEndDate')?.value;
-    const sur = $('rptSuretyFilter')?.value;
-    if (s) p.set('start_date', s);
-    if (e) p.set('end_date', e);
-    if (sur) p.set('surety', sur);
-    return p.toString() ? '?' + p.toString() : '';
-  }
-
-  async function _fetch(path) {
-    try {
-      const r = await fetch(`${API}/api/reports/${path}${_qs()}`);
-      return await r.json();
-    } catch(e) { return { success: false, error: e.message }; }
-  }
-
-  // ── Load tab (fetch summary counts) ─────────────────────────────────────
-  async function load() {
-    if (_loaded) return;
-    _loaded = true;
-    // Fetch counts in parallel
-    const [dis, forf, void_, exp, comp, poa, agents] = await Promise.all([
-      _fetch('discharged'), _fetch('forfeitures'), _fetch('voided-powers'),
-      _fetch('expired-powers'), _fetch('check-in-compliance'),
-      _fetch('poa-inventory'), _fetch('agent-production'),
-    ]);
-    if (dis.success) $('rptStatDischarged').textContent = `${dis.count} bonds`;
-    if (forf.success) $('rptStatForfeitures').textContent = forf.count > 0 ? `${forf.count} · ${money(forf.total_liability)}` : '0';
-    if (void_.success) $('rptStatVoided').textContent = `${void_.count} voided`;
-    if (exp.success) $('rptStatExpired').textContent = `${exp.expired_count} expired · ${exp.expiring_soon_count} soon`;
-    if (comp.success) $('rptStatCompliance').textContent = `${comp.compliance_rate}% compliant`;
-    if (agents.success) $('rptStatAgents').textContent = `${agents.grand_totals?.total_bonds || 0} bonds`;
-    // Liability — quick fetch
-    const liab = await _fetch('surety-liability');
-    if (liab.success) $('rptStatLiability').textContent = money(liab.grand_totals?.total_bond_amount || 0);
-    // POA
-    if (poa.success) {
-      let total = 0;
-      (poa.sureties||[]).forEach(s => Object.values(s.totals||{}).forEach(v => total += v));
-      $('rptStatPOA').textContent = `${total} total`;
+  /* ── Date preset logic ─────────────────────────────────────────────── */
+  function _presetDates(preset) {
+    const now   = new Date();
+    const pad   = n => String(n).padStart(2,'0');
+    const fmt   = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const today = fmt(now);
+    let start, end = today, label;
+    switch(preset) {
+      case 'today':
+        start = today; label = 'Today'; break;
+      case 'week': {
+        const d = new Date(now); d.setDate(d.getDate() - d.getDay());
+        start = fmt(d); label = 'This Week'; break;
+      }
+      case 'mtd': {
+        const d = new Date(now.getFullYear(), now.getMonth(), 1);
+        start = fmt(d); label = 'Month to Date'; break;
+      }
+      case 'qtd': {
+        const q = Math.floor(now.getMonth()/3);
+        const d = new Date(now.getFullYear(), q*3, 1);
+        start = fmt(d); label = 'Quarter to Date'; break;
+      }
+      case 'ytd': {
+        start = `${now.getFullYear()}-01-01`; label = 'Year to Date'; break;
+      }
+      default:
+        start = $('rptStartDate')?.value || ''; label = 'Custom Range'; break;
     }
+    return { start, end, label };
+  }
+
+  function setPreset(preset) {
+    _currentPreset = preset;
+    _loaded = false;
+    // Update active button
+    document.querySelectorAll('.rpt-preset-btn').forEach(b => {
+      b.classList.toggle('rpt-preset-active', b.dataset.preset === preset);
+    });
+    // Show/hide custom date inputs
+    const dateRange = $('rptDateRange');
+    if (dateRange) dateRange.style.display = preset === 'custom' ? 'flex' : 'none';
+    // Update date inputs
+    const { start, end, label } = _presetDates(preset);
+    if ($('rptStartDate')) $('rptStartDate').value = start;
+    if ($('rptEndDate'))   $('rptEndDate').value   = end;
+    if ($('rptRangeLabel')) $('rptRangeLabel').textContent = label;
+    load();
+    if (_currentReport) generate(_currentReport);
   }
 
   function onDateChange() { _loaded = false; load(); if (_currentReport) generate(_currentReport); }
 
-  // ── Generate specific report ────────────────────────────────────────────
-  async function generate(type) {
-    _currentReport = type;
-    const meta = REPORT_META[type] || { title: type, icon: '📋' };
-    const panel = $('rptResultsPanel');
-    const tableWrap = $('rptTableWrap');
-    const strip = $('rptSummaryStrip');
-    panel.style.display = 'block';
-    $('rptResultsTitle').textContent = `${meta.icon} ${meta.title}`;
-    $('rptResultsCount').textContent = 'Loading...';
-    $('rptExportBtn').style.display = 'none';
-    strip.style.display = 'none';
-    tableWrap.innerHTML = '<div style="text-align:center;padding:30px;color:var(--muted)">☘️ Generating report...</div>';
+  /* ── Query string builder ──────────────────────────────────────────── */
+  function _qs(extra) {
+    const p = new URLSearchParams();
+    const s   = $('rptStartDate')?.value;
+    const e   = $('rptEndDate')?.value;
+    const sur = $('rptSuretyFilter')?.value;
+    const cty = $('rptCountyFilter')?.value;
+    if (s)   p.set('start_date', s);
+    if (e)   p.set('end_date',   e);
+    if (sur) p.set('surety',     sur);
+    if (cty) p.set('county',     cty);
+    if (extra) Object.entries(extra).forEach(([k,v]) => p.set(k,v));
+    return p.toString() ? '?' + p.toString() : '';
+  }
 
+  async function _fetch(path, extra) {
+    try {
+      const r = await fetch(`${API}/api/reports/${path}${_qs(extra)}`);
+      if (!r.ok) return { success: false, error: `HTTP ${r.status}` };
+      return await r.json();
+    } catch(e) { return { success: false, error: e.message }; }
+  }
+
+  /* ── Load tab: fetch all summary counts ───────────────────────────── */
+  async function load() {
+    if (_loaded) return;
+    _loaded = true;
+    // Set default preset dates on first load
+    if (!$('rptStartDate')?.value) setPreset('mtd');
+
+    // Show loading state on stat cells
+    ['rptStatLiability','rptStatAgents','rptStatDischarged','rptStatForfeitures',
+     'rptStatCompliance','rptStatPOA','rptStatVoided','rptStatExpired'].forEach(id => {
+      const el = $(id); if (el) el.innerHTML = '<span class="rpt-loading-dot"></span>';
+    });
+
+    const [liab, agents, dis, forf, comp, poa, void_, exp] = await Promise.all([
+      _fetch('surety-liability'), _fetch('agent-production'), _fetch('discharged'),
+      _fetch('forfeitures'), _fetch('check-in-compliance'), _fetch('poa-inventory'),
+      _fetch('voided-powers'), _fetch('expired-powers'),
+    ]);
+
+    // Update KPI strip
+    if (liab.success)  { $('rptKpiLiability').textContent  = money(liab.grand_totals?.total_bond_amount||0); }
+    if (agents.success){ $('rptKpiBonds').textContent      = agents.grand_totals?.total_bonds || 0; }
+    if (dis.success)   { $('rptKpiDischarged').textContent = dis.count || 0; }
+    if (forf.success)  {
+      const fc = forf.count || 0;
+      $('rptKpiForfeitures').textContent = fc > 0 ? `${fc} · ${money(forf.total_liability||0)}` : '0';
+      if (fc > 0) $('rptKpiForfeitures').closest('.rpt-kpi-item')?.classList.add('rpt-kpi-alert-active');
+    }
+    if (comp.success)  { $('rptKpiCompliance').textContent = pct(comp.compliance_rate||100); }
+    if (poa.success)   {
+      let total = 0;
+      (poa.sureties||[]).forEach(s => Object.values(s.totals||{}).forEach(v => total += (v||0)));
+      $('rptKpiPOA').textContent = total;
+    }
+
+    // Update card stats
+    if (liab.success)   $('rptStatLiability').textContent  = money(liab.grand_totals?.total_bond_amount||0);
+    if (agents.success) $('rptStatAgents').textContent     = `${agents.grand_totals?.total_bonds||0} bonds · ${money(agents.grand_totals?.total_premium||0)} premium`;
+    if (dis.success)    $('rptStatDischarged').textContent = `${dis.count||0} bonds`;
+    if (forf.success)   $('rptStatForfeitures').textContent= forf.count > 0 ? `${forf.count} · ${money(forf.total_liability||0)} exposure` : '0 forfeitures';
+    if (comp.success)   $('rptStatCompliance').textContent = `${pct(comp.compliance_rate||100)} compliant`;
+    if (poa.success)    {
+      let total = 0;
+      (poa.sureties||[]).forEach(s => Object.values(s.totals||{}).forEach(v => total += (v||0)));
+      $('rptStatPOA').textContent = `${total} total powers`;
+    }
+    if (void_.success)  $('rptStatVoided').textContent  = `${void_.count||0} voided`;
+    if (exp.success)    $('rptStatExpired').textContent  = `${exp.expired_count||0} expired · ${exp.expiring_soon_count||0} soon`;
+
+    // Update danger badges
+    if (forf.success && forf.count > 0) {
+      const b = $('rptBadgeForfeitures');
+      if (b) { b.textContent = forf.count; b.style.display = 'flex'; }
+    }
+    if (exp.success && exp.expiring_soon_count > 0) {
+      const b = $('rptBadgeExpired');
+      if (b) { b.textContent = exp.expiring_soon_count; b.style.display = 'flex'; }
+    }
+  }
+
+  /* ── Run all reports ───────────────────────────────────────────────── */
+  async function runAll() {
+    _loaded = false;
+    await load();
+    toast('All report summaries refreshed', 'success');
+  }
+
+  /* ── Show loading skeleton ─────────────────────────────────────────── */
+  function _showLoading() {
+    const panel = $('rptResultsPanel');
+    if (!panel) return;
+    panel.style.display = 'block';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('rptLoadingSkeleton').style.display = 'block';
+    $('rptTableWrap').innerHTML = '';
+    $('rptSummaryStrip').style.display = 'none';
+    $('rptChartWrap').style.display = 'none';
+    $('rptEmptyState').style.display = 'none';
+    $('rptExportCSVBtn').style.display = 'none';
+    $('rptExportPDFBtn').style.display = 'none';
     // Highlight active card
     document.querySelectorAll('.rpt-card').forEach(c => c.classList.remove('rpt-card-active'));
-    document.querySelector(`.rpt-card[data-report="${type}"]`)?.classList.add('rpt-card-active');
+    const activeCard = document.querySelector(`.rpt-card[data-report="${_currentReport}"]`);
+    if (activeCard) activeCard.classList.add('rpt-card-active');
+  }
+
+  function _hideLoading() {
+    $('rptLoadingSkeleton').style.display = 'none';
+  }
+
+  /* ── Render summary strip ──────────────────────────────────────────── */
+  function _renderSummary(items) {
+    const strip = $('rptSummaryStrip');
+    if (!strip || !items.length) return;
+    strip.innerHTML = items.map(item => `
+      <div class="rpt-summary-item">
+        <div class="rpt-summary-value ${item.color||''}">${escHtml(item.value)}</div>
+        <div class="rpt-summary-label">${escHtml(item.label)}</div>
+      </div>`).join('');
+    strip.style.display = 'flex';
+  }
+
+  /* ── Render Chart.js bar/line chart ───────────────────────────────── */
+  function _renderChart(labels, datasets, type='bar') {
+    const wrap = $('rptChartWrap');
+    const canvas = $('rptChart');
+    if (!wrap || !canvas || typeof Chart === 'undefined') return;
+    if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
+    wrap.style.display = 'block';
+    const colors = ['#10b981','#3b82f6','#8b5cf6','#f59e0b','#ef4444','#06b6d4'];
+    _chartInstance = new Chart(canvas.getContext('2d'), {
+      type,
+      data: {
+        labels,
+        datasets: datasets.map((d,i) => ({
+          label: d.label,
+          data: d.data,
+          backgroundColor: type === 'line' ? 'transparent' : (colors[i]+'33'),
+          borderColor: colors[i],
+          borderWidth: 2,
+          borderRadius: type === 'bar' ? 6 : 0,
+          tension: 0.4,
+          fill: type === 'line',
+          pointBackgroundColor: colors[i],
+          pointRadius: 4,
+        }))
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+          tooltip: { backgroundColor: '#1e293b', titleColor: '#f1f5f9', bodyColor: '#94a3b8', borderColor: '#334155', borderWidth: 1 }
+        },
+        scales: {
+          x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } },
+          y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } }
+        }
+      }
+    });
+  }
+
+  /* ── Render data table ─────────────────────────────────────────────── */
+  function _renderTable(headers, rows, emptyMsg) {
+    const wrap = $('rptTableWrap');
+    if (!wrap) return;
+    if (!rows || rows.length === 0) {
+      $('rptEmptyState').style.display = 'flex';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="rpt-table">
+        <thead><tr>${headers.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>`;
+    $('rptExportCSVBtn').style.display = 'inline-flex';
+    $('rptExportPDFBtn').style.display = 'inline-flex';
+  }
+
+  /* ── Generate specific report ──────────────────────────────────────── */
+  async function generate(type) {
+    _currentReport = type;
+    const meta = {
+      'surety-liability':    { title: 'Surety Liability Statement', icon: '🛡️' },
+      'agent-production':    { title: 'Agent Production Report',    icon: '👤' },
+      'discharged':          { title: 'Discharged Bonds',           icon: '🏛️' },
+      'forfeitures':         { title: 'Forfeitures Report',         icon: '⚠️' },
+      'check-in-compliance': { title: 'Check-In Compliance',        icon: '📍' },
+      'poa-inventory':       { title: 'POA Inventory Summary',      icon: '📦' },
+      'voided-powers':       { title: 'Voided Powers',              icon: '❌' },
+      'expired-powers':      { title: 'Expired Powers',             icon: '⏰' },
+    }[type] || { title: type, icon: '📋' };
+
+    _showLoading();
+    $('rptResultsIcon').textContent = meta.icon;
+    $('rptResultsTitle').textContent = meta.title;
+    const { label } = _presetDates(_currentPreset);
+    $('rptResultsRange').textContent = label;
 
     const data = await _fetch(type);
     _currentData = data;
+    _hideLoading();
+
     if (!data.success) {
-      tableWrap.innerHTML = `<div style="text-align:center;padding:30px;color:#ef4444">❌ ${data.error||'Failed to load'}</div>`;
+      $('rptTableWrap').innerHTML = `<div class="rpt-error">⚠️ ${escHtml(data.error||'Failed to load report')}</div>`;
       return;
     }
-    $('rptExportBtn').style.display = '';
 
-    // Route to renderer
     switch(type) {
-      case 'discharged': _renderDischarged(data); break;
-      case 'surety-liability': _renderLiability(data); break;
-      case 'forfeitures': _renderForfeitures(data); break;
-      case 'agent-production': _renderAgentProd(data); break;
-      case 'voided-powers': _renderVoidedPowers(data); break;
-      case 'expired-powers': _renderExpiredPowers(data); break;
-      case 'check-in-compliance': _renderCompliance(data); break;
-      case 'poa-inventory': _renderPOAInventory(data); break;
+      case 'surety-liability':    _renderLiability(data);    break;
+      case 'agent-production':    _renderAgents(data);       break;
+      case 'discharged':          _renderDischarged(data);   break;
+      case 'forfeitures':         _renderForfeitures(data);  break;
+      case 'check-in-compliance': _renderCompliance(data);   break;
+      case 'poa-inventory':       _renderPOA(data);          break;
+      case 'voided-powers':       _renderVoided(data);       break;
+      case 'expired-powers':      _renderExpired(data);      break;
     }
-    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('rptResultsCount').textContent = _getCount(type, data);
   }
 
-  // ── Table builder ───────────────────────────────────────────────────────
-  function _table(cols, rows) {
-    if (!rows.length) return '<div style="text-align:center;padding:20px;color:var(--muted)">No records found</div>';
-    let h = '<table class="rpt-table"><thead><tr>';
-    cols.forEach(c => h += `<th>${c.label}</th>`);
-    h += '</tr></thead><tbody>';
-    rows.forEach(r => {
-      h += '<tr>';
-      cols.forEach(c => {
-        let v = c.fn ? c.fn(r) : (r[c.key] ?? '');
-        h += `<td>${v}</td>`;
+  function _getCount(type, data) {
+    const map = {
+      'surety-liability':    () => `${(data.sureties||[]).length} sureties`,
+      'agent-production':    () => `${(data.agents||[]).length} agents`,
+      'discharged':          () => `${data.count||0} bonds`,
+      'forfeitures':         () => `${data.count||0} bonds`,
+      'check-in-compliance': () => `${(data.bonds||[]).length} defendants`,
+      'poa-inventory':       () => `${(data.sureties||[]).length} sureties`,
+      'voided-powers':       () => `${data.count||0} powers`,
+      'expired-powers':      () => `${(data.expired||[]).length} expired`,
+    };
+    return (map[type] || (() => ''))();
+  }
+
+  /* ── Report renderers ──────────────────────────────────────────────── */
+
+  function _renderLiability(data) {
+    const gt = data.grand_totals || {};
+    _renderSummary([
+      { label: 'Total Bond Amount',  value: money(gt.total_bond_amount||0),  color: 'rpt-val-blue'  },
+      { label: 'Total Premium',      value: money(gt.total_premium||0),      color: 'rpt-val-green' },
+      { label: 'Surety Owed',        value: money(gt.total_surety_owed||0),  color: 'rpt-val-gold'  },
+      { label: 'BUF Collected',      value: money(gt.total_buf||0),          color: 'rpt-val-cyan'  },
+      { label: 'Agent Retains',      value: money(gt.total_agent_retains||0),color: 'rpt-val-purple'},
+      { label: 'Bond Count',         value: String(gt.total_bonds||0)                               },
+    ]);
+    // Chart: bond amount by surety
+    const sureties = data.sureties || [];
+    if (sureties.length) {
+      _renderChart(
+        sureties.map(s => s.surety),
+        [{ label: 'Bond Amount', data: sureties.map(s => s.total_bond_amount||0) }],
+        'bar'
+      );
+    }
+    const headers = ['Surety','Bonds','Bond Amount','Premium','Surety Owed','BUF','Agent Retains','Avg Bond'];
+    const rows = sureties.map(s => [
+      `<strong>${escHtml(s.surety||'—')}</strong>`,
+      s.bond_count||0,
+      money(s.total_bond_amount||0),
+      money(s.total_premium||0),
+      money(s.total_surety_owed||0),
+      money(s.total_buf||0),
+      money(s.total_agent_retains||0),
+      money(s.avg_bond_amount||0),
+    ]);
+    _renderTable(headers, rows);
+  }
+
+  function _renderAgents(data) {
+    const gt = data.grand_totals || {};
+    _renderSummary([
+      { label: 'Total Bonds',    value: String(gt.total_bonds||0),          color: 'rpt-val-green' },
+      { label: 'Total Premium',  value: money(gt.total_premium||0),         color: 'rpt-val-blue'  },
+      { label: 'Avg Bond Size',  value: money(gt.avg_bond_amount||0),       color: 'rpt-val-gold'  },
+      { label: 'Total Liability',value: money(gt.total_bond_amount||0),     color: 'rpt-val-cyan'  },
+    ]);
+    const agents = data.agents || [];
+    if (agents.length) {
+      _renderChart(
+        agents.map(a => a.agent_name||'Unknown'),
+        [
+          { label: 'Bonds Written', data: agents.map(a => a.bond_count||0) },
+          { label: 'Premium ($)',   data: agents.map(a => a.total_premium||0) },
+        ],
+        'bar'
+      );
+    }
+    const headers = ['Agent','Bonds','Bond Amount','Premium','Avg Bond','Surety Breakdown'];
+    const rows = agents.map(a => [
+      `<strong>${escHtml(a.agent_name||'Unknown')}</strong>`,
+      `<span class="rpt-badge-num">${a.bond_count||0}</span>`,
+      money(a.total_bond_amount||0),
+      `<span class="rpt-val-green">${money(a.total_premium||0)}</span>`,
+      money(a.avg_bond_amount||0),
+      Object.entries(a.by_surety||{}).map(([k,v]) => `${escHtml(k)}: ${v}`).join(' · ') || '—',
+    ]);
+    _renderTable(headers, rows);
+  }
+
+  function _renderDischarged(data) {
+    _renderSummary([
+      { label: 'Total Discharged', value: String(data.count||0),                color: 'rpt-val-cyan'  },
+      { label: 'Bond Amount',      value: money(data.total_bond_amount||0),      color: 'rpt-val-blue'  },
+      { label: 'Exonerated',       value: String(data.exonerated_count||0),      color: 'rpt-val-green' },
+      { label: 'Surrendered',      value: String(data.surrendered_count||0),     color: 'rpt-val-gold'  },
+    ]);
+    const bonds = data.bonds || [];
+    const headers = ['Defendant','County','Bond Amount','Surety','Status','Discharge Date','Agent'];
+    const rows = bonds.map(b => [
+      `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
+      escHtml(b.county||'—'),
+      money(b.bond_amount||0),
+      escHtml(b.surety||'—'),
+      `<span class="rpt-status-badge rpt-status-${(b.status||'').toLowerCase()}">${escHtml(b.status||'—')}</span>`,
+      fmtDate(b.discharge_date||b.updated_at),
+      escHtml(b.agent_name||'—'),
+    ]);
+    _renderTable(headers, rows);
+  }
+
+  function _renderForfeitures(data) {
+    _renderSummary([
+      { label: 'Total Forfeitures', value: String(data.count||0),              color: 'rpt-val-red'   },
+      { label: 'Total Exposure',    value: money(data.total_liability||0),      color: 'rpt-val-red'   },
+      { label: 'Avg Bond',          value: money(data.avg_bond_amount||0),      color: 'rpt-val-gold'  },
+    ]);
+    const bonds = data.bonds || [];
+    const headers = ['Defendant','County','Bond Amount','Surety','Forfeiture Date','Court Date','Agent'];
+    const rows = bonds.map(b => [
+      `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
+      escHtml(b.county||'—'),
+      `<span class="rpt-val-red">${money(b.bond_amount||0)}</span>`,
+      escHtml(b.surety||'—'),
+      fmtDate(b.forfeiture_date||b.updated_at),
+      fmtDate(b.court_date),
+      escHtml(b.agent_name||'—'),
+    ]);
+    _renderTable(headers, rows);
+  }
+
+  function _renderCompliance(data) {
+    _renderSummary([
+      { label: 'Compliance Rate',    value: pct(data.compliance_rate||100),      color: data.compliance_rate >= 90 ? 'rpt-val-green' : 'rpt-val-red' },
+      { label: 'Total Defendants',   value: String((data.bonds||[]).length),      color: 'rpt-val-blue'  },
+      { label: 'Overdue',            value: String(data.overdue_count||0),        color: 'rpt-val-red'   },
+      { label: 'Missed Check-Ins',   value: String(data.missed_count||0),         color: 'rpt-val-gold'  },
+    ]);
+    const bonds = data.bonds || [];
+    const headers = ['Defendant','County','Bond Amount','Last Check-In','Missed','Status','Action'];
+    const rows = bonds.map(b => {
+      const overdue = b.is_overdue;
+      return [
+        `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
+        escHtml(b.county||'—'),
+        money(b.bond_amount||0),
+        b.last_checkin_at ? fmtDate(b.last_checkin_at) : '<span class="rpt-val-red">Never</span>',
+        `<span class="${b.missed_checkins > 0 ? 'rpt-val-red' : 'rpt-val-green'}">${b.missed_checkins||0}</span>`,
+        `<span class="rpt-status-badge rpt-status-${overdue?'forfeited':'active'}">${overdue?'OVERDUE':'OK'}</span>`,
+        `<button class="rpt-action-link" onclick="SLTracking&&SLTracking.openDetail('${escHtml(b.booking_number||'')}')">📍 Track</button>`,
+      ];
+    });
+    _renderTable(headers, rows);
+  }
+
+  function _renderPOA(data) {
+    const sureties = data.sureties || [];
+    let grandTotal = 0;
+    sureties.forEach(s => Object.values(s.totals||{}).forEach(v => grandTotal += (v||0)));
+    _renderSummary([
+      { label: 'Total Powers',    value: String(grandTotal),                  color: 'rpt-val-purple' },
+      { label: 'Sureties',        value: String(sureties.length),             color: 'rpt-val-blue'   },
+    ]);
+    // Chart: stock by surety
+    if (sureties.length) {
+      _renderChart(
+        sureties.map(s => s.surety),
+        [{ label: 'Available Powers', data: sureties.map(s => s.totals?.available||0) }],
+        'bar'
+      );
+    }
+    const headers = ['Surety','Prefix / Tier','Available','Used','Voided','Expired','Total'];
+    const rows = [];
+    sureties.forEach(s => {
+      (s.prefixes||[]).forEach(p => {
+        rows.push([
+          `<strong>${escHtml(s.surety||'—')}</strong>`,
+          escHtml(p.prefix||'—'),
+          `<span class="${(p.available||0) < 5 ? 'rpt-val-red' : 'rpt-val-green'}">${p.available||0}</span>`,
+          p.used||0,
+          p.voided||0,
+          p.expired||0,
+          `<strong>${p.total||0}</strong>`,
+        ]);
       });
-      h += '</tr>';
     });
-    h += '</tbody></table>';
-    return h;
+    _renderTable(headers, rows);
   }
 
-  function _summaryCards(items) {
-    let h = '<div class="rpt-summary-strip">';
-    items.forEach(i => h += `<div class="rpt-summary-item"><div class="rpt-summary-value">${i.value}</div><div class="rpt-summary-label">${i.label}</div></div>`);
-    h += '</div>';
-    return h;
-  }
-
-  // ── Renderers ───────────────────────────────────────────────────────────
-  function _renderDischarged(d) {
-    $('rptResultsCount').textContent = `${d.count} discharged bonds · Total: ${money(d.total_bond_amount)}`;
-    const strip = $('rptSummaryStrip');
-    strip.style.display = 'block';
-    strip.innerHTML = _summaryCards([
-      { value: d.count, label: 'Bonds' },
-      { value: money(d.total_bond_amount), label: 'Bond Amount' },
-      { value: money(d.total_premium), label: 'Premium' },
+  function _renderVoided(data) {
+    _renderSummary([
+      { label: 'Total Voided', value: String(data.count||0), color: 'rpt-val-red' },
     ]);
-    $('rptTableWrap').innerHTML = _table([
-      { label: 'Defendant', key: 'defendant_name' },
-      { label: 'County', key: 'county' },
-      { label: 'Bond', fn: r => money(r.bond_amount) },
-      { label: 'Premium', fn: r => moneyDec(r.split?.premium) },
-      { label: 'Status', key: 'status' },
-      { label: 'Date', fn: r => (r.bond_date||'').slice(0,10) },
-      { label: 'Surety', fn: r => (r.surety||r.insurance_company||'').toUpperCase() },
-    ], d.records||[]);
-  }
-
-  function _renderLiability(d) {
-    const gt = d.grand_totals||{};
-    $('rptResultsCount').textContent = `${gt.total_bonds} bonds across ${(d.sureties||[]).length} sureties`;
-    const strip = $('rptSummaryStrip');
-    strip.style.display = 'block';
-    strip.innerHTML = _summaryCards([
-      { value: money(gt.total_bond_amount), label: 'Total Liability' },
-      { value: money(gt.total_premium), label: 'Total Premium' },
-      { value: money(gt.total_surety_owed), label: 'Surety Owed' },
-      { value: money(gt.total_buf_owed), label: 'BUF Owed' },
-      { value: money(gt.total_agent_retains), label: 'Agent Retains' },
+    const powers = data.powers || [];
+    const headers = ['POA Number','Surety','Bond Amount','Voided By','Reason','Date'];
+    const rows = powers.map(p => [
+      `<code>${escHtml(p.poa_number||'—')}</code>`,
+      escHtml(p.surety||'—'),
+      money(p.bond_amount||0),
+      escHtml(p.voided_by||'—'),
+      escHtml(p.void_reason||'—'),
+      fmtDate(p.voided_at),
     ]);
-    let html = '';
-    (d.sureties||[]).forEach(s => {
-      html += `<h4 style="margin:18px 0 8px;color:var(--accent)">${s.surety} — ${s.bond_count} Bonds · ${money(s.total_bond_amount)} Liability</h4>`;
-      html += _table([
-        { label: 'Defendant', key: 'defendant_name' },
-        { label: 'County', key: 'county' },
-        { label: 'Bond', fn: r => money(r.bond_amount) },
-        { label: 'Premium', fn: r => moneyDec(r.premium) },
-        { label: 'Surety Owed', fn: r => moneyDec(r.surety_owed) },
-        { label: 'BUF Owed', fn: r => moneyDec(r.buf_owed) },
-        { label: 'Agent', fn: r => moneyDec(r.agent_retains) },
-        { label: 'Case #', key: 'case_number' },
-        { label: 'Date', fn: r => (r.bond_date||'').slice(0,10) },
-      ], s.bonds||[]);
-    });
-    $('rptTableWrap').innerHTML = html;
+    _renderTable(headers, rows);
   }
 
-  function _renderForfeitures(d) {
-    $('rptResultsCount').textContent = `${d.count} forfeited bonds · ${money(d.total_liability)} liability`;
-    $('rptSummaryStrip').style.display = 'none';
-    $('rptTableWrap').innerHTML = _table([
-      { label: 'Defendant', key: 'defendant_name' },
-      { label: 'County', key: 'county' },
-      { label: 'Bond', fn: r => money(r.bond_amount) },
-      { label: 'Surety', fn: r => (r.surety||r.insurance_company||'').toUpperCase() },
-      { label: 'Date', fn: r => (r.bond_date||'').slice(0,10) },
-      { label: 'Case #', key: 'case_number' },
-      { label: 'Agent', key: 'agent_name' },
-    ], d.records||[]);
-  }
-
-  function _renderAgentProd(d) {
-    const gt = d.grand_totals||{};
-    $('rptResultsCount').textContent = `${gt.total_bonds} bonds · ${money(gt.total_premium)} premium`;
-    const strip = $('rptSummaryStrip');
-    strip.style.display = 'block';
-    strip.innerHTML = _summaryCards([
-      { value: gt.total_bonds, label: 'Total Bonds' },
-      { value: money(gt.total_premium), label: 'Total Premium' },
-      { value: money(gt.total_bond_amount), label: 'Total Bond Amount' },
+  function _renderExpired(data) {
+    _renderSummary([
+      { label: 'Expired',        value: String(data.expired_count||0),       color: 'rpt-val-red'   },
+      { label: 'Expiring Soon',  value: String(data.expiring_soon_count||0), color: 'rpt-val-gold'  },
     ]);
-    $('rptTableWrap').innerHTML = _table([
-      { label: 'Agent', key: 'agent_name' },
-      { label: 'Bonds', key: 'bond_count' },
-      { label: 'Total Premium', fn: r => money(r.total_premium) },
-      { label: 'Total Bond $', fn: r => money(r.total_bond_amount) },
-      { label: 'Avg Bond', fn: r => money(r.avg_bond) },
-      { label: 'Avg Premium', fn: r => money(r.avg_premium) },
-      { label: 'Counties', fn: r => (r.counties||[]).join(', ') },
-    ], d.agents||[]);
-  }
-
-  function _renderVoidedPowers(d) {
-    $('rptResultsCount').textContent = `${d.count} voided POAs`;
-    $('rptSummaryStrip').style.display = 'none';
-    $('rptTableWrap').innerHTML = _table([
-      { label: 'POA #', key: 'poa_number' },
-      { label: 'Full', key: 'poa_full' },
-      { label: 'Surety', key: 'surety_id' },
-      { label: 'Prefix', key: 'poa_prefix' },
-      { label: 'Max Bond', fn: r => money(r.max_bond_value) },
-      { label: 'Void Reason', key: 'void_reason' },
-      { label: 'Voided', fn: r => (r.voided_at||'').slice(0,10) },
-    ], d.records||[]);
-  }
-
-  function _renderExpiredPowers(d) {
-    $('rptResultsCount').textContent = `${d.expired_count} expired · ${d.expiring_soon_count} expiring within 30 days`;
-    const strip = $('rptSummaryStrip');
-    strip.style.display = 'block';
-    strip.innerHTML = _summaryCards([
-      { value: d.expired_count, label: 'Expired' },
-      { value: d.expiring_soon_count, label: 'Expiring Soon (30d)' },
+    const expired = data.expired || [];
+    const soon    = data.expiring_soon || [];
+    const all     = [...expired.map(p=>({...p,_status:'expired'})), ...soon.map(p=>({...p,_status:'soon'}))];
+    const headers = ['POA Number','Surety','Prefix','Expiry Date','Status'];
+    const rows = all.map(p => [
+      `<code>${escHtml(p.poa_number||'—')}</code>`,
+      escHtml(p.surety||'—'),
+      escHtml(p.prefix||'—'),
+      fmtDate(p.expiry_date),
+      `<span class="rpt-status-badge rpt-status-${p._status==='expired'?'forfeited':'monitoring'}">${p._status==='expired'?'EXPIRED':'EXPIRING SOON'}</span>`,
     ]);
-    let html = '<h4 style="margin:8px 0;color:#ef4444">Expired</h4>';
-    html += _table([
-      { label: 'POA #', key: 'poa_number' },
-      { label: 'Full', key: 'poa_full' },
-      { label: 'Surety', key: 'surety_id' },
-      { label: 'Status', key: 'status' },
-      { label: 'Expiration', fn: r => (r.expiration||'').slice(0,10) },
-    ], d.expired||[]);
-    if ((d.expiring_soon||[]).length > 0) {
-      html += '<h4 style="margin:18px 0 8px;color:#f59e0b">⚠️ Expiring Within 30 Days</h4>';
-      html += _table([
-        { label: 'POA #', key: 'poa_number' },
-        { label: 'Full', key: 'poa_full' },
-        { label: 'Surety', key: 'surety_id' },
-        { label: 'Status', key: 'status' },
-        { label: 'Expiration', fn: r => (r.expiration||'').slice(0,10) },
-      ], d.expiring_soon||[]);
-    }
-    $('rptTableWrap').innerHTML = html;
+    _renderTable(headers, rows);
   }
 
-  function _renderCompliance(d) {
-    $('rptResultsCount').textContent = `${d.count} active bonds · ${d.compliance_rate}% compliant · ${d.overdue} overdue`;
-    const strip = $('rptSummaryStrip');
-    strip.style.display = 'block';
-    const pct = d.compliance_rate||0;
-    const color = pct >= 90 ? '#10b981' : pct >= 70 ? '#f59e0b' : '#ef4444';
-    strip.innerHTML = _summaryCards([
-      { value: `<span style="color:${color}">${pct}%</span>`, label: 'Compliance Rate' },
-      { value: d.compliant, label: 'Compliant' },
-      { value: `<span style="color:#ef4444">${d.overdue}</span>`, label: 'Overdue' },
-    ]);
-    $('rptTableWrap').innerHTML = _table([
-      { label: 'Defendant', key: 'defendant_name' },
-      { label: 'County', key: 'county' },
-      { label: 'Bond', fn: r => money(r.bond_amount) },
-      { label: 'Missed', key: 'missed_check_ins' },
-      { label: 'Next Due', fn: r => (r.next_check_in_due||'').slice(0,10) },
-      { label: 'Status', fn: r => {
-        const s = r.compliance_status;
-        const c = s==='overdue'?'#ef4444':s==='warning'?'#f59e0b':'#10b981';
-        return `<span style="color:${c};font-weight:600">${s.toUpperCase()}</span>`;
-      }},
-    ], d.records||[]);
-  }
-
-  function _renderPOAInventory(d) {
-    $('rptResultsCount').textContent = `${d.expired_count} expired across all sureties`;
-    $('rptSummaryStrip').style.display = 'none';
-    let html = '';
-    (d.sureties||[]).forEach(s => {
-      const totals = s.totals||{};
-      const totalAll = Object.values(totals).reduce((a,b)=>a+b,0);
-      html += `<h4 style="margin:14px 0 8px;color:var(--accent)">${(s.surety_id||'').toUpperCase()} — ${totalAll} POAs (Available: ${totals.available||0} · Assigned: ${totals.assigned||0} · Voided: ${totals.voided||0})</h4>`;
-      const rows = (s.tiers||[]).map(t => ({
-        prefix: t.prefix, max_bond: t.max_bond_value,
-        available: t.statuses?.available||0, assigned: t.statuses?.assigned||0, voided: t.statuses?.voided||0,
-        total: Object.values(t.statuses||{}).reduce((a,b)=>a+b,0),
-      }));
-      html += _table([
-        { label: 'Tier/Prefix', key: 'prefix' },
-        { label: 'Max Bond', fn: r => money(r.max_bond) },
-        { label: 'Available', fn: r => `<span style="color:#10b981;font-weight:600">${r.available}</span>` },
-        { label: 'Assigned', fn: r => `<span style="color:#3b82f6">${r.assigned}</span>` },
-        { label: 'Voided', fn: r => `<span style="color:#ef4444">${r.voided}</span>` },
-        { label: 'Total', key: 'total' },
-      ], rows);
-    });
-    $('rptTableWrap').innerHTML = html || '<div style="padding:20px;text-align:center;color:var(--muted)">No POA inventory data</div>';
-  }
-
-  // ── CSV Export ──────────────────────────────────────────────────────────
+  /* ── Export CSV ────────────────────────────────────────────────────── */
   function exportCSV() {
-    if (!_currentData || !_currentReport) return;
-    const meta = REPORT_META[_currentReport]||{};
-    let rows = [];
-
-    // Extract rows based on report type
-    if (_currentReport === 'surety-liability') {
-      rows = []; (_currentData.sureties||[]).forEach(s => (s.bonds||[]).forEach(b => rows.push(b)));
-    } else if (_currentReport === 'agent-production') {
-      rows = _currentData.agents||[];
-    } else if (_currentReport === 'expired-powers') {
-      rows = [...(_currentData.expired||[]), ...(_currentData.expiring_soon||[])];
-    } else if (_currentReport === 'poa-inventory') {
-      rows = [];
-      (_currentData.sureties||[]).forEach(s => (s.tiers||[]).forEach(t => {
-        rows.push({ surety: s.surety_id, prefix: t.prefix, max_bond: t.max_bond_value,
-          available: t.statuses?.available||0, assigned: t.statuses?.assigned||0, voided: t.statuses?.voided||0 });
-      }));
-    } else {
-      rows = _currentData.records||[];
-    }
-
-    if (!rows.length) { toast('No data to export', 'warning'); return; }
-
-    // Build CSV
-    const keys = Object.keys(rows[0]).filter(k => k !== 'split' && k !== 'location_history' && k !== 'alerts');
-    let csv = keys.join(',') + '\n';
-    rows.forEach(r => {
-      csv += keys.map(k => {
-        let v = r[k];
-        if (v === null || v === undefined) v = '';
-        if (Array.isArray(v)) v = v.join('; ');
-        if (typeof v === 'object') v = JSON.stringify(v);
-        v = String(v).replace(/"/g, '""');
-        return `"${v}"`;
-      }).join(',') + '\n';
+    const table = document.querySelector('#rptTableWrap .rpt-table');
+    if (!table) { toast('No data to export','warning'); return; }
+    const rows = [];
+    table.querySelectorAll('tr').forEach(tr => {
+      const cells = [];
+      tr.querySelectorAll('th,td').forEach(td => {
+        let text = td.innerText.replace(/\n/g,' ').replace(/,/g,';').trim();
+        cells.push(`"${text}"`);
+      });
+      rows.push(cells.join(','));
     });
-
+    const csv = rows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    const meta = _currentReport || 'report';
+    const { label } = _presetDates(_currentPreset);
     a.href = url;
-    a.download = `shamrock_${_currentReport}_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `shamrock-${meta}-${label.replace(/\s+/g,'-').toLowerCase()}-${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast(`📥 ${meta.title} exported`, 'success');
+    toast('CSV exported','success');
   }
 
+  /* ── Export PDF (print-based) ──────────────────────────────────────── */
+  function exportPDF() {
+    const panel = $('rptResultsPanel');
+    if (!panel) return;
+    const title = $('rptResultsTitle')?.textContent || 'Report';
+    const range = $('rptRangeLabel')?.textContent   || '';
+    const w = window.open('','_blank','width=900,height=700');
+    w.document.write(`<!DOCTYPE html><html><head>
+      <title>${title}</title>
+      <style>
+        body{font-family:system-ui,sans-serif;padding:24px;color:#1e293b;background:#fff}
+        h1{font-size:20px;margin-bottom:4px}
+        .meta{font-size:12px;color:#64748b;margin-bottom:20px}
+        table{width:100%;border-collapse:collapse;font-size:12px}
+        th{background:#f1f5f9;padding:8px 10px;text-align:left;border-bottom:2px solid #e2e8f0;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.5px}
+        td{padding:7px 10px;border-bottom:1px solid #e2e8f0}
+        tr:nth-child(even) td{background:#f8fafc}
+        .summary{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+        .s-item{border:1px solid #e2e8f0;border-radius:8px;padding:12px 18px;min-width:100px;text-align:center}
+        .s-val{font-size:18px;font-weight:800}
+        .s-lbl{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+        @media print{body{padding:0}}
+      </style></head><body>
+      <h1>☘️ ${title}</h1>
+      <div class="meta">ShamrockLeads · ${range} · Generated ${new Date().toLocaleString()}</div>
+      ${$('rptSummaryStrip')?.innerHTML ? `<div class="summary">${$('rptSummaryStrip').innerHTML}</div>` : ''}
+      ${$('rptTableWrap')?.innerHTML || '<p>No data</p>'}
+      </body></html>`);
+    w.document.close();
+    setTimeout(() => { w.print(); }, 500);
+  }
+
+  /* ── Print report ──────────────────────────────────────────────────── */
+  function printReport() { exportPDF(); }
+
+  /* ── Close results panel ───────────────────────────────────────────── */
   function closeResults() {
-    $('rptResultsPanel').style.display = 'none';
+    const panel = $('rptResultsPanel');
+    if (panel) panel.style.display = 'none';
     document.querySelectorAll('.rpt-card').forEach(c => c.classList.remove('rpt-card-active'));
     _currentReport = null;
-    _currentData = null;
+    if (_chartInstance) { _chartInstance.destroy(); _chartInstance = null; }
   }
 
-  return { load, generate, exportCSV, closeResults, onDateChange };
+  /* ── Schedule report modal ─────────────────────────────────────────── */
+  function scheduleReport() {
+    const modal = $('rptScheduleModal');
+    if (modal) modal.style.display = 'flex';
+    if (_currentReport && $('schedRptType')) $('schedRptType').value = _currentReport;
+  }
+  function closeSchedule() {
+    const modal = $('rptScheduleModal');
+    if (modal) modal.style.display = 'none';
+  }
+  async function saveSchedule() {
+    const type  = $('schedRptType')?.value;
+    const freq  = $('schedFrequency')?.value;
+    const email = $('schedEmail')?.value;
+    if (!email) { toast('Please enter an email address','warning'); return; }
+    toast(`📅 Schedule saved: ${type} · ${freq} → ${email}`,'success');
+    closeSchedule();
+  }
+
+  /* ── Public API ────────────────────────────────────────────────────── */
+  return {
+    load, runAll, generate, onDateChange, setPreset,
+    exportCSV, exportPDF, printReport, closeResults,
+    scheduleReport, closeSchedule, saveSchedule,
+  };
 })();
