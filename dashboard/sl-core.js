@@ -79,6 +79,13 @@ function _updateBadgeEl(key, count) {
   }
 }
 
+function _decrementBadge(key) {
+  if (SL_STATE.badges[key] > 0) {
+    SL_STATE.badges[key]--;
+    _updateBadgeEl(key, SL_STATE.badges[key]);
+  }
+}
+
 function _incrementBadge(key) {
   // Only increment if the tab is NOT currently active
   const tabMap = {
@@ -221,6 +228,22 @@ function initSSE() {
       _addActivity('✅', `Bond written: ${data.defendant_name} — ${data.county}`, 'success');
       _incrementBadge('activeBonds');
       if (typeof SLTracking !== 'undefined') SLTracking.onBondWritten(data);
+    } catch(_) {}
+  });
+
+  // ── Bond exonerated (discharge email or manual) ──────────────────────────
+  es.addEventListener('bond_exonerated', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const name = data.defendant_name || data.booking_number || 'Defendant';
+      const src  = data.source === 'court_email' ? ' via court discharge email'
+                 : data.source === 'manual'       ? ' (manual)' : '';
+      toast(`✅ Bond exonerated: ${name}${src} — tracking stopped`, 'success');
+      _addActivity('✅', `Bond exonerated: ${name}${src}`, 'success');
+      _desktopNotif('✅ Bond Exonerated', `${name} — tracking stopped${src}`);
+      _decrementBadge('activeBonds');
+      if (typeof SLTracking !== 'undefined') SLTracking.onBondExonerated(data);
+      if (typeof loadActiveBonds === 'function') loadActiveBonds();
     } catch(_) {}
   });
 

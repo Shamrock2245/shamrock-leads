@@ -124,6 +124,36 @@ class CourtEmailScheduler:
                 # ── Step 4: Slack notification ──
                 self._notify_slack(event_type, parsed)
 
+                # ── Step 4.5: Auto-exonerate bond on discharge ──────────────
+                # When a discharge email arrives from the court, we automatically:
+                #   1. Mark the bond as exonerated in active_bonds
+                #   2. Cancel pending geo_pings tokens (stop location tracking)
+                #   3. Cancel pending court reminders / check-in messages
+                #   4. Write an audit event
+                # This is the critical link between court email → tracking stop.
+                if event_type == "discharge" and case_number:
+                    try:
+                        exon_count = self._auto_exonerate_bond(
+                            case_number=case_number,
+                            defendant_name=parsed.get("defendant_name"),
+                            note=(
+                                f"Discharge email received: "
+                                f"{email_data.get('subject', '')} "
+                                f"from {email_data.get('sender', 'court')}"
+                            ),
+                        )
+                        stats["bonds_exonerated"] = stats.get("bonds_exonerated", 0) + exon_count
+                        if exon_count:
+                            logger.info(
+                                "[CourtEmailScheduler] ✅ Auto-exonerated %d bond(s) for case %s",
+                                exon_count, case_number,
+                            )
+                    except Exception as exon_err:
+                        logger.warning(
+                            "[CourtEmailScheduler] Auto-exonerate failed for %s: %s",
+                            case_number, exon_err,
+                        )
+
                 # ── Step 5: BlueBubbles notification (defendant + indemnitor) ──
                 if case_number:
                     try:
@@ -333,3 +363,117 @@ class CourtEmailScheduler:
             http_requests.post(webhook_url, json=payload, timeout=5)
         except Exception:
             pass
+
+    def _auto_exonerate_bond(
+        self,
+        case_number: str,
+        defendant_name: Optional[str] = None,
+        note: str = "",
+    ) -> int:
+        """
+        Automatically exonerate all active bonds matching a case number.
+        Called when a discharge email is received from the court.
+
+        Steps:
+          1. Find matching bonds in active_bonds by case_number
+          2. Mark each as exonerated, clear tracking flags
+          3. Cancel pending geo_pings tokens
+          4. Cancel pending court reminders
+          5. Write audit log entry
+
+        Returns:
+            Number of bonds exonerated (0 if none found).
+        """
+        if not self._db:
+            logger.warning("[_auto_exonerate_bond] No DB — cannot exonerate")
+            return 0
+
+        now = datetime.now(timezone.utc)
+        exon_count = 0
+
+        try:
+            # Find all active bonds matching this case number
+            bonds = list(self._db["active_bonds"].find(
+                {
+                    "case_number": case_number,
+                    "status": {"$in": ["active", "monitoring", "alert"]},
+                },
+                {"booking_number": 1, "defendant_name": 1, "indemnitor_phone": 1,
+                 "indemnitor_name": 1, "county": 1, "_id": 0},
+            ))
+
+            if not bonds:
+                # Also try booking_number-based lookup if defendant name is known
+                if defendant_name:
+                    import re
+                    pattern = re.compile(re.escape(defendant_name), re.IGNORECASE)
+                    bonds = list(self._db["active_bonds"].find(
+                        {
+                            "defendant_name": {"$regex": pattern},
+                            "status": {"$in": ["active", "monitoring", "alert"]},
+                        },
+                        {"booking_number": 1, "defendant_name": 1, "indemnitor_phone": 1,
+                         "indemnitor_name": 1, "county": 1, "_id": 0},
+                    ))
+
+            for bond in bonds:
+                booking_number = bond.get("booking_number", "")
+                if not booking_number:
+                    continue
+
+                # 1. Mark bond as exonerated
+                self._db["active_bonds"].update_one(
+                    {"booking_number": booking_number},
+                    {"$set": {
+                        "status": "exonerated",
+                        "tracking_active": False,
+                        "check_in_required": False,
+                        "exonerated_at": now.isoformat(),
+                        "exoneration_source": "court_email",
+                        "exoneration_case_number": case_number,
+                        "exoneration_note": note,
+                        "updated_at": now,
+                    }}
+                )
+
+                # 2. Cancel pending geo_pings tokens
+                self._db["geo_pings"].update_many(
+                    {"booking_number": booking_number,
+                     "status": {"$in": ["pending", "captured"]}},
+                    {"$set": {"status": "cancelled_exonerated",
+                              "cancelled_at": now.isoformat()}},
+                )
+
+                # 3. Cancel pending court reminders / check-in messages
+                self._db["court_reminders"].update_many(
+                    {"booking_number": booking_number,
+                     "status": {"$in": ["scheduled", "pending"]}},
+                    {"$set": {"status": "cancelled_exonerated",
+                              "cancelled_at": now.isoformat()}},
+                )
+
+                # 4. Audit log
+                self._db["audit_events"].insert_one({
+                    "event_type": "bond_exonerated",
+                    "entity_id": booking_number,
+                    "entity_type": "bond_case",
+                    "defendant_name": bond.get("defendant_name", defendant_name or ""),
+                    "case_number": case_number,
+                    "source": "court_email",
+                    "note": note,
+                    "exonerated_at": now,
+                    "timestamp": now,
+                })
+
+                exon_count += 1
+                logger.info(
+                    "[_auto_exonerate_bond] Exonerated booking %s (%s) — case %s",
+                    booking_number,
+                    bond.get("defendant_name", "?"),
+                    case_number,
+                )
+
+        except Exception as e:
+            logger.error("[_auto_exonerate_bond] DB error: %s", e)
+
+        return exon_count

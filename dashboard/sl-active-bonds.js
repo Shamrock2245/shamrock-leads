@@ -116,7 +116,9 @@ function renderActiveBondsTable() {
         <div style="display:flex;gap:4px;flex-wrap:wrap">
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}')">🗺️ History</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">🗺️ Track</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:var(--danger)" onclick="addManualAlert('${bkSafe}','${nameSafe}')">🚨 Alert</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#22c55e;color:#fff" onclick="exonerateFromActiveBonds('${bkSafe}','${nameSafe}')">✅ Exonerate</button>
           <select style="font-size:10px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text)" onchange="updateBondStatus('${bkSafe}',this.value);this.value=''">
             <option value="">Status…</option>
             <option value="active">Active</option>
@@ -256,7 +258,21 @@ function showRiskBreakdown(booking) {
     { label: `Location history (${(bond.location_history||[]).length} pings)`, value: (bond.location_history||[]).length >= 3 ? -5 : 0 },
   ].filter(r => r.value !== 0);
 
-  alert(`Risk Score: ${risk}/100\n\n${breakdown.map(r => `${r.label}: ${r.value > 0 ? '+' : ''}${r.value}`).join('\n')}`);
+  // Show in a toast/panel instead of alert()
+  const lines = breakdown.map(r => `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px"><span>${r.label}</span><span style="font-weight:700;color:${r.value > 0 ? 'var(--danger)' : 'var(--accent)'}">${r.value > 0 ? '+' : ''}${r.value}</span></div>`).join('');
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:420px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;font-size:16px">🧠 Risk Score Breakdown</h3>
+      <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <div style="font-size:28px;font-weight:700;text-align:center;margin-bottom:16px;color:${risk >= 75 ? 'var(--danger)' : risk >= 50 ? 'var(--gold)' : 'var(--accent)'}">${risk}<span style="font-size:14px;color:var(--muted)">/100</span></div>
+    ${lines}
+    <div style="margin-top:14px;font-size:11px;color:var(--muted);text-align:center">Score updates automatically as check-ins and alerts are recorded.</div>
+  </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 // ── Manual Alert ──
@@ -300,6 +316,64 @@ async function updateBondStatus(booking, newStatus) {
     }
   } catch (e) {
     toast('Network error', 'error');
+  }
+}
+
+// ── Open in Tracking Tab ──
+// Switches to the Tracking tab and opens the detail panel for this booking number.
+function openInTracking(bookingNumber) {
+  // Switch to Tracking tab
+  const trackTab = document.querySelector('[data-tab="tabTracking"]') ||
+                   document.querySelector('button[onclick*="tabTracking"]') ||
+                   Array.from(document.querySelectorAll('.tab-btn')).find(b => b.textContent.includes('Tracking'));
+  if (trackTab) trackTab.click();
+  // Pre-fill the search box and open detail after a short delay
+  setTimeout(() => {
+    const searchEl = document.getElementById('trkSearch');
+    if (searchEl) { searchEl.value = bookingNumber; searchEl.dispatchEvent(new Event('input')); }
+    if (window.SLTracking) SLTracking.openDetail(bookingNumber);
+  }, 350);
+}
+
+// ── Exonerate Bond from Active Bonds Tab ──
+// Calls the tracking exoneration endpoint and refreshes both tabs.
+async function exonerateFromActiveBonds(bookingNumber, defName) {
+  const note = prompt(
+    '✅ Exonerate bond for ' + defName + '?\n\n' +
+    'This will:\n' +
+    '  • Stop all location tracking immediately\n' +
+    '  • Cancel all pending GPS capture links\n' +
+    '  • Cancel all pending court reminders\n\n' +
+    'Enter a note (e.g. "Discharge email from Lee County Clerk") or leave blank:'
+  );
+  if (note === null) return; // User pressed Cancel
+  const notifyIndem = confirm('Notify indemnitor via iMessage that the bond is officially discharged?');
+  try {
+    const r = await fetch(`${API}/api/tracking/${encodeURIComponent(bookingNumber)}/exonerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'manual',
+        note: note || 'Manual exoneration from Active Bonds tab',
+        notify_indemnitor: notifyIndem,
+      }),
+    });
+    const data = await r.json();
+    if (data.success) {
+      toast('✅ ' + defName + ' exonerated — tracking stopped', 'success');
+      loadActiveBonds();
+      // Refresh tracking tab data and exoneration log
+      if (window.SLTracking) {
+        SLTracking.refresh();
+        SLTracking.onBondExonerated({ booking_number: bookingNumber, defendant_name: defName });
+      }
+    } else if (data.already_exonerated) {
+      toast(defName + ' was already exonerated on ' + (data.exonerated_at ? new Date(data.exonerated_at).toLocaleDateString() : '—'), 'info');
+    } else {
+      toast('❌ ' + (data.error || 'Exoneration failed'), 'error');
+    }
+  } catch (e) {
+    toast('Network error during exoneration', 'error');
   }
 }
 

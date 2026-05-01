@@ -850,12 +850,25 @@
       </div>
     </div>
 
+    <!-- Search + Filter Row -->
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="trkSearch" placeholder="🔍 Search by name, booking, case, county…"
+        style="flex:1;min-width:220px;padding:9px 14px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;font-family:inherit">
+      <div class="btn-group">
+        <button class="active" data-trk-filter="all">All</button>
+        <button data-trk-filter="overdue" style="color:var(--danger)">⚠ Overdue</button>
+        <button data-trk-filter="high_risk" style="color:var(--gold)">🔥 High Risk</button>
+        <button data-trk-filter="alert" style="color:var(--danger)">🚨 Alert</button>
+        <button data-trk-filter="no_location" style="color:var(--muted)">📵 No Location</button>
+      </div>
+    </div>
     <!-- Map / List Toggle -->
     <div style="display:flex;gap:8px;margin-bottom:14px;align-items:center">
       <div class="btn-group">
         <button class="active" id="trkBtnMap" onclick="SLTracking.showView('map')">🗺️ Map View</button>
         <button id="trkBtnList" onclick="SLTracking.showView('list')">📋 List View</button>
       </div>
+      <span id="trkNoLocationCount" style="font-size:12px;color:var(--warning);margin-left:8px"></span>
       <button class="btn-export" onclick="SLTracking.refresh()" style="margin-left:auto">↻ Refresh</button>
     </div>
 
@@ -892,6 +905,17 @@
         <button class="btn-cancel" onclick="SLTracking.closeDetail()">✕ Close</button>
       </div>
       <div id="trkDetailBody"></div>
+    </div>
+
+    <!-- Exoneration Log -->
+    <div class="panel" style="margin-top:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div class="panel-title" style="margin:0">✅ Exoneration Log — Tracking Auto-Stopped</div>
+        <span style="font-size:12px;color:var(--muted)">Auto-populated when discharge emails arrive from courts or bonds are manually exonerated</span>
+      </div>
+      <div id="trkExonerationLog">
+        <p style="color:var(--muted);font-size:13px">Loading exoneration history…</p>
+      </div>
     </div>
 
     <!-- Court Reminder Scheduler -->
