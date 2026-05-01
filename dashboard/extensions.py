@@ -153,21 +153,9 @@ REGISTERED_COUNTIES = sorted([
 
 
 # ── SignNow Template IDs ──
-SIGNNOW_TEMPLATES = {
-    "paperwork-header": "9b9dad3e319f4b1580094e05f9844929d5a6f7de",
-    "faq-cosigners": "0820b9fef3bd4c38a91643455881021f3f0c3a88",
-    "faq-defendants": "1524f1c816c54a72be76d14fe128e4a6034579dc",
-    "indemnity-agreement": "ed5e6ca0a3444796a127fbeb6a880658371aafd7",
-    "defendant-application": "d50adc808f3245f087b218d33da89e4ace15ecd4",
-    "promissory-note": "460bd43c2f514305a3b296481713a00ee8311c79",
-    "disclosure-form": "fb8b57bf55ac4d5e8bff820b018a0bfd3b17a37a",
-    "surety-terms": "192aeb246230446bb0d7f658765afd2832704964",
-    "master-waiver": "3b0e71188b3049cc8760d144e6c49df227ccd741",
-    "ssa-release": "4800defff07541079760889d83109059585b0cea",
-    "collateral-receipt": "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",
-    "payment-plan": "1861b158d7a447d48be5ac1dd24755f727f0773b",
-    "appearance-bond": "7ba703e101e04604a2f1458c21d3addfce9ca86b",
-}
+# Single Source of Truth: SignNowPacketService.TEMPLATE_MAP
+# Location: dashboard/services/signnow_packet_service.py
+# Do NOT duplicate template IDs here — import from the service if needed.
 
 
 # ── App Factory Init ──

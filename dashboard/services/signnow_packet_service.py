@@ -40,8 +40,17 @@ class SignNowPacketService:
     Migrated from GAS SignNow_SendPaperwork.js and Telegram_Documents.js.
     """
 
-    # Single Source of Truth for Template IDs
+    # ─── Single Source of Truth for Template IDs ────────────────────────
+    # All template IDs live HERE and only here.
+    # extensions.py references this location — do NOT duplicate there.
+    #
+    # To add Palmetto-specific templates:
+    #   1. Create the template in SignNow (admin@shamrockbailbonds.biz)
+    #   2. Add the ID below under "Palmetto-Specific Overrides"
+    #   3. The surety-routing logic in build_packet_manifest() will pick it up
+    # ──────────────────────────────────────────────────────────────────────
     TEMPLATE_MAP = {
+        # ── Shared Templates (used by both OSI and Palmetto) ──
         "paperwork-header":      "9b9dad3e319f4b1580094e05f9844929d5a6f7de",
         "faq-cosigners":         "0820b9fef3bd4c38a91643455881021f3f0c3a88",
         "faq-defendants":        "1524f1c816c54a72be76d14fe128e4a6034579dc",
@@ -52,9 +61,16 @@ class SignNowPacketService:
         "surety-terms":          "192aeb246230446bb0d7f658765afd2832704964",
         "master-waiver":         "3b0e71188b3049cc8760d144e6c49df227ccd741",
         "ssa-release":           "4800defff07541079760889d83109059585b0cea",
-        "collateral-receipt":    "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",
-        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",
-        "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",
+        # ── OSI-Specific Templates ──
+        "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",  # Appearance Bond blank (OSI)
+        "collateral-receipt":    "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",  # osi-premium-collateral-template
+        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # shamrock-premium-finance-notice
+
+        # ── Palmetto-Specific Overrides ──
+        "appearance-bond-palmetto":    "9b1d3d0b64004153b347ceccda07420a906350e5",  # shamrock-palmetto-appearance-bond
+        # TODO: Add remaining Palmetto template IDs once created in SignNow
+        # "collateral-receipt-palmetto": "<TEMPLATE_ID>",
+        # "payment-plan-palmetto":       "<TEMPLATE_ID>",
     }
 
     # Document Multiplication Rules
@@ -326,7 +342,8 @@ class SignNowPacketService:
 
         for doc_key in target_docs:
             template_key = doc_key
-            if doc_key in ("collateral-receipt", "payment-plan") and surety_id == "palmetto":
+            # Route to surety-specific templates when Palmetto is selected
+            if doc_key in ("appearance-bond", "collateral-receipt", "payment-plan") and surety_id == "palmetto":
                 template_key = f"{doc_key}-palmetto"
 
             template_id = self.TEMPLATE_MAP.get(template_key)
