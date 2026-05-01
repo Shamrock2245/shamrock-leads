@@ -83,6 +83,13 @@ shamrock-leads/
 | `docker-ops` | Container management on Hetzner | `.agent/skills/docker-ops/` |
 | `systematic-debugging` | Root-cause-first debugging | `.agent/skills/systematic-debugging/` |
 | `self-improving-agent` | Session learning & skill creation | `.agent/skills/self-improving-agent/` |
+| `gws-shared` | Google Workspace CLI auth & global flags | `.agent/skills/gws-shared/` |
+| `gws-calendar` | Google Calendar: court dates & events | `.agent/skills/gws-calendar/` |
+| `gws-gmail` | Gmail: intake email triage & automation | `.agent/skills/gws-gmail/` |
+| `gws-drive` | Google Drive: case file management | `.agent/skills/gws-drive/` |
+| `mongodb-query-optimizer` | MongoDB query optimization & indexing | `.agent/skills/mongodb-query-optimizer/` |
+| `mongodb-schema-design` | MongoDB schema patterns & anti-patterns | `.agent/skills/mongodb-schema-design/` |
+| `mongodb-natural-language-querying` | Natural language → MongoDB queries | `.agent/skills/mongodb-natural-language-querying/` |
 
 ## 🔄 Key Workflows
 
