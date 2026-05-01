@@ -261,6 +261,30 @@ def create_app():
                 await asyncio.sleep(600)  # Every 10 minutes
         asyncio.ensure_future(_health_loop())
 
+    # ── Feature I: Court Reminder Auto-Scan (hourly cron) ───────────────────
+    @app.before_serving
+    async def _start_court_reminder_cron():
+        """Hourly background loop: scan active bonds for upcoming court dates,
+        auto-schedule 4-touch reminders, and send any that are due."""
+        import asyncio
+        async def _reminder_loop():
+            await asyncio.sleep(60)  # Initial delay — let DB connect first
+            while True:
+                try:
+                    from dashboard.services.court_reminder_service import CourtReminderService
+                    service = CourtReminderService(app.db)
+                    scan = await service.auto_scan_and_schedule()
+                    send = await service.process_due_reminders()
+                    logger.info(
+                        "☘️  Court reminder cron: scanned=%s scheduled=%s sent=%s failed=%s",
+                        scan.get("bonds_scanned", 0), scan.get("scheduled", 0),
+                        send.get("sent", 0), send.get("failed", 0),
+                    )
+                except Exception as e:
+                    logger.warning("Court reminder cron error: %s", e)
+                await asyncio.sleep(3600)  # Every hour
+        asyncio.ensure_future(_reminder_loop())
+
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
     if pin:

@@ -271,6 +271,138 @@ class CourtReminderService:
             logger.error("[reminder] process_due error: %s", e)
             return {"error": str(e)}
 
+    # ── Auto-Scan: Find bonds needing reminders and schedule them ──
+
+    async def auto_scan_and_schedule(self, horizon_days: int = 8):
+        """Scan active_bonds for upcoming court dates within `horizon_days`.
+        For each bond WITHOUT existing pending court reminders, auto-schedule
+        the 4-touch sequence (7d, 3d, 1d, morning-of).
+
+        Returns: { scheduled: int, skipped: int, errors: int, details: [] }
+        """
+        try:
+            active_bonds = get_collection("active_bonds")
+            court_reminders = get_collection("court_reminders")
+
+            now = datetime.now(timezone.utc)
+            horizon = now + timedelta(days=horizon_days)
+
+            # Find bonds with court_date in the next N days
+            bonds = await active_bonds.find({
+                "court_date": {"$gte": now.isoformat(), "$lte": horizon.isoformat()},
+                "status": {"$nin": ["exonerated", "surrendered", "forfeited"]},
+            }, {
+                "booking_number": 1, "defendant_name": 1, "county": 1,
+                "court_date": 1, "court_location": 1, "case_number": 1,
+                "indemnitor_phone": 1, "indemnitor_name": 1,
+                "indemnitor": 1, "indemnitors": 1, "phone": 1,
+            }).to_list(200)
+
+            scheduled = 0
+            skipped = 0
+            errors = 0
+            details = []
+
+            for bond in bonds:
+                booking = bond.get("booking_number", "")
+                if not booking:
+                    continue
+
+                # Check if reminders already exist for this booking
+                existing = await court_reminders.count_documents({
+                    "booking_number": booking,
+                    "reminder_type": "court",
+                    "status": {"$in": ["pending", "sent"]},
+                })
+                if existing > 0:
+                    skipped += 1
+                    continue
+
+                # Resolve phone numbers
+                def_phone = bond.get("phone", "")
+                court_date = bond.get("court_date", "")
+                court_location = bond.get("court_location", bond.get("county", ""))
+                case_number = bond.get("case_number", "")
+                defendant_name = bond.get("defendant_name", "")
+
+                # Resolve indemnitor phones
+                indemnitor_phones = []
+                ind = bond.get("indemnitor", {})
+                if isinstance(ind, dict) and ind.get("phone"):
+                    indemnitor_phones.append(ind["phone"])
+                ip = bond.get("indemnitor_phone", "")
+                if ip and ip not in indemnitor_phones:
+                    indemnitor_phones.append(ip)
+                for ind_entry in bond.get("indemnitors", []):
+                    p = ind_entry.get("phone", "")
+                    if p and p not in indemnitor_phones:
+                        indemnitor_phones.append(p)
+
+                # Need at least one phone to send to
+                if not def_phone and not indemnitor_phones:
+                    # Try to look up from other collections
+                    ind_phones = await self._lookup_indemnitor_phones(booking)
+                    indemnitor_phones.extend(ind_phones)
+
+                if not def_phone and not indemnitor_phones:
+                    details.append({
+                        "booking": booking, "status": "no_phone",
+                        "name": defendant_name,
+                    })
+                    errors += 1
+                    continue
+
+                # Schedule using the existing method
+                # Use indemnitor phone as defendant phone if no def phone
+                primary_phone = def_phone or (indemnitor_phones[0] if indemnitor_phones else "")
+                try:
+                    result = await self.schedule_reminders(
+                        booking_number=booking,
+                        defendant_name=defendant_name,
+                        phone=primary_phone,
+                        court_date_str=court_date,
+                        court_location=court_location or "the courthouse",
+                        case_number=case_number or "N/A",
+                        indemnitor_phones=indemnitor_phones,
+                    )
+                    if result.get("success"):
+                        scheduled += 1
+                        details.append({
+                            "booking": booking, "status": "scheduled",
+                            "name": defendant_name,
+                            "count": result.get("scheduled_count", 0),
+                            "recipients": result.get("recipients", 0),
+                        })
+                    else:
+                        errors += 1
+                        details.append({
+                            "booking": booking, "status": "error",
+                            "name": defendant_name,
+                            "error": result.get("error", "unknown"),
+                        })
+                except Exception as exc:
+                    errors += 1
+                    details.append({
+                        "booking": booking, "status": "error",
+                        "name": defendant_name, "error": str(exc),
+                    })
+
+            logger.info(
+                "[auto_scan] Court reminder scan complete: "
+                "scheduled=%d skipped=%d errors=%d",
+                scheduled, skipped, errors,
+            )
+            return {
+                "scheduled": scheduled,
+                "skipped": skipped,
+                "errors": errors,
+                "bonds_scanned": len(bonds),
+                "details": details[:20],  # Limit detail output
+            }
+        except Exception as e:
+            logger.error("[auto_scan] error: %s", e)
+            return {"error": str(e)}
+
     # ── Private helpers ──
 
     async def _lookup_indemnitor_phones(self, booking_number: str) -> list:

@@ -286,6 +286,10 @@
         <button onclick="SL.setDefBond(5000)">$5K+</button>
         <button onclick="SL.setDefBond(10000)">$10K+</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:4px 12px;border-radius:6px;background:var(--panel);border:1px solid var(--border)">
+        <input type="checkbox" id="defHasIndemnitor" onchange="SL.loadDefendants()" style="cursor:pointer">
+        <span>👤 Has Indemnitor</span>
+      </label>
       <span class="meta" id="defResultsMeta"></span>
     </div>
 
@@ -786,6 +790,42 @@
           <tbody id="abTableBody"><tr><td colspan="12" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Feature I: Court Reminder Auto-Text Panel -->
+    <div class="panel" style="margin-top:18px">
+      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>📲 Court Date Auto-Text Engine</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="meta" id="crStatus">Loading...</span>
+          <button class="btn-export" onclick="runCourtReminderScan()" style="font-size:12px;padding:5px 12px;background:#7c3aed;color:#fff">
+            🔄 Scan Now
+          </button>
+          <button class="btn-export" onclick="loadReminderStatus()" style="font-size:12px;padding:5px 12px">
+            ↻ Refresh
+          </button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;padding:12px">
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--warning)" id="crPending">—</div>
+          <div style="font-size:11px;color:var(--muted)">Pending</div>
+        </div>
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--success)" id="crSent">—</div>
+          <div style="font-size:11px;color:var(--muted)">Sent</div>
+        </div>
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--danger)" id="crFailed">—</div>
+          <div style="font-size:11px;color:var(--muted)">Failed</div>
+        </div>
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:var(--text)" id="crTotal">—</div>
+          <div style="font-size:11px;color:var(--muted)">Total</div>
+        </div>
+      </div>
+      <div id="crNextDue" style="padding:4px 16px 12px;font-size:12px;color:var(--muted)"></div>
+      <div id="crScanResult" style="display:none;padding:8px 16px 12px;font-size:12px;background:rgba(124,58,237,0.06);border-radius:0 0 8px 8px"></div>
     </div>
 
     <!-- Location History Panel (shown on row click) -->

@@ -814,6 +814,66 @@ function initActiveBonds() {
   if (missedBtn) missedBtn.addEventListener('click', processMissedCheckins);
   loadActiveBonds();
   _checkPoaStock();
+  loadReminderStatus();
+}
+
+/* ── Feature I: Court Reminder Panel Functions ───────── */
+async function loadReminderStatus() {
+  try {
+    const r = await fetch(`${API}/api/court-reminders/status`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const el = id => document.getElementById(id);
+    el('crPending').textContent = d.pending || 0;
+    el('crSent').textContent = d.sent || 0;
+    el('crFailed').textContent = d.failed || 0;
+    el('crTotal').textContent = d.total || 0;
+    el('crStatus').textContent = `${d.total || 0} total reminders`;
+    if (d.next_due) {
+      const dt = new Date(d.next_due.send_at);
+      el('crNextDue').innerHTML = `⏰ Next: <strong>${escHtml(d.next_due.defendant_name || '—')}</strong> (${d.next_due.touch}) → ${dt.toLocaleDateString('en-US',{month:'short',day:'numeric'})} at ${dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}`;
+    } else {
+      el('crNextDue').textContent = 'No pending reminders';
+    }
+  } catch(e) { console.warn('Reminder status load error:', e); }
+}
+
+async function runCourtReminderScan() {
+  const btn = event?.target;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning...'; }
+  const resultDiv = document.getElementById('crScanResult');
+  try {
+    const r = await fetch(`${API}/api/court-reminders/auto-scan`, { method: 'POST' });
+    const d = await r.json();
+    if (d.success) {
+      const scan = d.scan || {};
+      const send = d.send || {};
+      let html = `<div style="margin-bottom:6px"><strong>✅ Scan Complete</strong></div>`;
+      html += `<div>📋 Bonds scanned: <strong>${scan.bonds_scanned || 0}</strong></div>`;
+      html += `<div>📲 New reminders scheduled: <strong>${scan.scheduled || 0}</strong></div>`;
+      html += `<div>⏭ Already scheduled (skipped): ${scan.skipped || 0}</div>`;
+      if (scan.errors > 0) html += `<div style="color:var(--danger)">❌ Errors: ${scan.errors}</div>`;
+      html += `<div style="margin-top:6px">📤 Sent this cycle: <strong>${send.sent || 0}</strong> | Failed: ${send.failed || 0}</div>`;
+      if (scan.details?.length > 0) {
+        html += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px">Details (${scan.details.length})</summary><div style="margin-top:4px;max-height:150px;overflow-y:auto">`;
+        scan.details.forEach(d => {
+          const icon = d.status === 'scheduled' ? '✅' : d.status === 'no_phone' ? '📵' : '❌';
+          html += `<div style="padding:2px 0;font-size:11px">${icon} ${escHtml(d.name || d.booking)} — ${d.status}${d.count ? ` (${d.count} msgs)` : ''}${d.error ? ` — ${d.error}` : ''}</div>`;
+        });
+        html += `</div></details>`;
+      }
+      resultDiv.innerHTML = html;
+      resultDiv.style.display = 'block';
+      toast(`Scanned ${scan.bonds_scanned} bonds, scheduled ${scan.scheduled} new reminders`, 'success');
+      loadReminderStatus();
+    } else {
+      toast(d.error || 'Scan failed', 'error');
+    }
+  } catch(e) {
+    toast('Court scan error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Scan Now'; }
+  }
 }
 
 if (document.readyState === 'loading') {

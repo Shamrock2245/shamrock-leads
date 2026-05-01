@@ -53,6 +53,39 @@ async def api_leads():
         except ValueError:
             pass
 
+    # Feature D: Has Indemnitor filter — cross-reference bonds collections
+    has_indemnitor = request.args.get("has_indemnitor", "").lower()
+    if has_indemnitor == "true":
+        active = get_collection("active_bonds")
+        prospective = get_collection("prospective_bonds")
+        # Find booking numbers that have indemnitor info
+        ind_bookings = set()
+        async for doc in active.find(
+            {"$or": [
+                {"indemnitor.phone": {"$exists": True, "$ne": ""}},
+                {"indemnitor_phone": {"$exists": True, "$ne": ""}},
+                {"indemnitors.0": {"$exists": True}},
+            ]},
+            {"booking_number": 1},
+        ):
+            if doc.get("booking_number"):
+                ind_bookings.add(doc["booking_number"])
+        async for doc in prospective.find(
+            {"$or": [
+                {"indemnitor.phone": {"$exists": True, "$ne": ""}},
+                {"indemnitor_phone": {"$exists": True, "$ne": ""}},
+                {"indemnitors.0": {"$exists": True}},
+            ]},
+            {"booking_number": 1},
+        ):
+            if doc.get("booking_number"):
+                ind_bookings.add(doc["booking_number"])
+        if ind_bookings:
+            query["booking_number"] = {"$in": list(ind_bookings)}
+        else:
+            # No matches — return empty
+            return jsonify({"leads": [], "total": 0, "page": 1, "pages": 1})
+
     total = await arrests.count_documents(query)
     cursor = arrests.find(query, {"_id": 0}).sort(
         sort_by, sort_dir

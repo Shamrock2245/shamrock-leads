@@ -24,6 +24,8 @@ async function loadDefendants() {
   if (custody) p.set('custody', custody);
   if (county) p.set('county', county);
   if (minBond) p.set('min_bond', minBond);
+  const hasIndemnitor = document.getElementById('defHasIndemnitor')?.checked;
+  if (hasIndemnitor) p.set('has_indemnitor', 'true');
 
   try {
     const d = await _safeFetch(`${API}/api/leads?${p}`);

@@ -88,3 +88,58 @@ async def get_reminders(booking_number):
         return jsonify({"reminders": reminders})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@court_reminders_bp.route("/court-reminders/auto-scan", methods=["POST"])
+async def auto_scan_court_dates():
+    """Scan active_bonds for upcoming court dates and auto-schedule reminders.
+    This replaces the manual scheduling flow — bonds with court dates within
+    the next 8 days that have NO pending reminders get them auto-created.
+    Also processes any due reminders immediately."""
+    try:
+        service = CourtReminderService(current_app.db)
+        scan_result = await service.auto_scan_and_schedule()
+        send_result = await service.process_due_reminders()
+        return jsonify({
+            "success": True,
+            "scan": scan_result,
+            "send": send_result,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@court_reminders_bp.route("/court-reminders/status", methods=["GET"])
+async def reminder_status():
+    """Dashboard status: pending, sent, failed counts + next due."""
+    try:
+        col = current_app.db["court_reminders"]
+        pipeline = [
+            {"$group": {
+                "_id": "$status",
+                "count": {"$sum": 1},
+            }}
+        ]
+        status_counts = {}
+        async for row in col.aggregate(pipeline):
+            status_counts[row["_id"]] = row["count"]
+
+        # Next due reminder
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        next_due = await col.find_one(
+            {"status": "pending", "send_at": {"$gte": now}},
+            {"_id": 0, "booking_number": 1, "defendant_name": 1,
+             "touch": 1, "send_at": 1, "phone": 1, "recipient_role": 1},
+            sort=[("send_at", 1)],
+        )
+
+        return jsonify({
+            "pending": status_counts.get("pending", 0),
+            "sent": status_counts.get("sent", 0),
+            "failed": status_counts.get("failed", 0),
+            "total": sum(status_counts.values()),
+            "next_due": next_due,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
