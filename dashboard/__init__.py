@@ -120,10 +120,6 @@ def create_app():
     app.register_blueprint(bb_docs_bp, url_prefix="/api")
     app.register_blueprint(bb_contacts_bp, url_prefix="/api")
     app.register_blueprint(bb_health_bp, url_prefix="/api")
-    # 25002500 Gmail Discharge Monitor (Feature J) 25002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500
-    from dashboard.api.discharge_monitor import discharge_monitor_bp
-    app.register_blueprint(discharge_monitor_bp, url_prefix="/api")
-
     # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving
     async def _start_inbox_poller():
@@ -308,19 +304,24 @@ def create_app():
         import asyncio
         async def _reminder_loop():
             await asyncio.sleep(60)  # Initial delay — let DB connect first
+            _cycle = 0
             while True:
+                _cycle += 1
                 try:
                     from dashboard.services.court_reminder_service import CourtReminderService
                     service = CourtReminderService(app.db)
                     scan = await service.auto_scan_and_schedule()
                     send = await service.process_due_reminders()
                     logger.info(
-                        "☘️  Court reminder cron: scanned=%s scheduled=%s sent=%s failed=%s",
-                        scan.get("bonds_scanned", 0), scan.get("scheduled", 0),
+                        "☘️  Court reminder cron [cycle %s]: scanned=%s scheduled=%s sent=%s failed=%s",
+                        _cycle, scan.get("bonds_scanned", 0), scan.get("scheduled", 0),
                         send.get("sent", 0), send.get("failed", 0),
                     )
+                    # Heartbeat every 6th cycle (~6 hours) to confirm loop is alive
+                    if _cycle % 6 == 0:
+                        logger.info("☘️  Court reminder cron heartbeat: cycle=%s still running", _cycle)
                 except Exception as e:
-                    logger.warning("Court reminder cron error: %s", e)
+                    logger.warning("Court reminder cron error [cycle %s]: %s", _cycle, e)
                 await asyncio.sleep(3600)  # Every hour
         asyncio.ensure_future(_reminder_loop())
 

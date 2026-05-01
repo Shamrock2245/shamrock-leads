@@ -75,7 +75,7 @@ ShamrockLeads is a **statewide arrest intelligence and bail bond lifecycle platf
 │  📍 Tracking          │ 📥 Intake Queue      │ 🤝 Indemnitors       │
 │  📋 POA Inventory     │                      │                       │
 │                                                                      │
-│  30+ REST API Endpoints    │  11 Frontend JS Modules                 │
+│  200+ REST API Endpoints   │  15 Frontend JS Modules                 │
 │  iMessage Bridge (BB)      │  AI Outreach Agent Panel                │
 │  Defendant Lifecycle       │  Pipeline Auto-Sync                     │
 └──────────────────────────────────────────────────────────────────────┘
@@ -165,7 +165,7 @@ The system automatically bridges defendants from the Lead Explorer/Defendants ta
 
 ## API Endpoints
 
-The dashboard exposes 30+ REST endpoints across these modules:
+The dashboard exposes 200+ REST endpoints across these modules:
 
 | Module | Prefix | Key Endpoints |
 |--------|--------|---------------|

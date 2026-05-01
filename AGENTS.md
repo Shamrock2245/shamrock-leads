@@ -65,13 +65,15 @@ Move records safely through this lifecycle:
 | **The Clerk** | Jail roster parsing, HTML→JSON, anti-bot evasion | ✅ `IMPLEMENTED` | `scrapers/counties/*.py` | `base_scraper.py` |
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ `IMPLEMENTED` | `scoring/lead_scorer.py` | `lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ `IMPLEMENTED` | `writers/slack_notifier.py` | `slack_notifier.py` |
-| **The Matcher** | Link indemnitor intake to correct defendant | 🔲 `Phase 4` | `matching/` | — |
-| **The Paperwork Agent** | Generate surety-specific bond paperwork | 🔲 `Phase 6` | `paperwork/` | — |
-| **The Signature Agent** | Send and track SignNow packets | 🔲 `Phase 7` | `signing/` | — |
+| **The Matcher** | Link indemnitor intake to correct defendant | ✅ `IMPLEMENTED` | `dashboard/api/matching.py` | `matching.py` |
+| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
+| **The Signature Agent** | Send and track SignNow packets | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
 | **The Payment Agent** | Collect premium via SwipeSimple | 🔲 `Phase 8` | `payments/` | — |
-| **The Auditor** | Immutable event logging for all state changes | 🔲 `Phase 2+` | `audit/` | — |
+| **The Auditor** | Immutable event logging for all state changes | ✅ `IMPLEMENTED` | `dashboard/api/events.py` | `events.py` |
 | **The Finder** | OSINT: family/friend contact discovery | 🔲 `Phase 9` | `discovery/` | — |
-| **The Closer** | Outreach sequencing: SMS/WhatsApp drip | 🔲 `Phase 10` | `outreach/` | — |
+| **The Closer** | Outreach sequencing: SMS/WhatsApp drip | ✅ `IMPLEMENTED` | `dashboard/api/outreach.py` | `outreach.py` |
+| **The Court Clerk** | Auto-scan court dates, schedule Twilio SMS | ✅ `IMPLEMENTED` | `dashboard/services/court_reminder_service.py` | `court_reminder_service.py` |
+| **The Discharge Monitor** | Scan Gmail for exonerations, auto-discharge | ✅ `IMPLEMENTED` | `dashboard/api/discharge_monitor.py` | `discharge_monitor.py` |
 
 ---
 

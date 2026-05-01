@@ -949,6 +949,14 @@ async def api_bulk_exonerate():
     - Audit event written per bond
     - SSE bond_exonerated fired per bond
     """
+    import os
+    # ── Auth guard: X-Admin-Token must match DASHBOARD_PIN ──────────────────
+    _pin = os.getenv("DASHBOARD_PIN", "")
+    if _pin:
+        token = request.headers.get("X-Admin-Token", "").strip()
+        if token != _pin:
+            return jsonify({"success": False, "error": "Unauthorized — X-Admin-Token required"}), 401
+    # ────────────────────────────────────────────────────────────────────────
     import asyncio
     active_bonds = get_collection("active_bonds")
     poa_inventory = get_collection("poa_inventory")
