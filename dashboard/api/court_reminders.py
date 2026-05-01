@@ -2,6 +2,7 @@
 
 from quart import Blueprint, jsonify, request, current_app
 from dashboard.services.court_reminder_service import CourtReminderService
+from dashboard.extensions import get_db
 
 court_reminders_bp = Blueprint("court_reminders", __name__)
 
@@ -73,6 +74,51 @@ async def process_reminders():
         service = CourtReminderService(current_app.db)
         result = await service.process_due_reminders()
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@court_reminders_bp.route("/court-reminders/auto-scan", methods=["POST"])
+async def court_reminders_auto_scan():
+    """Trigger the hourly auto-scan: finds active bonds with court dates
+    within 8 days and schedules 4-touch reminder sequences for unscheduled bonds."""
+    try:
+        service = CourtReminderService()
+        result = await service.auto_scan_and_schedule()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@court_reminders_bp.route("/court-reminders/status", methods=["GET"])
+async def court_reminders_status():
+    """Returns reminder queue stats: pending/sent/failed counts + next due reminder."""
+    try:
+        db = get_db()
+        col = db["court_reminders"]
+        pending = await col.count_documents({"status": "pending"})
+        sent = await col.count_documents({"status": "sent"})
+        failed = await col.count_documents({"status": "failed"})
+        cancelled = await col.count_documents({"status": {"$regex": "^cancelled"}})
+        last_sent = await col.find_one(
+            {"status": "sent"}, {"sent_at": 1, "_id": 0}, sort=[("sent_at", -1)]
+        )
+        next_due = await col.find_one(
+            {"status": "pending"},
+            {"send_at": 1, "defendant_name": 1, "touch": 1, "_id": 0},
+            sort=[("send_at", 1)]
+        )
+        return jsonify({
+            "success": True,
+            "counts": {"pending": pending, "sent": sent, "failed": failed, "cancelled": cancelled},
+            "last_sent_at": last_sent.get("sent_at") if last_sent else None,
+            "next_due": {
+                "send_at": next_due.get("send_at") if next_due else None,
+                "defendant_name": next_due.get("defendant_name") if next_due else None,
+                "touch": next_due.get("touch") if next_due else None,
+            },
+            "cron_interval_hours": 1,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

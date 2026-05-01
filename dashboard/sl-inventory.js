@@ -29,6 +29,7 @@ const SLInventory = (() => {
       _data = await r.json();
       renderSummary();
       renderMiniKpis();
+      _checkLowStockBanner();
     } catch (e) {
       body.innerHTML = `<div class="inv-error">❌ Failed to load inventory: ${e.message}</div>`;
     }
@@ -424,11 +425,48 @@ const SLInventory = (() => {
     setTimeout(() => { resultEl.innerHTML = ''; }, 5000);
   }
 
+  // ── Low-Stock Global Banner ──────────────────────────────────────────────
+  function _checkLowStockBanner() {
+    const LOW = 5;
+    const tiers = _data.tiers || [];
+    const criticalTiers = tiers.filter(t => t.available <= 2);
+    const lowTiers = tiers.filter(t => t.available > 2 && t.available <= LOW);
+    const bannerId = 'poaLowStockBanner';
+    let banner = document.getElementById(bannerId);
+    if (!criticalTiers.length && !lowTiers.length) {
+      if (banner) banner.remove();
+      return;
+    }
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = bannerId;
+      banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:8500;max-width:600px;width:calc(100% - 32px);border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:12px;font-size:13px;font-weight:600;box-shadow:0 4px 20px rgba(0,0,0,.4);cursor:pointer;transition:opacity .3s';
+      banner.onclick = function() { SLInventory.open(); };
+      document.body.appendChild(banner);
+    }
+    if (criticalTiers.length > 0) {
+      banner.style.background = '#ef4444';
+      banner.style.color = '#fff';
+      banner.innerHTML = '🔴 CRITICAL: ' + criticalTiers.map(t => t.poa_prefix + ' (' + t.available + ' left)').join(', ') + ' — Click to manage POA inventory';
+    } else {
+      banner.style.background = '#f59e0b';
+      banner.style.color = '#000';
+      banner.innerHTML = '⚠️ Low Stock: ' + lowTiers.map(t => t.poa_prefix + ' (' + t.available + ' left)').join(', ') + ' — Click to manage POA inventory';
+    }
+    setTimeout(function() {
+      if (banner && banner.parentNode) {
+        banner.style.opacity = '0';
+        setTimeout(function() { if (banner && banner.parentNode) banner.remove(); }, 300);
+      }
+    }, 12000);
+  }
+
   return {
     open, close, switchTab, loadSummary, loadDetailView,
     applyFilter, searchFilter, detailPage,
     showAddForm, submitAdd, updatePrefixOptions, autoFillMaxBond,
     openAssignDialog, voidPower, reassignPower, restorePower,
     handleUpload, handleDrop, confirmUploadedPOAs,
+    checkLowStockBanner: _checkLowStockBanner,
   };
 })();

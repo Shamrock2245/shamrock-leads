@@ -120,6 +120,9 @@ def create_app():
     app.register_blueprint(bb_docs_bp, url_prefix="/api")
     app.register_blueprint(bb_contacts_bp, url_prefix="/api")
     app.register_blueprint(bb_health_bp, url_prefix="/api")
+    # 25002500 Gmail Discharge Monitor (Feature J) 25002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500250025002500
+    from dashboard.api.discharge_monitor import discharge_monitor_bp
+    app.register_blueprint(discharge_monitor_bp, url_prefix="/api")
 
     # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving

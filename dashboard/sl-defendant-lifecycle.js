@@ -345,8 +345,17 @@ async function openShamrockNotes(bookingNumber, defendantData) {
     document.getElementById('slcDncReasonRow').style.display = this.checked ? '' : 'none';
   });
 
-  modal.classList.add('active');
-  document.body.style.overflow = 'hidden';
+  // iOS Safari touch fix: force repaint before adding .active
+  modal.style.display = 'flex';
+  modal.style.opacity = '0';
+  requestAnimationFrame(function () {
+    setTimeout(function () {
+      modal.classList.add('active');
+      modal.style.display = '';
+      modal.style.opacity = '';
+      document.body.style.overflow = 'hidden';
+    }, 0);
+  });
 }
 
 function closeShamrockNotes() {

@@ -1,20 +1,22 @@
 """ShamrockLeads — Court Calendar API Blueprint
 
 Endpoints:
-  GET /api/calendar/events     — Court dates as calendar events
-  GET /api/calendar/reminders  — Scheduled reminder status per event
-  GET /api/calendar/upcoming   — Upcoming court dates (next N days)
+  GET  /api/calendar/events       — Court dates as calendar event objects
+  GET  /api/calendar/reminders    — Scheduled reminder status per event
+  GET  /api/calendar/upcoming     — Upcoming court dates (next N days)
+  POST /api/calendar/sync-gcal    — Sync court dates to Google Calendar (Feature K)
 
 All routes use Quart (async) + Motor (async MongoDB).
 """
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from quart import Blueprint, jsonify, request
 
-from dashboard.extensions import get_db
+from dashboard.extensions import get_db, get_collection
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +71,12 @@ async def calendar_events():
         start = datetime.fromisoformat(start_str) if start_str else now - timedelta(days=7)
         end = datetime.fromisoformat(end_str) if end_str else now + timedelta(days=90)
 
-        # Ensure timezone aware
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
         if end.tzinfo is None:
             end = end.replace(tzinfo=timezone.utc)
 
-        match: dict = {
-            "court_date": {"$gte": start, "$lte": end}
-        }
+        match: dict = {"court_date": {"$gte": start, "$lte": end}}
         if county:
             match["county"] = county
 
@@ -88,7 +87,6 @@ async def calendar_events():
             "indemnitor_name": 1, "indemnitor_phone": 1
         }).sort("court_date", 1).to_list(None)
 
-        # Fetch reminder statuses in bulk
         booking_numbers = [b.get("booking_number") for b in bonds if b.get("booking_number")]
         reminders_map: dict = {}
         if booking_numbers:
@@ -134,7 +132,6 @@ async def calendar_events():
                 "last_reminder_at": reminder.get("last_reminder_at", None),
             })
 
-        # Summary counts
         summary = {
             "today": sum(1 for e in events if e["urgency"] == "today"),
             "this_week": sum(1 for e in events if e["urgency"] == "this_week"),
@@ -217,205 +214,145 @@ async def upcoming_events():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Feature K: Google Calendar Sync
-# Push court dates → shared Google Calendar (dedup via extendedProperties)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ── Google Calendar Sync (Feature K) ─────────────────────────────────────────
 
 @calendar_bp.route("/calendar/sync-gcal", methods=["POST"])
-async def sync_to_gcal():
-    """Push a single bond's court date to Google Calendar.
-
-    Body: { "booking_number": "2025-001234" }
-
-    Creates a Google Calendar event with:
-      - Title: "🏛 Court: {defendant} — {county} County"
-      - Date/time from bond's court_date + court_time
-      - Description with case details
-      - Dedup key: booking_number-court_date in extendedProperties
-
-    Requires GOOGLE_CALENDAR_ID and GOOGLE_CREDENTIALS_JSON env vars.
+async def calendar_sync_gcal():
     """
-    import os
-    data = await request.get_json(force=True) or {}
-    booking_number = data.get("booking_number", "").strip()
-    if not booking_number:
-        return jsonify({"error": "booking_number required"}), 400
+    Sync upcoming court dates to Google Calendar (admin@shamrockbailbonds.biz).
 
-    calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "")
-    creds_path = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
+    Returns 501 when GOOGLE_APPLICATION_CREDENTIALS is not set.
+    See docs/GCAL_SYNC_SETUP.md for the full setup guide.
 
-    if not calendar_id or not creds_path:
+    Body (all optional):
+        {
+            "days_ahead": 30,           // how far ahead to sync (default: 30)
+            "county_filter": "Lee",     // only sync this county (default: all)
+            "dry_run": false            // if true, returns events without writing
+        }
+    """
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "admin@shamrockbailbonds.biz")
+
+    if not creds_path or not os.path.exists(creds_path):
         return jsonify({
             "success": False,
             "error": "Google Calendar not configured",
-            "setup": [
-                "1. Create a Google Calendar 'Shamrock Court Dates'",
-                "2. Share it with your service account email",
-                "3. Set GOOGLE_CALENDAR_ID=<calendar_id> in .env",
-                "4. Set GOOGLE_CREDENTIALS_JSON=/path/to/key.json in .env",
+            "code": "GCAL_NOT_CONFIGURED",
+            "setup_steps": [
+                "1. Create a Google Cloud service account at console.cloud.google.com",
+                "2. Enable the Google Calendar API",
+                "3. Share your calendar with the service account email (Editor role)",
+                "4. Download the service account JSON key",
+                "5. Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json in .env",
+                "6. Set GOOGLE_CALENDAR_ID=admin@shamrockbailbonds.biz in .env",
             ],
+            "docs": "docs/GCAL_SYNC_SETUP.md",
         }), 501
 
-    db = get_db()
-    bond = await db["active_bonds"].find_one(
-        {"booking_number": booking_number},
-        {"_id": 0, "defendant_name": 1, "county": 1, "court_date": 1,
-         "court_time": 1, "court_location": 1, "case_number": 1,
-         "bond_amount": 1, "insurance_company": 1, "poa_number": 1},
-    )
-    if not bond:
-        return jsonify({"error": f"Bond {booking_number} not found"}), 404
-    if not bond.get("court_date"):
-        return jsonify({"error": f"Bond {booking_number} has no court date"}), 400
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
 
-    # Build dedup key
-    court_date_str = str(bond["court_date"])
-    dedup_key = f"{booking_number}-{court_date_str[:10]}"
+        data = await request.get_json(force=True) or {}
+        days_ahead = int(data.get("days_ahead", 30))
+        county_filter = data.get("county_filter", "")
+        dry_run = bool(data.get("dry_run", False))
 
-    # Check if already synced
-    gcal_sync = db["gcal_sync"]
-    existing = await gcal_sync.find_one({"dedup_key": dedup_key})
-    if existing:
+        active_bonds = get_collection("active_bonds")
+        now = _utc_now()
+        window_end = now + timedelta(days=days_ahead)
+
+        query: dict = {
+            "status": {"$in": ["active", "released"]},
+        }
+        if county_filter:
+            query["county"] = {"$regex": county_filter, "$options": "i"}
+
+        cursor = active_bonds.find(query, {
+            "_id": 0, "booking_number": 1, "defendant_name": 1,
+            "court_date": 1, "court_location": 1, "case_number": 1, "county": 1
+        })
+        all_bonds = await cursor.to_list(500)
+
+        # Filter to window (court_date may be string or datetime)
+        bonds = []
+        for b in all_bonds:
+            cd = b.get("court_date")
+            try:
+                if isinstance(cd, str) and cd:
+                    cd = datetime.fromisoformat(cd.replace("Z", "+00:00"))
+                if isinstance(cd, datetime):
+                    if cd.tzinfo is None:
+                        cd = cd.replace(tzinfo=timezone.utc)
+                    if now <= cd <= window_end:
+                        b["_court_dt"] = cd
+                        bonds.append(b)
+            except Exception:
+                continue
+
+        if dry_run:
+            return jsonify({
+                "success": True,
+                "dry_run": True,
+                "events_to_sync": len(bonds),
+                "bonds": [b.get("booking_number") for b in bonds],
+            })
+
+        scopes = ["https://www.googleapis.com/auth/calendar"]
+        credentials = service_account.Credentials.from_service_account_file(
+            creds_path, scopes=scopes
+        )
+        service = build("calendar", "v3", credentials=credentials)
+
+        synced = 0
+        errors = []
+        for bond in bonds:
+            try:
+                court_dt = bond["_court_dt"]
+                event = {
+                    "summary": f"Court: {bond.get('defendant_name', 'Unknown')} ({bond.get('booking_number', '')})",
+                    "location": bond.get("court_location", f"{bond.get('county', 'Lee')} County Justice Center"),
+                    "description": (
+                        f"Case: {bond.get('case_number', 'N/A')}\n"
+                        f"Booking: {bond.get('booking_number', '')}\n"
+                        f"County: {bond.get('county', '')}\n"
+                        f"Synced by Shamrock Leads Dashboard"
+                    ),
+                    "start": {
+                        "dateTime": court_dt.isoformat(),
+                        "timeZone": "America/New_York",
+                    },
+                    "end": {
+                        "dateTime": (court_dt + timedelta(hours=2)).isoformat(),
+                        "timeZone": "America/New_York",
+                    },
+                    "reminders": {
+                        "useDefault": False,
+                        "overrides": [
+                            {"method": "popup", "minutes": 60 * 24},
+                            {"method": "popup", "minutes": 60 * 3},
+                        ],
+                    },
+                }
+                service.events().insert(calendarId=calendar_id, body=event).execute()
+                synced += 1
+            except Exception as ev_err:
+                errors.append({"booking_number": bond.get("booking_number"), "error": str(ev_err)})
+
         return jsonify({
             "success": True,
-            "already_synced": True,
-            "gcal_event_id": existing.get("gcal_event_id", ""),
-            "dedup_key": dedup_key,
+            "synced": synced,
+            "total": len(bonds),
+            "errors": errors,
+            "calendar_id": calendar_id,
         })
 
-    # Build event payload
-    defendant = bond.get("defendant_name", "Unknown")
-    county = bond.get("county", "")
-    court_location = bond.get("court_location", f"{county} County Courthouse")
-    case_number = bond.get("case_number", "N/A")
-    bond_amount = bond.get("bond_amount", 0)
-    surety = bond.get("insurance_company", "")
-    poa = bond.get("poa_number", "")
-
-    # Parse court date
-    if isinstance(bond["court_date"], datetime):
-        event_date = bond["court_date"]
-    else:
-        try:
-            event_date = datetime.fromisoformat(str(bond["court_date"]).replace("Z", "+00:00"))
-        except Exception:
-            event_date = datetime.now(timezone.utc)
-
-    court_time = bond.get("court_time", "8:30 AM")
-
-    event_body = {
-        "summary": f"🏛 Court: {defendant} — {county} County",
-        "location": court_location,
-        "description": (
-            f"Defendant: {defendant}\n"
-            f"Booking #: {booking_number}\n"
-            f"Case #: {case_number}\n"
-            f"Bond: ${bond_amount:,.2f} ({surety})\n"
-            f"POA: {poa}\n"
-            f"Court Time: {court_time}\n\n"
-            f"— Shamrock Bail Bonds"
-        ),
-        "start": {
-            "dateTime": event_date.strftime("%Y-%m-%dT08:30:00"),
-            "timeZone": "America/New_York",
-        },
-        "end": {
-            "dateTime": event_date.strftime("%Y-%m-%dT09:30:00"),
-            "timeZone": "America/New_York",
-        },
-        "reminders": {
-            "useDefault": False,
-            "overrides": [
-                {"method": "popup", "minutes": 1440},   # 1 day before
-                {"method": "popup", "minutes": 60},      # 1 hour before
-            ],
-        },
-        "extendedProperties": {
-            "private": {
-                "shamrock_booking": booking_number,
-                "shamrock_dedup": dedup_key,
-            },
-        },
-    }
-
-    # Store the sync record (actual GCal API call will be wired when creds are configured)
-    await gcal_sync.update_one(
-        {"dedup_key": dedup_key},
-        {"$set": {
-            "dedup_key": dedup_key,
-            "booking_number": booking_number,
-            "defendant_name": defendant,
-            "county": county,
-            "court_date": court_date_str,
-            "event_payload": event_body,
-            "status": "queued",
-            "created_at": _utc_now().isoformat(),
-        }},
-        upsert=True,
-    )
-
-    logger.info("[gcal] Queued event for %s — %s (%s)", booking_number, defendant, county)
-
-    return jsonify({
-        "success": True,
-        "dedup_key": dedup_key,
-        "event": {
-            "summary": event_body["summary"],
-            "date": event_date.strftime("%Y-%m-%d"),
-            "location": court_location,
-        },
-        "note": "Event queued. Will sync when Google Calendar API credentials are configured.",
-    })
-
-
-@calendar_bp.route("/calendar/sync-all", methods=["POST"])
-async def sync_all_to_gcal():
-    """Batch sync: push ALL active bonds with court dates to Google Calendar."""
-    db = get_db()
-    now = _utc_now()
-
-    bonds = await db["active_bonds"].find(
-        {
-            "court_date": {"$gte": now.isoformat()},
-            "status": {"$in": ["active", "monitoring"]},
-        },
-        {"booking_number": 1, "defendant_name": 1, "county": 1, "court_date": 1},
-    ).to_list(200)
-
-    gcal_sync = db["gcal_sync"]
-    queued = 0
-    skipped = 0
-
-    for bond in bonds:
-        booking = bond.get("booking_number", "")
-        court_date_str = str(bond.get("court_date", ""))[:10]
-        dedup_key = f"{booking}-{court_date_str}"
-
-        existing = await gcal_sync.find_one({"dedup_key": dedup_key})
-        if existing:
-            skipped += 1
-            continue
-
-        await gcal_sync.update_one(
-            {"dedup_key": dedup_key},
-            {"$set": {
-                "dedup_key": dedup_key,
-                "booking_number": booking,
-                "defendant_name": bond.get("defendant_name", ""),
-                "county": bond.get("county", ""),
-                "court_date": court_date_str,
-                "status": "queued",
-                "created_at": now.isoformat(),
-            }},
-            upsert=True,
-        )
-        queued += 1
-
-    return jsonify({
-        "success": True,
-        "bonds_found": len(bonds),
-        "queued": queued,
-        "skipped": skipped,
-    })
-
+    except ImportError:
+        return jsonify({
+            "success": False,
+            "error": "google-auth package not installed. Run: pip install google-auth google-api-python-client",
+        }), 501
+    except Exception as e:
+        logger.exception("[sync-gcal] Error: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500

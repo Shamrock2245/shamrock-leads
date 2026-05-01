@@ -451,6 +451,122 @@ class CourtReminderService:
             logger.error("[reminder] all phones lookup error: %s", e)
         return result
 
+    async def auto_scan_and_schedule(self) -> dict:
+        """
+        Hourly cron: scan active_bonds for court dates within 8 days,
+        auto-schedule 4-touch reminders (7d/3d/1d/morning-of) for each bond
+        that doesn't already have pending/sent reminders.
+
+        Edge cases handled:
+          - court_date as ISO string, date-only string, datetime, empty/null
+          - skips bonds already having pending or sent reminders
+          - skips bonds with court_date in the past
+        """
+        active_bonds = get_collection("active_bonds")
+        court_reminders = get_collection("court_reminders")
+        now = datetime.now(timezone.utc)
+        scan_window_end = now + timedelta(days=8)
+
+        scheduled_count = 0
+        skipped_count = 0
+        error_count = 0
+        scanned_count = 0
+
+        try:
+            cursor = active_bonds.find(
+                {"status": "active"},
+                {"booking_number": 1, "defendant_name": 1, "phone": 1,
+                 "court_date": 1, "court_location": 1, "case_number": 1,
+                 "county": 1, "indemnitors": 1, "indemnitor_phone": 1}
+            )
+            async for bond in cursor:
+                scanned_count += 1
+                booking_number = bond.get("booking_number", "")
+                if not booking_number:
+                    continue
+
+                # Normalize court_date to timezone-aware datetime
+                court_date = None
+                raw_cd = bond.get("court_date")
+                try:
+                    if isinstance(raw_cd, datetime):
+                        court_date = raw_cd
+                    elif isinstance(raw_cd, str) and raw_cd.strip():
+                        cd_str = raw_cd.strip().replace("Z", "+00:00")
+                        try:
+                            court_date = datetime.fromisoformat(cd_str)
+                        except ValueError:
+                            court_date = datetime.strptime(raw_cd.strip()[:10], "%Y-%m-%d")
+                    if court_date and court_date.tzinfo is None:
+                        court_date = court_date.replace(tzinfo=timezone.utc)
+                except Exception:
+                    continue  # skip records with unparseable dates
+
+                if not court_date:
+                    continue
+                if court_date < now:
+                    continue  # past court date — skip
+                if court_date > scan_window_end:
+                    continue  # too far out — skip
+
+                # Check for existing pending/sent reminders (dedup)
+                existing = await court_reminders.find_one({
+                    "booking_number": booking_number,
+                    "reminder_type": "court",
+                    "status": {"$in": ["scheduled", "pending", "sent"]},
+                })
+                if existing:
+                    skipped_count += 1
+                    continue
+
+                # Build indemnitor phone list
+                indemnitor_phones = []
+                for ind in bond.get("indemnitors", []):
+                    p = ind.get("phone", "")
+                    if p:
+                        indemnitor_phones.append(p)
+                legacy = bond.get("indemnitor_phone", "")
+                if legacy and legacy not in indemnitor_phones:
+                    indemnitor_phones.append(legacy)
+
+                # Schedule 4-touch reminder sequence
+                try:
+                    result = await self.schedule_reminders(
+                        booking_number=booking_number,
+                        defendant_name=bond.get("defendant_name", "Defendant"),
+                        phone=bond.get("phone", ""),
+                        court_date_str=court_date.isoformat(),
+                        court_location=bond.get("court_location", bond.get("county", "Lee") + " County"),
+                        case_number=bond.get("case_number", ""),
+                        indemnitor_phones=indemnitor_phones,
+                    )
+                    if result.get("success"):
+                        scheduled_count += 1
+                    else:
+                        error_count += 1
+                        logger.warning("[auto_scan] Failed for %s: %s", booking_number, result)
+                except Exception as inner_e:
+                    error_count += 1
+                    logger.error("[auto_scan] Error scheduling %s: %s", booking_number, inner_e)
+
+        except Exception as e:
+            logger.error("[auto_scan] Scan error: %s", e)
+            return {"success": False, "error": str(e)}
+
+        logger.info(
+            "[auto_scan] Complete — scanned=%d scheduled=%d skipped=%d errors=%d",
+            scanned_count, scheduled_count, skipped_count, error_count
+        )
+        return {
+            "success": True,
+            "scanned": scanned_count,
+            "scheduled": scheduled_count,
+            "skipped_existing": skipped_count,
+            "errors": error_count,
+            "scan_window_days": 8,
+            "scanned_at": now.isoformat(),
+        }
+
     @staticmethod
     def _build_court_message(
         name: str, date: str, location: str, case: str,

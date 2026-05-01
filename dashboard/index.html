@@ -7,6 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <!-- Tabulator v6 — sortable/filterable tables with CSV export -->
+  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css">
+  <!-- Vanilla Calendar Pro — court calendar -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.css">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/responsive.css">
   <!-- PWA Manifest -->
@@ -756,7 +760,8 @@
       <button class="btn-export" onclick="exportActiveBondsCSV()" style="font-size:13px;padding:7px 14px;background:rgba(34,197,94,0.15);color:var(--success)">📥 Export CSV</button>
       <button class="btn-export" onclick="loadActiveBonds()" style="font-size:13px;padding:7px 14px">↻ Refresh</button>
       <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>
-      <button class="btn-export" onclick="bulkExonerate()" style="background:rgba(124,58,237,0.15);color:#7c3aed;font-size:13px;padding:7px 14px">⚖️ Bulk Exonerate</button>
+      <button class="btn-export" id="abCsvExportBtn" onclick="SLActiveBonds.exportCSV()" style="background:#0ea5e9;color:#fff;font-size:13px;padding:7px 14px">📥 Export CSV</button>
+      <button class="btn-export" id="abBulkExonBtn" onclick="SLActiveBonds.openBulkExonerate()" style="background:#22c55e;color:#fff;font-size:13px;padding:7px 14px">✅ Bulk Exonerate</button>
     </div>
 
     <!-- Feature E: Duplicate Phone Alert Banner -->
@@ -774,21 +779,21 @@
         <table>
           <thead>
             <tr>
-              <th>Defendant</th>
-              <th>County</th>
-              <th>Bond</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('defendant_name')">⇵ Defendant</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('county')">⇵ County</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('bond_amount')">⇵ Bond</th>
               <th>Surety</th>
               <th>Indemnitor</th>
               <th>Charges</th>
-              <th>Risk Score</th>
-              <th>Court Date</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('risk_score')">⇵ Risk</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('court_date')">⇵ Court Date</th>
+              <th id="abCourtCountdownHdr" style="cursor:pointer" onclick="SLActiveBonds.sortTable('court_days')">⇵ Days to Court</th>
               <th>Last Check-In</th>
-              <th>Next Due</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="abTableBody"><tr><td colspan="12" class="loading">Loading active bonds…</td></tr></tbody>
+          <tbody id="abTableBody"><tr><td colspan="13" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -845,6 +850,31 @@
         <button onclick="SLActiveBonds.closeEditDrawer()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div id="abEditDrawerBody" style="padding:20px"></div>
+    </div>
+    <!-- Bulk Exonerate Modal -->
+    <div class="modal-overlay" id="abBulkExonModal" style="display:none">
+      <div class="modal" style="max-width:560px;width:95%">
+        <div class="modal-header">
+          <h2>✅ Bulk Exonerate Bonds</h2>
+          <button class="modal-close" onclick="document.getElementById('abBulkExonModal').style.display='none'">&#x2715;</button>
+        </div>
+        <div class="modal-body">
+          <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Select bonds to exonerate in batch. This will cancel all pending reminders and release POA inventory.</p>
+          <div id="abBulkExonList" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px"></div>
+          <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+            <label style="font-size:12px;color:var(--muted)">Note (optional):
+              <input id="abBulkExonNote" type="text" placeholder="e.g. Batch discharge from court email" style="width:100%;margin-top:4px;padding:7px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px">
+            </label>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:var(--muted)">
+            <input type="checkbox" id="abBulkExonNotify"> Notify indemnitors via iMessage
+          </label>
+        </div>
+        <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;padding:16px 20px;border-top:1px solid var(--border)">
+          <button class="btn-cancel" onclick="document.getElementById('abBulkExonModal').style.display='none'">Cancel</button>
+          <button class="btn-primary" style="background:#22c55e" onclick="SLActiveBonds.submitBulkExonerate()">✅ Exonerate Selected</button>
+        </div>
+      </div>
     </div>
     <!-- Add Bond Modal -->
     <div class="modal-overlay" id="abAddBondModal" style="display:none">
@@ -1465,11 +1495,27 @@
             <tbody id="countyPerfBody"></tbody>
           </table>
         </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts Row 4: ApexCharts Advanced Analytics -->
+    <div class="grid-3" style="margin-bottom:24px">
+      <div class="panel">
+        <div class="panel-title">⚡ Live Revenue Sparkline</div>
+        <div id="apexRevenueSpark" style="height:160px"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🌳 Bond Amount Treemap</div>
+        <div id="apexBondTreemap" style="height:200px"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🗺️ Risk Score by County</div>
+        <div id="apexRiskHeatmap" style="height:200px"></div>
       </div>
     </div>
   </div>
 </div>
-
 <!-- ═══════════════════════════════════════════════════════
      TAB: COURT CALENDAR
      ═══════════════════════════════════════════════════════ -->
@@ -2300,8 +2346,15 @@
 <script src="/sl-core.js"></script>
 <script src="/sl-rearrest.js"></script>
 <script src="/sl-data.js"></script>
+<!-- Tabulator v6 JS -->
+<script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+<!-- ApexCharts -->
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
+<!-- Vanilla Calendar Pro -->
+<script src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
 <script src="/sl-features.js"></script>
 <script src="/sl-active-bonds.js"></script>
+<script src="/sl-active-bonds-ext.js"></script>
 <script src="/sl-tracking.js"></script>
 <script src="/sl-intake.js"></script>
 <script src="/sl-health.js"></script>
@@ -2310,7 +2363,9 @@
 <script src="/sl-indemnitor.js"></script>
 <script src="/sl-inventory.js"></script>
 <script src="/sl-analytics.js"></script>
+<script src="/sl-analytics-apex.js"></script>
 <script src="/sl-calendar.js"></script>
+<script src="/sl-calendar-ext.js"></script>
 <script src="/sl-record-bond.js"></script>
 <script src="/sl-reports.js"></script>
 <script src="/sl-utils.js"></script>

@@ -764,7 +764,7 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .slc-notes-btn:hover{background:rgba(59,130,246,.2)}
 .slc-dnb-filter-btn{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:#f87171;padding:6px 14px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s}
 .slc-dnb-filter-btn:hover{background:rgba(239,68,68,.2)}
-.slc-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9100;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-overflow-scrolling:touch;touch-action:manipulation}
+.slc-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9100;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-overflow-scrolling:touch;touch-action:manipulation;will-change:opacity;isolation:isolate;-webkit-transform:translateZ(0);transform:translateZ(0)}
 .slc-modal-overlay.active{display:flex;pointer-events:auto}
 .slc-modal-box{background:var(--card);border:1px solid var(--border);border-radius:14px;width:100%;max-width:680px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden;touch-action:manipulation;-webkit-overflow-scrolling:touch}
 .slc-finalize-box{max-width:600px}
