@@ -157,7 +157,7 @@
     var btn = document.getElementById('calDischargeBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Checking…'; }
 
-    fetch('/api/discharge/scan', { method: 'POST' })
+    fetch('/api/discharge-monitor/scan', { method: 'POST' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data.success) {

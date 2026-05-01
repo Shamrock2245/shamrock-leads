@@ -45,7 +45,7 @@ When a Florida court clerk sends a discharge email (e.g., "Bond Exonerated", "Or
 
 ```bash
 cd /path/to/shamrock-leads
-python3 dashboard/api/discharge_monitor.py --authorize
+python3 scripts/get_gmail_token.py
 ```
 
 This opens a browser window. Log in with the Gmail account that receives discharge emails. A `credentials/gmail_token.json` file will be created.
@@ -55,16 +55,14 @@ This opens a browser window. Log in with the Gmail account that receives dischar
 Add to your `.env` file:
 
 ```env
-GMAIL_CREDENTIALS_PATH=credentials/gmail_credentials.json
-GMAIL_TOKEN_PATH=credentials/gmail_token.json
-GMAIL_DISCHARGE_LABEL=discharge          # Optional: Gmail label to filter
-GMAIL_DISCHARGE_DAYS_BACK=7              # How many days back to scan
+GMAIL_CREDENTIALS_JSON=credentials/gmail_token.json
+DISCHARGE_GMAIL_LABEL=Court/Discharges    # Gmail label to filter
 ```
 
 ### 5. Test the Connection
 
 ```bash
-curl -X POST http://localhost:5000/api/discharge/scan
+curl -X POST http://localhost:5050/api/discharge-monitor/scan
 ```
 
 Expected response:
@@ -101,7 +99,7 @@ From the Court Calendar tab, click **📧 Check Discharge Emails** to run an on-
 The endpoint is also available directly:
 
 ```bash
-curl -X POST http://localhost:5000/api/discharge/scan
+curl -X POST http://localhost:5050/api/discharge-monitor/scan
 ```
 
 ---
@@ -111,7 +109,7 @@ curl -X POST http://localhost:5000/api/discharge/scan
 Add to crontab for automatic daily scanning:
 
 ```cron
-0 8 * * * curl -s -X POST http://localhost:5000/api/discharge/scan >> /var/log/discharge_scan.log
+0 8 * * * curl -s -X POST http://localhost:5050/api/discharge-monitor/scan >> /var/log/discharge_scan.log
 ```
 
 ---
@@ -120,7 +118,7 @@ Add to crontab for automatic daily scanning:
 
 | Error | Fix |
 |-------|-----|
-| `GMAIL_NOT_CONFIGURED` | Check that `GMAIL_CREDENTIALS_PATH` and `GMAIL_TOKEN_PATH` env vars are set |
+| `GMAIL_NOT_CONFIGURED` | Check that `GMAIL_CREDENTIALS_JSON` env var is set and points to a valid token file |
 | `Token expired` | Delete `gmail_token.json` and re-run `--authorize` |
 | `No discharges found` | Check email subject patterns — court clerks vary by county |
 | `Booking number not matched` | Verify the booking number format in the email matches MongoDB |

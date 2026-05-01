@@ -66,16 +66,14 @@ print('Authorization complete')
 Add to your `.env` file:
 
 ```env
-GCAL_CREDENTIALS_PATH=credentials/gmail_credentials.json
-GCAL_TOKEN_PATH=credentials/gcal_token.json
-GCAL_CALENDAR_ID=your-calendar-id@group.calendar.google.com
-GCAL_DAYS_AHEAD=30                        # How many days ahead to sync
+GOOGLE_APPLICATION_CREDENTIALS=credentials/gcal_service_account.json
+GOOGLE_CALENDAR_ID=your-calendar-id@group.calendar.google.com
 ```
 
 ### 6. Test the Sync
 
 ```bash
-curl -X POST http://localhost:5000/api/calendar/sync-gcal \
+curl -X POST http://localhost:5050/api/calendar/sync-gcal \
   -H "Content-Type: application/json" \
   -d '{"days_ahead": 30}'
 ```
@@ -122,7 +120,7 @@ From the Court Calendar tab, click **📅 Sync to Google Cal** to run an on-dema
 Add to crontab for nightly sync:
 
 ```cron
-0 22 * * * curl -s -X POST http://localhost:5000/api/calendar/sync-gcal -H "Content-Type: application/json" -d '{"days_ahead":30}' >> /var/log/gcal_sync.log
+0 22 * * * curl -s -X POST http://localhost:5050/api/calendar/sync-gcal -H "Content-Type: application/json" -d '{"days_ahead":30}' >> /var/log/gcal_sync.log
 ```
 
 ---
@@ -131,7 +129,7 @@ Add to crontab for nightly sync:
 
 | Error | Fix |
 |-------|-----|
-| `GCAL_NOT_CONFIGURED` | Check that `GCAL_CALENDAR_ID` and `GCAL_TOKEN_PATH` env vars are set |
+| `GCAL_NOT_CONFIGURED` | Check that `GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_CALENDAR_ID` env vars are set |
 | `Token expired` | Delete `gcal_token.json` and re-run the authorization script |
 | `Calendar not found` | Verify the Calendar ID is correct and the calendar is shared with the OAuth account |
 | `Quota exceeded` | Google Calendar API has a 1M requests/day limit — reduce `GCAL_DAYS_AHEAD` |

@@ -4,7 +4,6 @@ Endpoints: /api/status, /api/mongo-stats, /api/command, /api/stats,
            /api/bond-distribution, /api/top-charges, /api/bounty-board,
            /api/timeline, /api/scraper-health, /api/leads/<booking_number>
 """
-from __future__ import annotations
 
 import csv
 import io
@@ -579,7 +578,7 @@ async def api_scraper_health():
 
         counts_24h = {}
         async for r in arrests.aggregate([
-            {"$match": {"created_at": {"$gte": h24_ago.replace(tzinfo=None)}}},
+            {"$match": {"created_at": {"$gte": h24_ago}}},
             {"$group": {"_id": "$county", "count_24h": {"$sum": 1}}},
         ]):
             counts_24h[r["_id"]] = r["count_24h"]
@@ -607,13 +606,10 @@ async def api_scraper_health():
                 continue
             seen.add(county)
             latest = r.get("latest_record") or r.get("latest_scrape")
-            # Normalize to UTC-aware — MongoDB may return naive datetimes
-            if isinstance(latest, datetime):
-                if latest.tzinfo is None:
-                    latest = latest.replace(tzinfo=timezone.utc)
-                hours_since = (now - latest).total_seconds() / 3600
-            else:
-                hours_since = 999
+            # Normalize naive UTC datetimes from MongoDB to tz-aware before comparison
+            if isinstance(latest, datetime) and latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
             base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
             live = live_status.get(county, {})
             cfg = config_map.get(county, {})

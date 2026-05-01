@@ -152,7 +152,7 @@
           + '<td>' + escHtml(b.county || '—') + '</td>'
           + '<td><strong>$' + (b.bond_amount || 0).toLocaleString() + '</strong></td>'
           + '<td>' + insBadge + '</td>'
-          + '<td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(indemnitorName) + '">' + escHtml(indemnitorName) + '</td>'
+          + '<td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(indemnitorName) + '">' + (indemnitorName && indemnitorName !== '—' ? '<a href="#" style="color:var(--accent);text-decoration:none" onclick="event.preventDefault();crossLinkToDefendants(\'' + escHtml(indemnitorName).replace(/'/g, "\\'") + '\')">' + escHtml(indemnitorName) + '</a>' : '—') + '</td>'
           + '<td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(charges) + '</td>'
           + '<td><span class="score-pill ' + rCls + '" style="cursor:pointer" onclick="showRiskBreakdown(\'' + bkSafe + '\',\'' + nameSafe + '\',' + risk + ',\'' + factorsSafe + '\')">' + risk + ' ' + (risk >= 75 ? '🔴' : risk >= 50 ? '🟡' : '🟢') + '</span></td>'
           + '<td style="font-size:11px;white-space:nowrap">' + cdStr + '</td>'
@@ -229,7 +229,7 @@
     var note = noteEl ? noteEl.value : 'Bulk exoneration from Active Bonds tab';
     var notifyEl = document.getElementById('abBulkExonNotify');
     var notifyIndem = notifyEl ? notifyEl.checked : false;
-    fetch('/api/bonds/bulk-exonerate', {
+    fetch('/api/active-bonds/bulk-exonerate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ booking_numbers: checked, note: note || 'Bulk exoneration', notify_indemnitor: notifyIndem }),
