@@ -1,6 +1,6 @@
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,123 @@ class CourtEmailProcessor:
         return result if result else None
 
     @classmethod
+    def extract_county(cls, sender: str, body: str) -> Optional[str]:
+        """Extract county name from sender domain or email body."""
+        domain_county_map = {
+            'leeclerk.org': 'Lee',
+            'collierclerk.com': 'Collier',
+            'hendryso.org': 'Hendry',
+            'charlotteclerk.com': 'Charlotte',
+            'manateeclerk.com': 'Manatee',
+            'sarasotaclerk.com': 'Sarasota',
+            'desotoclerk.com': 'DeSoto',
+            'hillsboroughclerk.com': 'Hillsborough',
+            'circuit20.org': 'Lee',  # 20th Circuit covers Lee/Charlotte/Collier/Hendry/Glades
+        }
+        
+        for domain, county in domain_county_map.items():
+            if domain in sender.lower():
+                return county
+        
+        # Fallback: search body for county mentions
+        county_pattern = r'(\w+)\s+County'
+        match = re.search(county_pattern, body)
+        if match:
+            return match.group(1).title()
+        
+        return None
+    
+    @classmethod
+    def extract_judge(cls, body: str) -> Optional[str]:
+        """Extract judge name from email body."""
+        patterns = [
+            r'(?:Judge|Hon\.|Honorable):?\s+([A-Za-z\s.]+?)(?:\n|,|$)',
+            r'(?:before|assigned to)\s+(?:Judge|Hon\.)?\s*([A-Za-z\s.]+?)(?:\n|,|$)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, body, re.IGNORECASE)
+            if match:
+                return match.group(1).strip().rstrip('.')
+        return None
+
+    @classmethod
+    def extract_location(cls, body: str) -> Optional[str]:
+        """Extract courtroom/location from email body."""
+        patterns = [
+            r'(?:Room|Courtroom|Division):?\s*([A-Za-z0-9\s-]+?)(?:\n|,|$)',
+            r'(?:Location|Courthouse):?\s*([A-Za-z0-9\s,.]+?)(?:\n|$)',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, body, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+
+    @classmethod
+    def generate_sms_summary(cls, parsed: Dict[str, Any]) -> Optional[str]:
+        """
+        Generate a clean iMessage summary for court date notifications.
+        Sent to defendants/indemnitors via BlueBubbles.
+        """
+        event_type = parsed.get('event_type', 'unknown')
+        case_number = parsed.get('case_number', 'N/A')
+        defendant_name = parsed.get('defendant_name', 'N/A')
+        datetime_info = parsed.get('datetime_info') or {}
+        date_str = datetime_info.get('date_str', 'TBD')
+        time_str = datetime_info.get('time_str', '')
+        location = parsed.get('location', '')
+        county = parsed.get('county', '')
+        
+        if event_type == 'courtDate':
+            lines = [
+                "⚖️ Court Date Notice",
+                f"Case: {case_number}",
+                f"Defendant: {defendant_name}",
+            ]
+            time_line = f"Date: {date_str}"
+            if time_str:
+                time_line += f" at {time_str}"
+            lines.append(time_line)
+            
+            if location:
+                lines.append(f"Location: {location}")
+            elif county:
+                lines.append(f"County: {county} County Courthouse")
+            
+            lines.append("")
+            lines.append("📍 Reply CONFIRM to acknowledge")
+            lines.append("")
+            lines.append("— Shamrock Bail Bonds")
+            lines.append("(239) 955-0178")
+            
+        elif event_type == 'forfeiture':
+            lines = [
+                "🔴 Forfeiture Notice",
+                f"Case: {case_number}",
+                f"Defendant: {defendant_name}",
+                f"Date: {date_str}",
+                "",
+                "⚠️ Please contact us IMMEDIATELY.",
+                "— Shamrock Bail Bonds",
+                "(239) 955-0178",
+            ]
+        elif event_type == 'discharge':
+            lines = [
+                "🟢 Bond Discharge Notice",
+                f"Case: {case_number}",
+                f"Defendant: {defendant_name}",
+                "",
+                "Your bond obligation has been discharged.",
+                "Thank you for your cooperation.",
+                "— Shamrock Bail Bonds",
+                "(239) 955-0178",
+            ]
+        else:
+            return None
+        
+        return "\n".join(lines)
+
+    @classmethod
     def process_email(cls, subject: str, body: str, sender: str) -> Dict[str, Any]:
         """Main processing pipeline for a single email."""
         # 1. Verify sender
@@ -112,13 +229,20 @@ class CourtEmailProcessor:
         case_number = cls.extract_case_number(subject, body)
         defendant_name = cls.extract_defendant_name(body)
         datetime_info = cls.extract_court_datetime(body)
+        county = cls.extract_county(sender, body)
+        judge = cls.extract_judge(body)
+        location = cls.extract_location(body)
         
         return {
             'event_type': event_type,
             'case_number': case_number,
             'defendant_name': defendant_name,
             'datetime_info': datetime_info,
+            'county': county,
+            'judge': judge,
+            'location': location,
             'sender': sender,
             'subject': subject,
-            'processed_at': datetime.utcnow().isoformat()
+            'is_trusted': is_trusted,
+            'processed_at': datetime.now(timezone.utc).isoformat()
         }

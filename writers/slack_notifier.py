@@ -3,9 +3,11 @@ Slack Notifier — ShamrockLeads
 
 Sends arrest alerts, scraper health, and lead notifications to Slack.
 Supports per-county channels and per-tenant routing.
+Includes PII masking for all error/debug messages.
 """
 
 import os
+import re
 import json
 import logging
 from typing import Optional, Dict, Any, List
@@ -16,6 +18,25 @@ import requests
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_pii(text: str) -> str:
+    """
+    Mask PII patterns in text before sending to Slack.
+    Covers: phone numbers, SSNs, email addresses, FL driver license numbers.
+    """
+    if not text:
+        return text
+    # Phone numbers: (239) 555-1234, 239-555-1234, 2395551234
+    text = re.sub(r'\b(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})\b', r'\1-***-****', text)
+    text = re.sub(r'\((\d{3})\)\s*(\d{3})[-.\s]?(\d{4})', r'(\1) ***-****', text)
+    # SSNs: 123-45-6789
+    text = re.sub(r'\b(\d{3})-(\d{2})-(\d{4})\b', r'***-**-\3', text)
+    # Email addresses
+    text = re.sub(r'([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', r'***@\2', text)
+    # FL Driver License: letter + 12 digits
+    text = re.sub(r'\b([A-Za-z])\d{12}\b', r'\1***', text)
+    return text
 
 
 class SlackNotifier:
@@ -160,7 +181,8 @@ class SlackNotifier:
 
     # ── Scraper Error ──
     def notify_scraper_error(self, county: str, error: str) -> bool:
-        """Send a scraper error alert."""
+        """Send a scraper error alert. PII is masked before posting."""
+        safe_error = _mask_pii(error)
         return self._post(self.webhook_errors, {
             "blocks": [
                 {
@@ -169,7 +191,7 @@ class SlackNotifier:
                 },
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"```{error[:2000]}```"},
+                    "text": {"type": "mrkdwn", "text": f"```{safe_error[:2000]}```"},
                 },
                 {
                     "type": "context",

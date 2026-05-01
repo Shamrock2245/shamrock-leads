@@ -42,6 +42,13 @@ except ImportError:
     def get_scraper_headers(**kwargs):  # noqa: E302
         return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
+# Self-hosted error tracking (MongoDB + Slack)
+try:
+    from dashboard.services.error_tracker import ErrorTracker
+    _error_tracker = ErrorTracker()
+except ImportError:
+    _error_tracker = None
+
 logger = logging.getLogger(__name__)
 
 # Shared instances (initialized once)
@@ -342,7 +349,18 @@ class BaseScraper(ABC):
             self.last_error = str(e)
             logger.error(f"❌ {self.county}: scraper failed after {elapsed:.1f}s — {e}")
 
-            # Alert on scraper failure
+            # Log to self-hosted error tracker (MongoDB)
+            if _error_tracker:
+                try:
+                    _error_tracker.log_error(
+                        source=f"scraper.{self.county}",
+                        message=str(e),
+                        details={"elapsed": elapsed, "county": self.county},
+                    )
+                except Exception:
+                    pass
+
+            # Alert on scraper failure (Slack)
             try:
                 _slack.notify_scraper_error(self.county, str(e))
             except:

@@ -34,3 +34,8 @@ venv/
 .venv/
 env/
 scripts/gmail_token.json
+*.heapsnapshot
+token.json
+client_secret*.json
+service-account*.json
+*_credentials.json

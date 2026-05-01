@@ -128,3 +128,76 @@ async def process_court_email():
     except Exception as e:
         logger.error(f"Error processing court email: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+
+@bond_lifecycle_bp.route('/court-emails/process-now', methods=['POST'])
+async def process_gmail_now():
+    """
+    Manually trigger the Gmail → Calendar → BlueBubbles pipeline.
+    Fetches unread court emails, processes them, creates calendar events,
+    and sends iMessage notifications.
+    """
+    try:
+        from dashboard.services.court_email_scheduler import CourtEmailScheduler
+        # CourtEmailScheduler uses sync pymongo — create a sync client
+        from pymongo import MongoClient
+        import os
+        mongo_uri = os.getenv("MONGODB_URI", "")
+        db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
+        sync_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000) if mongo_uri else None
+        db = sync_client[db_name] if sync_client else None
+        scheduler = CourtEmailScheduler(db=db)
+        result = scheduler.process_all()
+        return jsonify({
+            'status': 'success',
+            'emails_processed': result.get('processed', 0),
+            'events_created': result.get('events_created', 0),
+            'messages_sent': result.get('messages_sent', 0),
+            'errors': result.get('errors', []),
+        }), 200
+    except Exception as e:
+        logger.error(f"Gmail processing failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@bond_lifecycle_bp.route('/errors', methods=['GET'])
+async def get_error_log():
+    """
+    Query the self-hosted error log (MongoDB error_log collection).
+    Params: ?source=scraper.lee&limit=50&level=error
+    """
+    try:
+        from dashboard.services.error_tracker import ErrorTracker
+        tracker = ErrorTracker()
+
+        source = request.args.get('source')
+        level = request.args.get('level')
+        limit = int(request.args.get('limit', '50'))
+
+        errors = tracker.get_recent_errors(
+            source=source,
+            level=level,
+            limit=min(limit, 200),
+        )
+        return jsonify({
+            'status': 'success',
+            'count': len(errors),
+            'errors': errors,
+        }), 200
+    except Exception as e:
+        logger.error(f"Error log query failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@bond_lifecycle_bp.route('/errors/stats', methods=['GET'])
+async def get_error_stats():
+    """Get aggregated error statistics (counts by source and level)."""
+    try:
+        from dashboard.services.error_tracker import ErrorTracker
+        tracker = ErrorTracker()
+        stats = tracker.get_error_stats()
+        return jsonify({'status': 'success', 'stats': stats}), 200
+    except Exception as e:
+        logger.error(f"Error stats query failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
