@@ -7,6 +7,8 @@
 const SLIndemnitor = (() => {
   const API = window.API || '';
   let _data = [];
+  let _personData = [];
+  let _viewMode = 'bonds';  // 'bonds' | 'persons'
   let _currentBk = null;
   let _subTab = 'profile';
   let _searchTimer = null;
@@ -39,6 +41,7 @@ const SLIndemnitor = (() => {
 
   // ── Load ──
   async function load() {
+    if (_viewMode === 'persons') { await loadPersonView(); return; }
     const search = $('indSearch')?.value || '';
     const p = new URLSearchParams();
     if (search) p.set('search', search);
@@ -50,6 +53,69 @@ const SLIndemnitor = (() => {
       if (badge) badge.textContent = d.total || '—';
       renderList();
     } catch(e) { console.error('SLIndemnitor.load:', e); }
+  }
+
+  async function loadPersonView() {
+    const search = $('indSearch')?.value || '';
+    const p = new URLSearchParams();
+    if (search) p.set('search', search);
+    const c = $('indemnitorList');
+    if (c) c.innerHTML = '<div class="pipeline-empty" style="padding:40px">⏳ Loading…</div>';
+    try {
+      const r = await fetch(`${API}/api/indemnitors/by-person?${p}`);
+      const d = await r.json();
+      _personData = d.persons || [];
+      const badge = $('indemnitorBadge');
+      if (badge) badge.textContent = d.total || '—';
+      renderPersonList();
+    } catch(e) { console.error('SLIndemnitor.loadPersonView:', e); }
+  }
+
+  function renderPersonList() {
+    const c = $('indemnitorList');
+    if (!c) return;
+    if (!_personData.length) { c.innerHTML = '<div class="pipeline-empty">No indemnitors found</div>'; return; }
+    c.innerHTML = _personData.map(p => {
+      const bondCount = p.bonds.length;
+      const activeBonds = p.active_bonds || 0;
+      const totalVal = '$' + (p.total_bond_value||0).toLocaleString();
+      const bondsHtml = p.bonds.map(b => {
+        const stageColor = b.bond_type === 'active' ? '#22c55e' : b.stage === 'ready' ? '#6366f1' : '#64748b';
+        const bkSafe = (b.booking_number||'').replace(/'/g,"\\'");
+        return `<div class="ind-person-bond-row" onclick="event.stopPropagation();SLIndemnitor.openDetail('${bkSafe}')">
+          <span class="ind-person-bond-def">${b.defendant_name || '—'}</span>
+          <span style="color:var(--muted);font-size:11px">${b.county || ''}</span>
+          <span style="color:var(--accent);font-size:11px">$${(b.bond_amount||0).toLocaleString()}</span>
+          <span style="color:${stageColor};font-size:10px;text-transform:capitalize">${b.stage || b.bond_type || '—'}</span>
+        </div>`;
+      }).join('');
+      return `<div class="ind-card ind-person-card">
+        <div class="ind-card-top">
+          <div class="ind-card-name">👤 ${p.name || '—'}</div>
+          <span class="ind-stage-pill" style="background:rgba(99,102,241,0.15);color:#818cf8">${bondCount} bond${bondCount!==1?'s':''}</span>
+        </div>
+        <div class="ind-card-meta">
+          ${p.phone ? `<span>📱 ${p.phone}</span>` : ''}
+          ${p.email ? `<span>✉️ ${p.email}</span>` : ''}
+          ${p.relationship ? `<span>👥 ${p.relationship}</span>` : ''}
+        </div>
+        <div style="display:flex;gap:12px;margin:6px 0;font-size:12px">
+          <span style="color:#22c55e">🔒 ${activeBonds} active</span>
+          <span style="color:var(--accent)">💰 ${totalVal} total</span>
+          <span style="color:var(--muted);font-size:11px">${timeAgo(p.latest_activity)}</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">${bondsHtml}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function toggleViewMode(mode) {
+    _viewMode = mode;
+    const btnBonds = $('indViewBonds');
+    const btnPersons = $('indViewPersons');
+    if (btnBonds) btnBonds.classList.toggle('active', mode === 'bonds');
+    if (btnPersons) btnPersons.classList.toggle('active', mode === 'persons');
+    load();
   }
 
   function debounceSearch() { clearTimeout(_searchTimer); _searchTimer = setTimeout(load, 350); }
@@ -795,5 +861,7 @@ const SLIndemnitor = (() => {
     showNewForm, backToSearch, submitAddForm,
     // KYC Uploads
     handleFileSelect, handleDrop, deleteUpload,
+    // View mode toggle
+    toggleViewMode,
   };
 })();

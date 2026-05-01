@@ -945,6 +945,7 @@ window.SLContact = (function() {
     document.getElementById('ciDefName').textContent = name || '—';
     document.getElementById('ciDefCounty').textContent = (county||'').trim() || '—';
     document.getElementById('ciDefBond').textContent = bond ? '$' + Number(bond).toLocaleString() : '—';
+    document.getElementById('ciIndemName').value = '';
     document.getElementById('ciPhone').value = '';
     document.getElementById('ciRelation').value = 'Indemnitor';
     document.getElementById('ciAgent').value = document.getElementById('outreachAgent')?.value || 'Brendan';
@@ -1005,6 +1006,29 @@ window.SLContact = (function() {
       if (result.success) {
         if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent)">\u2713 Sent</span>';
         SL.toast(`Text sent to ${relation}`, 'success');
+        // ── Auto-attach indemnitor to the bond record ──
+        if (_current.booking && phone) {
+          try {
+            const indName = (document.getElementById('ciIndemName')?.value || '').trim();
+            const formattedPhone = phone.length === 10 ? '+1' + phone : (phone.startsWith('1') ? '+' + phone : phone);
+            await fetch(`${API}/api/indemnitors/create`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                booking_number: _current.booking,
+                phone: formattedPhone,
+                name: indName || relation,
+                relationship: relation,
+                agent: agent,
+                source: 'contact_indem_button',
+              }),
+            });
+            // Refresh Indemnitors tab if it is the active tab
+            if (typeof SLIndemnitor !== 'undefined' && SLIndemnitor.load) {
+              SLIndemnitor.load();
+            }
+          } catch(_e) { /* non-fatal — text was still sent successfully */ }
+        }
         document.getElementById('ciPhone').value = '';
         setTimeout(closeModal, 1200);
       } else {

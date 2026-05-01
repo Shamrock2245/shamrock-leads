@@ -1463,6 +1463,98 @@ def api_indemnitors_list():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/indemnitors/by-person", methods=["GET"])
+def api_indemnitors_by_person():
+    """Group all indemnitors by phone number so each person shows all bonds they've signed for."""
+    try:
+        search = request.args.get("search", "").strip()
+        limit = min(int(request.args.get("limit", 200)), 1000)
+        # Collect all bonds with indemnitor data from both collections
+        all_bonds = []
+        def _collect(coll, bond_type, stage_override=None):
+            query = {"$or": [{"indemnitor": {"$exists": True, "$ne": {}}}, {"indemnitors": {"$exists": True, "$ne": []}}]}
+            if search:
+                query = {"$and": [query, {"$or": [
+                    {"indemnitor.name": {"$regex": search, "$options": "i"}},
+                    {"indemnitor.firstName": {"$regex": search, "$options": "i"}},
+                    {"indemnitor.lastName": {"$regex": search, "$options": "i"}},
+                    {"indemnitor.phone": {"$regex": search, "$options": "i"}},
+                    {"indemnitor_name": {"$regex": search, "$options": "i"}},
+                    {"indemnitors.name": {"$regex": search, "$options": "i"}},
+                    {"defendant_name": {"$regex": search, "$options": "i"}},
+                    {"booking_number": {"$regex": search, "$options": "i"}},
+                ]}]}
+            for doc in coll.find(query).sort("updated_at", -1).limit(limit):
+                indemnitors = doc.get("indemnitors", [])
+                if not indemnitors and doc.get("indemnitor"):
+                    indemnitors = [doc.get("indemnitor", {})]
+                for ind in indemnitors:
+                    ind_name = ind.get("name") or " ".join(filter(None, [ind.get("firstName", ""), ind.get("lastName", "")])) or ""
+                    phone = ind.get("phone", "").strip()
+                    if not ind_name and not phone:
+                        continue
+                    all_bonds.append({
+                        "booking_number": doc.get("booking_number", ""),
+                        "defendant_name": doc.get("defendant_name", ""),
+                        "county": doc.get("county", ""),
+                        "bond_amount": doc.get("bond_amount", 0),
+                        "stage": stage_override or doc.get("stage", ""),
+                        "status": doc.get("status", ""),
+                        "bond_type": bond_type,
+                        "charges": doc.get("charges", ""),
+                        "created_at": doc["created_at"].isoformat() if hasattr(doc.get("created_at"), "isoformat") else str(doc.get("created_at", "")),
+                        "updated_at": doc.get("updated_at", doc.get("created_at", "")),
+                        "indemnitor": ind,
+                        "indemnitor_name": ind_name,
+                        "indemnitor_phone": phone,
+                        "indemnitor_email": ind.get("email", ""),
+                        "indemnitor_relationship": ind.get("relationship", ""),
+                        "indemnitor_role": ind.get("role", "primary"),
+                        "documents": doc.get("documents", {}),
+                    })
+        _collect(prospective_bonds, "prospective")
+        _collect(active_bonds, "active", "bonded")
+        # Group by phone (or name if no phone)
+        grouped = {}  # key -> person record
+        for bond in all_bonds:
+            phone = bond["indemnitor_phone"]
+            name = bond["indemnitor_name"]
+            key = phone if phone else f"__name__{name.lower().strip()}"
+            if key not in grouped:
+                grouped[key] = {
+                    "person_key": key,
+                    "name": name,
+                    "phone": phone,
+                    "email": bond["indemnitor_email"],
+                    "relationship": bond["indemnitor_relationship"],
+                    "bonds": [],
+                    "total_bond_value": 0,
+                    "active_bonds": 0,
+                    "latest_activity": bond.get("updated_at", ""),
+                }
+            grouped[key]["bonds"].append({
+                "booking_number": bond["booking_number"],
+                "defendant_name": bond["defendant_name"],
+                "county": bond["county"],
+                "bond_amount": bond["bond_amount"],
+                "stage": bond["stage"],
+                "bond_type": bond["bond_type"],
+                "charges": bond["charges"],
+                "role": bond["indemnitor_role"],
+                "created_at": bond["created_at"],
+            })
+            grouped[key]["total_bond_value"] += bond["bond_amount"]
+            if bond["bond_type"] == "active" or bond["stage"] == "bonded":
+                grouped[key]["active_bonds"] += 1
+            if str(bond.get("updated_at", "")) > str(grouped[key]["latest_activity"]):
+                grouped[key]["latest_activity"] = bond.get("updated_at", "")
+        # Sort by number of bonds desc, then total value desc
+        persons = sorted(grouped.values(), key=lambda x: (-len(x["bonds"]), -x["total_bond_value"]))
+        return jsonify({"success": True, "persons": persons, "total": len(persons)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/indemnitors/<booking_number>", methods=["GET"])
 def api_indemnitor_detail(booking_number):
     """Get full indemnitor profile for a booking number."""

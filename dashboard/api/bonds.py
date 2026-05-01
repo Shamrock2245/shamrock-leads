@@ -708,6 +708,48 @@ async def api_appearance_bond_pdf():
 # POST /api/active-bonds/<booking_number>/release
 # Mark defendant as released and trigger Phase 2 signing flow via BlueBubbles
 # ─────────────────────────────────────────────────────────────────────────────
+
+@bonds_bp.route("/active-bonds/<booking_number>/edit", methods=["PATCH"])
+async def api_active_bond_edit(booking_number: str):
+    """
+    Full-field edit of an active bond record.
+    Accepts any subset of editable fields and updates only those provided.
+    """
+    active_bonds = get_collection("active_bonds")
+    data = await request.get_json(force=True) or {}
+    EDITABLE = [
+        "defendant_name", "county", "facility", "bond_amount", "premium",
+        "insurance_company", "poa_number", "case_number", "check_in_required",
+        "check_in_frequency_days", "indemnitor_name", "indemnitor_phone",
+        "indemnitor_email", "agent_name", "notes", "court_date",
+        "court_location", "charges",
+    ]
+    updates = {k: data[k] for k in EDITABLE if k in data}
+    if not updates:
+        return jsonify({"success": False, "error": "No editable fields provided"}), 400
+    updates["updated_at"] = datetime.now(timezone.utc)
+    try:
+        result = await active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": updates},
+        )
+        if result.matched_count == 0:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+        try:
+            audit = get_collection("audit_events")
+            await audit.insert_one({
+                "entity_id": booking_number,
+                "event_type": "bond_edited",
+                "fields_changed": list(updates.keys()),
+                "agent": data.get("agent", "Dashboard"),
+                "timestamp": datetime.now(timezone.utc),
+            })
+        except Exception:
+            pass
+        return jsonify({"success": True, "booking_number": booking_number, "updated": list(updates.keys())})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 @bonds_bp.route("/active-bonds/<booking_number>/release", methods=["POST"])
 async def api_active_bond_release(booking_number: str):
     """

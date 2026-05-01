@@ -343,14 +343,14 @@ const SLInventory = (() => {
     const select = document.getElementById('addPrefix');
     const prefixes = surety === 'osi'
       ? [{ v: 'OSI3', l: 'OSI3 — ≤ $3K' }, { v: 'OSI6', l: 'OSI6 — ≤ $6K' }, { v: 'OSI16', l: 'OSI16 — ≤ $16K' }, { v: 'OSI51', l: 'OSI51 — ≤ $51K' }, { v: 'OSI101', l: 'OSI101 — ≤ $101K' }, { v: 'OSI251', l: 'OSI251 — ≤ $251K' }]
-      : [{ v: 'PSC5', l: 'PSC5 — ≤ $5K' }, { v: 'PSC15', l: 'PSC15 — ≤ $15K' }, { v: 'PSC25', l: 'PSC25 — ≤ $25K' }, { v: 'PSC50', l: 'PSC50 — ≤ $50K' }, { v: 'PSC75', l: 'PSC75 — ≤ $75K' }, { v: 'PSC105', l: 'PSC105 — ≤ $105K' }];
+      : [{ v: 'PSC2', l: 'PSC2 — ≤ $2K' }, { v: 'PSC5', l: 'PSC5 — ≤ $5K' }, { v: 'PSC15', l: 'PSC15 — ≤ $15K' }, { v: 'PSC25', l: 'PSC25 — ≤ $25K' }, { v: 'PSC50', l: 'PSC50 — ≤ $50K' }, { v: 'PSC75', l: 'PSC75 — ≤ $75K' }, { v: 'PSC105', l: 'PSC105 — ≤ $105K' }];
     select.innerHTML = prefixes.map(p => `<option value="${p.v}">${p.l}</option>`).join('');
     autoFillMaxBond();
   }
 
   function autoFillMaxBond() {
     const prefix = document.getElementById('addPrefix').value;
-    const bondMap = { OSI3: 3000, OSI6: 6000, OSI16: 16000, OSI51: 51000, OSI101: 101000, OSI251: 251000, PSC5: 5000, PSC15: 15000, PSC25: 25000, PSC50: 50000, PSC75: 75000, PSC105: 105000 };
+    const bondMap = { OSI3: 3000, OSI6: 6000, OSI16: 16000, OSI51: 51000, OSI101: 101000, OSI251: 251000, PSC2: 2000, PSC5: 5000, PSC15: 15000, PSC25: 25000, PSC50: 50000, PSC75: 75000, PSC105: 105000 };
     document.getElementById('addMaxBond').value = bondMap[prefix] || 0;
   }
 

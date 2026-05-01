@@ -743,8 +743,9 @@
         <button onclick="filterActiveBonds('monitoring')">Monitoring</button>
         <button onclick="filterActiveBonds('exonerated')">Exonerated</button>
       </div>
-      <button class="btn-export" onclick="loadActiveBonds()" style="margin-left:auto">↻ Refresh</button>
-      <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000">⏰ Process Missed Check-Ins</button>
+      <button class="btn-primary" id="abAddBondBtn" onclick="SLActiveBonds.openAddModal()" style="margin-left:auto;font-size:13px;padding:7px 16px">➕ Add Bond</button>
+      <button class="btn-export" onclick="loadActiveBonds()" style="font-size:13px;padding:7px 14px">↻ Refresh</button>
+      <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>
     </div>
 
     <!-- Active Bonds Table -->
@@ -784,6 +785,79 @@
       <div id="abLocationBody"></div>
     </div>
 
+    <!-- Edit Bond Drawer -->
+    <div id="abEditDrawer" style="display:none;position:fixed;top:0;right:0;width:520px;height:100vh;background:var(--panel);border-left:1px solid var(--border);z-index:1200;overflow-y:auto;box-shadow:-8px 0 32px rgba(0,0,0,0.4)">
+      <div style="padding:20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <h3 id="abEditDrawerTitle" style="margin:0;font-size:16px">✏️ Edit Bond</h3>
+        <button onclick="SLActiveBonds.closeEditDrawer()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+      </div>
+      <div id="abEditDrawerBody" style="padding:20px"></div>
+    </div>
+    <!-- Add Bond Modal -->
+    <div class="modal-overlay" id="abAddBondModal" style="display:none">
+      <div class="modal" style="max-width:600px;width:95%">
+        <div class="modal-header"><h2>➕ Add Active Bond</h2><button class="modal-close" onclick="SLActiveBonds.closeAddModal()">&#x2715;</button></div>
+        <div class="modal-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <label style="font-size:12px;color:var(--muted)">Defendant Name *
+              <input id="abAddDefName" type="text" placeholder="LAST, FIRST MIDDLE" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Booking Number *
+              <input id="abAddBooking" type="text" placeholder="e.g. 2024-00012345" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">County
+              <input id="abAddCounty" type="text" placeholder="e.g. Lee" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Bond Amount
+              <input id="abAddBondAmt" type="number" placeholder="e.g. 5000" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Surety
+              <select id="abAddSurety" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+                <option value="osi">OSI (Old Surety)</option>
+                <option value="palmetto">Palmetto Surety</option>
+                <option value="lexington">Lexington National</option>
+                <option value="american_bankers">American Bankers</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Status
+              <select id="abAddStatus" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+                <option value="active">Active</option>
+                <option value="monitoring">Monitoring</option>
+                <option value="alert">Alert</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:var(--muted);grid-column:1/-1">Charges
+              <input id="abAddCharges" type="text" placeholder="e.g. DRUG POSSESS CONTROLLED SUBSTANCE" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Indemnitor Name
+              <input id="abAddIndemName" type="text" placeholder="Full name" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Indemnitor Phone
+              <input id="abAddIndemPhone" type="tel" placeholder="(239) 555-0000" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Court Date
+              <input id="abAddCourtDate" type="date" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <label style="font-size:12px;color:var(--muted)">Check-In Frequency
+              <select id="abAddCheckinFreq" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">Bi-Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="daily">Daily</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:var(--muted);grid-column:1/-1">Notes
+              <textarea id="abAddNotes" rows="3" placeholder="Any relevant notes about this bond…" style="width:100%;margin-top:4px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);resize:vertical"></textarea>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" onclick="SLActiveBonds.closeAddModal()">Cancel</button>
+          <button class="btn-primary" onclick="SLActiveBonds.submitAddBond()">➕ Add Bond</button>
+        </div>
+      </div>
+    </div>
     <!-- Manual Check-In Modal -->
     <div class="modal-overlay" id="abCheckinModal">
       <div class="modal">
@@ -1032,6 +1106,11 @@
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input id="indSearch" type="text" placeholder="🔍 Search name, phone, booking#…" oninput="SLIndemnitor.debounceSearch()" style="padding:8px 14px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;min-width:220px">
+      <!-- View Mode Toggle -->
+      <div style="display:flex;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px">
+        <button id="indViewBonds" class="btn-export active" onclick="SLIndemnitor.toggleViewMode('bonds')" style="font-size:12px;padding:6px 12px;border-radius:4px">📋 By Bond</button>
+        <button id="indViewPersons" class="btn-export" onclick="SLIndemnitor.toggleViewMode('persons')" style="font-size:12px;padding:6px 12px;border-radius:4px">👤 By Person</button>
+      </div>
       <button class="btn-primary" onclick="SLIndemnitor.openAddModal()" style="font-size:13px;padding:8px 16px">+ Add Indemnitor</button>
       <button class="btn-export" onclick="SLIndemnitor.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
     </div>
@@ -1159,9 +1238,15 @@
       </div>
       <div class="ci-field-row">
         <div>
+          <div class="ci-label">Indemnitor Name <span style="color:var(--muted);font-size:10px;font-weight:400">(attached to record)</span></div>
+          <input id="ciIndemName" class="ci-input" type="text" placeholder="First Last" autocomplete="name">
+        </div>
+        <div>
           <div class="ci-label">Indemnitor Phone</div>
           <input id="ciPhone" class="ci-input" type="tel" placeholder="(239) 555-0100" autocomplete="tel">
         </div>
+      </div>
+      <div class="ci-field-row">
         <div>
           <div class="ci-label">Relationship</div>
           <select id="ciRelation" class="ci-select">

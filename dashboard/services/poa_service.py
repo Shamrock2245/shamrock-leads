@@ -12,7 +12,7 @@ TIERS = {
         (51000, "OSI51"), (101000, "OSI101"), (251000, "OSI251"),
     ],
     "palmetto": [
-        (5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
+        (2000, "PSC2"), (5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
         (50000, "PSC50"), (75000, "PSC75"), (105000, "PSC105"),
     ],
 }
@@ -22,7 +22,7 @@ def get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
     Return the smallest POA prefix that covers the bond amount for the given surety.
     OSI tiers:     OSI3→$3k, OSI6→$6k, OSI16→$16k, OSI51→$51k, OSI101→$101k, OSI251→$251k
-    Palmetto tiers: PSC5→$5k, PSC15→$15k, PSC25→$25k, PSC50→$50k, PSC75→$75k, PSC105→$105k
+    Palmetto tiers: PSC2->$2k, PSC5->$5k, PSC15->$15k, PSC25->$25k, PSC50->$50k, PSC75->$75k, PSC105->$105k
     """
     for cap, prefix in TIERS.get(surety_id.lower(), []):
         if bond_amount <= cap:
