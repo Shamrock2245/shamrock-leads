@@ -495,6 +495,7 @@
               <th>County</th>
               <th>Bond</th>
               <th>Surety</th>
+              <th>Indemnitor</th>
               <th>Charges</th>
               <th>Risk Score</th>
               <th>Last Check-In</th>
@@ -503,7 +504,7 @@
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="abTableBody"><tr><td colspan="10" class="loading">Loading active bonds…</td></tr></tbody>
+          <tbody id="abTableBody"><tr><td colspan="11" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -737,10 +738,11 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
       <h2 style="margin:0;font-size:20px">🤝 Indemnitor Management</h2>
-      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">All cosigners across prospective &amp; active bonds — Profile · Payment · Documents</p>
+      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">All indemnitors across prospective &amp; active bonds — Profile · Payment · Documents</p>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input id="indSearch" type="text" placeholder="🔍 Search name, phone, booking#…" oninput="SLIndemnitor.debounceSearch()" style="padding:8px 14px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;min-width:220px">
+      <button class="btn-primary" onclick="SLIndemnitor.openAddModal()" style="font-size:13px;padding:8px 16px">+ Add Indemnitor</button>
       <button class="btn-export" onclick="SLIndemnitor.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
     </div>
   </div>
@@ -1081,7 +1083,7 @@
 
     <!-- Calendar Grid -->
     <div class="panel" style="padding:0;overflow:hidden">
-      <div id="calGrid" style="padding:16px"></div>
+      <div id="calGrid"></div>
     </div>
 
     <!-- Event Detail Panel -->
@@ -1400,6 +1402,147 @@
   <div style="display:flex;gap:8px">
     <button class="pwa-dismiss-btn" onclick="SLUtils.dismissPWA()">Not now</button>
     <button class="pwa-install-btn" onclick="SLUtils.installPWA()">⬇️ Install</button>
+  </div>
+</div>
+
+<!-- ═══ ADD INDEMNITOR MODAL ═══ -->
+<div id="addIndemnitorModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)SLIndemnitor.closeAddModal()">
+  <div class="modal-box" style="max-width:680px;max-height:92vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+      <h3 style="margin:0;font-size:18px;font-weight:800">🤝 Add / Link Indemnitor</h3>
+      <button onclick="SLIndemnitor.closeAddModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+    </div>
+
+    <!-- Step 1: Smart Search -->
+    <div id="indAddStep1">
+      <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px">Search for an existing person in the system, or create a new record.</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="indSmartSearch" type="text" placeholder="Search name, phone, booking#…" style="flex:1;padding:10px 14px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px" oninput="SLIndemnitor.smartSearch(this.value)">
+        <button class="btn-primary" onclick="SLIndemnitor.showNewForm()" style="white-space:nowrap;font-size:13px;padding:8px 14px">+ New Person</button>
+      </div>
+      <div id="indSearchResults" style="max-height:240px;overflow-y:auto"></div>
+    </div>
+
+    <!-- Step 2: Profile Form (shown after selecting or creating new) -->
+    <div id="indAddStep2" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <button onclick="SLIndemnitor.backToSearch()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px">← Back to search</button>
+        <span id="indFormTitle" style="font-weight:700;font-size:14px;color:var(--text-secondary)">New Indemnitor</span>
+      </div>
+
+      <!-- Booking Number Selection -->
+      <div style="margin-bottom:14px">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Link to Bond (Booking #) *</label>
+        <input id="indFormBooking" type="text" placeholder="Enter booking number" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+      </div>
+
+      <!-- Name Row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">First Name *</label>
+          <input id="indFormFirst" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Last Name *</label>
+          <input id="indFormLast" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <!-- Contact Row -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Phone *</label>
+          <input id="indFormPhone" type="tel" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Email</label>
+          <input id="indFormEmail" type="email" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <!-- Address + DOB -->
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Address</label>
+          <input id="indFormAddress" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Date of Birth</label>
+          <input id="indFormDOB" type="date" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <!-- Relationship + Role -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Relationship to Defendant</label>
+          <select id="indFormRelationship" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+            <option value="">Select…</option>
+            <option value="Spouse">Spouse</option>
+            <option value="Parent">Parent</option>
+            <option value="Sibling">Sibling</option>
+            <option value="Child">Child</option>
+            <option value="Friend">Friend</option>
+            <option value="Employer">Employer</option>
+            <option value="Significant Other">Significant Other</option>
+            <option value="Other">Other</option>
+            <option value="Self">Self (Defendant)</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Employer</label>
+          <input id="indFormEmployer" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <!-- DL + SSN Last 4 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL Number</label>
+          <input id="indFormDL" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL State</label>
+          <input id="indFormDLState" type="text" value="FL" maxlength="2" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;text-transform:uppercase">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">SSN Last 4</label>
+          <input id="indFormSSN4" type="text" maxlength="4" placeholder="••••" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+
+      <!-- References Section -->
+      <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px">
+        <h4 style="margin:0 0 10px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent)">Personal References</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="indFormRef1Name" type="text" placeholder="Reference 1 Name" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef1Phone" type="tel" placeholder="Phone" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef1Rel" type="text" placeholder="Relationship" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <input id="indFormRef2Name" type="text" placeholder="Reference 2 Name" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef2Phone" type="tel" placeholder="Phone" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef2Rel" type="text" placeholder="Relationship" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <input id="indFormRef3Name" type="text" placeholder="Reference 3 Name" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef3Phone" type="tel" placeholder="Phone" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+          <input id="indFormRef3Rel" type="text" placeholder="Relationship" style="padding:7px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+        </div>
+      </div>
+
+      <!-- Prior System Match Info (shown when pre-existing) -->
+      <div id="indPriorMatch" style="display:none;background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.2);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:14px;font-size:12px">
+        <span style="font-weight:700;color:var(--accent)">✅ Existing Record Found</span>
+        <span id="indPriorDetail" style="color:var(--text-secondary);margin-left:8px"></span>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;justify-content:flex-end;gap:10px;padding-top:12px;border-top:1px solid var(--border)">
+        <button onclick="SLIndemnitor.closeAddModal()" style="padding:10px 20px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);cursor:pointer;font-size:13px;font-family:inherit">Cancel</button>
+        <button onclick="SLIndemnitor.submitAddForm()" class="btn-primary" style="padding:10px 24px;font-size:13px">💾 Save Indemnitor</button>
+      </div>
+    </div>
   </div>
 </div>
 

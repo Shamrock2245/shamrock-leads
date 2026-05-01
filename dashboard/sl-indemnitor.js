@@ -321,6 +321,16 @@ const SLIndemnitor = (() => {
       const suretySection = surety === 'palmetto' ? 'palmetto' : 'osi';
       const sections = ['shamrock', suretySection];
 
+      // Fetch uploaded KYC files
+      let uploads = [];
+      try {
+        const ur = await fetch(`${API}/api/indemnitors/${encodeURIComponent(_currentBk)}/uploads`);
+        const ud = await ur.json();
+        if (ud.success) uploads = ud.uploads || [];
+      } catch(e) { /* ignore */ }
+
+      const imgExts = ['png','jpg','jpeg','gif','webp','heic'];
+
       $('indSubContent').innerHTML = `
         <div class="ind-docs-section">
           <div class="ind-docs-surety-select">
@@ -347,6 +357,63 @@ const SLIndemnitor = (() => {
               </div>
             </div>`;
           }).join('')}
+
+          <!-- KYC Upload Section -->
+          <div class="ind-doc-group" style="margin-top:20px">
+            <div class="ind-doc-group-header">
+              <span>📎 KYC Documents & Images</span>
+              <span class="ind-doc-counter">${uploads.length} files</span>
+            </div>
+
+            <div class="ind-upload-zone" id="indUploadZone"
+              ondragover="event.preventDefault();this.classList.add('dragover')"
+              ondragleave="this.classList.remove('dragover')"
+              ondrop="SLIndemnitor.handleDrop(event)">
+              <div class="ind-upload-inner">
+                <span class="ind-upload-icon">📄</span>
+                <span>Drag & drop files here, or</span>
+                <label class="ind-upload-btn">
+                  Browse Files
+                  <input type="file" id="indFileInput" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.heic" multiple hidden onchange="SLIndemnitor.handleFileSelect(this.files)">
+                </label>
+              </div>
+              <div class="ind-upload-type-row">
+                <select id="indUploadType" style="padding:6px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+                  <option value="govt_id_front">Government ID (Front)</option>
+                  <option value="govt_id_back">Government ID (Back)</option>
+                  <option value="selfie">Selfie Verification</option>
+                  <option value="pay_stub">Pay Stub / Income Proof</option>
+                  <option value="utility_bill">Utility Bill / Address Proof</option>
+                  <option value="other">Other Document</option>
+                </select>
+              </div>
+            </div>
+
+            ${uploads.length > 0 ? `
+              <div class="ind-upload-gallery">
+                ${uploads.map(u => {
+                  const isImg = imgExts.includes(u.extension);
+                  const sizeKb = (u.size_bytes / 1024).toFixed(1);
+                  return `<div class="ind-upload-card">
+                    <div class="ind-upload-preview">
+                      ${isImg
+                        ? `<img src="/uploads/${_currentBk}/${u.saved_as}" alt="${u.doc_type_label}" loading="lazy">`
+                        : `<div class="ind-upload-pdf-icon">📄</div>`}
+                    </div>
+                    <div class="ind-upload-info">
+                      <span class="ind-upload-type-badge">${u.doc_type_label}</span>
+                      <span class="ind-upload-meta">${sizeKb}KB · ${u.extension.toUpperCase()}</span>
+                      <span class="ind-upload-date">${timeAgo(u.uploaded_at)}</span>
+                    </div>
+                    <div class="ind-upload-actions">
+                      ${isImg ? `<a href="/uploads/${_currentBk}/${u.saved_as}" target="_blank" class="ind-upload-action" title="View full size">🔍</a>` : ''}
+                      <button class="ind-upload-action del" onclick="SLIndemnitor.deleteUpload('${u.file_id}')" title="Delete">🗑️</button>
+                    </div>
+                  </div>`;
+                }).join('')}
+              </div>
+            ` : '<div style="padding:12px 16px;color:var(--muted);font-size:13px">No KYC documents uploaded yet. Upload government ID, pay stubs, or other verification documents above.</div>'}
+          </div>
         </div>
       `;
     } catch(e) { $('indSubContent').innerHTML = '<div class="pipeline-empty">Error: '+e.message+'</div>'; }
@@ -510,10 +577,223 @@ const SLIndemnitor = (() => {
     });
   }
 
+  // ── Add Indemnitor Modal ──
+  let _smartSearchTimer = null;
+  let _selectedPrior = null;
+
+  function openAddModal() {
+    const modal = $('addIndemnitorModal');
+    if (modal) modal.style.display = 'flex';
+    $('indAddStep1').style.display = '';
+    $('indAddStep2').style.display = 'none';
+    $('indSmartSearch').value = '';
+    $('indSearchResults').innerHTML = '';
+    _selectedPrior = null;
+  }
+
+  function closeAddModal() {
+    const modal = $('addIndemnitorModal');
+    if (modal) modal.style.display = 'none';
+    _selectedPrior = null;
+  }
+
+  function smartSearch(q) {
+    clearTimeout(_smartSearchTimer);
+    if (q.length < 2) { $('indSearchResults').innerHTML = ''; return; }
+    _smartSearchTimer = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API}/api/indemnitors/search-existing?q=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        const results = d.results || [];
+        if (!results.length) {
+          $('indSearchResults').innerHTML = `<div style="padding:16px;text-align:center;color:var(--muted);font-size:13px">No existing records found. <a href="#" onclick="SLIndemnitor.showNewForm();return false" style="color:var(--accent)">Create new →</a></div>`;
+          return;
+        }
+        $('indSearchResults').innerHTML = results.map((r,i) => {
+          const roleIcon = r.prior_role === 'defendant' ? '⚖️' : '🤝';
+          const roleLabel = r.prior_role === 'defendant' ? 'Prior Defendant' : 'Prior Indemnitor';
+          const sourceBg = r.source === 'arrest' ? 'rgba(239,68,68,.1)' : r.source === 'active_bond' ? 'rgba(16,185,129,.1)' : 'rgba(59,130,246,.1)';
+          return `<div class="ind-search-result" onclick="SLIndemnitor.selectSearchResult(${i})" style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:var(--transition)" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-weight:700;font-size:14px">${r.name || '—'}</span>
+              <span style="font-size:10px;padding:2px 8px;border-radius:8px;background:${sourceBg};font-weight:600">${roleIcon} ${roleLabel}</span>
+            </div>
+            <div style="display:flex;gap:12px;font-size:12px;color:var(--text-secondary)">
+              ${r.phone ? `<span>📱 ${r.phone}</span>` : ''}
+              ${r.county ? `<span>📍 ${r.county}</span>` : ''}
+              ${r.booking_number ? `<span>🔖 ${r.booking_number}</span>` : ''}
+            </div>
+          </div>`;
+        }).join('');
+        // Stash results for selection
+        $('indSearchResults')._results = results;
+      } catch(e) { console.error('smartSearch:', e); }
+    }, 300);
+  }
+
+  function selectSearchResult(idx) {
+    const results = $('indSearchResults')._results || [];
+    const r = results[idx];
+    if (!r) return;
+    _selectedPrior = r;
+    populateFormFromResult(r);
+    $('indAddStep1').style.display = 'none';
+    $('indAddStep2').style.display = '';
+    $('indFormTitle').textContent = `Linking: ${r.name || '—'} (${r.prior_role})`;
+    $('indPriorMatch').style.display = '';
+    $('indPriorDetail').textContent = `Previously ${r.prior_role === 'defendant' ? 'a defendant' : 'an indemnitor'} — ${r.county || ''} ${r.booking_number ? '(#' + r.booking_number + ')' : ''}`;
+  }
+
+  function populateFormFromResult(r) {
+    const nameParts = (r.name || '').split(' ');
+    $('indFormFirst').value = r.first_name || nameParts[0] || '';
+    $('indFormLast').value = r.last_name || nameParts.slice(1).join(' ') || '';
+    $('indFormPhone').value = r.phone || '';
+    $('indFormEmail').value = r.email || '';
+    $('indFormAddress').value = r.address || '';
+    $('indFormDOB').value = r.dob || '';
+    $('indFormRelationship').value = r.relationship || '';
+    $('indFormBooking').value = '';  // User must specify which bond to link to
+  }
+
+  function showNewForm() {
+    _selectedPrior = null;
+    $('indAddStep1').style.display = 'none';
+    $('indAddStep2').style.display = '';
+    $('indFormTitle').textContent = 'New Indemnitor';
+    $('indPriorMatch').style.display = 'none';
+    // Clear form
+    ['indFormFirst','indFormLast','indFormPhone','indFormEmail','indFormAddress',
+     'indFormDOB','indFormRelationship','indFormEmployer','indFormDL','indFormDLState',
+     'indFormSSN4','indFormBooking',
+     'indFormRef1Name','indFormRef1Phone','indFormRef1Rel',
+     'indFormRef2Name','indFormRef2Phone','indFormRef2Rel',
+     'indFormRef3Name','indFormRef3Phone','indFormRef3Rel',
+    ].forEach(id => { const el = $(id); if (el) el.value = id === 'indFormDLState' ? 'FL' : ''; });
+  }
+
+  function backToSearch() {
+    $('indAddStep1').style.display = '';
+    $('indAddStep2').style.display = 'none';
+  }
+
+  async function submitAddForm() {
+    const booking = ($('indFormBooking')?.value || '').trim();
+    const firstName = ($('indFormFirst')?.value || '').trim();
+    const lastName = ($('indFormLast')?.value || '').trim();
+    const phone = ($('indFormPhone')?.value || '').trim();
+
+    if (!booking) { toast('⚠️ Booking number required', 'error'); return; }
+    if (!firstName && !lastName) { toast('⚠️ Name required', 'error'); return; }
+    if (!phone) { toast('⚠️ Phone required', 'error'); return; }
+
+    const body = {
+      booking_number: booking,
+      firstName, lastName, phone,
+      email: $('indFormEmail')?.value || '',
+      address: $('indFormAddress')?.value || '',
+      dob: $('indFormDOB')?.value || '',
+      relationship: $('indFormRelationship')?.value || '',
+      employer: $('indFormEmployer')?.value || '',
+      dl_number: $('indFormDL')?.value || '',
+      dl_state: $('indFormDLState')?.value || 'FL',
+      ssn_last4: $('indFormSSN4')?.value || '',
+      reference1_name: $('indFormRef1Name')?.value || '',
+      reference1_phone: $('indFormRef1Phone')?.value || '',
+      reference1_relationship: $('indFormRef1Rel')?.value || '',
+      reference2_name: $('indFormRef2Name')?.value || '',
+      reference2_phone: $('indFormRef2Phone')?.value || '',
+      reference2_relationship: $('indFormRef2Rel')?.value || '',
+      reference3_name: $('indFormRef3Name')?.value || '',
+      reference3_phone: $('indFormRef3Phone')?.value || '',
+      reference3_relationship: $('indFormRef3Rel')?.value || '',
+    };
+
+    if (_selectedPrior) {
+      body.prior_defendant_id = _selectedPrior.prior_id || '';
+      body.prior_role = _selectedPrior.prior_role || '';
+    }
+
+    try {
+      const r = await fetch(`${API}/api/indemnitors/create`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(`❌ ${d.error || 'Failed'}`, 'error'); return; }
+      toast(`✅ Indemnitor ${d.action === 'updated_existing' ? 'updated' : 'added'}: ${firstName} ${lastName}`, 'success');
+      closeAddModal();
+      load();  // Refresh list
+    } catch(e) { toast('❌ Network error: ' + e.message, 'error'); }
+  }
+
+  // ── KYC Upload Handlers ──
+  async function handleFileSelect(files) {
+    if (!files || !files.length) return;
+    const docType = $('indUploadType')?.value || 'other';
+    for (const file of files) {
+      await uploadFile(file, docType);
+    }
+    // Refresh the documents tab to show new uploads
+    renderDocumentsTab();
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    const zone = $('indUploadZone');
+    if (zone) zone.classList.remove('dragover');
+    const files = event.dataTransfer?.files;
+    if (files && files.length) handleFileSelect(files);
+  }
+
+  async function uploadFile(file, docType) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('doc_type', docType);
+
+      toast('⏳ Uploading ' + file.name + '...', 'info');
+      const r = await fetch(`${API}/api/indemnitors/${encodeURIComponent(_currentBk)}/uploads`, {
+        method: 'POST',
+        body: formData,
+      });
+      const d = await r.json();
+      if (r.ok && d.success) {
+        toast(`✅ Uploaded: ${d.doc_type_label}`, 'success');
+      } else {
+        toast(`❌ Upload failed: ${d.error || 'Unknown error'}`, 'error');
+      }
+    } catch(e) {
+      toast('❌ Upload error: ' + e.message, 'error');
+    }
+  }
+
+  async function deleteUpload(fileId) {
+    if (!confirm('Delete this document?')) return;
+    try {
+      const r = await fetch(`${API}/api/indemnitors/${encodeURIComponent(_currentBk)}/uploads/${fileId}`, {
+        method: 'DELETE',
+      });
+      const d = await r.json();
+      if (d.success) {
+        toast('🗑️ Document deleted', 'success');
+        renderDocumentsTab();
+      } else {
+        toast(`❌ ${d.error || 'Delete failed'}`, 'error');
+      }
+    } catch(e) { toast('❌ ' + e.message, 'error'); }
+  }
+
   return {
     load, debounceSearch, openDetail, closeDetail,
     switchSubTab, saveProfile, toggleDoc,
     generatePaymentLink, copyPaymentLink, sendPaymentLink,
     hydrateFrom,
+    // Add Indemnitor Modal
+    openAddModal, closeAddModal, smartSearch, selectSearchResult,
+    showNewForm, backToSearch, submitAddForm,
+    // KYC Uploads
+    handleFileSelect, handleDrop, deleteUpload,
   };
 })();

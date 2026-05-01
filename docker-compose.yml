@@ -47,6 +47,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    volumes:
+      - dashboard-uploads:/app/dashboard/uploads  # Persistent KYC uploads
     logging:
       driver: "json-file"
       options:
@@ -83,4 +85,6 @@ services:
 
 volumes:
   node-red-data:
+    driver: local
+  dashboard-uploads:
     driver: local

@@ -60,7 +60,7 @@ async function loadActiveBonds() {
   } catch (e) {
     console.error('loadActiveBonds error:', e);
     document.getElementById('abTableBody').innerHTML =
-      `<tr><td colspan="10" style="color:var(--danger);text-align:center">Error loading active bonds: ${e.message}</td></tr>`;
+      `<tr><td colspan="11" style="color:var(--danger);text-align:center">Error loading active bonds: ${e.message}</td></tr>`;
   }
 }
 
@@ -68,7 +68,7 @@ async function loadActiveBonds() {
 function renderActiveBondsTable() {
   const tbody = document.getElementById('abTableBody');
   if (!_abBonds.length) {
-    tbody.innerHTML = '<tr><td colspan="10" class="loading">No active bonds found. Write a bond to get started.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="loading">No active bonds found. Write a bond to get started.</td></tr>';
     return;
   }
 
@@ -82,7 +82,11 @@ function renderActiveBondsTable() {
     const nextDue = b.next_check_in_due ? new Date(b.next_check_in_due).toLocaleDateString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
     const nextDueStyle = overdue ? 'color:var(--danger);font-weight:700' : '';
     const overdueLabel = overdue ? `<br><span style="color:var(--danger);font-size:10px">⚠️ ${hoursOver}h overdue</span>` : '';
-    const charges = (b.charges || []).slice(0, 2).join(', ') + ((b.charges || []).length > 2 ? ` +${b.charges.length - 2} more` : '');
+    const chargesRaw = b.charges_raw || b.charges || '';
+    const charges = typeof chargesRaw === 'string'
+      ? (chargesRaw.length > 60 ? chargesRaw.slice(0, 57) + '…' : (chargesRaw || '—'))
+      : Array.isArray(chargesRaw) ? (chargesRaw.slice(0, 2).join(', ') + (chargesRaw.length > 2 ? ` +${chargesRaw.length - 2} more` : '')) : '—';
+    const indemnitorName = (b.indemnitor?.name || b.indemnitor_name || [b.indemnitor?.firstName, b.indemnitor?.lastName].filter(Boolean).join(' ') || '—');
     const alerts = (b.alerts || []).length;
     const alertBadge = alerts > 0 ? `<span style="background:var(--danger);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px">${alerts}</span>` : '';
     const bkSafe = (b.booking_number || '').replace(/'/g, "\\'");
@@ -96,7 +100,8 @@ function renderActiveBondsTable() {
       <td>${b.county || '—'}</td>
       <td>$${(b.bond_amount || 0).toLocaleString()}</td>
       <td><span style="font-size:11px;background:var(--panel);padding:2px 6px;border-radius:4px">${b.surety || '—'}</span></td>
-      <td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${(b.charges_raw||'').replace(/"/g,"'")}">
+      <td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${indemnitorName}">${indemnitorName}</td>
+      <td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${(b.charges_raw||typeof chargesRaw==='string'?chargesRaw:'').replace(/"/g,"'")}">        
         ${charges || '—'}
       </td>
       <td>
