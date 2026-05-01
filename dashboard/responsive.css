@@ -1,0 +1,344 @@
+/* ═══════════════════════════════════════════════════════════
+   ShamrockLeads — Mobile & Tablet Responsive System
+   Phone (≤480px) · Phablet (≤640px) · Tablet (≤1024px)
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Global Touch Targets ── */
+@media(pointer:coarse){
+  button,a,.tab-btn,.preset-btn,.pipeline-card,.rpt-card,.def-card-footer button,
+  .insurer-pill,.ci-lang-btn,.health-filter-btn,.btn-group button{
+    min-height:44px
+  }
+  input,select,textarea,.ci-input,.ci-select,.ci-textarea,.slc-input,.slc-select,.slc-textarea,
+  .outreach-textarea,.field-input{
+    font-size:16px !important;min-height:44px
+  }
+}
+
+/* ── iOS Safari: prevent auto-zoom on focus ── */
+@supports(-webkit-touch-callout:none){
+  input,select,textarea{font-size:max(16px,1em) !important}
+}
+
+/* ═══════════════════════════════════════════════════════
+   TABLET (641px – 1024px) — Office Kiosk
+   ═══════════════════════════════════════════════════════ */
+@media(min-width:641px) and (max-width:1024px){
+  /* Header */
+  .header{padding:12px 20px;gap:12px}
+  .header h1{font-size:16px}
+  .header h1 small{font-size:9px}
+
+  /* Tab bar: scrollable, compact */
+  .tab-bar{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;gap:0;padding:0 16px}
+  .tab-bar::-webkit-scrollbar{display:none}
+  .tab-btn{padding:12px 18px;font-size:12px;white-space:nowrap;flex-shrink:0}
+
+  /* Container */
+  .container{padding:18px 20px}
+
+  /* Stats */
+  .stats-grid{grid-template-columns:repeat(3,1fr);gap:10px}
+  .stat-value{font-size:24px}
+
+  /* Grids */
+  .grid-2{grid-template-columns:1fr 1fr;gap:14px}
+  .grid-3{grid-template-columns:1fr 1fr;gap:14px}
+  .defendant-grid{grid-template-columns:repeat(auto-fill,minmax(380px,1fr))}
+
+  /* Pipeline */
+  .pipeline-board{grid-template-columns:repeat(2,1fr)}
+  .pipeline-summary-cards{grid-template-columns:repeat(4,1fr)}
+
+  /* Reports */
+  .rpt-grid{grid-template-columns:repeat(2,1fr)}
+
+  /* Modals */
+  .modal{max-width:90vw}
+  .modal-lg{max-width:95vw}
+  .slc-modal-box{max-width:90vw}
+  .rb-modal{max-width:90vw}
+
+  /* Tables: horizontal scroll */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{min-width:600px}
+
+  /* Inventory */
+  .inv-grid{grid-template-columns:1fr 1fr}
+
+  /* Outreach */
+  .outreach-kpi-row{grid-template-columns:repeat(3,1fr)}
+
+  /* Form grids */
+  .wb-meta-grid{grid-template-columns:1fr 1fr}
+  .prosp-detail-grid{grid-template-columns:1fr 1fr}
+}
+
+/* ═══════════════════════════════════════════════════════
+   PHABLET (481px – 640px) — Large phones
+   ═══════════════════════════════════════════════════════ */
+@media(max-width:640px){
+  /* Header */
+  .header{padding:10px 14px;flex-direction:column;align-items:stretch;gap:8px}
+  .header-left{justify-content:center}
+  .header-right{justify-content:center;flex-wrap:wrap;gap:8px}
+  .header h1{font-size:15px;text-align:center}
+  .header-logo{height:32px}
+  .meta{display:none}
+
+  /* Tab bar: scrollable with momentum */
+  .tab-bar{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+    padding:0 10px;position:sticky;top:auto;gap:0}
+  .tab-bar::-webkit-scrollbar{display:none}
+  .tab-btn{padding:11px 14px;font-size:11px;white-space:nowrap;flex-shrink:0}
+  .tab-btn .badge{font-size:10px;padding:1px 6px}
+
+  /* Container */
+  .container{padding:12px 14px}
+
+  /* Stats */
+  .stats-grid{grid-template-columns:repeat(2,1fr);gap:8px}
+  .stat-card{padding:14px}
+  .stat-value{font-size:22px;letter-spacing:-1px}
+  .stat-label{font-size:9px;letter-spacing:1px}
+
+  /* Grids */
+  .grid-2,.grid-3{grid-template-columns:1fr;gap:12px}
+  .defendant-grid{grid-template-columns:1fr}
+
+  /* Panels */
+  .panel{padding:14px;border-radius:12px}
+  .panel-title{font-size:13px}
+
+  /* Filters */
+  .filters{flex-direction:column;gap:8px;align-items:stretch}
+  .multi-select{min-width:100%}
+  .btn-group{width:100%;display:grid;grid-template-columns:repeat(auto-fit,minmax(60px,1fr))}
+  .btn-group button{padding:8px 4px;font-size:11px}
+  .preset-bar{gap:4px}
+  .preset-btn{padding:5px 10px;font-size:10px}
+
+  /* Tables */
+  .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -14px;padding:0 14px}
+  table{min-width:500px}
+  th{padding:8px 10px;font-size:9px}
+  td{padding:8px 10px;font-size:12px}
+
+  /* Pipeline */
+  .pipeline-board{grid-template-columns:1fr !important;gap:10px}
+  .pipeline-col{min-height:120px}
+  .pipeline-col-body{max-height:400px}
+  .pipeline-summary-cards{grid-template-columns:repeat(2,1fr);gap:6px}
+  .psc-card{padding:10px 12px}
+  .psc-value{font-size:18px}
+
+  /* Defendant cards */
+  .def-card-header{padding:12px 14px 10px;flex-wrap:wrap;gap:8px}
+  .def-name{font-size:14px}
+  .def-bond-pill{font-size:13px;padding:4px 10px}
+  .def-body{padding:12px 14px}
+  .def-row{grid-template-columns:1fr 1fr;gap:4px 10px}
+  .def-card-footer{padding:10px 14px;flex-wrap:wrap;gap:6px}
+  .def-card-footer button{flex:1;min-width:80px;justify-content:center}
+
+  /* Reports */
+  .rpt-grid{grid-template-columns:1fr !important;gap:10px}
+  .rpt-card{padding:16px}
+  .rpt-summary-strip{flex-direction:column;gap:8px}
+  .rpt-summary-item{min-width:unset;padding:10px 14px}
+  .rpt-table{min-width:500px}
+  #rptTableWrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -14px;padding:0 14px}
+
+  /* Modals — full screen on mobile */
+  .modal-overlay{padding:0;align-items:flex-end}
+  .modal{max-width:100vw !important;width:100vw !important;max-height:95vh;
+    border-radius:16px 16px 0 0;border-bottom:none}
+  .modal-lg{max-width:100vw !important}
+  .modal-header{padding:16px 18px}
+  .modal-body{padding:18px}
+  .modal-footer{padding:14px 18px;flex-wrap:wrap}
+  .modal-footer button{flex:1;min-width:100px}
+
+  /* Record Bond modal */
+  .rb-modal{max-width:100vw !important;width:100vw !important;max-height:95vh;
+    border-radius:16px 16px 0 0}
+  .rb-body{padding:16px}
+  .wb-meta-grid{grid-template-columns:1fr !important}
+  .insurer-selector{flex-direction:column;gap:8px}
+
+  /* SLC modals */
+  .slc-modal-overlay{padding:0;align-items:flex-end}
+  .slc-modal-box{max-width:100vw !important;max-height:95vh;border-radius:16px 16px 0 0}
+  .slc-finalize-box{max-width:100vw !important}
+  .slc-form-row{grid-template-columns:1fr !important}
+  .slc-modal-header{padding:16px 18px}
+  .slc-modal-body{padding:16px 18px}
+  .slc-modal-footer{flex-wrap:wrap}
+  .slc-modal-footer button{flex:1}
+
+  /* Contact Indem modal */
+  #contactIndemModal .modal{max-width:100vw !important;width:100vw !important;
+    border-radius:16px 16px 0 0}
+  .ci-field-row{grid-template-columns:1fr !important}
+
+  /* Prospective bond detail */
+  .prosp-detail-grid{grid-template-columns:1fr !important}
+  .prosp-stage-bar{gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    justify-content:flex-start;padding-bottom:8px}
+  .prosp-stage-dot{padding:6px 12px;font-size:10px;flex-shrink:0}
+  .prosp-stage-line{width:12px}
+  .prosp-actions{flex-direction:column;gap:8px}
+  .prosp-stage-select{margin-left:0;width:100%;justify-content:space-between}
+  .prosp-actions button{width:100%}
+
+  /* Comm timeline */
+  .comm-bubble{max-width:95%}
+
+  /* Outreach */
+  .outreach-kpi-row{grid-template-columns:repeat(2,1fr) !important}
+  .ar-grid{grid-template-columns:1fr !important}
+
+  /* Lifecycle badges */
+  .slc-status-row{font-size:11px;gap:4px}
+  .slc-badge{font-size:9px;padding:2px 6px}
+
+  /* Inventory */
+  .inv-grid{grid-template-columns:1fr !important}
+  .inv-stat-cards{grid-template-columns:repeat(2,1fr) !important}
+
+  /* Write bond buttons */
+  .btn-write-bond,.btn-track-lead,.btn-contact-indem,.btn-detail{
+    font-size:11px;padding:8px 12px}
+}
+
+/* ═══════════════════════════════════════════════════════
+   PHONE (≤480px) — Extra small / iPhone SE
+   ═══════════════════════════════════════════════════════ */
+@media(max-width:480px){
+  .header-logo{height:28px}
+  .header h1{font-size:14px}
+  .refresh-btn{padding:6px 12px;font-size:11px}
+  .live{font-size:11px}
+
+  .tab-btn{padding:10px 12px;font-size:10px}
+  .container{padding:10px 12px}
+
+  .stats-grid{gap:6px}
+  .stat-card{padding:12px}
+  .stat-value{font-size:20px}
+  .stat-label{font-size:8px}
+  .stat-sub{font-size:9px}
+
+  .def-card-header{flex-direction:column;gap:6px}
+  .def-name{font-size:13px}
+  .def-booking{font-size:10px}
+  .def-bond-pill{align-self:flex-start;font-size:12px}
+  .def-row{grid-template-columns:1fr}
+  .def-charges-table{font-size:11px}
+  .def-charges-table th,.def-charges-table td{padding:5px 6px}
+  .def-card-footer{flex-direction:column}
+  .def-card-footer button{width:100%}
+
+  .pipeline-card{padding:10px}
+  .pipeline-card-name{font-size:12px}
+  .pipeline-col-header{padding:10px 12px;font-size:11px}
+
+  .rpt-card{padding:14px}
+  .rpt-card-icon{font-size:20px}
+  .rpt-card-title{font-size:13px}
+  .rpt-summary-value{font-size:18px}
+
+  .panel{padding:12px}
+  .panel-title{font-size:12px}
+
+  /* Premium calc */
+  .wb-premium-row{font-size:12px}
+  .wb-premium-value.accent{font-size:16px}
+  .wb-bond-total{font-size:16px}
+
+  /* Modal buttons */
+  .btn-primary,.btn-cancel{width:100%;text-align:center;padding:12px}
+  .btn-officialize,.btn-close-lead{width:100%;text-align:center;padding:12px}
+}
+
+/* ═══════════════════════════════════════════════════════
+   LANDSCAPE PHONE — Extra wide but short
+   ═══════════════════════════════════════════════════════ */
+@media(max-height:500px) and (orientation:landscape){
+  .header{padding:6px 16px;min-height:0}
+  .header-logo{height:24px}
+  .header h1{font-size:13px}
+  .header h1 small{display:none}
+  .tab-bar{top:auto;position:relative}
+  .tab-btn{padding:8px 14px;font-size:11px}
+  .modal,.slc-modal-box,.rb-modal{max-height:90vh}
+}
+
+/* ═══════════════════════════════════════════════════════
+   PRINT — Clean output for bond/liability reports
+   ═══════════════════════════════════════════════════════ */
+@media print{
+  .header,.tab-bar,.filters,.preset-bar,.btn-export,.btn-write-bond,
+  .btn-detail,.btn-contact-indem,.btn-track-lead,.pipeline-board,
+  .modal-overlay,.slc-modal-overlay,.toast-notification,
+  .auto-reply-panel,.pagination,#hotLeadSound,
+  .rpt-grid,.rpt-filters,#rptExportBtn{display:none !important}
+  body{background:#fff !important;color:#000 !important}
+  .container{max-width:100%;padding:0}
+  .panel,.rpt-results{border:1px solid #ccc;box-shadow:none;break-inside:avoid}
+  table,th,td{border:1px solid #ccc !important;color:#000 !important;
+    background:#fff !important;font-size:11px}
+  .rpt-summary-item{border:1px solid #ccc;background:#f9f9f9 !important}
+  .rpt-summary-value,.rpt-summary-label{color:#000 !important}
+}
+
+/* ═══════════════════════════════════════════════════════
+   SAFE AREA INSETS — Notch/Dynamic Island
+   ═══════════════════════════════════════════════════════ */
+@supports(padding:max(0px)){
+  .header{padding-top:max(14px,env(safe-area-inset-top));
+    padding-left:max(28px,env(safe-area-inset-left));
+    padding-right:max(28px,env(safe-area-inset-right))}
+  .tab-bar{padding-left:max(28px,env(safe-area-inset-left));
+    padding-right:max(28px,env(safe-area-inset-right))}
+  .container{padding-left:max(28px,env(safe-area-inset-left));
+    padding-right:max(28px,env(safe-area-inset-right))}
+  .modal-overlay,.slc-modal-overlay{
+    padding-bottom:env(safe-area-inset-bottom)}
+  .toast-notification{bottom:max(28px,env(safe-area-inset-bottom));
+    right:max(28px,env(safe-area-inset-right))}
+}
+
+/* ═══════════════════════════════════════════════════════
+   SMOOTH SCROLL + REDUCED MOTION
+   ═══════════════════════════════════════════════════════ */
+@media(prefers-reduced-motion:reduce){
+  *{animation-duration:0.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:0.01ms !important}
+}
+html{scroll-behavior:smooth}
+
+/* ── Edit Drawer mobile ── */
+@media(max-width:640px){
+  .edit-drawer,.ab-edit-drawer,#abEditDrawer{
+    width:100vw !important;max-width:100vw !important}
+  #abEditDrawer .field-group{display:flex;flex-direction:column}
+  #abEditDrawer input,#abEditDrawer select,#abEditDrawer textarea{
+    width:100% !important;min-height:44px;font-size:16px !important}
+}
+
+/* ── Add Bond modal mobile ── */
+@media(max-width:640px){
+  .ab-add-overlay .modal,.ab-add-modal{
+    max-width:100vw !important;width:100vw !important;
+    border-radius:16px 16px 0 0;max-height:95vh}
+}
+
+/* ── Tab bar scroll shadow hint ── */
+.tab-bar{
+  mask-image:linear-gradient(to right,transparent,#000 20px,#000 calc(100% - 20px),transparent);
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 20px,#000 calc(100% - 20px),transparent);
+}
+@media(min-width:1025px){
+  .tab-bar{mask-image:none;-webkit-mask-image:none}
+}

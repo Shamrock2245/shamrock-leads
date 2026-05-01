@@ -8,6 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/responsive.css">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -46,7 +47,8 @@
   <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
   <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
   <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
-  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📋 POA Inventory</button>
+  <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
+  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
@@ -1466,6 +1468,126 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════════
+     TAB: REPORTS
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabReports">
+  <div class="container">
+    <!-- Header + Date Range -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0;font-size:20px">📋 Agency Reports</h2>
+        <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Financial compliance, surety liability, agent production &amp; POA management</p>
+      </div>
+      <div class="rpt-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:12px;color:var(--muted)">From</label>
+        <input type="date" id="rptStartDate" class="rpt-date-input" onchange="SLReports.onDateChange()">
+        <label style="font-size:12px;color:var(--muted)">To</label>
+        <input type="date" id="rptEndDate" class="rpt-date-input" onchange="SLReports.onDateChange()">
+        <select id="rptSuretyFilter" class="rpt-date-input" onchange="SLReports.onDateChange()" style="width:auto">
+          <option value="">All Sureties</option>
+          <option value="osi">OSI</option>
+          <option value="palmetto">Palmetto</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Report Cards Grid -->
+    <div class="rpt-grid" id="rptCardGrid">
+      <div class="rpt-card" data-report="discharged" onclick="SLReports.generate('discharged')">
+        <div class="rpt-card-icon">🏛️</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Discharged Bonds</div>
+          <div class="rpt-card-desc">Exonerated &amp; surrendered bonds</div>
+          <div class="rpt-card-stat" id="rptStatDischarged">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="surety-liability" onclick="SLReports.generate('surety-liability')">
+        <div class="rpt-card-icon">🛡️</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Surety Liability</div>
+          <div class="rpt-card-desc">Insurance company bond statements</div>
+          <div class="rpt-card-stat" id="rptStatLiability">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="forfeitures" onclick="SLReports.generate('forfeitures')">
+        <div class="rpt-card-icon">⚠️</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Forfeitures</div>
+          <div class="rpt-card-desc">Forfeited bonds — liability exposure</div>
+          <div class="rpt-card-stat" id="rptStatForfeitures">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="agent-production" onclick="SLReports.generate('agent-production')">
+        <div class="rpt-card-icon">👤</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Agent Production</div>
+          <div class="rpt-card-desc">Per-agent bond performance</div>
+          <div class="rpt-card-stat" id="rptStatAgents">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="voided-powers" onclick="SLReports.generate('voided-powers')">
+        <div class="rpt-card-icon">❌</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Voided Powers</div>
+          <div class="rpt-card-desc">Manually voided POAs</div>
+          <div class="rpt-card-stat" id="rptStatVoided">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="expired-powers" onclick="SLReports.generate('expired-powers')">
+        <div class="rpt-card-icon">⏰</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Expired Powers</div>
+          <div class="rpt-card-desc">POAs past semi-annual expiration</div>
+          <div class="rpt-card-stat" id="rptStatExpired">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="check-in-compliance" onclick="SLReports.generate('check-in-compliance')">
+        <div class="rpt-card-icon">📍</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">Check-In Compliance</div>
+          <div class="rpt-card-desc">Missed check-ins &amp; overdue defendants</div>
+          <div class="rpt-card-stat" id="rptStatCompliance">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+      <div class="rpt-card" data-report="poa-inventory" onclick="SLReports.generate('poa-inventory')">
+        <div class="rpt-card-icon">📦</div>
+        <div class="rpt-card-body">
+          <div class="rpt-card-title">POA Inventory</div>
+          <div class="rpt-card-desc">Stock by surety, tier &amp; status</div>
+          <div class="rpt-card-stat" id="rptStatPOA">—</div>
+        </div>
+        <div class="rpt-card-arrow">→</div>
+      </div>
+    </div>
+
+    <!-- Results Panel -->
+    <div id="rptResultsPanel" class="panel" style="display:none;margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <h3 id="rptResultsTitle" style="margin:0;font-size:16px">Report</h3>
+          <span id="rptResultsCount" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-export" onclick="SLReports.exportCSV()" id="rptExportBtn" style="display:none">📥 Export CSV</button>
+          <button class="btn-export" onclick="SLReports.closeResults()" style="background:var(--panel);border-color:var(--border)">✕ Close</button>
+        </div>
+      </div>
+      <!-- Summary strip for liability/production reports -->
+      <div id="rptSummaryStrip" style="display:none;margin-bottom:14px"></div>
+      <!-- Data table -->
+      <div id="rptTableWrap" style="overflow-x:auto"></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ TOAST ═══ -->
 <div class="toast-notification" id="toast"><span class="toast-icon"></span><span class="toast-message"></span></div>
 
@@ -1614,7 +1736,10 @@
           </div>
           <div class="rb-field">
             <label for="rbAgentName">Agent</label>
-            <input type="text" id="rbAgentName" value="Brendan">
+            <select id="rbAgentName">
+              <option value="Brendan O'Neal" selected>Brendan O'Neal</option>
+              <option value="Jason Taylor">Jason Taylor</option>
+            </select>
           </div>
           <div class="rb-field rb-field-2">
             <label for="rbNotes">Notes</label>
@@ -1938,6 +2063,7 @@
 <script src="/sl-analytics.js"></script>
 <script src="/sl-calendar.js"></script>
 <script src="/sl-record-bond.js"></script>
+<script src="/sl-reports.js"></script>
 <script src="/sl-utils.js"></script>
 <script src="/sl-animations.js"></script>
 </body>

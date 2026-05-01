@@ -61,6 +61,10 @@ def create_app():
     from dashboard.api.analytics import analytics_bp
     app.register_blueprint(analytics_bp, url_prefix="/api")
 
+    # ── Agency Reports (Discharged, Liability, Forfeitures, Agent Production) ─
+    from dashboard.api.reports import reports_bp
+    app.register_blueprint(reports_bp, url_prefix="/api")
+
     # ── Lead Intelligence (AI scoring explanations, trends, charge severity) ─────
     from dashboard.api.lead_intelligence import lead_intel_bp
     app.register_blueprint(lead_intel_bp, url_prefix="/api")
