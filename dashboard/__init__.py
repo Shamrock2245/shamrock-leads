@@ -93,6 +93,10 @@ def create_app():
     from dashboard.api.lifecycle_timeline import lifecycle_timeline_bp
     app.register_blueprint(lifecycle_timeline_bp, url_prefix="/api")
 
+    # ── Feature J: Discharge Monitor (Gmail → auto-exonerate) ──
+    from dashboard.api.discharge_monitor import discharge_monitor_bp
+    app.register_blueprint(discharge_monitor_bp, url_prefix="/api")
+
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
@@ -245,6 +249,38 @@ def create_app():
             logger.info("☘️  Phase 10: outreach + paperwork indexes ensured")
         except Exception as exc:
             logger.warning("Phase 10 index setup warning: %s", exc)
+
+    # ── Tier 2-3: Court reminders, discharge, GCal indexes ───────────────────
+    @app.before_serving
+    async def _ensure_tier23_indexes():
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            # court_reminders: used by auto-scan dedup + process_due
+            await db["court_reminders"].create_index(
+                [("booking_number", 1), ("reminder_type", 1), ("status", 1)],
+                name="idx_cr_booking_type_status", background=True,
+            )
+            await db["court_reminders"].create_index(
+                [("status", 1), ("send_at", 1)],
+                name="idx_cr_status_sendat", background=True,
+            )
+            # discharge_queue: used by process endpoint
+            await db["discharge_queue"].create_index(
+                [("status", 1)], name="idx_dq_status", background=True,
+            )
+            # gcal_sync: dedup key
+            await db["gcal_sync"].create_index(
+                [("dedup_key", 1)], unique=True, name="idx_gcal_dedup", background=True,
+            )
+            # active_bonds: court date scan performance
+            await db["active_bonds"].create_index(
+                [("court_date", 1), ("status", 1)],
+                name="idx_ab_court_status", background=True,
+            )
+            logger.info("☘️  Tier 2-3: court/discharge/gcal indexes ensured")
+        except Exception as exc:
+            logger.warning("Tier 2-3 index setup warning: %s", exc)
 
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving

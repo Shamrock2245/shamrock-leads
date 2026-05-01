@@ -927,3 +927,145 @@ async def api_active_bond_release(booking_number: str):
         logger.warning("[release] Audit log error: %s", exc)
 
     return jsonify({"success": True, **results})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Feature F: BULK EXONERATE — batch discharge workflow
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@bonds_bp.route("/active-bonds/bulk-exonerate", methods=["POST"])
+async def api_bulk_exonerate():
+    """Batch exonerate multiple bonds at once.
+
+    Body: {
+        "booking_numbers": ["2025-001234", "2025-001235", ...],
+        "exoneration_type": "discharge",   // optional, default "discharge"
+        "agent": "Brendan"                  // optional
+    }
+
+    For each bond:
+      1. Updates status → 'exonerated'
+      2. Releases assigned POA back to 'available'
+      3. Creates audit_events entry
+      4. Cancels any pending court reminders
+    """
+    data = await request.get_json(force=True) or {}
+    booking_numbers = data.get("booking_numbers", [])
+    if not booking_numbers or not isinstance(booking_numbers, list):
+        return jsonify({"success": False, "error": "booking_numbers array required"}), 400
+    if len(booking_numbers) > 50:
+        return jsonify({"success": False, "error": "Max 50 bonds per batch"}), 400
+
+    exoneration_type = data.get("exoneration_type", "discharge")
+    agent = data.get("agent", "dashboard")
+    now = datetime.now(timezone.utc)
+
+    active_bonds = get_collection("active_bonds")
+    poa_inventory = get_collection("poa_inventory")
+    audit_events = get_collection("audit_events")
+    court_reminders = get_collection("court_reminders")
+
+    exonerated = 0
+    poa_released = 0
+    reminders_cancelled = 0
+    not_found = 0
+    already_done = 0
+    details = []
+
+    for booking in booking_numbers:
+        booking = str(booking).strip()
+        if not booking:
+            continue
+
+        bond = await active_bonds.find_one({"booking_number": booking})
+        if not bond:
+            not_found += 1
+            details.append({"booking": booking, "status": "not_found"})
+            continue
+
+        current_status = bond.get("status", "")
+        if current_status in ("exonerated", "surrendered"):
+            already_done += 1
+            details.append({"booking": booking, "status": f"already_{current_status}"})
+            continue
+
+        # 1. Exonerate the bond
+        await active_bonds.update_one(
+            {"booking_number": booking},
+            {"$set": {
+                "status": "exonerated",
+                "exonerated_at": now.isoformat(),
+                "exoneration_type": exoneration_type,
+                "exoneration_source": "bulk_exonerate",
+                "exoneration_agent": agent,
+                "updated_at": now,
+            }},
+        )
+        exonerated += 1
+
+        # 2. Release POA
+        poa_num = bond.get("poa_number", "")
+        surety = (bond.get("insurance_company", "") or "").lower()
+        if poa_num and surety:
+            result = await poa_inventory.update_one(
+                {"poa_number": poa_num, "surety_id": surety, "status": "assigned"},
+                {"$set": {
+                    "status": "available",
+                    "bond_case_id": None,
+                    "defendant_name": None,
+                    "used_at": None,
+                    "released_at": now.isoformat(),
+                }},
+            )
+            if result.modified_count > 0:
+                poa_released += 1
+
+        # 3. Cancel pending court reminders
+        cr_result = await court_reminders.update_many(
+            {"booking_number": booking, "status": "pending"},
+            {"$set": {"status": "cancelled", "cancelled_at": now.isoformat(),
+                      "cancelled_reason": "bond_exonerated"}},
+        )
+        reminders_cancelled += cr_result.modified_count
+
+        # 4. Audit event
+        try:
+            await audit_events.insert_one({
+                "event_type": "bond_exonerated",
+                "entity_id": booking,
+                "entity_type": "bond_case",
+                "defendant_name": bond.get("defendant_name", ""),
+                "county": bond.get("county", ""),
+                "bond_amount": bond.get("bond_amount", 0),
+                "exoneration_type": exoneration_type,
+                "poa_released": poa_num if poa_num else None,
+                "agent": agent,
+                "source": "bulk_exonerate",
+                "timestamp": now,
+            })
+        except Exception:
+            pass
+
+        details.append({
+            "booking": booking,
+            "defendant": bond.get("defendant_name", ""),
+            "status": "exonerated",
+            "poa_released": bool(poa_num),
+        })
+
+    logger.info(
+        "[bulk-exonerate] Completed: exonerated=%d poa_released=%d not_found=%d already=%d",
+        exonerated, poa_released, not_found, already_done,
+    )
+
+    return jsonify({
+        "success": True,
+        "exonerated": exonerated,
+        "poa_released": poa_released,
+        "reminders_cancelled": reminders_cancelled,
+        "not_found": not_found,
+        "already_done": already_done,
+        "total_requested": len(booking_numbers),
+        "details": details[:30],
+    })
+

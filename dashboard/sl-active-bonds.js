@@ -221,7 +221,11 @@ function renderActiveBondsTable() {
       <td>${escHtml(b.county || '—')}</td>
       <td><strong>$${(b.bond_amount || 0).toLocaleString()}</strong></td>
       <td>${insBadge}</td>
-      <td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(indemnitorName)}">${escHtml(indemnitorName)}</td>
+      <td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(indemnitorName)}">
+        ${indemnitorName && indemnitorName !== '—'
+          ? `<a href="#" style="color:var(--accent);text-decoration:none" onclick="event.preventDefault();crossLinkToDefendants('${escHtml(indemnitorName).replace(/'/g,"\\'")}')">${escHtml(indemnitorName)}</a>`
+          : '—'}
+      </td>
       <td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(charges)}</td>
       <td>
         <span class="score-pill ${rCls}" style="cursor:pointer" onclick="showRiskBreakdown('${bkSafe}','${nameSafe}',${risk},'${factorsSafe}')">
@@ -873,6 +877,58 @@ async function runCourtReminderScan() {
     toast('Court scan error: ' + e.message, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Scan Now'; }
+  }
+}
+
+/* ── Feature C: Cross-link indemnitor → Defendants tab ───────── */
+function crossLinkToDefendants(name) {
+  // Switch to Defendants tab and pre-fill search
+  const defBtn = document.querySelector('[data-tab="tabDefendants"]');
+  if (defBtn) {
+    SL.switchTab(defBtn);
+    const searchInput = document.getElementById('defSearch');
+    if (searchInput) {
+      searchInput.value = name;
+      SL.debounceDefSearch();
+    }
+  }
+}
+
+/* ── Feature F: Bulk Exonerate ───────────────────────────────── */
+async function bulkExonerate() {
+  const input = prompt(
+    'Enter booking numbers to exonerate (comma-separated):\n\n' +
+    'Example: 2025-001234, 2025-001235, 2025-001236\n\n' +
+    'This will:\n• Set status to "exonerated"\n• Release assigned POAs\n• Cancel pending court reminders\n• Create audit trail'
+  );
+  if (!input) return;
+
+  const bookings = input.split(',').map(s => s.trim()).filter(Boolean);
+  if (bookings.length === 0) return;
+
+  const exType = prompt('Exoneration type? (discharge / nolle_prosequi / acquittal / completion)', 'discharge') || 'discharge';
+
+  if (!confirm(`Exonerate ${bookings.length} bond(s) as "${exType}"?\n\n${bookings.join('\n')}`)) return;
+
+  try {
+    const r = await fetch(`${API}/api/active-bonds/bulk-exonerate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        booking_numbers: bookings,
+        exoneration_type: exType,
+        agent: 'Dashboard',
+      }),
+    });
+    const d = await r.json();
+    if (d.success) {
+      toast(`✅ ${d.exonerated} bond(s) exonerated, ${d.poa_released} POA(s) released`, 'success');
+      loadActiveBonds();
+    } else {
+      toast(d.error || 'Bulk exonerate failed', 'error');
+    }
+  } catch(e) {
+    toast('Bulk exonerate error: ' + e.message, 'error');
   }
 }
 
