@@ -749,9 +749,15 @@
       </div>
       <input type="text" id="abSearch" placeholder="🔍 Search bonds..." style="flex:1;min-width:180px;padding:8px 12px;font-size:13px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)" oninput="renderActiveBondsTable()">
       <button class="btn-primary" id="abAddBondBtn" onclick="SLActiveBonds.openAddModal()" style="margin-left:auto;font-size:13px;padding:7px 16px">➕ Add Bond</button>
+      <button class="btn-export" onclick="exportActiveBondsCSV()" style="font-size:13px;padding:7px 14px;background:rgba(34,197,94,0.15);color:var(--success)">📥 Export CSV</button>
       <button class="btn-export" onclick="loadActiveBonds()" style="font-size:13px;padding:7px 14px">↻ Refresh</button>
       <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>
     </div>
+
+    <!-- Feature E: Duplicate Phone Alert Banner -->
+    <div id="abDupePhoneBanner" class="ab-alert-banner" style="display:none;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:var(--danger)"></div>
+    <!-- Feature G: POA Low-Stock Alert Banner -->
+    <div id="abPoaStockBanner" class="ab-alert-banner" style="display:none;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:var(--warning)"></div>
 
     <!-- Active Bonds Table -->
     <div class="panel">
@@ -770,13 +776,14 @@
               <th>Indemnitor</th>
               <th>Charges</th>
               <th>Risk Score</th>
+              <th>Court Date</th>
               <th>Last Check-In</th>
               <th>Next Due</th>
               <th>Status</th>
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="abTableBody"><tr><td colspan="11" class="loading">Loading active bonds…</td></tr></tbody>
+          <tbody id="abTableBody"><tr><td colspan="12" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
       </div>
     </div>

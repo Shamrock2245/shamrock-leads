@@ -61,8 +61,86 @@ async function loadActiveBonds() {
   } catch (e) {
     console.error('loadActiveBonds error:', e);
     const tbody = document.getElementById('abTableBody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="11" style="color:var(--danger);text-align:center;padding:24px">Error loading active bonds: ${e.message}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="12" style="color:var(--danger);text-align:center;padding:24px">Error loading active bonds: ${e.message}</td></tr>`;
   }
+}
+
+/* ── Feature B: CSV Export ─────────────────────────────── */
+function exportActiveBondsCSV() {
+  if (!_abBonds.length) { toast('No bonds to export', 'error'); return; }
+  const headers = ['Defendant','Booking #','County','Bond Amount','Premium','Surety','POA #','Court Date','Days Until Court','Indemnitor','Indemnitor Phone','Status','Risk Score','Last Check-In','Charges'];
+  const rows = _abBonds.map(b => {
+    const cd = b.court_date ? new Date(b.court_date) : null;
+    const daysUntil = cd ? Math.ceil((cd - new Date()) / 86400000) : '';
+    return [
+      b.defendant_name || '', b.booking_number || '', b.county || '',
+      b.bond_amount || 0, b.premium || '', (b.insurance_company || b.surety || ''),
+      b.poa_number || '', b.court_date ? cd.toLocaleDateString() : '', daysUntil,
+      b.indemnitor?.name || b.indemnitor_name || '', b.indemnitor?.phone || b.indemnitor_phone || '',
+      b.status || 'active', b.risk_score || 0,
+      b.last_check_in ? new Date(b.last_check_in).toLocaleString() : 'Never',
+      (typeof b.charges_raw === 'string' ? b.charges_raw : (b.charges || '')).replace(/,/g, ';')
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`);
+  });
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `active-bonds-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  toast(`Exported ${_abBonds.length} bonds to CSV`, 'success');
+}
+
+/* ── Feature E: Duplicate Indemnitor Phone Detection ──── */
+function _detectDuplicatePhones() {
+  const phoneMap = {}; // normalized phone → [{booking, defendant, indemnitor}]
+  _abBonds.forEach(b => {
+    const phone = (b.indemnitor?.phone || b.indemnitor_phone || '').replace(/\D/g, '');
+    if (phone.length >= 10) {
+      const norm = phone.slice(-10); // last 10 digits
+      if (!phoneMap[norm]) phoneMap[norm] = [];
+      phoneMap[norm].push({
+        booking: b.booking_number,
+        defendant: b.defendant_name,
+        indemnitor: b.indemnitor?.name || b.indemnitor_name || 'Unknown',
+        bond: b.bond_amount || 0
+      });
+    }
+  });
+  const dupes = Object.entries(phoneMap).filter(([, entries]) => entries.length > 1);
+  const banner = document.getElementById('abDupePhoneBanner');
+  if (!banner) return;
+  if (dupes.length === 0) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  const dupeHtml = dupes.map(([phone, entries]) => {
+    const formatted = phone.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3');
+    const bonds = entries.map(e => `<span style="font-weight:600">${escHtml(e.defendant)}</span> ($${e.bond.toLocaleString()})`).join(', ');
+    return `<div style="padding:6px 0;border-bottom:1px solid rgba(239,68,68,0.15)">📱 <strong>${formatted}</strong> — ${bonds}</div>`;
+  }).join('');
+  banner.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:16px">⚠️</span><strong>Duplicate Indemnitor Phone${dupes.length > 1 ? 's' : ''} Detected (${dupes.length})</strong><button onclick="this.closest('.ab-alert-banner').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px">✕</button></div>${dupeHtml}`;
+}
+
+/* ── Feature G: POA Low-Stock Alert ────────────────────── */
+async function _checkPoaStock() {
+  const banner = document.getElementById('abPoaStockBanner');
+  if (!banner) return;
+  try {
+    const r = await fetch(`${API}/api/poa/inventory-summary`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const lowTiers = (d.tiers || []).filter(t => t.available <= 5 && t.available > 0);
+    const emptyTiers = (d.tiers || []).filter(t => t.available === 0);
+    if (lowTiers.length === 0 && emptyTiers.length === 0) { banner.style.display = 'none'; return; }
+    banner.style.display = 'block';
+    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:16px">${emptyTiers.length > 0 ? '🚨' : '⚠️'}</span><strong>POA Inventory ${emptyTiers.length > 0 ? 'CRITICAL' : 'Low Stock'}</strong><button onclick="this.closest('.ab-alert-banner').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--warning);cursor:pointer;font-size:14px">✕</button></div>`;
+    if (emptyTiers.length > 0) {
+      html += emptyTiers.map(t => `<div style="color:var(--danger)">🚫 <strong>${t.prefix}</strong> — EMPTY (${t.surety})</div>`).join('');
+    }
+    if (lowTiers.length > 0) {
+      html += lowTiers.map(t => `<div>⚠️ <strong>${t.prefix}</strong> — ${t.available} remaining (${t.surety})</div>`).join('');
+    }
+    banner.innerHTML = html;
+  } catch(e) { /* non-fatal */ }
 }
 
 function renderActiveBondsTable() {
@@ -92,7 +170,7 @@ function renderActiveBondsTable() {
   }
 
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:32px;color:var(--muted)">No bonds match this filter.<br><button class="btn-export" style="margin-top:12px" onclick="openAddBondModal()">➕ Add First Bond</button></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--muted)">No bonds match this filter.<br><button class="btn-export" style="margin-top:12px" onclick="openAddBondModal()">➕ Add First Bond</button></td></tr>`;
     return;
   }
 
@@ -121,6 +199,20 @@ function renderActiveBondsTable() {
     const nameSafe = (b.defendant_name || '').replace(/'/g, "\\'");
     const factorsSafe = encodeURIComponent(JSON.stringify(b.risk_factors || {}));
 
+    /* Feature A: Court Date Countdown */
+    let courtCountdown = '—';
+    if (b.court_date) {
+      const cd = new Date(b.court_date);
+      const diff = Math.ceil((cd - new Date()) / 86400000);
+      if (diff < 0) courtCountdown = `<span style="color:var(--danger);font-weight:700">${Math.abs(diff)}d ago ⚠️</span>`;
+      else if (diff === 0) courtCountdown = `<span style="color:var(--danger);font-weight:700">TODAY 🔴</span>`;
+      else if (diff <= 3) courtCountdown = `<span style="color:var(--danger);font-weight:600">${diff}d</span>`;
+      else if (diff <= 7) courtCountdown = `<span style="color:#f59e0b;font-weight:600">${diff}d</span>`;
+      else if (diff <= 14) courtCountdown = `<span style="color:#3b82f6">${diff}d</span>`;
+      else courtCountdown = `<span style="color:var(--muted)">${diff}d</span>`;
+      courtCountdown += `<div style="font-size:10px;color:var(--muted)">${cd.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`;
+    }
+
     return `<tr class="${overdue ? 'row-alert' : ''}" style="${overdue ? 'background:rgba(239,68,68,0.05)' : ''}">
       <td>
         <div style="font-weight:600">${escHtml(b.defendant_name || '—')}${alertBadge}</div>
@@ -136,6 +228,7 @@ function renderActiveBondsTable() {
           ${risk} ${risk >= 75 ? '🔴' : risk >= 50 ? '🟡' : '🟢'}
         </span>
       </td>
+      <td style="text-align:center;min-width:70px">${courtCountdown}</td>
       <td>${lastCI}</td>
       <td style="${nextDueStyle}">${nextDue}${overdueLabel}</td>
       <td><span class="status-badge ${sCls}">${b.status || 'active'}</span></td>
@@ -160,6 +253,9 @@ function renderActiveBondsTable() {
       </td>
     </tr>`;
   }).join('');
+
+  // Run post-render checks
+  _detectDuplicatePhones();
 }
 
 /* ── Filter ─────────────────────────────────────────────────────── */
@@ -717,6 +813,7 @@ function initActiveBonds() {
   const missedBtn = document.getElementById('abProcessMissedBtn');
   if (missedBtn) missedBtn.addEventListener('click', processMissedCheckins);
   loadActiveBonds();
+  _checkPoaStock();
 }
 
 if (document.readyState === 'loading') {

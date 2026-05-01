@@ -140,6 +140,33 @@ async def api_poa_inventory():
     return jsonify({"tiers": result, "totals": totals})
 
 
+@poa_bp.route("/poa/inventory-summary", methods=["GET"])
+async def api_poa_inventory_summary():
+    """Lightweight summary for the dashboard low-stock alert banner.
+    Returns tiers with available count, prefix, and surety label."""
+    poa_inventory = get_collection("poa_inventory")
+
+    pipeline = [
+        {"$match": {"status": "available"}},
+        {"$group": {
+            "_id": {"surety_id": "$surety_id", "poa_prefix": "$poa_prefix"},
+            "available": {"$sum": 1},
+        }},
+        {"$sort": {"_id.surety_id": 1, "_id.poa_prefix": 1}},
+    ]
+    tiers = []
+    async for r in poa_inventory.aggregate(pipeline):
+        surety_label = "Palmetto Surety" if r["_id"]["surety_id"] == "palmetto" else "OSI"
+        tiers.append({
+            "prefix": r["_id"]["poa_prefix"],
+            "surety": surety_label,
+            "surety_id": r["_id"]["surety_id"],
+            "available": r["available"],
+        })
+
+    return jsonify({"tiers": tiers})
+
+
 @poa_bp.route("/poa/list", methods=["GET"])
 async def api_poa_list():
     """Paginated list of all POA powers with filters."""
