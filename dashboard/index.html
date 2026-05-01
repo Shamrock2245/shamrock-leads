@@ -293,45 +293,84 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
-     TAB: OUTREACH PIPELINE (AI Agent + Lead Management)
+     TAB: OUTREACH PIPELINE (Fortune 50 CRM)
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabProspective">
   <div class="container">
 
-    <!-- Agent Status Panel (always visible at top, rendered by sl-prospective.js) -->
-    <div id="autoReplyPanel" class="auto-reply-panel expanded" style="margin-bottom:16px"></div>
-
-    <!-- KPI Row -->
-    <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:18px">
-      <div class="stat-card" style="border-color:#10b981">
-        <div class="stat-label">📱 Pipeline</div>
-        <div class="stat-value" id="prospKpiTotal" style="color:#10b981">—</div>
-        <div class="stat-sub">active leads</div>
+    <!-- ── Top Action Bar ── -->
+    <div class="outreach-action-bar">
+      <div class="outreach-action-left">
+        <!-- AI Agent Panel (collapsible) -->
+        <div id="autoReplyPanel" class="auto-reply-panel" style="margin:0"></div>
       </div>
-      <div class="stat-card" style="border-color:#3b82f6">
-        <div class="stat-label">📞 Contacted</div>
-        <div class="stat-value" id="prospKpiContacted" style="color:#3b82f6">—</div>
-        <div class="stat-sub">initial outreach</div>
-      </div>
-      <div class="stat-card" style="border-color:#f59e0b">
-        <div class="stat-label">🤝 Negotiating</div>
-        <div class="stat-value" id="prospKpiNegotiating" style="color:#f59e0b">—</div>
-        <div class="stat-sub">in discussions</div>
-      </div>
-      <div class="stat-card" style="border-color:#8b5cf6">
-        <div class="stat-label">📄 Paperwork</div>
-        <div class="stat-value" id="prospKpiPaperwork" style="color:#8b5cf6">—</div>
-        <div class="stat-sub">docs in progress</div>
-      </div>
-      <div class="stat-card" style="border-color:var(--success)">
-        <div class="stat-label">✅ Ready</div>
-        <div class="stat-value" id="prospKpiReady" style="color:var(--success)">—</div>
-        <div class="stat-sub">ready to bond</div>
+      <div class="outreach-action-right">
+        <button class="btn-add-lead" onclick="SLProspective.openAddModal()">
+          <span>＋</span> Add Lead
+        </button>
+        <button class="btn-batch-outreach" onclick="SLProspective.batchStartOutreach()">
+          🚀 Batch Outreach
+        </button>
+        <button class="btn-export" onclick="SLProspective.exportPipeline()">
+          ⬇ Export
+        </button>
+        <button class="btn-export" onclick="SLProspective.load()" style="margin-left:4px">
+          ↻
+        </button>
       </div>
     </div>
 
-    <!-- Filters -->
-    <div class="filters" style="margin-bottom:12px">
+    <!-- ── KPI Row (7 metrics) ── -->
+    <div class="outreach-kpi-row">
+      <div class="outreach-kpi-card" style="--kpi-color:#10b981">
+        <div class="okpi-label">📱 Pipeline</div>
+        <div class="okpi-value" id="prospKpiTotal">—</div>
+        <div class="okpi-sub">active leads</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#3b82f6">
+        <div class="okpi-label">📞 Contacted</div>
+        <div class="okpi-value" id="prospKpiContacted">—</div>
+        <div class="okpi-sub" id="prospKpiContactedSub">initial outreach</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#f59e0b">
+        <div class="okpi-label">🤝 Negotiating</div>
+        <div class="okpi-value" id="prospKpiNegotiating">—</div>
+        <div class="okpi-sub" id="prospKpiNegotiatingSub">in discussions</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#8b5cf6">
+        <div class="okpi-label">📄 Paperwork</div>
+        <div class="okpi-value" id="prospKpiPaperwork">—</div>
+        <div class="okpi-sub" id="prospKpiPaperworkSub">docs in progress</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#10b981">
+        <div class="okpi-label">✅ Ready</div>
+        <div class="okpi-value" id="prospKpiReady">—</div>
+        <div class="okpi-sub" id="prospKpiReadySub">ready to bond</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#f87171">
+        <div class="okpi-label">🔔 New Replies</div>
+        <div class="okpi-value" id="prospKpiReplies">—</div>
+        <div class="okpi-sub">need response</div>
+      </div>
+      <div class="outreach-kpi-card" style="--kpi-color:#34d399">
+        <div class="okpi-label">💰 Pipeline Value</div>
+        <div class="okpi-value" id="prospKpiValue">—</div>
+        <div class="okpi-sub">total bond amount</div>
+      </div>
+    </div>
+
+    <!-- ── Bulk Action Bar (shown when cards selected) ── -->
+    <div class="bulk-action-bar" id="bulkActionBar" style="display:none">
+      <span class="bulk-count" id="bulkCount">0 selected</span>
+      <button class="bulk-btn" onclick="SLProspective.bulkAdvanceStage()">⏩ Advance Stage</button>
+      <button class="bulk-btn" onclick="SLProspective.bulkSendMessage()">💬 Send Message</button>
+      <button class="bulk-btn" onclick="SLProspective.bulkStartSequence()">🚀 Start Sequence</button>
+      <button class="bulk-btn bulk-btn-danger" onclick="SLProspective.bulkClose()">✕ Close Leads</button>
+      <button class="bulk-btn bulk-btn-ghost" onclick="SLProspective.clearSelection()">Deselect All</button>
+    </div>
+
+    <!-- ── Filter / Search Bar ── -->
+    <div class="outreach-filter-bar">
       <div class="btn-group" id="prospStageFilter">
         <button class="active" onclick="SLProspective.setStage('all',this)">All</button>
         <button onclick="SLProspective.setStage('contacted',this)">📞 Contacted</button>
@@ -339,43 +378,270 @@
         <button onclick="SLProspective.setStage('paperwork',this)">📄 Paperwork</button>
         <button onclick="SLProspective.setStage('ready',this)">✅ Ready</button>
       </div>
-      <input type="text" id="prospSearch" placeholder="🔍 Search pipeline..." style="width:200px" oninput="SLProspective.debounceSearch()">
-      <select id="prospStatusFilter" onchange="SLProspective.load()">
+      <div class="outreach-search-wrap">
+        <span class="outreach-search-icon">🔍</span>
+        <input type="text" id="prospSearch" class="outreach-search-input" placeholder="Search name, booking, county, phone..." oninput="SLProspective.debounceSearch()">
+        <button class="outreach-search-clear" id="prospSearchClear" onclick="SLProspective.clearSearch()" style="display:none">✕</button>
+      </div>
+      <select id="prospStatusFilter" class="outreach-select" onchange="SLProspective.load()">
         <option value="active">Active</option>
         <option value="all">All (incl. closed)</option>
         <option value="closed">Closed</option>
         <option value="promoted">Promoted</option>
       </select>
-      <button class="btn-export" onclick="SLProspective.load()" style="margin-left:auto">↻ Refresh</button>
+      <select id="prospSortFilter" class="outreach-select" onchange="SLProspective.load()">
+        <option value="updated_desc">Latest Activity</option>
+        <option value="score_desc">Highest Score</option>
+        <option value="bond_desc">Highest Bond</option>
+        <option value="created_desc">Newest First</option>
+        <option value="replies_first">New Replies First</option>
+      </select>
+      <label class="outreach-check-label">
+        <input type="checkbox" id="prospShowReplies" onchange="SLProspective.load()">
+        Replies only
+      </label>
     </div>
 
-    <!-- Pipeline Board -->
+    <!-- ── Pipeline Board (Kanban) ── -->
     <div class="pipeline-board" id="pipelineBoard">
-      <div class="pipeline-col" data-stage="contacted">
-        <div class="pipeline-col-header contacted"><span>📞</span> Contacted <span class="pipeline-col-count" id="colCountContacted">0</span></div>
+
+      <!-- CONTACTED -->
+      <div class="pipeline-col" data-stage="contacted" id="pcolContacted">
+        <div class="pipeline-col-header contacted">
+          <span>📞</span> Contacted
+          <span class="pipeline-col-count" id="colCountContacted">0</span>
+          <button class="pcol-add-btn" title="Add to Contacted" onclick="SLProspective.openAddModal('contacted')">＋</button>
+        </div>
         <div class="pipeline-col-body" id="colContacted"></div>
+        <div class="pipeline-col-footer">
+          <button class="pcol-footer-btn" onclick="SLProspective.openAddModal('contacted')">＋ Add Lead</button>
+        </div>
       </div>
-      <div class="pipeline-col" data-stage="negotiating">
-        <div class="pipeline-col-header negotiating"><span>🤝</span> Negotiating <span class="pipeline-col-count" id="colCountNegotiating">0</span></div>
+
+      <!-- NEGOTIATING -->
+      <div class="pipeline-col" data-stage="negotiating" id="pcolNegotiating">
+        <div class="pipeline-col-header negotiating">
+          <span>🤝</span> Negotiating
+          <span class="pipeline-col-count" id="colCountNegotiating">0</span>
+          <button class="pcol-add-btn" title="Add to Negotiating" onclick="SLProspective.openAddModal('negotiating')">＋</button>
+        </div>
         <div class="pipeline-col-body" id="colNegotiating"></div>
+        <div class="pipeline-col-footer">
+          <button class="pcol-footer-btn" onclick="SLProspective.openAddModal('negotiating')">＋ Add Lead</button>
+        </div>
       </div>
-      <div class="pipeline-col" data-stage="paperwork">
-        <div class="pipeline-col-header paperwork"><span>📄</span> Paperwork <span class="pipeline-col-count" id="colCountPaperwork">0</span></div>
+
+      <!-- PAPERWORK -->
+      <div class="pipeline-col" data-stage="paperwork" id="pcolPaperwork">
+        <div class="pipeline-col-header paperwork">
+          <span>📄</span> Paperwork
+          <span class="pipeline-col-count" id="colCountPaperwork">0</span>
+          <button class="pcol-add-btn" title="Add to Paperwork" onclick="SLProspective.openAddModal('paperwork')">＋</button>
+        </div>
         <div class="pipeline-col-body" id="colPaperwork"></div>
+        <div class="pipeline-col-footer">
+          <button class="pcol-footer-btn" onclick="SLProspective.openAddModal('paperwork')">＋ Add Lead</button>
+        </div>
       </div>
-      <div class="pipeline-col" data-stage="ready">
-        <div class="pipeline-col-header ready"><span>✅</span> Ready <span class="pipeline-col-count" id="colCountReady">0</span></div>
+
+      <!-- READY -->
+      <div class="pipeline-col" data-stage="ready" id="pcolReady">
+        <div class="pipeline-col-header ready">
+          <span>✅</span> Ready
+          <span class="pipeline-col-count" id="colCountReady">0</span>
+          <button class="pcol-add-btn" title="Add to Ready" onclick="SLProspective.openAddModal('ready')">＋</button>
+        </div>
         <div class="pipeline-col-body" id="colReady"></div>
+        <div class="pipeline-col-footer">
+          <button class="pcol-footer-btn" onclick="SLProspective.openAddModal('ready')">＋ Add Lead</button>
+        </div>
       </div>
+
     </div>
 
-    <!-- Detail Panel (hidden, shown on card click) -->
-    <div class="panel" id="prospDetailPanel" style="display:none;margin-top:18px">
-      <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span id="prospDetailTitle">📋 Lead Detail</span>
-        <button class="btn-cancel" onclick="SLProspective.closeDetail()">✕ Close</button>
+    <!-- ── Detail Drawer (slides in from right) ── -->
+    <div class="prosp-drawer-overlay" id="prospDrawerOverlay" onclick="SLProspective.closeDetail()"></div>
+    <div class="prosp-drawer" id="prospDetailPanel">
+      <div class="prosp-drawer-header">
+        <div id="prospDetailTitle" class="prosp-drawer-title">📋 Lead Detail</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="prosp-drawer-nav" id="prospDrawerPrev" onclick="SLProspective.navDetail(-1)" title="Previous lead">‹</button>
+          <button class="prosp-drawer-nav" id="prospDrawerNext" onclick="SLProspective.navDetail(1)" title="Next lead">›</button>
+          <button class="prosp-drawer-close" onclick="SLProspective.closeDetail()">✕</button>
+        </div>
       </div>
-      <div id="prospDetailBody"></div>
+      <div id="prospDetailBody" class="prosp-drawer-body"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MODAL: ADD LEAD MANUALLY
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="addLeadModal">
+  <div class="modal modal-lg" style="max-width:680px">
+    <div class="modal-header">
+      <h2>➕ Add Lead to Pipeline</h2>
+      <button class="modal-close" onclick="SLProspective.closeAddModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Source tabs -->
+      <div class="add-lead-source-tabs" id="addLeadSourceTabs">
+        <button class="als-tab active" data-source="manual" onclick="SLProspective.switchAddSource('manual',this)">✏️ Manual Entry</button>
+        <button class="als-tab" data-source="arrest" onclick="SLProspective.switchAddSource('arrest',this)">🔍 From Arrest Record</button>
+        <button class="als-tab" data-source="intake" onclick="SLProspective.switchAddSource('intake',this)">📋 From Intake Queue</button>
+      </div>
+
+      <!-- Manual Entry Form -->
+      <div id="addSourceManual">
+        <div class="add-lead-grid">
+          <div class="add-lead-field">
+            <label class="field-label">Defendant Name *</label>
+            <input class="field-input" id="alDefName" placeholder="Last, First Middle" autocomplete="off">
+          </div>
+          <div class="add-lead-field">
+            <label class="field-label">Booking Number</label>
+            <input class="field-input" id="alBooking" placeholder="e.g. 2026-00001234" autocomplete="off">
+          </div>
+          <div class="add-lead-field">
+            <label class="field-label">County *</label>
+            <select class="field-input" id="alCounty">
+              <option value="">— Select County —</option>
+              <option>Alachua</option><option>Bay</option><option>Brevard</option>
+              <option>Broward</option><option>Charlotte</option><option>Citrus</option>
+              <option>Clay</option><option>Collier</option><option>Columbia</option>
+              <option>DeSoto</option><option>Duval</option><option>Escambia</option>
+              <option>Flagler</option><option>Hernando</option><option>Highlands</option>
+              <option>Hillsborough</option><option>Indian River</option><option>Jackson</option>
+              <option>Lake</option><option>Lee</option><option>Leon</option>
+              <option>Manatee</option><option>Marion</option><option>Martin</option>
+              <option>Monroe</option><option>Nassau</option><option>Okaloosa</option>
+              <option>Orange</option><option>Osceola</option><option>Palm Beach</option>
+              <option>Pasco</option><option>Pinellas</option><option>Polk</option>
+              <option>Putnam</option><option>Santa Rosa</option><option>Sarasota</option>
+              <option>Seminole</option><option>St. Johns</option><option>St. Lucie</option>
+              <option>Sumter</option><option>Suwannee</option><option>Volusia</option>
+              <option>Walton</option>
+            </select>
+          </div>
+          <div class="add-lead-field">
+            <label class="field-label">Bond Amount ($)</label>
+            <input class="field-input" id="alBondAmount" type="number" placeholder="0.00" min="0">
+          </div>
+          <div class="add-lead-field">
+            <label class="field-label">Charges</label>
+            <input class="field-input" id="alCharges" placeholder="e.g. DUI, Battery" autocomplete="off">
+          </div>
+          <div class="add-lead-field">
+            <label class="field-label">Pipeline Stage</label>
+            <select class="field-input" id="alStage">
+              <option value="contacted">📞 Contacted</option>
+              <option value="negotiating">🤝 Negotiating</option>
+              <option value="paperwork">📄 Paperwork</option>
+              <option value="ready">✅ Ready</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:10px">Indemnitor / Contact</div>
+          <div class="add-lead-grid">
+            <div class="add-lead-field">
+              <label class="field-label">Contact Name</label>
+              <input class="field-input" id="alIndName" placeholder="Family member name" autocomplete="off">
+            </div>
+            <div class="add-lead-field">
+              <label class="field-label">Phone Number</label>
+              <input class="field-input" id="alIndPhone" type="tel" placeholder="+1 (239) 555-0000" autocomplete="off">
+            </div>
+            <div class="add-lead-field">
+              <label class="field-label">Email</label>
+              <input class="field-input" id="alIndEmail" type="email" placeholder="contact@email.com" autocomplete="off">
+            </div>
+            <div class="add-lead-field">
+              <label class="field-label">Relationship</label>
+              <select class="field-input" id="alIndRelation">
+                <option value="">— Select —</option>
+                <option>Spouse</option><option>Parent</option><option>Sibling</option>
+                <option>Child</option><option>Friend</option><option>Employer</option>
+                <option>Attorney</option><option>Other</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <label class="field-label">Initial Note (optional)</label>
+          <textarea class="field-input" id="alNote" rows="2" placeholder="How did this lead come in? Any context..."></textarea>
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="alAutoSequence" checked style="accent-color:var(--accent)">
+            Auto-start outreach sequence
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="alContactDiscover" style="accent-color:var(--accent)">
+            Run contact discovery
+          </label>
+        </div>
+      </div>
+
+      <!-- From Arrest Record -->
+      <div id="addSourceArrest" style="display:none">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input class="field-input" id="alArrestSearch" placeholder="Search booking #, name, county..." style="flex:1" oninput="SLProspective.searchArrests()">
+          <button class="btn-primary" onclick="SLProspective.searchArrests()">Search</button>
+        </div>
+        <div id="alArrestResults" style="max-height:320px;overflow-y:auto"></div>
+      </div>
+
+      <!-- From Intake Queue -->
+      <div id="addSourceIntake" style="display:none">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input class="field-input" id="alIntakeSearch" placeholder="Search intake queue..." style="flex:1" oninput="SLProspective.searchIntake()">
+          <button class="btn-primary" onclick="SLProspective.searchIntake()">Search</button>
+        </div>
+        <div id="alIntakeResults" style="max-height:320px;overflow-y:auto"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="SLProspective.closeAddModal()">Cancel</button>
+      <button class="btn-primary" id="alSubmitBtn" onclick="SLProspective.submitAddLead()">➕ Add to Pipeline</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MODAL: BULK MESSAGE
+     ═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="bulkMessageModal">
+  <div class="modal" style="max-width:540px">
+    <div class="modal-header">
+      <h2>💬 Bulk Message</h2>
+      <button class="modal-close" onclick="document.getElementById('bulkMessageModal').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="bulkMsgTargets" style="margin-bottom:12px;font-size:12px;color:var(--muted)"></div>
+      <label class="field-label">Message Template</label>
+      <select class="field-input" id="bulkMsgTemplate" onchange="SLProspective.applyBulkTemplate()" style="margin-bottom:10px">
+        <option value="">— Custom message —</option>
+        <option value="intro">👋 Introduction</option>
+        <option value="followup">🔄 Follow-up</option>
+        <option value="urgent">⚡ Urgent — Act Now</option>
+        <option value="paperwork">📄 Paperwork Ready</option>
+        <option value="court">⚖️ Court Date Reminder</option>
+      </select>
+      <label class="field-label">Message</label>
+      <textarea class="field-input" id="bulkMsgText" rows="5" placeholder="Type your message..."></textarea>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+          <input type="checkbox" id="bulkMsgPersonalize" checked style="accent-color:var(--accent)">
+          Personalize with defendant name
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="document.getElementById('bulkMessageModal').classList.remove('show')">Cancel</button>
+      <button class="btn-primary" onclick="SLProspective.executeBulkMessage()">📤 Send to All Selected</button>
     </div>
   </div>
 </div>

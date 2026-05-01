@@ -275,6 +275,8 @@ function initSSE() {
       toast(`📱 Message from ${data.from || 'unknown'}`, 'info');
       _addActivity('📱', `iMessage from ${data.from || ''}: ${(data.text || '').slice(0, 60)}`, 'info');
       _incrementBadge('prospective');
+      if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('message_received', data);
+      _desktopNotif('📱 New iMessage', `From ${data.from || 'contact'}: ${(data.text || '').slice(0, 80)}`);
     } catch(_) {}
   });
 
@@ -284,6 +286,22 @@ function initSSE() {
       toast(`💬 SMS from ${data.from || 'unknown'}`, 'info');
       _addActivity('💬', `SMS from ${data.from || ''}: ${(data.body || '').slice(0, 60)}`, 'info');
       _incrementBadge('prospective');
+      if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('sms_received', data);
+      _desktopNotif('💬 New SMS', `From ${data.from || 'contact'}: ${(data.body || '').slice(0, 80)}`);
+    } catch(_) {}
+  });
+
+  // ── New reply (explicit reply event) ────────────────────────────────────
+  es.addEventListener('new_reply', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const name = data.defendant_name || data.from || 'contact';
+      toast(`🔔 New reply from ${name}`, 'success');
+      _addActivity('🔔', `New reply: ${name} — ${(data.message || data.text || '').slice(0, 60)}`, 'success');
+      _incrementBadge('prospective');
+      if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('new_reply', data);
+      playHotAlert();
+      _desktopNotif('🔔 New Reply!', `${name}: ${(data.message || data.text || '').slice(0, 80)}`);
     } catch(_) {}
   });
 
