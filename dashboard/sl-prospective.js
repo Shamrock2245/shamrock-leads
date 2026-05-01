@@ -179,9 +179,10 @@ window.SLProspective = (function () {
         (lastComm && lastComm.message ? '<div class="pipeline-card-preview">"' + (lastComm.message || '').substring(0, 55) + ((lastComm.message || '').length > 55 ? '…' : '') + '"</div>' : '') +
       '</div>' +
       '<div class="card-quick-actions">' +
-        (indPhone ? '<button class="cqa-btn cqa-msg" title="Send iMessage" onclick="event.stopPropagation();SLProspective.quickMessage(\'' + bk + '\')">💬</button>' : '') +
+        (indPhone ? '<button class="cqa-btn cqa-msg" title="Send iMessage" onclick="event.stopPropagation();SLProspective.quickMessage(\'' + bk + '\')">💬 Msg</button>' : '') +
         advBtn +
-        '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠</button>' +
+        '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠 Intel</button>' +
+        '<button class="cqa-btn cqa-view-def" title="View in Defendants tab" onclick="event.stopPropagation();SLProspective.viewInDefendants(\'' + bk + '\')">👤</button>' +
       '</div>' +
     '</div>';
   }
@@ -1195,5 +1196,31 @@ window.SLProspective = (function () {
     unsendMsg: unsendMsg, editMsg: editMsg, reactMsg: reactMsg,
     handleSSEEvent: handleSSEEvent,
     trackLead: function(bk) { openDetail(bk); },
+    viewInDefendants: function(bk) {
+      // Switch to Defendants tab and pre-filter to this booking number
+      var tabBtn = document.querySelector('[data-tab="tabDefendants"]');
+      if (tabBtn) { tabBtn.click(); }
+      setTimeout(function() {
+        var si = document.getElementById('defSearch') || document.getElementById('defendantSearch');
+        if (si) { si.value = bk; si.dispatchEvent(new Event('input')); }
+      }, 300);
+    },
+    viewInActiveBonds: function(bk) {
+      var tabBtn = document.querySelector('[data-tab="tabActiveBonds"]');
+      if (tabBtn) { tabBtn.click(); }
+      setTimeout(function() {
+        var si = document.getElementById('abSearch');
+        if (si) { si.value = bk; si.dispatchEvent(new Event('input')); }
+      }, 300);
+    },
+    toggleAIPanel: function() {
+      var wrap = document.getElementById('autoReplyPanelWrap');
+      var btn  = document.getElementById('aiAgentToggle');
+      if (!wrap) return;
+      var visible = wrap.style.display !== 'none';
+      wrap.style.display = visible ? 'none' : 'block';
+      if (btn) btn.style.background = visible ? '' : 'rgba(139,92,246,.2)';
+      if (!visible) loadAutoReplyConfig();
+    },
   };
 })();

@@ -302,24 +302,26 @@
 
     <!-- ── Top Action Bar ── -->
     <div class="outreach-action-bar">
-      <div class="outreach-action-left">
-        <!-- AI Agent Panel (collapsible) -->
-        <div id="autoReplyPanel" class="auto-reply-panel" style="margin:0"></div>
-      </div>
-      <div class="outreach-action-right">
-        <button class="btn-add-lead" onclick="SLProspective.openAddModal()">
-          <span>＋</span> Add Lead
-        </button>
-        <button class="btn-batch-outreach" onclick="SLProspective.batchStartOutreach()">
-          🚀 Batch Outreach
-        </button>
-        <button class="btn-export" onclick="SLProspective.exportPipeline()">
-          ⬇ Export
-        </button>
-        <button class="btn-export" onclick="SLProspective.load()" style="margin-left:4px">
-          ↻
-        </button>
-      </div>
+      <span class="bar-title">☘️ Outreach <span>Pipeline</span></span>
+      <button class="btn-add-lead" onclick="SLProspective.openAddModal()">
+        <span>＋</span> Add Lead
+      </button>
+      <button class="btn-batch-outreach" onclick="SLProspective.batchStartOutreach()">
+        🚀 Batch Outreach
+      </button>
+      <button class="btn-secondary" onclick="SLProspective.exportPipeline()" style="padding:9px 14px;font-size:13px">
+        ⬇ Export
+      </button>
+      <button class="btn-secondary" id="aiAgentToggle" onclick="SLProspective.toggleAIPanel()" style="padding:9px 14px;font-size:13px" title="Toggle AI Agent Panel">
+        🤖 AI Agent
+      </button>
+      <button class="btn-secondary" onclick="SLProspective.load()" style="padding:9px 12px;font-size:13px" title="Refresh">
+        ↻
+      </button>
+    </div>
+    <!-- ── AI Agent Panel (collapsible, below action bar) ── -->
+    <div id="autoReplyPanelWrap" style="display:none;margin-bottom:14px">
+      <div id="autoReplyPanel" class="auto-reply-panel" style="margin:0"></div>
     </div>
 
     <!-- ── KPI Row (7 metrics) ── -->
