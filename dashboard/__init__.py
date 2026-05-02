@@ -57,6 +57,10 @@ def create_app():
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
+
+    # ── AI Agent Brain API (Pipeline AI feature bar) ──────────────────────────
+    from dashboard.api.agent_brain_api import agent_brain_api_bp
+    app.register_blueprint(agent_brain_api_bp, url_prefix="/api")  # ← AI Outreach Endpoints
     # ── Revenue Analytics ──────────────────────────────────────────────────────
     from dashboard.api.analytics import analytics_bp
     app.register_blueprint(analytics_bp, url_prefix="/api")

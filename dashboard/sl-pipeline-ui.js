@@ -285,8 +285,8 @@
   async function dropCard(bk, newStage) {
     try {
       toast('Moving to ' + newStage + '…', 'info');
-      var r = await fetch(API + '/api/prospective/' + bk + '/stage', {
-        method: 'POST',
+      var r = await fetch(API + '/api/prospective-bonds/' + bk + '/stage', {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stage: newStage, agent: 'Dashboard' })
       });
