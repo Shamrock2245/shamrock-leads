@@ -46,7 +46,7 @@ const SLRecordBond = (() => {
     $('rbIndemnitorEmail').value = data.indemnitor_email || '';
     $('rbIndemnitorRelationship').value = data.indemnitor_relationship || '';
     $('rbPaymentMethod').value = data.payment_method || 'cash';
-    $('rbAgentName').value = data.agent_name || 'Brendan';
+    $('rbAgentName').value = data.agent_name || "Brendan O'Neal";
     $('rbNotes').value = data.notes || '';
 
     // Clear status
@@ -145,7 +145,7 @@ const SLRecordBond = (() => {
       indemnitor_email: $('rbIndemnitorEmail')?.value || '',
       indemnitor_relationship: $('rbIndemnitorRelationship')?.value || '',
       payment_method: $('rbPaymentMethod')?.value || 'cash',
-      agent_name: $('rbAgentName')?.value || 'Brendan',
+      agent_name: $('rbAgentName')?.value || "Brendan O'Neal",
       notes: $('rbNotes')?.value || '',
     };
 

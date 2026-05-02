@@ -115,11 +115,16 @@ async def discharged_bonds():
         # Summary
         total_bond = sum(float(d.get("bond_amount", 0) or 0) for d in docs)
         total_premium = sum(d.get("split", {}).get("premium", 0) for d in docs)
+        exonerated = [d for d in docs if d.get("status") == "exonerated"]
+        surrendered = [d for d in docs if d.get("status") == "surrendered"]
 
         return jsonify({
             "success": True,
+            "bonds": docs,
             "records": docs,
             "count": len(docs),
+            "exonerated_count": len(exonerated),
+            "surrendered_count": len(surrendered),
             "total_bond_amount": round(total_bond, 2),
             "total_premium": round(total_premium, 2),
         })
@@ -242,6 +247,7 @@ async def voided_powers():
 
         return jsonify({
             "success": True,
+            "powers": docs,
             "records": docs,
             "count": len(docs),
         })
@@ -318,11 +324,15 @@ async def forfeitures():
             total_liability += ba
             d["split"] = _calc_surety_split(ba, d.get("surety") or d.get("insurance_company") or "OSI")
 
+        avg_bond = round(total_liability / max(len(docs), 1), 2)
+
         return jsonify({
             "success": True,
+            "bonds": docs,
             "records": docs,
             "count": len(docs),
             "total_liability": round(total_liability, 2),
+            "avg_bond_amount": avg_bond,
         })
     except Exception as exc:
         logger.exception("reports/forfeitures error: %s", exc)
@@ -334,47 +344,98 @@ async def forfeitures():
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.route("/reports/agent-production")
 async def agent_production():
-    """Per-agent bond count, premium, avg bond, production metrics."""
+    """Per-agent bond count, premium, avg bond, surety breakdown, production metrics."""
     try:
         db = get_db()
         col = db["active_bonds"]
         query = {}
         query.update(_date_filter("bond_date"))
 
+        # Normalize legacy short names → full names so they group correctly.
+        # Old records may have "Brendan" instead of "Brendan O'Neal".
+        AGENT_ALIAS = {
+            "Brendan": "Brendan O'Neal",
+            "brendan": "Brendan O'Neal",
+            "Jason": "Jason Taylor",
+            "jason": "Jason Taylor",
+        }
+
         pipe = [
             {"$match": query} if query else {"$match": {}},
+            # Normalize agent_name (short → full)
+            {"$addFields": {
+                "agent_name_norm": {
+                    "$switch": {
+                        "branches": [
+                            {"case": {"$eq": ["$agent_name", alias]},
+                             "then": full}
+                            for alias, full in AGENT_ALIAS.items()
+                        ],
+                        "default": {"$ifNull": ["$agent_name", "Unassigned"]},
+                    }
+                },
+            }},
+            # Per-agent + per-surety breakdown
             {"$group": {
-                "_id": "$agent_name",
+                "_id": {
+                    "agent": "$agent_name_norm",
+                    "surety": {"$toUpper": {"$ifNull": ["$insurance_company", "UNKNOWN"]}},
+                },
                 "bond_count": {"$sum": 1},
                 "total_bond_amount": {"$sum": "$bond_amount"},
                 "total_premium": {"$sum": "$premium"},
-                "avg_bond": {"$avg": "$bond_amount"},
-                "avg_premium": {"$avg": "$premium"},
                 "counties": {"$addToSet": "$county"},
             }},
-            {"$sort": {"total_premium": -1}},
+            {"$sort": {"_id.agent": 1, "_id.surety": 1}},
         ]
 
-        results = await col.aggregate(pipe).to_list(None)
+        raw = await col.aggregate(pipe).to_list(None)
+
+        # Re-group by agent, accumulating surety breakdown
+        agent_map = {}
+        for r in raw:
+            name = r["_id"]["agent"] or "Unassigned"
+            surety = r["_id"]["surety"] or "UNKNOWN"
+            if name not in agent_map:
+                agent_map[name] = {
+                    "agent_name": name,
+                    "bond_count": 0,
+                    "total_bond_amount": 0.0,
+                    "total_premium": 0.0,
+                    "counties": set(),
+                    "by_surety": {},
+                }
+            a = agent_map[name]
+            a["bond_count"] += r["bond_count"]
+            a["total_bond_amount"] += r["total_bond_amount"] or 0
+            a["total_premium"] += r["total_premium"] or 0
+            a["counties"].update(r.get("counties", []))
+            a["by_surety"][surety] = a["by_surety"].get(surety, 0) + r["bond_count"]
 
         agents = []
-        for r in results:
-            name = r["_id"] or "Unassigned"
+        for a in sorted(agent_map.values(), key=lambda x: x["total_premium"], reverse=True):
+            bc = a["bond_count"]
             agents.append({
-                "agent_name": name,
-                "bond_count": r["bond_count"],
-                "total_bond_amount": round(r["total_bond_amount"] or 0, 2),
-                "total_premium": round(r["total_premium"] or 0, 2),
-                "avg_bond": round(r["avg_bond"] or 0, 2),
-                "avg_premium": round(r["avg_premium"] or 0, 2),
-                "counties": sorted(r.get("counties", [])),
+                "agent_name": a["agent_name"],
+                "bond_count": bc,
+                "total_bond_amount": round(a["total_bond_amount"], 2),
+                "total_premium": round(a["total_premium"], 2),
+                "avg_bond": round(a["total_bond_amount"] / bc, 2) if bc else 0,
+                "avg_premium": round(a["total_premium"] / bc, 2) if bc else 0,
+                "counties": sorted(a["counties"] - {"", None}),
+                "county_count": len(a["counties"] - {"", None}),
+                "by_surety": a["by_surety"],
             })
 
-        # Grand total
+        # Grand totals
         grand = {
             "total_bonds": sum(a["bond_count"] for a in agents),
             "total_premium": round(sum(a["total_premium"] for a in agents), 2),
             "total_bond_amount": round(sum(a["total_bond_amount"] for a in agents), 2),
+            "avg_bond_amount": round(
+                sum(a["total_bond_amount"] for a in agents) /
+                max(sum(a["bond_count"] for a in agents), 1), 2
+            ),
         }
 
         # Include registered agent list

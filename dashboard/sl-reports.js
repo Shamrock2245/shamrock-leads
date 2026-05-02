@@ -121,7 +121,10 @@ const SLReports = (() => {
     if (forf.success)  {
       const fc = forf.count || 0;
       $('rptKpiForfeitures').textContent = fc > 0 ? `${fc} · ${money(forf.total_liability||0)}` : '0';
-      if (fc > 0) $('rptKpiForfeitures').closest('.rpt-kpi-item')?.classList.add('rpt-kpi-alert-active');
+      if (fc > 0) {
+        const card = $('rptKpiForfeitureCard');
+        if (card) { card.style.borderColor = 'rgba(239,68,68,.35)'; card.style.background = 'rgba(239,68,68,.06)'; }
+      }
     }
     if (comp.success)  { $('rptKpiCompliance').textContent = pct(comp.compliance_rate||100); }
     if (poa.success)   {
@@ -363,15 +366,22 @@ const SLReports = (() => {
         'bar'
       );
     }
-    const headers = ['Agent','Bonds','Bond Amount','Premium','Avg Bond','Surety Breakdown'];
-    const rows = agents.map(a => [
-      `<strong>${escHtml(a.agent_name||'Unknown')}</strong>`,
-      `<span class="rpt-badge-num">${a.bond_count||0}</span>`,
-      money(a.total_bond_amount||0),
-      `<span class="rpt-val-green">${money(a.total_premium||0)}</span>`,
-      money(a.avg_bond_amount||0),
-      Object.entries(a.by_surety||{}).map(([k,v]) => `${escHtml(k)}: ${v}`).join(' · ') || '—',
-    ]);
+    const headers = ['Agent','Bonds','Bond Amount','Premium','Avg Bond','Avg Premium','Counties','Surety Breakdown'];
+    const rows = agents.map(a => {
+      const suretyHtml = Object.entries(a.by_surety||{}).map(([k,v]) =>
+        `<span class="rpt-surety-chip">${escHtml(k)}: <strong>${v}</strong></span>`
+      ).join(' ') || '—';
+      return [
+        `<strong>${escHtml(a.agent_name||'Unknown')}</strong>`,
+        `<span class="rpt-badge-num">${a.bond_count||0}</span>`,
+        money(a.total_bond_amount||0),
+        `<span class="rpt-val-green">${money(a.total_premium||0)}</span>`,
+        money(a.avg_bond||0),
+        money(a.avg_premium||0),
+        `<span title="${(a.counties||[]).join(', ')}">${a.county_count||0} counties</span>`,
+        suretyHtml,
+      ];
+    });
     _renderTable(headers, rows);
   }
 
@@ -482,7 +492,7 @@ const SLReports = (() => {
     const headers = ['POA Number','Surety','Bond Amount','Voided By','Reason','Date'];
     const rows = powers.map(p => [
       `<code>${escHtml(p.poa_number||'—')}</code>`,
-      escHtml(p.surety||'—'),
+      escHtml(p.surety_id||p.surety||'—'),
       money(p.bond_amount||0),
       escHtml(p.voided_by||'—'),
       escHtml(p.void_reason||'—'),
@@ -502,9 +512,9 @@ const SLReports = (() => {
     const headers = ['POA Number','Surety','Prefix','Expiry Date','Status'];
     const rows = all.map(p => [
       `<code>${escHtml(p.poa_number||'—')}</code>`,
-      escHtml(p.surety||'—'),
+      escHtml(p.surety_id||p.surety||'—'),
       escHtml(p.prefix||'—'),
-      fmtDate(p.expiry_date),
+      fmtDate(p.expiration||p.expiry_date),
       `<span class="rpt-status-badge rpt-status-${p._status==='expired'?'forfeited':'monitoring'}">${p._status==='expired'?'EXPIRED':'EXPIRING SOON'}</span>`,
     ]);
     _renderTable(headers, rows);

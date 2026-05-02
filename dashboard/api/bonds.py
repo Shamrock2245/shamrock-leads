@@ -57,7 +57,7 @@ async def api_record_bond():
             "indemnitor_email":  "jane@example.com",
             "indemnitor_relationship": "Wife",
             "payment_method":    "cash",
-            "agent_name":        "Brendan",
+            "agent_name":        "Brendan O'Neal",
             "notes":             "Walk-in client"
         }
     """
@@ -103,7 +103,7 @@ async def api_record_bond():
     indemnitor_email = (data.get("indemnitor_email") or "").strip()
     indemnitor_relationship = (data.get("indemnitor_relationship") or "").strip()
     payment_method = (data.get("payment_method") or "cash").strip()
-    agent_name = (data.get("agent_name") or "Brendan").strip()
+    agent_name = (data.get("agent_name") or "Brendan O'Neal").strip()
     notes = (data.get("notes") or "").strip()
 
     now = datetime.now(timezone.utc)
@@ -769,7 +769,7 @@ async def api_active_bond_release(booking_number: str):
             "next_court_date":   "2025-02-10",
             "court_location":    "Lee County Justice Center",
             "poa_number":        "OSI-12345",
-            "agent_name":        "Brendan",
+            "agent_name":        "Brendan O'Neal",
             "agent_license":     "P123456",
             "surety_id":         "osi",
             "send_signing_link": true,
@@ -840,7 +840,7 @@ async def api_active_bond_release(booking_number: str):
     # 3. Phase 2 SignNow packet + send link via BlueBubbles
     if data.get("send_signing_link", True):
         poa_number = data.get("poa_number", bond.get("poa_number", ""))
-        agent_name = data.get("agent_name", os.getenv("DEFAULT_AGENT_NAME", "Brendan"))
+        agent_name = data.get("agent_name", os.getenv("DEFAULT_AGENT_NAME", "Brendan O'Neal"))
         agent_license = data.get("agent_license", os.getenv("DEFAULT_AGENT_LICENSE", ""))
         surety_id = data.get("surety_id", bond.get("insurance_company", "osi").lower())
 

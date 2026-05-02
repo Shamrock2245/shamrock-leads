@@ -1569,14 +1569,12 @@
      TAB: REPORTS
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabReports">
+ <div class="container">
   <!-- ═══ REPORTS: Header ═══ -->
-  <div class="rpt-header">
-    <div class="rpt-header-left">
-      <span class="rpt-header-icon">📋</span>
-      <div>
-        <div class="rpt-header-title">Agency Reports</div>
-        <div class="rpt-header-sub">Financial compliance · Surety liability · Agent production · POA management</div>
-      </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2 style="margin:0;font-size:20px">📋 Agency Reports</h2>
+      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Financial compliance · Surety liability · Agent production · POA management</p>
     </div>
     <div class="rpt-header-actions">
       <button class="btn-secondary" onclick="SLReports.scheduleReport()" title="Schedule automated report delivery">⏰ Schedule</button>
@@ -1608,10 +1606,8 @@
       <label class="rpt-filter-label">Surety</label>
       <select id="rptSuretyFilter" class="rpt-input rpt-select" onchange="SLReports.onDateChange()">
         <option value="">All Sureties</option>
-        <option value="OSI">OSI</option>
-        <option value="Palmetto">Palmetto</option>
-        <option value="Lexington">Lexington</option>
-        <option value="American Bankers">American Bankers</option>
+        <option value="Palmetto">🛡️ Palmetto Surety Corp</option>
+        <option value="OSI">🛡️ OSI (O'Shaughnahill)</option>
       </select>
     </div>
     <!-- County filter -->
@@ -1620,9 +1616,12 @@
       <select id="rptCountyFilter" class="rpt-input rpt-select" onchange="SLReports.onDateChange()">
         <option value="">All Counties</option>
         <option value="Lee">Lee</option>
-        <option value="Hendry">Hendry</option>
         <option value="Charlotte">Charlotte</option>
         <option value="Collier">Collier</option>
+        <option value="DeSoto">DeSoto</option>
+        <option value="Hendry">Hendry</option>
+        <option value="Manatee">Manatee</option>
+        <option value="Sarasota">Sarasota</option>
       </select>
     </div>
     <!-- Active date range display -->
@@ -1632,35 +1631,42 @@
   </div>
 
   <!-- ═══ REPORTS: KPI Summary Strip ═══ -->
-  <div class="rpt-kpi-strip" id="rptKpiStrip">
-    <div class="rpt-kpi-item">
-      <div class="rpt-kpi-value" id="rptKpiLiability">—</div>
-      <div class="rpt-kpi-label">Total Liability</div>
+  <div class="stats-grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:20px" id="rptKpiStrip">
+    <div class="stat-card accent-card">
+      <div class="stat-label">🛡️ Total Liability</div>
+      <div class="stat-value" id="rptKpiLiability">—</div>
+      <div class="stat-sub">outstanding bond exposure</div>
     </div>
-    <div class="rpt-kpi-item">
-      <div class="rpt-kpi-value" id="rptKpiBonds">—</div>
-      <div class="rpt-kpi-label">Bonds Written</div>
+    <div class="stat-card">
+      <div class="stat-label">📝 Bonds Written</div>
+      <div class="stat-value" id="rptKpiBonds">—</div>
+      <div class="stat-sub">active bonds on file</div>
     </div>
-    <div class="rpt-kpi-item">
-      <div class="rpt-kpi-value" id="rptKpiDischarged">—</div>
-      <div class="rpt-kpi-label">Discharged</div>
+    <div class="stat-card">
+      <div class="stat-label">✅ Discharged</div>
+      <div class="stat-value" id="rptKpiDischarged">—</div>
+      <div class="stat-sub">exonerated & surrendered</div>
     </div>
-    <div class="rpt-kpi-item rpt-kpi-alert">
-      <div class="rpt-kpi-value" id="rptKpiForfeitures">—</div>
-      <div class="rpt-kpi-label">Forfeitures</div>
+    <div class="stat-card" id="rptKpiForfeitureCard">
+      <div class="stat-label">⚠️ Forfeitures</div>
+      <div class="stat-value" id="rptKpiForfeitures">—</div>
+      <div class="stat-sub">liability at risk</div>
     </div>
-    <div class="rpt-kpi-item">
-      <div class="rpt-kpi-value" id="rptKpiCompliance">—</div>
-      <div class="rpt-kpi-label">Check-In Rate</div>
+    <div class="stat-card">
+      <div class="stat-label">📍 Check-In Rate</div>
+      <div class="stat-value" id="rptKpiCompliance">—</div>
+      <div class="stat-sub">defendant compliance</div>
     </div>
-    <div class="rpt-kpi-item">
-      <div class="rpt-kpi-value" id="rptKpiPOA">—</div>
-      <div class="rpt-kpi-label">POA Stock</div>
+    <div class="stat-card">
+      <div class="stat-label">📦 POA Stock</div>
+      <div class="stat-value" id="rptKpiPOA">—</div>
+      <div class="stat-sub">available powers</div>
     </div>
   </div>
 
   <!-- ═══ REPORTS: Card Grid ═══ -->
-  <div class="rpt-section-label">SELECT A REPORT TO RUN</div>
+  <div class="panel" style="padding:20px;margin-bottom:20px">
+  <div class="panel-title" style="margin-bottom:14px">📊 Select a Report</div>
   <div class="rpt-grid" id="rptCardGrid">
 
     <!-- 1: Surety Liability -->
@@ -1784,6 +1790,7 @@
     </div>
 
   </div><!-- /rpt-grid -->
+  </div><!-- /panel -->
 
   <!-- ═══ REPORTS: Results Panel ═══ -->
   <div id="rptResultsPanel" class="rpt-results" style="display:none">
@@ -1881,6 +1888,7 @@
     </div>
   </div>
 
+ </div><!-- /.container -->
 </div>
 
 <!-- ═══ TOAST ═══ -->
