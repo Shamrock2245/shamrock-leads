@@ -312,23 +312,23 @@
     <!-- ── Top Action Bar ── -->
     <div class="outreach-action-bar">
       <span class="bar-title">☘️ Outreach <span>Pipeline</span></span>
-      <button class="btn-add-lead" onclick="SLProspective.openAddModal()">
+      <button class="sl-btn sl-btn-primary" onclick="SLProspective.openAddModal()">
         <span>＋</span> Add Lead
       </button>
-      <button class="btn-batch-outreach" onclick="SLProspective.batchStartOutreach()">
+      <button class="sl-btn sl-btn-secondary" onclick="SLProspective.batchStartOutreach()" style="background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(99,102,241,.05));border-color:rgba(99,102,241,.3);color:#a5b4fc">
         🚀 Batch Outreach
       </button>
-      <button class="btn-secondary" onclick="SLProspective.exportPipeline()" style="padding:9px 14px;font-size:13px">
+      <button class="sl-btn sl-btn-ghost" onclick="SLProspective.exportPipeline()" title="Export pipeline data">
         ⬇ Export
       </button>
-      <button class="btn-secondary" id="aiAgentToggle" onclick="SLProspective.toggleAIPanel()" style="padding:9px 14px;font-size:13px" title="Toggle AI Agent Panel">
-        🤖 AI Agent
+      <button class="sl-btn sl-btn-ai" id="aiAgentToggle" onclick="SLProspective.toggleAIPanel()" title="Toggle AI Agent Panel">
+        ✦ AI Tools
       </button>
-      <button class="btn-secondary" onclick="SLProspective.load()" style="padding:9px 12px;font-size:13px" title="Refresh">
+      <button class="sl-btn sl-btn-ghost sl-btn-icon" onclick="SLProspective.load()" title="Refresh pipeline">
         ↻
       </button>
     </div>
-    <!-- ── AI Agent Panel (collapsible, below action bar) ── -->
+    <!-- ── AI Agent Panel (collapsible, below action bar — hidden by default) ── -->
     <div id="autoReplyPanelWrap" style="display:none;margin-bottom:14px">
       <div id="autoReplyPanel" class="auto-reply-panel" style="margin:0"></div>
     </div>
@@ -384,7 +384,7 @@
 
     <!-- ── Filter / Search Bar ── -->
     <div class="outreach-filter-bar">
-      <div class="btn-group" id="prospStageFilter">
+      <div class="sl-segmented" id="prospStageFilter">
         <button class="active" onclick="SLProspective.setStage('all',this)">All</button>
         <button onclick="SLProspective.setStage('contacted',this)">📞 Contacted</button>
         <button onclick="SLProspective.setStage('negotiating',this)">🤝 Negotiating</button>
@@ -396,13 +396,13 @@
         <input type="text" id="prospSearch" class="outreach-search-input" placeholder="Search name, booking, county, phone..." oninput="SLProspective.debounceSearch()">
         <button class="outreach-search-clear" id="prospSearchClear" onclick="SLProspective.clearSearch()" style="display:none">✕</button>
       </div>
-      <select id="prospStatusFilter" class="outreach-select" onchange="SLProspective.load()">
+      <select id="prospStatusFilter" class="sl-filter-select" onchange="SLProspective.load()">
         <option value="active">Active</option>
         <option value="all">All (incl. closed)</option>
         <option value="closed">Closed</option>
         <option value="promoted">Promoted</option>
       </select>
-      <select id="prospSortFilter" class="outreach-select" onchange="SLProspective.load()">
+      <select id="prospSortFilter" class="sl-filter-select" onchange="SLProspective.load()">
         <option value="updated_desc">Latest Activity</option>
         <option value="score_desc">Highest Score</option>
         <option value="bond_desc">Highest Bond</option>

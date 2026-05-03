@@ -25,31 +25,7 @@
     var bar = document.querySelector('.outreach-action-bar');
     if (!bar || bar.dataset.upgraded) return;
     bar.dataset.upgraded = '1';
-
-    // Replace the generic "🤖 AI Agent" button with a dropdown trigger
-    var aiBtn = $('aiAgentToggle');
-    if (aiBtn) {
-      aiBtn.innerHTML = '✦ AI Tools';
-      aiBtn.className = 'sl-btn sl-btn-ai';
-      aiBtn.title = 'AI-powered outreach tools';
-    }
-
-    // Add a refresh icon button
-    var refreshBtn = bar.querySelector('[title="Refresh"]');
-    if (refreshBtn) {
-      refreshBtn.className = 'sl-btn sl-btn-ghost sl-btn-icon';
-      refreshBtn.innerHTML = '↻';
-    }
-
-    // Style existing buttons
-    var addBtn = bar.querySelector('.btn-add-lead');
-    if (addBtn) addBtn.className = 'sl-btn sl-btn-primary';
-
-    var batchBtn = bar.querySelector('.btn-batch-outreach');
-    if (batchBtn) batchBtn.className = 'sl-btn sl-btn-secondary';
-
-    var exportBtn = bar.querySelector('[onclick*="exportPipeline"]');
-    if (exportBtn) exportBtn.className = 'sl-btn sl-btn-secondary';
+    // HTML now uses design-system classes directly — no runtime patching needed
   }
 
   /* ── 2. Inject AI Feature Bar ──────────────────────────────────────────── */
@@ -110,10 +86,7 @@
     var wrap = $('autoReplyPanelWrap');
     if (!wrap || wrap.dataset.upgraded) return;
     wrap.dataset.upgraded = '1';
-    wrap.style.display = 'block';
-    wrap.style.marginBottom = '0';
-
-    // The existing renderAutoReplyPanel() handles content — we just style the container
+    // Panel stays hidden by default — only shown via AI Tools toggle
     var panel = $('autoReplyPanel');
     if (panel) {
       panel.style.margin = '0';

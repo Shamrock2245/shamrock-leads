@@ -1581,6 +1581,7 @@ input[type="datetime-local"] {
   .rb-footer{padding:14px 20px;flex-direction:column}
   .rb-actions{width:100%;justify-content:stretch}
   .rb-btn-cancel,.rb-btn-submit{flex:1;text-align:center}
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    OUTREACH PIPELINE — Fortune 50 CRM Styles
