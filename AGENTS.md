@@ -1,8 +1,9 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** April 27, 2026
+> **Last Updated:** 2026-05-04
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
+> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
 
 ---
 
@@ -15,23 +16,32 @@ ShamrockLeads is a **statewide arrest intelligence and bonded-case management pl
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas with Google Sheets as a legacy fallback `[IMPLEMENTED]`
-6. **Matches** indemnitor intake to the correct defendant `[PLANNED — Phase 4]`
-7. **Creates bonded cases** with surety selection and POA assignment `[PLANNED — Phase 5]`
-8. **Generates paperwork** (surety-specific template packets) `[PLANNED — Phase 6]`
-9. **Orchestrates signatures** via SignNow `[PLANNED — Phase 7]`
-10. **Collects payments** via SwipeSimple `[PLANNED — Phase 8]`
+6. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED]`
+7. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
+8. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
+9. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
+10. **Collects payments** via SwipeSimple `[IMPLEMENTED — log + history API]`
 
-### Pipeline Flow (Current — Phase 1)
-
-```
-County Jail Roster → Scraper → ArrestRecord → Lead Scorer → Writer(s) → Slack Alert
-```
-
-### Pipeline Flow (Target — Full Lifecycle)
+### Pipeline Flow (Current — Full Lifecycle IMPLEMENTED)
 
 ```
-ArrestLead → Defendant → Indemnitor Intake → Match(validated) →
-  BondCase(Surety + POA + Case#) → DocumentPacket → Signature → Payment
+County Jail Roster → Scraper → ArrestRecord → Lead Scorer → MongoDB + Slack Alert
+  ↓
+Defendant Normalization → Contact Discovery
+  ↓
+Indemnitor Intake (Wix / GAS / Telegram / Walk-in)
+  ↓
+Matching Engine (confidence-scored, human-gated)
+  ↓
+BondCase (Surety + POA + Case#)
+  ↓
+DocumentPacket (SignNow templates, hydrated)
+  ↓
+Signature (SignNow webhook confirms)
+  ↓
+Payment (SwipeSimple premium collection)
+  ↓
+Posted Bond (court-ready)
 ```
 
 See `ROADMAP.md` for phase definitions and status.
@@ -46,15 +56,15 @@ Move records safely through this lifecycle:
 2. Normalize and deduplicate records `[Phase 1 — IMPLEMENTED]`
 3. Score every record for lead qualification `[Phase 1 — IMPLEMENTED]`
 4. Alert on hot leads via Slack `[Phase 1 — IMPLEMENTED]`
-5. Create or update defendant records `[Phase 2 — PLANNED]`
-6. Collect indemnitor intake from approved channels `[Phase 3 — PLANNED]`
-7. Match indemnitor to defendant `[Phase 4 — PLANNED]`
-8. Create bonded case only after match validation `[Phase 5 — PLANNED]`
-9. Select surety (OSI or Palmetto) and assign POA from inventory `[Phase 5 — PLANNED]`
-10. Generate surety-specific paperwork packet `[Phase 6 — PLANNED]`
-11. Send packet for signature `[Phase 7 — PLANNED]`
-12. Collect payment `[Phase 8 — PLANNED]`
-13. Maintain immutable audit history for every state change `[Phase 2+ — PLANNED]`
+5. Create or update defendant records `[Phase 2 — IMPLEMENTED]`
+6. Collect indemnitor intake from approved channels `[Phase 3 — IMPLEMENTED]`
+7. Match indemnitor to defendant `[Phase 4 — IMPLEMENTED]`
+8. Create bonded case only after match validation `[Phase 5 — IMPLEMENTED]`
+9. Select surety (OSI or Palmetto) and assign POA from inventory `[Phase 5 — IMPLEMENTED]`
+10. Generate surety-specific paperwork packet `[Phase 6 — IMPLEMENTED]`
+11. Send packet for signature `[Phase 7 — IMPLEMENTED]`
+12. Collect payment `[Phase 8 — IMPLEMENTED]`
+13. Maintain immutable audit history for every state change `[Phase 2+ — IMPLEMENTED]`
 
 ---
 
@@ -68,9 +78,9 @@ Move records safely through this lifecycle:
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ `IMPLEMENTED` | `dashboard/api/matching.py` | `matching.py` |
 | **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
 | **The Signature Agent** | Send and track SignNow packets | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
-| **The Payment Agent** | Collect premium via SwipeSimple | 🔲 `Phase 8` | `payments/` | — |
+| **The Payment Agent** | Collect premium via SwipeSimple | 🔲 `Phase 8 — Next` | `payments/` | — |
 | **The Auditor** | Immutable event logging for all state changes | ✅ `IMPLEMENTED` | `dashboard/api/events.py` | `events.py` |
-| **The Finder** | OSINT: family/friend contact discovery | 🔲 `Phase 9` | `discovery/` | — |
+| **The Finder** | OSINT: family/friend contact discovery | ✅ `IMPLEMENTED` | `discovery/` | — |
 | **The Closer** | Outreach sequencing: SMS/WhatsApp drip | ✅ `IMPLEMENTED` | `dashboard/api/outreach.py` | `outreach.py` |
 | **The Court Clerk** | Auto-scan court dates, schedule Twilio SMS | ✅ `IMPLEMENTED` | `dashboard/services/court_reminder_service.py` | `court_reminder_service.py` |
 | **The Discharge Monitor** | Scan Gmail for exonerations, auto-discharge | ✅ `IMPLEMENTED` | `dashboard/api/discharge_monitor.py` | `discharge_monitor.py` |
@@ -202,6 +212,10 @@ See `DATA_MODEL.md` for full entity definitions.
 
 ## 9. Non-Negotiable Safety Rules
 
+> **Brand Identity:** We are Shamrock Bail Bonds. We operate with speed, precision, and absolute compliance. Our agents must reflect this professional, high-autonomy, and zero-defect culture.
+>
+> **Compliance Standard:** All systems must be built with SOC II compliance principles in mind. Reference: [strongdm/comply](https://github.com/strongdm/comply), [getprobo/probo](https://github.com/getprobo/probo).
+
 1. **No guessing** — Never guess identity, legal facts, case numbers, POA numbers, court data, payment/signature status.
 2. **Fail closed** — If identity, match confidence, record ownership, or workflow state is unclear, stop and escalate.
 3. **No paperwork before validated case** — Requires: defendant exists, indemnitor exists, match validated, bonded case exists with surety, case number present, POA assigned from correct surety inventory.
@@ -226,18 +240,21 @@ See `DATA_MODEL.md` for full entity definitions.
 8. **Document Everything** — Every fix updates COUNTY_REGISTRY.md. No silent fixes.
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.
 10. **The Chain Is Law** — ArrestLead → Defendant → Indemnitor → Match → BondCase → Packet → Signature → Payment. No shortcuts.
+11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities. We are exclusively `Shamrock2245` and `admin@shamrockbailbonds.biz`.
+12. **End-to-End Integration** — All systems must integrate seamlessly across GAS, SignNow, Twilio, and Google Drive.
 
 ---
 
 ## 11. Required Read Order for Agents
 
-1. `AGENTS.md` (this file)
-2. `DATA_MODEL.md`
-3. `ROADMAP.md` — know what's implemented vs planned
-4. `docs/agents/scraper-agent.md` — if doing scraper work `[IMPLEMENTED]`
-5. `docs/policies/surety-policy.md` — if doing bond-writing work `[Phase 5+]`
-6. `docs/policies/matching-policy.md` — if doing matching work `[Phase 4+]`
-7. `docs/policies/signature-policy.md` — if doing signing work `[Phase 7+]`
+1. `BRAND.md` — Identity, vision, design standards, non-negotiables
+2. `AGENTS.md` (this file)
+3. `DATA_MODEL.md`
+4. `ROADMAP.md` — know what's implemented vs planned
+5. `docs/agents/scraper-agent.md` — if doing scraper work `[IMPLEMENTED]`
+6. `docs/policies/surety-policy.md` — if doing bond-writing work `[IMPLEMENTED]`
+7. `docs/policies/matching-policy.md` — if doing matching work `[IMPLEMENTED]`
+8. `docs/policies/signature-policy.md` — if doing signing work `[IMPLEMENTED]`
 
 ---
 

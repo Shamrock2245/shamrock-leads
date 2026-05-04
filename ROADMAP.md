@@ -1,7 +1,8 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before checking in.
-> **Last Updated:** 2026-04-29
+> **Last Updated:** 2026-05-04
+> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
 
 ## Phase Overview
 
@@ -175,6 +176,13 @@ This system provides discreet IP-based location tracking for active bail bonds. 
 **Integration point:** `County + Booking_Number` links a `BondedCase` in the tracker back to an `ArrestLead` in shamrock-leads. See `DATA_MODEL.md` for the full entity spec.
 
 ---
+
+## 🛡️ Compliance & Brand Standards
+
+- **SOC II Readiness**: All data flows (MongoDB, SignNow, Twilio, GAS) must meet SOC II compliance standards. Reference: [strongdm/comply](https://github.com/strongdm/comply), [getprobo/probo](https://github.com/getprobo/probo).
+- **Brand Exclusivity**: All work is exclusively in the `Shamrock2245` GitHub account. Never reference or use WTF or non-Shamrock identities.
+- **Strategic Goal**: Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
+- **Competitor Benchmark**: Captira and Bail Books are the floor, not the ceiling.
 
 ## Known Gaps / Next Actions
 

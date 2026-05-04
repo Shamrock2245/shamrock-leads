@@ -4,6 +4,9 @@
 This file defines the canonical entities and identity rules used throughout ShamrockLeads.
 Entities marked `[IMPLEMENTED]` exist in code. Entities marked `[PLANNED — Phase N]` are architectural targets.
 
+> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
+> **Last Updated:** 2026-05-04
+
 ---
 
 ## Core Principle
