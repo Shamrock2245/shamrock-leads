@@ -476,6 +476,68 @@ def create_app():
                 await asyncio.sleep(604800)  # Every 7 days
         asyncio.ensure_future(_retention_loop())
 
+    # ── Feature K: Court Email Intelligence Pipeline (every 15 minutes) ──────
+    @app.before_serving
+    async def _start_court_email_cron():
+        """Poll Gmail for court emails every 15 minutes.
+        Pipeline: Gmail → Parse → Google Calendar → Slack → Auto-Exonerate → BlueBubbles.
+        Uses sync PyMongo/Google APIs — runs in a thread to avoid blocking the event loop.
+        """
+        import asyncio
+
+        def _sync_process_emails():
+            """Sync wrapper — runs in a thread via asyncio.to_thread()."""
+            try:
+                from pymongo import MongoClient
+                from dashboard.services.court_email_scheduler import CourtEmailScheduler
+                mongo_uri = os.getenv("MONGODB_URI", "")
+                db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
+                if not mongo_uri:
+                    logger.warning("[CourtEmailCron] MONGODB_URI not set — skipping")
+                    return {"error": "no_mongo_uri"}
+                sync_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
+                db = sync_client[db_name]
+                scheduler = CourtEmailScheduler(db=db)
+                result = scheduler.process_all()
+                sync_client.close()
+                return result
+            except Exception as e:
+                logger.error("[CourtEmailCron] Sync process error: %s", e)
+                return {"error": str(e)}
+
+        async def _email_loop():
+            await asyncio.sleep(90)  # Initial delay — let Gmail OAuth warm up
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    result = await asyncio.to_thread(_sync_process_emails)
+                    processed = result.get("processed", 0)
+                    errors = result.get("errors", 0)
+                    cal_events = result.get("calendar_events_created", 0)
+                    msgs = result.get("messages_sent", 0)
+                    exon = result.get("bonds_exonerated", 0)
+
+                    if processed > 0 or errors > 0:
+                        logger.info(
+                            "☘️  Court email cron [cycle %s]: processed=%s cal_events=%s "
+                            "msgs_sent=%s exonerated=%s errors=%s",
+                            _cycle, processed, cal_events, msgs, exon, errors,
+                        )
+                    else:
+                        logger.debug("Court email cron [cycle %s]: no new emails", _cycle)
+
+                    # Heartbeat every 24th cycle (~6 hours)
+                    if _cycle % 24 == 0:
+                        logger.info(
+                            "☘️  Court email cron heartbeat: cycle=%s still running", _cycle
+                        )
+                except Exception as e:
+                    logger.warning("Court email cron error [cycle %s]: %s", _cycle, e)
+                await asyncio.sleep(900)  # Every 15 minutes
+
+        asyncio.ensure_future(_email_loop())
+
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
     if pin:
