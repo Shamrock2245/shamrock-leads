@@ -141,7 +141,6 @@ async def process_gmail_now():
         from dashboard.services.court_email_scheduler import CourtEmailScheduler
         # CourtEmailScheduler uses sync pymongo — create a sync client
         from pymongo import MongoClient
-        import os
         mongo_uri = os.getenv("MONGODB_URI", "")
         db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
         sync_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000) if mongo_uri else None

@@ -17,6 +17,7 @@ Borrows conversational patterns from:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -424,7 +425,6 @@ Respond with ONLY the JSON object, nothing else."""
             max_tokens=200,
         )
         
-        import json
         raw = response.choices[0].message.content.strip()
         # Clean any markdown fencing
         if raw.startswith("```"):

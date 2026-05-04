@@ -3251,13 +3251,7 @@ def api_finalize_bond_step2(booking_number):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# ── Appearance Bond PDF Generator ────────────────────────────────────────────────
-
-@app.route("/health")
-def health_check():
-    """Docker/Hetzner healthcheck endpoint."""
-    return jsonify({"status": "ok", "service": "shamrock-dashboard"})
-
+# ── Appearance Bond PDF Generator ────────────────────────────────────────────
 
 @app.route("/api/appearance-bond-pdf", methods=["GET", "POST"])
 def api_appearance_bond_pdf():

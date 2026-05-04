@@ -14,7 +14,10 @@ from dashboard.services.risk_engine import compute_risk_score
 
 bonds_bp = Blueprint("bonds", __name__)
 
+import asyncio
 import logging
+import os
+import traceback
 logger = logging.getLogger(__name__)
 
 
@@ -264,13 +267,10 @@ async def api_record_bond():
     except Exception as exc:
         logger.warning("[record-bond] Arrest update error: %s", exc)
 
-    print(f"\n{'═' * 60}")
-    print(f"☘️ BOND RECORDED — {defendant_name}")
-    print(f"   Booking: {booking_number} | County: {county}")
-    print(f"   Bond: ${bond_amount:,.2f} | Premium: ${premium:,.2f}")
-    print(f"   Surety: {surety.upper()} | POA: {poa_number}")
-    print(f"   Indemnitor: {indemnitor_name} ({indemnitor_phone})")
-    print(f"{'═' * 60}\n")
+    logger.info(
+        "☘️ BOND RECORDED — %s | Booking: %s | County: %s | Bond: $%.2f | Premium: $%.2f | Surety: %s | POA: %s | Indemnitor: %s (%s)",
+        defendant_name, booking_number, county, bond_amount, premium, surety.upper(), poa_number, indemnitor_name, indemnitor_phone
+    )
 
     return jsonify({
         "success": True,
@@ -408,17 +408,10 @@ async def api_write_bond():
     }
 
     # Log the formatted payload
-    print(f"\n{'═' * 60}")
-    print(f"📋 WRITE BOND — {defendant.get('full_name', 'Unknown')}")
-    print(f"   Insurance: {insurer.upper()}")
-    print(f"   Bond: ${bond.get('amount', 0):,.2f}")
-    print(f"   Premium: ${bond.get('premium', 0):,.2f}")
-    print(f"   County: {booking.get('county', 'Unknown')}")
-    print(f"   Booking #: {booking.get('booking_number', 'N/A')}")
-    print(f"   Indemnitors: {len(indemnitors_payload)}")
-    print(f"{'═' * 60}")
-    print(f"   GAS Payload: {json_lib.dumps(gas_payload, indent=2)[:600]}...")
-    print(f"{'═' * 60}\n")
+    logger.info(
+        "📋 WRITE BOND — %s | Insurance: %s | Bond: $%.2f | Premium: $%.2f | County: %s | Booking: %s | Indemnitors: %d",
+        defendant.get("full_name", "Unknown"), insurer.upper(), bond.get("amount", 0), bond.get("premium", 0), booking.get("county", "Unknown"), booking.get("booking_number", "N/A"), len(indemnitors_payload)
+    )
 
     # ── Forward to GAS (when configured) ──
     gas_url = os.getenv("GAS_WEB_APP_URL", "")
@@ -699,7 +692,6 @@ async def api_appearance_bond_pdf():
     except FileNotFoundError as e:
         return jsonify({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}), 404
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({"error": f"PDF generation failed: {str(e)}"}), 500
 
@@ -949,7 +941,6 @@ async def api_bulk_exonerate():
     - Audit event written per bond
     - SSE bond_exonerated fired per bond
     """
-    import os
     # ── Auth guard: X-Admin-Token must match DASHBOARD_PIN ──────────────────
     _pin = os.getenv("DASHBOARD_PIN", "")
     if _pin:
@@ -957,7 +948,6 @@ async def api_bulk_exonerate():
         if token != _pin:
             return jsonify({"success": False, "error": "Unauthorized — X-Admin-Token required"}), 401
     # ────────────────────────────────────────────────────────────────────────
-    import asyncio
     active_bonds = get_collection("active_bonds")
     poa_inventory = get_collection("poa_inventory")
     court_reminders = get_collection("court_reminders")

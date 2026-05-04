@@ -400,6 +400,82 @@
   /* ══════════════════════════════════════════════════════════════════════════
      TAB NAV — add active indicator line
      ══════════════════════════════════════════════════════════════════════════ */
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     REPORTS TAB — consistent card sizing, export format badges, loading states
+     ══════════════════════════════════════════════════════════════════════════ */
+  function polishReports() {
+    var tab = document.getElementById('tabReports');
+    if (!tab) return;
+    tab.querySelectorAll('.rpt-card:not([data-polished])').forEach(function (card) {
+      card.dataset.polished = '1';
+      card.style.transition = 'transform .2s, box-shadow .2s';
+      card.style.borderRadius = 'var(--r-md, 10px)';
+      card.addEventListener('mouseenter', function () {
+        card.style.transform = 'translateY(-2px)';
+        card.style.boxShadow = '0 6px 20px rgba(0,0,0,.25)';
+      });
+      card.addEventListener('mouseleave', function () {
+        card.style.transform = '';
+        card.style.boxShadow = '';
+      });
+      if (!card.querySelector('.rpt-fmt-badge')) {
+        var badges = document.createElement('div');
+        badges.style.cssText = 'display:flex;gap:4px;margin-top:8px;flex-wrap:wrap';
+        ['CSV', 'PDF'].forEach(function (fmt) {
+          var b = document.createElement('span');
+          b.className = 'rpt-fmt-badge';
+          b.textContent = fmt;
+          b.style.cssText = 'background:rgba(16,185,129,.12);color:var(--accent,#10b981);border:1px solid rgba(16,185,129,.25);padding:1px 7px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:.4px';
+          badges.appendChild(b);
+        });
+        card.appendChild(badges);
+      }
+    });
+    tab.querySelectorAll('.rpt-preset-btn:not([data-polished])').forEach(function (btn) {
+      btn.dataset.polished = '1';
+      btn.style.transition = 'all .15s';
+    });
+  }
+  /* ══════════════════════════════════════════════════════════════════════════
+     OUTREACH TAB — Kanban column height, drag feedback, card hover
+     ══════════════════════════════════════════════════════════════════════════ */
+  function polishOutreach() {
+    var tab = document.getElementById('tabProspective');
+    if (!tab) return;
+    tab.querySelectorAll('.kanban-col:not([data-polished])').forEach(function (col) {
+      col.dataset.polished = '1';
+      col.style.minHeight = '400px';
+    });
+    tab.querySelectorAll('.kanban-col-body:not([data-drag-polished])').forEach(function (body) {
+      body.dataset.dragPolished = '1';
+      body.addEventListener('dragover', function () {
+        body.style.background = 'rgba(16,185,129,.06)';
+        body.style.outline = '2px dashed rgba(16,185,129,.3)';
+        body.style.borderRadius = '8px';
+      });
+      body.addEventListener('dragleave', function () {
+        body.style.background = '';
+        body.style.outline = '';
+      });
+      body.addEventListener('drop', function () {
+        body.style.background = '';
+        body.style.outline = '';
+      });
+    });
+    tab.querySelectorAll('.kanban-card:not([data-polished])').forEach(function (card) {
+      card.dataset.polished = '1';
+      card.style.transition = 'transform .15s, box-shadow .15s';
+      card.addEventListener('mouseenter', function () {
+        card.style.transform = 'translateY(-1px)';
+        card.style.boxShadow = '0 4px 12px rgba(0,0,0,.3)';
+      });
+      card.addEventListener('mouseleave', function () {
+        card.style.transform = '';
+        card.style.boxShadow = '';
+      });
+    });
+  }
   function polishTabNav() {
     var nav = document.querySelector('.tab-nav');
     if (!nav || nav.dataset.polished) return;
@@ -509,6 +585,8 @@
     polishCalendar();
     polishAnalytics();
     polishHealth();
+    polishReports();
+    polishOutreach();
     polishTabNav();
     polishModals();
     fixNotesModalTouch();

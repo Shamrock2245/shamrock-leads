@@ -8,16 +8,16 @@ Endpoints:
   GET  /api/match/intake/<intake_id>       — Get current match status for an intake
 """
 import logging
-from quart import Blueprint, jsonify, request, current_app
+from quart import Blueprint, jsonify, request
 from dashboard.services.matching_engine import MatchingEngine
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 
 logger = logging.getLogger(__name__)
 matching_bp = Blueprint("matching", __name__)
 
 
 def _get_engine() -> MatchingEngine:
-    return MatchingEngine(current_app.db)
+    return MatchingEngine(get_db())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

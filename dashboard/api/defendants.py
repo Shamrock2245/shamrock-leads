@@ -15,7 +15,7 @@ Endpoints:
 import logging
 from datetime import datetime
 from quart import Blueprint, jsonify, request, current_app
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 from dashboard.services.defendant_normalizer import (
     DefendantNormalizationService,
     normalize_name_part,
@@ -28,7 +28,7 @@ defendants_bp = Blueprint("defendants", __name__)
 
 def _get_svc() -> DefendantNormalizationService:
     """Instantiate the normalization service with the current app's DB."""
-    return DefendantNormalizationService(current_app.db)
+    return DefendantNormalizationService(get_db())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

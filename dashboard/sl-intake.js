@@ -108,11 +108,24 @@ const SLIntake = (() => {
     ];
 
     container.innerHTML = cards.map(c => `
-      <div style="background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;text-align:center">
-        <div style="font-size:22px;font-weight:700;color:${c.color}">${c.value}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">${c.label}</div>
+      <div style="background:var(--card,var(--panel));border:1px solid var(--border);border-top:3px solid ${c.color};border-radius:var(--r-md,10px);padding:14px 16px;text-align:center;transition:transform .2s,box-shadow .2s" onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 16px rgba(0,0,0,.2)'" onmouseleave="this.style.transform='';this.style.boxShadow=''">
+        <div class="sl-kpi-val" data-target="${c.value}" style="font-size:24px;font-weight:800;color:${c.color};line-height:1;margin-bottom:4px">0</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${c.label}</div>
       </div>
     `).join('');
+    // Animate KPI counters
+    container.querySelectorAll('.sl-kpi-val').forEach(function(el) {
+      var target = parseInt(el.dataset.target, 10) || 0;
+      if (target === 0) { el.textContent = '0'; return; }
+      var duration = 600, startTime = null;
+      function step(ts) {
+        if (!startTime) startTime = ts;
+        var p = Math.min((ts - startTime) / duration, 1);
+        el.textContent = Math.round(target * p).toLocaleString();
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
   }
 
   // ── Render queue table ─────────────────────────────────────────────────────

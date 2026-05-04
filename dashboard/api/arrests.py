@@ -11,7 +11,7 @@ from dashboard.extensions import get_collection, REGISTERED_COUNTIES
 arrests_bp = Blueprint("arrests", __name__)
 
 
-@arrests_bp.route("/counties")
+@arrests_bp.route("/counties-detail")
 async def api_counties():
     """Return per-county arrest counts + scraper health."""
     arrests = get_collection("arrests")

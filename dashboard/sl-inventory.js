@@ -181,11 +181,13 @@ const SLInventory = (() => {
           const daysLeft = Math.ceil((expDate - now) / 86400000);
           const expStr = expDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
           if (daysLeft < 0) {
-            expHtml = `<span style="color:var(--red);font-weight:700" title="Expired ${Math.abs(daysLeft)}d ago">⛔ ${expStr}</span>`;
+            expHtml = `<span style="background:rgba(239,68,68,.15);color:#f87171;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap" title="Expired ${Math.abs(daysLeft)}d ago">⛔ EXPIRED ${expStr}</span>`;
+          } else if (daysLeft <= 7) {
+            expHtml = `<span style="background:rgba(239,68,68,.12);color:#fca5a5;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap" title="${daysLeft}d remaining — CRITICAL">🚨 ${daysLeft}d — ${expStr}</span>`;
           } else if (daysLeft <= 30) {
-            expHtml = `<span style="color:var(--warning);font-weight:600" title="${daysLeft}d remaining">⚠️ ${expStr}</span>`;
+            expHtml = `<span style="background:rgba(245,158,11,.12);color:#fcd34d;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;white-space:nowrap" title="${daysLeft}d remaining">⚠️ ${daysLeft}d — ${expStr}</span>`;
           } else {
-            expHtml = `<span title="${daysLeft}d remaining">${expStr}</span>`;
+            expHtml = `<span style="color:var(--text-secondary,var(--muted))" title="${daysLeft}d remaining">${expStr}</span>`;
           }
         }
         const actions = [];

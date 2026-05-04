@@ -11,16 +11,16 @@ Endpoints:
 """
 from __future__ import annotations
 import logging
-from quart import Blueprint, jsonify, request, current_app
+from quart import Blueprint, jsonify, request
 from dashboard.services.outreach_sequencer import OutreachSequencer
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 
 logger = logging.getLogger(__name__)
 outreach_bp = Blueprint("outreach", __name__)
 
 
 def _get_sequencer() -> OutreachSequencer:
-    return OutreachSequencer(current_app.db)
+    return OutreachSequencer(get_db())
 
 
 # ─────────────────────────────────────────────────────────────────────────────

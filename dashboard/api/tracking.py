@@ -199,7 +199,6 @@ async def tracking_search():
         return jsonify({"results": []})
     active_bonds = get_collection("active_bonds")
     try:
-        import re
         pattern = re.compile(re.escape(q), re.IGNORECASE)
         cursor = active_bonds.find(
             {"$or": [
@@ -492,7 +491,6 @@ async def tracking_send_geo_link(booking_number):
             return jsonify({"success": False, "error": "No phone number available"}), 400
 
         defendant_name = bond.get("defendant_name", "defendant")
-        import os, secrets
         geo_pings = get_collection("geo_pings")
         token = secrets.token_urlsafe(12)
         public_url = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")

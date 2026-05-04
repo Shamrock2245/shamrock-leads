@@ -35,7 +35,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from quart import Blueprint, request, jsonify, current_app
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 logger = logging.getLogger(__name__)
 intake_bp = Blueprint("intake", __name__)
 # ── Valid intake sources ──────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ async def intake_submit():
         match_result = None
         try:
             from dashboard.services.matching_engine import MatchingEngine
-            engine = MatchingEngine(current_app.db)
+            engine = MatchingEngine(get_db())
             match_result = await engine.match_intake(doc)
             logger.info(
                 "[intake] Auto-match for %s: confidence=%s strategy=%s auto_linked=%s",
@@ -418,7 +418,7 @@ async def intake_match(intake_id: str):
             return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
 
         from dashboard.services.matching_engine import MatchingEngine
-        engine = MatchingEngine(current_app.db)
+        engine = MatchingEngine(get_db())
         result = await engine.match_intake(intake_doc)
         return jsonify({"success": True, **result})
     except Exception as e:

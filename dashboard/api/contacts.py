@@ -1,6 +1,7 @@
 """Contacts API Blueprint (Phase 2) — contact discovery"""
 
 from quart import Blueprint, jsonify, request, current_app
+from dashboard.extensions import get_collection
 from dashboard.services.contact_discovery import ContactDiscoveryService
 
 contacts_bp = Blueprint("contacts", __name__)
@@ -19,7 +20,7 @@ async def discover_contacts():
         if not booking_number or not full_name:
             return jsonify({"error": "Missing required fields (booking_number, full_name)"}), 400
 
-        service = ContactDiscoveryService(current_app.db)
+        service = ContactDiscoveryService(get_db())
         result = await service.discover(
             booking_number=booking_number,
             full_name=full_name,
@@ -35,7 +36,8 @@ async def discover_contacts():
 async def get_contacts(booking_number):
     """Get discovered contacts for a defendant."""
     try:
-        doc = await current_app.db["contacts"].find_one(
+        contacts_col = get_collection("contacts")
+        doc = await contacts_col.find_one(
             {"booking_number": booking_number}, {"_id": 0}
         )
         if not doc:

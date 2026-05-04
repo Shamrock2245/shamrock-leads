@@ -14,7 +14,7 @@ from dashboard.extensions import get_collection
 leads_bp = Blueprint("leads", __name__)
 
 
-@leads_bp.route("/leads")
+@leads_bp.route("/leads-legacy")
 async def api_leads():
     """
     Paginated lead data with filtering, sorting, search.
@@ -106,7 +106,7 @@ async def api_leads():
     })
 
 
-@leads_bp.route("/leads/export")
+@leads_bp.route("/leads-legacy/export")
 async def api_leads_export():
     """Export leads as CSV."""
     arrests = get_collection("arrests")

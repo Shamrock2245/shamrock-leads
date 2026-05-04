@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import re as re_mod
+import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -304,10 +305,9 @@ async def imessage_send():
     # ── Geo-link: generate a silent tracking token and append to message ──
     geo_link = ""
     try:
-        import secrets as _secrets
         from datetime import timedelta as _td
         _geo_pings = get_collection("geo_pings")
-        _token = _secrets.token_urlsafe(12)
+        _token = secrets.token_urlsafe(12)
         try:
             from quart import current_app as _ca
             _public_url = _ca.config.get("DASHBOARD_PUBLIC_URL", "").rstrip("/")
@@ -329,8 +329,7 @@ async def imessage_send():
             "status": "pending",
         })
         # Only expose geo link if using a proper domain (never raw IP in customer messages)
-        import re as _re
-        _is_ip = bool(_re.search(r'://\d+\.\d+\.\d+\.\d+', _public_url)) if _public_url else True
+        _is_ip = bool(re_mod.search(r'://\d+\.\d+\.\d+\.\d+', _public_url)) if _public_url else True
         if _public_url and not _is_ip:
             geo_link = f"{_public_url}/g/{_token}"
     except Exception as _ge:

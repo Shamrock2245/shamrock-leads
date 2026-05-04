@@ -340,6 +340,18 @@ def create_app():
     async def index():
         return await send_from_directory(app.static_folder, "index.html")
 
+    @app.route("/<path:filename>")
+    async def serve_static(filename):
+        """Serve CSS, JS, images, and other static assets from the dashboard directory.
+        Falls back to index.html for SPA routing (non-API, non-file paths).
+        """
+        import os as _os
+        static_path = _os.path.join(app.static_folder, filename)
+        if _os.path.isfile(static_path):
+            return await send_from_directory(app.static_folder, filename)
+        # SPA fallback — return index.html for any unmatched non-API path
+        return await send_from_directory(app.static_folder, "index.html")
+
     @app.route("/health")
     async def health():
         from dashboard.extensions import get_collection
