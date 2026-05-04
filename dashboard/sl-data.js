@@ -136,7 +136,7 @@ async function loadDashboard() {
           <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
           <td class="${bc}">$${bond.toLocaleString()}</td>
           <td style="color:var(--success);font-weight:600">$${prem.toLocaleString()}</td>
-          <td><span class="score-pill ${(l.lead_status||'').toLowerCase()==='hot'?'score-hot':(l.lead_status||'').toLowerCase()==='cold'?'score-cold':'score-warm'}">${l.lead_score||0}</span></td>
+          <td><span class="score-pill ${{'hot':'score-hot','warm':'score-warm','cold':'score-cold','disqualified':'score-disq'}[(l.lead_status||'').toLowerCase()]||'score-warm'}">${l.lead_score||0}</span></td>
           <td title="${(l.charges||'').replace(/"/g,'&quot;')}" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${charges}</td>
           <td><button class="btn-write-bond" onclick="openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write</button></td>
         </tr>`;

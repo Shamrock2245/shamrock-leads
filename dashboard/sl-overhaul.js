@@ -360,7 +360,8 @@
     },
     {
       label: 'Business',
-      tabs: ['tabAnalytics', 'tabCalendar', 'tabReports', 'tabOutreach', 'tabInventory'],
+      // tabProspective is the actual Outreach tab ID; inv-tab-trigger has no data-tab (modal)
+      tabs: ['tabAnalytics', 'tabCalendar', 'tabReports', 'tabProspective'],
     },
   ];
 
@@ -409,9 +410,15 @@
       groupBtns.forEach(btn => tabBar.appendChild(btn));
     });
 
-    // Append any ungrouped buttons at the end
+    // Append any ungrouped buttons at the end (e.g., POA Inventory modal trigger)
     existingBtns.forEach(btn => {
-      if (!tabBar.contains(btn)) tabBar.appendChild(btn);
+      if (!tabBar.contains(btn)) {
+        // Add a separator before orphaned buttons if there are grouped buttons
+        if (tabBar.children.length > 0 && !tabBar.lastElementChild?.classList?.contains('tab-nav-sep')) {
+          tabBar.appendChild(el('div', 'tab-nav-sep'));
+        }
+        tabBar.appendChild(btn);
+      }
     });
   }
 

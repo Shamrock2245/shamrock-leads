@@ -2758,14 +2758,3 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   cursor: pointer; touch-action: manipulation; transition: all .2s; min-height: 32px;
 }
 .btn-lifecycle:hover { background: rgba(16,185,129,.15); border-color: rgba(16,185,129,.4); }
-
-/* ── Overhaul: Modal animation ── */
-.modal-overlay { transition: opacity .2s cubic-bezier(.4,0,.2,1); }
-.modal-overlay.show .modal,
-.modal-overlay.show .modal-box {
-  animation: sl-modal-in .32s cubic-bezier(.34,1.56,.64,1) both;
-}
-@keyframes sl-modal-in {
-  from { opacity:0; transform:translateY(20px) scale(.96); }
-  to   { opacity:1; transform:translateY(0) scale(1); }
-}

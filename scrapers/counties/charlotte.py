@@ -44,6 +44,12 @@ DETAIL_DELAY_S = 0.8   # Polite delay between detail page requests
 RETRY_LIMIT    = 3
 BACKOFF_BASE_S = 2.0
 
+# ── Bond sanity cap ───────────────────────────────────────────────────────────
+# No single charge in Florida realistically exceeds $5M bond.
+# Values above this are data-parsing artifacts (booking IDs, agency codes, etc.)
+MAX_BOND_PER_CHARGE = 5_000_000
+MAX_BOND_TOTAL      = 10_000_000  # Total across all charges
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -232,7 +238,15 @@ class CharlotteCountyScraper(BaseScraper):
                 raw[dt.get_text(strip=True).rstrip(":")] = dd.get_text(strip=True)
 
         # ── Extract from 2-column table rows (key-value) ──
+        # SAFETY: Skip rows inside booking/charge tables to prevent
+        # booking numbers (e.g. 202602867) from being parsed as bonds.
         for row in soup.find_all("tr"):
+            # Skip rows inside tables that have 3+ column headers (booking/charge tables)
+            parent_table = row.find_parent("table")
+            if parent_table:
+                headers = parent_table.find_all("th")
+                if len(headers) >= 3:
+                    continue
             cells = row.find_all(["td", "th"])
             if len(cells) == 2:
                 key = cells[0].get_text(strip=True).rstrip(":")
@@ -356,11 +370,24 @@ class CharlotteCountyScraper(BaseScraper):
                         charge["caseNum"] = val
 
                 # Fallback: find dollar amounts in cells
+                # STRICT: Only match values that look like real currency amounts.
+                # Must have $ prefix OR decimal point with cents to avoid
+                # misidentifying booking IDs (202602867) or agency codes as bonds.
                 if not charge["bond"]:
                     for ct in cell_texts:
-                        if re.match(r"^\$?[\d,]+\.?\d*$", ct.replace(" ", "")) and float(ct.replace("$", "").replace(",", "") or "0") > 0:
-                            charge["bond"] = ct
-                            break
+                        cleaned = ct.replace(" ", "")
+                        # Require either $ prefix or a decimal portion (e.g. "150.0000")
+                        if re.match(r"^\$[\d,]+\.?\d*$", cleaned):
+                            bond_candidate = float(cleaned.replace("$", "").replace(",", "") or "0")
+                            if 0 < bond_candidate <= MAX_BOND_PER_CHARGE:
+                                charge["bond"] = ct
+                                break
+                        elif re.match(r"^[\d,]+\.\d{2,}$", cleaned):
+                            # Matches "150.0000" format (decimal with 2+ decimal digits)
+                            bond_candidate = float(cleaned.replace(",", "") or "0")
+                            if 0 < bond_candidate <= MAX_BOND_PER_CHARGE:
+                                charge["bond"] = ct
+                                break
 
                 # Fallback: use first long text as desc
                 if not charge["desc"]:
@@ -418,12 +445,26 @@ class CharlotteCountyScraper(BaseScraper):
                 bond_val = float(bond_str) if bond_str else 0.0
             except ValueError:
                 bond_val = 0.0
+            # Per-charge sanity cap — rejects booking IDs parsed as bonds
+            if bond_val > MAX_BOND_PER_CHARGE:
+                logger.warning(
+                    f"[Charlotte] Bond sanity cap triggered: ${bond_val:,.0f} on "
+                    f"charge '{desc}' — capping to $0 (likely a parsing artifact)"
+                )
+                bond_val = 0.0
             bond_total += bond_val
             if desc:
                 charges_list.append(
                     f"{desc} [{ch.get('degree', '')}]"
                     + (f" Bond: ${bond_val:,.0f}" if bond_val else "")
                 )
+        # Total bond sanity cap
+        if bond_total > MAX_BOND_TOTAL:
+            logger.warning(
+                f"[Charlotte] Total bond ${bond_total:,.0f} exceeds ${MAX_BOND_TOTAL:,.0f} "
+                f"— resetting to $0 (data integrity issue)"
+            )
+            bond_total = 0.0
 
         charges_str = " | ".join(charges_list) if charges_list else self._clean(
             raw.get("Charge") or raw.get("Charges") or ""

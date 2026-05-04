@@ -8,7 +8,10 @@ adding MongoDB-native features (BSON serialization, ObjectId references).
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -326,6 +329,10 @@ class ArrestRecord:
         return cls(**valid)
 
     # ── Internal ──
+    # Global sanity cap — no single Florida bond realistically exceeds $10M.
+    # Values above this threshold are parsing artifacts (booking IDs, etc.)
+    _MAX_REASONABLE_BOND = 10_000_000
+
     def _parse_bond_numeric(self) -> float:
         """Parse bond amount to a float for MongoDB storage."""
         if not self.Bond_Amount:
@@ -334,7 +341,14 @@ class ArrestRecord:
         if any(t in cleaned for t in ["NO BOND", "NONE", "N/A", "HOLD"]):
             return 0.0
         try:
-            return float(cleaned)
+            val = float(cleaned)
+            if val > self._MAX_REASONABLE_BOND:
+                logger.warning(
+                    f"Bond sanity cap: ${val:,.0f} exceeds ${self._MAX_REASONABLE_BOND:,.0f} "
+                    f"for {self.Full_Name} ({self.County}) — zeroing out"
+                )
+                return 0.0
+            return val
         except (ValueError, TypeError):
             return 0.0
 
