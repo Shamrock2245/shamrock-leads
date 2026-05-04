@@ -204,6 +204,11 @@ def init_app(app):
     # Secret key for session cookies
     app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
 
+    # ── Motor DB handle ───────────────────────────────────────────────────────
+    # Many API blueprints pass `current_app.db` to service classes that do
+    # `self.db["collection_name"]`.  Wire it here so it's always available.
+    app.db = get_db()
+
     # ── Public URL config ─────────────────────────────────────────────────────
     # DASHBOARD_PUBLIC_URL: the branded public URL of this VPS dashboard.
     # Used for geo-tracking links (/g/<token>) and BB webhook registration.

@@ -1,8 +1,8 @@
 """Court & Payment Reminders API Blueprint — BlueBubbles-Powered"""
 
-from quart import Blueprint, jsonify, request, current_app
+from quart import Blueprint, jsonify, request
 from dashboard.services.court_reminder_service import CourtReminderService
-from dashboard.extensions import get_db
+from dashboard.extensions import get_db, get_collection
 
 court_reminders_bp = Blueprint("court_reminders", __name__)
 
@@ -23,7 +23,7 @@ async def schedule_reminders():
         if not all([booking_number, defendant_name, phone, court_date, court_location, case_number]):
             return jsonify({"error": "Missing required fields"}), 400
 
-        service = CourtReminderService(current_app.db)
+        service = CourtReminderService()
         result = await service.schedule_reminders(
             booking_number=booking_number,
             defendant_name=defendant_name,
@@ -53,7 +53,7 @@ async def schedule_payment_reminders():
         if not all([booking_number, defendant_name, amount_due, due_date]):
             return jsonify({"error": "Missing required fields"}), 400
 
-        service = CourtReminderService(current_app.db)
+        service = CourtReminderService()
         result = await service.schedule_payment_reminders(
             booking_number=booking_number,
             defendant_name=defendant_name,
@@ -71,7 +71,7 @@ async def schedule_payment_reminders():
 async def process_reminders():
     """Cron endpoint — send all due reminders (court + payment) via BlueBubbles."""
     try:
-        service = CourtReminderService(current_app.db)
+        service = CourtReminderService()
         result = await service.process_due_reminders()
         return jsonify(result)
     except Exception as e:
@@ -81,11 +81,17 @@ async def process_reminders():
 @court_reminders_bp.route("/court-reminders/auto-scan", methods=["POST"])
 async def court_reminders_auto_scan():
     """Trigger the hourly auto-scan: finds active bonds with court dates
-    within 8 days and schedules 4-touch reminder sequences for unscheduled bonds."""
+    within 8 days and schedules 4-touch reminder sequences for unscheduled bonds.
+    Also processes any due reminders immediately after scanning."""
     try:
         service = CourtReminderService()
-        result = await service.auto_scan_and_schedule()
-        return jsonify(result)
+        scan_result = await service.auto_scan_and_schedule()
+        send_result = await service.process_due_reminders()
+        return jsonify({
+            "success": True,
+            "scan": scan_result,
+            "send": send_result,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -127,65 +133,11 @@ async def court_reminders_status():
 async def get_reminders(booking_number):
     """View scheduled/sent reminders for a case (both court + payment)."""
     try:
-        cursor = current_app.db["court_reminders"].find(
+        col = get_collection("court_reminders")
+        cursor = col.find(
             {"booking_number": booking_number}, {"_id": 0}
         ).sort("send_at", 1)
         reminders = await cursor.to_list(length=100)
         return jsonify({"reminders": reminders})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@court_reminders_bp.route("/court-reminders/auto-scan", methods=["POST"])
-async def auto_scan_court_dates():
-    """Scan active_bonds for upcoming court dates and auto-schedule reminders.
-    This replaces the manual scheduling flow — bonds with court dates within
-    the next 8 days that have NO pending reminders get them auto-created.
-    Also processes any due reminders immediately."""
-    try:
-        service = CourtReminderService(current_app.db)
-        scan_result = await service.auto_scan_and_schedule()
-        send_result = await service.process_due_reminders()
-        return jsonify({
-            "success": True,
-            "scan": scan_result,
-            "send": send_result,
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@court_reminders_bp.route("/court-reminders/status", methods=["GET"])
-async def reminder_status():
-    """Dashboard status: pending, sent, failed counts + next due."""
-    try:
-        col = current_app.db["court_reminders"]
-        pipeline = [
-            {"$group": {
-                "_id": "$status",
-                "count": {"$sum": 1},
-            }}
-        ]
-        status_counts = {}
-        async for row in col.aggregate(pipeline):
-            status_counts[row["_id"]] = row["count"]
-
-        # Next due reminder
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
-        next_due = await col.find_one(
-            {"status": "pending", "send_at": {"$gte": now}},
-            {"_id": 0, "booking_number": 1, "defendant_name": 1,
-             "touch": 1, "send_at": 1, "phone": 1, "recipient_role": 1},
-            sort=[("send_at", 1)],
-        )
-
-        return jsonify({
-            "pending": status_counts.get("pending", 0),
-            "sent": status_counts.get("sent", 0),
-            "failed": status_counts.get("failed", 0),
-            "total": sum(status_counts.values()),
-            "next_due": next_due,
-        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

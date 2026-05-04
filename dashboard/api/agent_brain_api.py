@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -226,7 +227,6 @@ async def api_agent_brain_suggest():
                 if not line:
                     continue
                 # Remove numbering (1., 2., etc.)
-                import re
                 cleaned = re.sub(r"^\d+\.\s*", "", line).strip()
                 if cleaned and len(cleaned) > 10:
                     suggestions.append(cleaned)
