@@ -1,0 +1,220 @@
+"""
+ShamrockLeads — Re-Arrest Detector
+Cross-references new arrests against active bonds.
+
+If a bonded defendant is re-arrested:
+  - Creates a CRITICAL notification
+  - Posts to Slack #rearrest channel
+  - Flags the bond record
+
+Endpoints:
+  POST /rearrest/scan   — Manual full scan
+  GET  /rearrest/alerts  — Recent re-arrest alerts
+"""
+
+from quart import Blueprint, jsonify, request
+from datetime import datetime, timezone, timedelta
+import re
+import os
+
+from dashboard.extensions import get_collection
+
+rearrest_bp = Blueprint('rearrest', __name__)
+
+# Slack webhook for re-arrest alerts
+SLACK_REARREST_WEBHOOK = os.getenv("SLACK_WEBHOOK_ARRESTS", "")
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name for fuzzy matching: lowercase, strip suffixes, collapse whitespace."""
+    if not name:
+        return ""
+    name = name.lower().strip()
+    # Remove common suffixes
+    for suffix in [" jr", " sr", " ii", " iii", " iv", "."]:
+        name = name.replace(suffix, "")
+    # Collapse multiple spaces
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+
+def _name_parts(name: str) -> tuple:
+    """Extract (last, first) from 'LAST, FIRST' or 'FIRST LAST' formats."""
+    norm = _normalize_name(name)
+    if ',' in norm:
+        parts = norm.split(',', 1)
+        return (parts[0].strip(), parts[1].strip())
+    parts = norm.split()
+    if len(parts) >= 2:
+        return (parts[-1], parts[0])
+    return (norm, "")
+
+
+def _names_match(name_a: str, name_b: str) -> bool:
+    """Check if two names refer to the same person (fuzzy)."""
+    last_a, first_a = _name_parts(name_a)
+    last_b, first_b = _name_parts(name_b)
+
+    if not last_a or not last_b:
+        return False
+
+    # Last name must match exactly
+    if last_a != last_b:
+        return False
+
+    # First name: at least first 3 chars must match (handles Robert/Rob/Bobby edge cases poorly
+    # but prevents false positives better than full fuzzy)
+    if first_a and first_b:
+        min_len = min(len(first_a), len(first_b), 3)
+        return first_a[:min_len] == first_b[:min_len]
+
+    return False
+
+
+def _dob_matches(dob_a: str, dob_b: str) -> bool:
+    """Check if two DOBs match (various formats)."""
+    if not dob_a or not dob_b:
+        return False  # Can't confirm without DOB
+    # Normalize to digits only
+    digits_a = re.sub(r'\D', '', str(dob_a))
+    digits_b = re.sub(r'\D', '', str(dob_b))
+    # Match if same 8 digits (MMDDYYYY or YYYYMMDD)
+    if len(digits_a) == 8 and len(digits_b) == 8:
+        return digits_a == digits_b or digits_a == digits_b[4:] + digits_b[:4]
+    return digits_a == digits_b
+
+
+async def scan_for_rearrests(hours: int = 24) -> dict:
+    """
+    Scan recent arrests (last N hours) against active bonds.
+    Returns detected re-arrests.
+    """
+    arrests_col = get_collection("arrests")
+    bonds_col = get_collection("active_bonds")
+    rearrest_col = get_collection("rearrest_alerts")
+
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=hours)).isoformat()
+
+    # Get all active bonds with defendant info
+    active_bonds = []
+    async for bond in bonds_col.find({"status": "active"}):
+        active_bonds.append(bond)
+
+    if not active_bonds:
+        return {"scanned": 0, "detected": 0, "message": "No active bonds to check against"}
+
+    # Get recent arrests
+    recent_arrests = []
+    async for arrest in arrests_col.find({"scraped_at": {"$gte": cutoff}}):
+        recent_arrests.append(arrest)
+
+    detected = []
+
+    for arrest in recent_arrests:
+        arrest_name = arrest.get("full_name", "") or arrest.get("defendant_name", "")
+        arrest_dob = arrest.get("dob", "") or arrest.get("date_of_birth", "")
+
+        for bond in active_bonds:
+            bond_name = bond.get("defendant_name", "") or bond.get("full_name", "")
+            bond_dob = bond.get("dob", "") or bond.get("date_of_birth", "")
+
+            if not _names_match(arrest_name, bond_name):
+                continue
+
+            # Name matches — check DOB for confirmation (if available)
+            confidence = "probable"
+            if arrest_dob and bond_dob:
+                if _dob_matches(arrest_dob, bond_dob):
+                    confidence = "confirmed"
+                else:
+                    continue  # DOBs don't match, skip
+
+            # Check if we already alerted on this
+            existing = await rearrest_col.find_one({
+                "booking_number": arrest.get("booking_number"),
+                "bond_id": str(bond.get("_id", "")),
+            })
+            if existing:
+                continue
+
+            alert = {
+                "defendant_name": arrest_name,
+                "booking_number": arrest.get("booking_number", ""),
+                "county": arrest.get("county", ""),
+                "new_charges": arrest.get("charges", []),
+                "new_bond_amount": arrest.get("bond_amount", 0),
+                "original_bond_id": str(bond.get("_id", "")),
+                "original_bond_amount": bond.get("bond_amount", 0),
+                "original_case_number": bond.get("case_number", ""),
+                "original_poa": bond.get("poa_number", ""),
+                "confidence": confidence,
+                "detected_at": now.isoformat(),
+                "status": "new",
+            }
+
+            await rearrest_col.insert_one(alert)
+            alert["_id"] = str(alert.get("_id", ""))
+            detected.append(alert)
+
+            # Create notification
+            try:
+                from dashboard.api.notifications import create_notification
+                await create_notification(
+                    notification_type="rearrest",
+                    title=f"🔄 RE-ARREST: {arrest_name}",
+                    message=f"{arrest.get('county', '')} County — Active bond #{bond.get('poa_number', 'N/A')} (${bond.get('bond_amount', 0):,.0f})",
+                    entity_id=arrest.get("booking_number", ""),
+                    entity_type="rearrest",
+                    metadata={
+                        "confidence": confidence,
+                        "new_county": arrest.get("county"),
+                        "original_poa": bond.get("poa_number"),
+                    },
+                )
+            except Exception:
+                pass
+
+            # Flag the bond
+            try:
+                await bonds_col.update_one(
+                    {"_id": bond["_id"]},
+                    {"$set": {
+                        "rearrest_detected": True,
+                        "rearrest_date": now.isoformat(),
+                        "rearrest_booking": arrest.get("booking_number"),
+                    }}
+                )
+            except Exception:
+                pass
+
+    return {
+        "scanned_arrests": len(recent_arrests),
+        "active_bonds_checked": len(active_bonds),
+        "detected": len(detected),
+        "alerts": detected,
+    }
+
+
+@rearrest_bp.route('/rearrest/scan', methods=['POST'])
+async def manual_scan():
+    """Run a manual re-arrest scan."""
+    data = await request.get_json() or {}
+    hours = int(data.get("hours", 24))
+    result = await scan_for_rearrests(hours=hours)
+    return jsonify(result)
+
+
+@rearrest_bp.route('/rearrest/alerts', methods=['GET'])
+async def get_alerts():
+    """Get recent re-arrest alerts."""
+    rearrest_col = get_collection("rearrest_alerts")
+    limit = min(50, int(request.args.get('limit', 20)))
+
+    cursor = rearrest_col.find().sort("detected_at", -1).limit(limit)
+    results = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        results.append(doc)
+
+    return jsonify({"alerts": results, "total": len(results)})

@@ -101,6 +101,26 @@ def create_app():
     from dashboard.api.discharge_monitor import discharge_monitor_bp
     app.register_blueprint(discharge_monitor_bp, url_prefix="/api")
 
+    # ── Payment Plans (Phase 8: The Payment Agent) ─────────────────────────────
+    from dashboard.api.payment_plans import payment_plans_bp
+    app.register_blueprint(payment_plans_bp, url_prefix="/api")
+
+    # ── Ops Summary (Daily Intelligence Report) ──────────────────────────────
+    from dashboard.api.ops_summary import ops_summary_bp
+    app.register_blueprint(ops_summary_bp, url_prefix="/api")
+
+    # ── Notification Center (Centralized Alerts) ─────────────────────────────
+    from dashboard.api.notifications import notifications_bp
+    app.register_blueprint(notifications_bp, url_prefix="/api")
+
+    # ── Re-Arrest Detector (Cross-references arrests vs active bonds) ───────
+    from dashboard.api.rearrest_detector import rearrest_bp
+    app.register_blueprint(rearrest_bp, url_prefix="/api")
+
+    # ── Data Retention (Auto-purge policy for MongoDB M0 512MB ceiling) ──────
+    from dashboard.api.data_retention import retention_bp
+    app.register_blueprint(retention_bp, url_prefix="/api")
+
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
@@ -285,6 +305,44 @@ def create_app():
         except Exception as exc:
             logger.warning("Tier 2-3 index setup warning: %s", exc)
 
+    # ── Phase 8: Payment Plans + Notification Center indexes ─────────────────
+    @app.before_serving
+    async def _ensure_phase8_indexes():
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            # payment_plans
+            await db["payment_plans"].create_index(
+                [("plan_id", 1)], unique=True, name="idx_plan_id", background=True,
+            )
+            await db["payment_plans"].create_index(
+                [("booking_number", 1)], name="idx_pp_booking", background=True,
+            )
+            await db["payment_plans"].create_index(
+                [("status", 1), ("next_due_date", 1)], name="idx_pp_status_due", background=True,
+            )
+            # payments
+            await db["payments"].create_index(
+                [("booking_number", 1), ("timestamp", -1)], name="idx_pay_booking_ts", background=True,
+            )
+            await db["payments"].create_index(
+                [("plan_id", 1)], name="idx_pay_plan", background=True,
+            )
+            # notifications
+            await db["notifications"].create_index(
+                [("notification_id", 1)], unique=True, name="idx_notif_id", background=True,
+            )
+            await db["notifications"].create_index(
+                [("read", 1), ("dismissed", 1), ("created_at", -1)],
+                name="idx_notif_unread", background=True,
+            )
+            await db["notifications"].create_index(
+                [("type", 1), ("created_at", -1)], name="idx_notif_type", background=True,
+            )
+            logger.info("☘️  Phase 8: payment + notification indexes ensured")
+        except Exception as exc:
+            logger.warning("Phase 8 index setup warning: %s", exc)
+
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving
     async def _start_bb_health_monitor():
@@ -328,6 +386,95 @@ def create_app():
                     logger.warning("Court reminder cron error [cycle %s]: %s", _cycle, e)
                 await asyncio.sleep(3600)  # Every hour
         asyncio.ensure_future(_reminder_loop())
+
+    # ── Phase 8: Payment Delinquency Scanner (every 4 hours) ─────────────────
+    @app.before_serving
+    async def _start_delinquency_scanner():
+        """Check for overdue payment plans and create notifications."""
+        import asyncio
+        async def _delinquency_loop():
+            await asyncio.sleep(120)  # Initial delay
+            while True:
+                try:
+                    from dashboard.extensions import get_db
+                    from dashboard.api.notifications import create_notification
+                    from datetime import datetime, timezone, timedelta
+                    db = get_db()
+                    plans_col = db["payment_plans"]
+                    now = datetime.now(timezone.utc)
+                    cutoff = (now - timedelta(days=30)).isoformat()
+
+                    cursor = plans_col.find({
+                        "status": "active",
+                        "next_due_date": {"$lt": cutoff},
+                        "delinquent": {"$ne": True},
+                    })
+                    flagged = 0
+                    async for plan in cursor:
+                        # Flag as delinquent
+                        await plans_col.update_one(
+                            {"plan_id": plan["plan_id"]},
+                            {"$set": {"delinquent": True, "updated_at": now.isoformat()}}
+                        )
+                        # Create notification
+                        await create_notification(
+                            notification_type="delinquent",
+                            title=f"Delinquent: {plan.get('defendant_name', plan['booking_number'])}",
+                            message=f"Payment plan overdue. Balance: ${plan.get('balance_remaining', 0):,.2f}",
+                            entity_id=plan["booking_number"],
+                            entity_type="payment_plan",
+                            metadata={"plan_id": plan["plan_id"], "balance": plan.get("balance_remaining", 0)},
+                        )
+                        flagged += 1
+
+                    if flagged > 0:
+                        logger.info("☘️  Delinquency scanner: flagged %s plans", flagged)
+                except Exception as e:
+                    logger.warning("Delinquency scanner error: %s", e)
+                await asyncio.sleep(14400)  # Every 4 hours
+        asyncio.ensure_future(_delinquency_loop())
+
+    # ── Re-Arrest Detection Cron (every 2 hours) ────────────────────────────
+    @app.before_serving
+    async def _start_rearrest_cron():
+        """Scan recent arrests against active bonds to detect re-arrests."""
+        import asyncio
+        async def _rearrest_loop():
+            await asyncio.sleep(180)  # Initial delay
+            while True:
+                try:
+                    from dashboard.api.rearrest_detector import scan_for_rearrests
+                    result = await scan_for_rearrests(hours=3)
+                    if result.get("detected", 0) > 0:
+                        logger.warning(
+                            "🔄 RE-ARREST DETECTED: %s match(es) found!",
+                            result["detected"]
+                        )
+                    else:
+                        logger.debug("Re-arrest scan: clean (%s arrests checked)", result.get("scanned_arrests", 0))
+                except Exception as e:
+                    logger.warning("Re-arrest scan error: %s", e)
+                await asyncio.sleep(7200)  # Every 2 hours
+        asyncio.ensure_future(_rearrest_loop())
+
+    # ── Data Retention Cron (weekly purge) ──────────────────────────────────
+    @app.before_serving
+    async def _start_retention_cron():
+        """Weekly auto-purge of old low-value records to stay under MongoDB M0 512MB."""
+        import asyncio
+        async def _retention_loop():
+            await asyncio.sleep(300)  # Initial delay
+            while True:
+                try:
+                    from dashboard.api.data_retention import _execute_purge
+                    result = await _execute_purge(dry_run=False)
+                    total = result.get("total_purged", 0)
+                    if total > 0:
+                        logger.info("☘️  Data retention: purged %s records", total)
+                except Exception as e:
+                    logger.warning("Data retention error: %s", e)
+                await asyncio.sleep(604800)  # Every 7 days
+        asyncio.ensure_future(_retention_loop())
 
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")

@@ -177,7 +177,49 @@ class SlackNotifier:
             },
         ]
 
-        return self._post(self.webhook_leads, {"blocks": blocks})
+        slack_ok = self._post(self.webhook_leads, {"blocks": blocks})
+
+        # Bridge to dashboard Notification Center (best-effort, non-blocking)
+        self._bridge_to_notification_center(
+            notification_type="hot_lead",
+            title=f"🔥 Hot Lead: {record.Full_Name}",
+            message=f"{record.County} County — ${bond_val:,.0f} bond — Score {record.Lead_Score}",
+            entity_id=record.Booking_Number or "",
+            metadata={
+                "county": record.County,
+                "bond_amount": bond_val,
+                "lead_score": record.Lead_Score,
+                "charges": record.Charges[:200],
+            },
+        )
+
+        return slack_ok
+
+    def _bridge_to_notification_center(
+        self,
+        notification_type: str,
+        title: str,
+        message: str,
+        entity_id: str = "",
+        metadata: dict = None,
+    ):
+        """Best-effort POST to dashboard notification API. Fails silently."""
+        dashboard_url = os.getenv("DASHBOARD_INTERNAL_URL", "http://localhost:5050")
+        try:
+            requests.post(
+                f"{dashboard_url}/api/notifications",
+                json={
+                    "type": notification_type,
+                    "title": title,
+                    "message": message,
+                    "entity_id": entity_id,
+                    "entity_type": "arrest",
+                    "metadata": metadata or {},
+                },
+                timeout=3,
+            )
+        except Exception:
+            pass  # Dashboard may not be up — that's fine
 
     # ── Scraper Error ──
     def notify_scraper_error(self, county: str, error: str) -> bool:
