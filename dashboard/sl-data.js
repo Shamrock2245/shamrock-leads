@@ -43,7 +43,7 @@ function renderLeads() {
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
-      <td><span class="county-count">${l.county||'—'}</span></td>
+      <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></td>
@@ -133,10 +133,10 @@ async function loadDashboard() {
         const charges = (l.charges||'').length > 60 ? (l.charges||'').slice(0,57)+'…' : (l.charges||'—');
         return `<tr>
           <td><strong>${l.full_name||'?'}</strong><br><span style="color:var(--muted);font-size:11px">${l.dob||''} · ${l.booking_number||''}</span></td>
-          <td>${l.county||'—'}</td>
+          <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
           <td class="${bc}">$${bond.toLocaleString()}</td>
           <td style="color:var(--success);font-weight:600">$${prem.toLocaleString()}</td>
-          <td><span class="score-pill ${(l.lead_status||'').toLowerCase()==='hot'?'score-hot':'score-warm'}">${l.lead_score||0}</span></td>
+          <td><span class="score-pill ${(l.lead_status||'').toLowerCase()==='hot'?'score-hot':(l.lead_status||'').toLowerCase()==='cold'?'score-cold':'score-warm'}">${l.lead_score||0}</span></td>
           <td title="${(l.charges||'').replace(/"/g,'&quot;')}" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${charges}</td>
           <td><button class="btn-write-bond" onclick="openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write</button></td>
         </tr>`;

@@ -181,7 +181,7 @@ const SLHealth = (() => {
       const isDisabled = r.enabled === false || r.status === 'disabled';
       return `
         <tr class="${hasError ? 'row-error' : ''}" style="${isDisabled ? 'opacity:0.6' : ''}">
-          <td style="font-weight:600">${r.county || '—'}</td>
+          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}">${r.county}</span>`:'—'}</td>
           <td>
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
             ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}

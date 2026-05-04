@@ -1,0 +1,751 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShamrockLeads — UI/UX Overhaul  v2.0  (sl-overhaul.css)
+   Loaded after all other stylesheets — additive, non-breaking.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. DESIGN TOKENS (extend existing :root) ─────────────────────────────── */
+:root {
+  --danger:  #ef4444;
+  --warning: #f59e0b;
+  --success: #10b981;
+  --info:    #3b82f6;
+  --nav-group-label-color: rgba(255,255,255,.25);
+  --nav-sep-color: rgba(255,255,255,.06);
+  --county-lee-bg:       rgba(16,185,129,.12);
+  --county-lee-text:     #34d399;
+  --county-charlotte-bg: rgba(59,130,246,.12);
+  --county-charlotte-text:#93c5fd;
+  --county-collier-bg:   rgba(139,92,246,.12);
+  --county-collier-text: #c4b5fd;
+  --county-desoto-bg:    rgba(245,158,11,.12);
+  --county-desoto-text:  #fcd34d;
+  --county-hendry-bg:    rgba(236,72,153,.12);
+  --county-hendry-text:  #f9a8d4;
+  --county-manatee-bg:   rgba(6,182,212,.12);
+  --county-manatee-text: #67e8f9;
+  --county-sarasota-bg:  rgba(251,146,60,.12);
+  --county-sarasota-text:#fdba74;
+}
+
+/* ── 2. HEADER SEARCH PILL ────────────────────────────────────────────────── */
+.header-search-pill {
+  flex: 1;
+  max-width: 480px;
+  min-width: 200px;
+}
+.hsp-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, box-shadow .2s;
+  user-select: none;
+}
+.hsp-inner:hover,
+.hsp-inner:focus {
+  background: rgba(255,255,255,.1);
+  border-color: rgba(16,185,129,.35);
+  box-shadow: 0 0 0 3px rgba(16,185,129,.08);
+  outline: none;
+}
+.hsp-icon { font-size: 14px; opacity: .6; flex-shrink: 0; }
+.hsp-text {
+  flex: 1;
+  font-size: 13px;
+  color: rgba(255,255,255,.35);
+  font-style: italic;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hsp-kbd {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.hsp-kbd kbd {
+  background: rgba(255,255,255,.1);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: rgba(255,255,255,.5);
+  line-height: 1.4;
+}
+@media (max-width: 900px) {
+  .header-search-pill { display: none; }
+}
+
+/* ── 3. COMMAND PALETTE ───────────────────────────────────────────────────── */
+#sl-cmd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.65);
+  backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 80px 20px 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s cubic-bezier(.4,0,.2,1);
+}
+#sl-cmd-overlay.open {
+  opacity: 1;
+  pointer-events: all;
+}
+#sl-cmd-palette {
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 600px;
+  box-shadow: 0 32px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.04);
+  overflow: hidden;
+  transform: translateY(-12px) scale(.97);
+  transition: transform .25s cubic-bezier(.34,1.56,.64,1);
+}
+#sl-cmd-overlay.open #sl-cmd-palette {
+  transform: translateY(0) scale(1);
+}
+.cmd-search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.cmd-search-icon { font-size: 16px; opacity: .5; flex-shrink: 0; }
+#sl-cmd-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 16px;
+  font-family: 'Inter', system-ui, sans-serif;
+  color: #e2e8f0;
+  caret-color: #10b981;
+}
+#sl-cmd-input::placeholder { color: rgba(255,255,255,.25); }
+.cmd-kbd-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,.3);
+  flex-shrink: 0;
+}
+.cmd-kbd-hint kbd {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: inherit;
+}
+.cmd-results {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.cmd-results::-webkit-scrollbar { width: 4px; }
+.cmd-results::-webkit-scrollbar-track { background: transparent; }
+.cmd-results::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 2px; }
+.cmd-section-label {
+  padding: 6px 20px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: rgba(255,255,255,.25);
+}
+.cmd-result-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  cursor: pointer;
+  transition: background .12s;
+  border-radius: 0;
+}
+.cmd-result-item:hover,
+.cmd-result-item.active {
+  background: rgba(16,185,129,.08);
+}
+.cmd-result-item.active .cmd-result-title { color: #34d399; }
+.cmd-result-icon {
+  font-size: 20px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.04);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.cmd-result-body { flex: 1; min-width: 0; }
+.cmd-result-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  transition: color .12s;
+}
+.cmd-result-sub {
+  font-size: 12px;
+  color: rgba(255,255,255,.35);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmd-result-badge {
+  background: rgba(16,185,129,.12);
+  color: #34d399;
+  border: 1px solid rgba(16,185,129,.2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.cmd-empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: rgba(255,255,255,.3);
+  font-size: 14px;
+}
+.cmd-footer {
+  display: flex;
+  gap: 16px;
+  padding: 10px 20px;
+  border-top: 1px solid rgba(255,255,255,.06);
+  font-size: 11px;
+  color: rgba(255,255,255,.25);
+}
+.cmd-footer kbd {
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: inherit;
+  margin-right: 3px;
+}
+
+/* ── 4. TAB BAR GROUPING ──────────────────────────────────────────────────── */
+.tab-nav-sep {
+  width: 1px;
+  background: var(--nav-sep-color);
+  margin: 8px 6px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+.tab-nav-group-label {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 8px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--nav-group-label-color);
+  white-space: nowrap;
+  align-self: flex-end;
+  line-height: 1;
+}
+
+/* ── 5. COUNTY BADGES ─────────────────────────────────────────────────────── */
+.county-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  white-space: nowrap;
+  background: rgba(100,116,139,.12);
+  color: #94a3b8;
+}
+.county-badge[data-county="Lee"]       { background: var(--county-lee-bg);       color: var(--county-lee-text); }
+.county-badge[data-county="Charlotte"] { background: var(--county-charlotte-bg); color: var(--county-charlotte-text); }
+.county-badge[data-county="Collier"]   { background: var(--county-collier-bg);   color: var(--county-collier-text); }
+.county-badge[data-county="DeSoto"]    { background: var(--county-desoto-bg);    color: var(--county-desoto-text); }
+.county-badge[data-county="Hendry"]    { background: var(--county-hendry-bg);    color: var(--county-hendry-text); }
+.county-badge[data-county="Manatee"]   { background: var(--county-manatee-bg);   color: var(--county-manatee-text); }
+.county-badge[data-county="Sarasota"]  { background: var(--county-sarasota-bg);  color: var(--county-sarasota-text); }
+
+/* ── 6. KPI CARD UNIFIED STYLE ────────────────────────────────────────────── */
+/* Ensure all KPI cards across tabs look identical */
+.stat-card,
+.okpi-card,
+.analytics-kpi-card,
+.ab-kpi-card,
+.trk-kpi-card,
+.intake-kpi-card,
+.cal-kpi-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s;
+  box-shadow: var(--shadow-card, 0 1px 3px rgba(0,0,0,.3));
+}
+.stat-card:hover,
+.okpi-card:hover,
+.analytics-kpi-card:hover,
+.ab-kpi-card:hover,
+.trk-kpi-card:hover,
+.intake-kpi-card:hover,
+.cal-kpi-card:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--glow);
+}
+
+/* Top accent bar for all KPI cards */
+.stat-card::before,
+.okpi-card::before,
+.analytics-kpi-card::before,
+.ab-kpi-card::before,
+.trk-kpi-card::before,
+.intake-kpi-card::before,
+.cal-kpi-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--cyan, #06b6d4));
+}
+
+/* ── 7. TABLE IMPROVEMENTS ────────────────────────────────────────────────── */
+/* Zebra striping */
+tbody tr:nth-child(even) td {
+  background: var(--table-stripe);
+}
+/* Sticky first column for wide tables */
+.table-sticky-first th:first-child,
+.table-sticky-first td:first-child {
+  position: sticky;
+  left: 0;
+  background: var(--card);
+  z-index: 1;
+  box-shadow: 2px 0 8px rgba(0,0,0,.15);
+}
+/* Row hover highlight */
+tbody tr {
+  transition: background .12s;
+}
+tbody tr:hover td {
+  background: rgba(16,185,129,.04) !important;
+}
+/* Table header sort indicator */
+th[data-sorted="asc"]::after  { content: ' ↑'; color: var(--accent); }
+th[data-sorted="desc"]::after { content: ' ↓'; color: var(--accent); }
+
+/* ── 8. LOADING SKELETONS ─────────────────────────────────────────────────── */
+@keyframes sl-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.sl-skeleton {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,.04) 25%,
+    rgba(255,255,255,.09) 50%,
+    rgba(255,255,255,.04) 75%
+  );
+  background-size: 800px 100%;
+  animation: sl-shimmer 1.5s infinite;
+  border-radius: 6px;
+  height: 14px;
+}
+.sl-skeleton-text.short { width: 40%; }
+.sl-skeleton-text.med   { width: 65%; }
+.sl-skeleton-text.wide  { width: 85%; }
+.sl-skeleton-table-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; }
+.sl-skeleton-table-row  { display: flex; gap: 12px; padding: 8px 12px; }
+
+/* ── 9. EMPTY STATES ──────────────────────────────────────────────────────── */
+.sl-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 24px;
+  text-align: center;
+  gap: 10px;
+}
+.sl-empty-icon  { font-size: 40px; opacity: .6; }
+.sl-empty-title { font-size: 16px; font-weight: 700; color: var(--text-secondary); }
+.sl-empty-sub   { font-size: 13px; color: var(--muted); max-width: 320px; line-height: 1.5; }
+.sl-empty-action {
+  margin-top: 8px;
+  padding: 9px 22px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(16,185,129,.08);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, border-color .15s;
+}
+.sl-empty-action:hover {
+  background: rgba(16,185,129,.15);
+  border-color: var(--accent);
+}
+
+/* ── 10. TAB CONTENT FADE-IN ──────────────────────────────────────────────── */
+.tab-content.active {
+  animation: sl-tab-fadein .28s cubic-bezier(.4,0,.2,1) both;
+}
+@keyframes sl-tab-fadein {
+  from { opacity:0; transform:translateY(8px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+/* ── 11. TABLE ROW STAGGER ────────────────────────────────────────────────── */
+@keyframes sl-row-enter {
+  from { opacity:0; transform:translateX(-8px); }
+  to   { opacity:1; transform:translateX(0); }
+}
+.sl-row-enter {
+  animation: sl-row-enter .25s cubic-bezier(.4,0,.2,1) both;
+}
+
+/* ── 12. RISK BAR ─────────────────────────────────────────────────────────── */
+.risk-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 80px;
+}
+.risk-bar {
+  flex: 1;
+  height: 5px;
+  background: rgba(255,255,255,.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.risk-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width .6s cubic-bezier(.4,0,.2,1);
+}
+
+/* ── 13. SCORE PILLS (unified) ────────────────────────────────────────────── */
+.score-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+.score-hot  { background: rgba(239,68,68,.12);   color: #f87171; }
+.score-warm { background: rgba(245,158,11,.12);  color: #fbbf24; }
+.score-cold { background: rgba(100,116,139,.12); color: #94a3b8; }
+.score-disq { background: rgba(239,68,68,.06);   color: #6b7280; text-decoration: line-through; }
+
+/* ── 14. BOND-READY QUEUE IMPROVEMENTS ───────────────────────────────────── */
+#bondQueueBody tr td:first-child { font-weight: 700; }
+#bondQueueBody .bond-amount { font-weight: 700; color: var(--gold); }
+#bondQueueBody .premium     { color: var(--accent); font-weight: 600; }
+
+/* ── 15. ACTIVE BONDS TAB ─────────────────────────────────────────────────── */
+/* KPI row */
+#tabActiveBonds .stats-grid,
+#abKpiRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+/* Filter bar alignment */
+#tabActiveBonds .filters {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ── 16. TRACKING TAB ─────────────────────────────────────────────────────── */
+#trkMap {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+/* Fix Leaflet tile layer (CartoDB dark) */
+.leaflet-tile-pane { filter: brightness(.9) saturate(.8); }
+
+/* ── 17. INTAKE TAB ───────────────────────────────────────────────────────── */
+#intakeStatsRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+/* ── 18. REVENUE / ANALYTICS TAB ─────────────────────────────────────────── */
+.analytics-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+.analytics-kpi-value {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  background: linear-gradient(135deg, var(--text), var(--text-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.analytics-kpi-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+/* ── 19. REPORTS TAB ──────────────────────────────────────────────────────── */
+.rpt-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s, transform .2s;
+}
+.rpt-card:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--glow);
+  transform: translateY(-2px);
+}
+.rpt-card-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(0,0,0,.04);
+}
+.rpt-last-gen {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+.rpt-card-run {
+  padding: 7px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(16,185,129,.25);
+  background: rgba(16,185,129,.08);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, border-color .15s;
+}
+.rpt-card-run:hover {
+  background: rgba(16,185,129,.18);
+  border-color: var(--accent);
+}
+
+/* ── 20. CALENDAR TAB ─────────────────────────────────────────────────────── */
+.vc-container {
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--card) !important;
+}
+/* Court date badges */
+.court-date-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  background: rgba(239,68,68,.1);
+  color: #f87171;
+  border: 1px solid rgba(239,68,68,.15);
+}
+.court-date-badge.upcoming { background: rgba(245,158,11,.1); color: #fbbf24; border-color: rgba(245,158,11,.15); }
+.court-date-badge.today    { background: rgba(239,68,68,.15); color: #f87171; border-color: rgba(239,68,68,.25); animation: sl-pulse-badge 2s infinite; }
+@keyframes sl-pulse-badge {
+  0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.3); }
+  50%     { box-shadow: 0 0 0 5px rgba(239,68,68,0); }
+}
+
+/* ── 21. MICRO-INTERACTIONS ───────────────────────────────────────────────── */
+/* Button press feedback */
+.btn-primary:active,
+.btn-write-bond:active,
+.btn-export:active,
+.refresh-btn:active {
+  transform: scale(.97) !important;
+}
+/* Tab button hover glow */
+.tab-btn:hover {
+  color: var(--text-secondary);
+  background: rgba(255,255,255,.03);
+}
+/* Stat card hover lift */
+.stat-card:hover {
+  transform: translateY(-2px);
+}
+/* Panel hover */
+.panel:hover {
+  box-shadow: 0 4px 24px rgba(0,0,0,.2);
+}
+/* Input focus ring */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(16,185,129,.1) !important;
+}
+
+/* ── 22. SCRAPER HEALTH TAB ───────────────────────────────────────────────── */
+.health-status-ok   { color: var(--success); font-weight: 700; }
+.health-status-warn { color: var(--warning); font-weight: 700; }
+.health-status-err  { color: var(--danger);  font-weight: 700; }
+.health-uptime-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.06);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.health-uptime-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 2px;
+  transition: width .6s ease;
+}
+
+/* ── 23. REPEAT OFFENDER PANEL ────────────────────────────────────────────── */
+.ra-panel {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.ra-badge {
+  background: rgba(239,68,68,.15);
+  color: #f87171;
+  border: 1px solid rgba(239,68,68,.2);
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ── 24. FILTER PILLS ─────────────────────────────────────────────────────── */
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background: rgba(16,185,129,.1);
+  border: 1px solid rgba(16,185,129,.2);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s;
+}
+.filter-pill:hover { background: rgba(16,185,129,.18); }
+.filter-pill .pill-x { opacity: .6; font-size: 11px; }
+.filter-pill:hover .pill-x { opacity: 1; }
+
+/* ── 25. OUTREACH / PROSPECTIVE TAB ──────────────────────────────────────── */
+.okpi-value {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  background: linear-gradient(135deg, var(--text), var(--text-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.okpi-label {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+/* ── 26. INDEMNITOR TAB ───────────────────────────────────────────────────── */
+.ind-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.ind-status-active   { background: rgba(16,185,129,.1);  color: #34d399; }
+.ind-status-inactive { background: rgba(100,116,139,.1); color: #94a3b8; }
+.ind-status-risk     { background: rgba(239,68,68,.1);   color: #f87171; }
+
+/* ── 27. SCROLLBAR POLISH ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.18); }
+
+/* ── 28. LIGHT THEME OVERRIDES ────────────────────────────────────────────── */
+[data-theme="light"] .hsp-inner {
+  background: rgba(0,0,0,.04);
+  border-color: rgba(0,0,0,.1);
+}
+[data-theme="light"] .hsp-text { color: rgba(0,0,0,.35); }
+[data-theme="light"] .hsp-kbd kbd {
+  background: rgba(0,0,0,.06);
+  border-color: rgba(0,0,0,.1);
+  color: rgba(0,0,0,.4);
+}
+[data-theme="light"] #sl-cmd-palette {
+  background: #ffffff;
+  border-color: rgba(0,0,0,.1);
+}
+[data-theme="light"] #sl-cmd-input { color: #0f172a; }
+[data-theme="light"] .cmd-result-title { color: #0f172a; }
+[data-theme="light"] .tab-nav-group-label { color: rgba(0,0,0,.3); }
+[data-theme="light"] .tab-nav-sep { background: rgba(0,0,0,.08); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.12); }
+
+/* ── 29. RESPONSIVE ───────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .tab-nav-group-label { display: none; }
+  .tab-nav-sep { display: none; }
+  .analytics-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  #intakeStatsRow { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .analytics-kpi-grid { grid-template-columns: 1fr 1fr; }
+  #intakeStatsRow { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── 30. ACCENT CARD VARIANT ──────────────────────────────────────────────── */
+.accent-card {
+  background: linear-gradient(135deg, rgba(16,185,129,.08), rgba(6,182,212,.04)) !important;
+  border-color: rgba(16,185,129,.2) !important;
+}
+.accent-card .stat-value {
+  background: linear-gradient(135deg, var(--accent), var(--cyan, #06b6d4));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}

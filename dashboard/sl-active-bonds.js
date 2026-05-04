@@ -218,7 +218,7 @@ function renderActiveBondsTable() {
         <div style="font-weight:600">${escHtml(b.defendant_name || '—')}${alertBadge}</div>
         <div style="font-size:11px;color:var(--muted)">${escHtml(b.booking_number || '—')}</div>
       </td>
-      <td>${escHtml(b.county || '—')}</td>
+      <td>${b.county&&b.county!=='—'?`<span class="county-badge" data-county="${escHtml(b.county)}">${escHtml(b.county)}</span>`:'—'}</td>
       <td><strong>$${(b.bond_amount || 0).toLocaleString()}</strong></td>
       <td>${insBadge}</td>
       <td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(indemnitorName)}">
