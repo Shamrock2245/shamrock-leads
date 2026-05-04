@@ -135,7 +135,7 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 | Scheduling | APScheduler |
 | Database | MongoDB Atlas (motor, async) |
 | Dashboard API | Quart (async Flask) |
-| Frontend | Vanilla JS + CSS (~17,600 lines) |
+| Frontend | Vanilla JS + CSS (~21,000 lines) |
 | iMessage | BlueBubbles API |
 | AI | OpenAI GPT-4o |
 | Signatures | SignNow API |

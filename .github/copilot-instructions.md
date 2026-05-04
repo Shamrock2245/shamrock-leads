@@ -10,7 +10,7 @@
 
 - **49 county jail scrapers** — Python scrapers covering 49 of 67 Florida counties, running every 10–120 minutes on a Hetzner VPS
 - **Lead scoring engine** — 0–100 scoring on every arrest record before a human sees it
-- **13-tab intelligence dashboard** — Quart/async Python API + 17,600-line Vanilla JS frontend
+- **15-tab intelligence dashboard** — Quart/async Python API + ~21,000-line Vanilla JS frontend
 - **Full bond lifecycle** — From arrest scrape to signed paperwork to payment collection
 - **iMessage automation** — BlueBubbles bridge for human-feel outreach via the office iMac
 

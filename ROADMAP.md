@@ -110,7 +110,7 @@ Auto-generates bail bond application PDF, indemnitor agreement, and receipt from
 
 **Implemented:**
 - `dashboard/api/paperwork.py` — `POST /api/paperwork/generate/<intake_id>`, `GET /api/paperwork/packet/<packet_id>`, `POST /api/paperwork/deliver/<packet_id>`, `GET /api/paperwork/packets`
-- `dashboard/services/bond_pdf_service.py` — PDF field hydration (existing)
+- `dashboard/services/signnow_packet_service.py` — PDF field hydration + SignNow delivery
 - `paperwork_packets` MongoDB collection — full audit trail per packet
 - BlueBubbles delivery — `send_attachment_url` sends PDF link to indemnitor phone
 - SignNow integration — packet delivery triggers SignNow invite via `signnow_packet_service.py`
@@ -200,7 +200,7 @@ This system provides discreet IP-based location tracking for active bail bonds. 
 
 ---
 
-## Phase 11: BlueBubbles Enhancement Suite (2026-04-28)
+## Phase 12: BlueBubbles Enhancement Suite (2026-04-28)
 
 This phase dramatically expands the BlueBubbles / iMessage automation capabilities
 across the entire bail bond lifecycle — from first outreach to re-arrest follow-up.

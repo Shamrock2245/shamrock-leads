@@ -99,7 +99,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  20 County Scrapers  │  │  Slack relay               │ │
+│  │  50 County Scrapers  │  │  Slack relay               │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  │                            │ │
 │  │  Lead Scorer         │  └─────────┬────────────────┘ │
@@ -174,15 +174,15 @@ Every workflow step must attach to the correct record boundary. **Never collapse
 | Entity | Primary Key | Natural Key | Status |
 |--------|-------------|-------------|--------|
 | **Arrest Lead** | `ArrestLead_ID` | `County + Booking_Number` | ✅ Implemented |
-| **Defendant** | `Defendant_ID` | Internal UUID | 🔲 Phase 2 |
-| **Indemnitor** | `Indemnitor_ID` | Internal UUID | 🔲 Phase 3 |
-| **Match** | `Match_ID` | Internal UUID | 🔲 Phase 4 |
-| **Bonded Case** | `Bond_Case_ID` | `POA_Number + Case_Number` | 🔲 Phase 5 |
-| **Document Packet** | `Packet_ID` | Internal UUID | 🔲 Phase 6 |
-| **Payment Request** | `Payment_Request_ID` | Internal UUID | 🔲 Phase 8 |
-| **Audit Event** | `Event_ID` | Immutable UUID | 🔲 Phase 2+ |
-| **Surety** | `Surety_ID` | `osi` or `palmetto` | 🔲 Phase 5 |
-| **POA Inventory** | `POA_ID` | `POA_Number` (unique) | 🔲 Phase 5 |
+| **Defendant** | `Defendant_ID` | Internal UUID | ✅ Implemented |
+| **Indemnitor** | `Indemnitor_ID` | Internal UUID | ✅ Implemented |
+| **Match** | `Match_ID` | Internal UUID | ✅ Implemented |
+| **Bonded Case** | `Bond_Case_ID` | `POA_Number + Case_Number` | ✅ Implemented |
+| **Document Packet** | `Packet_ID` | Internal UUID | ✅ Implemented |
+| **Payment Request** | `Payment_Request_ID` | Internal UUID | ✅ Implemented |
+| **Audit Event** | `Event_ID` | Immutable UUID | ✅ Implemented |
+| **Surety** | `Surety_ID` | `osi` or `palmetto` | ✅ Implemented |
+| **POA Inventory** | `POA_ID` | `POA_Number` (unique) | ✅ Implemented |
 
 ### Identity Rules
 
