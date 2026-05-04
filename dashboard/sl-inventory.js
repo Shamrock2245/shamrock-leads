@@ -146,7 +146,7 @@ const SLInventory = (() => {
   // ── Detail View (All Powers Table) ──
   async function loadDetailView() {
     const tbody = document.getElementById('invDetailBody');
-    tbody.innerHTML = '<tr><td colspan="7"><div class="inv-loading"><div class="btn-spinner"></div><span>Loading powers…</span></div></td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8"><div class="inv-loading"><div class="btn-spinner"></div><span>Loading powers…</span></div></td></tr>';
     try {
       const params = new URLSearchParams({ page: _detailPage, limit: PAGE_SIZE });
       if (_filter.surety !== 'all') params.set('surety', _filter.surety);
@@ -157,7 +157,7 @@ const SLInventory = (() => {
       _allPowers = d.powers || [];
       renderDetailTable(d);
     } catch (e) {
-      tbody.innerHTML = `<tr><td colspan="7"><div class="inv-error">Error: ${e.message}</div></td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8"><div class="inv-error">Error: ${e.message}</div></td></tr>`;
     }
   }
 
@@ -168,11 +168,26 @@ const SLInventory = (() => {
     const pages = d.pages || 1;
 
     if (powers.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="inv-empty-state">No powers found matching filters</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="inv-empty-state">No powers found matching filters</td></tr>';
     } else {
       tbody.innerHTML = powers.map(p => {
         const statusCls = p.status === 'available' ? 'inv-st-available' : p.status === 'assigned' ? 'inv-st-assigned' : p.status === 'voided' ? 'inv-st-voided' : 'inv-st-other';
         const maxBondFmt = p.max_bond_value >= 1000 ? `$${(p.max_bond_value / 1000).toFixed(0)}K` : `$${p.max_bond_value || 0}`;
+        // Expiration display
+        let expHtml = '—';
+        if (p.expiration) {
+          const expDate = new Date(p.expiration);
+          const now = new Date();
+          const daysLeft = Math.ceil((expDate - now) / 86400000);
+          const expStr = expDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          if (daysLeft < 0) {
+            expHtml = `<span style="color:var(--red);font-weight:700" title="Expired ${Math.abs(daysLeft)}d ago">⛔ ${expStr}</span>`;
+          } else if (daysLeft <= 30) {
+            expHtml = `<span style="color:var(--warning);font-weight:600" title="${daysLeft}d remaining">⚠️ ${expStr}</span>`;
+          } else {
+            expHtml = `<span title="${daysLeft}d remaining">${expStr}</span>`;
+          }
+        }
         const actions = [];
         if (p.status === 'available') {
           actions.push(`<button class="inv-btn inv-btn-assign" onclick="SLInventory.openAssignDialog('${p.poa_number}','${p.surety_id}','${p.poa_prefix}')" title="Assign to defendant">📌 Assign</button>`);
@@ -188,6 +203,7 @@ const SLInventory = (() => {
           <td><span class="inv-surety-chip ${p.surety_id === 'osi' ? 'inv-chip-osi' : 'inv-chip-palm'}">${p.surety_id === 'osi' ? '🛡️ OSI' : '🌴 PSC'}</span></td>
           <td class="inv-cell-tier">${p.poa_prefix}</td>
           <td class="inv-cell-bond">${maxBondFmt}</td>
+          <td class="inv-cell-exp">${expHtml}</td>
           <td><span class="inv-status-pill ${statusCls}">${p.status}</span></td>
           <td class="inv-cell-case">${p.bond_case_id || '—'}</td>
           <td class="inv-cell-actions">${actions.join('')}</td>

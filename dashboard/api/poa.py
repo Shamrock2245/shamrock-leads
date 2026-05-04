@@ -253,7 +253,7 @@ async def api_poa_add():
             "status": "available",
             "expiration": expiration,
             "book_number": f"manual_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
-            "assigned_to_agent": "Brendan",
+            "assigned_to_agent": "Brendan O'Neal",
             "received_at": datetime.now(timezone.utc).isoformat(),
             "bond_case_id": None,
             "used_at": None,
