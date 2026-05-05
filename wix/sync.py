@@ -77,7 +77,7 @@ class WixSyncEngine:
 
     async def _get_sync_state(self, entity_type: str, entity_id: str) -> Optional[Dict]:
         """Check if an entity has been synced to Wix before."""
-        if not self.db:
+        if self.db is None:
             return None
         coll = self.db[self._sync_collection]
         return await coll.find_one({
@@ -94,7 +94,7 @@ class WixSyncEngine:
         status: str = "synced",
     ):
         """Record that an entity was synced to Wix."""
-        if not self.db:
+        if self.db is None:
             return
         coll = self.db[self._sync_collection]
         await coll.update_one(
@@ -125,7 +125,7 @@ class WixSyncEngine:
         if not self.is_configured:
             return {"status": "disabled", "reason": "WIX_BLOG_API_KEY not configured"}
 
-        if not self.db:
+        if self.db is None:
             return {"status": "error", "reason": "No database connection"}
 
         stats = {"synced": 0, "skipped": 0, "errors": 0, "total_checked": 0}
@@ -212,7 +212,7 @@ class WixSyncEngine:
         if not self.is_configured:
             return {"status": "disabled", "reason": "WIX_BLOG_API_KEY not configured"}
 
-        if not self.db:
+        if self.db is None:
             return {"status": "error", "reason": "No database connection"}
 
         stats = {"synced": 0, "updated": 0, "skipped": 0, "errors": 0}
@@ -298,7 +298,7 @@ class WixSyncEngine:
         if not self.is_configured:
             return {"status": "disabled", "reason": "WIX_BLOG_API_KEY not configured"}
 
-        if not self.db:
+        if self.db is None:
             return {"status": "error", "reason": "No database connection"}
 
         stats = {"created": 0, "skipped": 0, "errors": 0}
@@ -477,7 +477,7 @@ class WixSyncEngine:
         Returns:
             Dict with sync counts by type and last sync timestamps
         """
-        if not self.db:
+        if self.db is None:
             return {"status": "no_db"}
 
         coll = self.db[self._sync_collection]
