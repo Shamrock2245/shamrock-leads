@@ -121,6 +121,10 @@ def create_app():
     from dashboard.api.data_retention import retention_bp
     app.register_blueprint(retention_bp, url_prefix="/api")
 
+    # ── Wix CMS + CRM Integration (Direct REST API — no GAS middleman) ──────
+    from dashboard.api.wix_cms import wix_cms_bp
+    app.register_blueprint(wix_cms_bp, url_prefix="/api")
+
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
@@ -537,6 +541,80 @@ def create_app():
                 await asyncio.sleep(900)  # Every 15 minutes
 
         asyncio.ensure_future(_email_loop())
+
+    # ── Blog Auto-Publisher Cron (every 6 hours) ──────────────────────────────
+    @app.before_serving
+    async def _start_blog_cron():
+        """Check for due blog posts and publish to Wix Blog every 6 hours."""
+        import asyncio
+
+        def _sync_publish():
+            """Sync wrapper — blog publisher uses requests (sync)."""
+            try:
+                from blog.scheduler import BlogScheduler
+                from pymongo import MongoClient
+                mongo_uri = os.getenv("MONGODB_URI", "")
+                db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
+                db = None
+                sync_client = None
+                if mongo_uri:
+                    sync_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=10000)
+                    db = sync_client[db_name]
+                scheduler = BlogScheduler(db=db)
+                result = scheduler.run()
+                if sync_client:
+                    sync_client.close()
+                return result
+            except Exception as e:
+                logger.warning("[BlogCron] Error: %s", e)
+                return {"error": str(e)}
+
+        async def _blog_loop():
+            await asyncio.sleep(300)  # Initial delay — 5 min after startup
+            while True:
+                try:
+                    result = await asyncio.to_thread(_sync_publish)
+                    published = result.get("published", 0)
+                    if published > 0:
+                        logger.info(
+                            "☘️  Blog cron: published %s post(s)", published
+                        )
+                    elif result.get("status") == "disabled":
+                        logger.debug("Blog cron: disabled (WIX_BLOG_API_KEY not set)")
+                    else:
+                        logger.debug("Blog cron: %s pending, 0 due", result.get("pending", 0))
+                except Exception as e:
+                    logger.warning("Blog cron error: %s", e)
+                await asyncio.sleep(21600)  # Every 6 hours
+
+        asyncio.ensure_future(_blog_loop())
+
+    # ── Wix CMS Sync Cron (every 4 hours) ─────────────────────────────────────
+    @app.before_serving
+    async def _start_wix_sync_cron():
+        """Sync MongoDB data → Wix CMS (IntakeQueue, Cases) + CRM contacts."""
+        import asyncio
+        async def _wix_sync_loop():
+            await asyncio.sleep(600)  # Initial delay — 10 min after startup
+            while True:
+                try:
+                    from wix.sync import WixSyncEngine
+                    engine = WixSyncEngine(db=app.db)
+                    if engine.is_configured:
+                        result = await engine.run_full_sync()
+                        results = result.get("results", {})
+                        logger.info(
+                            "☘️  Wix sync cron: intakes=%s cases=%s crm=%s",
+                            results.get("intakes", {}).get("synced", 0),
+                            results.get("cases", {}).get("synced", 0),
+                            results.get("leads_to_crm", {}).get("created", 0),
+                        )
+                    else:
+                        logger.debug("Wix sync cron: disabled (no API key)")
+                except Exception as e:
+                    logger.warning("Wix sync cron error: %s", e)
+                await asyncio.sleep(14400)  # Every 4 hours
+        asyncio.ensure_future(_wix_sync_loop())
 
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
