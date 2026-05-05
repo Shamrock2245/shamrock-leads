@@ -324,7 +324,12 @@ class WixSyncEngine:
 
                 try:
                     # Parse name
-                    full_name = lead.get("full_name", lead.get("name", ""))
+                    full_name = (lead.get("full_name") or lead.get("name") or "").strip()
+                    if not full_name:
+                        logger.debug(f"Skipping lead {lead_id}: no name available")
+                        stats["skipped"] += 1
+                        continue
+
                     parts = full_name.split(",", 1) if "," in full_name else full_name.rsplit(" ", 1)
                     if len(parts) == 2:
                         last_name = parts[0].strip()
@@ -332,6 +337,10 @@ class WixSyncEngine:
                     else:
                         first_name = full_name
                         last_name = ""
+
+                    # Final guard — Wix CRM requires non-empty displayName
+                    if not first_name:
+                        first_name = full_name or "Unknown"
 
                     # Determine labels
                     labels = ["defendant"]
