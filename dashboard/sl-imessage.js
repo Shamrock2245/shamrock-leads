@@ -20,7 +20,7 @@
      POST /api/imessage/auto-reply/config → update auto-reply settings
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
-const SLiMessage = (() => {
+window.SLiMessage = (() => {
 
   /* ── State ─────────────────────────────────────────────────────────────── */
   let _state = {

@@ -88,10 +88,17 @@ async def require_pin():
         return  # No PIN configured, skip auth
 
     path = request.path
-    if (path in ("/login", "/health")
+    # Routes that must always be accessible without a session:
+    #   /login, /health          — login page + Docker healthcheck
+    #   /api/stats               — used by the deploy script health check
+    #   /api/webhooks/*          — inbound webhooks (BB, Wix, etc.)
+    #   /api/config/bluebubbles-url — API-key-authed BB sync
+    #   /g/*                     — geo-capture links sent to defendants
+    if (path in ("/login", "/health", "/api/stats")
             or path.startswith("/api/webhooks/")
-            or path == "/api/config/bluebubbles-url"):  # API-key-authed, no session needed
-        return  # Allow webhooks, health, and BB URL sync without session auth
+            or path.startswith("/g/")
+            or path == "/api/config/bluebubbles-url"):
+        return  # Allow without session auth
 
     if not session.get("authenticated"):
         if request.path.startswith("/api/"):

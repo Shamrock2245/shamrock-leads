@@ -201,8 +201,13 @@ def init_app(app):
     """Initialize extensions for the Quart app factory."""
     import secrets
 
-    # Secret key for session cookies
-    app.secret_key = os.getenv("SECRET_KEY", secrets.token_hex(32))
+    # Secret key for session cookies.
+    # IMPORTANT: must be stable across restarts so sessions survive Docker rebuilds.
+    # Priority: SECRET_KEY env var → derived from DASHBOARD_PIN → fixed fallback.
+    _secret = os.getenv("SECRET_KEY") or (
+        "shamrock-" + os.getenv("DASHBOARD_PIN", "leads-2245") + "-session-key-v1"
+    )
+    app.secret_key = _secret
 
     # ── Motor DB handle ───────────────────────────────────────────────────────
     # Many API blueprints pass `current_app.db` to service classes that do
