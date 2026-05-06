@@ -169,6 +169,17 @@ async def _handle_new_message(event_data: dict, db) -> dict:
         )
 
         # Log the inbound message
+        # Map intent → category for the iMessage inbox UI
+        _intent = agent_result.get("intent", "")
+        _category_map = {
+            "intake_inquiry": "intake",
+            "checkin": "checkin",
+            "check_in": "checkin",
+            "geo_response": "geo",
+            "payment": "payment",
+            "court": "court",
+        }
+        _category = _category_map.get(_intent, "general")
         await outreach_coll.insert_one({
             "recipient_phone": sender_phone,
             "message": msg_text,
@@ -178,7 +189,8 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "direction": "inbound",
             "status": "processed",
             "booking_number": bond.get("booking_number", ""),
-            "intent": agent_result.get("intent", ""),
+            "intent": _intent,
+            "category": _category,
             "responded": agent_result.get("responded", False),
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "source": "webhook",
@@ -200,6 +212,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "content_hash": chash,
             "direction": "inbound",
             "status": "unmatched",
+            "category": "general",
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "source": "webhook",
         })

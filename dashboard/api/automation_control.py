@@ -66,14 +66,14 @@ async def set_config():
 async def toggle_automation(key: str):
     """Toggle a specific automation on or off.
 
-    Valid keys: speed_to_contact, paperwork_chase, intake_recovery
+    Valid keys: speed_to_contact, paperwork_chase, intake_recovery, auto_reply, findmy_geofence
 
     Body (optional):
     { "enabled": true/false }
 
     If no body provided, toggles current state.
     """
-    valid_keys = {"speed_to_contact", "paperwork_chase", "intake_recovery"}
+    valid_keys = {"speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply", "findmy_geofence"}
     if key not in valid_keys:
         return jsonify({
             "success": False,

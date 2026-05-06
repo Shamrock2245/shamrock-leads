@@ -127,9 +127,25 @@ const SLiMessage = (() => {
       compose.addEventListener('keydown', e => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') sendMessage();
       });
+      // Gap 5: send/stop typing indicator as user types
+      let _typingTimer = null;
       compose.addEventListener('input', () => {
         const btn = $('bbSendBtn');
         if (btn) btn.disabled = !compose.value.trim();
+        // Fire typing indicator if a thread is open
+        if (!_state.activeThread) return;
+        clearTimeout(_typingTimer);
+        apiFetch('/api/imessage/typing', {
+          method: 'POST',
+          body: JSON.stringify({ chat_guid: 'any;-;' + _state.activeThread, active: true }),
+        }).catch(() => {});
+        // Auto-stop after 5 seconds of no typing
+        _typingTimer = setTimeout(() => {
+          apiFetch('/api/imessage/typing', {
+            method: 'POST',
+            body: JSON.stringify({ chat_guid: 'any;-;' + _state.activeThread, active: false }),
+          }).catch(() => {});
+        }, 5000);
       });
     }
 
@@ -140,6 +156,24 @@ const SLiMessage = (() => {
       _state.inboxPage = 0;
       renderInbox();
     }, 250));
+
+    // Gap 6: Manual poll button — trigger live BB fetch, then refresh DB read
+    const refreshBtn = $('bbInboxRefresh');
+    if (refreshBtn) {
+      // Remove the inline onclick set in index.html and replace with live-poll handler
+      refreshBtn.removeAttribute('onclick');
+      refreshBtn.addEventListener('click', async () => {
+        const orig = refreshBtn.textContent;
+        refreshBtn.textContent = '⏳';
+        refreshBtn.disabled = true;
+        try {
+          await apiFetch('/api/imessage/inbox/poll', { method: 'POST' });
+        } catch (_) { /* silent — poll may not be critical */ }
+        await loadInbox();
+        refreshBtn.textContent = orig;
+        refreshBtn.disabled = false;
+      });
+    }
   }
 
   function destroy() {
@@ -258,12 +292,14 @@ const SLiMessage = (() => {
   function filteredInbox() {
     let msgs = _state.inbox;
     if (_state.filter === 'unread')   msgs = msgs.filter(m => m.unread || m.is_unread);
-    if (_state.filter === 'intake')   msgs = msgs.filter(m => m.classification === 'intake');
-    if (_state.filter === 'checkin')  msgs = msgs.filter(m => m.classification === 'checkin');
+    // Gap 2 fix: use category (MongoDB field) with fallback to classification
+    if (_state.filter === 'intake')   msgs = msgs.filter(m => (m.category || m.classification) === 'intake');
+    if (_state.filter === 'checkin')  msgs = msgs.filter(m => (m.category || m.classification) === 'checkin');
     if (_state.searchQ) {
       const q = _state.searchQ.toLowerCase();
       msgs = msgs.filter(m =>
-        (m.handle || m.phone || m.address || '').toLowerCase().includes(q) ||
+        (m.recipient_phone || m.handle || m.phone || m.address || '').toLowerCase().includes(q) ||
+        (m.message || m.text || '').toLowerCase().includes(q) ||
         (m.text || m.last_message || m.preview || '').toLowerCase().includes(q) ||
         (m.contact_name || m.display_name || '').toLowerCase().includes(q)
       );
@@ -285,12 +321,13 @@ const SLiMessage = (() => {
       return;
     }
     body.innerHTML = msgs.map(m => {
-      const handle   = m.handle || m.phone || m.address || m.chat_identifier || '';
+      // MongoDB schema (bb_webhook_receiver.py): recipient_phone, message, sent_at, category, bb_message_guid
+      const handle   = m.recipient_phone || m.handle || m.phone || m.address || m.chat_identifier || '';
       const name     = m.contact_name || m.display_name || fmtPhone(handle);
-      const preview  = clampText(m.text || m.last_message || m.preview || '', 72);
-      const ts       = timeAgo(m.date || m.timestamp || m.last_message_date);
+      const preview  = clampText(m.message || m.text || m.last_message || m.preview || '', 72);
+      const ts       = timeAgo(m.sent_at || m.date || m.timestamp || m.last_message_date);
       const unread   = m.unread || m.is_unread;
-      const tag      = m.classification;
+      const tag      = m.category || m.classification || m.intent;
       const active   = _state.activeThread === handle ? 'active' : '';
 
       return `
@@ -339,7 +376,7 @@ const SLiMessage = (() => {
         body: JSON.stringify({ handle }),
       });
       _state.inbox = _state.inbox.map(m =>
-        (m.handle || m.address || m.chat_identifier) === handle
+        (m.recipient_phone || m.handle || m.address || m.chat_identifier) === handle
           ? { ...m, unread: false, is_unread: false }
           : m
       );
@@ -359,10 +396,18 @@ const SLiMessage = (() => {
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="sl-spinner"></span>'; }
 
     try {
+      // Gap 3 fix: backend expects 'phone' and 'message' (not 'handle'/'text')
       await apiFetch('/api/imessage/send', {
         method: 'POST',
-        body: JSON.stringify({ handle, text, method: 'private-api' }),
+        body: JSON.stringify({ phone: handle, message: text, method: 'private-api' }),
       });
+      // Gap 5: stop typing indicator after successful send
+      if (_state.activeThread) {
+        apiFetch('/api/imessage/typing', {
+          method: 'POST',
+          body: JSON.stringify({ chat_guid: 'any;-;' + _state.activeThread, active: false }),
+        }).catch(() => {});
+      }
       if ($('bbComposeText')) $('bbComposeText').value = '';
       if (btn) btn.innerHTML = '✅';
       setTimeout(() => {
@@ -412,11 +457,12 @@ const SLiMessage = (() => {
     if (!body) return;
     const devices = _state.findmy;
     if (!devices.length) {
+      // Gap 7A: proper empty state per Antigravity spec
       body.innerHTML = `
-        <div class="sl-empty-state" style="padding:24px">
+        <div class="sl-empty-state">
           <div class="sl-empty-state-icon">📍</div>
-          <div class="sl-empty-state-title">No Devices Found</div>
-          <div class="sl-empty-state-desc">No FindMy devices returned from BlueBubbles</div>
+          <div class="sl-empty-state-text">No FindMy devices enrolled</div>
+          <div class="sl-empty-state-sub">Enable FindMy location sharing on the defendant's device</div>
         </div>`;
       return;
     }
@@ -460,6 +506,11 @@ const SLiMessage = (() => {
       const data = await apiFetch('/api/automation/config');
       _state.automation = data.config || data || {};
       renderToggles();
+      // Gap 7B: update findmy_geofence toggle description with configured radius
+      const geofenceCfg = _state.automation['findmy_geofence'] || {};
+      const miles = geofenceCfg.geofence_miles || _state.automation['findmy_geofence.geofence_miles'] || 25;
+      const desc = document.querySelector('[data-toggle-desc="findmy_geofence"]');
+      if (desc) desc.textContent = `Alert on breach of ${miles}-mile Lee County geofence`;
     } catch (e) { /* silent */ }
   }
 
@@ -482,7 +533,7 @@ const SLiMessage = (() => {
         <div class="bb-toggle-row" id="toggle_row_${t.key}">
           <div class="bb-toggle-info">
             <div class="bb-toggle-label">${t.label}</div>
-            <div class="bb-toggle-desc">${t.desc}</div>
+            <div class="bb-toggle-desc" data-toggle-desc="${t.key}">${t.desc}</div>
           </div>
           <button class="bb-toggle-switch ${on ? 'on' : 'off'}"
                   id="toggle_${t.key}"

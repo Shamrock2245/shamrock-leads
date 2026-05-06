@@ -12,6 +12,8 @@ Automations controlled:
   1. Speed-to-Contact   — Auto-start outreach for hot leads
   2. Paperwork Chase    — Auto-nudge unsigned SignNow packets
   3. Intake Recovery    — Auto-recover abandoned intakes
+  4. Auto-Reply AI      — AI responds to inbound iMessages
+  5. FindMy Geofence    — Alert on Lee County boundary breach
 """
 import logging
 from datetime import datetime, timezone
@@ -49,6 +51,25 @@ DEFAULT_CONFIG = {
         "max_per_cycle": 10,            # Rate-limit per cycle
         "interval_seconds": 3600,       # Check every hour
         "cooldown_hours": 24,           # Don't re-nudge within 24h
+    },
+
+    # ── Auto-Reply AI (BlueBubbles inbound message handler) ──
+    "auto_reply": {
+        "enabled": False,
+        "cooldown_minutes": 5,           # Per-sender cooldown between auto-replies
+        "confidence_threshold": 0.8,     # Minimum AI confidence to auto-reply
+        "keywords": ["bail", "bond", "help", "arrested"],  # Trigger keywords
+        "after_hours_only": False,       # Only auto-reply outside business hours
+    },
+
+    # ── FindMy Geofence (Lee County boundary monitoring) ──
+    "findmy_geofence": {
+        "enabled": False,
+        "geofence_miles": 25,            # Radius in miles from Lee County center
+        "center_lat": 26.5629,           # Lee County center latitude
+        "center_lng": -81.8723,          # Lee County center longitude
+        "poll_interval_minutes": 15,     # How often to poll FindMy
+        "alert_channel": "slack",        # "slack" | "telegram" | "both"
     },
 
     # ── Metadata ──

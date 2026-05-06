@@ -132,13 +132,29 @@ async def check_server_health(suffix: str, server: dict) -> dict:
     if not messages_running:
         status = "offline"
 
+    # Gap 4: add uptime and message_count for the KPI strip
+    message_count = (
+        server_info.get("totalMessages")
+        or server_info.get("messageCount")
+        or server_info.get("total_messages")
+        or 0
+    )
+    uptime_seconds = (
+        server_info.get("uptime")
+        or server_info.get("serverUptime")
+        or 0
+    )
+
     return {
         "server": server["label"],
         "suffix": suffix,
         "reachable": True,
         "private_api_connected": private_api,
         "messages_app_running": messages_running,
-        "uptime_seconds": uptime,
+        "uptime_seconds": uptime_seconds,
+        "uptime": uptime_seconds,           # alias for JS KPI strip
+        "message_count": message_count,     # alias for JS KPI strip
+        "total_messages": message_count,    # alias for renderHealth()
         "version": version,
         "status": status,
         "issues": issues,
@@ -197,14 +213,29 @@ async def run_health_check_all() -> dict:
 
 @bb_health_bp.route("/bb-health/status", methods=["GET"])
 async def api_health_status():
-    """Get the most recent health check results from MongoDB."""
+    """Get the most recent health check results from MongoDB.
+
+    Gap 4 fix: if the cache is empty (first call), run a synchronous check
+    so the KPI strip populates immediately rather than showing dashes.
+    """
     try:
         health_coll = get_collection("bb_health_checks")
         latest = await health_coll.find_one(
             {}, {"_id": 0}, sort=[("checked_at", -1)]
         )
         if not latest:
-            return jsonify({"success": True, "message": "No health checks run yet"})
+            # No cached result — run a live check now so the UI gets real data
+            logger.info("[bb-health] No cached result — running synchronous check")
+            latest = await run_health_check_all()
+        # Flatten for JS: expose top-level uptime/message_count from first server
+        servers = latest.get("servers", [])
+        if servers:
+            first = servers[0]
+            latest.setdefault("uptime", first.get("uptime", first.get("uptime_seconds", 0)))
+            latest.setdefault("message_count", first.get("message_count", first.get("total_messages", 0)))
+            latest.setdefault("version", first.get("version", "unknown"))
+            latest.setdefault("private_api_enabled", first.get("private_api_connected", False))
+            latest.setdefault("connected", first.get("reachable", False))
         return jsonify({"success": True, **latest})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
