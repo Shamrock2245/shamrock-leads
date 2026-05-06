@@ -5,9 +5,7 @@
 # rebuilds Docker images, and restarts all services.
 #
 # Required GitHub Secrets:
-#   HETZNER_SSH_KEY              — Private SSH key for root@178.156.179.237
-#   FIREBASE_ADMINSDK_B64        — Base64-encoded firebase-adminsdk.json
-#   FIREBASE_GOOGLE_SERVICES_B64 — Base64-encoded google-services.json
+#   HETZNER_SSH_KEY  — Private SSH key for root@178.156.179.237
 #
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -27,16 +25,12 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
-        env:
-          FIREBASE_ADMINSDK_B64: ${{ secrets.FIREBASE_ADMINSDK_B64 }}
-          FIREBASE_GOOGLE_SERVICES_B64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_B64 }}
         with:
           host: 178.156.179.237
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
           command_timeout: 10m
-          envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |
             set -e
 
@@ -45,17 +39,6 @@ jobs:
             echo "═══════════════════════════════════════════════════"
 
             cd /opt/shamrock-leads
-
-            # ── Write Firebase secret files to config/ ─────────────────────────────────
-            mkdir -p /opt/shamrock-leads/config
-            if [ -n "$FIREBASE_ADMINSDK_B64" ]; then
-              echo "$FIREBASE_ADMINSDK_B64" | base64 -d > /opt/shamrock-leads/config/firebase-adminsdk.json
-              echo "✅ firebase-adminsdk.json written"
-            fi
-            if [ -n "$FIREBASE_GOOGLE_SERVICES_B64" ]; then
-              echo "$FIREBASE_GOOGLE_SERVICES_B64" | base64 -d > /opt/shamrock-leads/config/google-services.json
-              echo "✅ google-services.json written"
-            fi
 
             # ── Pull latest code ──────────────────────────────────
             echo "📥 Pulling latest from GitHub..."
