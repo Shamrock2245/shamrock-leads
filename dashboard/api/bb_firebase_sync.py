@@ -20,7 +20,7 @@ Firestore Document Path (BlueBubbles default):
 Environment Variables
 ---------------------
   FIREBASE_ADMINSDK_PATH  — Path to the firebase-adminsdk.json file
-                            Default: /opt/shamrock-leads/config/firebase-adminsdk.json
+                            Default: /app/config/firebase-adminsdk.json (Docker container path)
   FIREBASE_POLL_INTERVAL  — Seconds between polls (default: 300)
   FIREBASE_ENABLED        — Set to "false" to disable (default: "true")
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 _ADMINSDK_PATH = os.getenv(
     "FIREBASE_ADMINSDK_PATH",
-    "/opt/shamrock-leads/config/firebase-adminsdk.json"
+    "/app/config/firebase-adminsdk.json"  # Docker container path (host: /opt/shamrock-leads/config/)
 )
 _POLL_INTERVAL = int(os.getenv("FIREBASE_POLL_INTERVAL", "300"))  # 5 minutes
 _ENABLED = os.getenv("FIREBASE_ENABLED", "true").lower() != "false"
