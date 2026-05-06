@@ -99,6 +99,7 @@
   <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
   <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
+  <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
 
@@ -2431,7 +2432,185 @@
 <script src="/sl-reports-ui.js"></script>
 <script src="/sl-tab-polish.js"></script>
 <script src="/sl-overhaul.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: iMESSAGE CONTROL CENTER
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabImessage" style="display:none">
+  <div class="container" style="max-width:1600px">
+
+    <!-- ── Section Header ── -->
+    <div class="sl-section-header" style="margin-bottom:20px">
+      <div>
+        <h2 class="sl-section-title">📱 iMessage Control Center</h2>
+        <p class="sl-section-subtitle">BlueBubbles bridge · Real-time messaging · FindMy tracking · Automation controls</p>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span class="bb-status-dot bb-status-unknown" id="bbConnDot" title="Checking…"></span>
+          <span style="font-size:0.8rem;color:var(--text-muted)" id="bbConnLabel">Checking…</span>
+        </div>
+        <button class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLiMessage.refresh()">↻ Refresh</button>
+        <button class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLiMessage.newCompose()">✏️ New Message</button>
+      </div>
+    </div>
+
+    <!-- ── Health KPI Strip ── -->
+    <div class="stats-grid" style="margin-bottom:20px">
+      <div class="stat-card">
+        <div class="stat-label">Server Status</div>
+        <div class="stat-value" id="bbKpiStatus" style="font-size:1rem">—</div>
+        <div class="stat-sub">BlueBubbles bridge</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">BB Version</div>
+        <div class="stat-value" id="bbKpiVersion" style="font-size:1.1rem">—</div>
+        <div class="stat-sub">Server release</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Private API</div>
+        <div class="stat-value" id="bbKpiPrivApi" style="font-size:1rem">—</div>
+        <div class="stat-sub">Unsend · edit · effects</div>
+      </div>
+      <div class="stat-card accent-card">
+        <div class="stat-label">Total Messages</div>
+        <div class="stat-value" id="bbKpiMessages">—</div>
+        <div class="stat-sub">All-time via bridge</div>
+      </div>
+    </div>
+
+    <!-- ── 3-Column Grid ── -->
+    <div class="bb-three-col">
+
+      <!-- COL 1: Inbox -->
+      <div class="sl-card" style="padding:0;display:flex;flex-direction:column">
+        <div class="bb-panel-header">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-weight:700;font-size:0.9rem">💬 Inbox</span>
+            <span class="sl-badge sl-badge-blue" id="bbInboxBadge" style="display:none;min-width:18px;text-align:center">0</span>
+          </div>
+          <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage.loadInbox()">↻</button>
+        </div>
+        <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+          <input type="search" id="bbInboxSearch" placeholder="Search messages…"
+            style="width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-main);color:var(--text);font-size:0.82rem;outline:none;box-sizing:border-box">
+        </div>
+        <div style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap">
+          <button class="bb-inbox-filter-btn active" onclick="SLiMessage.setFilter(&apos;all&apos;,this)">All</button>
+          <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;unread&apos;,this)">Unread</button>
+          <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;intake&apos;,this)">Intake</button>
+          <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;checkin&apos;,this)">Check-In</button>
+        </div>
+        <div id="bbInboxList" style="flex:1;overflow-y:auto;min-height:380px">
+          <div class="sl-empty-state" style="padding:40px 16px">
+            <div class="sl-empty-state-icon">💬</div>
+            <div class="sl-empty-state-title">Loading inbox…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- COL 2: Compose + Health + Auto-Reply Config -->
+      <div style="display:flex;flex-direction:column;gap:16px">
+
+        <!-- Compose -->
+        <div class="sl-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h3 style="margin:0;font-size:0.95rem;font-weight:700">✏️ Compose iMessage</h3>
+            <div id="bbComposeTo" style="font-size:0.78rem;color:var(--text-muted)">Select thread or enter number</div>
+          </div>
+          <input type="hidden" id="bbComposeTarget">
+          <div id="bbComposeArea" style="display:flex;flex-direction:column;gap:10px">
+            <input type="tel" id="bbNewRecipient"
+              placeholder="+12395550178  (or select a thread)"
+              style="padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-main);color:var(--text);font-size:0.85rem;outline:none;width:100%;box-sizing:border-box"
+              oninput="document.getElementById('bbComposeTarget').value=this.value;document.getElementById('bbSendBtn').disabled=!this.value.trim()">
+            <textarea id="bbComposeText" rows="4"
+              placeholder="Type a message… (⌘↵ to send)"
+              style="resize:vertical;padding:12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-main);color:var(--text);font-size:0.88rem;outline:none;font-family:inherit;width:100%;box-sizing:border-box"></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:8px">
+              <button class="sl-btn sl-btn-ghost sl-btn-sm"
+                onclick="document.getElementById('bbComposeText').value='';document.getElementById('bbNewRecipient').value='';document.getElementById('bbSendBtn').disabled=true">
+                ✕ Clear
+              </button>
+              <button class="sl-btn sl-btn-primary" id="bbSendBtn" disabled onclick="SLiMessage.sendMessage()">⬆ Send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bridge Health Detail -->
+        <div class="sl-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h3 style="margin:0;font-size:0.95rem;font-weight:700">🔌 Bridge Health</h3>
+            <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage.loadHealth()">↻ Check</button>
+          </div>
+          <div id="bbHealthBody">
+            <div class="sl-empty-state" style="padding:24px">
+              <div class="sl-empty-state-icon">🔌</div>
+              <div class="sl-empty-state-title">Connecting…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto-Reply Config -->
+        <div class="sl-card">
+          <h3 style="margin:0 0 14px;font-size:0.95rem;font-weight:700">🤖 Auto-Reply AI Config</h3>
+          <div style="display:grid;gap:12px">
+            <div>
+              <label style="font-size:0.78rem;color:var(--text-muted);display:block;margin-bottom:4px">Trigger Keywords (comma-separated)</label>
+              <input type="text" id="bbAutoReplyKeywords"
+                placeholder="bail, bond, help, release"
+                style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-main);color:var(--text);font-size:0.85rem;outline:none;box-sizing:border-box">
+            </div>
+            <div>
+              <label style="font-size:0.78rem;color:var(--text-muted);display:block;margin-bottom:4px">AI Confidence Threshold (0–1)</label>
+              <input type="number" id="bbAutoReplyThresh" min="0" max="1" step="0.05" value="0.8"
+                style="width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-main);color:var(--text);font-size:0.85rem;outline:none;box-sizing:border-box">
+            </div>
+            <button class="sl-btn sl-btn-primary" id="bbSaveAutoReplyBtn" onclick="SLiMessage.saveAutoReplyConfig()">💾 Save Config</button>
+          </div>
+        </div>
+
+      </div><!-- end col 2 -->
+
+      <!-- COL 3: Automation + FindMy -->
+      <div style="display:flex;flex-direction:column;gap:16px">
+
+        <!-- Automation Toggles -->
+        <div class="sl-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <h3 style="margin:0;font-size:0.95rem;font-weight:700">⚙️ Automation</h3>
+            <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage.loadAutomationConfig()">↻</button>
+          </div>
+          <div id="bbAutoToggles" style="display:flex;flex-direction:column;gap:2px">
+            <div class="sl-empty-state" style="padding:20px">
+              <div class="sl-empty-state-title">Loading toggles…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- FindMy Panel -->
+        <div class="sl-card" style="padding:0">
+          <div class="bb-panel-header">
+            <h3 style="margin:0;font-size:0.9rem;font-weight:700">📍 FindMy Tracker</h3>
+            <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage.loadFindMy()">↻</button>
+          </div>
+          <div id="bbFindMyBody" style="padding:12px;max-height:420px;overflow-y:auto">
+            <div class="sl-empty-state" style="padding:24px">
+              <div class="sl-empty-state-icon">📍</div>
+              <div class="sl-empty-state-title">Loading devices…</div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- end col 3 -->
+
+    </div><!-- end bb-three-col -->
+  </div><!-- end container -->
+</div><!-- end tabImessage -->
+
 <script src="/sl-notifications.js"></script>
+<script src="/sl-imessage.js"></script>
+
 </body>
 </html>
 

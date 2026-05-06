@@ -628,3 +628,191 @@
   .sl-card { break-inside: avoid; }
   .sl-table { font-size: 11px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   18. iMessage Control Center — BlueBubbles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Layout ── */
+.bb-three-col {
+  display: grid;
+  grid-template-columns: 320px 1fr 300px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .bb-three-col { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 768px) {
+  .bb-three-col { grid-template-columns: 1fr; }
+}
+
+/* ── Panel header (shared between inbox + findmy) ── */
+.bb-panel-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* ── Connection status dot ── */
+.bb-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.bb-status-ok      { background: #10b981; box-shadow: 0 0 6px #10b98166; animation: bb-pulse 2s infinite; }
+.bb-status-offline { background: #ef4444; box-shadow: 0 0 6px #ef444466; }
+.bb-status-unknown { background: #94a3b8; }
+@keyframes bb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ── Inbox filter pills ── */
+.bb-inbox-filter-btn {
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.bb-inbox-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
+.bb-inbox-filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* ── Thread rows ── */
+.bb-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s;
+  position: relative;
+}
+.bb-thread-row:hover   { background: var(--bg-hover, rgba(255,255,255,0.04)); }
+.bb-thread-row.active  { background: rgba(59,130,246,0.1); border-left: 3px solid var(--accent); }
+.bb-thread-row.unread  { background: rgba(16,185,129,0.05); }
+
+.bb-thread-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bb-thread-meta  { flex: 1; min-width: 0; }
+.bb-thread-name  { font-size: 0.83rem; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.bb-thread-preview { font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+
+.bb-thread-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.bb-thread-time  { font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; }
+
+.bb-unread-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── Automation toggle switches ── */
+.bb-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.bb-toggle-row:last-child { border-bottom: none; }
+
+.bb-toggle-info   { flex: 1; min-width: 0; }
+.bb-toggle-label  { font-size: 0.85rem; font-weight: 600; }
+.bb-toggle-desc   { font-size: 0.74rem; color: var(--text-muted); margin-top: 2px; }
+
+.bb-toggle-switch {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+  outline: none;
+  margin-left: 12px;
+}
+.bb-toggle-switch.on  { background: #10b981; }
+.bb-toggle-switch.off { background: var(--border); }
+
+.bb-toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.bb-toggle-switch.on .bb-toggle-knob { transform: translateX(18px); }
+
+/* ── FindMy device cards ── */
+.bb-device-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  transition: border-color 0.2s;
+}
+.bb-device-card:last-child { margin-bottom: 0; }
+.bb-device-card.breach { border-color: #ef4444; background: rgba(239,68,68,0.05); }
+.bb-device-card:hover  { border-color: var(--accent); }
+
+.bb-device-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.bb-device-icon  { font-size: 1.4rem; flex-shrink: 0; }
+.bb-device-name  { font-size: 0.88rem; font-weight: 700; }
+.bb-device-model { font-size: 0.74rem; color: var(--text-muted); }
+
+.bb-device-stats { display: grid; gap: 5px; }
+.bb-device-stat  { display: flex; gap: 8px; font-size: 0.78rem; color: var(--text-muted); }
+.bb-device-stat span:first-child { flex-shrink: 0; }
+
+/* ── Health grid ── */
+.bb-health-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.bb-health-item { display: flex; flex-direction: column; gap: 2px; }
+.bb-health-key  { font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.bb-health-val  { font-size: 0.88rem; font-weight: 600; word-break: break-all; }
+
