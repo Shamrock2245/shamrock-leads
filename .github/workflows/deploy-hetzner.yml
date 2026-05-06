@@ -5,7 +5,9 @@
 # rebuilds Docker images, and restarts all services.
 #
 # Required GitHub Secrets:
-#   HETZNER_SSH_KEY  — Private SSH key for root@178.156.179.237
+#   HETZNER_SSH_KEY              — Private SSH key for root@178.156.179.237
+#   FIREBASE_ADMINSDK_B64        — Base64-encoded firebase-adminsdk.json
+#   FIREBASE_GOOGLE_SERVICES_B64 — Base64-encoded google-services.json
 #
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -25,12 +27,16 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          FIREBASE_ADMINSDK_B64: ${{ secrets.FIREBASE_ADMINSDK_B64 }}
+          FIREBASE_GOOGLE_SERVICES_B64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_B64 }}
         with:
           host: 178.156.179.237
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
           command_timeout: 10m
+          envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |
             set -e
 
@@ -40,7 +46,24 @@ jobs:
 
             cd /opt/shamrock-leads
 
+            # ── Write Firebase secret files to config/ ────────────
+            echo "🔑 Writing Firebase config files..."
+            mkdir -p /opt/shamrock-leads/config
+            if [ -n "$FIREBASE_ADMINSDK_B64" ]; then
+              echo "$FIREBASE_ADMINSDK_B64" | base64 -d > /opt/shamrock-leads/config/firebase-adminsdk.json
+              echo "   ✅ firebase-adminsdk.json written"
+            else
+              echo "   ⚠️  FIREBASE_ADMINSDK_B64 secret not set — skipping"
+            fi
+            if [ -n "$FIREBASE_GOOGLE_SERVICES_B64" ]; then
+              echo "$FIREBASE_GOOGLE_SERVICES_B64" | base64 -d > /opt/shamrock-leads/config/google-services.json
+              echo "   ✅ google-services.json written"
+            else
+              echo "   ⚠️  FIREBASE_GOOGLE_SERVICES_B64 secret not set — skipping"
+            fi
+
             # ── Pull latest code ──────────────────────────────────
+            echo ""
             echo "📥 Pulling latest from GitHub..."
             git fetch origin main
             git reset --hard origin/main
@@ -49,7 +72,7 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
-            # ── Clean up disk space (prevents build failures) ────
+            # ── Clean up disk space (prevents build failures) ─────
             echo ""
             echo "🧹 Cleaning up disk space..."
             docker system prune -f --all
@@ -77,11 +100,15 @@ jobs:
 
             echo ""
             echo "🏥 Health Check:"
-            curl -sf http://localhost:8088/api/stats > /dev/null && echo " ✅ Dashboard healthy (port 8088)" || echo " ⚠️ Dashboard health check failed"
+            curl -sf http://localhost:8088/api/stats > /dev/null && echo " ✅ Dashboard healthy (port 8088 )" || echo " ⚠️ Dashboard health check failed"
 
             echo ""
-            echo "📜 Last 10 log lines (scraper):"
-            docker logs shamrock-leads --tail 10 2>&1
+            echo "📜 Last 10 log lines (dashboard):"
+            docker logs shamrock-dashboard --tail 10 2>&1
+
+            echo ""
+            echo "🔥 Firebase config check:"
+            ls -la /opt/shamrock-leads/config/ 2>/dev/null || echo "   config/ directory not found"
 
             echo ""
             echo "═══════════════════════════════════════════════════"
