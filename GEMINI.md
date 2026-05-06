@@ -101,6 +101,16 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 | `mongodb-query-optimizer` | MongoDB query optimization & indexing | `.agent/skills/mongodb-query-optimizer/` |
 | `mongodb-schema-design` | MongoDB schema patterns & anti-patterns | `.agent/skills/mongodb-schema-design/` |
 | `mongodb-natural-language-querying` | Natural language to MongoDB queries | `.agent/skills/mongodb-natural-language-querying/` |
+| `sentry-python-sdk` | Error monitoring & performance tracing | `.agent/skills/sentry-python-sdk/` |
+| `sentry-fix-issues` | Diagnose & fix Sentry errors | `.agent/skills/sentry-fix-issues/` |
+| `cloudflare-platform` | CF product decision trees & tunnels | `.agent/skills/cloudflare-platform/` |
+| `cloudflare-deploy` | Deploy to Workers, Pages, Tunnels | `.agent/skills/cloudflare-deploy/` |
+| `cloudflare-email` | Email routing & transactional email | `.agent/skills/cloudflare-email/` |
+| `elevenlabs-agents` | Shannon voice agent & Conversational AI | `.agent/skills/elevenlabs-agents/` |
+| `openai-agents-sdk` | Multi-agent orchestration & tools | `.agent/skills/openai-agents-sdk/` |
+| `wix-app-builder` | Wix CLI app extensions & validation | `.agent/skills/wix-app-builder/` |
+| `wix-manage` | Wix REST API management recipes | `.agent/skills/wix-manage/` |
+| `wix-design-system` | WDS component reference & tokens | `.agent/skills/wix-design-system/` |
 
 ---
 

@@ -125,6 +125,10 @@ def create_app():
     from dashboard.api.wix_cms import wix_cms_bp
     app.register_blueprint(wix_cms_bp, url_prefix="/api")
 
+    # ── Automation Control (Speed-to-Contact, Paperwork Chase, Intake Recovery) ──
+    from dashboard.api.automation_control import automation_bp
+    app.register_blueprint(automation_bp, url_prefix="/api")
+
     # ── Legacy compatibility blueprint (iMessage, cleanup, custody, db-health) ──
     from dashboard.api.legacy import legacy_bp
     app.register_blueprint(legacy_bp, url_prefix="/api")
@@ -135,14 +139,14 @@ def create_app():
 
     # ── BlueBubbles Enhancement Suite (Phase 2) ──────────────────────────────
     from dashboard.api.bb_webhook_receiver import bb_webhook_bp
-    from dashboard.api.rearrest_notifier import rearrest_bp
+    from dashboard.api.rearrest_notifier import rearrest_bp as rearrest_notifier_bp
     from dashboard.api.bb_prospecting import bb_prospecting_bp
     from dashboard.api.bb_scheduled_messages import bb_schedule_bp
     from dashboard.api.bb_document_delivery import bb_docs_bp
     from dashboard.api.bb_contact_sync import bb_contacts_bp
     from dashboard.api.bb_health_monitor import bb_health_bp
     app.register_blueprint(bb_webhook_bp, url_prefix="/api")
-    app.register_blueprint(rearrest_bp, url_prefix="/api")
+    app.register_blueprint(rearrest_notifier_bp, url_prefix="/api")
     app.register_blueprint(bb_prospecting_bp, url_prefix="/api")
     app.register_blueprint(bb_schedule_bp, url_prefix="/api")
     app.register_blueprint(bb_docs_bp, url_prefix="/api")
@@ -346,6 +350,38 @@ def create_app():
             logger.info("☘️  Phase 8: payment + notification indexes ensured")
         except Exception as exc:
             logger.warning("Phase 8 index setup warning: %s", exc)
+
+    # ── Revenue Automation Engine — ensure indexes on startup ─────────────────
+    @app.before_serving
+    async def _ensure_automation_indexes():
+        """Create MongoDB indexes for automation config, run logs, and chase/recovery logs."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            # automation_config: single master document
+            await db["automation_config"].create_index(
+                [("type", 1)], unique=True, name="idx_config_type", background=True,
+            )
+            # automation_run_log: query by automation name + recency
+            await db["automation_run_log"].create_index(
+                [("automation", 1), ("run_at", -1)], name="idx_auto_run", background=True,
+            )
+            # TTL: auto-expire run logs after 30 days
+            await db["automation_run_log"].create_index(
+                [("run_at", 1)], name="idx_auto_run_ttl", background=True,
+                expireAfterSeconds=2592000,
+            )
+            # paperwork_chase_log: dedup by packet_id + chase_type
+            await db["paperwork_chase_log"].create_index(
+                [("packet_id", 1), ("chase_type", 1)], name="idx_chase_dedup", background=True,
+            )
+            # intake_recovery_log: dedup by intake_id + created_at
+            await db["intake_recovery_log"].create_index(
+                [("intake_id", 1), ("created_at", -1)], name="idx_recovery_dedup", background=True,
+            )
+            logger.info("☘️  Revenue Automation: indexes ensured")
+        except Exception as exc:
+            logger.warning("Automation index setup warning: %s", exc)
 
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving
@@ -615,6 +651,155 @@ def create_app():
                     logger.warning("Wix sync cron error: %s", e)
                 await asyncio.sleep(14400)  # Every 4 hours
         asyncio.ensure_future(_wix_sync_loop())
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    #  REVENUE AUTOMATION ENGINE — All gated by automation_config toggles
+    #  Prime Directive #6: Human-in-the-Loop for Outreach
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    # ── Tier 1A: Speed-to-Contact Cron (every 30 minutes) ────────────────────
+    @app.before_serving
+    async def _start_speed_to_contact_cron():
+        """Auto-start outreach sequences for new hot leads.
+        Gated by automation_config.speed_to_contact.enabled (default: OFF).
+        """
+        import asyncio
+        async def _stc_loop():
+            await asyncio.sleep(90)  # Initial delay
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    cfg = await get_automation_config(app.db)
+                    stc = cfg.get("speed_to_contact", {})
+
+                    if not stc.get("enabled", False):
+                        if _cycle % 20 == 1:  # Log once per ~10h
+                            logger.debug("Speed-to-Contact cron: DISABLED (toggle in dashboard)")
+                        await asyncio.sleep(stc.get("interval_seconds", 1800))
+                        continue
+
+                    from dashboard.services.outreach_sequencer import OutreachSequencer
+                    sequencer = OutreachSequencer(app.db)
+                    result = await sequencer.batch_start_new_arrests(
+                        hours_back=stc.get("hours_back", 1),
+                        limit=stc.get("max_per_cycle", 20),
+                    )
+
+                    # Log run to automation_run_log
+                    from datetime import datetime, timezone
+                    await app.db["automation_run_log"].insert_one({
+                        "automation": "speed_to_contact",
+                        "run_at": datetime.now(timezone.utc),
+                        "result": result,
+                    })
+
+                    if result.get("started", 0) > 0:
+                        logger.info(
+                            "☘️  Speed-to-Contact [cycle %s]: started=%s skipped=%s errors=%s",
+                            _cycle, result["started"], result.get("skipped", 0), result.get("errors", 0),
+                        )
+
+                    if _cycle % 12 == 0:  # Heartbeat every ~6 hours
+                        logger.info("☘️  Speed-to-Contact heartbeat: cycle=%s", _cycle)
+
+                except Exception as e:
+                    logger.warning("Speed-to-Contact cron error [cycle %s]: %s", _cycle, e)
+                await asyncio.sleep(stc.get("interval_seconds", 1800) if 'stc' in dir() else 1800)
+        asyncio.ensure_future(_stc_loop())
+
+    # ── Tier 1B: Unsigned Paperwork Chase Cron (every hour) ──────────────────
+    @app.before_serving
+    async def _start_paperwork_chase_cron():
+        """Auto-nudge unsigned SignNow packets.
+        Gated by automation_config.paperwork_chase.enabled (default: OFF).
+        """
+        import asyncio
+        async def _chase_loop():
+            await asyncio.sleep(150)  # Initial delay
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    cfg = await get_automation_config(app.db)
+                    chase = cfg.get("paperwork_chase", {})
+
+                    if not chase.get("enabled", False):
+                        if _cycle % 12 == 1:
+                            logger.debug("Paperwork Chase cron: DISABLED")
+                        await asyncio.sleep(chase.get("interval_seconds", 3600))
+                        continue
+
+                    from dashboard.services.paperwork_chase_service import PaperworkChaseService
+                    service = PaperworkChaseService(app.db)
+                    result = await service.scan_and_chase(config=chase)
+
+                    from datetime import datetime, timezone
+                    await app.db["automation_run_log"].insert_one({
+                        "automation": "paperwork_chase",
+                        "run_at": datetime.now(timezone.utc),
+                        "result": result,
+                    })
+
+                    total = result.get("nudge_1_sent", 0) + result.get("nudge_2_sent", 0) + result.get("staff_alerts", 0)
+                    if total > 0:
+                        logger.info(
+                            "☘️  Paperwork Chase [cycle %s]: nudge1=%s nudge2=%s staff=%s",
+                            _cycle, result["nudge_1_sent"], result["nudge_2_sent"], result["staff_alerts"],
+                        )
+
+                except Exception as e:
+                    logger.warning("Paperwork Chase cron error [cycle %s]: %s", _cycle, e)
+                await asyncio.sleep(chase.get("interval_seconds", 3600) if 'chase' in dir() else 3600)
+        asyncio.ensure_future(_chase_loop())
+
+    # ── Tier 1C: Abandoned Intake Recovery Cron (every hour) ─────────────────
+    @app.before_serving
+    async def _start_intake_recovery_cron():
+        """Auto-recover abandoned intakes.
+        Gated by automation_config.intake_recovery.enabled (default: OFF).
+        """
+        import asyncio
+        async def _recovery_loop():
+            await asyncio.sleep(200)  # Initial delay
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    cfg = await get_automation_config(app.db)
+                    recovery = cfg.get("intake_recovery", {})
+
+                    if not recovery.get("enabled", False):
+                        if _cycle % 12 == 1:
+                            logger.debug("Intake Recovery cron: DISABLED")
+                        await asyncio.sleep(recovery.get("interval_seconds", 3600))
+                        continue
+
+                    from dashboard.services.intake_recovery_service import IntakeRecoveryService
+                    service = IntakeRecoveryService(app.db)
+                    result = await service.scan_and_recover(config=recovery)
+
+                    from datetime import datetime, timezone
+                    await app.db["automation_run_log"].insert_one({
+                        "automation": "intake_recovery",
+                        "run_at": datetime.now(timezone.utc),
+                        "result": result,
+                    })
+
+                    if result.get("recovered_sent", 0) > 0:
+                        logger.info(
+                            "☘️  Intake Recovery [cycle %s]: sent=%s cooldown=%s no_phone=%s",
+                            _cycle, result["recovered_sent"], result.get("skipped_cooldown", 0),
+                            result.get("skipped_no_phone", 0),
+                        )
+
+                except Exception as e:
+                    logger.warning("Intake Recovery cron error [cycle %s]: %s", _cycle, e)
+                await asyncio.sleep(recovery.get("interval_seconds", 3600) if 'recovery' in dir() else 3600)
+        asyncio.ensure_future(_recovery_loop())
 
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")

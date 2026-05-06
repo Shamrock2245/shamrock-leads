@@ -85,7 +85,9 @@ class BlueBubblesClient:
         url = f"{self.base_url}{path}"
         merged_params = self._params(params)
         try:
-            async with httpx.AsyncClient() as client:
+            # ngrok free-tier requires this header to bypass the browser warning page
+            headers = {"ngrok-skip-browser-warning": "true"}
+            async with httpx.AsyncClient(headers=headers) as client:
                 r = await client.request(
                     method, url,
                     params=merged_params,
