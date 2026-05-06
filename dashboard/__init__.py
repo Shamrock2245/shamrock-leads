@@ -801,6 +801,18 @@ def create_app():
                 await asyncio.sleep(recovery.get("interval_seconds", 3600) if 'recovery' in dir() else 3600)
         asyncio.ensure_future(_recovery_loop())
 
+    # ── Firebase BB URL Sync (polls Firestore for live BB tunnel URL) ────────
+    @app.before_serving
+    async def _start_firebase_bb_sync():
+        """Poll Firebase Firestore every 5 min for the current BlueBubbles URL.
+        Auto-updates BB_SERVERS when the tunnel URL changes (Cloudflare rotates).
+        Requires FIREBASE_ADMINSDK_PATH env var or default path in config/.
+        """
+        import asyncio
+        from dashboard.api.bb_firebase_sync import poll_firebase_for_bb_url
+        asyncio.ensure_future(poll_firebase_for_bb_url())
+        logger.info("☘️  Firebase BB URL sync scheduled")
+
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
     if pin:

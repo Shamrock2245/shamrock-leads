@@ -49,6 +49,7 @@ services:
       start_period: 15s
     volumes:
       - dashboard-uploads:/app/dashboard/uploads  # Persistent KYC uploads
+      - ./config:/app/config:ro                   # Firebase admin SDK + secrets
     logging:
       driver: "json-file"
       options:
