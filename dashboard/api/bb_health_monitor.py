@@ -279,6 +279,73 @@ async def api_restart_messages():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@bb_health_bp.route("/bb-health/update-url", methods=["PATCH"])
+async def api_update_bb_url():
+    """Hot-swap a BlueBubbles server URL at runtime — no container restart needed.
+
+    This is required because Cloudflare trycloudflare.com URLs rotate on every
+    BlueBubbles server restart. Staff can paste the new URL directly in the
+    dashboard instead of SSHing into the VPS to update .env.
+
+    Body:
+        {
+            "suffix": "0178",           -- Which server (required)
+            "url": "https://new-url.trycloudflare.com",  -- New tunnel URL (required)
+            "api_key": "shamrock-bb-sync-2245"           -- Auth key (required)
+        }
+    """
+    try:
+        from dashboard.extensions import BB_CONFIG_API_KEY, update_bb_url, BB_SERVERS
+        data = await request.get_json(silent=True) or {}
+
+        # Auth check
+        provided_key = data.get("api_key") or request.headers.get("X-BB-Config-Key", "")
+        if provided_key != BB_CONFIG_API_KEY:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+        suffix = data.get("suffix", "0178")
+        new_url = (data.get("url") or "").strip().rstrip("/")
+        if not new_url:
+            return jsonify({"success": False, "error": "url is required"}), 400
+        if not new_url.startswith("https://"):
+            return jsonify({"success": False, "error": "url must start with https://"}), 400
+
+        # Hot-swap the URL in memory
+        updated_servers = update_bb_url(suffix, new_url)
+
+        # Run a quick connectivity test with the new URL
+        server = updated_servers.get(f"239955{suffix}")
+        connectivity = {"reachable": False, "message": "Server key not found after update"}
+        if server:
+            try:
+                from dashboard.api.bb_private_api import BlueBubblesClient
+                client = BlueBubblesClient(server["url"], server["password"], timeout=8.0)
+                info = await client.server_info()
+                connectivity = {
+                    "reachable": info.get("success", False),
+                    "message": "Connected" if info.get("success") else info.get("error", "unreachable"),
+                }
+            except Exception as test_err:
+                connectivity = {"reachable": False, "message": str(test_err)}
+
+        logger.info(
+            "BB URL hot-swapped: suffix=%s new_url=%s reachable=%s",
+            suffix, new_url, connectivity["reachable"]
+        )
+
+        return jsonify({
+            "success": True,
+            "suffix": suffix,
+            "new_url": new_url,
+            "connectivity": connectivity,
+            "servers_active": list(updated_servers.keys()),
+        })
+
+    except Exception as e:
+        logger.error("BB URL update error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @bb_health_bp.route("/bb-health/history", methods=["GET"])
 async def api_health_history():
     """Get health check history."""

@@ -305,7 +305,8 @@ window.SLiMessage = (() => {
       <div style="margin-top:12px;display:flex;gap:8px">
         <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage.loadHealth()">↻ Re-check</button>
         <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLiMessage._restartMessages()">🔄 Restart Messages.app</button>
-      </div>`;
+      </div>
+      ${_reconnectPanelHTML()}`;
   }
 
   function _renderHealthOffline(msg) {
@@ -319,15 +320,103 @@ window.SLiMessage = (() => {
       <div class="sl-empty-state">
         <div class="sl-empty-state-icon">🔌</div>
         <div class="sl-empty-state-title">BlueBubbles Unreachable</div>
-        <div class="sl-empty-state-desc">${msg}<br><br>Ensure the ngrok/Cloudflare tunnel is active and BB_SERVER_URL is set in .env</div>
+        <div class="sl-empty-state-desc">${msg}</div>
         <button class="sl-btn sl-btn-secondary" style="margin-top:12px" onclick="SLiMessage.loadHealth()">↻ Retry</button>
-      </div>`;
+      </div>
+      ${_reconnectPanelHTML()}`;
+  }
+
+  /* ── Reconnect Panel — paste Cloudflare URL, hot-swap without rebuild ──── */
+  function _reconnectPanelHTML() {
+    return `
+    <div class="bb-reconnect-panel" id="bbReconnectPanel">
+      <div class="bb-reconnect-header">
+        <span class="bb-reconnect-icon">🔗</span>
+        <div>
+          <div class="bb-reconnect-title">Update Tunnel URL</div>
+          <div class="bb-reconnect-subtitle">Cloudflare trycloudflare.com URLs rotate on every BlueBubbles restart. Paste the new URL here — no VPS rebuild needed.</div>
+        </div>
+      </div>
+      <div class="bb-reconnect-fields">
+        <div class="bb-reconnect-field">
+          <label class="bb-reconnect-label">Phone Line</label>
+          <select id="bbReconnectSuffix" class="sl-select sl-select-sm">
+            <option value="0178">239-955-0178 (Office iMac)</option>
+            <option value="0314">239-955-0314 (Brendan Mac)</option>
+          </select>
+        </div>
+        <div class="bb-reconnect-field bb-reconnect-field--url">
+          <label class="bb-reconnect-label">New Tunnel URL <span style="color:var(--text-muted);font-weight:400">(from BlueBubbles → Settings → Connection)</span></label>
+          <div class="bb-reconnect-url-row">
+            <input id="bbReconnectUrl" class="sl-input sl-input-sm" type="url"
+              placeholder="https://something-new.trycloudflare.com"
+              onkeydown="if(event.key==='Enter')SLiMessage.updateTunnelUrl()"
+            />
+            <button id="bbReconnectBtn" class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLiMessage.updateTunnelUrl()">
+              🔌 Reconnect
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="bbReconnectStatus" class="bb-reconnect-status" style="display:none"></div>
+    </div>`;
   }
 
   async function _restartMessages() {
     showToast('Restarting Messages.app…', 'info');
     const { ok } = await safeFetch('/api/bb-health/restart-messages', { method: 'POST' });
     showToast(ok ? 'Messages.app restart triggered' : 'Restart failed — check logs', ok ? 'success' : 'error');
+  }
+
+  async function updateTunnelUrl() {
+    const urlInput    = $('bbReconnectUrl');
+    const suffixEl    = $('bbReconnectSuffix');
+    const btn         = $('bbReconnectBtn');
+    const statusEl    = $('bbReconnectStatus');
+    if (!urlInput) return;
+
+    const newUrl = urlInput.value.trim();
+    if (!newUrl) { showToast('Paste a tunnel URL first', 'warning'); return; }
+    if (!newUrl.startsWith('https://')) { showToast('URL must start with https://', 'warning'); return; }
+
+    const suffix = suffixEl?.value || '0178';
+
+    // Disable button, show spinner
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Connecting…'; }
+    if (statusEl) { statusEl.style.display = 'none'; }
+
+    const { ok, data } = await safeFetch('/api/bb-health/update-url', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        suffix,
+        url: newUrl,
+        api_key: 'shamrock-bb-sync-2245',
+      }),
+    });
+
+    if (btn) { btn.disabled = false; btn.textContent = '🔌 Reconnect'; }
+
+    if (ok && data.success) {
+      const reachable = data.connectivity?.reachable;
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.className = `bb-reconnect-status ${reachable ? 'bb-reconnect-status--ok' : 'bb-reconnect-status--warn'}`;
+        statusEl.textContent = reachable
+          ? `✅ Connected! BlueBubbles is live at ${newUrl}`
+          : `⚠️ URL saved but server responded: ${data.connectivity?.message || 'unreachable'} — is the tunnel running?`;
+      }
+      showToast(reachable ? 'iMessage bridge reconnected!' : 'URL saved — verify tunnel is active', reachable ? 'success' : 'warning');
+      // Refresh health display after a brief delay
+      setTimeout(loadHealth, 1500);
+    } else {
+      const errMsg = data?.error || 'Update failed';
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.className = 'bb-reconnect-status bb-reconnect-status--error';
+        statusEl.textContent = `❌ ${errMsg}`;
+      }
+      showToast(`Reconnect failed: ${errMsg}`, 'error');
+    }
   }
 
   function _fmtUptime(s) {
@@ -691,6 +780,7 @@ window.SLiMessage = (() => {
     sendMessage, newCompose, openThread,
     toggle, setFilter,
     saveAutoReplyConfig,
+    updateTunnelUrl,
     _restartMessages,
     refresh() { loadHealth(); loadInbox(); loadFindMy(); },
   };
