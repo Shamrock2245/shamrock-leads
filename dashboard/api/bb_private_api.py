@@ -85,8 +85,15 @@ class BlueBubblesClient:
         url = f"{self.base_url}{path}"
         merged_params = self._params(params)
         try:
-            # ngrok free-tier requires this header to bypass the browser warning page
-            headers = {"ngrok-skip-browser-warning": "true"}
+            # Headers required to bypass tunnel browser interstitial pages:
+            #   - ngrok free-tier: ngrok-skip-browser-warning
+            #   - Cloudflare trycloudflare.com: proper User-Agent + Accept
+            #   Both headers are safe to send together for either tunnel type.
+            headers = {
+                "ngrok-skip-browser-warning": "true",
+                "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
+                "Accept": "application/json",
+            }
             async with httpx.AsyncClient(headers=headers) as client:
                 r = await client.request(
                     method, url,

@@ -248,6 +248,11 @@ async def imessage_status():
                 r = await client.get(
                     f"{srv['url']}/api/v1/server/info",
                     params={"password": srv["password"]},
+                    headers={
+                        "ngrok-skip-browser-warning": "true",
+                        "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
+                        "Accept": "application/json",
+                    },
                     timeout=5,
                 )
                 data = r.json()
