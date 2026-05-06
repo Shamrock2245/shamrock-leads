@@ -2477,6 +2477,16 @@
         <div class="stat-value" id="bbKpiMessages">—</div>
         <div class="stat-sub">All-time via bridge</div>
       </div>
+      <div class="stat-card">
+        <div class="stat-label">Bridge Uptime</div>
+        <div class="stat-value" id="bbKpiUptime" style="font-size:1rem">—</div>
+        <div class="stat-sub">Current session</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Inbox Count</div>
+        <div class="stat-value" id="bbKpiInbox">—</div>
+        <div class="stat-sub">Stored in MongoDB</div>
+      </div>
     </div>
 
     <!-- ── 3-Column Grid ── -->
@@ -2500,6 +2510,7 @@
           <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;unread&apos;,this)">Unread</button>
           <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;intake&apos;,this)">Intake</button>
           <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;checkin&apos;,this)">Check-In</button>
+          <button class="bb-inbox-filter-btn" onclick="SLiMessage.setFilter(&apos;geo&apos;,this)">📍 Geo</button>
         </div>
         <div id="bbInboxList" style="flex:1;overflow-y:auto;min-height:380px">
           <div class="sl-empty-state" style="padding:40px 16px">
