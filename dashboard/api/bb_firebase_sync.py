@@ -78,21 +78,36 @@ def _fetch_bb_url_from_firestore() -> Optional[str]:
         from firebase_admin import firestore
         db = firestore.client(app=_firebase_app)
 
-        # BlueBubbles stores server info in the 'servers' collection
+        # BlueBubbles v1.9+ writes to 'server' collection, doc 'config'
+        # Try the confirmed path first, then fall back to 'servers'
+        server_config = db.collection("server").document("config").get()
+        if server_config.exists:
+            data = server_config.to_dict()
+            url = (
+                data.get("serverUrl") or
+                data.get("serverURL") or
+                data.get("server_url") or
+                data.get("url")
+            )
+            if url and url.startswith("http"):
+                return url.rstrip("/")
+
+        # Fall back: scan 'servers' collection (older BB versions)
         servers_ref = db.collection("servers")
         docs = list(servers_ref.limit(5).stream())
 
         if not docs:
-            logger.debug("Firebase: no documents in 'servers' collection yet")
+            logger.debug("Firebase: no documents in 'server/config' or 'servers' collection yet")
             return None
 
         for doc in docs:
             data = doc.to_dict()
             logger.debug("Firebase doc %s: %s", doc.id, data)
 
-            # Try common field names BlueBubbles uses
+            # Try all field names BlueBubbles uses across versions
             url = (
-                data.get("serverURL") or
+                data.get("serverUrl") or   # BB v1.9+ actual field name
+                data.get("serverURL") or   # older BB versions
                 data.get("server_url") or
                 data.get("url") or
                 data.get("ngrokUrl") or
