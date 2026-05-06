@@ -88,8 +88,10 @@ async def require_pin():
         return  # No PIN configured, skip auth
 
     path = request.path
-    if path in ("/login", "/health") or path.startswith("/api/webhooks/"):
-        return  # Allow webhooks and health without auth
+    if (path in ("/login", "/health")
+            or path.startswith("/api/webhooks/")
+            or path == "/api/config/bluebubbles-url"):  # API-key-authed, no session needed
+        return  # Allow webhooks, health, and BB URL sync without session auth
 
     if not session.get("authenticated"):
         if request.path.startswith("/api/"):
