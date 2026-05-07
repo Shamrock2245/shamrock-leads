@@ -164,3 +164,41 @@ async function loadDashboard() {
     if (SL_STATE.counties.length === 0 && m.by_county) buildCountyOptions(Object.keys(m.by_county).sort());
   } catch(e) { console.error('Dashboard load error:', e); }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   COMMAND CENTER KPI AUTO-REFRESH (every 60 seconds, targeted)
+   Refreshes only the KPI cards without reloading the full page.
+   This runs independently of the 30s full-page refresh so the
+   Command Center always shows live data.
+   ══════════════════════════════════════════════════════════════════ */
+(function startKpiAutoRefresh() {
+  // Only start if we're on the dashboard page
+  if (typeof loadDashboard !== 'function') return;
+
+  let _kpiRefreshTimer = null;
+  const KPI_REFRESH_INTERVAL_MS = 60_000; // 60 seconds
+
+  function _scheduleKpiRefresh() {
+    _kpiRefreshTimer = setTimeout(async () => {
+      try {
+        await loadDashboard();
+        // Flash the KPI cards to signal a refresh
+        document.querySelectorAll('.stat-card').forEach(card => {
+          card.style.transition = 'opacity 0.2s';
+          card.style.opacity = '0.6';
+          setTimeout(() => { card.style.opacity = '1'; }, 200);
+        });
+      } catch (e) {
+        console.warn('[KPI auto-refresh] error:', e);
+      }
+      _scheduleKpiRefresh(); // reschedule
+    }, KPI_REFRESH_INTERVAL_MS);
+  }
+
+  // Start after initial load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _scheduleKpiRefresh);
+  } else {
+    _scheduleKpiRefresh();
+  }
+})();

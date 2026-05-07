@@ -773,11 +773,28 @@ window.SLiMessage = (() => {
   }
 
   /* ── Public API ────────────────────────────────────────────────────────── */
+  /* ── openCompose: callable from any tab ─────────────────────────────────── */
+  function openCompose(bookingOrPhone, name) {
+    // Switch to iMessage tab first
+    if (typeof SL !== 'undefined' && typeof SL.switchTab === 'function') {
+      SL.switchTab('tabImessage');
+    }
+    // Pre-fill the compose area
+    setTimeout(() => {
+      const phoneEl = $('bbComposePhone');
+      const nameEl  = $('bbComposeName');
+      if (phoneEl) phoneEl.value = bookingOrPhone || '';
+      if (nameEl)  nameEl.value  = name || '';
+      const textEl = $('bbComposeTxt');
+      if (textEl) textEl.focus();
+    }, 150);
+  }
+
   return {
     init, destroy,
     loadHealth, loadInbox, loadFindMy,
     loadAutomationConfig, loadAutoReplyConfig,
-    sendMessage, newCompose, openThread,
+    sendMessage, newCompose, openThread, openCompose,
     toggle, setFilter,
     saveAutoReplyConfig,
     updateTunnelUrl,

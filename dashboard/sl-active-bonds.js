@@ -244,6 +244,8 @@ function renderActiveBondsTable() {
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:var(--danger)" onclick="addManualAlert('${bkSafe}','${nameSafe}')">🚨 Alert</button>
           ${b.status !== 'exonerated' ? `<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#22c55e;color:#fff" onclick="exonerateFromActiveBonds('${bkSafe}','${nameSafe}')">✅ Exonerate</button>` : ''}
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff" onclick="sendPaymentLink('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💳 Pay Link</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#8b5cf6;color:#fff" onclick="sendBondImessage('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💬 iMessage</button>
           <select style="font-size:10px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text)" onchange="updateBondStatus('${bkSafe}',this.value);this.value=''">
             <option value="">Status…</option>
             <option value="active">Active</option>
@@ -936,4 +938,69 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initActiveBonds);
 } else {
   initActiveBonds();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PAYMENT LINK & IMESSAGE SHORTCUTS
+   ══════════════════════════════════════════════════════════════════ */
+
+/**
+ * Send SwipeSimple payment link to indemnitor via iMessage.
+ * Falls back to copying the link if BB is offline.
+ */
+async function sendPaymentLink(bookingNumber, defendantName, phone) {
+  const paymentLink = window._SWIPESIMPLE_LINK || 'https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd';
+  const cleanPhone = (phone || '').replace(/\D/g, '');
+
+  if (!cleanPhone) {
+    // No phone — just copy the link
+    try { await navigator.clipboard.writeText(paymentLink); } catch(e) { /* ignore */ }
+    toast('No phone on file — payment link copied to clipboard', 'warning');
+    return;
+  }
+
+  const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Please complete payment at your earliest convenience. Questions? Call us at (239) 224-5454.`;
+
+  try {
+    const r = await fetch('/api/imessage/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: '+1' + cleanPhone.slice(-10), message }),
+    });
+    const d = await r.json();
+    if (d.success) {
+      toast(`💳 Payment link sent to ${phone} via iMessage`, 'success');
+    } else {
+      // BB offline — fallback: open SMS
+      window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
+      toast('BB offline — opened SMS fallback', 'warning');
+    }
+  } catch(e) {
+    window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
+    toast('Opened SMS fallback', 'warning');
+  }
+}
+
+/**
+ * Open iMessage compose for a bond's indemnitor.
+ * If the iMessage tab is available, switches to it and pre-fills the compose area.
+ * Otherwise falls back to sms: link.
+ */
+function sendBondImessage(bookingNumber, defendantName, phone) {
+  const cleanPhone = (phone || '').replace(/\D/g, '');
+  if (!cleanPhone) { toast('No phone number on file for this bond', 'error'); return; }
+
+  const formattedPhone = '+1' + cleanPhone.slice(-10);
+
+  // Try to switch to iMessage tab and pre-fill compose
+  if (typeof SLiMessage !== 'undefined' && SLiMessage.openCompose) {
+    SLiMessage.openCompose(formattedPhone, `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `);
+    // Switch to iMessage tab
+    if (typeof SL !== 'undefined' && SL.switchTab) SL.switchTab('tabImessage');
+    toast(`💬 Opened iMessage compose for ${phone}`, 'info');
+  } else {
+    // Fallback: open native SMS
+    const msg = `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `;
+    window.open(`sms:${phone}?body=${encodeURIComponent(msg)}`);
+  }
 }

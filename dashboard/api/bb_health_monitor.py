@@ -36,12 +36,22 @@ from quart import Blueprint, jsonify, request
 from dashboard.api.bb_private_api import BlueBubblesClient
 from dashboard.extensions import BB_SERVERS, get_collection
 
+from datetime import timedelta
+
 logger = logging.getLogger(__name__)
 
 bb_health_bp = Blueprint("bb_health_monitor", __name__)
 
 _SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_URL", "")
 _SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "#shamrock-alerts")
+
+# ── Sustained-offline tracking ────────────────────────────────────────────────
+# Prevents alert storms: only fires the "offline >30 min" Slack alert once per
+# outage, not on every health-check cycle.
+_OFFLINE_THRESHOLD_MINUTES = 30
+_offline_since: dict[str, datetime] = {}   # suffix -> first-offline datetime
+_offline_alerted: set[str] = set()         # suffixes that already got the 30-min alert
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 async def _send_slack_alert(message: str) -> None:
@@ -179,12 +189,38 @@ async def run_health_check_all() -> dict:
 
         if health["status"] == "offline":
             overall_status = "offline"
-            await _send_slack_alert(
-                f"🔴 *{server['label']}* is OFFLINE\n"
-                f"Issues: {', '.join(health['issues'])}\n"
-                f"URL: {server['url']}"
-            )
-        elif health["status"] == "degraded" and overall_status == "healthy":
+            now = datetime.now(timezone.utc)
+            if suffix not in _offline_since:
+                # First detection of this outage — record the start time
+                _offline_since[suffix] = now
+                logger.warning("[bb-health] %s went offline at %s", server["label"], now.isoformat())
+            else:
+                # Check if we've crossed the 30-minute threshold
+                offline_duration = now - _offline_since[suffix]
+                if (
+                    offline_duration >= timedelta(minutes=_OFFLINE_THRESHOLD_MINUTES)
+                    and suffix not in _offline_alerted
+                ):
+                    _offline_alerted.add(suffix)
+                    minutes_down = int(offline_duration.total_seconds() / 60)
+                    await _send_slack_alert(
+                        f"🔴 *{server['label']}* has been OFFLINE for *{minutes_down} minutes*\n"
+                        f"Issues: {', '.join(health['issues'])}\n"
+                        f"URL: {server['url']}\n"
+                        f"⚠️ iMessage automation is broken — leads may be dying silently."
+                    )
+        else:
+            # Server is back online — clear the offline tracking state
+            if suffix in _offline_since:
+                was_down_since = _offline_since.pop(suffix)
+                _offline_alerted.discard(suffix)
+                recovery_minutes = int((datetime.now(timezone.utc) - was_down_since).total_seconds() / 60)
+                await _send_slack_alert(
+                    f"✅ *{server['label']}* is back ONLINE\n"
+                    f"Was offline for ~{recovery_minutes} minutes."
+                )
+
+        if health["status"] == "degraded" and overall_status == "healthy":
             overall_status = "degraded"
             await _send_slack_alert(
                 f"🟡 *{server['label']}* is DEGRADED\n"
