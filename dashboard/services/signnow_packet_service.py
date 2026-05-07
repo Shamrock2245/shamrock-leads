@@ -242,19 +242,101 @@ class SignNowPacketService:
     def _build_prefill_fields(intake_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Build the list of {field_name, prefilled_text} dicts from an intake doc.
-        Field names match those tagged in the SignNow templates.
+
+        IMPORTANT: The live SignNow templates use 4 different naming conventions:
+          1. kebab-case:  defendant-full-name, numeric-bond-amount  (Header, Disclosure, Surety Terms)
+          2. PascalCase:  DefendantName, BondAmount, IndemnitorName  (Def App, Promissory, Collateral, FAQs)
+          3. Ind-prefix:  IndName, IndAddress, IndDOB               (Indemnity Agreement)
+          4. Def-prefix:  DefLastName, DefFirstName, DefDOB          (Defendant Application)
+
+        We send ALL conventions for each piece of data. SignNow silently ignores
+        field names that don't exist on a given document, so duplicates are safe.
         """
         ind = intake_doc.get("indemnitor", {})
         def_ = intake_doc.get("defendant", {})
 
+        # ── Extract core values ──────────────────────────────────────────────
         defendant_name = intake_doc.get("defendant_name") or def_.get("name", "")
+        def_first = def_.get("firstName", "") or def_.get("first_name", "")
+        def_last = def_.get("lastName", "") or def_.get("last_name", "")
+        def_middle = def_.get("middleName", "") or def_.get("middle_name", "")
+        if not defendant_name and (def_first or def_last):
+            defendant_name = " ".join(filter(None, [def_first, def_middle, def_last]))
+
+        ind_first = ind.get("firstName", "") or ind.get("first_name", "")
+        ind_last = ind.get("lastName", "") or ind.get("last_name", "")
         indemnitor_name = intake_doc.get("indemnitor_name") or (
-            " ".join(filter(None, [ind.get("firstName"), ind.get("lastName")]))
+            " ".join(filter(None, [ind_first, ind_last]))
         )
+
         booking_number = (
             intake_doc.get("defendant_booking_number") or def_.get("bookingNumber", "")
         )
         county = intake_doc.get("defendant_county") or def_.get("county", "")
+        facility = def_.get("facility", intake_doc.get("defendant_facility", ""))
+        charges = def_.get("charges", "") or intake_doc.get("charges", "")
+        case_number = def_.get("caseNumber", "") or intake_doc.get("case_number", "")
+        court_date = def_.get("courtDate", "") or intake_doc.get("court_date", "")
+        court_time = def_.get("courtTime", "") or intake_doc.get("court_time", "")
+        court_location = def_.get("courtLocation", "") or intake_doc.get("court_location", "")
+        arrest_date = def_.get("arrestDate", "") or intake_doc.get("arrest_date", "")
+
+        # Indemnitor contact
+        ind_phone = ind.get("phone", intake_doc.get("indemnitor_phone", ""))
+        ind_email = ind.get("email", intake_doc.get("indemnitor_email", ""))
+        ind_address = ind.get("address", "")
+        ind_city = ind.get("city", "")
+        ind_state = ind.get("state", "FL")
+        ind_zip = ind.get("zip", "")
+        ind_city_state_zip = ", ".join(filter(None, [ind_city, ind_state])) + (f" {ind_zip}" if ind_zip else "")
+        ind_dob = ind.get("dob", "")
+        ind_dl = ind.get("dl", "") or ind.get("dlNumber", "")
+        ind_dl_state = ind.get("dlState", "FL")
+        ind_ssn = ind.get("ssn", "")
+        ind_relation = ind.get("relationship", "") or ind.get("relation", "")
+
+        # Indemnitor employment
+        ind_employer = ind.get("employer", "") or ind.get("employerName", "")
+        ind_emp_phone = ind.get("employerPhone", "")
+        ind_emp_address = ind.get("employerAddress", "") or ind.get("employerCity", "")
+
+        # Indemnitor vehicle
+        ind_car_make = ind.get("carMake", "")
+        ind_car_model = ind.get("carModel", "")
+        ind_car_year = ind.get("carYear", "")
+        ind_car_color = ind.get("carColor", "")
+
+        # References
+        ref1_name = ind.get("ref1Name", "") or ind.get("reference1Name", "")
+        ref1_phone = ind.get("ref1Phone", "") or ind.get("reference1Phone", "")
+        ref1_relation = ind.get("ref1Relation", "") or ind.get("reference1Relation", "")
+        ref1_address = ind.get("ref1Address", "") or ind.get("reference1Address", "")
+        ref2_name = ind.get("ref2Name", "") or ind.get("reference2Name", "")
+        ref2_phone = ind.get("ref2Phone", "") or ind.get("reference2Phone", "")
+        ref2_relation = ind.get("ref2Relation", "") or ind.get("reference2Relation", "")
+        ref2_address = ind.get("ref2Address", "") or ind.get("reference2Address", "")
+
+        # Defendant descriptors
+        def_dob = def_.get("dob", "") or intake_doc.get("defendant_dob", "")
+        def_address = def_.get("address", "")
+        def_city = def_.get("city", "")
+        def_state = def_.get("state", "FL")
+        def_zip = def_.get("zip", "")
+        def_phone = def_.get("phone", "")
+        def_email = def_.get("email", "")
+        def_height = def_.get("height", "")
+        def_weight = def_.get("weight", "")
+        def_race = def_.get("race", "")
+        def_hair = def_.get("hair", "") or def_.get("hairColor", "")
+        def_eyes = def_.get("eyes", "") or def_.get("eyeColor", "")
+        def_dl = def_.get("dl", "") or def_.get("dlNumber", "")
+        def_dl_state = def_.get("dlState", "FL")
+        def_sex = def_.get("sex", "")
+        def_employer = def_.get("employer", "")
+        def_emp_phone = def_.get("employerPhone", "")
+        def_emp_address = def_.get("employerAddress", "")
+
+        # Bond / payment math
         bond_amount_raw = def_.get("bondAmount", "") or intake_doc.get("bond_amount", "")
         try:
             bond_amount = float(str(bond_amount_raw).replace("$", "").replace(",", ""))
@@ -262,45 +344,176 @@ class SignNowPacketService:
             premium_str = f"${premium:,.2f}"
             bond_amount_str = f"${bond_amount:,.2f}"
         except (ValueError, TypeError):
+            bond_amount = 0.0
+            premium = 0.0
             premium_str = ""
             bond_amount_str = str(bond_amount_raw)
 
         today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+        now = datetime.now(timezone.utc)
+        day_dd = now.strftime("%d")
+        month_name = now.strftime("%B")
+        year_yy = now.strftime("%y")
 
+        # ── Build field map with ALL naming conventions ──────────────────────
+        # SignNow silently ignores field names not present on a template,
+        # so sending all variants is safe and ensures universal hydration.
         raw_fields = {
-            "defendant_name":      defendant_name,
-            "DefendantName":       defendant_name,
-            "defendant_dob":       def_.get("dob", ""),
-            "booking_number":      booking_number,
-            "arrest_number":       booking_number,
-            "county":              county,
-            "facility":            def_.get("facility", intake_doc.get("defendant_facility", "")),
-            "charges":             def_.get("charges", ""),
-            "bond_amount":         bond_amount_str,
-            "BondAmount":          bond_amount_str,
-            "indemnitor_name":     indemnitor_name,
-            "IndemnitorName":      indemnitor_name,
-            "indemnitor_address":  ind.get("address", ""),
-            "indemnitor_city":     ind.get("city", ""),
-            "indemnitor_state":    ind.get("state", "FL"),
-            "indemnitor_zip":      ind.get("zip", ""),
-            "indemnitor_phone":    ind.get("phone", intake_doc.get("indemnitor_phone", "")),
-            "indemnitor_email":    ind.get("email", intake_doc.get("indemnitor_email", "")),
-            "indemnitor_dob":      ind.get("dob", ""),
-            "indemnitor_dl":       ind.get("dl", ""),
-            "indemnitor_dl_state": ind.get("dlState", "FL"),
-            "premium_amount":      premium_str,
-            "PremiumAmount":       premium_str,
-            "agent_name":          AGENT_NAME,
-            "AgentName":           AGENT_NAME,
-            "agent_license":       AGENT_LICENSE,
-            "AgentLicense":        AGENT_LICENSE,
-            "agency_name":         AGENCY_NAME,
-            "AgencyName":          AGENCY_NAME,
-            "agency_phone":        AGENCY_PHONE,
-            "date":                today,
-            "Date":                today,
-            "intake_id":           intake_doc.get("intake_id", ""),
+            # ─── Defendant Name (all conventions) ─────────────────────────
+            "defendant_name":         defendant_name,
+            "DefendantName":          defendant_name,
+            "defendant-full-name":    defendant_name,
+            "DefName":                defendant_name,
+            "Defendant Print Name":   defendant_name,
+            "Defendants NameRow1":    defendant_name,
+            "DefFirstName":           def_first,
+            "DefLastName":            def_last,
+            "DefMiddleName":          def_middle,
+
+            # ─── Defendant Details (Def-prefix for Defendant Application) ─
+            "DefDOB":                 def_dob,
+            "defendant_dob":          def_dob,
+            "DefPhone":               def_phone,
+            "defendant-phone":        def_phone,
+            "defendant-email":        def_email,
+            "DefAddress":             def_address,
+            "defendant-address":      def_address,
+            "DefCity":                def_city,
+            "DefState":               def_state,
+            "DefZip":                 def_zip,
+            "DefCounty":              county,
+            "DefHeight":              def_height,
+            "DefWeight":              def_weight,
+            "DefRace":                def_race,
+            "DefHair":                def_hair,
+            "DefEyes":                def_eyes,
+            "DefSex":                 def_sex,
+            "DefDL":                  def_dl,
+            "DefDLState":             def_dl_state,
+            "DefEmployer":            def_employer,
+            "DefEmpPhone":            def_emp_phone,
+            "DefEmpAddress":          def_emp_address,
+
+            # ─── Indemnitor Name (all conventions) ────────────────────────
+            "indemnitor_name":        indemnitor_name,
+            "IndemnitorName":         indemnitor_name,
+            "indemnitor-full-name":   indemnitor_name,
+            "IndName":                indemnitor_name,
+
+            # ─── Indemnitor Details (Ind-prefix for Indemnity Agreement) ──
+            "IndAddress":             ind_address,
+            "indemnitor-address":     ind_address,
+            "indemnitor_address":     ind_address,
+            "IndCityStateZip":        ind_city_state_zip,
+            "indemnitor_city":        ind_city,
+            "indemnitor_state":       ind_state,
+            "indemnitor_zip":         ind_zip,
+            "IndPhone":               ind_phone,
+            "indemnitor-phone":       ind_phone,
+            "indemnitor_phone":       ind_phone,
+            "Phone":                  ind_phone,        # SSA Release uses bare "Phone"
+            "IndDL":                  ind_dl,
+            "indemnitor_dl":          ind_dl,
+            "indemnitor_dl_state":    ind_dl_state,
+            "IndDOB":                 ind_dob,
+            "indemnitor_dob":         ind_dob,
+            "IndSSN":                 ind_ssn,
+            "indemnitor-email":       ind_email,
+            "indemnitor_email":       ind_email,
+            "IndRelation":            ind_relation,
+
+            # ─── Indemnitor Employment ────────────────────────────────────
+            "IndEmployer":            ind_employer,
+            "IndEmpPhone":            ind_emp_phone,
+            "IndEmpAddress":          ind_emp_address,
+
+            # ─── Indemnitor Vehicle ───────────────────────────────────────
+            "IndCarMake":             ind_car_make,
+            "IndCarModel":            ind_car_model,
+            "IndCarYear":             ind_car_year,
+            "IndCarColor":            ind_car_color,
+
+            # ─── References ──────────────────────────────────────────────
+            "Ref1Name":               ref1_name,
+            "Ref1Phone":              ref1_phone,
+            "Ref1Relation":           ref1_relation,
+            "Ref1Address":            ref1_address,
+            "Ref2Name":               ref2_name,
+            "Ref2Phone":              ref2_phone,
+            "Ref2Relation":           ref2_relation,
+            "Ref2Address":            ref2_address,
+
+            # ─── SSA Release (uses bare names) ───────────────────────────
+            "FullName":               indemnitor_name,  # SSA Release
+            "Social":                 ind_ssn,          # SSA Release
+
+            # ─── Bond / Financial ─────────────────────────────────────────
+            "bond_amount":            bond_amount_str,
+            "BondAmount":             bond_amount_str,
+            "numeric-bond-amount":    bond_amount_str,
+            "NumericBondAmount":      bond_amount_str,
+            "premium_amount":         premium_str,
+            "PremiumAmount":          premium_str,
+            "premium-amount":         premium_str,
+            "Premium":                premium_str,
+
+            # ─── Booking / Arrest ─────────────────────────────────────────
+            "booking_number":         booking_number,
+            "BookingNumber":          booking_number,
+            "arrest_number":          booking_number,
+            "county":                 county,
+            "arrest-county":          county,
+            "ArrestCounty":           county,
+            "facility":              facility,
+            "JailFacility":           facility,
+            "jail-facility":          facility,
+            "charges":               charges,
+            "ChargeDescription":      charges,
+            "charge-description":     charges,
+            "arrest-date":            arrest_date,
+            "ArrestDate":             arrest_date,
+
+            # ─── Court ────────────────────────────────────────────────────
+            "case-number":            case_number,
+            "CaseNum":                case_number,
+            "CaseNumber":             case_number,
+            "court-date":             court_date,
+            "CourtDate":              court_date,
+            "court-time":             court_time,
+            "CourtTime":              court_time,
+            "court-location":         court_location,
+            "CourtLocation":          court_location,
+
+            # ─── Agent / Agency ───────────────────────────────────────────
+            "agent_name":             AGENT_NAME,
+            "AgentName":              AGENT_NAME,
+            "agent_license":          AGENT_LICENSE,
+            "AgentLicense":           AGENT_LICENSE,
+            "AgentLicenseNumber":     AGENT_LICENSE,
+            "agency_name":            AGENCY_NAME,
+            "AgencyName":             AGENCY_NAME,
+            "agency_phone":           AGENCY_PHONE,
+            "AgentPhone":             AGENCY_PHONE,
+            "AgentAddress":           "1528 Broadway",
+            "AgentCity":              "Fort Myers",
+            "AgentState":             "FL",
+            "AgentZip":               "33901",
+            "ReceiptNumber":          intake_doc.get("intake_id", ""),
+
+            # ─── Dates (all conventions) ──────────────────────────────────
+            "date":                   today,
+            "Date":                   today,
+            "DateSigned":             today,
+            "date-signed":            today,
+            "date-signed-ind":        today,
+            "date-signed-def":        today,
+            "date-signed-waiver":     today,
+            "DateDD":                 day_dd,
+            "Month":                  month_name,
+            "YearYY":                 year_yy,
+
+            # ─── Tracking ────────────────────────────────────────────────
+            "intake_id":              intake_doc.get("intake_id", ""),
         }
 
         return [
