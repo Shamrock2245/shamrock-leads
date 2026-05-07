@@ -30,6 +30,7 @@ function timeAgo(ts) {
 /* ── State ────────────────────────────────────────────────────────── */
 let _abBonds = [];
 let _abFilter = 'all';
+window._abFilter = _abFilter;   // expose for sl-active-bonds-ext.js
 let _abCheckinBooking = '';
 let _abCheckinName = '';
 let _abEditingBooking = null;
@@ -43,6 +44,7 @@ async function loadActiveBonds() {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     _abBonds = data.bonds || [];
+    window._abBonds = _abBonds;   // expose for sl-active-bonds-ext.js override
 
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('abKpiTotal',    (data.total || _abBonds.length).toLocaleString());
@@ -267,6 +269,7 @@ function renderActiveBondsTable() {
 /* ── Filter ─────────────────────────────────────────────────────── */
 function filterActiveBonds(status) {
   _abFilter = status;
+  window._abFilter = status;   // keep ext in sync
   document.querySelectorAll('#abStatusFilter button[data-filter]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.filter === status);
   });
@@ -993,10 +996,13 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
   const formattedPhone = '+1' + cleanPhone.slice(-10);
 
   // Try to switch to iMessage tab and pre-fill compose
-  if (typeof SLiMessage !== 'undefined' && SLiMessage.openCompose) {
-    SLiMessage.openCompose(formattedPhone, `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `);
-    // Switch to iMessage tab
-    if (typeof SL !== 'undefined' && SL.switchTab) SL.switchTab('tabImessage');
+  if (window.SLiMessage && window.SLiMessage.openCompose) {
+    // Switch to iMessage tab first
+    const imTab = document.querySelector('[data-tab="tabImessage"]');
+    if (imTab && typeof SL !== 'undefined' && SL.switchTab) SL.switchTab(imTab);
+    setTimeout(() => {
+      window.SLiMessage.openCompose(formattedPhone, `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `);
+    }, 200);
     toast(`💬 Opened iMessage compose for ${phone}`, 'info');
   } else {
     // Fallback: open native SMS
