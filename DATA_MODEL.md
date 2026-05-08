@@ -1,140 +1,273 @@
-# DATA_MODEL.md
+# DATA_MODEL.md — ShamrockLeads Entity & Schema Reference
 
-## Purpose
-This file defines the canonical entities and identity rules used throughout ShamrockLeads.
-Entities marked `[IMPLEMENTED]` exist in code. Entities marked `[PLANNED — Phase N]` are architectural targets.
-
-> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
-> **Last Updated:** 2026-05-04
+> **Last Updated:** 2026-05-08
+> **Database:** MongoDB Atlas — `ShamrockBailDB`
+> **Dedup Key:** `county` + `booking_number` (for arrests)
+> **Identity Rule:** ArrestLead ≠ Defendant ≠ Indemnitor ≠ Match ≠ BondCase. Never collapse.
 
 ---
 
-## Core Principle
-Every workflow step must attach to the correct record boundary.
+## Collections Overview
 
-Do not collapse these concepts into one record:
-- arrest lead
-- defendant
-- indemnitor
-- match
-- bonded case
-- surety
-- POA inventory
-- document packet
-- payment request
-- location event
-- risk flag
-- audit event
-
----
-
-## 1. ArrestLead `[IMPLEMENTED]`
-Represents scraped booking/arrest information. Entry point for all data.
-Implemented in `core/models.py` as the `ArrestRecord` dataclass.
-
-### Primary identity
-- `ArrestLead_ID` (MongoDB `_id`)
-- Unique natural key: `County + Booking_Number`
-
-### Constraints
-- One arrest lead per `County + Booking_Number`
-- Updates may enrich existing record (upsert)
-- Arrest lead is NOT sufficient to generate paperwork
+| Collection | Purpose | Dedup Key |
+|------------|---------|-----------|
+| `arrests` | Raw scraped arrest records (39 fields) | `county` + `booking_number` |
+| `defendants` | Normalized defendant profiles | `Defendant_ID` (UUID) |
+| `indemnitors` | Indemnitor intake records | `Indemnitor_ID` (UUID) |
+| `matches` | Validated defendant↔indemnitor links | `Match_ID` (UUID) |
+| `active_bonds` | Bonded cases with 7-status lifecycle | `Bond_Case_ID` (UUID), natural: `poa_number` + `case_number` |
+| `prospective_bonds` | Pre-bond pipeline (leads being worked) | `_id` (ObjectId) |
+| `poa_inventory` | Power of Attorney inventory per surety | `poa_number` (unique) |
+| `paperwork_packets` | SignNow document packet metadata | `Packet_ID` (UUID) |
+| `payments` | Payment log (SwipeSimple) | `Payment_ID` (UUID) |
+| `payment_plans` | Scheduled payment plans | `_id` (ObjectId) |
+| `intake_queue` | Incoming intake submissions | `_id` (ObjectId) |
+| `audit_events` | Immutable state change log | `Event_ID` (UUID) |
+| `defendant_notes` | Free-text notes on defendants | `_id` (ObjectId) |
+| `court_reminders` | Scheduled SMS court reminders | `_id` (ObjectId) |
+| `notifications` | Dashboard notification center | `_id` (ObjectId) |
+| `outreach_sequences` | Drip campaign state machine | `_id` (ObjectId) |
 
 ---
 
-## 2. BondedCase `[IMPLEMENTED — shamrock-bond-tracker]`
-Represents a written bail bond. Created when an agent writes a bond.
-Implemented in `shamrock-bond-tracker/tracker/models.py` as the `BondCase` dataclass.
-Stored in MongoDB collection: `shamrock_tracker.bond_cases`
+## ArrestRecord (39 Fields)
 
-### Primary identity
-- `bond_id` (UUID, generated at write time)
-- Natural key: `County + Booking_Number` (links back to ArrestLead)
+The canonical arrest record. Written by every county scraper, scored by `lead_scorer.py`, stored in `arrests`.
 
-### Key fields
-- `defendant_phone` — E.164 format; used to match inbound Twilio SMS to this bond
-- `bond_status` — ACTIVE / FORFEITED / EXONERATED / SURRENDERED
-- `risk_level` — LOW / MEDIUM / HIGH / CRITICAL (computed from location events)
-- `last_known_city`, `last_known_state`, `last_known_lat`, `last_known_lon` — updated on each location event
-- `location_event_count` — running total of captured location events
+```
+full_name             : str       # "LAST, FIRST MIDDLE" or "FIRST LAST"
+first_name            : str
+middle_name           : str
+last_name             : str
+date_of_birth         : str       # ISO "YYYY-MM-DD"
+age                   : int
+race                  : str       # W/B/H/A/O
+sex                   : str       # M/F
+height                : str
+weight                : str
+hair_color            : str
+eye_color             : str
+address               : str
+city                  : str
+state                 : str
+zip_code              : str
+booking_number        : str       # DEDUP KEY (+ county)
+case_number           : str
+arrest_date           : str       # ISO
+booking_date          : str       # ISO
+release_date          : str       # ISO or None
+facility              : str
+charges               : list[dict]  # [{description, degree, bond_amount, bond_type, statute}]
+total_bond_amount     : float
+bond_type             : str       # "SURETY", "CASH", "ROR", "NO BOND"
+custody_status        : str       # "In Custody", "Released"
+court_date            : str       # ISO or None
+court_type            : str
+judge                 : str
+arresting_agency      : str
+mugshot_url           : str
+source_url            : str
+county                : str       # DEDUP KEY (+ booking_number)
+scraped_at            : str       # ISO timestamp
+lead_score            : int       # 0–100
+lead_status           : str       # "hot", "warm", "cold", "disqualified"
+notes                 : str
+image_url             : str
+raw_html              : str       # Optional debug field
+```
 
-### Constraints
-- One BondedCase per `bond_id`
-- `defendant_phone` must be unique across ACTIVE bonds (one phone → one active bond)
-- BondedCase is the only approved bridge between ArrestLead and location tracking
-
----
-
-## 3. LocationEvent `[IMPLEMENTED — shamrock-bond-tracker]`
-Represents a single IP geolocation capture from an inbound SMS.
-Stored in MongoDB collection: `shamrock_tracker.location_events`
-
-### Primary identity
-- `event_id` (UUID)
-- Foreign key: `bond_id` → BondedCase
-
-### Key fields
-- `ip_address` — extracted public IP from SMS body
-- `city`, `region`, `country`, `lat`, `lon` — from MaxMind GeoLite2
-- `isp`, `org` — ISP/organization from GeoLite2
-- `is_vpn`, `is_proxy`, `is_tor` — from ipquery or heuristic detection
-- `risk_score` — 0–100 computed by RiskEngine
-- `risk_flags` — list of flag codes (e.g., `VPN_DETECTED`, `STATE_JUMP`, `TOR_DETECTED`)
-- `distance_from_last_km` — geodesic distance from previous location event
-- `source_platform` — `twilio_sms` / `whatsapp` / `manual`
-- `message_sid` — Twilio message SID for audit trail
-
-### Constraints
-- Immutable after creation (append-only log)
-- One LocationEvent per unique `ip_address` per `bond_id` per day (dedup)
-
----
-
-## 4. RiskFlag `[IMPLEMENTED — shamrock-bond-tracker]`
-Represents an auto-generated alert requiring agent review.
-Stored in MongoDB collection: `shamrock_tracker.risk_flags`
-
-### Primary identity
-- `flag_id` (UUID)
-- Foreign key: `bond_id` → BondedCase
-
-### Key fields
-- `flag_type` — e.g., `TOR_DETECTED`, `COUNTRY_JUMP`, `RAPID_MOVEMENT_CRITICAL`
-- `severity` — MEDIUM / HIGH / CRITICAL
-- `description` — human-readable explanation
-- `acknowledged` — bool; set to true when agent reviews
-- `acknowledged_by` — agent name
-- `acknowledged_at` — timestamp
-
-### Constraints
-- One open flag per `bond_id + flag_type` (no duplicate open flags of same type)
-- Flags are never deleted — acknowledged flags are retained for audit
+### Required Fields (minimum viable record)
+- `full_name` (or `first_name` + `last_name`)
+- `booking_number`
+- `county`
+- `scraped_at`
 
 ---
 
-## State Transition Rule
-The bonded-case record is the only approved bridge between:
-- matched intake
-- surety selection
-- POA assignment
-- case number confirmation
-- paperwork generation
-- signature workflow
-- payment workflow
-- **location tracking** ← NEW
-- **risk flag escalation** ← NEW
+## Defendant
 
-No shortcutting the chain.
+Normalized, deduplicated defendant profile linked to one or more arrest records.
+
+```
+Defendant_ID          : str (UUID)
+full_name             : str
+first_name            : str
+last_name             : str
+date_of_birth         : str
+phone                 : str
+email                 : str
+address               : str
+linked_arrests        : list[ObjectId]   # refs to arrests._id
+notes                 : list[dict]       # [{text, author, created_at}]
+created_at            : str (ISO)
+updated_at            : str (ISO)
+```
 
 ---
 
-## Cross-Repo Architecture
+## Indemnitor
 
-| Repo | Responsibility | MongoDB DB |
-|---|---|---|
-| `shamrock-leads` | Arrest scraping, lead scoring, Slack alerts | `shamrock_leads` |
-| `shamrock-bond-tracker` | Bond written side, location tracking, risk flags | `shamrock_tracker` |
-| `shamrock-bail-portal-site` | Indemnitor portal, GAS, SignNow, Drive | Wix CMS + Google Sheets |
+Person responsible for the bond (cosigner).
 
-The `County + Booking_Number` key is the canonical link between `shamrock-leads` (ArrestLead) and `shamrock-bond-tracker` (BondedCase).
+```
+Indemnitor_ID         : str (UUID)
+full_name             : str
+first_name            : str
+last_name             : str
+phone                 : str
+email                 : str
+address               : str
+relationship          : str              # "Mother", "Spouse", "Friend", etc.
+source                : str              # "wix", "telegram", "walk-in", "phone"
+created_at            : str (ISO)
+```
+
+---
+
+## Match
+
+Validated link between an Indemnitor and a Defendant.
+
+```
+Match_ID              : str (UUID)
+indemnitor_id         : str (ref)
+defendant_id          : str (ref)
+arrest_id             : str (ref)
+confidence            : float            # 0.0–1.0
+strategy              : str              # "exact_booking", "fuzzy_name_dob", "county_name", "manual"
+status                : str              # "pending", "confirmed", "rejected"
+confirmed_by          : str              # "system" or staff name
+created_at            : str (ISO)
+confirmed_at          : str (ISO)
+```
+
+---
+
+## Active Bond (7-Status Lifecycle)
+
+A bonded case with surety, POA, and court tracking.
+
+```
+Bond_Case_ID          : str (UUID)
+defendant_id          : str (ref)
+indemnitor_id         : str (ref)
+match_id              : str (ref)
+arrest_id             : str (ref)
+
+# Bond Details
+poa_number            : str              # From POA inventory
+case_number           : str
+court_case_number     : str
+surety_id             : str              # "osi" or "palmetto"
+bond_amount           : float
+premium_amount        : float
+premium_rate          : float            # Typically 0.10 (10%)
+
+# Status
+status                : str              # "active" | "monitoring" | "alert" | "exonerated" | "forfeited" | "surrendered" | "reinstated"
+status_history        : list[dict]       # [{from_status, to_status, changed_by, changed_at, note}]
+
+# Court
+court_date            : str (ISO)
+court_location        : str
+judge                 : str
+
+# Parties
+defendant_name        : str
+defendant_phone       : str
+indemnitor_name       : str
+indemnitor_phone      : str
+
+# Paperwork
+packet_id             : str (ref)
+signing_status        : str              # "pending", "sent", "completed"
+signnow_document_id   : str
+
+# Timestamps
+created_at            : str (ISO)
+updated_at            : str (ISO)
+posted_date           : str (ISO)
+```
+
+---
+
+## POA Inventory
+
+Power of Attorney documents tracked per surety.
+
+```
+poa_number            : str (unique)
+surety_id             : str              # "osi" or "palmetto"
+status                : str              # "available", "assigned", "void", "used"
+tier                  : str              # bond amount tier
+assigned_to           : str (ref)        # Bond_Case_ID when assigned
+assigned_at           : str (ISO)
+released_at           : str (ISO)        # Set when bond exonerated/forfeited/surrendered
+book_number           : str
+created_at            : str (ISO)
+```
+
+---
+
+## Audit Event
+
+Immutable record of every state change. **Never update or delete.**
+
+```
+Event_ID              : str (UUID)
+entity_type           : str              # "bond", "defendant", "intake", "poa", etc.
+entity_id             : str
+action                : str              # "status_change", "poa_assigned", "match_confirmed", etc.
+actor                 : str              # "system", "staff:brendan", "agent:matcher"
+old_value             : any
+new_value             : any
+metadata              : dict
+created_at            : str (ISO)
+```
+
+---
+
+## Prospective Bond
+
+Pre-bond pipeline record — a lead being actively worked.
+
+```
+defendant_id          : str (ref)
+indemnitor_id         : str (ref)
+arrest_id             : str (ref)
+status                : str              # "new", "contacted", "intake_pending", "intake_complete", "matching", "ready_to_bond"
+bond_amount           : float
+county                : str
+source                : str
+notes                 : str
+created_at            : str (ISO)
+updated_at            : str (ISO)
+```
+
+---
+
+## Key Indexes
+
+| Collection | Index | Type | Purpose |
+|------------|-------|------|---------|
+| `arrests` | `{county: 1, booking_number: 1}` | Unique | Dedup key |
+| `arrests` | `{lead_status: 1, scraped_at: -1}` | Compound | Hot lead queries |
+| `arrests` | `{county: 1, scraped_at: -1}` | Compound | Per-county dashboard |
+| `active_bonds` | `{poa_number: 1}` | Unique (sparse) | POA lookup |
+| `active_bonds` | `{status: 1}` | Single | Kanban grouping |
+| `poa_inventory` | `{poa_number: 1}` | Unique | POA lookup |
+| `poa_inventory` | `{surety_id: 1, status: 1}` | Compound | Available POA queries |
+| `audit_events` | `{created_at: 1}` | TTL (90 days) | Auto-purge old events |
+
+---
+
+## Data Flow Rules
+
+1. **Scraping → `arrests`**: Upsert by `county` + `booking_number`. Never overwrite with older data.
+2. **`arrests` → `defendants`**: Normalization creates/updates defendant profiles. Many arrests → one defendant.
+3. **Intake → `indemnitors`**: Validated intake creates indemnitor record.
+4. **`defendants` + `indemnitors` → `matches`**: Matching engine scores and links. Human gate for < 0.85 confidence.
+5. **Confirmed match → `active_bonds`**: Only after: defendant exists, indemnitor exists, match confirmed, surety selected, POA assigned.
+6. **`active_bonds` → `paperwork_packets`**: Packet generation hydrates SignNow templates with bond data.
+7. **Status changes**: Every transition writes to `status_history[]` AND `audit_events`.
+8. **POA lifecycle**: Available → Assigned (on bond creation) → Released (on exoneration/forfeit/surrender) → Available.

@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.4.0] — 2026-05-08 (Documentation Overhaul + POA Modal Fix)
+
+### Fixed
+
+- **POA Inventory Modal** (`styles.css`) — Fixed CSS specificity conflict where `.inv-overlay:not(.active)` forced `display: none !important`, but JS uses `.show` class. Changed selector to `:not(.show)`. The "Click to manage POA inventory" banner now correctly opens the modal.
+- **`.env.example`** — Corrected `BLUEBUBBLES_URL_0178` to actual ngrok permanent tunnel URL (`pseudospherical-etta-untactually.ngrok-free.dev`). Removed incorrect Cloudflare Tunnel references.
+
+### Added — Frontend (via Manus commit `9881188`)
+
+- **Destructive drop confirmation** (`sl-active-bonds.js`) — FORFEITED / SURRENDERED Kanban drops now show a confirmation modal before the API call. Optimistic update reverts on cancel or API failure.
+- **Kanban CSS animations** (`sl-overhaul.css`) — Card enter animation with 0.04s per-child stagger, dragging card rotates -1deg, drop zone pulses, alert cards pulse left border, column count badge pops on update.
+- **Mobile Kanban** (`sl-overhaul.css`) — Scroll-snap (85vw per column, touch-friendly).
+- **Post-save Kanban re-render** (`sl-record-bond.js`) — `SLKanban.render()` called after successful bond save.
+
+### Changed — Documentation
+
+Comprehensive audit and rewrite of all 7 coordination documents to reflect actual codebase state:
+
+- **`GEMINI.md`** — Updated all counts (50 scrapers, 49 API modules, 32 frontend modules, 34 skills, ~25,700 frontend LOC), corrected BlueBubbles to ngrok tunnel.
+- **`AGENTS.md`** — Added 3 new agents (Shannon, Re-Arrest Detector, Data Retention), updated all statuses to Live, corrected architecture diagram (Quart not Flask), expanded env vars table.
+- **`ROADMAP.md`** — Added Phases 13–15 (Kanban, Court Automation, Dashboard Overhaul), updated all phase descriptions with current file references.
+- **`DATA_MODEL.md`** — Complete rewrite with 16 MongoDB collections, full schema definitions, key indexes, and data flow rules.
+- **`BRAND.md`** — Updated agent table (all 14 agents Live), added public URL + ngrok tunnel to identity table, corrected frontend LOC.
+- **`README.md`** — Major rewrite: 15 tabs (was 10), 32 JS modules (was 11), ~25,700 frontend LOC (was 17,600), 49 API modules (was 30+), 34 skills (was 16), 15 phases all complete, expanded project structure tree.
+- **`CHANGELOG.md`** — Added v2.4.0 entry (this).
+
+---
+
 ## [2.3.0] — 2026-05-08 (Kanban Board + POA Inline Edit + Status Audit Trail)
 
 ### Added — Frontend
@@ -36,10 +64,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- **ngrok tunnel** — corrected port from 1880 (Node-RED) to 1234 (BlueBubbles). iMessage tab now shows Online.
-- **`docker-compose.yml`** — added `dns: [8.8.8.8, 1.1.1.1]` to both services to ensure `bb.shamrockbailbonds.biz` resolves once Cloudflare zone is activated.
-- **`TUNNEL_FIX.md`** — updated to document the ngrok permanent domain setup and the pending Cloudflare zone activation steps.
-- **`.env.example`** — updated `BLUEBUBBLES_URL_0178` to use `https://bb.shamrockbailbonds.biz` (permanent Cloudflare tunnel domain).
+- **ngrok tunnel** — corrected port from 1880 (Node-RED) to 1234 (BlueBubbles). Configured permanent ngrok static domain (`pseudospherical-etta-untactually.ngrok-free.dev`). iMessage tab now shows Online.
+- **`docker-compose.yml`** — added `dns: [8.8.8.8, 1.1.1.1]` to both services to ensure external DNS resolution.
+- **`TUNNEL_FIX.md`** — updated to document the ngrok permanent domain setup.
+- **`.env.example`** — updated `BLUEBUBBLES_URL_0178` to use the permanent ngrok tunnel domain.
 
 ---
 

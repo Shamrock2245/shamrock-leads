@@ -36,6 +36,8 @@ We write bonds under two surety companies. Every agent must know these cold.
 | **Primary Email** | `admin@shamrockbailbonds.biz` |
 | **Production VPS** | `178.156.179.237` (Hetzner, root) |
 | **Dashboard URL** | `http://178.156.179.237:8088/` |
+| **Public Dashboard** | `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy) |
+| **iMessage Bridge** | ngrok permanent tunnel → office iMac BlueBubbles |
 | **Primary Repo** | `Shamrock2245/shamrock-leads` |
 | **Portal Repo** | `Shamrock2245/shamrock-bail-portal-site` |
 | **Ops Repo** | `Shamrock2245/shamrock-node-red` |
@@ -55,7 +57,7 @@ We are building a platform that will surpass **Captira** and **Bail Books** — 
 2. **Intelligence** — Every arrest is scored 0–100 before a human sees it. Hot leads get immediate Slack alerts.
 3. **Automation** — From first outreach to signed paperwork to payment collection, the system handles the workflow.
 4. **Compliance** — Every state change is audited. Every PII access is logged. We are building toward SOC II readiness.
-5. **Reach** — 49 active county scrapers today. 67 counties is the target. Statewide coverage is the moat.
+5. **Reach** — 50 active county scrapers today. 67 counties is the target. Statewide coverage is the moat.
 
 ---
 
@@ -67,7 +69,7 @@ We are building a platform that will surpass **Captira** and **Bail Books** — 
 | **Scheduling** | APScheduler | Per-county cron with staggered intervals |
 | **Database** | MongoDB Atlas (motor, async) | Primary data store for all entities |
 | **Dashboard** | Quart (async Flask) on port 5050 | 15-tab intelligence dashboard |
-| **Frontend** | Vanilla JS + CSS (~21,000 lines, 29 modules) | Premium dark-theme UI |
+| **Frontend** | Vanilla JS + CSS (~25,700 lines, 32 modules) | Premium dark-theme UI |
 | **iMessage** | BlueBubbles API (office iMac bridge) | Human-feel outreach automation |
 | **AI** | OpenAI GPT-4o | Auto-reply agent, lead enrichment |
 | **Signatures** | SignNow API | E-signature orchestration |
@@ -143,9 +145,11 @@ We are building toward **SOC II Type II** compliance. All agents must build with
 | iMessage Agent | "Shannon" | ✅ Live | `dashboard/api/agent_brain.py` |
 | Court Reminder | "The Court Clerk" | ✅ Live | `dashboard/services/court_reminder_service.py` |
 | Discharge Monitor | "The Discharge Monitor" | ✅ Live | `dashboard/api/discharge_monitor.py` |
-| OSINT Finder | "The Finder" | 🔲 Phase 9 | `dashboard/services/contact_discovery.py` |
-| Payment Collector | "The Treasurer" | 🔲 Phase 8 | `payments/` |
+| OSINT Finder | "The Finder" | ✅ Live | `dashboard/services/contact_discovery.py` |
+| Payment Collector | "The Treasurer" | ✅ Live | `dashboard/api/payments.py` |
 | Audit Logger | "The Auditor" | ✅ Live | `dashboard/api/events.py` |
+| Re-Arrest Detector | "The Sentinel" | ✅ Live | `dashboard/api/rearrest_detector.py` |
+| Data Retention | "The Janitor" | ✅ Live | `dashboard/api/data_retention.py` |
 
 ---
 
@@ -179,4 +183,4 @@ Every pull request, every commit, every feature must meet this bar:
 
 ---
 
-*Last updated: 2026-05-04 | Maintained by: Brendan / Shamrock Active Software LLC*
+*Last updated: 2026-05-08 | Maintained by: Brendan / Shamrock Active Software LLC*

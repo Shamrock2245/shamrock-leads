@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-05-04
+> **Last Updated:** 2026-05-08
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
@@ -11,25 +11,30 @@
 
 ShamrockLeads is a **statewide arrest intelligence and bonded-case management platform** that:
 
-1. **Scrapes** all 67 Florida county jail rosters on scheduled intervals `[IMPLEMENTED]`
+1. **Scrapes** 50 Florida county jail rosters on scheduled intervals `[IMPLEMENTED]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
-5. **Stores** everything in MongoDB Atlas with Google Sheets as a legacy fallback `[IMPLEMENTED]`
+5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
 6. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED]`
 7. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 8. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
 9. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
-10. **Collects payments** via SwipeSimple `[IMPLEMENTED — log + history API]`
+10. **Collects payments** via SwipeSimple `[IMPLEMENTED]`
+11. **Manages** the 7-status bond lifecycle via drag-and-drop Kanban `[IMPLEMENTED]`
+12. **Automates** iMessage outreach via BlueBubbles bridge `[IMPLEMENTED]`
+13. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
+14. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
+15. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
 
-### Pipeline Flow (Current — Full Lifecycle IMPLEMENTED)
+### Pipeline Flow (Full Lifecycle)
 
 ```
 County Jail Roster → Scraper → ArrestRecord → Lead Scorer → MongoDB + Slack Alert
   ↓
 Defendant Normalization → Contact Discovery
   ↓
-Indemnitor Intake (Wix / GAS / Telegram / Walk-in)
+Indemnitor Intake (Wix / Telegram / Walk-in / Phone / Bookmarklet)
   ↓
 Matching Engine (confidence-scored, human-gated)
   ↓
@@ -41,10 +46,10 @@ Signature (SignNow webhook confirms)
   ↓
 Payment (SwipeSimple premium collection)
   ↓
-Posted Bond (court-ready)
+Active Bond Management (7-status Kanban lifecycle)
+  ↓
+Court Reminders → Discharge Monitoring → Exoneration
 ```
-
-See `ROADMAP.md` for phase definitions and status.
 
 ---
 
@@ -52,38 +57,44 @@ See `ROADMAP.md` for phase definitions and status.
 
 Move records safely through this lifecycle:
 
-1. Scrape arrest/booking data `[Phase 1 — IMPLEMENTED]`
-2. Normalize and deduplicate records `[Phase 1 — IMPLEMENTED]`
-3. Score every record for lead qualification `[Phase 1 — IMPLEMENTED]`
-4. Alert on hot leads via Slack `[Phase 1 — IMPLEMENTED]`
-5. Create or update defendant records `[Phase 2 — IMPLEMENTED]`
-6. Collect indemnitor intake from approved channels `[Phase 3 — IMPLEMENTED]`
-7. Match indemnitor to defendant `[Phase 4 — IMPLEMENTED]`
-8. Create bonded case only after match validation `[Phase 5 — IMPLEMENTED]`
-9. Select surety (OSI or Palmetto) and assign POA from inventory `[Phase 5 — IMPLEMENTED]`
-10. Generate surety-specific paperwork packet `[Phase 6 — IMPLEMENTED]`
-11. Send packet for signature `[Phase 7 — IMPLEMENTED]`
-12. Collect payment `[Phase 8 — IMPLEMENTED]`
-13. Maintain immutable audit history for every state change `[Phase 2+ — IMPLEMENTED]`
+1. Scrape arrest/booking data `[IMPLEMENTED]`
+2. Normalize and deduplicate records `[IMPLEMENTED]`
+3. Score every record for lead qualification `[IMPLEMENTED]`
+4. Alert on hot leads via Slack `[IMPLEMENTED]`
+5. Create or update defendant records `[IMPLEMENTED]`
+6. Collect indemnitor intake from approved channels `[IMPLEMENTED]`
+7. Match indemnitor to defendant `[IMPLEMENTED]`
+8. Create bonded case only after match validation `[IMPLEMENTED]`
+9. Select surety (OSI or Palmetto) and assign POA from inventory `[IMPLEMENTED]`
+10. Generate surety-specific paperwork packet `[IMPLEMENTED]`
+11. Send packet for signature `[IMPLEMENTED]`
+12. Collect payment `[IMPLEMENTED]`
+13. Manage bond through 7-status lifecycle (Kanban) `[IMPLEMENTED]`
+14. Auto-detect re-arrests on active bonds `[IMPLEMENTED]`
+15. Monitor for court discharges/exonerations `[IMPLEMENTED]`
+16. Maintain immutable audit history for every state change `[IMPLEMENTED]`
 
 ---
 
 ## 3. Digital Workforce
 
-| Agent | Role | Status | Where It Runs | Key File |
-|-------|------|--------|---------------|----------|
-| **The Clerk** | Jail roster parsing, HTML→JSON, anti-bot evasion | ✅ `IMPLEMENTED` | `scrapers/counties/*.py` | `base_scraper.py` |
-| **The Analyst** | Lead scoring (0–100), risk classification | ✅ `IMPLEMENTED` | `scoring/lead_scorer.py` | `lead_scorer.py` |
-| **The Watchdog** | Scraper health monitoring, failure alerts | ✅ `IMPLEMENTED` | `writers/slack_notifier.py` | `slack_notifier.py` |
-| **The Matcher** | Link indemnitor intake to correct defendant | ✅ `IMPLEMENTED` | `dashboard/api/matching.py` | `matching.py` |
-| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
-| **The Signature Agent** | Send and track SignNow packets | ✅ `IMPLEMENTED` | `dashboard/api/paperwork.py` | `paperwork.py` |
-| **The Payment Agent** | Collect premium via SwipeSimple | 🔲 `Phase 8 — Next` | `payments/` | — |
-| **The Auditor** | Immutable event logging for all state changes | ✅ `IMPLEMENTED` | `dashboard/api/events.py` | `events.py` |
-| **The Finder** | OSINT: family/friend contact discovery | ✅ `IMPLEMENTED` | `discovery/` | — |
-| **The Closer** | Outreach sequencing: SMS/WhatsApp drip | ✅ `IMPLEMENTED` | `dashboard/api/outreach.py` | `outreach.py` |
-| **The Court Clerk** | Auto-scan court dates, schedule Twilio SMS | ✅ `IMPLEMENTED` | `dashboard/services/court_reminder_service.py` | `court_reminder_service.py` |
-| **The Discharge Monitor** | Scan Gmail for exonerations, auto-discharge | ✅ `IMPLEMENTED` | `dashboard/api/discharge_monitor.py` | `discharge_monitor.py` |
+| Agent | Role | Status | Key File(s) |
+|-------|------|--------|-------------|
+| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties/*.py`, `base_scraper.py` |
+| **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
+| **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
+| **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
+| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ Live | `dashboard/api/paperwork.py`, `services/signnow_packet_service.py` |
+| **The Signature Agent** | Send and track SignNow packets | ✅ Live | `services/signnow_service.py`, `api/bond_lifecycle.py` |
+| **The Payment Agent** | Log and track premium payments | ✅ Live | `dashboard/api/payments.py`, `api/payment_plans.py` |
+| **The Auditor** | Immutable event logging for all state changes | ✅ Live | `dashboard/api/events.py` |
+| **The Finder** | OSINT: family/friend contact discovery | ✅ Live | `services/contact_discovery.py`, `api/contacts.py` |
+| **The Closer** | Outreach sequencing via iMessage | ✅ Live | `dashboard/api/outreach.py`, `services/outreach_sequencer.py` |
+| **The Court Clerk** | Auto-scan court dates, schedule Twilio SMS | ✅ Live | `services/court_reminder_service.py`, `api/court_reminders.py` |
+| **The Discharge Monitor** | Scan Gmail for exonerations, auto-discharge | ✅ Live | `dashboard/api/discharge_monitor.py` |
+| **Shannon** | AI iMessage auto-reply agent | ✅ Live | `dashboard/api/agent_brain.py`, `api/agent_brain_api.py` |
+| **Re-Arrest Detector** | Cross-reference new arrests against active bonds | ✅ Live | `dashboard/api/rearrest_detector.py`, `api/rearrest_notifier.py` |
+| **Data Retention** | Tiered purge policies for M0 512MB limit | ✅ Live | `dashboard/api/data_retention.py` |
 
 ---
 
@@ -101,22 +112,27 @@ Move records safely through this lifecycle:
 │  │    ↓                 │  │  39+ cron queries          │ │
 │  │  50 County Scrapers  │  │  Slack relay               │ │
 │  │  (Self-Healing)      │  │                            │ │
-│  │    ↓                 │  │                            │ │
-│  │  Lead Scorer         │  └─────────┬────────────────┘ │
-│  │    ↓                 │            │                   │
-│  │  Writers             │            │ HTTP              │
-│  │   ├── MongoDB        │            │                   │
-│  │   ├── Google Sheets  │            ▼                   │
-│  │   └── Slack          │  ┌──────────────────────────┐ │
-│  └──────────────────────┘  │  Dashboard (Flask :5050   │ │
+│  │    ↓                 │  └─────────┬────────────────┘ │
+│  │  Lead Scorer         │            │                   │
+│  │    ↓                 │            │ HTTP              │
+│  │  Writers             │            │                   │
+│  │   ├── MongoDB        │            ▼                   │
+│  │   ├── Google Sheets  │  ┌──────────────────────────┐ │
+│  │   └── Slack          │  │  Dashboard (Quart :5050   │ │
+│  └──────────────────────┘  │   → Nginx :443            │ │
 │                            │   → external :8088)       │ │
-│                            └──────────────────────────┘ │
+│  ┌──────────────────────┐  │                            │ │
+│  │  Nginx Reverse Proxy │  │  49 API modules            │ │
+│  │  leads.shamrock      │  │  21 service modules        │ │
+│  │  bailbonds.biz       │  │  32 frontend JS modules    │ │
+│  └──────────────────────┘  └──────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
-                       │
-              ┌────────┴────────┐
-              │  MongoDB Atlas  │
-              │  (Central DB)   │
-              └─────────────────┘
+         │                            │
+    ┌────┴────────┐          ┌────────┴────────┐
+    │  MongoDB    │          │  BlueBubbles    │
+    │  Atlas      │          │  iMessage Bridge│
+    │  (Central)  │          │  (ngrok Tunnel) │
+    └─────────────┘          └─────────────────┘
 ```
 
 ---
@@ -163,6 +179,8 @@ Shamrock represents **two** insurance/surety companies. Every bonded case must s
 
 The surety determines: POA book assignment, SignNow template set, commission rate, build-up fund %, monthly reporting format, and compliance requirements.
 
+**Rule:** OSI is always preferred. Use Palmetto when OSI inventory is depleted for the needed tier, or when the case is outside Florida.
+
 See `docs/policies/surety-policy.md` for selection rules.
 
 ---
@@ -171,18 +189,21 @@ See `docs/policies/surety-policy.md` for selection rules.
 
 Every workflow step must attach to the correct record boundary. **Never collapse these into one record.**
 
-| Entity | Primary Key | Natural Key | Status |
-|--------|-------------|-------------|--------|
-| **Arrest Lead** | `ArrestLead_ID` | `County + Booking_Number` | ✅ Implemented |
-| **Defendant** | `Defendant_ID` | Internal UUID | ✅ Implemented |
-| **Indemnitor** | `Indemnitor_ID` | Internal UUID | ✅ Implemented |
-| **Match** | `Match_ID` | Internal UUID | ✅ Implemented |
-| **Bonded Case** | `Bond_Case_ID` | `POA_Number + Case_Number` | ✅ Implemented |
-| **Document Packet** | `Packet_ID` | Internal UUID | ✅ Implemented |
-| **Payment Request** | `Payment_Request_ID` | Internal UUID | ✅ Implemented |
-| **Audit Event** | `Event_ID` | Immutable UUID | ✅ Implemented |
-| **Surety** | `Surety_ID` | `osi` or `palmetto` | ✅ Implemented |
-| **POA Inventory** | `POA_ID` | `POA_Number` (unique) | ✅ Implemented |
+| Entity | Primary Key | Natural Key | MongoDB Collection |
+|--------|-------------|-------------|-------------------|
+| **Arrest Lead** | `_id` (ObjectId) | `County + Booking_Number` | `arrests` |
+| **Defendant** | `Defendant_ID` (UUID) | Internal | `defendants` |
+| **Indemnitor** | `Indemnitor_ID` (UUID) | Internal | `indemnitors` |
+| **Match** | `Match_ID` (UUID) | Internal | `matches` |
+| **Bonded Case** | `Bond_Case_ID` (UUID) | `POA_Number + Case_Number` | `active_bonds` |
+| **Document Packet** | `Packet_ID` (UUID) | Internal | `paperwork_packets` |
+| **Payment** | `Payment_ID` (UUID) | Internal | `payments` |
+| **Audit Event** | `Event_ID` (UUID) | Immutable | `audit_events` |
+| **POA Inventory** | `POA_ID` | `POA_Number` (unique) | `poa_inventory` |
+| **Prospective Bond** | `_id` (ObjectId) | Internal | `prospective_bonds` |
+| **Intake Record** | `_id` (ObjectId) | Internal | `intake_queue` |
+| **Defendant Note** | `_id` (ObjectId) | Internal | `defendant_notes` |
+| **Court Reminder** | `_id` (ObjectId) | Internal | `court_reminders` |
 
 ### Identity Rules
 
@@ -192,11 +213,30 @@ Every workflow step must attach to the correct record boundary. **Never collapse
 - Once a `POA_Number` is assigned, that bonded case becomes the operational anchor
 - `POA_Number + Case_Number` must point to exactly one bonded case
 
-See `DATA_MODEL.md` for full entity definitions.
+---
+
+## 8. Bond Lifecycle (7-Status Kanban)
+
+Active bonds move through these statuses via drag-and-drop Kanban board:
+
+| Status | Description | POA Action |
+|--------|-------------|------------|
+| `active` | Bond is posted and current | — |
+| `monitoring` | Elevated attention required | — |
+| `alert` | Immediate agent intervention | — |
+| `exonerated` | Court discharged the bond | **Auto-release POA** |
+| `forfeited` | Defendant FTA, bond forfeited | **Auto-release POA** (confirmation required) |
+| `surrendered` | Defendant surrendered | **Auto-release POA** (confirmation required) |
+| `reinstated` | Previously forfeited/surrendered, reinstated | — |
+
+**Every status transition** is:
+1. Logged to `status_history[]` on the bond document
+2. Written as an immutable `audit_events` record
+3. Optionally annotated with actor + note
 
 ---
 
-## 8. Self-Healing Infrastructure
+## 9. Self-Healing Infrastructure
 
 | Feature | Description |
 |---------|-------------|
@@ -210,11 +250,10 @@ See `DATA_MODEL.md` for full entity definitions.
 
 ---
 
-## 9. Non-Negotiable Safety Rules
+## 10. Non-Negotiable Safety Rules
 
-> **Brand Identity:** We are Shamrock Bail Bonds. We operate with speed, precision, and absolute compliance. Our agents must reflect this professional, high-autonomy, and zero-defect culture.
->
-> **Compliance Standard:** All systems must be built with SOC II compliance principles in mind. Reference: [strongdm/comply](https://github.com/strongdm/comply), [getprobo/probo](https://github.com/getprobo/probo).
+> **Brand Identity:** We are Shamrock Bail Bonds. We operate with speed, precision, and absolute compliance.
+> **Compliance Standard:** All systems must be built with SOC II compliance principles in mind.
 
 1. **No guessing** — Never guess identity, legal facts, case numbers, POA numbers, court data, payment/signature status.
 2. **Fail closed** — If identity, match confidence, record ownership, or workflow state is unclear, stop and escalate.
@@ -228,7 +267,7 @@ See `DATA_MODEL.md` for full entity definitions.
 
 ---
 
-## 10. Prime Directives
+## 11. Prime Directives
 
 1. **Scrape Respectfully** — Rate-limit. Rotate user agents. Never DDoS a county server.
 2. **Idempotent Writes** — `Booking_Number + County` is the dedup key. Always check before insert.
@@ -240,25 +279,24 @@ See `DATA_MODEL.md` for full entity definitions.
 8. **Document Everything** — Every fix updates COUNTY_REGISTRY.md. No silent fixes.
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.
 10. **The Chain Is Law** — ArrestLead → Defendant → Indemnitor → Match → BondCase → Packet → Signature → Payment. No shortcuts.
-11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities. We are exclusively `Shamrock2245` and `admin@shamrockbailbonds.biz`.
-12. **End-to-End Integration** — All systems must integrate seamlessly across GAS, SignNow, Twilio, and Google Drive.
+11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities.
+12. **End-to-End Integration** — All systems must integrate seamlessly across SignNow, Twilio, iMessage, and Google Drive.
 
 ---
 
-## 11. Required Read Order for Agents
+## 12. Required Read Order for Agents
 
 1. `BRAND.md` — Identity, vision, design standards, non-negotiables
-2. `AGENTS.md` (this file)
-3. `DATA_MODEL.md`
-4. `ROADMAP.md` — know what's implemented vs planned
-5. `docs/agents/scraper-agent.md` — if doing scraper work `[IMPLEMENTED]`
-6. `docs/policies/surety-policy.md` — if doing bond-writing work `[IMPLEMENTED]`
-7. `docs/policies/matching-policy.md` — if doing matching work `[IMPLEMENTED]`
-8. `docs/policies/signature-policy.md` — if doing signing work `[IMPLEMENTED]`
+2. `AGENTS.md` (this file) — Digital workforce, scoring, safety rules
+3. `DATA_MODEL.md` — Entity definitions, MongoDB collections
+4. `ROADMAP.md` — What's implemented vs planned
+5. `docs/policies/surety-policy.md` — if doing bond-writing work
+6. `docs/policies/matching-policy.md` — if doing matching work
+7. `docs/policies/signature-policy.md` — if doing signing work
 
 ---
 
-## 12. Escalation Conditions
+## 13. Escalation Conditions
 
 Escalate immediately if:
 - Two+ defendants could match one intake
@@ -273,24 +311,35 @@ Escalate immediately if:
 
 ---
 
-## 13. Environment Variables
+## 14. Environment Variables
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `MONGODB_URI` | ✅ | MongoDB Atlas connection string |
-| `MONGODB_DB_NAME` | ✅ | Database name (default: `shamrock_leads`) |
+| `MONGODB_DB_NAME` | ✅ | Database name (default: `ShamrockBailDB`) |
+| `DASHBOARD_PIN` | ✅ | Dashboard authentication PIN |
+| `SECRET_KEY` | ✅ | Session encryption key (prevents invalidation on restart) |
 | `SLACK_WEBHOOK_ARRESTS` | ✅ | #new-arrests channel |
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel |
+| `BLUEBUBBLES_URL_0178` | ✅ | ngrok permanent tunnel URL (office iMac) |
+| `BLUEBUBBLES_PASSWORD_0178` | ✅ | BlueBubbles API password |
+| `SIGNNOW_API_TOKEN` | ✅ | SignNow bearer token |
+| `SIGNNOW_BASIC_AUTH` | ✅ | Base64 client_id:client_secret for ROPC flow |
+| `SIGNNOW_USERNAME` | ✅ | `admin@shamrockbailbonds.biz` |
+| `SIGNNOW_PASSWORD` | ✅ | SignNow account password |
+| `TWILIO_ACCOUNT_SID` | Optional | Twilio SID for SMS court reminders |
+| `TWILIO_AUTH_TOKEN` | Optional | Twilio auth token |
+| `TWILIO_FROM_NUMBER` | Optional | Twilio sender number |
+| `OPENAI_API_KEY` | Optional | AI-powered enrichment + auto-reply |
 | `DEFAULT_SURETY` | Optional | Default surety ID (`osi` or `palmetto`) |
-| `GAS_WEB_APP_URL` | Optional | GAS integration endpoint |
-| `GOOGLE_SPREADSHEET_ID` | Optional | Legacy Sheets writer |
+| `DASHBOARD_PUBLIC_URL` | Optional | `https://leads.shamrockbailbonds.biz` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | GCP service account JSON path |
-| `OPENAI_API_KEY` | Optional | AI-powered enrichment |
+| `FIREBASE_ADMINSDK_PATH` | Optional | Firebase admin SDK for BB URL auto-sync |
 
 ---
 
-## 14. Deployment
+## 15. Deployment
 
 ```bash
 # Build and deploy to Hetzner (Docker Compose v2 — use space, NOT hyphen)
@@ -302,7 +351,8 @@ docker compose ps
 docker logs shamrock-leads --tail 50
 
 # Dashboard URL: http://178.156.179.237:8088/
-# (Flask listens internally on 5050, Docker maps external 8088 → internal 5050)
+# Public URL: https://leads.shamrockbailbonds.biz
+# (Quart listens internally on 5050, Docker maps external 8088 → internal 5050)
 
 # Run one-shot for a specific county
 docker exec shamrock-leads python main.py lee
@@ -313,3 +363,6 @@ docker exec shamrock-leads python main.py lee
 - **Adding a county scraper**: See `.agent/skills/scraper-builder/SKILL.md`
 - **Debugging a broken scraper**: See `.agent/skills/scraper-debugger/SKILL.md`
 - **Tuning lead scores**: See `.agent/skills/lead-scoring-tuning/SKILL.md`
+- **iMessage integration**: See `.agent/skills/bluebubbles-integration/SKILL.md`
+- **Frontend UI work**: See `.agent/skills/frontend-design/SKILL.md`
+- **Docker ops**: See `.agent/skills/docker-ops/SKILL.md`

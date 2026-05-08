@@ -1,7 +1,8 @@
 # GEMINI.md — ShamrockLeads Intelligence Platform
 
-> This file configures Gemini (Google AI Studio) and other AI coding assistants.
+> This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
+> **Last Updated:** 2026-05-08
 
 ---
 
@@ -10,7 +11,7 @@
 ShamrockLeads is the core intelligence engine for **Shamrock Bail Bonds** — a Florida bail bond agency
 automating the full bond lifecycle from arrest scrape to signed paperwork to payment collection.
 
-**Strategic goal:** Scale from $3-5M/year (Lee County) to $20-50M/year (67 counties statewide).
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
 
 ---
 
@@ -20,7 +21,9 @@ automating the full bond lifecycle from arrest scrape to signed paperwork to pay
 - **Email:** `admin@shamrockbailbonds.biz` for all integrations.
 - **Sureties:** OSI (`osi`) and Palmetto (`palmetto`). Every bond specifies which.
 - **Production VPS:** `178.156.179.237` (Hetzner, root access)
-- **Dashboard URL:** `http://178.156.179.237:8088/`
+- **Dashboard URL:** `http://178.156.179.237:8088/` (internal: Quart on `:5050`)
+- **Public Domain:** `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy → `:8088`)
+- **iMessage Bridge:** ngrok permanent tunnel → office iMac BlueBubbles (port 1234)
 
 ---
 
@@ -28,17 +31,26 @@ automating the full bond lifecycle from arrest scrape to signed paperwork to pay
 
 ```
 Hetzner VPS (Docker Compose)
-  shamrock-leads     → Python 3.12 scraper engine + APScheduler
-  shamrock-dashboard → Quart async API (port 5050 → external 8088)
+  shamrock-leads     → Python 3.12 scraper engine + APScheduler (50 counties)
+  shamrock-dashboard → Quart async API (port 5050 → Nginx :443 → external :8088)
   node-red           → Ops dashboard (port 1880)
 
-MongoDB Atlas        → Primary database (all entities)
-BlueBubbles          → iMessage bridge (office iMac, port 1234)
-SignNow              → E-signature orchestration
+MongoDB Atlas        → Primary database: ShamrockBailDB (all entities)
+BlueBubbles          → iMessage bridge (office iMac via ngrok permanent tunnel)
+SignNow              → E-signature orchestration (14-doc packets)
 SwipeSimple          → Bond premium payment collection
-Slack                → Real-time operational alerts
-Google Workspace     → GAS write-bond forwarding, Drive case files
+Slack                → Real-time operational alerts (12+ channels)
+Google Workspace     → Gmail discharge scanner, GCal court sync, Drive case files
+Twilio               → SMS court reminders, 10DLC compliant
 ```
+
+### Docker Services
+
+| Service | Container | Internal | External | Purpose |
+|---------|-----------|----------|----------|---------|
+| `shamrock-leads` | `shamrock-leads` | — | — | Scraper engine + APScheduler |
+| `dashboard` | `shamrock-dashboard` | 5050 | 8088 | Quart dashboard (49 API modules, 21 services) |
+| `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs |
 
 ---
 
@@ -50,7 +62,35 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 ```
 
 **Dedup key:** `County + Booking_Number`. Always check before insert.
-**Identity rule:** ArrestLead != Defendant != Indemnitor != Match != BondCase.
+**Identity rule:** ArrestLead ≠ Defendant ≠ Indemnitor ≠ Match ≠ BondCase. Never collapse.
+
+---
+
+## Active Bond Lifecycle (7-Status Kanban)
+
+```
+Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Reinstated
+```
+
+- **Destructive transitions** (Forfeited, Surrendered): require confirmation modal
+- **POA auto-release**: triggered on Exonerated, Forfeited, Surrendered
+- **Audit trail**: every transition logged to `status_history[]` + `audit_events` collection
+
+---
+
+## Codebase Metrics (Current)
+
+| Metric | Count |
+|--------|-------|
+| County scraper files | 50 (in `scrapers/counties/`) |
+| API blueprint modules | 49 (in `dashboard/api/`) |
+| Service modules | 21 (in `dashboard/services/`) |
+| Frontend JS modules | 32 (`sl-*.js` files) |
+| Frontend CSS files | 3 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`) |
+| Frontend total LOC | ~25,700 (JS + CSS + HTML) |
+| Backend total LOC | ~24,300 (API + services) |
+| Agent skills | 34 (in `.agent/skills/`) |
+| Dashboard tabs | 15+ (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, POA, iMessage, Analytics, Calendar, Reports, Notifications) |
 
 ---
 
@@ -58,7 +98,7 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 
 1. **Scrape Respectfully** — Rate-limit. Rotate user agents. Never DDoS a county server.
 2. **Idempotent Writes** — `Booking_Number + County` is the dedup key. Always check before insert.
-3. **Score Everything** — No record enters the DB without a lead score.
+3. **Score Everything** — No record enters the DB without a lead score (0–100).
 4. **Fail Loudly** — Every scraper error fires a Slack alert. Silent failures are unacceptable.
 5. **Self-Heal First** — BaseScraper retries 3x, classifies errors, auto-disables. Fix root causes.
 6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval.
@@ -71,46 +111,34 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 
 ---
 
-## Brand & Compliance Standards
+## Key Skills (34 total in `.agent/skills/`)
 
-1. **Shamrock Exclusive**: We are Shamrock Bail Bonds. Never reference 'WTF' or other identities.
-2. **SOC II Compliance**: Architecture must support SOC II standards (secure data flow across GAS, SignNow, Twilio, Drive).
-3. **High-Autonomy**: Agents are authorized to proactively fix bugs and fill gaps during audits without breaking existing functionality.
-4. **Premium UI**: The dashboard must surpass Captira and Bail Books in both functionality and design.
-
----
-
-## Key Skills
-
-| Skill | Purpose | Path |
-|-------|---------|------|
-| `scraper-builder` | Add a new county scraper | `.agent/skills/scraper-builder/` |
-| `scraper-debugger` | Debug a broken scraper | `.agent/skills/scraper-debugger/` |
-| `lead-scoring-tuning` | Adjust scoring weights | `.agent/skills/lead-scoring-tuning/` |
-| `contact-discovery` | Find family/friend contacts | `.agent/skills/contact-discovery/` |
-| `county-jms-patterns` | JMS vendor reverse-engineering | `.agent/skills/county-jms-patterns/` |
-| `docker-ops` | Container management on Hetzner | `.agent/skills/docker-ops/` |
-| `frontend-design` | Premium dashboard UI/UX | `.agent/skills/frontend-design/` |
-| `bluebubbles-integration` | iMessage automation | `.agent/skills/bluebubbles-integration/` |
-| `systematic-debugging` | Root-cause-first debugging | `.agent/skills/systematic-debugging/` |
-| `self-improving-agent` | Session learning & skill creation | `.agent/skills/self-improving-agent/` |
-| `gws-shared` | Google Workspace CLI auth & global flags | `.agent/skills/gws-shared/` |
-| `gws-calendar` | Google Calendar: court dates & events | `.agent/skills/gws-calendar/` |
-| `gws-gmail` | Gmail: intake email triage & automation | `.agent/skills/gws-gmail/` |
-| `gws-drive` | Google Drive: case file management | `.agent/skills/gws-drive/` |
-| `mongodb-query-optimizer` | MongoDB query optimization & indexing | `.agent/skills/mongodb-query-optimizer/` |
-| `mongodb-schema-design` | MongoDB schema patterns & anti-patterns | `.agent/skills/mongodb-schema-design/` |
-| `mongodb-natural-language-querying` | Natural language to MongoDB queries | `.agent/skills/mongodb-natural-language-querying/` |
-| `sentry-python-sdk` | Error monitoring & performance tracing | `.agent/skills/sentry-python-sdk/` |
-| `sentry-fix-issues` | Diagnose & fix Sentry errors | `.agent/skills/sentry-fix-issues/` |
-| `cloudflare-platform` | CF product decision trees & tunnels | `.agent/skills/cloudflare-platform/` |
-| `cloudflare-deploy` | Deploy to Workers, Pages, Tunnels | `.agent/skills/cloudflare-deploy/` |
-| `cloudflare-email` | Email routing & transactional email | `.agent/skills/cloudflare-email/` |
-| `elevenlabs-agents` | Shannon voice agent & Conversational AI | `.agent/skills/elevenlabs-agents/` |
-| `openai-agents-sdk` | Multi-agent orchestration & tools | `.agent/skills/openai-agents-sdk/` |
-| `wix-app-builder` | Wix CLI app extensions & validation | `.agent/skills/wix-app-builder/` |
-| `wix-manage` | Wix REST API management recipes | `.agent/skills/wix-manage/` |
-| `wix-design-system` | WDS component reference & tokens | `.agent/skills/wix-design-system/` |
+| Skill | Purpose |
+|-------|---------|
+| `scraper-builder` | Add a new county scraper |
+| `scraper-debugger` | Debug a broken scraper |
+| `lead-scoring-tuning` | Adjust scoring weights |
+| `frontend-design` | Premium dashboard UI/UX |
+| `docker-ops` | Container management on Hetzner |
+| `git-sync-deploy` | Multi-environment sync workflow |
+| `bluebubbles-integration` | iMessage automation (9-module Python layer) |
+| `systematic-debugging` | Root-cause-first debugging |
+| `contact-discovery` | OSINT family/friend contacts |
+| `county-jms-patterns` | JMS vendor reverse-engineering |
+| `mongodb-*` (3 skills) | Query optimization, schema design, natural language querying |
+| `gws-*` (4 skills) | Google Workspace: shared auth, Calendar, Gmail, Drive |
+| `cloudflare-*` (3 skills) | Platform, deploy, email |
+| `sentry-*` (2 skills) | Error monitoring + fix workflow |
+| `wix-*` (3 skills) | App builder, REST management, design system |
+| `elevenlabs-agents` | Shannon voice agent |
+| `openai-agents-sdk` | Multi-agent orchestration |
+| `pdf-processing` | Bond paperwork PDF manipulation |
+| `programmatic-seo` | County-specific landing pages |
+| `mcp-builder` | MCP server development |
+| `seo-audit` | Page performance & SEO |
+| `skill-creator` | Create new agent skills |
+| `self-improving-agent` | Session learning |
+| `verification-before-completion` | No claims without evidence |
 
 ---
 
@@ -126,14 +154,17 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 
 ## Key Reference Docs
 
-- `BRAND.md` — Identity, vision, design standards, non-negotiables
-- `AGENTS.md` — Digital workforce roles & scoring rules
-- `DATA_MODEL.md` — Entity definitions (39-field ArrestRecord, MongoDB collections)
-- `ROADMAP.md` — Phase-by-phase implementation status
-- `docs/SCHEMAS.md` — Full MongoDB collection schemas
-- `docs/COUNTY_REGISTRY.md` — All 67 counties with JMS vendors and scraper status
-- `docs/policies/surety-policy.md` — POA inventory, surety selection, premium splits
-- `docs/policies/matching-policy.md` — Match confidence scoring and validation gates
+| Doc | Purpose |
+|-----|---------|
+| `BRAND.md` | Identity, vision, design standards, non-negotiables |
+| `AGENTS.md` | Digital workforce roles, scoring rules, safety rules |
+| `DATA_MODEL.md` | Entity definitions, MongoDB collections |
+| `ROADMAP.md` | Phase-by-phase implementation status |
+| `docs/SCHEMAS.md` | Full MongoDB collection schemas |
+| `docs/COUNTY_REGISTRY.md` | All 67 counties with JMS vendors and scraper status |
+| `docs/policies/surety-policy.md` | POA inventory, surety selection, premium splits |
+| `docs/policies/matching-policy.md` | Match confidence scoring and validation gates |
+| `docs/policies/signature-policy.md` | Packet binding rules, signing workflow |
 
 ---
 
@@ -143,15 +174,17 @@ ArrestLead -> Defendant -> Indemnitor -> Match(validated) ->
 |-------|-----------|
 | Language | Python 3.12 |
 | Scheduling | APScheduler |
-| Database | MongoDB Atlas (motor, async) |
-| Dashboard API | Quart (async Flask) |
-| Frontend | Vanilla JS + CSS (~21,000 lines) |
-| iMessage | BlueBubbles API |
-| AI | OpenAI GPT-4o |
-| Signatures | SignNow API |
-| Payments | SwipeSimple |
-| Alerts | Slack SDK |
+| Database | MongoDB Atlas (motor, async) — DB: `ShamrockBailDB` |
+| Dashboard API | Quart (async Flask) — 49 API modules, 21 services |
+| Frontend | Vanilla JS + CSS — 32 modules, ~25,700 LOC |
+| iMessage | BlueBubbles API via ngrok permanent tunnel |
+| AI | OpenAI GPT-4o (auto-reply, lead enrichment) |
+| Signatures | SignNow API (14-doc packet orchestration) |
+| Payments | SwipeSimple (premium collection) |
+| SMS | Twilio (court reminders, 10DLC compliant) |
+| Alerts | Slack SDK (12+ webhook channels) |
 | Hosting | Hetzner VPS (Docker Compose) |
+| Proxy | Nginx reverse proxy → `leads.shamrockbailbonds.biz` |
 | CI/CD | GitHub Actions |
 | Ops | Node-RED (39+ cron jobs) |
 
