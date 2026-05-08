@@ -1412,3 +1412,110 @@ body.drawer-open{overflow:hidden}
   #abKanbanBoard { flex-direction: column; }
   .kb-col { flex: none; max-width: 100%; max-height: 360px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   KANBAN POLISH — Animations, drag feedback, mobile UX  (May 2026)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Card enter animation — slides up and fades in on initial render */
+@keyframes kb-card-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.kb-card {
+  animation: kb-card-enter .18s ease both;
+}
+/* Stagger cards within a column so they cascade in */
+.kb-card:nth-child(1)  { animation-delay: .00s; }
+.kb-card:nth-child(2)  { animation-delay: .04s; }
+.kb-card:nth-child(3)  { animation-delay: .08s; }
+.kb-card:nth-child(4)  { animation-delay: .12s; }
+.kb-card:nth-child(5)  { animation-delay: .16s; }
+.kb-card:nth-child(n+6){ animation-delay: .20s; }
+
+/* Dragging card — lift effect */
+.kb-card.dragging {
+  opacity: .45;
+  transform: scale(.97) rotate(-1deg);
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  border-color: var(--accent);
+  z-index: 100;
+}
+
+/* Drop zone — pulsing border when a card is hovering over a column */
+@keyframes kb-drop-pulse {
+  0%, 100% { outline-color: rgba(124,58,237,.35); }
+  50%       { outline-color: rgba(124,58,237,.75); }
+}
+.kb-col-body.drag-target {
+  animation: kb-drop-pulse .8s ease-in-out infinite;
+}
+
+/* Column count badge — animate when count changes */
+@keyframes kb-count-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.35); }
+  100% { transform: scale(1); }
+}
+.kb-col-count.updated {
+  animation: kb-count-pop .3s ease;
+}
+
+/* Card hover — subtle lift without layout shift */
+.kb-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+}
+.kb-card:active {
+  transform: scale(1.01) translateY(-1px);
+}
+
+/* Alert card — pulsing left border for urgency */
+@keyframes kb-alert-pulse {
+  0%, 100% { border-left-color: rgba(239,68,68,.7); }
+  50%       { border-left-color: rgba(239,68,68,1); }
+}
+.kb-card.kb-card-alert {
+  animation: kb-card-enter .18s ease both, kb-alert-pulse 2s ease-in-out infinite;
+}
+
+/* Destructive status confirmation modal overlay */
+#abDestructiveConfirm {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sl-modal-fadein .15s ease;
+}
+#abDestructiveConfirm .sl-modal {
+  animation: sl-modal-slidein .18s ease;
+}
+
+/* Mobile: horizontal scroll on small screens */
+@media (max-width: 768px) {
+  #abKanbanBoard {
+    flex-direction: row;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+    gap: 10px;
+    padding-bottom: 12px;
+    position: relative;
+  }
+  .kb-col {
+    flex: 0 0 85vw;
+    max-width: 85vw;
+    scroll-snap-align: start;
+    max-height: 70vh;
+  }
+}
+@media (max-width: 480px) {
+  .kb-col { flex: 0 0 92vw; max-width: 92vw; }
+  .kb-card-name { font-size: 12px; }
+  .kb-card-actions button { font-size: 9px; padding: 2px 5px; }
+}

@@ -307,6 +307,8 @@ const SLRecordBond = (() => {
           if (window.SLActiveBonds?.load) SLActiveBonds.load();
           if (window.loadActiveBonds) loadActiveBonds();
           if (window.SLInventory?.load) SLInventory.load();
+          // Re-render Kanban board if it's currently visible
+          if (window.SLKanban?.render) SLKanban.render();
         }, 500);
 
         // Close modal after brief delay to show success

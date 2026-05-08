@@ -61,6 +61,8 @@ async function loadActiveBonds() {
     set('abMeta', `${_abBonds.length} bonds · Updated ${new Date(data.updated_at || Date.now()).toLocaleTimeString()}`);
 
     renderActiveBondsTable();
+    // Fire-and-forget: POA stock check (non-blocking)
+    _checkPoaStock();
   } catch (e) {
     console.error('loadActiveBonds error:', e);
     const tbody = document.getElementById('abTableBody');
@@ -131,19 +133,35 @@ async function _checkPoaStock() {
     const r = await fetch(`${API}/api/poa/inventory-summary`);
     if (!r.ok) return;
     const d = await r.json();
-    const lowTiers = (d.tiers || []).filter(t => t.available <= 5 && t.available > 0);
-    const emptyTiers = (d.tiers || []).filter(t => t.available === 0);
-    if (lowTiers.length === 0 && emptyTiers.length === 0) { banner.style.display = 'none'; return; }
-    banner.style.display = 'block';
-    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><span style="font-size:16px">${emptyTiers.length > 0 ? '🚨' : '⚠️'}</span><strong>POA Inventory ${emptyTiers.length > 0 ? 'CRITICAL' : 'Low Stock'}</strong><button onclick="this.closest('.ab-alert-banner').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--warning);cursor:pointer;font-size:14px">✕</button></div>`;
-    if (emptyTiers.length > 0) {
-      html += emptyTiers.map(t => `<div style="color:var(--danger)">🚫 <strong>${t.prefix}</strong> — EMPTY (${t.surety})</div>`).join('');
+    // Support both tiers[] format and {osi:{}, palmetto:{}} format
+    let sureties = [];
+    if (Array.isArray(d.tiers)) {
+      sureties = d.tiers.map(t => ({ name: t.surety || t.prefix, available: t.available || 0 }));
+    } else {
+      // Flat surety-keyed format: { osi: { available, assigned, total }, palmetto: {...} }
+      sureties = Object.entries(d)
+        .filter(([k]) => !['updated_at','success'].includes(k))
+        .map(([k, v]) => ({ name: k.toUpperCase(), available: (v && v.available) || 0 }));
     }
-    if (lowTiers.length > 0) {
-      html += lowTiers.map(t => `<div>⚠️ <strong>${t.prefix}</strong> — ${t.available} remaining (${t.surety})</div>`).join('');
+    const lowStock  = sureties.filter(s => s.available > 0 && s.available <= 5);
+    const outOfStock = sureties.filter(s => s.available === 0);
+    if (lowStock.length === 0 && outOfStock.length === 0) { banner.style.display = 'none'; return; }
+    banner.style.display = 'block';
+    const isCritical = outOfStock.length > 0;
+    const manageLink = `<a href="#" onclick="event.preventDefault();(function(){const t=document.querySelector('[data-tab=tabInventory],[data-tab=tabPoa],[onclick*=Inventory]');if(t)t.click();else if(window.SL&&SL.switchTab)SL.switchTab(document.querySelector('[data-tab]'));})()" style="color:var(--warning);font-weight:600;text-decoration:underline;font-size:12px">Manage Inventory →</a>`;
+    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">`;
+    html += `<span style="font-size:16px">${isCritical ? '🚨' : '⚠️'}</span>`;
+    html += `<strong style="color:${isCritical ? 'var(--danger)' : 'var(--warning)'}">POA Inventory ${isCritical ? 'CRITICAL' : 'Low Stock'}</strong>`;
+    html += `<span style="margin-left:8px">${manageLink}</span>`;
+    html += `<button onclick="this.closest('.ab-alert-banner').style.display='none'" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:0 4px" title="Dismiss">✕</button></div>`;
+    if (outOfStock.length > 0) {
+      html += outOfStock.map(s => `<div style="color:var(--danger);font-size:12px">🚫 <strong>${escHtml(s.name)}</strong> — OUT OF STOCK</div>`).join('');
+    }
+    if (lowStock.length > 0) {
+      html += lowStock.map(s => `<div style="color:var(--warning);font-size:12px">⚠️ <strong>${escHtml(s.name)}</strong> — only <strong>${s.available}</strong> POA${s.available !== 1 ? 's' : ''} remaining</div>`).join('');
     }
     banner.innerHTML = html;
-  } catch(e) { /* non-fatal */ }
+  } catch(e) { /* non-fatal — POA stock check should never break the main view */ }
 }
 
 function renderActiveBondsTable() {
@@ -202,18 +220,40 @@ function renderActiveBondsTable() {
     const nameSafe = (b.defendant_name || '').replace(/'/g, "\\'");
     const factorsSafe = encodeURIComponent(JSON.stringify(b.risk_factors || {}));
 
-    /* Feature A: Court Date Countdown */
+    /* Feature A: Court Date Countdown — polished with full-date tooltip + location */
     let courtCountdown = '—';
     if (b.court_date) {
       const cd = new Date(b.court_date);
       const diff = Math.ceil((cd - new Date()) / 86400000);
-      if (diff < 0) courtCountdown = `<span style="color:var(--danger);font-weight:700">${Math.abs(diff)}d ago ⚠️</span>`;
-      else if (diff === 0) courtCountdown = `<span style="color:var(--danger);font-weight:700">TODAY 🔴</span>`;
-      else if (diff <= 3) courtCountdown = `<span style="color:var(--danger);font-weight:600">${diff}d</span>`;
-      else if (diff <= 7) courtCountdown = `<span style="color:#f59e0b;font-weight:600">${diff}d</span>`;
-      else if (diff <= 14) courtCountdown = `<span style="color:#3b82f6">${diff}d</span>`;
-      else courtCountdown = `<span style="color:var(--muted)">${diff}d</span>`;
-      courtCountdown += `<div style="font-size:10px;color:var(--muted)">${cd.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`;
+      const fullDate = cd.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+      const locationTip = b.court_location ? ` @ ${b.court_location}` : '';
+      const tooltip = escHtml(`${fullDate}${locationTip}`);
+      let countLabel, countStyle;
+      if (diff < 0) {
+        countLabel = `${Math.abs(diff)}d ago ⚠️`;
+        countStyle = 'color:var(--danger);font-weight:700';
+      } else if (diff === 0) {
+        countLabel = 'TODAY 🔴';
+        countStyle = 'color:var(--danger);font-weight:800;letter-spacing:.02em';
+      } else if (diff === 1) {
+        countLabel = 'TOMORROW ⚠️';
+        countStyle = 'color:var(--danger);font-weight:700';
+      } else if (diff <= 3) {
+        countLabel = `${diff}d`;
+        countStyle = 'color:var(--danger);font-weight:600';
+      } else if (diff <= 7) {
+        countLabel = `${diff}d`;
+        countStyle = 'color:#f59e0b;font-weight:600';
+      } else if (diff <= 14) {
+        countLabel = `${diff}d`;
+        countStyle = 'color:#3b82f6';
+      } else {
+        countLabel = `${diff}d`;
+        countStyle = 'color:var(--muted)';
+      }
+      const dateLabel = cd.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+      courtCountdown = `<span title="${tooltip}" style="cursor:help;${countStyle}">${countLabel}</span>`
+        + `<div style="font-size:10px;color:var(--muted)" title="${tooltip}">${dateLabel}${b.court_location ? `<br><span style="font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;display:block" title="${escHtml(b.court_location)}">${escHtml(b.court_location.slice(0,18))}${b.court_location.length>18?'…':''}</span>` : ''}</div>`;
     }
 
     return `<tr class="${overdue ? 'row-alert' : ''}" style="${overdue ? 'background:rgba(239,68,68,0.05)' : ''}">
@@ -1000,26 +1040,39 @@ async function sendPaymentLink(bookingNumber, defendantName, phone) {
  */
 function sendBondImessage(bookingNumber, defendantName, phone) {
   const cleanPhone = (phone || '').replace(/\D/g, '');
-  if (!cleanPhone) { toast('No phone number on file for this bond', 'error'); return; }
-
-  const formattedPhone = '+1' + cleanPhone.slice(-10);
-
-  // Try to switch to iMessage tab and pre-fill compose
-  if (window.SLiMessage && window.SLiMessage.openCompose) {
-    // Switch to iMessage tab first
-    const imTab = document.querySelector('[data-tab="tabImessage"]');
-    if (imTab && typeof SL !== 'undefined' && SL.switchTab) SL.switchTab(imTab);
-    setTimeout(() => {
-      window.SLiMessage.openCompose(formattedPhone, `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `);
-    }, 200);
-    toast(`💬 Opened iMessage compose for ${phone}`, 'info');
-  } else {
-    // Fallback: open native SMS
-    const msg = `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `;
-    window.open(`sms:${phone}?body=${encodeURIComponent(msg)}`);
+  if (!cleanPhone || cleanPhone.length < 10) {
+    toast('No valid phone number on file for this bond', 'error');
+    return;
   }
-}
+  const digits10 = cleanPhone.slice(-10);
+  const formattedPhone = '+1' + digits10;
+  const displayPhone = `(${digits10.slice(0,3)}) ${digits10.slice(3,6)}-${digits10.slice(6)}`;
+  const defaultMsg = `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `;
 
+  // Prefer in-app iMessage compose (SLiMessage module)
+  if (window.SLiMessage && typeof window.SLiMessage.openCompose === 'function') {
+    const imTab = document.querySelector('[data-tab="tabImessage"]');
+    if (imTab && typeof SL !== 'undefined' && typeof SL.switchTab === 'function') {
+      SL.switchTab(imTab);
+    }
+    // Small delay to let tab transition complete before opening compose
+    setTimeout(() => {
+      window.SLiMessage.openCompose(formattedPhone, defaultMsg);
+    }, 250);
+    toast(`💬 iMessage compose opened for ${displayPhone}`, 'info');
+    return;
+  }
+
+  // Fallback: native SMS deep link (works on macOS + iOS)
+  const smsUrl = `sms:${formattedPhone}?body=${encodeURIComponent(defaultMsg)}`;
+  const a = document.createElement('a');
+  a.href = smsUrl;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 500);
+  toast(`💬 SMS app opened for ${displayPhone}`, 'info');
+}
 
 /* ══════════════════════════════════════════════════════════════════
    KANBAN BOARD — Bond Portfolio View
@@ -1290,9 +1343,51 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
   /* ══════════════════════════════════════════════════════════════════
      STATUS CHANGE (shared by drag-drop and card buttons)
      ══════════════════════════════════════════════════════════════════ */
+  /* ── Confirmation modal for legally significant status changes ─── */
+  function _confirmDestructive(defendantName, newStatus) {
+    return new Promise(resolve => {
+      const existing = document.getElementById('abDestructiveConfirm');
+      if (existing) existing.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'abDestructiveConfirm';
+      overlay.className = 'sl-modal-overlay';
+      overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;z-index:10000;';
+      const label = newStatus.charAt(0).toUpperCase() + newStatus.slice(1);
+      overlay.innerHTML = `
+        <div class="sl-modal" style="max-width:420px;width:90%;padding:28px 24px;border:1px solid var(--danger);">
+          <div style="font-size:28px;text-align:center;margin-bottom:10px">⚠️</div>
+          <h3 style="color:var(--danger);margin:0 0 10px;text-align:center;font-size:16px">Legally Significant Status Change</h3>
+          <p style="color:var(--text);margin:0 0 20px;text-align:center;line-height:1.6;font-size:14px">
+            Change status of <strong>${escHtml(defendantName)}</strong> to
+            <strong style="color:var(--danger)">${label}</strong>?<br>
+            <span style="color:var(--muted);font-size:12px">This action is legally significant and will be logged in the audit trail.</span>
+          </p>
+          <div style="display:flex;gap:10px;justify-content:center">
+            <button id="abDestructCancel" style="padding:9px 22px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text);cursor:pointer;font-size:13px;font-weight:600;min-width:80px">Cancel</button>
+            <button id="abDestructConfirm" style="padding:9px 22px;border-radius:6px;border:none;background:var(--danger);color:#fff;cursor:pointer;font-size:13px;font-weight:700;min-width:130px">Confirm ${label}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const cleanup = (result) => { overlay.remove(); resolve(result); };
+      overlay.querySelector('#abDestructCancel').addEventListener('click', () => cleanup(false));
+      overlay.querySelector('#abDestructConfirm').addEventListener('click', () => cleanup(true));
+      overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(false); });
+      const onKey = e => { if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); cleanup(false); } };
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   async function doStatusChange(bookingNumber, defendantName, newStatus) {
+    // Guard: require explicit confirmation for legally significant statuses
+    const DESTRUCTIVE = ['forfeited', 'surrendered'];
+    if (DESTRUCTIVE.includes(newStatus)) {
+      const confirmed = await _confirmDestructive(defendantName, newStatus);
+      if (!confirmed) { render(); return; }  // revert any optimistic UI
+    }
     // Optimistic UI update
     const bond = (window._abBonds || []).find(b => b.booking_number === bookingNumber);
+    const prevStatus = bond ? bond.status : null;
     if (bond) bond.status = newStatus;
     render();
 
@@ -1311,13 +1406,13 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
         // Full reload to sync KPIs
         if (typeof loadActiveBonds === 'function') loadActiveBonds();
       } else {
-        // Revert optimistic update
-        if (bond) bond.status = result.from_status || bond.status;
+        // Revert optimistic update to previous status
+        if (bond) bond.status = result.from_status || prevStatus || bond.status;
         render();
         toast(result.error || 'Status update failed', 'error');
       }
     } catch (e) {
-      if (bond) bond.status = bond.status;  // keep current
+      if (bond && prevStatus) bond.status = prevStatus;  // revert to known-good state
       render();
       toast('Network error updating status', 'error');
     }
