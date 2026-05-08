@@ -220,6 +220,11 @@ def init_app(app):
     )
     app.secret_key = _secret
 
+    # ── Disable static file caching (belt-and-suspenders with serve_static no-cache headers) ──
+    # Quart's send_from_directory uses SEND_FILE_MAX_AGE_DEFAULT to set Cache-Control max-age.
+    # Setting to 0 prevents 12-hour browser caching of JS/CSS after deploys.
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
     # ── Motor DB handle ───────────────────────────────────────────────────────
     # Many API blueprints pass `current_app.db` to service classes that do
     # `self.db["collection_name"]`.  Wire it here so it's always available.
