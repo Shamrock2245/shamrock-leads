@@ -579,21 +579,127 @@ async def api_active_bond_alert(booking_number):
 
 @bonds_bp.route("/active-bonds/<booking_number>/status", methods=["PATCH"])
 async def api_active_bond_status(booking_number):
-    """Update bond status (active, exonerated, forfeited, surrendered)."""
+    """Update bond status with full audit trail, status_history tracking, and POA lifecycle.
+
+    Valid statuses: active | monitoring | alert | exonerated | forfeited | surrendered | reinstated
+
+    Side-effects:
+      - Appends to bond's ``status_history`` array
+      - Creates an ``audit_events`` document for every transition
+      - On transition TO ``exonerated``: releases assigned POA back to ``available``
+      - On transition FROM ``exonerated``: clears exonerated_at timestamp
+    """
     active_bonds = get_collection("active_bonds")
     data = await request.get_json(force=True) or {}
     new_status = data.get("status", "")
-    valid_statuses = {"active", "exonerated", "forfeited", "surrendered", "reinstated"}
+    agent = data.get("agent", "Dashboard")
+    note = data.get("note", "")
+    valid_statuses = {"active", "monitoring", "alert", "exonerated", "forfeited", "surrendered", "reinstated"}
     if new_status not in valid_statuses:
-        return jsonify({"success": False, "error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
+        return jsonify({"success": False, "error": f"Invalid status. Must be one of: {sorted(valid_statuses)}"}), 400
     try:
-        result = await active_bonds.update_one(
-            {"booking_number": booking_number},
-            {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc)}},
-        )
-        if result.matched_count == 0:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+
+        # Fetch current bond for old status + POA info
+        bond = await active_bonds.find_one({"booking_number": booking_number})
+        if not bond:
             return jsonify({"success": False, "error": "Bond not found"}), 404
-        return jsonify({"success": True, "booking_number": booking_number, "status": new_status})
+
+        old_status = bond.get("status", "active")
+        if old_status == new_status:
+            return jsonify({"success": True, "status": new_status, "note": "No change"})
+
+        # Build status history entry
+        history_entry = {
+            "from_status": old_status,
+            "to_status": new_status,
+            "timestamp": now_iso,
+            "agent": agent,
+            "note": note,
+        }
+
+        # Build update payload
+        set_fields: dict[str, object] = {"status": new_status, "updated_at": now}
+        if new_status == "exonerated":
+            set_fields["exonerated_at"] = now_iso
+        elif old_status == "exonerated":
+            set_fields["exonerated_at"] = None
+
+        await active_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": set_fields,
+                "$push": {"status_history": history_entry},
+            },
+        )
+
+        # Auto-release POA when bond is exonerated
+        poa_released = False
+        poa_number = bond.get("poa_number")
+        if new_status == "exonerated" and poa_number:
+            try:
+                surety_raw = str(bond.get("insurance_company") or bond.get("surety") or "osi").lower()
+                surety_id = "palmetto" if ("palm" in surety_raw or "psc" in surety_raw) else "osi"
+                poa_col = get_collection("poa_inventory")
+                await poa_col.update_one(
+                    {"poa_number": str(poa_number), "surety_id": surety_id},
+                    {"$set": {"status": "available", "bond_case_id": None, "released_at": now_iso}},
+                )
+                poa_released = True
+            except Exception:
+                logger.warning("POA release failed for %s", poa_number, exc_info=True)
+
+        # Write audit event
+        try:
+            audit_col = get_collection("audit_events")
+            await audit_col.insert_one({
+                "event_type": "status_change",
+                "booking_number": booking_number,
+                "defendant_name": bond.get("defendant_name", ""),
+                "from_status": old_status,
+                "to_status": new_status,
+                "agent": agent,
+                "note": note,
+                "poa_released": poa_released,
+                "poa_number": poa_number,
+                "timestamp": now_iso,
+            })
+        except Exception:
+            logger.warning("Audit event write failed for %s", booking_number, exc_info=True)
+
+        return jsonify({
+            "success": True,
+            "status": new_status,
+            "from_status": old_status,
+            "poa_released": poa_released,
+            "poa_number": poa_number if poa_released else None,
+            "history_entry": history_entry,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bonds_bp.route("/active-bonds/<booking_number>/status-history", methods=["GET"])
+async def api_active_bond_status_history(booking_number):
+    """Return the full status_history array for a bond, newest first."""
+    active_bonds = get_collection("active_bonds")
+    try:
+        bond = await active_bonds.find_one(
+            {"booking_number": booking_number},
+            {"_id": 0, "status_history": 1, "status": 1, "defendant_name": 1},
+        )
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+        history = list(reversed(bond.get("status_history", [])))
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "defendant_name": bond.get("defendant_name", ""),
+            "current_status": bond.get("status", "active"),
+            "history": history,
+            "total": len(history),
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
