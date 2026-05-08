@@ -810,6 +810,11 @@
       <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>
       <button class="btn-export" id="abCsvExportBtn" onclick="SLActiveBonds.exportCSV()" style="background:#0ea5e9;color:#fff;font-size:13px;padding:7px 14px">📥 Export CSV</button>
       <button class="btn-export" id="abBulkExonBtn" onclick="SLActiveBonds.openBulkExonerate()" style="background:#22c55e;color:#fff;font-size:13px;padding:7px 14px">✅ Bulk Exonerate</button>
+      <!-- View Toggle -->
+      <div class="btn-group" id="abViewToggle" style="margin-left:8px">
+        <button id="abViewTableBtn" class="active" title="Table View" onclick="SLKanban&&SLKanban.setView('table')" style="font-size:13px;padding:7px 12px">☰ Table</button>
+        <button id="abViewKanbanBtn" title="Kanban View" onclick="SLKanban&&SLKanban.setView('kanban')" style="font-size:13px;padding:7px 12px">⬛ Kanban</button>
+      </div>
     </div>
 
     <!-- Feature E: Duplicate Phone Alert Banner -->
@@ -818,7 +823,7 @@
     <div id="abPoaStockBanner" class="ab-alert-banner" style="display:none;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:var(--warning)"></div>
 
     <!-- Active Bonds Table -->
-    <div class="panel">
+    <div class="panel" id="abTablePanel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
         <span>🔒 Active Bond Portfolio — Geolocation &amp; Risk Tracking</span>
         <span class="meta" id="abMeta"></span>
@@ -838,11 +843,26 @@
               <th id="abCourtCountdownHdr" style="cursor:pointer" onclick="SLActiveBonds.sortTable('court_days')">⇵ Days to Court</th>
               <th>Last Check-In</th>
               <th>Status</th>
+              <th>POA</th>
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="abTableBody"><tr><td colspan="13" class="loading">Loading active bonds…</td></tr></tbody>
+          <tbody id="abTableBody"><tr><td colspan="14" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Kanban Board (hidden by default) -->
+    <div id="abKanbanBoard" class="kanban-board" style="display:none"></div>
+
+    <!-- Status History Modal -->
+    <div id="abStatusHistoryModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center">
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:520px;width:90%;max-height:80vh;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;font-size:15px">📋 Status History</h3>
+          <button onclick="document.getElementById('abStatusHistoryModal').style.display='none'" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <div id="abStatusHistoryContent"><div class="loading">Loading…</div></div>
       </div>
     </div>
 

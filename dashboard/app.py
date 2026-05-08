@@ -2602,21 +2602,129 @@ def api_active_bond_alert(booking_number):
 
 @app.route("/api/active-bonds/<booking_number>/status", methods=["PATCH"])
 def api_active_bond_status(booking_number):
-    """Update bond status (active | monitoring | alert | exonerated | forfeited)."""
+    """Update bond status with full audit trail, status_history tracking, and POA lifecycle management.
+
+    Valid statuses: active | monitoring | alert | exonerated | forfeited | surrendered | reinstated
+
+    Side-effects:
+      - Appends to bond's ``status_history`` array (timestamp, from_status, to_status, agent, note)
+      - Creates an ``audit_events`` document for every transition
+      - On transition TO ``exonerated``: releases the assigned POA back to ``available``
+      - On transition FROM ``exonerated`` (reinstatement): clears exonerated_at timestamp
+    """
     try:
         data = request.get_json() or {}
         new_status = data.get("status", "active")
-        valid_statuses = ["active", "monitoring", "alert", "exonerated", "forfeited", "surrendered"]
+        agent = data.get("agent", "Dashboard")
+        note = data.get("note", "")
+        valid_statuses = ["active", "monitoring", "alert", "exonerated", "forfeited", "surrendered", "reinstated"]
         if new_status not in valid_statuses:
             return jsonify({"success": False, "error": f"Invalid status. Use: {valid_statuses}"}), 400
+
         now = datetime.now(timezone.utc)
-        result = active_bonds.update_one(
-            {"booking_number": booking_number},
-            {"$set": {"status": new_status, "updated_at": now}}
-        )
-        if result.matched_count == 0:
+        now_iso = now.isoformat()
+
+        # Fetch current bond to get old status and POA info
+        bond = active_bonds.find_one({"booking_number": booking_number})
+        if not bond:
             return jsonify({"success": False, "error": "Bond not found"}), 404
-        return jsonify({"success": True, "status": new_status})
+
+        old_status = bond.get("status", "active")
+        if old_status == new_status:
+            return jsonify({"success": True, "status": new_status, "note": "No change"})
+
+        # Build status history entry
+        history_entry = {
+            "from_status": old_status,
+            "to_status": new_status,
+            "timestamp": now_iso,
+            "agent": agent,
+            "note": note,
+        }
+
+        # Build update payload
+        set_fields = {"status": new_status, "updated_at": now}
+        if new_status == "exonerated":
+            set_fields["exonerated_at"] = now_iso
+        elif old_status == "exonerated":
+            # Reinstatement — clear exonerated timestamp
+            set_fields["exonerated_at"] = None
+
+        active_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": set_fields,
+                "$push": {"status_history": history_entry},
+            }
+        )
+
+        # Auto-release POA when bond is exonerated
+        poa_released = False
+        poa_number = bond.get("poa_number")
+        surety_raw = (bond.get("insurance_company") or bond.get("surety") or "osi").lower()
+        surety_id = "palmetto" if ("palm" in surety_raw or "psc" in surety_raw) else "osi"
+        if new_status == "exonerated" and poa_number:
+            try:
+                poa_inventory.update_one(
+                    {"poa_number": str(poa_number), "surety_id": surety_id},
+                    {"$set": {
+                        "status": "available",
+                        "bond_case_id": None,
+                        "released_at": now_iso,
+                    }}
+                )
+                poa_released = True
+            except Exception as poa_err:
+                app.logger.warning(f"POA release failed for {poa_number}: {poa_err}")
+
+        # Write audit event to audit_events collection
+        try:
+            audit_events_col = db["audit_events"]
+            audit_events_col.insert_one({
+                "event_type": "status_change",
+                "booking_number": booking_number,
+                "defendant_name": bond.get("defendant_name", ""),
+                "from_status": old_status,
+                "to_status": new_status,
+                "agent": agent,
+                "note": note,
+                "poa_released": poa_released,
+                "poa_number": poa_number,
+                "timestamp": now_iso,
+            })
+        except Exception as audit_err:
+            app.logger.warning(f"Audit event write failed: {audit_err}")
+
+        return jsonify({
+            "success": True,
+            "status": new_status,
+            "from_status": old_status,
+            "poa_released": poa_released,
+            "history_entry": history_entry,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/active-bonds/<booking_number>/status-history", methods=["GET"])
+def api_active_bond_status_history(booking_number):
+    """Return the full status_history array for a bond, newest first."""
+    try:
+        bond = active_bonds.find_one(
+            {"booking_number": booking_number},
+            {"_id": 0, "status_history": 1, "status": 1, "defendant_name": 1}
+        )
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+        history = list(reversed(bond.get("status_history", [])))
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "defendant_name": bond.get("defendant_name", ""),
+            "current_status": bond.get("status", "active"),
+            "history": history,
+            "total": len(history),
+        })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -2989,11 +3097,25 @@ def api_poa_release():
 
 @app.route("/api/poa/reassign", methods=["POST"])
 def api_poa_reassign():
-    """Reassign an assigned POA to a different bond case."""
+    """Reassign a POA from one bond to another (or assign an available POA to a bond).
+
+    Body params:
+      poa_number        - POA serial number (required)
+      surety_id         - "osi" or "palmetto" (required)
+      new_booking_number - booking number to assign the POA to (required)
+      old_booking_number - booking number to clear poa_number from (optional)
+
+    Side-effects:
+      - Updates poa_inventory: bond_case_id = new_booking_number
+      - Clears poa_number on the old bond document (if old_booking_number provided)
+      - Sets poa_number on the new bond document
+      - Writes an audit_events record
+    """
     body = request.get_json(force=True) or {}
     poa_number = str(body.get("poa_number", "")).strip()
     surety_id = str(body.get("surety_id", "")).lower().strip()
     new_booking = str(body.get("new_booking_number", "")).strip()
+    old_booking = str(body.get("old_booking_number", "")).strip()
 
     if not poa_number or not surety_id or not new_booking:
         return jsonify({"error": "poa_number, surety_id, and new_booking_number required"}), 400
@@ -3001,17 +3123,48 @@ def api_poa_reassign():
     doc = poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
         return jsonify({"error": f"POA {poa_number} not found"}), 404
-    if doc.get("status") != "assigned":
-        return jsonify({"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}), 409
+    if doc.get("status") not in ("assigned", "available"):
+        return jsonify({"error": f"POA {poa_number} is {doc.get('status')} — cannot reassign"}), 409
 
-    old_case = doc.get("bond_case_id", "")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    old_case = doc.get("bond_case_id") or old_booking
+
+    # Update POA inventory record
     poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
-        {"$set": {"bond_case_id": new_booking, "used_at": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {"status": "assigned", "bond_case_id": new_booking, "used_at": now_iso}}
     )
+
+    # Clear poa_number on the old bond (if provided)
+    if old_booking and old_booking != new_booking:
+        active_bonds.update_one(
+            {"booking_number": old_booking},
+            {"$set": {"poa_number": None, "poa_surety": None, "updated_at": now_iso}}
+        )
+
+    # Set poa_number on the new bond
+    poa_full = doc.get("poa_full") or f"{doc.get('poa_prefix','')} {poa_number}"
+    active_bonds.update_one(
+        {"booking_number": new_booking},
+        {"$set": {"poa_number": poa_number, "poa_full": poa_full, "poa_surety": surety_id, "updated_at": now_iso}}
+    )
+
+    # Write audit event
+    try:
+        db["audit_events"].insert_one({
+            "event_type": "poa_reassign",
+            "poa_number": poa_number,
+            "surety_id": surety_id,
+            "old_booking": old_case,
+            "new_booking": new_booking,
+            "timestamp": now_iso,
+        })
+    except Exception:
+        pass
+
     return jsonify({
         "success": True, "poa_number": poa_number,
-        "message": f"POA {poa_number} reassigned from {old_case} to {new_booking}",
+        "message": f"POA {poa_number} reassigned from {old_case or '(none)'} to {new_booking}",
         "old_case": old_case, "new_case": new_booking,
     })
 

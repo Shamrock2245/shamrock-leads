@@ -5,6 +5,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.3.0] — 2026-05-08 (Kanban Board + POA Inline Edit + Status Audit Trail)
+
+### Added — Frontend
+
+- **Bond Kanban Board** (`sl-active-bonds.js` → `SLKanban` IIFE module) — full drag-and-drop view with 6 status columns (Active, Monitoring, Alert, Exonerated, Surrendered, Forfeited). Drag a card to change status; touch-device fallback via tap-and-hold. Toggle between Table and Kanban via the new `☰ Table / ⬛ Kanban` button group in the Active Bonds toolbar.
+- **POA Inline Edit** — new `POA` column in the table view shows the current POA number with a `⇄` swap button. Kanban cards also display the POA badge with a swap button.
+- **POA Quick-Swap Modal** (`SLKanban.openPoaSwap`) — fetches available POA inventory for the bond's surety, displays a scrollable list of available POAs, and calls `PATCH /api/poa/reassign` on confirm.
+- **Status History Modal** (`SLKanban.loadStatusHistory`) — fetches `GET /api/active-bonds/<booking>/status-history` and renders a timeline of all status transitions with timestamp, actor, and optional note.
+- **Reinstated status** — added to the status dropdown in the table row and as a Kanban column.
+- **View toggle buttons** (`☰ Table` / `⬛ Kanban`) added to the Active Bonds toolbar.
+- **Status History button** (`📋 History`) added to each table row's action group.
+- **Kanban CSS** appended to `sl-overhaul.css` — columns, cards, drag-over indicators, POA badge, score pills, risk badges, touch-drag fallback, and responsive scroll.
+
+### Added — Backend (`app.py`)
+
+- **`PATCH /api/active-bonds/<booking>/status`** — now appends to `status_history` array (timestamp, old status, new status, actor, note), auto-releases POA inventory on `exonerated`/`surrendered`/`forfeited`, and accepts optional `note` and `actor` fields.
+- **`GET /api/active-bonds/<booking>/status-history`** — new endpoint returning the full `status_history` array for a bond.
+- **`PATCH /api/poa/reassign`** — enhanced to also clear `poa_number` on the old bond when `old_booking_number` is provided.
+
+### Fixed
+
+- Table `colspan` updated from 13 to 14 to account for the new POA column.
+- `SLKanban.setView()` wired to the view toggle buttons for explicit table/kanban switching.
+- `SLKanban` public API now exports `setView` in addition to `render`, `toggle`, `openPoaSwap`, `_confirmPoaSwap`, `loadStatusHistory`, and `init`.
+
+---
+
+## [2.2.0] — 2026-05-08 (BlueBubbles Tunnel Fix)
+
+### Fixed
+
+- **ngrok tunnel** — corrected port from 1880 (Node-RED) to 1234 (BlueBubbles). iMessage tab now shows Online.
+- **`docker-compose.yml`** — added `dns: [8.8.8.8, 1.1.1.1]` to both services to ensure `bb.shamrockbailbonds.biz` resolves once Cloudflare zone is activated.
+- **`TUNNEL_FIX.md`** — updated to document the ngrok permanent domain setup and the pending Cloudflare zone activation steps.
+- **`.env.example`** — updated `BLUEBUBBLES_URL_0178` to use `https://bb.shamrockbailbonds.biz` (permanent Cloudflare tunnel domain).
+
+---
+
 ## [2.1.0] — 2026-05-01 (Antigravity Tier 1-3 + Library Upgrade Sprint)
 
 ### Added — Backend

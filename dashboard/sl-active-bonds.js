@@ -239,6 +239,12 @@ function renderActiveBondsTable() {
       <td style="${nextDueStyle}">${nextDue}${overdueLabel}</td>
       <td><span class="status-badge ${sCls}">${b.status || 'active'}</span></td>
       <td>
+        <div class="poa-inline-cell" style="display:flex;align-items:center;gap:4px;min-width:90px">
+          <span class="poa-inline-value" style="font-size:11px;font-weight:600;color:var(--text)" title="${escHtml(b.poa_number||'—')}">${escHtml((b.poa_number||'—').slice(0,12))}</span>
+          <button class="poa-inline-swap-btn" title="Swap POA" style="font-size:10px;padding:1px 5px;background:var(--panel);border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--accent)" onclick="SLKanban&&SLKanban.openPoaSwap(${JSON.stringify(b).replace(/"/g,'&quot;')})">⇄</button>
+        </div>
+      </td>
+      <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="openEditDrawer('${bkSafe}')">✏️ Edit</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
@@ -256,7 +262,9 @@ function renderActiveBondsTable() {
             <option value="exonerated">Exonerated</option>
             <option value="surrendered">Surrendered</option>
             <option value="forfeited">Forfeited</option>
+            <option value="reinstated">Reinstated</option>
           </select>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#6b7280;color:#fff" onclick="SLKanban&&SLKanban.loadStatusHistory('${bkSafe}')">📋 History</button>
         </div>
       </td>
     </tr>`;
@@ -1010,3 +1018,521 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
     window.open(`sms:${phone}?body=${encodeURIComponent(msg)}`);
   }
 }
+
+
+/* ══════════════════════════════════════════════════════════════════
+   KANBAN BOARD — Bond Portfolio View
+   ══════════════════════════════════════════════════════════════════
+
+   Provides a drag-and-drop Kanban view of all active bonds organised
+   by status column.  Works alongside the existing table view — both
+   share the same _abBonds data array and the same loadActiveBonds()
+   refresh cycle.
+
+   Public API exposed on window.SLKanban:
+     .render()          — (re)render the board from current _abBonds
+     .toggle(view)      — switch between 'table' | 'kanban'
+     .openPoaSwap(b)    — open the POA quick-swap modal for bond b
+     .loadStatusHistory(booking) — fetch & render status timeline
+   ══════════════════════════════════════════════════════════════════ */
+
+(function () {
+  'use strict';
+
+  /* ── Constants ──────────────────────────────────────────────────── */
+  const COLUMNS = [
+    { status: 'active',      label: 'Active',      icon: '🟢' },
+    { status: 'monitoring',  label: 'Monitoring',  icon: '🔵' },
+    { status: 'alert',       label: 'Alert',       icon: '🔴' },
+    { status: 'exonerated',  label: 'Exonerated',  icon: '✅' },
+    { status: 'forfeited',   label: 'Forfeited',   icon: '❌' },
+    { status: 'surrendered', label: 'Surrendered', icon: '🏳️' },
+    { status: 'reinstated',  label: 'Reinstated',  icon: '🔄' },
+  ];
+
+  /* ── State ──────────────────────────────────────────────────────── */
+  let _currentView = 'table';   // 'table' | 'kanban'
+  let _dragCard    = null;      // DOM element being dragged
+  let _dragBond    = null;      // bond object being dragged
+  let _ghost       = null;      // placeholder DOM element
+
+  /* ── DOM helpers ────────────────────────────────────────────────── */
+  function qs(sel, root) { return (root || document).querySelector(sel); }
+  function qsa(sel, root) { return Array.from((root || document).querySelectorAll(sel)); }
+
+  /* ── Days-until helper ──────────────────────────────────────────── */
+  function daysUntil(dateStr) {
+    if (!dateStr) return null;
+    return Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     RENDER KANBAN BOARD
+     ══════════════════════════════════════════════════════════════════ */
+  function render() {
+    const board = document.getElementById('abKanbanBoard');
+    if (!board) return;
+
+    const bonds = window._abBonds || [];
+    const filter = window._abFilter || 'all';
+
+    // Apply same filter as table view
+    const filtered = filter === 'all' ? bonds : bonds.filter(b => b.status === filter);
+
+    // Group by status
+    const byStatus = {};
+    COLUMNS.forEach(c => { byStatus[c.status] = []; });
+    filtered.forEach(b => {
+      const s = (b.status || 'active').toLowerCase();
+      if (byStatus[s]) byStatus[s].push(b);
+      else byStatus['active'].push(b);  // fallback unknown statuses to active
+    });
+
+    board.innerHTML = '';
+
+    COLUMNS.forEach(col => {
+      const cards = byStatus[col.status] || [];
+      const colEl = document.createElement('div');
+      colEl.className = 'kb-col';
+      colEl.dataset.status = col.status;
+
+      colEl.innerHTML = `
+        <div class="kb-col-header">
+          <span class="kb-col-title">${col.icon} ${col.label}</span>
+          <span class="kb-col-count">${cards.length}</span>
+        </div>
+        <div class="kb-col-body" data-status="${col.status}"></div>
+      `;
+
+      const body = colEl.querySelector('.kb-col-body');
+      cards.forEach(bond => body.appendChild(buildCard(bond)));
+
+      // Drop zone events
+      body.addEventListener('dragover', onDragOver);
+      body.addEventListener('dragleave', onDragLeave);
+      body.addEventListener('drop', onDrop);
+
+      board.appendChild(colEl);
+    });
+  }
+
+  /* ── Build a single Kanban card ─────────────────────────────────── */
+  function buildCard(bond) {
+    const card = document.createElement('div');
+    card.className = 'kb-card' + (bond.status === 'alert' ? ' kb-card-alert' : '');
+    card.draggable = true;
+    card.dataset.booking = bond.booking_number;
+
+    const days = daysUntil(bond.court_date);
+    const courtClass = days !== null && days <= 7 ? 'kb-tag-court-soon' : 'kb-tag-court-ok';
+    const courtLabel = days !== null ? (days < 0 ? `${Math.abs(days)}d overdue` : `${days}d to court`) : '—';
+    const amount = bond.bond_amount ? '$' + Number(bond.bond_amount).toLocaleString() : '—';
+    const poa = bond.poa_number || bond.poa_full || '—';
+    const surety = (bond.insurance_company || bond.surety || '').replace('Old Surety Insurance', 'OSI').replace('Palmetto Surety', 'PSC');
+
+    card.innerHTML = `
+      <div class="kb-card-name" title="${escHtml(bond.defendant_name)}">${escHtml(bond.defendant_name || 'Unknown')}</div>
+      <div class="kb-card-booking">${escHtml(bond.booking_number || '')} · ${escHtml(bond.county || '')} Co.</div>
+      <div class="kb-card-meta">
+        <span class="kb-tag kb-tag-amount">${amount}</span>
+        <span class="kb-tag ${courtClass}">${courtLabel}</span>
+        ${surety ? `<span class="kb-tag">${escHtml(surety)}</span>` : ''}
+      </div>
+      <div class="kb-card-poa">
+        <span class="kb-card-poa-label">POA:</span>
+        <span class="kb-card-poa-value" title="${escHtml(poa)}">${escHtml(poa)}</span>
+        <button class="kb-card-poa-edit-btn" title="Swap POA" onclick="SLKanban.openPoaSwap(${JSON.stringify(bond).replace(/"/g, '&quot;')})">⇄</button>
+      </div>
+      <div class="kb-card-actions">
+        <button onclick="openEditDrawer('${escHtml(bond.booking_number)}')">Edit</button>
+        <button onclick="openInTracking('${escHtml(bond.booking_number)}')">Track</button>
+        <button onclick="sendBondImessage('${escHtml(bond.booking_number)}','${escHtml(bond.defendant_name)}','${escHtml(bond.indemnitor_phone||'')}')">💬</button>
+        <button onclick="SLKanban.loadStatusHistory('${escHtml(bond.booking_number)}')">History</button>
+      </div>
+    `;
+
+    // Drag events
+    card.addEventListener('dragstart', (e) => onDragStart(e, bond, card));
+    card.addEventListener('dragend',   onDragEnd);
+
+    // Touch drag fallback
+    addTouchDrag(card, bond);
+
+    return card;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     DRAG AND DROP (Mouse)
+     ══════════════════════════════════════════════════════════════════ */
+  function onDragStart(e, bond, card) {
+    _dragBond = bond;
+    _dragCard = card;
+    card.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', bond.booking_number);
+  }
+
+  function onDragEnd() {
+    if (_dragCard) _dragCard.classList.remove('dragging');
+    removeGhost();
+    qsa('.kb-col-body.drag-target').forEach(el => el.classList.remove('drag-target'));
+    _dragCard = null;
+    _dragBond = null;
+  }
+
+  function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const body = e.currentTarget;
+    body.classList.add('drag-target');
+
+    // Show ghost placeholder
+    removeGhost();
+    _ghost = document.createElement('div');
+    _ghost.className = 'kb-drag-ghost';
+    const afterEl = getDragAfterElement(body, e.clientY);
+    if (afterEl) body.insertBefore(_ghost, afterEl);
+    else body.appendChild(_ghost);
+  }
+
+  function onDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      e.currentTarget.classList.remove('drag-target');
+      removeGhost();
+    }
+  }
+
+  async function onDrop(e) {
+    e.preventDefault();
+    const body = e.currentTarget;
+    body.classList.remove('drag-target');
+    removeGhost();
+
+    const newStatus = body.dataset.status;
+    if (!_dragBond || !newStatus) return;
+    if (_dragBond.status === newStatus) return;
+
+    await doStatusChange(_dragBond.booking_number, _dragBond.defendant_name, newStatus);
+  }
+
+  function getDragAfterElement(container, y) {
+    const draggables = qsa('.kb-card:not(.dragging)', container);
+    return draggables.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) return { offset, element: child };
+      return closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  function removeGhost() {
+    if (_ghost && _ghost.parentNode) _ghost.parentNode.removeChild(_ghost);
+    _ghost = null;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     TOUCH DRAG FALLBACK
+     ══════════════════════════════════════════════════════════════════ */
+  function addTouchDrag(card, bond) {
+    let startX, startY, clone, moved;
+
+    card.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      startX = t.clientX; startY = t.clientY;
+      moved = false;
+      _dragBond = bond;
+      _dragCard = card;
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (!moved && Math.abs(t.clientX - startX) < 5 && Math.abs(t.clientY - startY) < 5) return;
+      moved = true;
+      e.preventDefault();
+
+      if (!clone) {
+        clone = card.cloneNode(true);
+        clone.style.cssText = `position:fixed;opacity:.7;pointer-events:none;z-index:9999;width:${card.offsetWidth}px;`;
+        document.body.appendChild(clone);
+        card.classList.add('dragging');
+      }
+      clone.style.left = (t.clientX - card.offsetWidth / 2) + 'px';
+      clone.style.top  = (t.clientY - 30) + 'px';
+
+      // Highlight target column
+      const el = document.elementFromPoint(t.clientX, t.clientY);
+      const targetBody = el && el.closest('.kb-col-body');
+      qsa('.kb-col-body.drag-target').forEach(b => b.classList.remove('drag-target'));
+      if (targetBody) targetBody.classList.add('drag-target');
+    }, { passive: false });
+
+    card.addEventListener('touchend', async (e) => {
+      if (clone) { clone.remove(); clone = null; }
+      card.classList.remove('dragging');
+      qsa('.kb-col-body.drag-target').forEach(b => b.classList.remove('drag-target'));
+
+      if (!moved || !_dragBond) return;
+
+      const t = e.changedTouches[0];
+      const el = document.elementFromPoint(t.clientX, t.clientY);
+      const targetBody = el && el.closest('.kb-col-body');
+      if (!targetBody) return;
+
+      const newStatus = targetBody.dataset.status;
+      if (newStatus && newStatus !== _dragBond.status) {
+        await doStatusChange(_dragBond.booking_number, _dragBond.defendant_name, newStatus);
+      }
+      _dragBond = null; _dragCard = null;
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     STATUS CHANGE (shared by drag-drop and card buttons)
+     ══════════════════════════════════════════════════════════════════ */
+  async function doStatusChange(bookingNumber, defendantName, newStatus) {
+    // Optimistic UI update
+    const bond = (window._abBonds || []).find(b => b.booking_number === bookingNumber);
+    if (bond) bond.status = newStatus;
+    render();
+
+    try {
+      const r = await fetch(`/api/active-bonds/${encodeURIComponent(bookingNumber)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus, agent: 'Kanban Board' }),
+      });
+      const result = await r.json();
+      if (result.success) {
+        const msg = result.poa_released
+          ? `${defendantName} → ${newStatus} · POA ${result.poa_number || ''} released`
+          : `${defendantName} → ${newStatus}`;
+        toast(msg, newStatus === 'exonerated' ? 'success' : 'info');
+        // Full reload to sync KPIs
+        if (typeof loadActiveBonds === 'function') loadActiveBonds();
+      } else {
+        // Revert optimistic update
+        if (bond) bond.status = result.from_status || bond.status;
+        render();
+        toast(result.error || 'Status update failed', 'error');
+      }
+    } catch (e) {
+      if (bond) bond.status = bond.status;  // keep current
+      render();
+      toast('Network error updating status', 'error');
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     VIEW TOGGLE
+     ══════════════════════════════════════════════════════════════════ */
+  function toggleView(view) {
+    _currentView = view;
+    const table  = document.getElementById('abTableWrapper') || qs('.ab-table-wrapper') || qs('#abTable')?.closest('div');
+    const board  = document.getElementById('abKanbanBoard');
+    const btnTable  = document.getElementById('abViewTable');
+    const btnKanban = document.getElementById('abViewKanban');
+
+    if (!board) return;
+
+    if (view === 'kanban') {
+      if (table) table.style.display = 'none';
+      board.classList.add('visible');
+      if (btnTable)  btnTable.classList.remove('active');
+      if (btnKanban) btnKanban.classList.add('active');
+      render();
+    } else {
+      if (table) table.style.display = '';
+      board.classList.remove('visible');
+      if (btnTable)  btnTable.classList.add('active');
+      if (btnKanban) btnKanban.classList.remove('active');
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     POA QUICK-SWAP MODAL
+     ══════════════════════════════════════════════════════════════════ */
+  async function openPoaSwap(bond) {
+    // Fetch available POAs for this surety
+    const suretyRaw = (bond.insurance_company || bond.surety || 'osi').toLowerCase();
+    const suretyId  = (suretyRaw.includes('palm') || suretyRaw.includes('psc')) ? 'palmetto' : 'osi';
+
+    let available = [];
+    try {
+      const r = await fetch(`/api/poa/list?surety_id=${suretyId}&status=available`);
+      const d = await r.json();
+      available = d.poas || d.items || [];
+    } catch (e) {
+      toast('Could not load available POAs', 'error');
+      return;
+    }
+
+    // Build modal
+    let modal = document.getElementById('abPoaSwapModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'abPoaSwapModal';
+      modal.className = 'sl-modal-overlay';
+      modal.innerHTML = `
+        <div class="sl-modal" style="max-width:480px">
+          <div class="sl-modal-header">
+            <h3 class="sl-modal-title">Swap POA</h3>
+            <button class="sl-modal-close" onclick="document.getElementById('abPoaSwapModal').style.display='none'">✕</button>
+          </div>
+          <div class="sl-modal-body">
+            <p id="abPoaSwapSubtitle" style="font-size:13px;color:var(--muted);margin-bottom:12px"></p>
+            <div class="poa-swap-list" id="abPoaSwapList"></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+    }
+
+    const subtitle = document.getElementById('abPoaSwapSubtitle');
+    const list     = document.getElementById('abPoaSwapList');
+    if (subtitle) subtitle.textContent = `${bond.defendant_name} · Current POA: ${bond.poa_number || '(none)'} · Surety: ${suretyId.toUpperCase()}`;
+
+    list.innerHTML = available.length === 0
+      ? '<p style="color:var(--muted);text-align:center;padding:16px">No available POAs for this surety</p>'
+      : available.map(p => `
+          <div class="poa-swap-item" onclick="SLKanban._confirmPoaSwap('${escHtml(bond.booking_number)}','${escHtml(bond.poa_number||'')}','${escHtml(p.poa_number)}','${suretyId}','${escHtml(bond.defendant_name)}')">
+            <div>
+              <div class="poa-num">${escHtml(p.poa_number)}</div>
+              <div class="poa-meta">${escHtml(p.poa_prefix || suretyId.toUpperCase())} · Added ${fmtDate(p.added_at)}</div>
+            </div>
+            <div class="poa-max">${p.max_bond_amount ? '$' + Number(p.max_bond_amount).toLocaleString() : ''}</div>
+          </div>
+        `).join('');
+
+    modal.style.display = 'flex';
+  }
+
+  async function _confirmPoaSwap(bookingNumber, oldPoa, newPoa, suretyId, defendantName) {
+    document.getElementById('abPoaSwapModal').style.display = 'none';
+    try {
+      const r = await fetch('/api/poa/reassign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          poa_number: newPoa,
+          surety_id: suretyId,
+          new_booking_number: bookingNumber,
+          old_booking_number: bookingNumber,
+        }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        toast(`POA swapped: ${oldPoa || '(none)'} → ${newPoa} for ${defendantName}`, 'success');
+        if (typeof loadActiveBonds === 'function') loadActiveBonds();
+      } else {
+        toast(d.error || 'POA swap failed', 'error');
+      }
+    } catch (e) {
+      toast('Network error during POA swap', 'error');
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     STATUS HISTORY TIMELINE
+     ══════════════════════════════════════════════════════════════════ */
+  async function loadStatusHistory(bookingNumber) {
+    // Try to find the history section in the Edit Drawer first
+    const drawerHistoryEl = document.getElementById('abStatusHistoryTimeline');
+    if (drawerHistoryEl) {
+      drawerHistoryEl.innerHTML = '<p style="color:var(--muted);font-size:12px">Loading…</p>';
+    }
+
+    try {
+      const r = await fetch(`/api/active-bonds/${encodeURIComponent(bookingNumber)}/status-history`);
+      const d = await r.json();
+      if (!d.success) { toast(d.error || 'Could not load history', 'error'); return; }
+
+      const history = d.history || [];
+      if (!history.length) {
+        if (drawerHistoryEl) drawerHistoryEl.innerHTML = '<p style="color:var(--muted);font-size:12px">No status changes recorded yet.</p>';
+        return;
+      }
+
+      const html = `<div class="ab-status-timeline">${history.map(h => `
+        <div class="ab-timeline-entry">
+          <div class="tl-transition">${escHtml(h.from_status || '—')} → ${escHtml(h.to_status || '—')}</div>
+          <div class="tl-time">${fmtDate(h.timestamp)} ${h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : ''}</div>
+          ${h.agent ? `<div class="tl-agent">by ${escHtml(h.agent)}</div>` : ''}
+          ${h.note  ? `<div class="tl-note">"${escHtml(h.note)}"</div>` : ''}
+        </div>
+      `).join('')}</div>`;
+
+      if (drawerHistoryEl) {
+        drawerHistoryEl.innerHTML = html;
+      } else {
+        // Show in a quick modal if drawer isn't open
+        toast(`${d.defendant_name}: ${history.length} status change(s) — open Edit Drawer to view timeline`, 'info', 5000);
+      }
+    } catch (e) {
+      toast('Error loading status history', 'error');
+    }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════
+     INIT — wire up view toggle buttons
+     ══════════════════════════════════════════════════════════════════ */
+  function init() {
+    const btnTable  = document.getElementById('abViewTable');
+    const btnKanban = document.getElementById('abViewKanban');
+    if (btnTable)  btnTable.addEventListener('click',  () => toggleView('table'));
+    if (btnKanban) btnKanban.addEventListener('click', () => toggleView('kanban'));
+
+    // Re-render kanban whenever bonds are refreshed (if kanban is active)
+    const origLoad = window.loadActiveBonds;
+    if (typeof origLoad === 'function') {
+      // Patch: after loadActiveBonds resolves, also re-render kanban if visible
+      // (loadActiveBonds already calls renderActiveBondsTable; we add kanban re-render)
+      const origRender = window.renderActiveBondsTable;
+      if (typeof origRender === 'function') {
+        window.renderActiveBondsTable = function () {
+          origRender.apply(this, arguments);
+          if (_currentView === 'kanban') render();
+        };
+      }
+    }
+  }
+
+  /* ── setView: explicit switch between table and kanban ─────────── */
+  function setView(view) {
+    const tablePanel = document.getElementById('abTablePanel');
+    const kanbanBoard = document.getElementById('abKanbanBoard');
+    const tableBtn = document.getElementById('abViewTableBtn');
+    const kanbanBtn = document.getElementById('abViewKanbanBtn');
+    if (!tablePanel || !kanbanBoard) return;
+    if (view === 'kanban') {
+      tablePanel.style.display = 'none';
+      kanbanBoard.style.display = 'flex';
+      if (tableBtn) tableBtn.classList.remove('active');
+      if (kanbanBtn) kanbanBtn.classList.add('active');
+      render(window._abBonds || []);
+    } else {
+      tablePanel.style.display = '';
+      kanbanBoard.style.display = 'none';
+      if (tableBtn) tableBtn.classList.add('active');
+      if (kanbanBtn) kanbanBtn.classList.remove('active');
+    }
+  }
+
+  /* ── Public API ─────────────────────────────────────────────────── */
+  window.SLKanban = {
+    render,
+    toggle: toggleView,
+    setView,
+    openPoaSwap,
+    _confirmPoaSwap,
+    loadStatusHistory,
+    init,
+  };
+
+  // Auto-init when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+})();
