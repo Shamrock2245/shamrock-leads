@@ -77,16 +77,16 @@ async def api_health_full():
         db = get_db()
         await db.command("ping")
         mongo_ok = True
-    except Exception:
-        pass
+    except Exception as _ping_err:
+        logger.warning("[legacy] MongoDB ping failed: %s", _ping_err)
 
     total_arrests = 0
     active_counties = 0
     try:
         total_arrests = await arrests.estimated_document_count()
         active_counties = len(await arrests.distinct("county"))
-    except Exception:
-        pass
+    except Exception as _count_err:
+        logger.warning("[legacy] Stats count failed: %s", _count_err)
 
     status = "ok" if mongo_ok else "degraded"
     code = 200 if mongo_ok else 503

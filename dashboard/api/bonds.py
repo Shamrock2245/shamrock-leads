@@ -736,8 +736,8 @@ async def api_active_bond_edit(booking_number: str):
                 "agent": data.get("agent", "Dashboard"),
                 "timestamp": datetime.now(timezone.utc),
             })
-        except Exception:
-            pass
+        except Exception as _audit_err:
+            logger.warning("[bonds] audit write failed for %s: %s", booking_number, _audit_err)
         return jsonify({"success": True, "booking_number": booking_number, "updated": list(updates.keys())})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1076,8 +1076,8 @@ async def api_bulk_exonerate():
                                 "exonerated_at": now.isoformat(),
                             },
                         })
-                except Exception:
-                    pass
+                except Exception as _sse_err:
+                    logger.debug("[bonds] SSE push failed for %s: %s", booking_number, _sse_err)
 
                 exonerated_count += 1
                 results.append({

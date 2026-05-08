@@ -170,8 +170,8 @@ async def schedule_court_reminders_for_case(
         try:
             avail = await bb_client.check_imessage_availability(phone)
             is_imessage = avail.get("available", False)
-        except Exception:
-            pass
+        except Exception as _avail_err:
+            logger.debug("[bb_scheduled] iMessage availability check failed for %s: %s", phone[-4:] if phone else "?", _avail_err)
 
     context = {
         "name": indemnitor_name.split()[0] if indemnitor_name else "there",

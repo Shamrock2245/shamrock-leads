@@ -41,21 +41,46 @@ COUNTY_ALIASES = {
 }
 
 # ── Regex patterns for discharge email parsing ────────────────────────────────
-# TODO: Refine with real email samples from admin@shamrockbailbonds.biz
+# Patterns cover common Florida court email formats from Clerk of Courts offices,
+# JailTracker automated notifications, and Lee/Collier/Charlotte county systems.
 BOOKING_PATTERNS = [
-    re.compile(r'\b([A-Z]{2,3}[-]?\d{6,10})\b'),          # e.g. LEE-2024123456
-    re.compile(r'booking\s*(?:number|#|no\.?)[:\s]+([A-Z0-9\-]{6,15})', re.I),
-    re.compile(r'case\s*(?:number|#|no\.?)[:\s]+([A-Z0-9\-]{6,15})', re.I),
+    # County-prefixed booking numbers: LEE-2024123456, COL2024123456, SWFL-123456
+    re.compile(r'\b([A-Z]{2,5}[-]?\d{6,12})\b'),
+    # Explicit "Booking Number:" labels (various formats)
+    re.compile(r'booking\s*(?:number|#|no\.?|num\.?)[:\s]+([A-Z0-9\-]{6,18})', re.I),
+    # Case/docket/cause numbers
+    re.compile(r'(?:case|docket|cause)\s*(?:number|#|no\.?)[:\s]+([A-Z0-9\-\/]{6,20})', re.I),
+    # POA / Power of Attorney numbers
+    re.compile(r'(?:poa|power\s+of\s+attorney)\s*(?:#|no\.?|number)?[:\s]+([A-Z0-9\-]{4,15})', re.I),
+    # Arrest/incident/report numbers
+    re.compile(r'(?:arrest|incident|report)\s*(?:#|no\.?|number)?[:\s]+([A-Z0-9\-]{6,18})', re.I),
 ]
 DEFENDANT_PATTERNS = [
-    re.compile(r'defendant[:\s]+([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)', re.I),
-    re.compile(r'(?:re:|regarding)[:\s]+([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)', re.I),
-    re.compile(r'bond\s+(?:for|of)[:\s]+([A-Z][a-z]+(?:\s[A-Z][a-z]+)+)', re.I),
+    # Explicit "Defendant:" label
+    re.compile(r'defendant[:\s]+([A-Z][A-Za-z\-\']+(?:\s[A-Z][A-Za-z\-\']+){1,3})', re.I),
+    # "Re:" / "Regarding:" subject lines often contain defendant name
+    re.compile(r'(?:re:|regarding|subj(?:ect)?:)[:\s]+([A-Z][A-Za-z\-\']+(?:\s[A-Z][A-Za-z\-\']+){1,3})', re.I),
+    # "Bond for/of NAME" patterns
+    re.compile(r'bond\s+(?:for|of|on\s+behalf\s+of)[:\s]+([A-Z][A-Za-z\-\']+(?:\s[A-Z][A-Za-z\-\']+){1,3})', re.I),
+    # "Inmate: NAME" from JailTracker automated emails
+    re.compile(r'inmate[:\s]+([A-Z][A-Za-z\-\']+(?:\s[A-Z][A-Za-z\-\']+){1,3})', re.I),
+    # ALL-CAPS name patterns common in Florida court docs: LAST, FIRST MIDDLE
+    re.compile(r'\b([A-Z]{2,20},\s+[A-Z]{2,15}(?:\s+[A-Z]{1,15})?)\b'),
 ]
 DISCHARGE_KEYWORDS = [
+    # Core exoneration terms
     "discharged", "exonerated", "released from bond", "bond discharged",
     "bond exonerated", "bond released", "obligation satisfied",
-    "case dismissed", "charges dropped", "nolle prosequi",
+    # Case resolution
+    "case dismissed", "charges dropped", "nolle prosequi", "nol pros",
+    "acquitted", "not guilty", "judgment of acquittal",
+    # Sentence served / custody ended
+    "sentence served", "time served", "released from custody",
+    "released on recognizance", "released on own recognizance",
+    # Florida-specific clerk language
+    "bond forfeiture vacated", "forfeiture vacated", "bond reinstated",
+    "surety discharged", "surety exonerated", "bond satisfied",
+    "order of discharge", "discharge of bond",
 ]
 COUNTY_PATTERN = re.compile(
     r'\b(' + '|'.join(COUNTY_ALIASES.keys()) + r')\s+county\b', re.I
@@ -73,14 +98,24 @@ def _gmail_available() -> bool:
 def _parse_discharge_email(subject: str, body: str) -> dict:
     """
     Parse a court email for discharge signals.
-    Returns dict with: is_discharge, booking_number, defendant_name, county, confidence.
-    TODO: Refine with real email samples from admin@shamrockbailbonds.biz
+
+    Returns dict with keys:
+      is_discharge (bool), booking_number (str|None), defendant_name (str|None),
+      county (str|None), confidence (int 0-100), matched_keywords (list[str]).
+
+    Confidence scoring:
+      - Each matched discharge keyword adds 20 points (capped at 60)
+      - Booking number match adds 20 points
+      - Defendant name match adds 15 points
+      - County match adds 10 points
+      - Threshold for is_discharge=True: any keyword matched
     """
     text = f"{subject}\n{body}".lower()
     combined = f"{subject}\n{body}"
 
-    # Check for discharge keywords
-    is_discharge = any(kw in text for kw in DISCHARGE_KEYWORDS)
+    # Check for discharge keywords and collect matched ones
+    matched_keywords = [kw for kw in DISCHARGE_KEYWORDS if kw in text]
+    is_discharge = bool(matched_keywords)
 
     # Extract booking number
     booking_number = None
@@ -104,16 +139,16 @@ def _parse_discharge_email(subject: str, body: str) -> dict:
     if m:
         county = COUNTY_ALIASES.get(m.group(1).lower(), m.group(1).title())
 
-    # Confidence scoring
-    confidence = 0
-    if is_discharge:
-        confidence += 50
+    # Confidence scoring (0-100)
+    # Each keyword match adds 20 pts (capped at 60), booking +20, name +15, county +10
+    confidence = min(len(matched_keywords) * 20, 60)
     if booking_number:
-        confidence += 30
+        confidence += 20
     if defendant_name:
-        confidence += 10
+        confidence += 15
     if county:
         confidence += 10
+    confidence = min(confidence, 100)
 
     return {
         "is_discharge": is_discharge,
@@ -121,6 +156,7 @@ def _parse_discharge_email(subject: str, body: str) -> dict:
         "defendant_name": defendant_name,
         "county": county,
         "confidence": confidence,
+        "matched_keywords": matched_keywords,
     }
 
 

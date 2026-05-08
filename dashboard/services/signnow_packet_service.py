@@ -67,10 +67,15 @@ class SignNowPacketService:
         "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # shamrock-premium-finance-notice
 
         # ── Palmetto-Specific Overrides ──
+        # These override the OSI defaults when surety_id == "palmetto".
+        # To add a new Palmetto template:
+        #   1. Log in to SignNow as admin@shamrockbailbonds.biz
+        #   2. Open the template and copy the 40-char template ID from the URL
+        #   3. Add the key here using the pattern "<doc-key>-palmetto"
+        #   4. The surety-routing logic in get_template_id() will pick it up automatically
         "appearance-bond-palmetto":    "9b1d3d0b64004153b347ceccda07420a906350e5",  # shamrock-palmetto-appearance-bond
-        # TODO: Add remaining Palmetto template IDs once created in SignNow
-        # "collateral-receipt-palmetto": "<TEMPLATE_ID>",
-        # "payment-plan-palmetto":       "<TEMPLATE_ID>",
+        # "collateral-receipt-palmetto": "",  # Uncomment + fill once Palmetto collateral template is created
+        # "payment-plan-palmetto":       "",  # Uncomment + fill once Palmetto payment plan template is created
     }
 
     # Document Multiplication Rules
