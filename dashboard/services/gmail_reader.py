@@ -36,6 +36,7 @@ class GmailReaderService:
         "charlotteclerk.com", "manateeclerk.com", "sarasotaclerk.com",
         "desotoclerk.com", "hillsboroughclerk.com", "circuit20.org",
         "ca.cjis20.org", "jud12.flcourts.org", "jud20.flcourts.org",
+        "shamrockbailbonds.biz"
     ]
 
     # Keywords that signal court-related emails
@@ -44,6 +45,7 @@ class GmailReaderService:
         "forfeiture", "discharge", "bond", "arraignment",
         "first appearance", "court date", "service of court",
         "notice of appearance", "subpoena", "summons",
+        "criminal bonds", "clerk set"
     ]
 
     def __init__(self):

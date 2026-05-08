@@ -8,6 +8,7 @@ Migrated from Flask to Quart — all handlers are async.
 
 from quart import Blueprint, request, jsonify, current_app
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 bond_lifecycle_bp = Blueprint('bond_lifecycle', __name__)
@@ -150,7 +151,7 @@ async def process_gmail_now():
         return jsonify({
             'status': 'success',
             'emails_processed': result.get('processed', 0),
-            'events_created': result.get('events_created', 0),
+            'events_created': result.get('calendar_events_created', 0),
             'messages_sent': result.get('messages_sent', 0),
             'errors': result.get('errors', []),
         }), 200
