@@ -121,16 +121,22 @@
 
     _modelStatus = mlStatus;
 
-    renderForecastKPIs(forecast);
-    renderMLKPIs(mlStatus, heatmap);
-    renderForecastChart(forecast);
-    renderConfidenceBands(forecast);
-    renderCountyHeatmap(heatmap);
-    renderTemporalHeatmap(temporal);
-    renderRiskTrend(riskTrend);
-    renderModelCards(mlStatus);
-    renderCourtPredictions(courtPred);
-    renderForfeitureRisk(forfeit);
+    // Fault-tolerant rendering: each panel renders independently
+    const renders = [
+      ['ForecastKPIs',       () => renderForecastKPIs(forecast)],
+      ['MLKPIs',             () => renderMLKPIs(mlStatus, heatmap)],
+      ['ForecastChart',      () => renderForecastChart(forecast)],
+      ['ConfidenceBands',    () => renderConfidenceBands(forecast)],
+      ['CountyHeatmap',      () => renderCountyHeatmap(heatmap)],
+      ['TemporalHeatmap',    () => renderTemporalHeatmap(temporal)],
+      ['RiskTrend',          () => renderRiskTrend(riskTrend)],
+      ['ModelCards',         () => renderModelCards(mlStatus)],
+      ['CourtPredictions',   () => renderCourtPredictions(courtPred)],
+      ['ForfeitureRisk',     () => renderForfeitureRisk(forfeit)],
+    ];
+    for (const [name, fn] of renders) {
+      try { fn(); } catch (e) { console.error(`[Intelligence] ${name} render failed:`, e); }
+    }
   }
 
   // ── Forecast KPIs ───────────────────────────────────────────────────────
@@ -141,20 +147,35 @@
       });
       return;
     }
-    const f = d.forecast;
-    if (f.point_forecast) animMoney($('intKpiForecast'), f.point_forecast.reduce((a, b) => a + b, 0));
-    if (f.confidence_intervals) {
-      const ci = f.confidence_intervals;
-      const p50sum = ci.filter(c => c.level === 'p50').reduce((a, c) => a + (c.values ? c.values.reduce((x, y) => x + y, 0) : 0), 0);
-      const p90sum = ci.filter(c => c.level === 'p90').reduce((a, c) => a + (c.values ? c.values.reduce((x, y) => x + y, 0) : 0), 0);
-      if (p50sum) animMoney($('intKpiP50'), p50sum);
-      if (p90sum) animMoney($('intKpiP90'), p90sum);
+    // Map from actual API shape: {exponential_smoothing, monte_carlo, summary, historical}
+    const s = d.summary || {};
+    const mc = d.monte_carlo || {};
+    const es = d.exponential_smoothing || {};
+
+    // 30d blended forecast
+    if (s.forecast_next_30d != null) {
+      animMoney($('intKpiForecast'), s.forecast_next_30d);
+    } else if (es.forecast) {
+      animMoney($('intKpiForecast'), es.forecast.reduce((a, b) => a + b, 0));
     }
+
+    // P10 (pessimistic) and P90 (optimistic) from Monte Carlo
+    if (mc.p10_total != null) animMoney($('intKpiP50'), mc.p10_total);
+    if (mc.p90_total != null) animMoney($('intKpiP90'), mc.p90_total);
+
+    // Confidence band fallback from summary
+    if (s.confidence_band) {
+      if (!mc.p10_total && s.confidence_band.low) animMoney($('intKpiP50'), s.confidence_band.low);
+      if (!mc.p90_total && s.confidence_band.high) animMoney($('intKpiP90'), s.confidence_band.high);
+    }
+
+    // Trend from exponential smoothing or summary
+    const trend = s.trend || es.trend;
     const trendEl = $('intKpiTrend');
-    if (trendEl && f.trend_direction) {
-      const arrow = f.trend_direction === 'up' ? '↗' : f.trend_direction === 'down' ? '↘' : '→';
-      const color = f.trend_direction === 'up' ? '#10b981' : f.trend_direction === 'down' ? '#ef4444' : '#94a3b8';
-      trendEl.innerHTML = `<span style="color:${color}">${arrow} ${f.trend_direction}</span>`;
+    if (trendEl && trend) {
+      const arrow = trend === 'up' ? '↗' : trend === 'down' ? '↘' : '→';
+      const color = trend === 'up' ? '#10b981' : trend === 'down' ? '#ef4444' : '#94a3b8';
+      trendEl.innerHTML = `<span style="color:${color}">${arrow} ${trend}</span>`;
     }
   }
 
@@ -194,27 +215,18 @@
     const ctx = $('intForecastChart');
     if (!ctx || !d || !d.success) return;
     const c = C();
-    const f = d.forecast;
-    if (!f || !f.point_forecast) return;
+    const es = d.exponential_smoothing || {};
+    const forecastArr = es.forecast || [];
+    if (!forecastArr.length) return;
 
-    const labels = f.dates || f.point_forecast.map((_, i) => `Day ${i + 1}`);
-    const datasets = [{
-      label: 'Forecast',
-      data: f.point_forecast,
-      borderColor: '#10b981',
-      backgroundColor: '#10b98133',
-      fill: false,
-      tension: 0.3,
-      borderWidth: 2.5,
-      pointRadius: 2,
-      pointHoverRadius: 5,
-    }];
+    const datasets = [];
 
-    // Add historical if available
-    if (f.historical) {
-      datasets.unshift({
+    // Historical daily revenue (last 30 days from API)
+    const hist = d.historical || [];
+    if (hist.length) {
+      datasets.push({
         label: 'Historical',
-        data: f.historical,
+        data: hist.map(h => h.amount || 0),
         borderColor: c.muted,
         backgroundColor: c.muted + '22',
         fill: true,
@@ -224,6 +236,27 @@
         borderDash: [4, 3],
       });
     }
+
+    // Forecast line
+    // Offset forecast data after historical points
+    const pad = hist.length ? new Array(hist.length).fill(null) : [];
+    datasets.push({
+      label: 'Forecast',
+      data: [...pad, ...forecastArr],
+      borderColor: '#10b981',
+      backgroundColor: '#10b98133',
+      fill: false,
+      tension: 0.3,
+      borderWidth: 2.5,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      spanGaps: true,
+    });
+
+    // Build labels: historical dates + forecast days
+    const histLabels = hist.map(h => h.date ? h.date.slice(5) : '');
+    const fcastLabels = forecastArr.map((_, i) => `+${i + 1}d`);
+    const labels = [...histLabels, ...fcastLabels];
 
     _charts.forecast = new Chart(ctx, {
       type: 'line',
@@ -246,39 +279,37 @@
     });
   }
 
-  // ── Confidence Bands (bar range) ────────────────────────────────────────
+  // ── Confidence Bands (forecast + upper/lower bounds) ────────────────────
   function renderConfidenceBands(d) {
     kill('confidence');
     const ctx = $('intConfidenceChart');
     if (!ctx || !d || !d.success) return;
-    const f = d.forecast;
-    if (!f || !f.confidence_intervals) return;
+    const es = d.exponential_smoothing || {};
+    const forecastArr = es.forecast || [];
+    if (!forecastArr.length) return;
     const c = C();
 
-    const ci = f.confidence_intervals;
-    const p10 = ci.find(x => x.level === 'p10');
-    const p50 = ci.find(x => x.level === 'p50');
-    const p90 = ci.find(x => x.level === 'p90');
-    if (!p50 || !p50.values) return;
+    const upper = es.upper_bound || [];
+    const lower = es.lower_bound || [];
+    const labels = forecastArr.map((_, i) => `Day ${i + 1}`);
 
-    const labels = p50.values.map((_, i) => `Day ${i + 1}`);
     const datasets = [];
-    if (p10 && p10.values) {
+    if (lower.length) {
       datasets.push({
-        label: 'P10 (Pessimistic)',
-        data: p10.values, borderColor: '#ef444488', backgroundColor: '#ef444411',
+        label: 'Lower Bound (P10)',
+        data: lower, borderColor: '#ef444488', backgroundColor: '#ef444411',
         fill: false, tension: 0.3, borderWidth: 1, pointRadius: 0, borderDash: [3, 3],
       });
     }
     datasets.push({
-      label: 'P50 (Median)',
-      data: p50.values, borderColor: '#3b82f6', backgroundColor: '#3b82f622',
+      label: 'Forecast (Median)',
+      data: forecastArr, borderColor: '#3b82f6', backgroundColor: '#3b82f622',
       fill: false, tension: 0.3, borderWidth: 2, pointRadius: 1,
     });
-    if (p90 && p90.values) {
+    if (upper.length) {
       datasets.push({
-        label: 'P90 (Optimistic)',
-        data: p90.values, borderColor: '#10b98188', backgroundColor: '#10b98111',
+        label: 'Upper Bound (P90)',
+        data: upper, borderColor: '#10b98188', backgroundColor: '#10b98111',
         fill: '-1', tension: 0.3, borderWidth: 1, pointRadius: 0, borderDash: [3, 3],
       });
     }
