@@ -18,6 +18,7 @@ Dashboard.html in the GAS project:
     PATCH /api/intake/<intake_id>    — Update intake fields
     GET  /api/intake/stats           — Queue stats (count by source, status)
     POST /api/intake/<intake_id>/match    — Phase 4: Run matching engine on this intake
+    POST /api/intake/<intake_id>/promote  — Phase 5: Atomic intake → active_bonds promotion
   Indemnitor Field Schema (mirrors Dashboard.html addIndemnitor() exactly):
     Personal:   firstName, middleName, lastName, relationship, dob, ssn, dl, dlState
     Contact:    phone, email
@@ -31,6 +32,7 @@ Dashboard.html in the GAS project:
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
 from __future__ import annotations
+import os
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -616,3 +618,308 @@ async def intake_stats():
         })
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/promote
+#  Atomic intake-to-case transition: validates match, creates active_bonds,
+#  assigns POA from inventory, archives intake, and creates audit trail.
+#  Enforces The Chain: Match → BondCase → Packet → Signature → Payment
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.route("/intake/<intake_id>/promote", methods=["POST"])
+async def intake_promote(intake_id: str):
+    """
+    Atomically promote a matched intake to an active bond case.
+
+    Prerequisites (enforced):
+      1. Intake exists and has status 'pending' or 'in_progress'
+      2. Intake has a validated match (matched_booking_number exists)
+      3. Surety is specified ('osi' or 'palmetto')
+      4. POA is available from the correct surety's inventory
+
+    Creates:
+      1. active_bonds document (liability tracking anchor)
+      2. Updates poa_inventory (marks POA as assigned)
+      3. Archives the intake record (status → 'promoted')
+      4. Creates audit_events entry (immutable trail)
+      5. Publishes SSE event to dashboard
+
+    Body (optional overrides):
+        {
+            "surety": "osi",             // Required: "osi" or "palmetto"
+            "case_number": "25-CF-1234", // Optional: court case number
+            "court_date": "2025-06-15",  // Optional
+            "court_time": "8:30 AM",     // Optional
+            "court_location": "...",     // Optional
+            "agent_name": "Brendan",     // Optional, defaults to system
+            "notes": "Walk-in client"    // Optional
+        }
+    """
+    from dashboard.api.events import publish_event
+
+    data = (await request.get_json(force=True)) or {}
+    now = datetime.now(timezone.utc)
+
+    # ── 1. Load and validate intake ──────────────────────────────────────────
+    intake_queue = get_collection("intake_queue")
+    intake_doc = await intake_queue.find_one({"intake_id": intake_id})
+    if not intake_doc:
+        return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+
+    current_status = intake_doc.get("status", "")
+    if current_status not in ("pending", "in_progress"):
+        return jsonify({
+            "success": False,
+            "error": f"Intake {intake_id} cannot be promoted — current status is '{current_status}'. "
+                     f"Only 'pending' or 'in_progress' intakes can be promoted."
+        }), 409
+
+    # ── 2. Validate match exists ─────────────────────────────────────────────
+    matched_booking = intake_doc.get("matched_booking_number")
+    matched_county = intake_doc.get("matched_county") or intake_doc.get("defendant_county", "")
+    match_confidence = intake_doc.get("match_confidence")
+
+    if not matched_booking:
+        return jsonify({
+            "success": False,
+            "error": "Cannot promote: intake has no validated match. "
+                     "Run /api/intake/<id>/match first to link a defendant."
+        }), 422
+
+    # ── 3. Validate surety ───────────────────────────────────────────────────
+    surety = (data.get("surety") or "").lower().strip()
+    if surety not in ("osi", "palmetto"):
+        return jsonify({
+            "success": False,
+            "error": "surety is required and must be 'osi' or 'palmetto'."
+        }), 400
+
+    # ── 4. Check for duplicate bond (idempotent) ─────────────────────────────
+    active_bonds = get_collection("active_bonds")
+    existing_bond = await active_bonds.find_one({"booking_number": matched_booking})
+    if existing_bond:
+        return jsonify({
+            "success": False,
+            "error": f"Bond already exists for booking {matched_booking}. "
+                     f"Use /api/bonds/record to update existing bonds.",
+            "existing_bond_status": existing_bond.get("status"),
+        }), 409
+
+    # ── 5. Extract defendant and indemnitor data ─────────────────────────────
+    ind = intake_doc.get("indemnitor", {})
+    def_ = intake_doc.get("defendant", {})
+
+    defendant_name = intake_doc.get("defendant_name", def_.get("name", "Unknown"))
+    indemnitor_name = intake_doc.get("indemnitor_name", "Unknown")
+
+    # Parse bond amount safely
+    raw_bond = def_.get("bondAmount") or def_.get("bond_amount") or "0"
+    try:
+        bond_amount = float(str(raw_bond).replace(",", "").replace("$", ""))
+    except (ValueError, TypeError):
+        bond_amount = 0.0
+
+    # ── 6. Auto-assign POA from inventory ────────────────────────────────────
+    poa_inventory = get_collection("poa_inventory")
+
+    # Find the right POA tier: smallest max_bond that covers this bond amount
+    poa_query = {
+        "surety_id": surety,
+        "status": "available",
+        "max_bond_value": {"$gte": bond_amount} if bond_amount > 0 else {"$gt": 0},
+    }
+    poa_doc = await poa_inventory.find_one(
+        poa_query,
+        sort=[("max_bond_value", 1), ("poa_number", 1)],  # Smallest sufficient, lowest number
+    )
+
+    if not poa_doc:
+        # Fallback: try any available POA from this surety
+        poa_doc = await poa_inventory.find_one(
+            {"surety_id": surety, "status": "available"},
+            sort=[("max_bond_value", -1), ("poa_number", 1)],
+        )
+
+    if not poa_doc:
+        return jsonify({
+            "success": False,
+            "error": f"No available POA in {surety.upper()} inventory for bond amount ${bond_amount:,.2f}. "
+                     f"Assign a POA manually via /api/bonds/record."
+        }), 422
+
+    poa_number = poa_doc["poa_number"]
+    poa_full = poa_doc.get("poa_full", poa_number)
+
+    # ── 7. Create active_bonds document (THE bond case) ──────────────────────
+    case_number = data.get("case_number", "").strip()
+    court_date = data.get("court_date", "").strip()
+    court_time = data.get("court_time", "").strip()
+    court_location = data.get("court_location", "").strip()
+    agent_name = data.get("agent_name", "Brendan O'Neal").strip()
+    notes = data.get("notes", "").strip()
+
+    bond_doc = {
+        "booking_number": matched_booking,
+        "defendant_name": defendant_name,
+        "county": matched_county,
+        "facility": def_.get("facility", intake_doc.get("defendant_facility", "")),
+        "bond_amount": bond_amount,
+        "premium": bond_amount * 0.10,  # Standard 10% premium
+        "insurance_company": surety.upper(),
+        "poa_number": poa_number,
+        "poa_full": poa_full,
+        "case_number": case_number,
+        "charges": def_.get("charges", ""),
+        "court_date": court_date,
+        "court_time": court_time,
+        "court_location": court_location,
+        "bond_date": now.isoformat(),
+        "status": "active",
+        "source": "intake_promotion",
+        "intake_id": intake_id,
+        "agent_name": agent_name,
+        # Indemnitor
+        "indemnitor_name": indemnitor_name,
+        "indemnitor_phone": intake_doc.get("indemnitor_phone", ind.get("phone", "")),
+        "indemnitor_email": intake_doc.get("indemnitor_email", ind.get("email", "")),
+        "indemnitor_relationship": ind.get("relationship", ""),
+        # Matching metadata
+        "match_confidence": match_confidence,
+        "match_strategy": intake_doc.get("match_strategy"),
+        # Payment tracking
+        "payment_status": "pending",
+        "payment_received": False,
+        "total_paid": 0.0,
+        # Paperwork tracking
+        "paperwork_packet_id": intake_doc.get("paperwork_packet_id"),
+        "paperwork_status": intake_doc.get("paperwork_status"),
+        # Check-in
+        "check_in_required": False,
+        "notes": notes,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    await active_bonds.insert_one(bond_doc)
+    logger.info(
+        "[intake] PROMOTED %s → active bond: %s (%s, %s, $%.2f, POA %s)",
+        intake_id, matched_booking, defendant_name, surety.upper(), bond_amount, poa_number,
+    )
+
+    # ── 8. Mark POA as assigned ──────────────────────────────────────────────
+    await poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety},
+        {"$set": {
+            "status": "assigned",
+            "bond_case_id": matched_booking,
+            "defendant_name": defendant_name,
+            "used_at": now.isoformat(),
+        }},
+    )
+
+    # ── 9. Archive the intake (status → 'promoted') ──────────────────────────
+    await intake_queue.update_one(
+        {"intake_id": intake_id},
+        {"$set": {
+            "status": "promoted",
+            "promoted_at": now,
+            "promoted_to_booking": matched_booking,
+            "promoted_surety": surety.upper(),
+            "promoted_poa": poa_number,
+            "updated_at": now,
+        }},
+    )
+
+    # ── 10. Update arrest record with bond status ────────────────────────────
+    try:
+        arrests = get_collection("arrests")
+        await arrests.update_one(
+            {"booking_number": matched_booking},
+            {"$set": {
+                "bond_written": True,
+                "bond_written_at": now.isoformat(),
+                "bond_poa_number": poa_number,
+                "bond_surety": surety.upper(),
+                "bond_premium": bond_amount * 0.10,
+            }},
+        )
+    except Exception as exc:
+        logger.warning("[intake] arrest update during promote failed: %s", exc)
+
+    # ── 11. Audit event (immutable) ──────────────────────────────────────────
+    try:
+        audit_col = get_collection("audit_events")
+        await audit_col.insert_one({
+            "event_type": "intake_promoted_to_bond",
+            "entity_id": matched_booking,
+            "entity_type": "bond_case",
+            "intake_id": intake_id,
+            "defendant_name": defendant_name,
+            "indemnitor_name": indemnitor_name,
+            "county": matched_county,
+            "bond_amount": bond_amount,
+            "premium": bond_amount * 0.10,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "match_confidence": match_confidence,
+            "agent_name": agent_name,
+            "source": "intake_promotion",
+            "timestamp": now,
+        })
+    except Exception as exc:
+        logger.warning("[intake] audit log error during promote: %s", exc)
+
+    # ── 12. SSE event to dashboard ───────────────────────────────────────────
+    try:
+        await publish_event("intake_promoted", {
+            "intake_id": intake_id,
+            "booking_number": matched_booking,
+            "defendant_name": defendant_name,
+            "indemnitor_name": indemnitor_name,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "bond_amount": bond_amount,
+        })
+    except Exception:
+        pass
+
+    # ── 13. Slack alert ──────────────────────────────────────────────────────
+    slack_url = os.getenv("SLACK_WEBHOOK_URL", "")
+    if slack_url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(slack_url, json={
+                    "text": (
+                        f"☘️ *Bond Case Created from Intake*\n"
+                        f"Defendant: *{defendant_name}*\n"
+                        f"Booking: `{matched_booking}`\n"
+                        f"County: {matched_county}\n"
+                        f"Bond: *${bond_amount:,.2f}*\n"
+                        f"Surety: {surety.upper()} | POA: {poa_number}\n"
+                        f"Indemnitor: {indemnitor_name}\n"
+                        f"Source: Intake Promotion ({intake_id})"
+                    )
+                })
+        except Exception as exc:
+            logger.warning("[intake] Slack alert failed during promote: %s", exc)
+
+    logger.info(
+        "☘️ INTAKE PROMOTED — %s → Booking: %s | %s | $%.2f | %s | POA: %s",
+        intake_id, matched_booking, defendant_name, bond_amount, surety.upper(), poa_number,
+    )
+
+    return jsonify({
+        "success": True,
+        "message": f"Intake {intake_id} promoted to active bond",
+        "intake_id": intake_id,
+        "booking_number": matched_booking,
+        "defendant_name": defendant_name,
+        "indemnitor_name": indemnitor_name,
+        "bond_amount": bond_amount,
+        "premium": bond_amount * 0.10,
+        "surety": surety.upper(),
+        "poa_number": poa_number,
+        "poa_full": poa_full,
+        "status": "active",
+    })

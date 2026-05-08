@@ -451,3 +451,114 @@ async def list_packets(intake_id: str):
         })
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/paperwork/signnow/validate-templates
+# Diagnostic: validate every TEMPLATE_MAP entry against production SignNow.
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.route("/paperwork/signnow/validate-templates", methods=["GET"])
+async def validate_signnow_templates():
+    """
+    Validate all SignNow TEMPLATE_MAP entries against the production account.
+    For each template:
+      - Calls GET /template/{id} to confirm it exists and is accessible
+      - Reports template name, field count, and role list
+      - Flags any missing or inaccessible templates
+
+    Returns:
+        {
+            "success": true,
+            "templates": [...],
+            "valid_count": 12,
+            "invalid_count": 1,
+            "palmetto_todos": ["collateral-receipt-palmetto", ...]
+        }
+    """
+    import httpx
+    from dashboard.services.signnow_packet_service import SignNowPacketService
+
+    svc = SignNowPacketService()
+    if not svc.api_token:
+        try:
+            await svc._get_token()
+        except Exception as exc:
+            return jsonify({
+                "success": False,
+                "error": f"SignNow auth failed: {exc}",
+            }), 500
+
+    results = []
+    valid = 0
+    invalid = 0
+    palmetto_todos = []
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for slug, template_id in SignNowPacketService.TEMPLATE_MAP.items():
+            if not template_id or template_id.startswith("<"):
+                palmetto_todos.append(slug)
+                results.append({
+                    "slug": slug,
+                    "template_id": template_id,
+                    "status": "todo",
+                    "message": "Template ID not yet configured",
+                })
+                continue
+
+            try:
+                resp = await client.get(
+                    f"{svc.base_url}/document/{template_id}",
+                    headers=svc._headers,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    field_count = len(data.get("fields", []))
+                    roles = list({
+                        f.get("role", "")
+                        for f in data.get("fields", [])
+                        if f.get("role")
+                    })
+                    results.append({
+                        "slug": slug,
+                        "template_id": template_id,
+                        "status": "valid",
+                        "document_name": data.get("document_name", ""),
+                        "field_count": field_count,
+                        "roles": roles,
+                        "page_count": data.get("page_count", 0),
+                    })
+                    valid += 1
+                elif resp.status_code == 404:
+                    results.append({
+                        "slug": slug,
+                        "template_id": template_id,
+                        "status": "not_found",
+                        "message": "Template does not exist in this account",
+                    })
+                    invalid += 1
+                else:
+                    results.append({
+                        "slug": slug,
+                        "template_id": template_id,
+                        "status": "error",
+                        "http_status": resp.status_code,
+                        "message": resp.text[:200],
+                    })
+                    invalid += 1
+            except Exception as exc:
+                results.append({
+                    "slug": slug,
+                    "template_id": template_id,
+                    "status": "error",
+                    "message": str(exc),
+                })
+                invalid += 1
+
+    return jsonify({
+        "success": True,
+        "valid_count": valid,
+        "invalid_count": invalid,
+        "todo_count": len(palmetto_todos),
+        "palmetto_todos": palmetto_todos,
+        "templates": results,
+    })

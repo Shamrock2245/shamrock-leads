@@ -43,6 +43,7 @@ const SLIntake = (() => {
     pending:     '<span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">PENDING</span>',
     in_progress: '<span style="background:#3b82f6;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">IN PROGRESS</span>',
     archived:    '<span style="background:#6b7280;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">ARCHIVED</span>',
+    promoted:    '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">☘️ PROMOTED</span>',
   };
 
   const RISK_COLORS = {
@@ -502,6 +503,70 @@ const SLIntake = (() => {
     }
   }
 
+  // ── Promote intake to Active Bond (Phase 5 — atomic transition) ────────────
+  async function promoteToBond() {
+    if (!_currentIntakeId) {
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No intake loaded — re-open the intake first', 'warn');
+      return;
+    }
+    const h = _currentHydration || {};
+    const def = h.defendant || {};
+
+    // Check for a matched booking number
+    const bookingNum = def.bookingNumber || h.matched_booking_number || '';
+    if (!bookingNum) {
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No matched booking number — run Match first', 'warn');
+      return;
+    }
+
+    // Ask for surety selection
+    const surety = prompt(
+      'Select surety company:\n\n' +
+      '  osi      — O\'Shaughnahill Surety & Insurance\n' +
+      '  palmetto — Palmetto Surety Corporation\n\n' +
+      'Enter surety (default: osi):',
+      'osi'
+    );
+    if (surety === null) return; // cancelled
+    const finalSurety = ['osi', 'palmetto'].includes((surety || '').trim().toLowerCase())
+      ? (surety || '').trim().toLowerCase()
+      : 'osi';
+
+    // Optional: case number
+    const caseNumber = prompt('Court case number (optional, press Enter to skip):', '') || '';
+
+    const intakeId = _currentIntakeId;
+    closeModal();
+
+    try {
+      const res = await fetch(`/api/intake/${encodeURIComponent(intakeId)}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          surety: finalSurety,
+          case_number: caseNumber,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof SL !== 'undefined') {
+          SL.toast(
+            `☘️ Bond created! ${data.defendant_name} — ${data.surety} — POA: ${data.poa_number} — $${Number(data.bond_amount).toLocaleString()}`,
+            'success',
+            6000
+          );
+          // Refresh both tabs
+          if (typeof SLActiveBonds !== 'undefined') SLActiveBonds.load();
+        }
+        load(); // refresh intake queue
+      } else {
+        throw new Error(data.error || 'Promotion failed');
+      }
+    } catch (err) {
+      if (typeof SL !== 'undefined') SL.toast('Error: ' + err.message, 'error');
+    }
+  }
+
   // ── Modal close ──────────────────────────────────────────────────────────────────────────────────
   function closeModal() {
     const modal = document.getElementById('intakeModal');
@@ -526,6 +591,7 @@ const SLIntake = (() => {
     openProcess,
     writeBondFromIntake,
     markAsInProgress,
+    promoteToBond,
     archive,
     archiveCurrent,
     openManualEntry,

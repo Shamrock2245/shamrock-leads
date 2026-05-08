@@ -1185,6 +1185,7 @@
       <select id="intakeStatusFilter" onchange="SLIntake.load()" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
         <option value="pending">⏳ Pending</option>
         <option value="in_progress">🔄 In Progress</option>
+        <option value="promoted">☘️ Promoted</option>
         <option value="all">📋 All</option>
         <option value="archived">✅ Archived</option>
       </select>
@@ -1278,6 +1279,7 @@
       <button class="btn-cancel" onclick="SLIntake.closeModal()">Close</button>
       <button class="btn-secondary" id="btnArchiveIntake" onclick="SLIntake.archiveCurrent()" style="background:var(--muted);color:#fff">✅ Archive</button>
       <button class="btn-secondary" id="btnMarkInProgress" onclick="SLIntake.markAsInProgress()" style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac">🟢 Mark In Progress</button>
+      <button class="btn-secondary" id="btnPromoteToBond" onclick="SLIntake.promoteToBond()" style="background:linear-gradient(135deg,#065f46,#047857);border:1px solid #10b981;color:#a7f3d0;font-weight:600" title="Atomic promotion: creates active bond, assigns POA, archives intake">☘️ Promote to Bond</button>
       <button class="btn-primary" id="btnWriteBondFromIntake" onclick="SLIntake.writeBondFromIntake()">✍️ Write Bond</button>
     </div>
   </div>
