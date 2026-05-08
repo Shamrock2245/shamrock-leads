@@ -835,13 +835,18 @@ def create_app():
         clean_name = filename.split("?")[0]
         static_path = _os.path.join(app.static_folder, clean_name)
         if _os.path.isfile(static_path):
-            response = await send_from_directory(app.static_folder, clean_name)
             # Prevent aggressive browser caching for JS/CSS so deploys take effect immediately
             if clean_name.endswith((".js", ".css")):
+                response = await send_from_directory(
+                    app.static_folder, clean_name,
+                    cache_timeout=0,  # Quart: disables max-age header
+                    add_etags=False,  # Quart: disables ETag (forces full re-fetch)
+                )
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
                 response.headers["Pragma"] = "no-cache"
                 response.headers["Expires"] = "0"
-            return response
+                return response
+            return await send_from_directory(app.static_folder, clean_name)
         # SPA fallback — return index.html for any unmatched non-API path
         return await send_from_directory(app.static_folder, "index.html")
 
