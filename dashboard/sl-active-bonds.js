@@ -1,9 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════════════
    ShamrockLeads — Active Bonds Module  (sl-active-bonds.js)
    Full-featured: editable records, Add Bond, location history, exoneration
+   NOTE: `API` is declared in sl-core.js (loaded first) — do NOT redeclare here.
    ═══════════════════════════════════════════════════════════════════════ */
-
-const API = '';
 
 /* ── Tiny helpers ─────────────────────────────────────────────────── */
 function toast(msg, type = 'info', duration = 3500) {
