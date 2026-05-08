@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Dict
 
 from quart import Blueprint, jsonify, request
 
@@ -299,3 +300,76 @@ def _assess_charge_risk(charges: str, features: dict) -> Dict:
         "severity_score": severity,
         "felony_degree": felony_degree,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GET /api/intelligence/court-prediction — Batch Court Outcome Prediction
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.route("/intelligence/court-prediction")
+async def api_court_prediction_batch():
+    """Predict court outcomes for recent high-value arrests.
+
+    Query params:
+        limit: Number of records to score (default: 20)
+        min_bond: Minimum bond amount filter (default: 5000)
+    """
+    try:
+        from dashboard.services.court_outcome_predictor import predict_outcome
+
+        db = get_db()
+        limit = int(request.args.get("limit", 20))
+        min_bond = float(request.args.get("min_bond", 5000))
+
+        cursor = db.arrests.find(
+            {"bond_amount": {"$gte": min_bond}, "lead_status": {"$in": ["Hot", "Warm"]}},
+            {"charges": 1, "bond_amount": 1, "county": 1, "full_name": 1,
+             "booking_number": 1, "Defendant_Name": 1, "Charges": 1,
+             "Bond_Amount": 1, "County": 1}
+        ).sort("bond_amount", -1).limit(limit)
+        records = await cursor.to_list(length=limit)
+
+        results = []
+        for rec in records:
+            pred = predict_outcome(rec)
+            pred["defendant_name"] = rec.get("full_name") or rec.get("Defendant_Name", "Unknown")
+            pred["booking_number"] = rec.get("booking_number", "")
+            pred["bond_amount"] = float(rec.get("bond_amount", 0) or rec.get("Bond_Amount", 0) or 0)
+            results.append(pred)
+
+        # Sort by FTA probability (highest risk first)
+        results.sort(key=lambda x: x["fta_probability"], reverse=True)
+
+        return jsonify({
+            "success": True,
+            "predictions": results,
+            "total": len(results),
+            "avg_fta": round(sum(r["fta_probability"] for r in results) / max(len(results), 1), 3),
+        })
+
+    except Exception as e:
+        logger.exception("Court prediction batch error: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  GET /api/intelligence/forfeiture-risk — Portfolio Forfeiture Risk
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.route("/intelligence/forfeiture-risk")
+async def api_forfeiture_risk():
+    """Score all active bonds for forfeiture probability.
+
+    Query params:
+        limit: Max bonds to score (default: 50)
+    """
+    try:
+        from dashboard.services.forfeiture_predictor import score_portfolio
+
+        db = get_db()
+        limit = int(request.args.get("limit", 50))
+        data = await score_portfolio(db, limit=limit)
+
+        return jsonify(data)
+
+    except Exception as e:
+        logger.exception("Forfeiture risk error: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500

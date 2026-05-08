@@ -109,12 +109,14 @@
       const el = $(id); if (el) el.innerHTML = spinner();
     });
 
-    const [forecast, heatmap, temporal, mlStatus, riskTrend] = await Promise.all([
+    const [forecast, heatmap, temporal, mlStatus, riskTrend, courtPred, forfeit] = await Promise.all([
       api(`/api/intelligence/forecast?history=${_historyDays}&horizon=${_forecastHorizon}`),
       api('/api/intelligence/heatmap/counties'),
       api('/api/intelligence/heatmap/temporal'),
       api('/api/ml/model-status'),
       api('/api/intelligence/risk-trend'),
+      api('/api/intelligence/court-prediction?limit=15'),
+      api('/api/intelligence/forfeiture-risk?limit=20'),
     ]);
 
     _modelStatus = mlStatus;
@@ -127,6 +129,8 @@
     renderTemporalHeatmap(temporal);
     renderRiskTrend(riskTrend);
     renderModelCards(mlStatus);
+    renderCourtPredictions(courtPred);
+    renderForfeitureRisk(forfeit);
   }
 
   // ── Forecast KPIs ───────────────────────────────────────────────────────
@@ -510,6 +514,93 @@
       }).join('');
     }
     modal.classList.add('show');
+  }
+
+  // ── Court Outcome Predictions Table ──────────────────────────────────────
+  function renderCourtPredictions(d) {
+    const container = $('intCourtPredictions');
+    if (!container) return;
+    if (!d || !d.success || !d.predictions || !d.predictions.length) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">No court predictions available</div>';
+      return;
+    }
+    const preds = d.predictions.slice(0, 12);
+    const riskColor = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#10b981' };
+
+    let html = '<div class="int-pred-table"><div class="int-pred-header">';
+    html += '<span>Defendant</span><span>County</span><span>Bond</span><span>FTA Risk</span><span>Risk Level</span><span>Interventions</span>';
+    html += '</div>';
+
+    preds.forEach(p => {
+      const ftaPct = (p.fta_probability * 100).toFixed(1);
+      const color = riskColor[p.risk_level] || '#94a3b8';
+      const interventionCount = (p.interventions || []).length;
+      const topIntervention = (p.interventions || ['—'])[0];
+      html += `<div class="int-pred-row">
+        <span class="int-pred-name">${p.defendant_name || 'Unknown'}</span>
+        <span class="int-pred-county">${(p.county || '').replace(/ county/i, '')}</span>
+        <span class="int-pred-bond">${fmtK(p.bond_amount)}</span>
+        <span class="int-pred-fta" style="color:${color};font-weight:700">${ftaPct}%</span>
+        <span><span class="int-risk-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${p.risk_level}</span></span>
+        <span class="int-pred-interv" title="${(p.interventions||[]).join('\\n')}">${topIntervention}${interventionCount > 1 ? ` +${interventionCount-1}` : ''}</span>
+      </div>`;
+    });
+    html += '</div>';
+    if (d.avg_fta) {
+      const avgColor = d.avg_fta >= 0.25 ? '#ef4444' : d.avg_fta >= 0.15 ? '#f59e0b' : '#10b981';
+      html += `<div style="margin-top:10px;font-size:12px;color:var(--muted)">Portfolio Avg FTA: <span style="color:${avgColor};font-weight:700">${(d.avg_fta*100).toFixed(1)}%</span> across ${d.total} leads</div>`;
+    }
+    container.innerHTML = html;
+  }
+
+  // ── Forfeiture Early Warning ────────────────────────────────────────────
+  function renderForfeitureRisk(d) {
+    const container = $('intForfeitureRisk');
+    if (!container) return;
+    if (!d || !d.success || !d.results || !d.results.length) {
+      container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)">No active bonds to score</div>';
+      return;
+    }
+
+    // Summary bar
+    const crit = d.critical_count || 0;
+    const high = d.high_risk_count || 0;
+    const exposure = d.total_at_risk_exposure || 0;
+    let html = `<div class="int-forfeit-summary">
+      <div class="int-forfeit-stat"><span class="int-forfeit-num" style="color:#ef4444">${crit}</span><span class="int-forfeit-label">Critical</span></div>
+      <div class="int-forfeit-stat"><span class="int-forfeit-num" style="color:#f59e0b">${high}</span><span class="int-forfeit-label">High Risk</span></div>
+      <div class="int-forfeit-stat"><span class="int-forfeit-num" style="color:#3b82f6">${d.bonds_scored || 0}</span><span class="int-forfeit-label">Scored</span></div>
+      <div class="int-forfeit-stat"><span class="int-forfeit-num" style="color:#ef4444">${fmtK(exposure)}</span><span class="int-forfeit-label">At-Risk $</span></div>
+    </div>`;
+
+    const riskColor = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#10b981' };
+    const topRisks = d.results.filter(r => r.risk_tier !== 'low').slice(0, 10);
+
+    if (topRisks.length) {
+      html += '<div class="int-forfeit-list">';
+      topRisks.forEach(r => {
+        const color = riskColor[r.risk_tier] || '#94a3b8';
+        const barWidth = Math.min(r.forfeiture_probability * 100, 100);
+        html += `<div class="int-forfeit-item">
+          <div class="int-forfeit-top">
+            <span class="int-forfeit-name">${r.defendant_name || 'Unknown'}</span>
+            <span class="int-risk-badge" style="background:${color}22;color:${color};border:1px solid ${color}44">${r.risk_tier} · ${(r.forfeiture_probability*100).toFixed(0)}%</span>
+          </div>
+          <div class="int-forfeit-bar-wrap">
+            <div class="int-forfeit-bar" style="width:${barWidth}%;background:${color}"></div>
+          </div>
+          <div class="int-forfeit-meta">
+            <span>${fmtK(r.bond_amount)} · ${(r.county||'').replace(/ county/i,'')}</span>
+            <span>${r.days_active}d active</span>
+          </div>
+          ${r.warning_signals && r.warning_signals.length ? `<div class="int-forfeit-signals">${r.warning_signals.slice(0,2).map(s => `<span class="int-signal">⚠ ${s}</span>`).join('')}</div>` : ''}
+        </div>`;
+      });
+      html += '</div>';
+    } else {
+      html += '<div style="padding:16px;text-align:center;color:#10b981;font-weight:600">✅ All active bonds in healthy range</div>';
+    }
+    container.innerHTML = html;
   }
 
   // ── Forecast range toggle ───────────────────────────────────────────────
