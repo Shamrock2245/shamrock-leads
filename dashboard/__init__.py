@@ -170,6 +170,11 @@ def create_app():
     app.register_blueprint(bb_docs_bp, url_prefix="/api")
     app.register_blueprint(bb_contacts_bp, url_prefix="/api")
     app.register_blueprint(bb_health_bp, url_prefix="/api")
+
+    # ── Court Intelligence (Juriscraper + CourtListener SE US) ────────────
+    from dashboard.api.court_dockets import court_intel_bp
+    app.register_blueprint(court_intel_bp)  # Routes: /api/court-intel/*
+
     # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving
     async def _start_inbox_poller():

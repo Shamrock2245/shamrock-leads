@@ -8,7 +8,9 @@ LABEL maintainer="Shamrock Active Software"
 LABEL description="ShamrockLeads Dashboard API (Quart/Hypercorn)"
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl libxml2-dev libxslt-dev libyaml-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

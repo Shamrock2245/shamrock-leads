@@ -133,6 +133,7 @@
       ['ModelCards',         () => renderModelCards(mlStatus)],
       ['CourtPredictions',   () => renderCourtPredictions(courtPred)],
       ['ForfeitureRisk',     () => renderForfeitureRisk(forfeit)],
+      ['CourtIntel',         () => loadCourtIntel()],
     ];
     for (const [name, fn] of renders) {
       try { fn(); } catch (e) { console.error(`[Intelligence] ${name} render failed:`, e); }
@@ -648,6 +649,146 @@
     console.log(`[Intelligence] ${type}: ${msg}`);
   }
 
+  // ── Regional Court Intelligence Panel ───────────────────────────────────
+  async function loadCourtIntel() {
+    const panel = $('intCourtIntelPanel');
+    if (!panel) return;
+
+    try {
+      const [coverageRes, statsRes] = await Promise.all([
+        fetch('/api/court-intel/coverage').then(r => r.json()).catch(() => null),
+        fetch('/api/court-intel/stats').then(r => r.json()).catch(() => null),
+      ]);
+
+      renderCourtIntel(panel, coverageRes, statsRes);
+    } catch (e) {
+      panel.innerHTML = `<div style="padding:16px;color:var(--muted);text-align:center">Court intelligence unavailable</div>`;
+    }
+  }
+
+  function renderCourtIntel(panel, coverage, stats) {
+    const c = C();
+    let html = '';
+
+    // ── Coverage Map (state chips) ──────────────────────────────────────
+    if (coverage && coverage.total_states) {
+      html += `<div style="margin-bottom:16px">
+        <div style="font-size:12px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600">
+          Coverage · ${coverage.total_courts} Courts · ${coverage.total_states} States
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">`;
+
+      const stateColors = {
+        FL: '#10b981', GA: '#6366f1', AL: '#f59e0b', MS: '#ec4899',
+        LA: '#8b5cf6', TN: '#3b82f6', KY: '#14b8a6', NC: '#f97316',
+        SC: '#06b6d4', VA: '#a855f7', WV: '#64748b', AR: '#ef4444',
+      };
+
+      (coverage.by_state || []).forEach(s => {
+        const color = stateColors[s.state] || c.accent;
+        const total = s.state_count + s.federal_count;
+        html += `<div style="background:${color}18;border:1px solid ${color}44;border-radius:6px;
+          padding:6px 12px;font-size:12px;font-weight:600;color:${color};cursor:default"
+          title="${s.state}: ${s.state_count} state + ${s.federal_count} federal courts">
+          ${s.state} <span style="opacity:0.7;font-weight:400">${total}</span>
+        </div>`;
+      });
+      html += '</div></div>';
+    }
+
+    // ── Stats Grid ──────────────────────────────────────────────────────
+    if (stats && stats.success) {
+      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">`;
+
+      const kpis = [
+        { label: 'Total Outcomes', value: (stats.total_outcomes || 0).toLocaleString(), icon: '📊', color: c.accent2 },
+        { label: 'Matched Defendants', value: (stats.matched_defendants || 0).toLocaleString(), icon: '🔗', color: c.accent },
+        { label: 'States Active', value: (stats.by_state || []).length, icon: '🗺️', color: '#f59e0b' },
+        { label: 'Last Ingestion', value: stats.last_ingestion ? new Date(stats.last_ingestion).toLocaleDateString() : 'Never', icon: '🕐', color: c.muted },
+      ];
+
+      kpis.forEach(k => {
+        html += `<div style="background:${c.panel};border:1px solid ${c.border};border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:18px;margin-bottom:4px">${k.icon}</div>
+          <div style="font-size:18px;font-weight:700;color:${k.color}">${k.value}</div>
+          <div style="font-size:11px;color:${c.muted};margin-top:2px">${k.label}</div>
+        </div>`;
+      });
+      html += '</div>';
+
+      // ── Disposition Breakdown ──────────────────────────────────────────
+      if (stats.by_disposition && stats.by_disposition.length > 0) {
+        html += `<div style="margin-bottom:12px">
+          <div style="font-size:12px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600">Disposition Breakdown</div>`;
+
+        const dispColors = {
+          affirmed: '#10b981', conviction: '#ef4444', dismissed: '#3b82f6',
+          plea: '#f59e0b', reversed: '#8b5cf6', remanded: '#ec4899',
+          acquittal: '#14b8a6', vacated: '#64748b', denied: '#f97316', unknown: '#475569',
+        };
+        const totalDisp = stats.by_disposition.reduce((a, d) => a + d.count, 0);
+
+        stats.by_disposition.slice(0, 8).forEach(d => {
+          const pct = totalDisp > 0 ? ((d.count / totalDisp) * 100) : 0;
+          const color = dispColors[d.disposition] || c.muted;
+          html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <div style="width:90px;font-size:12px;color:${c.text};font-weight:500;text-transform:capitalize">${d.disposition}</div>
+            <div style="flex:1;background:${c.border}44;border-radius:4px;height:18px;overflow:hidden">
+              <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;transition:width 0.6s ease"></div>
+            </div>
+            <div style="width:50px;text-align:right;font-size:11px;color:${c.muted}">${pct.toFixed(1)}%</div>
+          </div>`;
+        });
+        html += '</div>';
+      }
+
+      // ── Ingest Button ─────────────────────────────────────────────────
+      html += `<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+        <button onclick="SLIntelligence.triggerIngestion()" class="btn-secondary" style="font-size:12px;padding:6px 14px">
+          🔄 Run Ingestion
+        </button>
+        <button onclick="SLIntelligence.triggerIngestion(['FL'])" class="btn-primary" style="font-size:12px;padding:6px 14px">
+          🌴 Florida Only
+        </button>
+      </div>`;
+    } else if (!stats || stats.total_outcomes === 0) {
+      html += `<div style="padding:20px;text-align:center;color:${c.muted}">
+        <div style="font-size:2rem;margin-bottom:8px">📡</div>
+        <div style="font-weight:600;margin-bottom:4px">No court data ingested yet</div>
+        <div style="font-size:12px;margin-bottom:12px">Click below to pull recent opinions from CourtListener</div>
+        <button onclick="SLIntelligence.triggerIngestion()" class="btn-primary" style="font-size:13px;padding:8px 20px">
+          🚀 Run First Ingestion
+        </button>
+      </div>`;
+    }
+
+    panel.innerHTML = html;
+  }
+
+  async function triggerIngestion(states) {
+    const panel = $('intCourtIntelPanel');
+    if (panel) panel.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)"><span class="spinner-sm"></span> Ingesting court opinions...</div>';
+    try {
+      const body = { days_back: 30 };
+      if (states) body.states = states;
+      const res = await fetch('/api/court-intel/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(`Ingested ${data.ingested} opinions (${data.duplicates} dupes)`, 'success');
+      } else {
+        showToast('Ingestion failed: ' + (data.error || 'Unknown'), 'error');
+      }
+      // Reload panel
+      await loadCourtIntel();
+    } catch (e) {
+      showToast('Ingestion error: ' + e.message, 'error');
+    }
+  }
+
   // ── Public API ──────────────────────────────────────────────────────────
-  window.SLIntelligence = { load, trainModel, showFeatures, setHorizon };
+  window.SLIntelligence = { load, trainModel, showFeatures, setHorizon, loadCourtIntel, triggerIngestion };
 })();
