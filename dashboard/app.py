@@ -158,8 +158,18 @@ def index():
 @app.route("/<path:filename>")
 def serve_file(filename):
     """Serve CSS, JS, PDF, and other static files from dashboard dir."""
-    if filename.endswith((".css", ".js", ".png", ".ico", ".svg", ".pdf")):
-        return send_from_directory(".", filename)
+    # Strip query-string cache-busters (e.g. ?v=abc123) before looking up file
+    clean_name = filename.split("?")[0]
+    if clean_name.endswith((".css", ".js")):
+        # Prevent aggressive browser caching so deploys take effect immediately
+        from flask import make_response
+        resp = make_response(send_from_directory(".", clean_name))
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+    if clean_name.endswith((".png", ".ico", ".svg", ".pdf")):
+        return send_from_directory(".", clean_name)
     return send_from_directory(".", "index.html")
 
 
