@@ -2382,7 +2382,7 @@ button,
 .prosp-drawer-overlay:not(.open),
 .modal-overlay:not(.active),
 .slc-modal-overlay:not(.active),
-.inv-overlay:not(.active),
+.inv-overlay:not(.show),
 .rb-overlay:not(.active) {
   pointer-events: none !important;
   display: none !important;
