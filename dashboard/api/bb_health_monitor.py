@@ -110,7 +110,7 @@ async def check_server_health(suffix: str, server: dict) -> dict:
             "uptime_seconds": 0,
             "version": "unknown",
             "status": "offline",
-            "issues": ["Server unreachable — BlueBubbles may be down or Cloudflare tunnel expired"],
+            "issues": ["Server unreachable — BlueBubbles may be down or ngrok tunnel offline"],
         }
 
     # 2. Parse server info
@@ -319,15 +319,15 @@ async def api_restart_messages():
 async def api_update_bb_url():
     """Hot-swap a BlueBubbles server URL at runtime — no container restart needed.
 
-    This is required because Cloudflare trycloudflare.com URLs rotate on every
-    BlueBubbles server restart. Staff can paste the new URL directly in the
-    dashboard instead of SSHing into the VPS to update .env.
+    The permanent ngrok static domain (pseudospherical-etta-untactually.ngrok-free.dev)
+    should never change. This endpoint exists as a manual override if the ngrok
+    domain ever needs to be updated without a container rebuild.
 
     Body:
         {
-            "suffix": "0178",           -- Which server (required)
-            "url": "https://new-url.trycloudflare.com",  -- New tunnel URL (required)
-            "api_key": "shamrock-bb-sync-2245"           -- Auth key (required)
+            "suffix": "0178",                                                    -- Which server (required)
+            "url": "https://pseudospherical-etta-untactually.ngrok-free.dev",   -- New tunnel URL (required)
+            "api_key": "shamrock-bb-sync-2245"                                  -- Auth key (required)
         }
     """
     try:
