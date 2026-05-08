@@ -1407,11 +1407,7 @@ body.drawer-open{overflow:hidden}
   font-style: italic;
 }
 
-/* Responsive: stack columns on small screens */
-@media (max-width: 768px) {
-  #abKanbanBoard { flex-direction: column; }
-  .kb-col { flex: none; max-width: 100%; max-height: 360px; }
-}
+/* (Responsive moved to Kanban Polish section below) */
 
 /* ═══════════════════════════════════════════════════════════════════
    KANBAN POLISH — Animations, drag feedback, mobile UX  (May 2026)
@@ -1490,10 +1486,10 @@ body.drawer-open{overflow:hidden}
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: sl-modal-fadein .15s ease;
+  animation: sl-modal-in .15s ease;
 }
 #abDestructiveConfirm .sl-modal {
-  animation: sl-modal-slidein .18s ease;
+  animation: sl-modal-in .18s cubic-bezier(.34,1.56,.64,1);
 }
 
 /* Mobile: horizontal scroll on small screens */
