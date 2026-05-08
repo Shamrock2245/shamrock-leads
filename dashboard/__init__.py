@@ -828,11 +828,20 @@ def create_app():
     async def serve_static(filename):
         """Serve CSS, JS, images, and other static assets from the dashboard directory.
         Falls back to index.html for SPA routing (non-API, non-file paths).
+        JS/CSS files are served with no-cache headers to ensure deploys take effect immediately.
         """
         import os as _os
-        static_path = _os.path.join(app.static_folder, filename)
+        # Strip query-string cache-busters (e.g. ?v=abc123) before file lookup
+        clean_name = filename.split("?")[0]
+        static_path = _os.path.join(app.static_folder, clean_name)
         if _os.path.isfile(static_path):
-            return await send_from_directory(app.static_folder, filename)
+            response = await send_from_directory(app.static_folder, clean_name)
+            # Prevent aggressive browser caching for JS/CSS so deploys take effect immediately
+            if clean_name.endswith((".js", ".css")):
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+            return response
         # SPA fallback — return index.html for any unmatched non-API path
         return await send_from_directory(app.static_folder, "index.html")
 
