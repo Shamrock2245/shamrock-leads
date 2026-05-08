@@ -839,8 +839,9 @@ def create_app():
             if clean_name.endswith((".js", ".css")):
                 response = await send_from_directory(
                     app.static_folder, clean_name,
-                    cache_timeout=0,  # Quart: disables max-age header
-                    add_etags=False,  # Quart: disables ETag (forces full re-fetch)
+                    cache_timeout=0,    # Quart: disables max-age header
+                    add_etags=False,    # Quart: disables ETag (forces full re-fetch)
+                    conditional=False,  # Quart: skip make_conditional which may reset headers
                 )
                 # Quart may still set cache-control.public — override everything
                 response.cache_control.no_cache = True
