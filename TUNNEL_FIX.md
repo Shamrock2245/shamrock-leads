@@ -1,19 +1,19 @@
-# BlueBubbles Tunnel — Permanent ngrok Static Domain
+# BlueBubbles Tunnel — Permanent Cloudflare Tunnel Domain
 
-## Status: ✅ MIGRATED (May 2025)
+## Status: ✅ MIGRATED TO CLOUDFLARE TUNNEL (May 2026)
 
 The BlueBubbles iMessage bridge on the office iMac (`shamrockbailoffice@gmail.com`, phone `239-955-0178`)
-has been **migrated from Cloudflare quick tunnels to a permanent ngrok static domain**.
+has been **migrated from ngrok to a permanent Cloudflare Tunnel with branded subdomain**.
 
 ---
 
 ## Permanent Tunnel URL
 
 ```
-https://pseudospherical-etta-untactually.ngrok-free.dev
+https://bb.shamrockbailbonds.biz
 ```
 
-This URL **never changes** — it is a static domain claimed on the ngrok free tier.
+This URL **never changes** — it is a named Cloudflare Tunnel (bluebubbles) with a CNAME on shamrockbailbonds.biz.
 
 ---
 
@@ -71,7 +71,7 @@ brew services start ngrok
 ### 4. Verify Tunnel is Live
 ```bash
 curl -s -H 'ngrok-skip-browser-warning: true' \
-  'https://pseudospherical-etta-untactually.ngrok-free.dev/api/v1/server?password=2245Bail' \
+  'https://bb.shamrockbailbonds.biz/api/v1/server?password=2245Bail' \
   | python3 -m json.tool | grep -E 'private_api|helper_connected'
 ```
 Expected: `"private_api": true`, `"helper_connected": true`
@@ -81,8 +81,8 @@ Expected: `"private_api": true`, `"helper_connected": true`
 ## VPS `.env` Values
 
 ```env
-BLUEBUBBLES_URL_0178=https://pseudospherical-etta-untactually.ngrok-free.dev
-BLUEBUBBLES_URL=https://pseudospherical-etta-untactually.ngrok-free.dev
+BLUEBUBBLES_URL_0178=https://bb.shamrockbailbonds.biz
+BLUEBUBBLES_URL=https://bb.shamrockbailbonds.biz
 BLUEBUBBLES_PASSWORD_0178=2245Bail
 BLUEBUBBLES_PASSWORD=2245Bail
 BB_WEBHOOK_PUBLIC_URL=https://leads.shamrockbailbonds.biz
@@ -107,7 +107,7 @@ BB_CONFIG_API_KEY=shamrock-bb-sync-2245
 ```
 Office iMac (BlueBubbles Server, port 1234)
     ↕ ngrok tunnel (permanent static domain)
-https://pseudospherical-etta-untactually.ngrok-free.dev
+https://bb.shamrockbailbonds.biz
     ↕
 Hetzner VPS (Docker: shamrock-leads container)
     → BlueBubblesClient (bb_private_api.py) — all outbound calls

@@ -10,6 +10,9 @@ services:
     build: .
     container_name: shamrock-leads
     restart: unless-stopped
+    dns:
+      - 8.8.8.8                         # Force Google DNS (bypasses VPS resolver)
+      - 1.1.1.1                         # Cloudflare DNS fallback
     env_file:
       - .env
     volumes:
@@ -34,6 +37,9 @@ services:
       dockerfile: dashboard/Dockerfile
     container_name: shamrock-dashboard
     restart: unless-stopped
+    dns:
+      - 8.8.8.8                         # Force Google DNS — resolves Wix CNAME for bb.shamrockbailbonds.biz
+      - 1.1.1.1                         # Cloudflare DNS fallback
     command: hypercorn "dashboard:create_app()" --bind 0.0.0.0:5050 --access-logfile -
     env_file:
       - .env

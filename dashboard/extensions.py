@@ -58,6 +58,7 @@ BB_CONFIG_API_KEY = os.getenv("BB_CONFIG_API_KEY", "shamrock-bb-sync-2245")
 
 def init_bluebubbles():
     """Load BlueBubbles server configs from environment variables."""
+    import socket
     global BB_SERVERS
     BB_SERVERS = {}
     for suffix, label, email in _BB_PHONES:
@@ -76,6 +77,16 @@ def init_bluebubbles():
                 "email": email,
                 "suffix": suffix,
             }
+            # DNS resolution check at init time (helps diagnose tunnel connectivity)
+            try:
+                from urllib.parse import urlparse
+                hostname = urlparse(url).hostname or ""
+                if hostname:
+                    resolved = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+                    ip = resolved[0][4][0] if resolved else "unknown"
+                    print(f"  ✅ BB [{suffix}] DNS OK: {hostname} -> {ip}")
+            except Exception as dns_err:
+                print(f"  ⚠️  BB [{suffix}] DNS FAILED for {url}: {dns_err}")
 
 
 def update_bb_url(suffix: str, new_url: str):
