@@ -4,6 +4,8 @@
    NOTE: `API` is declared in sl-core.js (loaded first) — do NOT redeclare here.
    ═══════════════════════════════════════════════════════════════════════ */
 
+
+
 /* ── Tiny helpers ─────────────────────────────────────────────────── */
 function toast(msg, type = 'info', duration = 3500) {
   const t = document.createElement('div');

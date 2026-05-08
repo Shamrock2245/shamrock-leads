@@ -3,12 +3,15 @@
 Production entry point for the async dashboard API.
 All blueprints use Motor (async MongoDB) via extensions.get_collection().
 """
-from quart import Quart, send_from_directory
+from quart import Quart, send_from_directory, make_response
 from quart_cors import cors
 import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Dashboard directory — used for serving static files since Quart's built-in handler is disabled
+DASHBOARD_DIR = os.path.dirname(__file__)
 
 
 def create_app():
@@ -16,9 +19,7 @@ def create_app():
     # This ensures all file requests go through our custom serve_static() route,
     # which sets no-cache headers for JS/CSS. Without this, Quart intercepts
     # static file requests before our route and serves them with max-age=43200.
-    _dashboard_dir = os.path.dirname(__file__)
     app = Quart(__name__, static_folder=None)
-    app._dashboard_static_folder = _dashboard_dir  # Store for use in serve_static
     # ── CORS — allow dashboard frontend and external callers ──
     app = cors(app, allow_origin="*")
 
@@ -827,11 +828,12 @@ def create_app():
     # ── Static file routes ──
     @app.route("/")
     async def index():
-        return await send_from_directory(app._dashboard_static_folder, "index.html")
+        return await send_from_directory(DASHBOARD_DIR, "index.html")
 
     @app.route("/<path:filename>")
     async def serve_static(filename):
         """Serve CSS, JS, images, and other static assets from the dashboard directory.
+        Adds no-cache headers for JS/CSS to prevent stale browser caches.
         Falls back to index.html for SPA routing (non-API, non-file paths).
         JS/CSS files are served with no-cache headers to ensure deploys take effect immediately.
 
@@ -840,15 +842,14 @@ def create_app():
         no-cache headers for JS/CSS files on every request.
         """
         import os as _os
-        _static_dir = app._dashboard_static_folder
         # Strip query-string cache-busters (e.g. ?v=abc123) before file lookup
         clean_name = filename.split("?")[0]
-        static_path = _os.path.join(_static_dir, clean_name)
+        static_path = _os.path.join(DASHBOARD_DIR, clean_name)
         if _os.path.isfile(static_path):
             # Prevent aggressive browser caching for JS/CSS so deploys take effect immediately
             if clean_name.endswith((".js", ".css")):
                 response = await send_from_directory(
-                    _static_dir, clean_name,
+                    DASHBOARD_DIR, clean_name,
                     cache_timeout=0,    # Quart: disables max-age header
                     add_etags=False,    # Quart: disables ETag (forces full re-fetch)
                     conditional=False,  # Quart: skip make_conditional which may reset headers
@@ -863,9 +864,9 @@ def create_app():
                 response.headers.set("Pragma", "no-cache")
                 response.headers.set("Expires", "0")
                 return response
-            return await send_from_directory(_static_dir, clean_name)
+            return await send_from_directory(DASHBOARD_DIR, clean_name)
         # SPA fallback — return index.html for any unmatched non-API path
-        return await send_from_directory(_static_dir, "index.html")
+        return await send_from_directory(DASHBOARD_DIR, "index.html")
 
     @app.route("/health")
     async def health():

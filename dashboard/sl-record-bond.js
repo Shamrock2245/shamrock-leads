@@ -11,12 +11,142 @@ const SLRecordBond = (() => {
 
   let _prefillData = {};
   let _suggestedPOA = null;
+  let _searchTimer = null;
+  let _searchResults = [];
+
+  // ── Defendant Search — queries /api/arrests/search ──────────────────────
+  function searchDefendants(query) {
+    clearTimeout(_searchTimer);
+    const resultsEl = $('rbSearchResults');
+    const hintEl = $('rbSearchHint');
+
+    if (!query || query.length < 2) {
+      if (resultsEl) resultsEl.style.display = 'none';
+      if (hintEl) hintEl.textContent = 'Type to search all arrest records. Select to auto-fill form.';
+      _searchResults = [];
+      return;
+    }
+
+    if (hintEl) hintEl.textContent = '⏳ Searching...';
+
+    // Debounce — wait 300ms after last keystroke
+    _searchTimer = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API}/api/arrests/search?q=${encodeURIComponent(query)}&limit=15`);
+        const d = await r.json();
+        _searchResults = d.arrests || [];
+
+        if (_searchResults.length === 0) {
+          if (hintEl) hintEl.textContent = `No results for "${query}". You can still fill the form manually.`;
+          if (resultsEl) resultsEl.style.display = 'none';
+          return;
+        }
+
+        if (hintEl) hintEl.textContent = `${d.total} result${d.total !== 1 ? 's' : ''} found. Click to auto-fill.`;
+        renderSearchResults();
+      } catch (e) {
+        if (hintEl) hintEl.textContent = '❌ Search failed. Fill form manually.';
+        console.warn('Defendant search error:', e);
+      }
+    }, 300);
+  }
+
+  function renderSearchResults() {
+    const resultsEl = $('rbSearchResults');
+    if (!resultsEl || _searchResults.length === 0) return;
+
+    const fmtBond = n => n ? '$' + Number(n).toLocaleString() : '—';
+    resultsEl.innerHTML = _searchResults.map((a, i) => `
+      <div class="rb-search-item" onclick="SLRecordBond.selectDefendant(${i})"
+        style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s"
+        onmouseenter="this.style.background='rgba(16,185,129,0.08)'"
+        onmouseleave="this.style.background='transparent'">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong style="color:var(--text);font-size:13px">${a.full_name || 'Unknown'}</strong>
+          <span style="font-size:12px;color:var(--accent);font-weight:600">${fmtBond(a.bond_amount || a.total_bond_amount)}</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap">
+          <span>📍 ${a.county || '—'}</span>
+          <span>📋 ${a.booking_number || '—'}</span>
+          <span>⚖️ ${(a.charges || '—').substring(0, 45)}${(a.charges || '').length > 45 ? '…' : ''}</span>
+          ${a.custody_status ? `<span style="color:${a.custody_status.toLowerCase().includes('custody') ? 'var(--warning)' : 'var(--success)'}">● ${a.custody_status}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+    resultsEl.style.display = 'block';
+  }
+
+  function showResults() {
+    if (_searchResults.length > 0) {
+      renderSearchResults();
+    }
+  }
+
+  function hideResults() {
+    // Delay to allow click events on results
+    setTimeout(() => {
+      const resultsEl = $('rbSearchResults');
+      if (resultsEl) resultsEl.style.display = 'none';
+    }, 200);
+  }
+
+  function selectDefendant(index) {
+    const arrest = _searchResults[index];
+    if (!arrest) return;
+
+    // Auto-fill ALL form fields from the selected arrest record
+    // This works regardless of which county scraped the data
+    $('rbDefendantName').value = arrest.full_name || '';
+    $('rbBookingNumber').value = arrest.booking_number || '';
+    $('rbCounty').value = arrest.county || '';
+    $('rbFacility').value = arrest.facility || arrest.jail_facility || '';
+    $('rbCharges').value = arrest.charges || '';
+    $('rbCaseNumber').value = arrest.case_number || '';
+
+    // Bond amount — handle various field names across counties
+    const bondAmt = parseFloat(arrest.bond_amount || arrest.total_bond_amount || 0);
+    $('rbBondAmount').value = bondAmt > 0 ? bondAmt : '';
+    const premiumEl = $('rbPremium');
+    if (premiumEl && bondAmt > 0) {
+      premiumEl.value = Math.round(bondAmt * 0.10);
+      delete premiumEl.dataset.manualEdit;
+    }
+
+    // Court info if available
+    if (arrest.court_date) $('rbCourtDate').value = arrest.court_date;
+    if (arrest.court_time) $('rbCourtTime').value = arrest.court_time;
+    if (arrest.court_location) $('rbCourtLocation').value = arrest.court_location;
+
+    // Auto-set today as bond date
+    $('rbBondDate').value = new Date().toISOString().split('T')[0];
+
+    // Hide search results and show success hint
+    const resultsEl = $('rbSearchResults');
+    if (resultsEl) resultsEl.style.display = 'none';
+    const hintEl = $('rbSearchHint');
+    if (hintEl) hintEl.innerHTML = `<span style="color:var(--success)">✅ Auto-filled from <strong>${arrest.county}</strong> arrest data. Assign a POA below.</span>`;
+
+    // Clear search input
+    $('rbDefendantSearch').value = '';
+    _searchResults = [];
+
+    // Trigger POA suggestion for the selected surety
+    suggestPOA();
+
+    toast(`☘️ Loaded: ${arrest.full_name} — ${arrest.county} County`, 'success');
+  }
 
   // ── Open Modal ──────────────────────────────────────────────────────────
   function open(data = {}) {
     _prefillData = data;
     const modal = $('recordBondModal');
     if (!modal) { console.error('Record Bond modal not found'); return; }
+
+    // Reset search state
+    if ($('rbDefendantSearch')) $('rbDefendantSearch').value = '';
+    if ($('rbSearchResults')) $('rbSearchResults').style.display = 'none';
+    if ($('rbSearchHint')) $('rbSearchHint').textContent = 'Type to search all arrest records. Select to auto-fill form.';
+    _searchResults = [];
 
     // Pre-fill from defendant/arrest data
     $('rbDefendantName').value = data.defendant_name || data.full_name || '';
@@ -198,7 +328,8 @@ const SLRecordBond = (() => {
   });
 
   // Public API
-  return { open, close, calcPremium, markPremiumManual, suggestPOA, submit };
+  return { open, close, calcPremium, markPremiumManual, suggestPOA, submit,
+           searchDefendants, showResults, hideResults, selectDefendant };
 })();
 
 // Global alias for easy access from other modules
