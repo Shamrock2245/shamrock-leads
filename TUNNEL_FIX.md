@@ -1,116 +1,88 @@
-# BlueBubbles Tunnel — Permanent Cloudflare Tunnel Domain
+# BlueBubbles Tunnel Fix - May 8, 2026
 
-## Status: ✅ MIGRATED TO CLOUDFLARE TUNNEL (May 2026)
+## Current Status: ONLINE
 
-The BlueBubbles iMessage bridge on the office iMac (`shamrockbailoffice@gmail.com`, phone `239-955-0178`)
-has been **migrated from ngrok to a permanent Cloudflare Tunnel with branded subdomain**.
-
----
-
-## Permanent Tunnel URL
-
-```
-https://bb.shamrockbailbonds.biz
-```
-
-This URL **never changes** — it is a named Cloudflare Tunnel (bluebubbles) with a CNAME on shamrockbailbonds.biz.
+- Active Tunnel: ngrok permanent domain
+- URL: https://pseudospherical-etta-untactually.ngrok-free.dev
+- Forwards to: http://localhost:1234 (BlueBubbles on the iMac)
+- BlueBubbles version: 1.9.9
+- Private API: enabled
+- iMessage account: shamrockbailoffice@gmail.com
 
 ---
 
-## iMac Setup (One-Time)
+## What Happened (May 8, 2026)
 
-### 1. Disable BlueBubbles Built-in Cloudflare Proxy
-- Open **BlueBubbles Server** app on the office iMac
-- Go to **Settings → Proxy Service** (or Connection Settings)
-- Switch from "Cloudflare" to **"None"** or **"Custom URL"**
-- Save settings
+The ngrok tunnel was running but forwarding to port 1880 (Node-RED) instead of
+port 1234 (BlueBubbles). This caused the dashboard iMessage tab to show Offline.
 
-### 2. Start the ngrok Tunnel
-```bash
-ngrok http 1234 --domain=pseudospherical-etta-untactually.ngrok-free.dev
-```
+### Root Cause
+The ngrok agent was started with a config pointing to port 1880. The stale session
+was locked in ngrok's cloud, preventing a new session from starting. The session was
+stopped via the ngrok dashboard (dashboard.ngrok.com/agents), then restarted.
 
-### 3. Make ngrok Persistent (Survive Reboots)
-
-**Option A — Launch Agent (recommended):**
-```bash
-cat > ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.ngrok.bluebubbles</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/ngrok</string>
-        <string>http</string>
-        <string>1234</string>
-        <string>--domain=pseudospherical-etta-untactually.ngrok-free.dev</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/ngrok-bb.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/ngrok-bb.err</string>
-</dict>
-</plist>
-EOF
-
-launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
-```
-
-**Option B — brew services (if supported):**
-```bash
-brew services start ngrok
-```
-
-### 4. Verify Tunnel is Live
-```bash
-curl -s -H 'ngrok-skip-browser-warning: true' \
-  'https://bb.shamrockbailbonds.biz/api/v1/server?password=2245Bail' \
-  | python3 -m json.tool | grep -E 'private_api|helper_connected'
-```
-Expected: `"private_api": true`, `"helper_connected": true`
+### Fix Applied
+1. Stopped the stale ngrok agent session via the ngrok web dashboard
+2. On the iMac Terminal, ran:
+     ngrok http 1234 --url=pseudospherical-etta-untactually.ngrok-free.dev
+3. Hot-swapped the URL in the VPS dashboard via /api/bb-health/update-url
 
 ---
 
-## VPS `.env` Values
+## How to Restart the Tunnel (if it goes down)
 
-```env
-BLUEBUBBLES_URL_0178=https://bb.shamrockbailbonds.biz
-BLUEBUBBLES_URL=https://bb.shamrockbailbonds.biz
-BLUEBUBBLES_PASSWORD_0178=2245Bail
-BLUEBUBBLES_PASSWORD=2245Bail
-BB_WEBHOOK_PUBLIC_URL=https://leads.shamrockbailbonds.biz
-BB_WEBHOOK_SECRET=f44694bd92293fe5b27c4a68adaf6991911ba067fcb813926bd6653bcd556754
-BB_CONFIG_API_KEY=shamrock-bb-sync-2245
-```
+On the iMac Terminal, run:
+  ngrok http 1234 --url=pseudospherical-etta-untactually.ngrok-free.dev
+
+Keep this terminal window open. If you close it, the tunnel stops.
+
+### To run as a persistent background service (survives reboots):
+
+1. Create ~/.config/ngrok/ngrok.yml with:
+
+   version: "3"
+   agent:
+     authtoken: 3AlFcEt1wP01NPVBuP9po8vE1y8_56b2KnU8Ydzyvi1CpktSY
+   tunnels:
+     bluebubbles:
+       proto: http
+       addr: 1234
+       url: pseudospherical-etta-untactually.ngrok-free.dev
+
+2. Install and start as a macOS service:
+   ngrok service install --config ~/.config/ngrok/ngrok.yml
+   ngrok service start
 
 ---
 
-## Code Changes Applied
+## Cloudflare Tunnel (Future Permanent Branded URL)
 
-| File | Change |
-|------|--------|
-| `dashboard/api/bb_private_api.py` | Added `ngrok-skip-browser-warning: true` header to `_request()` |
-| `dashboard/__init__.py` | Fixed `rearrest_bp` import shadowing (aliased notifier as `rearrest_notifier_bp`) |
-| `.env.example` | Updated BB URLs to ngrok permanent domain |
+A Cloudflare Tunnel named "bluebubbles" is configured and HEALTHY with 4 active
+connections from Miami.
+
+- Tunnel ID: bd9101bf-39a5-4b7a-97a8-d024c973c769
+- Intended URL: https://bb.shamrockbailbonds.biz
+- Ingress rule: bb.shamrockbailbonds.biz -> http://localhost:1234
+
+### Why it is not active yet
+The Cloudflare zone for shamrockbailbonds.biz is PENDING. The domain nameservers
+still point to Wix (ns6.wixdns.net / ns7.wixdns.net). Cloudflare requires nameserver
+delegation to activate the zone and route tunnel traffic.
+
+### To activate the Cloudflare tunnel permanently
+At your domain registrar, change nameservers to:
+  rita.ns.cloudflare.com
+  thaddeus.ns.cloudflare.com
+
+Once the zone activates (~24h after NS change), https://bb.shamrockbailbonds.biz
+will work automatically. Update BLUEBUBBLES_URL_0178 in the VPS .env to that URL.
 
 ---
 
-## Architecture
+## VPS .env Variable
+BLUEBUBBLES_URL_0178=https://pseudospherical-etta-untactually.ngrok-free.dev
 
-```
-Office iMac (BlueBubbles Server, port 1234)
-    ↕ ngrok tunnel (permanent static domain)
-https://bb.shamrockbailbonds.biz
-    ↕
-Hetzner VPS (Docker: shamrock-leads container)
-    → BlueBubblesClient (bb_private_api.py) — all outbound calls
-    → BB Webhook Receiver (/api/webhooks/bluebubbles) — inbound events
-    → BB Health Monitor — 5-min health checks with Slack alerts
-```
+## Hot-Swap Command (no restart needed)
+curl -X PATCH http://leads.shamrockbailbonds.biz/api/bb-health/update-url \
+  -H "Content-Type: application/json" \
+  -d '{"suffix":"0178","url":"NEW_URL","api_key":"shamrock-bb-sync-2245"}'
