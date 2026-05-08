@@ -60,7 +60,7 @@ class BlueBubblesClient:
     """Async client for BlueBubbles REST + Private API.
 
     Usage:
-        client = BlueBubblesClient("https://pseudospherical-etta-untactually.ngrok-free.dev", "mypassword")
+        client = BlueBubblesClient("https://bb.shamrockbailbonds.biz", "mypassword")
         info = await client.server_info()
         await client.send_text("any;-;+12395550178", "Hello!")
         await client.unsend_message("msg-guid-here")
