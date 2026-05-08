@@ -842,9 +842,15 @@ def create_app():
                     cache_timeout=0,  # Quart: disables max-age header
                     add_etags=False,  # Quart: disables ETag (forces full re-fetch)
                 )
-                response.headers["Cache-Control"] = "no-cache, must-revalidate"
-                response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
+                # Quart may still set cache-control.public — override everything
+                response.cache_control.no_cache = True
+                response.cache_control.must_revalidate = True
+                response.cache_control.public = False
+                response.cache_control.max_age = None
+                # Also set raw headers to ensure no proxy or browser caches the file
+                response.headers.set("Cache-Control", "no-cache, must-revalidate")
+                response.headers.set("Pragma", "no-cache")
+                response.headers.set("Expires", "0")
                 return response
             return await send_from_directory(app.static_folder, clean_name)
         # SPA fallback — return index.html for any unmatched non-API path
