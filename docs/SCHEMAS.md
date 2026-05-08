@@ -1,6 +1,6 @@
 # SCHEMAS.md — ShamrockLeads Data Schemas
 
-> **Last Updated:** April 23, 2026
+> **Last Updated:** May 8, 2026
 > **Source of Truth:** `core/models.py` (ArrestRecord dataclass)
 
 ---
@@ -74,37 +74,37 @@ Contains the same documents as `arrests` but filtered/indexed for lead-focused q
 
 ---
 
-### `poa_inventory` — POA number tracking `[PLANNED — Phase 5]`
+### `poa_inventory` — POA number tracking `[IMPLEMENTED]`
 
 See `docs/specs/surety-config-schema.md` for full schema.
 
 ---
 
-### `bond_cases` — Active bond cases `[PLANNED — Phase 5]`
+### `bond_cases` — Active bond cases `[IMPLEMENTED]`
 
-See `docs/specs/bond-case-schema.md` for full schema.
+See `docs/specs/bond-case-schema.md` for full schema. Production collection name: `active_bonds`.
 
 ---
 
-### `defendants` — Normalized person records `[PLANNED — Phase 2]`
+### `defendants` — Normalized person records `[IMPLEMENTED]`
 
 See `DATA_MODEL.md` Section 2 for schema.
 
 ---
 
-### `indemnitors` — Co-signer records `[PLANNED — Phase 3]`
+### `indemnitors` — Co-signer records `[IMPLEMENTED]`
 
 See `DATA_MODEL.md` Section 3 for schema.
 
 ---
 
-### `matches` — Defendant-indemnitor links `[PLANNED — Phase 4]`
+### `matches` — Defendant-indemnitor links `[IMPLEMENTED]`
 
 See `DATA_MODEL.md` Section 4 for schema.
 
 ---
 
-### `audit_events` — Immutable event log `[PLANNED — Phase 2+]`
+### `audit_events` — Immutable event log `[IMPLEMENTED]`
 
 See `DATA_MODEL.md` Section 10 for schema.
 

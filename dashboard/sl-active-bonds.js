@@ -148,7 +148,7 @@ async function _checkPoaStock() {
     if (lowStock.length === 0 && outOfStock.length === 0) { banner.style.display = 'none'; return; }
     banner.style.display = 'block';
     const isCritical = outOfStock.length > 0;
-    const manageLink = `<a href="#" onclick="event.preventDefault();(function(){const t=document.querySelector('[data-tab=tabInventory],[data-tab=tabPoa],[onclick*=Inventory]');if(t)t.click();else if(window.SL&&SL.switchTab)SL.switchTab(document.querySelector('[data-tab]'));})()" style="color:var(--warning);font-weight:600;text-decoration:underline;font-size:12px">Manage Inventory →</a>`;
+    const manageLink = `<a href="#" onclick="event.preventDefault();if(window.SLInventory)SLInventory.open();else{var t=document.querySelector('.inv-tab-trigger');if(t)t.click();}" style="color:var(--warning);font-weight:600;text-decoration:underline;font-size:12px">Manage Inventory →</a>`;
     let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">`;
     html += `<span style="font-size:16px">${isCritical ? '🚨' : '⚠️'}</span>`;
     html += `<strong style="color:${isCritical ? 'var(--danger)' : 'var(--warning)'}">POA Inventory ${isCritical ? 'CRITICAL' : 'Low Stock'}</strong>`;

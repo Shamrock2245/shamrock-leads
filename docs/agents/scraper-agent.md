@@ -1,7 +1,7 @@
 # Scraper Agent — "The Clerk"
 
 > **Status:** `[IMPLEMENTED — Phase 1]`
-> **This is the only agent that exists in production code today.**
+> **All 14 digital agents are now implemented. The Clerk was the first and remains the core data ingestion pipeline.**
 
 ---
 
@@ -40,7 +40,7 @@ Dashboard updates
 | File | Purpose |
 |------|---------|
 | `scrapers/base_scraper.py` | Abstract base class with self-healing |
-| `scrapers/counties/*.py` | 20 county-specific implementations |
+| `scrapers/counties/*.py` | 50 county-specific implementations |
 | `scoring/lead_scorer.py` | 0-100 scoring rules |
 | `writers/mongo_writer.py` | MongoDB upsert by County + Booking_Number |
 | `writers/sheets_writer.py` | Legacy Google Sheets writer |

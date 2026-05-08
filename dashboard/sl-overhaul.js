@@ -292,6 +292,11 @@
 
   function navigateToTab(tabId) {
     if (!tabId) return;
+    // POA Inventory is a modal, not a tab — handle specially
+    if (tabId === 'tabInventory' && window.SLInventory) {
+      SLInventory.open();
+      return;
+    }
     const btn = document.querySelector(`[data-tab="${tabId}"]`);
     if (btn) {
       btn.click();

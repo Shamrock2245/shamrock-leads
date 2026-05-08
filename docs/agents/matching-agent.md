@@ -1,7 +1,7 @@
 # Matching Agent — "The Matcher"
 
-> **Status:** `[PLANNED — Phase 4]`
-> **This agent does not exist in code yet.**
+> **Status:** `[IMPLEMENTED]`
+> **Implementation:** `dashboard/api/matching.py`, `dashboard/services/matching_engine.py`
 
 ---
 

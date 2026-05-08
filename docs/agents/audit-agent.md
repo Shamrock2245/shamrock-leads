@@ -1,7 +1,8 @@
 # Audit Agent — "The Auditor"
 
-> **Status:** `[PLANNED — Phase 2+]`
-> **This agent does not exist in code yet. Should be built early.**
+> **Status:** `[IMPLEMENTED]`
+> **Implementation:** `dashboard/api/events.py`, `dashboard/api/bond_lifecycle.py`
+> **All state changes are logged to the `audit_events` MongoDB collection.**
 
 ---
 

@@ -1,7 +1,7 @@
 # Payment Agent
 
-> **Status:** `[PLANNED — Phase 8]`
-> **This agent does not exist in code yet.**
+> **Status:** `[IMPLEMENTED]`
+> **Implementation:** `dashboard/api/payments.py`, `dashboard/api/payment_plans.py`
 
 ---
 
