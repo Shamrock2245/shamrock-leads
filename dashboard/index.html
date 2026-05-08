@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/responsive.css?v=4">
   <link rel="stylesheet" href="/sl-overhaul.css?v=5">
   <link rel="stylesheet" href="/sl-imessage.css?v=4">
+  <link rel="stylesheet" href="/sl-intelligence.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -98,6 +99,7 @@
   <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
   <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
+  <button class="tab-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()">🧠 Intelligence</button>
   <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
   <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
@@ -1587,6 +1589,138 @@
     </div>
   </div>
 </div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: AI INTELLIGENCE
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabIntelligence">
+  <div class="container">
+    <!-- Header -->
+    <div class="int-section-header">
+      <div>
+        <h2>🧠 AI Intelligence Suite</h2>
+        <p>Predictive analytics, ML scoring, revenue forecasting, and risk assessment</p>
+      </div>
+      <div class="btn-group">
+        <button class="int-range-btn active" onclick="SLIntelligence.setHorizon(7,this)">7d</button>
+        <button class="int-range-btn" onclick="SLIntelligence.setHorizon(14,this)">14d</button>
+        <button class="int-range-btn" onclick="SLIntelligence.setHorizon(30,this)">30d</button>
+      </div>
+    </div>
+
+    <!-- KPI Row 1: Forecasting -->
+    <div class="int-kpi-grid">
+      <div class="int-kpi-card emerald">
+        <div class="int-kpi-icon">📈</div>
+        <div class="int-kpi-label">Forecast Total</div>
+        <div class="int-kpi-value" id="intKpiForecast">—</div>
+        <div class="int-kpi-sub">predicted revenue (horizon)</div>
+      </div>
+      <div class="int-kpi-card blue">
+        <div class="int-kpi-icon">📊</div>
+        <div class="int-kpi-label">P50 (Median)</div>
+        <div class="int-kpi-value" id="intKpiP50">—</div>
+        <div class="int-kpi-sub">50th percentile outcome</div>
+      </div>
+      <div class="int-kpi-card amber">
+        <div class="int-kpi-icon">🎯</div>
+        <div class="int-kpi-label">P90 (Optimistic)</div>
+        <div class="int-kpi-value" id="intKpiP90">—</div>
+        <div class="int-kpi-sub">best-case scenario</div>
+      </div>
+      <div class="int-kpi-card purple">
+        <div class="int-kpi-icon">📉</div>
+        <div class="int-kpi-label">Trend</div>
+        <div class="int-kpi-value" id="intKpiTrend">—</div>
+        <div class="int-kpi-sub">revenue direction</div>
+      </div>
+    </div>
+
+    <!-- KPI Row 2: ML Models -->
+    <div class="int-kpi-grid">
+      <div class="int-kpi-card cyan">
+        <div class="int-kpi-icon">🧠</div>
+        <div class="int-kpi-label">ML Models</div>
+        <div class="int-kpi-value" id="intKpiModels">—</div>
+        <div class="int-kpi-sub">trained &amp; active</div>
+      </div>
+      <div class="int-kpi-card emerald">
+        <div class="int-kpi-icon">🎯</div>
+        <div class="int-kpi-label">Avg Accuracy</div>
+        <div class="int-kpi-value" id="intKpiAccuracy">—</div>
+        <div class="int-kpi-sub">cross-validated score</div>
+      </div>
+      <div class="int-kpi-card blue">
+        <div class="int-kpi-icon">📍</div>
+        <div class="int-kpi-label">Counties Analyzed</div>
+        <div class="int-kpi-value" id="intKpiCounties">—</div>
+        <div class="int-kpi-sub">in risk heatmap</div>
+      </div>
+      <div class="int-kpi-card rose">
+        <div class="int-kpi-icon">🔥</div>
+        <div class="int-kpi-label">High-Risk Counties</div>
+        <div class="int-kpi-value" id="intKpiHotRate">—</div>
+        <div class="int-kpi-sub">risk score ≥ 70</div>
+      </div>
+    </div>
+
+    <!-- Charts Row 1: Forecast + Confidence -->
+    <div class="int-grid-2">
+      <div class="int-chart-panel">
+        <div class="int-chart-title">📈 Revenue Forecast <span class="int-chart-badge">Holt-Winters</span></div>
+        <div style="height:280px;position:relative"><canvas id="intForecastChart"></canvas></div>
+      </div>
+      <div class="int-chart-panel">
+        <div class="int-chart-title">🎯 Monte Carlo Confidence Bands <span class="int-chart-badge">1K sims</span></div>
+        <div style="height:280px;position:relative"><canvas id="intConfidenceChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Charts Row 2: County Heatmap + Temporal -->
+    <div class="int-grid-2">
+      <div class="int-chart-panel">
+        <div class="int-chart-title">🗺️ County Risk Heatmap <span class="int-chart-badge">Top 20</span></div>
+        <div style="height:400px;position:relative"><canvas id="intHeatmapChart"></canvas></div>
+      </div>
+      <div class="int-chart-panel">
+        <div class="int-chart-title">🕐 Arrest Patterns (24h × 7d) <span class="int-chart-badge">Temporal</span></div>
+        <div id="intTemporalGrid"></div>
+      </div>
+    </div>
+
+    <!-- Charts Row 3: Risk Trend -->
+    <div class="int-chart-panel">
+      <div class="int-chart-title">📉 Risk Score Trend (30d) <span class="int-chart-badge">7d MA</span></div>
+      <div style="height:220px;position:relative"><canvas id="intRiskTrendChart"></canvas></div>
+    </div>
+
+    <!-- ML Model Cards -->
+    <div style="margin-top:22px">
+      <div class="int-chart-title" style="font-size:16px;margin-bottom:14px">🤖 ML Model Status</div>
+      <div class="int-grid-2" id="intModelCards">
+        <div class="int-model-empty">
+          <div style="font-size:2rem;margin-bottom:8px">🧠</div>
+          <div style="font-weight:700;margin-bottom:4px">Loading models...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FEATURE IMPORTANCE MODAL ═══ -->
+<div id="intFeatureModal" class="modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <h2>📊 Feature Importance</h2>
+      <button class="modal-close" onclick="document.getElementById('intFeatureModal').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body" id="intFeatureBody"></div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="document.getElementById('intFeatureModal').classList.remove('show')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════════════════
      TAB: COURT CALENDAR
      ═══════════════════════════════════════════════════════ -->
@@ -2454,6 +2588,7 @@
 <script src="/sl-inventory.js?v=4"></script>
 <script src="/sl-analytics.js?v=4"></script>
 <script src="/sl-analytics-apex.js?v=4"></script>
+<script src="/sl-intelligence.js?v=1"></script>
 <script src="/sl-calendar.js?v=4"></script>
 <script src="/sl-calendar-ext.js?v=4"></script>
 <script src="/sl-record-bond.js?v=4"></script>
