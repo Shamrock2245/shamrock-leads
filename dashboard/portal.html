@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="robots" content="noindex,nofollow">
+<title>Shamrock Bail Bonds — My Bond</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --shamrock: #00844a;
+  --shamrock-light: #e8f5ee;
+  --shamrock-dark: #006b3c;
+  --gold: #c8a84e;
+  --bg: #f5f7f6;
+  --card: #ffffff;
+  --text: #1a2e1a;
+  --muted: #6b7b6b;
+  --border: #e2e8e4;
+  --danger: #dc3545;
+  --success: #28a745;
+  --warning: #f0ad4e;
+  --radius: 16px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.06);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 100px;
+}
+
+/* ── Header ── */
+.portal-header {
+  background: linear-gradient(135deg, #00844a 0%, #006b3c 50%, #004d2a 100%);
+  color: #fff;
+  padding: 20px 20px 28px;
+  position: relative;
+  overflow: hidden;
+}
+.portal-header::after {
+  content: ''; position: absolute; bottom: -20px; left: 0; right: 0;
+  height: 40px; background: var(--bg); border-radius: 24px 24px 0 0;
+}
+.header-top { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.header-logo { font-size: 28px; }
+.header-brand { font-size: 15px; font-weight: 600; opacity: 0.9; letter-spacing: 0.5px; }
+.header-name { font-size: 22px; font-weight: 700; margin-top: 8px; }
+.header-case { font-size: 13px; opacity: 0.75; margin-top: 2px; }
+
+/* ── Status Badge ── */
+.status-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 20px; font-size: 12px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  margin-top: 12px;
+}
+.status-active { background: rgba(40,167,69,0.15); color: #28a745; }
+.status-exonerated { background: rgba(0,132,74,0.15); color: #00844a; }
+.status-forfeited { background: rgba(220,53,69,0.15); color: #dc3545; }
+.status-monitoring { background: rgba(240,173,78,0.15); color: #c08a30; }
+.status-alert { background: rgba(220,53,69,0.15); color: #dc3545; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+/* ── Cards ── */
+.section { padding: 0 16px; margin-bottom: 16px; }
+.section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.2px; color: var(--muted); margin-bottom: 10px; padding-left: 4px;
+}
+.card {
+  background: var(--card); border-radius: var(--radius);
+  padding: 20px; box-shadow: var(--shadow); border: 1px solid var(--border);
+}
+.card + .card { margin-top: 12px; }
+
+/* ── Info Rows ── */
+.info-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.info-row:last-child { border-bottom: none; padding-bottom: 0; }
+.info-row:first-child { padding-top: 0; }
+.info-label { font-size: 13px; color: var(--muted); font-weight: 500; }
+.info-value { font-size: 14px; font-weight: 600; text-align: right; max-width: 60%; }
+
+/* ── Payment Section ── */
+.balance-card {
+  background: linear-gradient(135deg, #1a2e1a, #2a3e2a);
+  color: #fff; border-radius: var(--radius); padding: 24px;
+  text-align: center; border: none;
+}
+.balance-label { font-size: 12px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; }
+.balance-amount { font-size: 36px; font-weight: 700; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.balance-due { font-size: 12px; opacity: 0.6; }
+
+/* ── Buttons ── */
+.btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 16px 24px; border: none; border-radius: 14px;
+  font-size: 16px; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: all 0.2s; min-height: 52px;
+  text-decoration: none;
+}
+.btn-primary { background: var(--shamrock); color: #fff; }
+.btn-primary:hover { background: var(--shamrock-dark); transform: translateY(-1px); }
+.btn-secondary { background: var(--shamrock-light); color: var(--shamrock); }
+.btn-secondary:hover { background: #d4edde; }
+.btn-gold { background: linear-gradient(135deg, #c8a84e, #a08030); color: #fff; }
+.btn-gold:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(200,168,78,0.3); }
+.btn + .btn { margin-top: 10px; }
+
+/* ── Check-in ── */
+.checkin-success {
+  background: var(--shamrock-light); border-radius: var(--radius);
+  padding: 20px; text-align: center; display: none;
+}
+.checkin-success .icon { font-size: 48px; margin-bottom: 8px; }
+.checkin-success h3 { color: var(--shamrock); font-size: 18px; margin-bottom: 4px; }
+.checkin-success p { color: var(--muted); font-size: 13px; }
+
+/* ── Payment History ── */
+.payment-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.payment-row:last-child { border-bottom: none; }
+.pay-info { flex: 1; }
+.pay-method { font-size: 13px; font-weight: 600; }
+.pay-date { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.pay-amount { font-size: 15px; font-weight: 700; color: var(--shamrock); }
+
+/* ── Court Date ── */
+.court-card {
+  background: linear-gradient(135deg, #fffbeb, #fef3c7);
+  border: 1px solid #f0d060; border-radius: var(--radius); padding: 16px;
+}
+.court-card .icon { font-size: 24px; margin-bottom: 6px; }
+.court-card .date { font-size: 18px; font-weight: 700; color: #92400e; }
+.court-card .location { font-size: 13px; color: #a16207; margin-top: 4px; }
+
+/* ── Tab Bar ── */
+.tab-bar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--card); border-top: 1px solid var(--border);
+  display: flex; padding: 8px 0;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 100;
+}
+.tab {
+  flex: 1; text-align: center; font-size: 10px; font-weight: 600;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px;
+  padding: 4px 0; cursor: pointer; transition: color 0.2s;
+}
+.tab.active { color: var(--shamrock); }
+.tab-icon { font-size: 22px; display: block; margin-bottom: 2px; }
+
+/* ── Tab Content ── */
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ── Loading ── */
+.loading {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 60vh; flex-direction: column; gap: 12px;
+}
+.spinner {
+  width: 36px; height: 36px; border: 3px solid var(--border);
+  border-top-color: var(--shamrock); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Footer ── */
+.portal-footer {
+  text-align: center; padding: 24px 16px 40px; color: var(--muted); font-size: 12px;
+}
+.portal-footer a { color: var(--shamrock); text-decoration: none; font-weight: 600; }
+
+/* ── Animations ── */
+@keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+.fade-up { animation: fadeUp 0.4s ease-out both; }
+.fade-up-1 { animation-delay: 0.05s; }
+.fade-up-2 { animation-delay: 0.1s; }
+.fade-up-3 { animation-delay: 0.15s; }
+.fade-up-4 { animation-delay: 0.2s; }
+</style>
+</head>
+<body>
+
+<div id="loadingState" class="loading">
+  <div class="spinner"></div>
+  <span style="color:var(--muted);font-size:13px">Loading your bond information…</span>
+</div>
+
+<div id="portalContent" style="display:none">
+
+  <!-- Header -->
+  <div class="portal-header" id="portalHeader">
+    <div class="header-top">
+      <span class="header-logo">☘️</span>
+      <span class="header-brand">Shamrock Bail Bonds</span>
+    </div>
+    <div class="header-name" id="hDefendantName">—</div>
+    <div class="header-case" id="hCaseInfo">—</div>
+    <div id="hStatusBadge"></div>
+  </div>
+
+  <!-- Tab: Status -->
+  <div class="tab-content active" id="tabStatus">
+    <div class="section fade-up fade-up-1">
+      <div class="section-title">Bond Details</div>
+      <div class="card" id="bondDetails"></div>
+    </div>
+
+    <div class="section fade-up fade-up-2" id="courtSection" style="display:none">
+      <div class="section-title">Upcoming Court Date</div>
+      <div class="court-card" id="courtCard"></div>
+    </div>
+
+    <div class="section fade-up fade-up-3" id="checkinSection" style="display:none">
+      <div class="section-title">Check-In</div>
+      <div class="card">
+        <div id="checkinContent">
+          <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+            Verify your location to stay compliant with your bond conditions.
+          </p>
+          <button class="btn btn-secondary" id="btnCheckin" onclick="doCheckin()">
+            📍 Check In Now
+          </button>
+        </div>
+        <div class="checkin-success" id="checkinSuccess">
+          <div class="icon">✅</div>
+          <h3>Check-In Complete</h3>
+          <p id="checkinTime">Your location has been verified.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: Payments (indemnitor only) -->
+  <div class="tab-content" id="tabPayments">
+    <div class="section fade-up">
+      <div id="balanceCard"></div>
+    </div>
+    <div class="section fade-up fade-up-1">
+      <div id="paymentActions"></div>
+    </div>
+    <div class="section fade-up fade-up-2" id="payHistorySection" style="display:none">
+      <div class="section-title">Payment History</div>
+      <div class="card" id="paymentHistory"></div>
+    </div>
+  </div>
+
+  <!-- Tab: Contact -->
+  <div class="tab-content" id="tabContact">
+    <div class="section fade-up">
+      <div class="section-title">Contact Us</div>
+      <div class="card" style="text-align:center">
+        <div style="font-size:48px;margin-bottom:12px">☘️</div>
+        <h3 style="font-size:18px;margin-bottom:4px">Shamrock Bail Bonds</h3>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:20px">
+          1528 Broadway, Ft. Myers, FL 33901
+        </p>
+        <a href="tel:+12393322245" class="btn btn-primary">📞 Call (239) 332-2245</a>
+        <a href="sms:+12393322245" class="btn btn-secondary">💬 Text Us</a>
+        <a href="https://www.shamrockbailbonds.biz" target="_blank" class="btn btn-secondary" style="margin-top:10px">
+          🌐 Visit Website
+        </a>
+      </div>
+    </div>
+    <div class="section fade-up fade-up-1">
+      <div class="card" style="font-size:12px;color:var(--muted);line-height:1.6">
+        <strong>Office Hours</strong><br>
+        Monday–Friday: 8:00 AM – 6:00 PM<br>
+        After Hours: Available by phone 24/7<br><br>
+        <strong>Need immediate help?</strong> Call us anytime — we're here for you.
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <div class="tab active" data-tab="tabStatus"><span class="tab-icon">📋</span>Status</div>
+    <div class="tab" data-tab="tabPayments" id="tabPaymentsBtn" style="display:none">
+      <span class="tab-icon">💳</span>Payments
+    </div>
+    <div class="tab" data-tab="tabContact"><span class="tab-icon">📞</span>Contact</div>
+  </div>
+
+  <div class="portal-footer">
+    <a href="https://www.shamrockbailbonds.biz">shamrockbailbonds.biz</a><br>
+    <span style="margin-top:4px;display:inline-block">Licensed & Insured · Lee County, FL</span>
+  </div>
+</div>
+
+<script>
+const TOKEN = window.location.pathname.split('/c/')[1]?.split('?')[0] || '';
+const API = window.location.origin;
+let caseData = null;
+
+// ── Init ──
+async function init() {
+  if (!TOKEN) { document.getElementById('loadingState').innerHTML = '<p>Invalid link.</p>'; return; }
+  try {
+    const res = await fetch(`${API}/api/portal/${TOKEN}/status`);
+    if (!res.ok) throw new Error('expired');
+    caseData = await res.json();
+    render();
+    document.getElementById('loadingState').style.display = 'none';
+    document.getElementById('portalContent').style.display = 'block';
+  } catch(e) {
+    document.getElementById('loadingState').innerHTML =
+      '<div style="text-align:center;padding:40px"><div style="font-size:48px;margin-bottom:16px">☘️</div>' +
+      '<h2 style="font-size:18px;margin-bottom:8px">Link Expired</h2>' +
+      '<p style="color:var(--muted);font-size:14px">This link is no longer valid. Contact Shamrock Bail Bonds for a new one.</p>' +
+      '<a href="tel:+12393322245" style="display:inline-block;margin-top:20px;padding:14px 32px;background:var(--shamrock);color:#fff;border-radius:14px;text-decoration:none;font-weight:600">Call (239) 332-2245</a></div>';
+  }
+}
+
+// ── Render ──
+function render() {
+  const d = caseData;
+  // Header
+  document.getElementById('hDefendantName').textContent = d.defendant_name || '—';
+  document.getElementById('hCaseInfo').textContent =
+    `${d.county || ''} County · Case ${d.case_number || 'Pending'}`;
+
+  // Status badge
+  const statusMap = {
+    active: ['Active Bond', 'status-active'],
+    monitoring: ['Monitoring', 'status-monitoring'],
+    alert: ['Alert', 'status-alert'],
+    exonerated: ['Discharged', 'status-exonerated'],
+    forfeited: ['Forfeited', 'status-forfeited'],
+    surrendered: ['Surrendered', 'status-forfeited'],
+  };
+  const [label, cls] = statusMap[d.status] || ['Active', 'status-active'];
+  document.getElementById('hStatusBadge').innerHTML =
+    `<span class="status-badge ${cls}"><span class="status-dot"></span>${label}</span>`;
+
+  // Bond details
+  const rows = [
+    ['Bond Amount', fmtMoney(d.bond_amount)],
+    ['County', d.county || '—'],
+    ['Case Number', d.case_number || 'Pending'],
+    ['Bond Date', fmtDate(d.bond_date)],
+    ['Status', label],
+  ];
+  if (d.role === 'indemnitor' && d.premium) rows.push(['Premium', fmtMoney(d.premium)]);
+  document.getElementById('bondDetails').innerHTML = rows.map(([l,v]) =>
+    `<div class="info-row"><span class="info-label">${l}</span><span class="info-value">${v}</span></div>`
+  ).join('');
+
+  // Court date
+  if (d.court_date) {
+    document.getElementById('courtSection').style.display = '';
+    document.getElementById('courtCard').innerHTML =
+      `<div class="icon">⚖️</div><div class="date">${fmtDate(d.court_date)}</div>` +
+      (d.court_location ? `<div class="location">📍 ${d.court_location}</div>` : '');
+  }
+
+  // Role-specific
+  if (d.role === 'defendant') renderDefendant(d);
+  else if (d.role === 'indemnitor') renderIndemnitor(d);
+}
+
+function renderDefendant(d) {
+  if (d.check_in_required) {
+    document.getElementById('checkinSection').style.display = '';
+    if (d.last_check_in) {
+      const ago = timeAgo(d.last_check_in);
+      document.querySelector('#checkinContent p').textContent =
+        `Last check-in: ${ago}. Next due: ${d.next_check_in_due ? fmtDate(d.next_check_in_due) : 'TBD'}`;
+    }
+  }
+}
+
+function renderIndemnitor(d) {
+  document.getElementById('tabPaymentsBtn').style.display = '';
+  const plan = d.payment_plan;
+  const balance = plan ? plan.balance : (d.premium || 0);
+  const nextDue = plan ? plan.next_due_date : '';
+
+  document.getElementById('balanceCard').innerHTML = `
+    <div class="balance-card">
+      <div class="balance-label">Balance Due</div>
+      <div class="balance-amount">${fmtMoney(balance)}</div>
+      ${nextDue ? `<div class="balance-due">Next payment due: ${fmtDate(nextDue)}</div>` : ''}
+    </div>`;
+
+  document.getElementById('paymentActions').innerHTML = `
+    <a href="${d.payment_link || '#'}" target="_blank" class="btn btn-gold">
+      💳 Make a Payment
+    </a>
+    <a href="tel:+12393322245" class="btn btn-secondary">
+      📞 Call to Pay by Phone
+    </a>`;
+
+  // Payment history
+  const payments = d.payment_history || [];
+  if (payments.length > 0) {
+    document.getElementById('payHistorySection').style.display = '';
+    document.getElementById('paymentHistory').innerHTML = payments.map(p => `
+      <div class="payment-row">
+        <div class="pay-info">
+          <div class="pay-method">${p.method || 'Payment'}</div>
+          <div class="pay-date">${fmtDate(p.timestamp)}</div>
+        </div>
+        <div class="pay-amount">${fmtMoney(p.amount)}</div>
+      </div>
+    `).join('');
+  }
+}
+
+// ── Check-In ──
+async function doCheckin() {
+  const btn = document.getElementById('btnCheckin');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0 auto"></div>';
+
+  let lat = null, lng = null, acc = null;
+  try {
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: true, timeout: 10000, maximumAge: 0
+      });
+    });
+    lat = pos.coords.latitude;
+    lng = pos.coords.longitude;
+    acc = pos.coords.accuracy;
+  } catch(e) { /* GPS optional — still submit check-in */ }
+
+  try {
+    const res = await fetch(`${API}/api/portal/${TOKEN}/checkin`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ lat, lng, accuracy: acc })
+    });
+    if (res.ok) {
+      document.getElementById('checkinContent').style.display = 'none';
+      const success = document.getElementById('checkinSuccess');
+      success.style.display = '';
+      document.getElementById('checkinTime').textContent =
+        `Verified at ${new Date().toLocaleString()}` + (lat ? ` · GPS captured` : '');
+    } else {
+      btn.innerHTML = '❌ Error — Try Again';
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.innerHTML = '❌ Network Error';
+    btn.disabled = false;
+  }
+}
+
+// ── Tabs ──
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(t.dataset.tab).classList.add('active');
+  });
+});
+
+// ── Helpers ──
+function fmtMoney(n) { return '$' + Number(n || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
+}
+function timeAgo(iso) {
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 3600) return Math.round(s/60) + 'm ago';
+  if (s < 86400) return Math.round(s/3600) + 'h ago';
+  return Math.round(s/86400) + 'd ago';
+}
+
+init();
+</script>
+</body>
+</html>

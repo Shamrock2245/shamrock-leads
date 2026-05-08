@@ -100,6 +100,7 @@
   <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
   <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
+  <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
   <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
@@ -2465,6 +2466,194 @@
 <script src="/sl-reports-ui.js?v=4"></script>
 <script src="/sl-tab-polish.js?v=4"></script>
 <script src="/sl-overhaul.js?v=4"></script>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: CLIENT PORTAL MANAGEMENT
+     ═══════════════════════════════════════════════════════ -->
+<style>
+/* ── Portal Tab — Fortune 50 Staff Interface ── */
+#tabPortal .container { max-width:1200px; margin:0 auto; padding:24px 20px; }
+
+.portal-kpi-row {
+  display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:24px;
+}
+.portal-kpi {
+  background:var(--bg-card,#1e293b); border:1px solid var(--border,#334155);
+  border-radius:14px; padding:20px 24px; text-align:center;
+  transition:transform 0.2s, box-shadow 0.2s;
+}
+.portal-kpi:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,0.2); }
+.portal-kpi.accent { border-color:rgba(16,185,129,0.3); background:linear-gradient(135deg,rgba(16,185,129,0.08),transparent); }
+.portal-kpi-value { font-size:2rem; font-weight:800; color:var(--text,#e2e8f0); letter-spacing:-0.5px; }
+.portal-kpi.accent .portal-kpi-value { color:#10b981; }
+.portal-kpi-label { font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:1px; color:var(--text-muted,#94a3b8); margin-top:4px; }
+
+.portal-action-bar {
+  display:flex; gap:12px; margin-bottom:20px; align-items:center;
+}
+.portal-search-wrap {
+  flex:1; display:flex; align-items:center;
+  background:var(--bg-card,#1e293b); border:1px solid var(--border,#334155);
+  border-radius:10px; padding:0 14px; transition:border-color 0.2s;
+}
+.portal-search-wrap:focus-within { border-color:#10b981; }
+.portal-search-wrap input {
+  flex:1; background:none; border:none; color:var(--text,#e2e8f0);
+  padding:12px 8px; font-size:0.88rem; outline:none; font-family:inherit;
+}
+.portal-search-wrap input::placeholder { color:var(--text-muted,#64748b); }
+
+.portal-btn-generate {
+  display:flex; align-items:center; gap:8px;
+  padding:12px 20px; border:none; border-radius:10px;
+  background:linear-gradient(135deg,#10b981,#059669); color:#fff;
+  font-size:0.85rem; font-weight:600; cursor:pointer;
+  font-family:inherit; transition:all 0.2s; white-space:nowrap;
+}
+.portal-btn-generate:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(16,185,129,0.3); }
+
+.portal-section-label {
+  font-size:0.7rem; font-weight:700; text-transform:uppercase; letter-spacing:1.2px;
+  color:var(--text-muted,#94a3b8); margin-bottom:10px; padding-left:2px;
+}
+
+.portal-bond-list { display:flex; flex-direction:column; gap:6px; }
+.portal-bond-row {
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--bg-card,#1e293b); border:1px solid var(--border,#334155);
+  border-radius:12px; padding:14px 18px; transition:all 0.15s;
+}
+.portal-bond-row:hover { border-color:rgba(16,185,129,0.3); background:rgba(16,185,129,0.03); }
+.portal-bond-info { flex:1; min-width:0; }
+.portal-bond-name { font-size:0.92rem; font-weight:600; color:var(--text,#e2e8f0); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.portal-bond-meta { font-size:0.75rem; color:var(--text-muted,#94a3b8); margin-top:3px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.portal-bond-booking { font-family:'SF Mono','Fira Code',monospace; font-size:0.7rem; opacity:0.7; }
+
+.portal-bond-status {
+  display:inline-block; padding:2px 8px; border-radius:6px; font-size:0.65rem;
+  font-weight:700; text-transform:uppercase; letter-spacing:0.5px;
+}
+.portal-bond-status.st-active { background:rgba(16,185,129,0.15); color:#10b981; }
+.portal-bond-status.st-monitoring { background:rgba(245,158,11,0.15); color:#f59e0b; }
+.portal-bond-status.st-alert { background:rgba(239,68,68,0.15); color:#ef4444; }
+.portal-bond-status.st-exonerated { background:rgba(59,130,246,0.15); color:#3b82f6; }
+
+.portal-bond-actions { display:flex; gap:6px; flex-shrink:0; }
+.portal-action-btn {
+  padding:6px 12px; border:1px solid var(--border,#334155); border-radius:8px;
+  background:transparent; color:var(--text-muted,#94a3b8); font-size:0.75rem;
+  cursor:pointer; font-family:inherit; transition:all 0.15s; white-space:nowrap;
+}
+.portal-action-btn:hover { border-color:#10b981; color:#10b981; background:rgba(16,185,129,0.06); }
+.portal-action-btn.subtle { padding:6px 8px; }
+.portal-action-btn.subtle.danger:hover { border-color:#ef4444; color:#ef4444; background:rgba(239,68,68,0.06); }
+
+/* ── Generate Modal ── */
+.portal-modal-overlay {
+  position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10002;
+  display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+}
+.portal-modal {
+  background:var(--bg-card,#1e293b); border:1px solid var(--border,#334155);
+  border-radius:18px; width:480px; max-width:92vw;
+  box-shadow:0 24px 80px rgba(0,0,0,0.5); overflow:hidden;
+}
+.portal-modal-header {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:18px 22px; border-bottom:1px solid var(--border,#334155);
+}
+.portal-modal-header h3 { font-size:1rem; font-weight:700; margin:0; }
+.portal-modal-close {
+  background:none; border:none; color:var(--text-muted); cursor:pointer;
+  font-size:1.2rem; padding:4px 8px; border-radius:6px; transition:background 0.15s;
+}
+.portal-modal-close:hover { background:rgba(255,255,255,0.1); }
+.portal-modal-body { padding:22px; }
+.portal-modal-footer {
+  display:flex; justify-content:flex-end; gap:10px;
+  padding:16px 22px; border-top:1px solid var(--border,#334155);
+}
+
+.portal-form-group { margin-bottom:18px; }
+.portal-form-group label {
+  display:block; font-size:0.75rem; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.8px; color:var(--text-muted,#94a3b8); margin-bottom:6px;
+}
+.portal-form-group input {
+  width:100%; padding:11px 14px; border:1px solid var(--border,#334155);
+  border-radius:10px; background:var(--bg-main,#0f172a); color:var(--text,#e2e8f0);
+  font-size:0.9rem; font-family:inherit; transition:border-color 0.2s;
+}
+.portal-form-group input:focus { outline:none; border-color:#10b981; }
+
+.portal-role-toggle { display:flex; gap:8px; margin-bottom:8px; }
+.portal-role-btn {
+  flex:1; padding:10px 14px; border:1px solid var(--border,#334155); border-radius:10px;
+  background:transparent; color:var(--text-muted); cursor:pointer; font-size:0.85rem;
+  font-family:inherit; font-weight:500; transition:all 0.2s;
+}
+.portal-role-btn.active { border-color:#10b981; color:#10b981; background:rgba(16,185,129,0.08); }
+.portal-role-btn:hover:not(.active) { border-color:rgba(255,255,255,0.2); }
+.portal-role-hint { font-size:0.75rem; color:var(--text-muted,#64748b); font-style:italic; }
+
+.portal-btn-primary {
+  padding:10px 22px; border:none; border-radius:10px;
+  background:linear-gradient(135deg,#10b981,#059669); color:#fff;
+  font-size:0.85rem; font-weight:600; cursor:pointer; font-family:inherit; transition:all 0.2s;
+}
+.portal-btn-primary:hover { transform:translateY(-1px); }
+.portal-btn-primary:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
+.portal-btn-secondary {
+  padding:10px 22px; border:1px solid var(--border,#334155); border-radius:10px;
+  background:transparent; color:var(--text-muted); font-size:0.85rem;
+  font-weight:500; cursor:pointer; font-family:inherit;
+}
+
+/* ── Result ── */
+.portal-result-success { text-align:center; padding:16px 0; }
+.portal-result-icon { font-size:2rem; margin-bottom:8px; }
+.portal-result-title { font-size:1rem; font-weight:700; color:var(--text,#e2e8f0); margin-bottom:4px; }
+.portal-result-sent { font-size:0.8rem; color:#10b981; margin-bottom:12px; }
+.portal-result-url {
+  display:flex; gap:8px; margin:12px 0;
+}
+.portal-result-url input {
+  flex:1; padding:10px 12px; border:1px solid var(--border,#334155);
+  border-radius:8px; background:var(--bg-main,#0f172a); color:var(--text,#e2e8f0);
+  font-size:0.78rem; font-family:'SF Mono','Fira Code',monospace;
+}
+.portal-copy-btn {
+  padding:10px 14px; border:1px solid var(--border,#334155); border-radius:8px;
+  background:transparent; color:var(--text,#e2e8f0); cursor:pointer;
+  font-size:0.8rem; font-family:inherit; transition:all 0.15s; white-space:nowrap;
+}
+.portal-copy-btn:hover { border-color:#10b981; color:#10b981; }
+.portal-result-meta { font-size:0.72rem; color:var(--text-muted); }
+.portal-result-error { color:#ef4444; font-size:0.85rem; padding:12px 0; text-align:center; }
+
+/* ── Token List ── */
+.portal-token-list-header { font-size:0.8rem; font-weight:700; color:var(--text,#e2e8f0); margin-bottom:10px; }
+.portal-token-row {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:10px 12px; border:1px solid var(--border,#334155); border-radius:8px;
+  margin-bottom:6px;
+}
+.portal-token-info { display:flex; align-items:center; gap:8px; }
+.portal-token-meta { font-size:0.72rem; color:var(--text-muted); }
+.portal-token-actions { display:flex; gap:4px; }
+</style>
+
+<div class="tab-content" id="tabPortal">
+  <div class="container">
+    <div id="portalBody">
+      <div style="display:flex;align-items:center;justify-content:center;padding:80px 0">
+        <div class="sl-spinner"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/sl-portal.js?v=1"></script>
 
 <!-- ═══════════════════════════════════════════════════════
      TAB: iMESSAGE CONTROL CENTER

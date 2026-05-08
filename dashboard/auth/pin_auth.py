@@ -94,9 +94,13 @@ async def require_pin():
     #   /api/webhooks/*          — inbound webhooks (BB, Wix, etc.)
     #   /api/config/bluebubbles-url — API-key-authed BB sync
     #   /g/*                     — geo-capture links sent to defendants
+    #   /c/*                     — client portal (token-gated, no session)
+    #   /api/portal/*            — client portal API (token-gated)
     if (path in ("/login", "/health", "/api/stats")
             or path.startswith("/api/webhooks/")
             or path.startswith("/g/")
+            or path.startswith("/c/")
+            or path.startswith("/api/portal/")
             or path == "/api/config/bluebubbles-url"):
         return  # Allow without session auth
 

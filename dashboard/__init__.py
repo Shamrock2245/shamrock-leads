@@ -127,6 +127,10 @@ def create_app():
     from dashboard.api.data_retention import retention_bp
     app.register_blueprint(retention_bp, url_prefix="/api")
 
+    # ── Phase 16: Client Self-Service Portal (magic link token-gated) ────────
+    from dashboard.api.client_portal import portal_bp
+    app.register_blueprint(portal_bp)  # Routes: /c/<token>, /api/portal/*
+
     # ── Wix CMS + CRM Integration (Direct REST API — no GAS middleman) ──────
     from dashboard.api.wix_cms import wix_cms_bp
     app.register_blueprint(wix_cms_bp, url_prefix="/api")
@@ -356,6 +360,35 @@ def create_app():
             logger.info("☘️  Phase 8: payment + notification indexes ensured")
         except Exception as exc:
             logger.warning("Phase 8 index setup warning: %s", exc)
+
+    # ── Phase 16: Client Portal — ensure indexes on startup ──────────────────
+    @app.before_serving
+    async def _ensure_portal_indexes():
+        """Create MongoDB indexes for portal_tokens and bond_checkins."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            # portal_tokens: fast token lookup
+            await db["portal_tokens"].create_index(
+                [("token", 1)], unique=True, name="idx_token_unique", background=True,
+            )
+            await db["portal_tokens"].create_index(
+                [("booking_number", 1), ("active", 1)],
+                name="idx_portal_booking_active", background=True,
+            )
+            # TTL: auto-delete tokens 7 days after expiry
+            await db["portal_tokens"].create_index(
+                [("expires_at", 1)], expireAfterSeconds=604800,
+                name="idx_portal_ttl", background=True,
+            )
+            # bond_checkins: query by booking
+            await db["bond_checkins"].create_index(
+                [("booking_number", 1), ("checkin_at", -1)],
+                name="idx_checkin_booking", background=True,
+            )
+            logger.info("☘️  Phase 16: portal + checkin indexes ensured")
+        except Exception as exc:
+            logger.warning("Phase 16 index setup warning: %s", exc)
 
     # ── Revenue Automation Engine — ensure indexes on startup ─────────────────
     @app.before_serving
