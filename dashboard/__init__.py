@@ -71,6 +71,14 @@ def create_app():
     from dashboard.api.analytics import analytics_bp
     app.register_blueprint(analytics_bp, url_prefix="/api")
 
+    # ── ML Intelligence (Predictive Scoring, Model Training) ─────────────────
+    from dashboard.api.ml_intelligence import ml_bp
+    app.register_blueprint(ml_bp, url_prefix="/api")
+
+    # ── Intelligence Suite (Forecasting, Heatmaps, Court Predictor) ──────────
+    from dashboard.api.intelligence import intelligence_bp
+    app.register_blueprint(intelligence_bp, url_prefix="/api")
+
     # ── Agency Reports (Discharged, Liability, Forfeitures, Agent Production) ─
     from dashboard.api.reports import reports_bp
     app.register_blueprint(reports_bp, url_prefix="/api")

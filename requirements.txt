@@ -14,6 +14,13 @@ google-api-python-client>=2.100.0
 # AI / Scoring (future)
 openai>=1.12.0
 
+# ML / Predictive Scoring Pipeline
+scikit-learn>=1.4.0
+pandas>=2.2.0
+numpy>=1.26.0
+joblib>=1.3.0
+xgboost>=2.0.0              # Optional — falls back to RandomForest if unavailable
+
 # Slack notifications
 slack-sdk>=3.27.0
 
