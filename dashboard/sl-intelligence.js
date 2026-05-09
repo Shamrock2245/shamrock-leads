@@ -767,9 +767,13 @@
 
   async function triggerIngestion(states) {
     const panel = $('intCourtIntelPanel');
-    if (panel) panel.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted)"><span class="spinner-sm"></span> Ingesting court opinions...</div>';
+    const stateLabel = states ? states.join(', ') : 'all SE US states';
+    if (panel) panel.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted)">
+      <span class="spinner-sm"></span> Ingesting court opinions from ${stateLabel}...<br>
+      <small style="opacity:0.6;margin-top:8px;display:block">This may take 15-30 seconds</small>
+    </div>`;
     try {
-      const body = { days_back: 30 };
+      const body = { days_back: 180 };
       if (states) body.states = states;
       const res = await fetch('/api/court-intel/ingest', {
         method: 'POST',
@@ -778,7 +782,7 @@
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`Ingested ${data.ingested} opinions (${data.duplicates} dupes)`, 'success');
+        showToast(`Ingested ${data.ingested} opinions (${data.duplicates} dupes) from ${data.total_fetched || 0} fetched`, 'success');
       } else {
         showToast('Ingestion failed: ' + (data.error || 'Unknown'), 'error');
       }

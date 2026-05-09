@@ -3639,6 +3639,15 @@ def update_custody():
 #  BlueBubbles iMessage Outreach Proxy
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Headers required to bypass tunnel browser interstitial pages:
+#   - ngrok free-tier: ngrok-skip-browser-warning
+#   - Cloudflare trycloudflare.com: proper User-Agent + Accept
+_BB_HEADERS = {
+    "ngrok-skip-browser-warning": "true",
+    "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
+    "Accept": "application/json",
+}
+
 def _format_phone(raw):
     """Normalize a US phone number to +1XXXXXXXXXX."""
     digits = re_mod.sub(r"\D", "", str(raw))
@@ -3664,6 +3673,7 @@ def imessage_status():
             r = http_requests.get(
                 f"{srv['url']}/api/v1/server/info",
                 params={"password": srv["password"]},
+                headers=_BB_HEADERS,
                 timeout=5,
             )
             data = r.json()
@@ -3721,6 +3731,7 @@ def imessage_send():
         r = http_requests.post(
             f"{srv['url']}/api/v1/message/text",
             params={"password": srv["password"]},
+            headers=_BB_HEADERS,
             json={
                 "chatGuid": chat_guid,
                 "tempGuid": temp_guid,
@@ -3728,7 +3739,37 @@ def imessage_send():
             },
             timeout=15,
         )
-        bb_resp = r.json()
+
+        # Handle non-JSON responses (tunnel HTML error pages, 502 gateways)
+        try:
+            bb_resp = r.json()
+        except Exception:
+            # Tunnel returned HTML instead of JSON — extract useful info
+            raw_body = r.text[:300] if r.text else "(empty)"
+            error_msg = f"BlueBubbles tunnel returned HTTP {r.status_code} (non-JSON)"
+            doc = {
+                "booking_number": booking_number,
+                "defendant_name": defendant_name,
+                "county": county,
+                "recipient_phone": phone,
+                "recipient_label": recipient_label,
+                "message": message,
+                "chat_guid": chat_guid,
+                "temp_guid": temp_guid,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+                "status": "failed",
+                "bb_status_code": r.status_code,
+                "bb_error": error_msg,
+                "bb_raw_body": raw_body,
+                "sent_by": "dashboard",
+                "agent_name": agent_name,
+                "from_number": from_number,
+                "from_email": srv.get("email", ""),
+            }
+            imessage_outreach.insert_one(doc)
+            doc.pop("_id", None)
+            return jsonify({"success": False, "error": error_msg, "detail": raw_body, "record": doc}), 502
+
         success = r.status_code in (200, 201)
 
         # Log to MongoDB
@@ -3759,7 +3800,9 @@ def imessage_send():
             return jsonify({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}), 502
 
     except http_requests.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach BlueBubbles server. Is it running?"}), 502
+        return jsonify({"error": "Cannot reach BlueBubbles server — tunnel may be down. Check ngrok/Cloudflare tunnel status."}), 502
+    except http_requests.exceptions.Timeout:
+        return jsonify({"error": "BlueBubbles request timed out after 15s — tunnel may be slow or iMac is asleep."}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

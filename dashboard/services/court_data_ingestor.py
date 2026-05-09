@@ -17,12 +17,12 @@ from typing import Optional
 log = logging.getLogger("shamrock.court_ingestor")
 
 
-async def run_ingestion(db, days_back: int = 30, states: list = None) -> dict:
+async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
     """Execute a full court opinion ingestion cycle.
 
     Args:
         db: Motor database instance
-        days_back: How many days back to pull opinions
+        days_back: How many days back to pull opinions (default 180)
         states: Optional list of state codes (defaults to all SE US)
 
     Returns:

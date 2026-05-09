@@ -193,34 +193,53 @@ class CourtListenerClient:
             query=f'"{name}"', courts=courts, date_filed_after=date_after,
         )
 
-    async def ingest_recent_opinions(self, days_back=30, states=None, page_size=20) -> list:
+    async def ingest_recent_opinions(self, days_back=180, states=None, page_size=20) -> list:
         """Pull recent opinions for ingestion into court_outcomes.
 
+        Batches courts by state for efficiency (12 queries vs 67).
+        Focuses on criminal cases relevant to bail bond intelligence.
+
         Args:
-            days_back: How many days back to search
+            days_back: How many days back to search (default 180 for good coverage)
             states: List of state codes (defaults to all SE US)
-            page_size: Max results per court
+            page_size: Max results per state batch
         """
         date_after = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        if states:
-            target_courts = courts_for_states(states)
-        else:
-            target_courts = ALL_COURT_IDS
+        target_states = [s.upper() for s in states] if states else SE_US_STATES
+
         all_results = []
-        for court_id in target_courts:
+
+        for state in target_states:
+            state_courts = courts_for_state(state)
+            if not state_courts:
+                continue
+
             try:
+                # Batch all courts for this state in one query
                 result = await self.search_opinions(
-                    courts=[court_id], date_filed_after=date_after, page_size=page_size,
+                    courts=state_courts,
+                    date_filed_after=date_after,
+                    page_size=page_size,
                 )
+
                 if result.get("success") and result.get("results"):
                     for r in result["results"]:
+                        # Determine which court this result belongs to
+                        court_id = r.get("court_id", "")
+                        if court_id not in SE_US_COURTS:
+                            # Fallback: use the first court for this state
+                            court_id = state_courts[0]
                         normalized = self._normalize_opinion(r, court_id)
                         if normalized:
                             all_results.append(normalized)
-                await asyncio.sleep(0.5)  # Rate-limit
+
+                log.info("State %s: fetched %d results",
+                         state, len(result.get("results", [])) if result.get("success") else 0)
+                await asyncio.sleep(0.3)  # Rate-limit between states
             except Exception as e:
-                log.warning("Ingestion skip for court %s: %s", court_id, str(e)[:100])
-        log.info("Ingested %d opinions from %d courts", len(all_results), len(target_courts))
+                log.warning("Ingestion skip for state %s: %s", state, str(e)[:100])
+
+        log.info("Ingested %d opinions from %d states", len(all_results), len(target_states))
         return all_results
 
     def _normalize_opinion(self, raw: dict, court_id: str) -> Optional[dict]:
