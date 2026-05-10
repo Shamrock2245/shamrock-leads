@@ -45,6 +45,7 @@ def create_app():
     from dashboard.api.scraper_control import scraper_control_bp  # ← Run-Now Control
     from dashboard.api.prospective_bonds import prospective_bonds_bp  # ← In Progress Pipeline
     from dashboard.api.geo import geo_bp  # ← Silent Geo-Link Capture
+    from dashboard.api.match_manager import match_manager_bp  # ← Manual Bond Matching
 
     app.register_blueprint(stats_bp, url_prefix="/api")
     app.register_blueprint(bonds_bp, url_prefix="/api")
@@ -62,6 +63,7 @@ def create_app():
     app.register_blueprint(intake_bp, url_prefix="/api")  # ← Indemnitor Intake Queue
     app.register_blueprint(scraper_control_bp, url_prefix="/api")  # ← Run-Now Control
     app.register_blueprint(prospective_bonds_bp, url_prefix="/api")  # ← In Progress Pipeline
+    app.register_blueprint(match_manager_bp, url_prefix="/api")  # ← Manual Bond Matching
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
 
     # ── AI Agent Brain API (Pipeline AI feature bar) ──────────────────────────
@@ -174,6 +176,10 @@ def create_app():
     # ── Court Intelligence (Juriscraper + CourtListener SE US) ────────────
     from dashboard.api.court_dockets import court_intel_bp
     app.register_blueprint(court_intel_bp)  # Routes: /api/court-intel/*
+
+    # ── Accounting & Revenue Intelligence ─────────────────────────────────
+    from dashboard.api.accounting import accounting_bp
+    app.register_blueprint(accounting_bp, url_prefix="/api")
 
     # ── Court Intelligence — Scheduled Ingestion (every 6 hours) ─────────
     async def _court_intel_cron_loop():

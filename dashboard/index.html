@@ -104,6 +104,7 @@
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
   <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
   <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
+  <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">💰 Accounting</button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
 
@@ -430,6 +431,7 @@
       <button class="bulk-btn" onclick="SLProspective.bulkSendMessage()">💬 Send Message</button>
       <button class="bulk-btn" onclick="SLProspective.bulkStartSequence()">🚀 Start Sequence</button>
       <button class="bulk-btn bulk-btn-danger" onclick="SLProspective.bulkClose()">✕ Close Leads</button>
+      <button class="bulk-btn" style="background:rgba(245,158,11,.15);color:#f59e0b" onclick="SLProspective.bulkArchive()">📦 Archive</button>
       <button class="bulk-btn bulk-btn-ghost" onclick="SLProspective.clearSelection()">Deselect All</button>
     </div>
 
@@ -464,6 +466,9 @@
         <input type="checkbox" id="prospShowReplies" onchange="SLProspective.load()">
         Replies only
       </label>
+      <button id="prospArchiveToggle" class="sl-btn sl-btn-ghost" style="font-size:12px;gap:4px;padding:4px 10px;border-radius:6px" onclick="SLProspective.toggleArchiveView()" title="Show/hide archived leads">
+        📦 <span>Archive</span><span id="prospArchivedBadge" class="sl-badge" style="display:none;background:var(--amber);color:#000;font-size:10px;padding:1px 6px;border-radius:10px">0</span>
+      </button>
     </div>
 
     <!-- ── Pipeline Board (Kanban) ── -->
@@ -808,7 +813,7 @@
         <button data-filter="exonerated" onclick="filterActiveBonds('exonerated')">Exonerated</button>
       </div>
       <input type="text" id="abSearch" placeholder="🔍 Search bonds..." style="flex:1;min-width:180px;padding:8px 12px;font-size:13px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)" oninput="renderActiveBondsTable()">
-      <button class="btn-primary" id="abAddBondBtn" onclick="SLActiveBonds.openAddModal()" style="margin-left:auto;font-size:13px;padding:7px 16px">➕ Add Bond</button>
+      <button class="btn-primary" id="abAddBondBtn" onclick="SLRecordBond.open()" style="margin-left:auto;font-size:13px;padding:7px 16px">➕ Record Bond</button>
       <button class="btn-export" onclick="loadActiveBonds()" style="font-size:13px;padding:7px 14px">↻ Refresh</button>
       <button class="btn-export" onclick="processMissedCheckins()" style="background:var(--warning);color:#000;font-size:13px;padding:7px 14px">⏰ Missed Check-Ins</button>
       <button class="btn-export" id="abCsvExportBtn" onclick="SLActiveBonds.exportCSV()" style="background:#0ea5e9;color:#fff;font-size:13px;padding:7px 14px">📥 Export CSV</button>
@@ -2153,7 +2158,7 @@
             onfocus="SLRecordBond.showResults()"
             autocomplete="off">
           <div id="rbSearchResults" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:999;max-height:280px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
-          <div id="rbSearchHint" style="font-size:11px;color:var(--muted);margin-top:4px">Type to search all arrest records. Select to auto-fill form.</div>
+          <div id="rbSearchHint" style="font-size:11px;color:var(--muted);margin-top:4px">Search arrest records to auto-fill, or skip this and fill every field manually for unscraped defendants.</div>
         </div>
         <div class="rb-row">
           <div class="rb-field rb-field-2">
@@ -3058,8 +3063,243 @@
 </div><!-- /im-shell -->
 </div><!-- end tabImessage -->
 
+<!-- ═══════════════════════════════════════════════════════
+     ACCOUNTING & REVENUE SUITE
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabAccounting">
+<style>
+/* ── Accounting Tab Inline Styles ── */
+.acct-wrap{max-width:1400px;margin:0 auto;padding:24px 20px}
+.acct-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.acct-header h2{font-size:22px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:10px}
+.acct-actions{display:flex;gap:8px;flex-wrap:wrap}
+.acct-btn{padding:8px 18px;border-radius:10px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:var(--transition);font-family:inherit;display:flex;align-items:center;gap:6px}
+.acct-btn:hover{background:var(--card-hover);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.acct-btn-primary{background:rgba(16,185,129,.12);color:var(--accent);border-color:rgba(16,185,129,.25)}
+.acct-btn-primary:hover{background:rgba(16,185,129,.22)}
+.acct-btn-export{background:rgba(59,130,246,.08);color:var(--blue);border-color:rgba(59,130,246,.2)}
+.acct-btn-export:hover{background:rgba(59,130,246,.16)}
+
+/* KPI Row */
+.acct-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}
+.acct-kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;text-align:center;transition:var(--transition)}
+.acct-kpi:hover{border-color:var(--border-accent);box-shadow:var(--glow)}
+.acct-kpi-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.acct-kpi-value{font-size:28px;font-weight:800;letter-spacing:-.5px}
+.acct-kpi-value.green{color:var(--accent)}
+.acct-kpi-value.blue{color:var(--blue)}
+.acct-kpi-value.gold{color:var(--gold)}
+.acct-kpi-value.muted{color:var(--text-secondary)}
+
+/* Panels */
+.acct-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.acct-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;overflow:hidden}
+.acct-panel-title{font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.acct-method-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.acct-method-row:last-child{border-bottom:none}
+.acct-method-label{font-size:13px;color:var(--text-secondary);text-transform:capitalize}
+.acct-method-value{font-size:13px;font-weight:700;color:var(--text)}
+.acct-method-value small{font-weight:400;color:var(--muted);margin-left:4px}
+
+/* Split Calculator */
+.acct-split-input-row{display:flex;gap:8px;margin-bottom:12px}
+.acct-split-input-row input,.acct-split-input-row select{flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit}
+.acct-split-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.acct-split-item{background:var(--surface);padding:12px;border-radius:8px;text-align:center}
+.acct-split-item span{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}
+.acct-split-item strong{font-size:18px}
+.acct-split-highlight{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.15)}
+
+/* Filters */
+.acct-filters{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)}
+.acct-filters input,.acct-filters select{padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:12px;font-family:inherit}
+.acct-filters input[type="text"]{min-width:180px}
+.acct-filters label{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;cursor:pointer}
+
+/* Table */
+.acct-table-wrap{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.acct-table{width:100%;border-collapse:collapse}
+.acct-table th{position:sticky;top:0;background:var(--surface);padding:10px 14px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;text-align:left;border-bottom:1px solid var(--border)}
+.acct-table td{padding:10px 14px;font-size:13px;color:var(--text);border-bottom:1px solid var(--border)}
+.acct-table tr:hover{background:var(--hover)}
+.acct-voided{opacity:.45;text-decoration:line-through}
+.acct-txn-id{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+.acct-status{padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.acct-status-ok{background:rgba(16,185,129,.1);color:#34d399}
+.acct-status-void{background:rgba(239,68,68,.1);color:#ef4444}
+.acct-status-pending{background:rgba(245,158,11,.1);color:#f59e0b}
+.acct-attr-btn{padding:3px 10px;border-radius:6px;border:1px solid rgba(59,130,246,.3);background:rgba(59,130,246,.08);color:var(--blue);font-size:11px;font-weight:600;cursor:pointer;transition:var(--transition)}
+.acct-attr-btn:hover{background:rgba(59,130,246,.18)}
+.acct-void-btn{width:24px;height:24px;border-radius:6px;border:1px solid rgba(239,68,68,.2);background:transparent;color:var(--red);cursor:pointer;font-size:12px;transition:var(--transition);display:flex;align-items:center;justify-content:center}
+.acct-void-btn:hover{background:rgba(239,68,68,.1)}
+.acct-page-btn{padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);font-size:11px;cursor:pointer}
+#acctPagination{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-top:1px solid var(--border)}
+
+/* Modals */
+.acct-modal{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
+.acct-modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 48px rgba(0,0,0,.4)}
+.acct-modal-title{font-size:18px;font-weight:700;color:var(--text);margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.acct-field{margin-bottom:14px}
+.acct-field label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+.acct-field input,.acct-field select,.acct-field textarea{width:100%;padding:9px 14px;border-radius:8px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit}
+.acct-field textarea{min-height:60px;resize:vertical}
+.acct-field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.acct-modal-actions{display:flex;gap:8px;margin-top:20px}
+.acct-modal-actions .acct-btn{flex:1;justify-content:center}
+
+@media(max-width:900px){
+  .acct-kpi-row{grid-template-columns:repeat(2,1fr)}
+  .acct-grid{grid-template-columns:1fr}
+  .acct-field-row{grid-template-columns:1fr}
+}
+</style>
+
+<div class="acct-wrap">
+  <!-- Header -->
+  <div class="acct-header">
+    <h2>💰 Accounting & Revenue</h2>
+    <div class="acct-actions">
+      <button class="acct-btn acct-btn-primary" onclick="SLAccounting.openRecordModal()">💵 Record Payment</button>
+      <button class="acct-btn" onclick="SLAccounting.openImportModal()">📤 Import SwipeSimple</button>
+      <button class="acct-btn acct-btn-export" onclick="SLAccounting.exportQuickBooks()">📥 QuickBooks Export</button>
+      <button class="acct-btn acct-btn-export" onclick="SLAccounting.exportCSV()">📥 CSV Export</button>
+    </div>
+  </div>
+
+  <!-- KPI Row -->
+  <div class="acct-kpi-row">
+    <div class="acct-kpi"><div class="acct-kpi-label">Month-to-Date</div><div class="acct-kpi-value green" id="acctKpiMTD">—</div></div>
+    <div class="acct-kpi"><div class="acct-kpi-label">Year-to-Date</div><div class="acct-kpi-value blue" id="acctKpiYTD">—</div></div>
+    <div class="acct-kpi"><div class="acct-kpi-label">Outstanding</div><div class="acct-kpi-value gold" id="acctKpiOutstanding">—</div></div>
+    <div class="acct-kpi"><div class="acct-kpi-label">Total Transactions</div><div class="acct-kpi-value muted" id="acctKpiTxnCount">—</div></div>
+  </div>
+
+  <!-- Panels Row: Chart + Breakdowns -->
+  <div class="acct-grid">
+    <div class="acct-panel">
+      <div class="acct-panel-title">📈 Monthly Revenue</div>
+      <canvas id="acctRevenueChart" style="width:100%;height:200px"></canvas>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div class="acct-panel" style="flex:1">
+        <div class="acct-panel-title">💳 By Payment Method</div>
+        <div id="acctMethodBreakdown"><div style="color:var(--muted);font-size:12px">Loading...</div></div>
+      </div>
+      <div class="acct-panel" style="flex:1">
+        <div class="acct-panel-title">🏛 By Surety</div>
+        <div id="acctSuretyBreakdown"><div style="color:var(--muted);font-size:12px">Loading...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Premium Split Calculator -->
+  <div class="acct-panel" style="margin-bottom:24px">
+    <div class="acct-panel-title">🧮 Premium Split Calculator</div>
+    <div class="acct-split-input-row">
+      <input type="number" id="acctSplitBond" placeholder="Bond Amount" oninput="SLAccounting.calcSplit()">
+      <select id="acctSplitSurety" onchange="SLAccounting.calcSplit()"><option value="osi">OSI</option><option value="palmetto">Palmetto</option></select>
+    </div>
+    <div id="acctSplitResult" style="color:var(--muted);font-size:12px">Enter a bond amount above</div>
+  </div>
+
+  <!-- Filters -->
+  <div class="acct-filters">
+    <input type="text" id="acctSearch" placeholder="Search name, booking #, ID..." onkeydown="if(event.key==='Enter')SLAccounting.applyFilters()">
+    <select id="acctFilterMethod" onchange="SLAccounting.applyFilters()"><option value="">All Methods</option><option value="card">Card</option><option value="cash">Cash</option><option value="check">Check</option><option value="wire">Wire</option></select>
+    <select id="acctFilterStatus" onchange="SLAccounting.applyFilters()"><option value="">All Statuses</option><option value="completed">Completed</option><option value="pending">Pending</option><option value="voided">Voided</option></select>
+    <input type="date" id="acctDateFrom" title="From" onchange="SLAccounting.applyFilters()">
+    <input type="date" id="acctDateTo" title="To" onchange="SLAccounting.applyFilters()">
+    <label><input type="checkbox" id="acctFilterUnattributed" onchange="SLAccounting.applyFilters()"> Unlinked Only</label>
+    <button class="acct-btn" onclick="SLAccounting.clearFilters()" style="padding:6px 12px;font-size:11px">Clear</button>
+  </div>
+
+  <!-- Transactions Table -->
+  <div class="acct-table-wrap">
+    <table class="acct-table">
+      <thead><tr>
+        <th>Date</th><th>Transaction ID</th><th>Amount</th><th>Method</th>
+        <th>Status</th><th>Defendant</th><th>Attribution</th><th></th>
+      </tr></thead>
+      <tbody id="acctTxnBody">
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">Loading transactions...</td></tr>
+      </tbody>
+    </table>
+    <div id="acctPagination"></div>
+  </div>
+</div>
+
+<!-- ═══ Record Payment Modal ═══ -->
+<div class="acct-modal" id="acctRecordModal">
+  <div class="acct-modal-box">
+    <div class="acct-modal-title">💵 Record Payment</div>
+    <div class="acct-field"><label>Amount *</label><input type="number" id="acctRecAmount" placeholder="0.00" step="0.01" min="0"></div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>Method</label><select id="acctRecMethod"><option value="cash">Cash</option><option value="check">Check</option><option value="wire">Wire</option><option value="card">Card</option><option value="other">Other</option></select></div>
+      <div class="acct-field"><label>Type</label><select id="acctRecType"><option value="premium">Premium</option><option value="payment_plan">Payment Plan</option><option value="fee">Fee</option><option value="refund">Refund</option><option value="other">Other</option></select></div>
+    </div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>Defendant Name</label><input type="text" id="acctRecDefendant" placeholder="John Doe"></div>
+      <div class="acct-field"><label>Booking #</label><input type="text" id="acctRecBooking" placeholder="24-001234"></div>
+    </div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>POA Number</label><input type="text" id="acctRecPOA" placeholder="POA-123"></div>
+      <div class="acct-field"><label>Case Number</label><input type="text" id="acctRecCase" placeholder="2024-CF-001"></div>
+    </div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>Surety</label><select id="acctRecSurety"><option value="">—</option><option value="osi">OSI</option><option value="palmetto">Palmetto</option></select></div>
+      <div class="acct-field"><label>Indemnitor</label><input type="text" id="acctRecIndemnitor" placeholder="Jane Doe"></div>
+    </div>
+    <div class="acct-field"><label>Description / Notes</label><textarea id="acctRecDesc" placeholder="Payment notes..."></textarea></div>
+    <div class="acct-field"><label>Reference ID</label><input type="text" id="acctRecRef" placeholder="Receipt #, check #..."></div>
+    <div class="acct-modal-actions">
+      <button class="acct-btn" onclick="SLAccounting.closeRecordModal()">Cancel</button>
+      <button class="acct-btn acct-btn-primary" onclick="SLAccounting.submitRecord()">💾 Record Payment</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ SwipeSimple Import Modal ═══ -->
+<div class="acct-modal" id="acctImportModal">
+  <div class="acct-modal-box">
+    <div class="acct-modal-title">📤 Import SwipeSimple CSV</div>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:16px">Upload your SwipeSimple transaction export. Duplicates are automatically skipped.</p>
+    <div class="acct-field"><label>CSV File</label><input type="file" id="acctImportFile" accept=".csv"></div>
+    <div id="acctImportStatus" style="margin:12px 0;min-height:20px"></div>
+    <div class="acct-modal-actions">
+      <button class="acct-btn" onclick="SLAccounting.closeImportModal()">Cancel</button>
+      <button class="acct-btn acct-btn-primary" onclick="SLAccounting.submitImport()">📤 Import</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Attribution Modal ═══ -->
+<div class="acct-modal" id="acctAttributeModal">
+  <div class="acct-modal-box">
+    <div class="acct-modal-title">🔗 Link Transaction to Case</div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>Booking Number</label><input type="text" id="acctAttrBooking" placeholder="24-001234"></div>
+      <div class="acct-field"><label>Defendant Name</label><input type="text" id="acctAttrDefendant" placeholder="John Doe"></div>
+    </div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>POA Number</label><input type="text" id="acctAttrPOA" placeholder="POA-123"></div>
+      <div class="acct-field"><label>Case Number</label><input type="text" id="acctAttrCase" placeholder="2024-CF-001"></div>
+    </div>
+    <div class="acct-field-row">
+      <div class="acct-field"><label>Surety</label><input type="text" id="acctAttrSurety" placeholder="OSI / Palmetto"></div>
+      <div class="acct-field"><label>Indemnitor</label><input type="text" id="acctAttrIndemnitor" placeholder="Jane Doe"></div>
+    </div>
+    <div class="acct-modal-actions">
+      <button class="acct-btn" onclick="SLAccounting.closeAttribution()">Cancel</button>
+      <button class="acct-btn acct-btn-primary" onclick="SLAccounting.submitAttribution()">✅ Link</button>
+    </div>
+  </div>
+</div>
+
+</div><!-- end tabAccounting -->
+
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-imessage.js?v=4"></script>
+<script src="/sl-accounting.js?v=1"></script>
 
 </body>
 </html>
