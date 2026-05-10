@@ -134,6 +134,7 @@
       ['CourtPredictions',   () => renderCourtPredictions(courtPred)],
       ['ForfeitureRisk',     () => renderForfeitureRisk(forfeit)],
       ['CourtIntel',         () => loadCourtIntel()],
+      ['DocketMonitor',      () => { if (window.SLDocketMonitor) SLDocketMonitor.init(); }],
     ];
     for (const [name, fn] of renders) {
       try { fn(); } catch (e) { console.error(`[Intelligence] ${name} render failed:`, e); }
@@ -194,7 +195,7 @@
     const accEl = $('intKpiAccuracy');
     if (accEl && ml && ml.success) {
       const models = ml.models || {};
-      const accs = Object.values(models).map(m => m.accuracy || m.cv_score || 0).filter(a => a > 0);
+      const accs = Object.values(models).map(m => (m.metrics || {}).accuracy || m.accuracy || m.cv_score || 0).filter(a => a > 0);
       accEl.textContent = accs.length > 0 ? (accs.reduce((a, b) => a + b, 0) / accs.length * 100).toFixed(1) + '%' : 'N/A';
     }
     const countiesEl = $('intKpiCounties');
@@ -459,45 +460,119 @@
         <div class="int-model-empty">
           <div style="font-size:2rem;margin-bottom:8px">🧠</div>
           <div style="font-weight:700;margin-bottom:4px">No ML Models Trained</div>
-          <div style="color:var(--muted);font-size:12px;margin-bottom:12px">Train your first model to unlock predictive lead scoring</div>
-          <button class="int-train-btn" onclick="SLIntelligence.trainModel('lead_quality')">
-            ⚡ Train Lead Quality Model
-          </button>
+          <div style="color:var(--muted);font-size:12px;margin-bottom:16px">Train your first model to unlock predictive scoring</div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+            <button class="int-train-btn" onclick="SLIntelligence.trainModel('lead_quality')">
+              ⚡ Train Lead Quality
+            </button>
+            <button class="int-train-btn int-train-fta" onclick="SLIntelligence.bootstrapFTA()">
+              🧬 Bootstrap FTA Risk (COMPAS)
+            </button>
+          </div>
         </div>`;
       return;
     }
 
     const models = d.models;
-    container.innerHTML = Object.entries(models).map(([key, m]) => {
-      const acc = m.accuracy || m.cv_score || 0;
+    let html = '';
+
+    // Add bootstrap FTA button if no FTA model exists yet
+    const hasFTA = Object.keys(models).some(k => k.includes('fta_risk'));
+    if (!hasFTA) {
+      html += `<div class="int-fta-bootstrap-banner">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:1.3rem">🧬</span>
+          <div>
+            <div style="font-weight:700;font-size:13px">FTA Risk Model Available</div>
+            <div style="font-size:11px;color:var(--muted)">Bootstrap from ProPublica COMPAS dataset (~6K labeled pretrial outcomes)</div>
+          </div>
+        </div>
+        <button class="int-train-btn int-train-fta" onclick="SLIntelligence.bootstrapFTA()" style="white-space:nowrap">
+          🧬 Bootstrap FTA
+        </button>
+      </div>`;
+    }
+
+    html += Object.entries(models).map(([key, m]) => {
+      const metrics = m.metrics || {};
+      const acc = metrics.accuracy || m.accuracy || m.cv_score || 0;
       const accPct = (acc * 100).toFixed(1);
       const accColor = acc >= 0.8 ? '#10b981' : acc >= 0.6 ? '#f59e0b' : '#ef4444';
       const trained = m.trained_at ? new Date(m.trained_at).toLocaleDateString() : 'Unknown';
       const samples = m.training_samples || m.n_samples || '?';
-      const algo = m.algorithm || 'RandomForest';
+      const algo = (m.algorithm || 'random_forest').replace(/_/g, ' ');
+      const target = m.target || key.split('_').slice(0, -2).join('_') || key;
+      const posRate = m.positive_rate != null ? m.positive_rate.toFixed(1) + '%' : '—';
+      const isFTA = key.includes('fta_risk');
+      const cardAccent = isFTA ? '#f59e0b' : '#10b981';
+
+      // Confusion matrix mini-display
+      let cmHtml = '';
+      if (m.confusion_matrix) {
+        const cm = m.confusion_matrix;
+        const total = cm.tp + cm.tn + cm.fp + cm.fn;
+        const precision = cm.tp + cm.fp > 0 ? (cm.tp / (cm.tp + cm.fp) * 100).toFixed(0) : '—';
+        const recall = cm.tp + cm.fn > 0 ? (cm.tp / (cm.tp + cm.fn) * 100).toFixed(0) : '—';
+        cmHtml = `
+          <div class="int-cm-mini">
+            <div class="int-cm-grid">
+              <div class="int-cm-cell int-cm-tn" title="True Negative">${cm.tn}</div>
+              <div class="int-cm-cell int-cm-fp" title="False Positive">${cm.fp}</div>
+              <div class="int-cm-cell int-cm-fn" title="False Negative">${cm.fn}</div>
+              <div class="int-cm-cell int-cm-tp" title="True Positive">${cm.tp}</div>
+            </div>
+            <div class="int-cm-labels">
+              <span>Prec: ${precision}%</span><span>Recall: ${recall}%</span>
+            </div>
+          </div>`;
+      }
+
+      // Metric pills
+      const f1 = metrics.f1_score != null ? (metrics.f1_score * 100).toFixed(1) : '—';
+      const auc = metrics.auc_roc != null ? (metrics.auc_roc * 100).toFixed(1) : '—';
+      const aucColor = (metrics.auc_roc || 0) >= 0.8 ? '#10b981' : (metrics.auc_roc || 0) >= 0.65 ? '#f59e0b' : '#ef4444';
 
       return `
-        <div class="int-model-card">
+        <div class="int-model-card" style="border-left:3px solid ${cardAccent}">
           <div class="int-model-header">
-            <span class="int-model-name">${key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</span>
-            <span class="int-model-algo">${algo}</span>
-          </div>
-          <div class="int-model-acc">
-            <div class="int-acc-ring" style="--acc-pct:${accPct};--acc-color:${accColor}">
-              <span>${accPct}%</span>
+            <div>
+              <span class="int-model-name">${isFTA ? '⚠️ FTA Risk' : '📊 Lead Quality'}</span>
+              <span class="int-model-algo">${algo}</span>
             </div>
-            <div class="int-acc-label">Accuracy</div>
+            ${m.training_source === 'compas_bootstrap' ? '<span class="int-badge-compas">COMPAS</span>' : ''}
           </div>
+
+          <div class="int-model-metrics-row">
+            <div class="int-metric-pill">
+              <div class="int-metric-value" style="color:${accColor}">${accPct}%</div>
+              <div class="int-metric-label">Accuracy</div>
+            </div>
+            <div class="int-metric-pill">
+              <div class="int-metric-value" style="color:#8b5cf6">${f1}%</div>
+              <div class="int-metric-label">F1 Score</div>
+            </div>
+            <div class="int-metric-pill">
+              <div class="int-metric-value" style="color:${aucColor}">${auc}%</div>
+              <div class="int-metric-label">AUC-ROC</div>
+            </div>
+          </div>
+
+          ${cmHtml}
+
           <div class="int-model-meta">
             <div><span class="int-meta-label">Trained</span><span>${trained}</span></div>
             <div><span class="int-meta-label">Samples</span><span>${Number(samples).toLocaleString()}</span></div>
+            <div><span class="int-meta-label">Positive Rate</span><span>${posRate}</span></div>
           </div>
           <div class="int-model-actions">
-            <button class="int-action-btn" onclick="SLIntelligence.trainModel('${key}')">↻ Retrain</button>
-            <button class="int-action-btn int-action-secondary" onclick="SLIntelligence.showFeatures('${key}')">📊 Features</button>
+            <button class="int-action-btn" onclick="SLIntelligence.trainModel('${target}')" data-target="${target}">↻ Retrain</button>
+            <button class="int-action-btn int-action-secondary" onclick="SLIntelligence.showFeatures('${target}')">📊 Features</button>
+            ${m.roc_curve ? `<button class="int-action-btn int-action-secondary" onclick="SLIntelligence.showROC('${key}')">📈 ROC</button>` : ''}
           </div>
         </div>`;
     }).join('');
+
+    container.innerHTML = html;
   }
 
   // ── Train Model ─────────────────────────────────────────────────────────
@@ -519,6 +594,93 @@
     } else {
       showToast('❌ Training failed: ' + (result.error || 'Unknown error'), 'error');
     }
+  }
+
+  // ── Bootstrap FTA Model via COMPAS ──────────────────────────────────────
+  async function bootstrapFTA() {
+    const btn = event ? event.target : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-sm"></span> Bootstrapping…'; }
+
+    showToast('🧬 Downloading COMPAS dataset & training FTA model…', 'info');
+
+    const result = await apiPost('/api/ml/bootstrap-fta', {
+      algorithm: 'random_forest',
+      max_samples: 6000,
+      include_internal: true,
+    });
+
+    if (btn) { btn.disabled = false; btn.textContent = '🧬 Bootstrap FTA Risk (COMPAS)'; }
+
+    if (result.success) {
+      const m = result.metrics || {};
+      showToast(
+        `✅ FTA model bootstrapped — ${result.training_samples} samples, ` +
+        `F1=${(m.f1_score*100||0).toFixed(1)}%, AUC=${(m.auc_roc*100||0).toFixed(1)}%`,
+        'success'
+      );
+      load();
+    } else {
+      showToast('❌ Bootstrap failed: ' + (result.error || 'Unknown'), 'error');
+    }
+  }
+
+  // ── Show ROC Curve Modal ────────────────────────────────────────────────
+  function showROC(modelKey) {
+    if (!_modelStatus || !_modelStatus.models) return;
+    const m = _modelStatus.models[modelKey];
+    if (!m || !m.roc_curve) { showToast('No ROC data available', 'error'); return; }
+
+    const modal = $('intFeatureModal');
+    if (!modal) return;
+
+    const body = $('intFeatureBody');
+    if (body) {
+      body.innerHTML = `
+        <div style="margin-bottom:12px;font-weight:700;font-size:14px">ROC Curve — ${modelKey.replace(/_/g,' ')}</div>
+        <div style="height:280px;position:relative">
+          <canvas id="intROCCanvas"></canvas>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--muted);text-align:center">
+          AUC = ${((m.metrics||{}).auc_roc*100||0).toFixed(1)}%
+        </div>`;
+
+      // Render ROC chart after DOM update
+      setTimeout(() => {
+        const ctx = document.getElementById('intROCCanvas');
+        if (!ctx) return;
+        kill('rocCurve');
+        const c = C();
+        _charts.rocCurve = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: m.roc_curve.fpr.map(v => v.toFixed(2)),
+            datasets: [{
+              label: 'ROC Curve',
+              data: m.roc_curve.tpr,
+              borderColor: '#8b5cf6',
+              backgroundColor: '#8b5cf622',
+              fill: true, tension: 0.3, borderWidth: 2, pointRadius: 0,
+            }, {
+              label: 'Random (AUC=0.5)',
+              data: m.roc_curve.fpr,
+              borderColor: c.muted + '66',
+              borderDash: [5, 5], borderWidth: 1, pointRadius: 0, fill: false,
+            }]
+          },
+          options: {
+            ...chartBase(),
+            plugins: { ...chartBase().plugins,
+              legend: { display: true, position: 'bottom', labels: { color: c.text, usePointStyle: true, padding: 10 } }
+            },
+            scales: {
+              x: { ...chartBase().scales.x, title: { display: true, text: 'False Positive Rate', color: c.muted } },
+              y: { ...chartBase().scales.y, title: { display: true, text: 'True Positive Rate', color: c.muted }, min: 0, max: 1 },
+            }
+          }
+        });
+      }, 100);
+    }
+    modal.classList.add('show');
   }
 
   // ── Feature Importance Modal ────────────────────────────────────────────
@@ -794,5 +956,5 @@
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
-  window.SLIntelligence = { load, trainModel, showFeatures, setHorizon, loadCourtIntel, triggerIngestion };
+  window.SLIntelligence = { load, trainModel, bootstrapFTA, showFeatures, showROC, setHorizon, loadCourtIntel, triggerIngestion };
 })();

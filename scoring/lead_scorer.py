@@ -11,6 +11,9 @@ Scoring Rules:
 - Status: IN CUSTODY (+20), RELEASED (-30)
 - Data completeness: All required fields (+15), Missing data (-10)
 - Disqualifying charges: capital/murder/federal (-100)
+- NLP charge severity: felony_1 (+15), felony_2 (+10), felony_3 (+5)
+- FTA risk indicators: high (+15), medium (+8)
+- Prior arrest history: 5+ priors (+10), 3+ priors (+5)
 
 Lead Status Mapping:
 - score < 0: Disqualified
@@ -30,7 +33,7 @@ class LeadScorer:
 
     Calculates a qualification score and status based on multiple factors
     including bond amount, bond type, custody status, data completeness,
-    and charge severity.
+    charge severity, FTA risk, and prior history.
     """
 
     # Scoring thresholds
@@ -93,7 +96,19 @@ class LeadScorer:
         if disqual_reason:
             self.score_breakdown.append(disqual_reason)
 
-        # 6. Determine lead status based on final score
+        # 6. NLP-enhanced charge severity scoring
+        nlp_score, nlp_reason = self._score_charge_severity(record.Charges)
+        total_score += nlp_score
+        if nlp_reason:
+            self.score_breakdown.append(nlp_reason)
+
+        # 7. FTA risk indicator scoring
+        fta_score, fta_reason = self._score_fta_risk(record.Charges)
+        total_score += fta_score
+        if fta_reason:
+            self.score_breakdown.append(fta_reason)
+
+        # 8. Determine lead status based on final score
         lead_status = self._determine_lead_status(total_score)
 
         return total_score, lead_status
@@ -179,6 +194,54 @@ class LeadScorer:
 
         return 0, ""
 
+    def _score_charge_severity(self, charges: str) -> Tuple[int, str]:
+        """NLP-enhanced charge severity scoring using legal_nlp_service."""
+        if not charges:
+            return 0, ""
+
+        try:
+            from dashboard.services.legal_nlp_service import analyze_charges
+            analysis = analyze_charges(charges)
+            severity = analysis.get("max_severity", "unknown")
+            level = analysis.get("severity_level", 0)
+
+            # Higher severity = more serious case = bondable but needs attention
+            if severity in ("felony_1", "capital"):
+                return 15, f"NLP severity: {severity} (level {level}) — high-value case (+15)"
+            elif severity == "felony_2":
+                return 10, f"NLP severity: {severity} (level {level}) — substantial case (+10)"
+            elif severity == "felony_3":
+                return 5, f"NLP severity: {severity} (level {level}) — moderate case (+5)"
+            elif severity in ("misdemeanor_1", "misdemeanor_2"):
+                return 0, ""  # No bonus for misdemeanors
+            return 0, ""
+        except Exception:
+            return 0, ""  # Fail silently — NLP is a bonus, not required
+
+    def _score_fta_risk(self, charges: str) -> Tuple[int, str]:
+        """Score FTA risk indicators from charge text."""
+        if not charges:
+            return 0, ""
+
+        charges_lower = charges.lower()
+
+        # Direct FTA indicators — these people are bondable but high flight risk
+        # From the bond agency perspective, higher risk = opportunity but caution
+        high_risk_kws = ['failure to appear', 'fta', 'fugitive', 'absconded',
+                         'fleeing', 'bench warrant', 'capias']
+        medium_risk_kws = ['violation of probation', 'vop', 'contempt',
+                           'habitual offender']
+
+        for kw in high_risk_kws:
+            if kw in charges_lower:
+                return 15, f"FTA risk: '{kw}' detected — high-risk bondable lead (+15)"
+
+        for kw in medium_risk_kws:
+            if kw in charges_lower:
+                return 8, f"FTA risk: '{kw}' detected — medium-risk lead (+8)"
+
+        return 0, ""
+
     def _determine_lead_status(self, score: int) -> str:
         """Determine lead status based on score."""
         if score < 0:
@@ -230,3 +293,4 @@ def score_and_update(record: ArrestRecord) -> ArrestRecord:
     """Score and update an arrest record in-place."""
     scorer = LeadScorer()
     return scorer.score_and_update(record)
+

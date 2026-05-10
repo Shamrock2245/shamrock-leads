@@ -30,7 +30,7 @@ COUNTY_FORFEITURE_RATES = {
 
 
 def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
-               court_dates: list = None) -> dict:
+               court_dates: list = None, docket_events: list = None) -> dict:
     """
     Score an active bond for forfeiture risk.
 
@@ -148,6 +148,20 @@ def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
         risk_score += 0.15
         signals.append("Prior FTA/fleeing charges — elevated flight risk")
 
+    # ── Factor 9: Docket event intelligence ──────────────────────────────────
+    if docket_events:
+        docket_risk = sum(e.get("risk_adjustment", 0) for e in docket_events)
+        if docket_risk != 0:
+            risk_score += docket_risk
+            critical_dockets = sum(1 for e in docket_events if e.get("event_severity") == "critical")
+            high_dockets = sum(1 for e in docket_events if e.get("event_severity") == "high")
+            if critical_dockets:
+                signals.append(f"{critical_dockets} CRITICAL docket event(s) detected — {docket_risk:+.0%} risk shift")
+            elif high_dockets:
+                signals.append(f"{high_dockets} HIGH docket event(s) detected — {docket_risk:+.0%} risk shift")
+            else:
+                signals.append(f"Docket activity detected — {docket_risk:+.0%} risk shift")
+
     # ── Composite ──────────────────────────────────────────────────────────
     forfeiture_prob = max(0.01, min(0.95, risk_score))
 
@@ -215,22 +229,28 @@ async def score_portfolio(db, limit: int = 50) -> dict:
 
     results = []
     for bond in bonds:
-        # Fetch check-ins if available
+        # Fetch check-ins, court dates, and docket events
         check_ins = []
         court_dates = []
+        docket_events = []
         defendant = None
         try:
             did = bond.get("Defendant_ID")
+            bid = str(bond.get("Bond_Case_ID") or bond.get("_id", ""))
             if did:
                 defendant = await db.defendants.find_one({"Defendant_ID": did})
                 ci_cursor = db.check_ins.find({"defendant_id": did}).limit(20)
                 check_ins = await ci_cursor.to_list(length=20)
                 cd_cursor = db.court_reminders.find({"defendant_id": did}).limit(10)
                 court_dates = await cd_cursor.to_list(length=10)
+            # Fetch docket events for this bond
+            if bid:
+                de_cursor = db.docket_events.find({"bond_case_id": bid}).limit(50)
+                docket_events = await de_cursor.to_list(length=50)
         except Exception:
             pass
 
-        scored = score_bond(bond, defendant, check_ins, court_dates)
+        scored = score_bond(bond, defendant, check_ins, court_dates, docket_events)
         results.append(scored)
 
     # Sort by priority (highest risk first)

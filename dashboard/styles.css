@@ -1873,6 +1873,21 @@ input[type="datetime-local"] {
 .cqa-intel:hover { background: rgba(139,92,246,.25); color: #fff; }
 .cqa-view-def { background: rgba(99,102,241,.1); border-color: rgba(99,102,241,.2); color: #a5b4fc; }
 .cqa-view-def:hover { background: rgba(99,102,241,.22); color: #fff; }
+.cqa-archive  { background: rgba(245,158,11,.1); border-color: rgba(245,158,11,.2); color: #fbbf24; }
+.cqa-archive:hover { background: rgba(245,158,11,.22); color: #fff; }
+.cqa-restore  { background: rgba(16,185,129,.1); border-color: rgba(16,185,129,.2); color: #6ee7b7; }
+.cqa-restore:hover { background: rgba(16,185,129,.22); color: #fff; }
+
+/* Archive Toggle Button (active state) */
+#prospArchiveToggle.active { background: rgba(245,158,11,.15) !important; border: 1px solid rgba(245,158,11,.3) !important; color: #fbbf24 !important; }
+
+/* Archive Detail Button */
+.btn-archive { display: inline-flex; align-items: center; gap: 5px; padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(245,158,11,.3); background: rgba(245,158,11,.08); color: #fcd34d; font-weight: 600; cursor: pointer; font-family: inherit; transition: all .15s; }
+.btn-archive:hover { background: rgba(245,158,11,.18); border-color: rgba(245,158,11,.5); transform: translateY(-1px); }
+
+/* Archived card visual treatment */
+.pipeline-card[data-archived="true"] { opacity: .7; border-style: dashed; }
+.pipeline-card[data-archived="true"]:hover { opacity: 1; }
 
 /* Pipeline Notes Row */
 .pipeline-card-notes-row {
@@ -2220,8 +2235,19 @@ input[type="datetime-local"] {
 .rpt-color-red{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.2)}
 .rpt-color-gold{background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.2)}
 .rpt-color-purple{background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.2)}
+.rpt-color-orange{background:rgba(249,115,22,.12);border:1px solid rgba(249,115,22,.2)}
 .rpt-card-badge{display:none;min-width:20px;height:20px;padding:0 6px;background:var(--red);border-radius:10px;font-size:10px;font-weight:700;color:#fff;align-items:center;justify-content:center}
 .rpt-badge-danger{background:var(--red)}
+.rpt-badge-new{display:inline-flex !important;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-size:9px;font-weight:700;letter-spacing:.5px;padding:2px 8px;border-radius:8px;text-transform:uppercase}
+.rpt-card-premium{border-color:rgba(16,185,129,.15);position:relative;overflow:hidden}
+.rpt-card-premium::after{background:linear-gradient(90deg,#10b981,#059669) !important;opacity:.7}
+.rpt-card-premium:hover{border-color:rgba(16,185,129,.35) !important}
+
+/* ── Inline KPI cards (used by compliance/analytics reports) ── */
+.rpt-kpi-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;text-align:center;transition:var(--transition)}
+.rpt-kpi-card:hover{border-color:var(--border-accent);transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.15)}
+.rpt-kpi-card .rpt-kpi-label{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;font-weight:600;margin-top:6px}
+.rpt-kpi-card .rpt-kpi-value{font-size:20px;font-weight:800;letter-spacing:-.5px;color:var(--text);line-height:1.2}
 .rpt-card-title{font-size:14px;font-weight:700;letter-spacing:-.2px;color:var(--text)}
 .rpt-card-desc{font-size:11px;color:var(--muted);line-height:1.5;flex:1}
 .rpt-card-stat{font-size:12px;color:var(--accent-light);font-weight:600;min-height:18px;display:flex;align-items:center;gap:4px}

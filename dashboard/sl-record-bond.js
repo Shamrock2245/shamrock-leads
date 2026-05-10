@@ -1,6 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
    ShamrockLeads — Record Bond (Retrospective)
    Modal for recording manually-written bonds into the system
+   Features: defendant search, URL auto-population, NLP risk scoring
    ═══════════════════════════════════════════════════════════ */
 
 const SLRecordBond = (() => {
@@ -132,6 +133,9 @@ const SLRecordBond = (() => {
 
     // Trigger POA suggestion for the selected surety
     suggestPOA();
+
+    // Fetch NLP risk score for the selected defendant
+    fetchRiskBadge(arrest.booking_number);
 
     toast(`☘️ Loaded: ${arrest.full_name} — ${arrest.county} County`, 'success');
   }
@@ -279,9 +283,16 @@ const SLRecordBond = (() => {
       notes: $('rbNotes')?.value || '',
     };
 
+    // Auto-generate booking number for fully manual entries
+    if (!payload.booking_number && payload.defendant_name) {
+      payload.booking_number = 'MANUAL-' + Date.now().toString(36).toUpperCase();
+      const bkEl = $('rbBookingNumber');
+      if (bkEl) bkEl.value = payload.booking_number;
+    }
+
     // Client-side validation
-    if (!payload.defendant_name || !payload.booking_number || !payload.poa_number) {
-      if (statusEl) statusEl.innerHTML = '<span class="rb-error">❌ Name, Booking #, and POA # are required</span>';
+    if (!payload.defendant_name || !payload.poa_number) {
+      if (statusEl) statusEl.innerHTML = '<span class="rb-error">❌ Defendant Name and POA # are required</span>';
       if (btn) btn.disabled = false;
       return;
     }
@@ -329,9 +340,124 @@ const SLRecordBond = (() => {
     if (e.key === 'Escape' && $('recordBondModal')?.classList.contains('active')) close();
   });
 
+  // ── Fetch from URL — auto-populate from jail booking URL ─────────────
+  async function fetchFromURL() {
+    const urlInput = $('rbFetchUrl');
+    const statusEl = $('rbUrlStatus');
+    const url = urlInput?.value?.trim();
+
+    if (!url) {
+      if (statusEl) statusEl.innerHTML = '<span class="rb-error">⚠️ Paste a jail booking URL first</span>';
+      return;
+    }
+
+    // Validate URL
+    try { new URL(url); } catch {
+      if (statusEl) statusEl.innerHTML = '<span class="rb-error">❌ Invalid URL format</span>';
+      return;
+    }
+
+    if (statusEl) statusEl.innerHTML = '<span class="rb-loading">🔍 Fetching arrest data from URL...</span>';
+
+    try {
+      const r = await fetch(`${API}/api/bonds/ingest-url`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ url }),
+      });
+      const d = await r.json();
+
+      if (d.success && d.data) {
+        const data = d.data;
+        // Auto-fill form fields from the ingested data
+        if (data.full_name) $('rbDefendantName').value = data.full_name;
+        if (data.booking_number) $('rbBookingNumber').value = data.booking_number;
+        if (data.county) $('rbCounty').value = data.county;
+        if (data.facility) $('rbFacility').value = data.facility;
+        if (data.charges) $('rbCharges').value = data.charges;
+        if (data.case_number) $('rbCaseNumber').value = data.case_number;
+        if (data.court_date) $('rbCourtDate').value = data.court_date;
+        if (data.court_location) $('rbCourtLocation').value = data.court_location;
+
+        // Bond amount
+        const bondAmt = parseFloat(data.bond_amount || 0);
+        if (bondAmt > 0) {
+          $('rbBondAmount').value = bondAmt;
+          const premiumEl = $('rbPremium');
+          if (premiumEl) {
+            premiumEl.value = Math.round(bondAmt * 0.10);
+            delete premiumEl.dataset.manualEdit;
+          }
+        }
+
+        // Auto-set today as bond date
+        $('rbBondDate').value = new Date().toISOString().split('T')[0];
+
+        if (statusEl) statusEl.innerHTML = `<span class="rb-success">✅ Auto-filled from <strong>${data.county || 'booking'}</strong> URL (${data.parser || 'auto'})</span>`;
+        toast(`☘️ Loaded from URL: ${data.full_name || 'Defendant'}`, 'success');
+
+        // Clear URL input
+        urlInput.value = '';
+
+        // Trigger POA suggestion
+        suggestPOA();
+
+        // Fetch NLP risk badge
+        if (data.booking_number) fetchRiskBadge(data.booking_number);
+
+      } else {
+        if (statusEl) statusEl.innerHTML = `<span class="rb-error">❌ ${d.error || 'Could not parse this URL'}</span>`;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.innerHTML = `<span class="rb-error">❌ Network error: ${e.message}</span>`;
+    }
+  }
+
+  // ── NLP Risk Badge — visual risk tier indicator ────────────────────────
+  async function fetchRiskBadge(bookingNumber) {
+    if (!bookingNumber) return;
+    const badgeEl = $('rbRiskBadge');
+    if (!badgeEl) return;
+
+    badgeEl.innerHTML = '<span style="color:var(--muted);font-size:11px">⏳ Scoring...</span>';
+
+    try {
+      const r = await fetch(`${API}/api/legal-nlp/risk-score/${encodeURIComponent(bookingNumber)}`);
+      const d = await r.json();
+
+      if (d.success) {
+        const tierColors = {
+          critical: '#ef4444',
+          high: '#f59e0b',
+          medium: '#3b82f6',
+          low: '#10b981',
+        };
+        const tier = d.risk_tier || 'low';
+        const color = tierColors[tier] || '#6b7280';
+        const icon = tier === 'critical' ? '🔴' : tier === 'high' ? '🟡' : tier === 'medium' ? '🔵' : '🟢';
+
+        badgeEl.innerHTML = `
+          <div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;
+            background:${color}15;border:1px solid ${color}40;font-size:12px;font-weight:600;color:${color}">
+            ${icon} ${tier.toUpperCase()} RISK
+            <span style="font-weight:400;opacity:0.8">
+              R:${d.recidivism_score || 0} · FTA:${d.fta_score || 0}
+              ${d.prior_count > 0 ? ` · ${d.prior_count} priors` : ''}
+            </span>
+          </div>
+        `;
+      } else {
+        badgeEl.innerHTML = '';
+      }
+    } catch {
+      badgeEl.innerHTML = '';
+    }
+  }
+
   // Public API
   return { open, close, calcPremium, markPremiumManual, suggestPOA, submit,
-           searchDefendants, showResults, hideResults, selectDefendant };
+           searchDefendants, showResults, hideResults, selectDefendant,
+           fetchFromURL, fetchRiskBadge };
 })();
 
 // Global alias for easy access from other modules

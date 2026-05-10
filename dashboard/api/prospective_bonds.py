@@ -27,6 +27,8 @@ VALID_STAGES = ["contacted", "negotiating", "paperwork", "ready"]
 VALID_OUTCOMES = [
     "bonded", "lost_to_competitor", "released_ror", "no_contact",
     "declined", "left_vm", "sent_text_to", "other",
+    "not_interested", "bonded_elsewhere", "released_own_recognizance",
+    "charges_dropped", "do_not_contact",
 ]
 
 
@@ -138,6 +140,7 @@ async def api_prospective_list():
         stage = request.args.get("stage", "").strip()
         status = request.args.get("status", "active").strip()
         search = request.args.get("search", "").strip()
+        show_archived = request.args.get("show_archived", "").strip().lower() == "true"
 
         col = get_collection("prospective_bonds")
 
@@ -145,7 +148,14 @@ async def api_prospective_list():
         if stage:
             query["stage"] = stage
         if status and status != "all":
-            query["status"] = status
+            if status == "archived":
+                query["status"] = "archived"
+            else:
+                query["status"] = status
+                if not show_archived:
+                    query["status"] = {"$nin": ["archived"]}
+                    if status == "active":
+                        query["status"] = "active"
         if search:
             query["$or"] = [
                 {"defendant_name": {"$regex": search, "$options": "i"}},
@@ -162,6 +172,9 @@ async def api_prospective_list():
         stage_counts = {}
         for s in VALID_STAGES:
             stage_counts[s] = await col.count_documents({"stage": s, "status": "active"})
+
+        # Archived count for UI toggle badge
+        archived_count = await col.count_documents({"status": "archived"})
         total_active = sum(stage_counts.values())
 
         # Messages sent today
@@ -182,6 +195,7 @@ async def api_prospective_list():
             "total_active": total_active,
             "stage_counts": stage_counts,
             "messages_today": msgs_today,
+            "archived_count": archived_count,
         })
 
     except Exception as exc:
@@ -328,12 +342,15 @@ async def api_prospective_close(booking_number: str):
     """Close a prospective bond with an outcome reason."""
     try:
         data = await request.get_json(silent=True) or {}
-        outcome = (data.get("outcome") or "").strip()
+        # Accept both 'outcome' and 'reason' for backwards compat with frontend
+        outcome = (data.get("outcome") or data.get("reason") or "").strip()
         outcome_note = (data.get("note") or "").strip()
         agent = data.get("agent", "Dashboard")
 
-        if outcome not in VALID_OUTCOMES:
+        if outcome and outcome not in VALID_OUTCOMES:
             return jsonify({"error": f"Invalid outcome. Must be one of: {VALID_OUTCOMES}"}), 400
+        if not outcome:
+            outcome = "other"
 
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
@@ -552,4 +569,136 @@ async def api_prospective_from_intake():
 
     except Exception as exc:
         logger.exception("api_prospective_from_intake error")
+        return jsonify({"error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PATCH /api/prospective-bonds/<booking_number>/archive — Hide from board
+# ─────────────────────────────────────────────────────────────────────────────
+@prospective_bonds_bp.route("/prospective-bonds/<booking_number>/archive", methods=["PATCH"])
+async def api_prospective_archive(booking_number: str):
+    """Archive (hide) a prospective bond from the Kanban board without deleting data."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        agent = data.get("agent", "Dashboard")
+
+        col = get_collection("prospective_bonds")
+        existing = await col.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+        # Store previous status so we can restore later
+        prev_status = existing.get("status", "active")
+
+        await col.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": "archived",
+                    "archived_at": now.isoformat(),
+                    "pre_archive_status": prev_status,
+                    "updated_at": now,
+                },
+                "$push": {"timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "archived",
+                    "detail": "Archived (hidden from board)",
+                    "agent": agent,
+                }},
+            },
+        )
+        return jsonify({"success": True, "status": "archived"})
+
+    except Exception as exc:
+        logger.exception("api_prospective_archive error")
+        return jsonify({"error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PATCH /api/prospective-bonds/<booking_number>/restore — Restore from archive
+# ─────────────────────────────────────────────────────────────────────────────
+@prospective_bonds_bp.route("/prospective-bonds/<booking_number>/restore", methods=["PATCH"])
+async def api_prospective_restore(booking_number: str):
+    """Restore an archived prospective bond back to the Kanban board."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        agent = data.get("agent", "Dashboard")
+
+        col = get_collection("prospective_bonds")
+        existing = await col.find_one({"booking_number": booking_number})
+        if not existing:
+            return jsonify({"error": "Prospective bond not found"}), 404
+        if existing.get("status") != "archived":
+            return jsonify({"error": "Bond is not archived"}), 400
+
+        now = datetime.now(timezone.utc)
+        restore_to = existing.get("pre_archive_status", "active")
+
+        await col.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": restore_to,
+                    "updated_at": now,
+                },
+                "$unset": {"archived_at": "", "pre_archive_status": ""},
+                "$push": {"timeline": {
+                    "timestamp": now.isoformat(),
+                    "event": "restored",
+                    "detail": f"Restored from archive (status: {restore_to})",
+                    "agent": agent,
+                }},
+            },
+        )
+        return jsonify({"success": True, "status": restore_to})
+
+    except Exception as exc:
+        logger.exception("api_prospective_restore error")
+        return jsonify({"error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  POST /api/prospective-bonds/bulk-archive — Bulk archive multiple leads
+# ─────────────────────────────────────────────────────────────────────────────
+@prospective_bonds_bp.route("/prospective-bonds/bulk-archive", methods=["POST"])
+async def api_prospective_bulk_archive():
+    """Archive multiple prospective bonds at once."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        booking_numbers = data.get("booking_numbers", [])
+        agent = data.get("agent", "Dashboard")
+
+        if not booking_numbers or not isinstance(booking_numbers, list):
+            return jsonify({"error": "booking_numbers list required"}), 400
+
+        col = get_collection("prospective_bonds")
+        now = datetime.now(timezone.utc)
+        archived = 0
+
+        for bk in booking_numbers:
+            result = await col.update_one(
+                {"booking_number": bk, "status": {"$ne": "archived"}},
+                {
+                    "$set": {
+                        "status": "archived",
+                        "archived_at": now.isoformat(),
+                        "pre_archive_status": "active",
+                        "updated_at": now,
+                    },
+                    "$push": {"timeline": {
+                        "timestamp": now.isoformat(),
+                        "event": "archived",
+                        "detail": "Bulk archived",
+                        "agent": agent,
+                    }},
+                },
+            )
+            if result.modified_count > 0:
+                archived += 1
+
+        return jsonify({"success": True, "archived": archived, "total": len(booking_numbers)})
+
+    except Exception as exc:
+        logger.exception("api_prospective_bulk_archive error")
         return jsonify({"error": str(exc)}), 500

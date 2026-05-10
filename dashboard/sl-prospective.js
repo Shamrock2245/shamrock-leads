@@ -54,14 +54,17 @@ window.SLProspective = (function () {
   const nextStage = s => ({ contacted: 'negotiating', negotiating: 'paperwork', paperwork: 'ready', ready: null }[s]);
 
   // ── Load Pipeline Data ─────────────────────────────────────────────────────
+  let _showArchived = false;
+
   async function load() {
-    const status = $('prospStatusFilter') ? $('prospStatusFilter').value : 'active';
+    const status = _showArchived ? 'archived' : ($('prospStatusFilter') ? $('prospStatusFilter').value : 'active');
     const search = $('prospSearch') ? $('prospSearch').value : '';
     const sort = $('prospSortFilter') ? $('prospSortFilter').value : 'updated_desc';
     const repliesOnly = $('prospShowReplies') ? $('prospShowReplies').checked : false;
     const p = new URLSearchParams({ status });
     if (_stage !== 'all') p.set('stage', _stage);
     if (search) p.set('search', search);
+    if (_showArchived) p.set('show_archived', 'true');
 
     try {
       const r = await fetch(API + '/api/prospective-bonds?' + p);
@@ -82,6 +85,15 @@ window.SLProspective = (function () {
       updateBulkBar();
       const clr = $('prospSearchClear');
       if (clr) clr.style.display = search ? 'flex' : 'none';
+      // Update archived badge
+      var archBadge = $('prospArchivedBadge');
+      if (archBadge) {
+        var ac = d.archived_count || 0;
+        archBadge.textContent = ac;
+        archBadge.style.display = ac > 0 ? 'inline-flex' : 'none';
+      }
+      var archBtn = $('prospArchiveToggle');
+      if (archBtn) archBtn.classList.toggle('active', _showArchived);
     } catch (e) {
       console.error('SLProspective.load:', e);
     }
@@ -146,6 +158,16 @@ window.SLProspective = (function () {
     });
   }
 
+  // ── Risk tier inline badge (NLP/COMPAS data) ─────────────────────────────
+  function riskBadge(b) {
+    var tier = (b.nlp_risk_tier || b.risk_tier || '').toLowerCase();
+    if (!tier) return '';
+    var colors = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#10b981' };
+    var icons = { critical: '🔴', high: '🟡', medium: '🔵', low: '🟢' };
+    var c = colors[tier] || '#6b7280';
+    return '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:' + c + '22;color:' + c + ';margin-left:4px">' + (icons[tier] || '') + ' ' + tier.toUpperCase() + '</span>';
+  }
+
   function renderCard(b) {
     var bk = b.booking_number;
     var sc = (b.lead_status || '').toLowerCase();
@@ -171,7 +193,7 @@ window.SLProspective = (function () {
       '<div class="card-select-wrap"><input type="checkbox" class="card-checkbox"' + (isSelected ? ' checked' : '') + ' onchange="SLProspective.toggleSelect(\'' + bk + '\',this.checked)" onclick="event.stopPropagation()"></div>' +
       '<div class="card-main" onclick="SLProspective.openDetail(\'' + bk + '\')">' +
         '<div class="pipeline-card-header"><span class="pipeline-card-name">' + (b.defendant_name || 'Unknown') + '</span><span class="pipeline-card-bond">' + money(b.bond_amount) + '</span></div>' +
-        '<div class="pipeline-card-meta"><span>' + (b.county || '—') + ' County</span><span class="score-pill ' + scoreCls + '">' + (b.lead_score || 0) + '</span>' + (turnCount > 0 ? '<span class="turn-badge">' + turnCount + '💬</span>' : '') + '</div>' +
+        '<div class="pipeline-card-meta"><span>' + (b.county || '—') + ' County</span><span class="score-pill ' + scoreCls + '">' + (b.lead_score || 0) + '</span>' + (turnCount > 0 ? '<span class="turn-badge">' + turnCount + '💬</span>' : '') + riskBadge(b) + '</div>' +
         (indName ? '<div class="pipeline-card-ind">👤 ' + indName + '</div>' : '') +
         (indPhone ? '<div class="pipeline-card-ind" style="font-size:11px;color:var(--muted)">📞 ' + indPhone + '</div>' : '') +
         seqBadge +
@@ -183,6 +205,9 @@ window.SLProspective = (function () {
         advBtn +
         '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠 Intel</button>' +
         '<button class="cqa-btn cqa-view-def" title="View in Defendants tab" onclick="event.stopPropagation();SLProspective.viewInDefendants(\'' + bk + '\')">👤</button>' +
+        (b.status === 'archived'
+          ? '<button class="cqa-btn cqa-restore" title="Restore from archive" onclick="event.stopPropagation();SLProspective.restoreLead(\'' + bk + '\')">♻️</button>'
+          : '<button class="cqa-btn cqa-archive" title="Hide / Archive" onclick="event.stopPropagation();SLProspective.archiveLead(\'' + bk + '\')">🗑️</button>') +
       '</div>' +
     '</div>';
   }
@@ -506,6 +531,7 @@ window.SLProspective = (function () {
         '<div class="prosp-stage-select"><label style="font-size:12px;color:var(--muted)">Stage:</label><select class="outreach-select" onchange="SLProspective.promptStage(\'' + bk + '\',this.value)">' +
           stages.map(function(s) { return '<option value="' + s + '"' + (bond.stage === s ? ' selected' : '') + '>' + stageLabel(s) + '</option>'; }).join('') +
         '</select></div>' +
+        '<button class="btn-archive" style="font-size:12px" onclick="SLProspective.archiveLead(\'' + bk + '\')">📦 Archive</button>' +
         '<button class="btn-cancel" style="font-size:12px" onclick="SLProspective.promptClose(\'' + bk + '\')">❌ Close Lead</button>' +
       '</div>';
 
@@ -802,7 +828,8 @@ window.SLProspective = (function () {
   // ── Close Lead ─────────────────────────────────────────────────────────────
   function promptClose(bk) {
     var reasons = ['not_interested', 'bonded_elsewhere', 'released_own_recognizance', 'charges_dropped', 'do_not_contact', 'other'];
-    var choice = prompt('Close this lead?\n\nReason:\n' + reasons.map(function(r, i) { return (i + 1) + '. ' + r; }).join('\n') + '\n\nEnter number (1-6):');
+    var labels = ['Not Interested', 'Bonded Elsewhere', 'Released (ROR)', 'Charges Dropped', 'Do Not Contact', 'Other'];
+    var choice = prompt('Close this lead?\n\nReason:\n' + labels.map(function(r, i) { return (i + 1) + '. ' + r; }).join('\n') + '\n\nEnter number (1-6):');
     if (!choice) return;
     var idx = parseInt(choice) - 1;
     var reason = reasons[idx] || 'other';
@@ -818,6 +845,55 @@ window.SLProspective = (function () {
       if (d.success) { toast('Lead closed', 'success'); closeDetail(); load(); }
       else toast(d.error || 'Failed', 'error');
     } catch (e) { toast('Error: ' + e.message, 'error'); }
+  }
+
+  // ── Archive / Hide Lead ────────────────────────────────────────────────────
+  async function archiveLead(bk) {
+    if (!confirm('Archive this lead? It will be hidden from the board but data is preserved.')) return;
+    try {
+      var r = await fetch(API + '/api/prospective-bonds/' + encodeURIComponent(bk) + '/archive', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'Brendan' })
+      });
+      var d = await r.json();
+      if (d.success) { toast('📦 Lead archived', 'success'); closeDetail(); load(); }
+      else toast(d.error || 'Archive failed', 'error');
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+  }
+
+  async function restoreLead(bk) {
+    try {
+      var r = await fetch(API + '/api/prospective-bonds/' + encodeURIComponent(bk) + '/restore', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'Brendan' })
+      });
+      var d = await r.json();
+      if (d.success) { toast('♻️ Lead restored', 'success'); load(); }
+      else toast(d.error || 'Restore failed', 'error');
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+  }
+
+  async function bulkArchive() {
+    var bks = Array.from(_selectedBks);
+    if (!bks.length) { toast('No leads selected', 'error'); return; }
+    if (!confirm('Archive ' + bks.length + ' selected lead(s)? They will be hidden but data is preserved.')) return;
+    try {
+      var r = await fetch(API + '/api/prospective-bonds/bulk-archive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ booking_numbers: bks, agent: 'Brendan' })
+      });
+      var d = await r.json();
+      if (d.success) { toast('📦 ' + d.archived + ' lead(s) archived', 'success'); clearSelection(); load(); }
+      else toast(d.error || 'Bulk archive failed', 'error');
+    } catch (e) { toast('Error: ' + e.message, 'error'); }
+  }
+
+  function toggleArchiveView() {
+    _showArchived = !_showArchived;
+    var btn = $('prospArchiveToggle');
+    if (btn) {
+      var label = btn.querySelector('span:first-of-type');
+      if (label) label.textContent = _showArchived ? '← Back to Board' : 'Archive';
+    }
+    load();
   }
 
   // ── Officialize Bond ───────────────────────────────────────────────────────
@@ -1191,6 +1267,7 @@ window.SLProspective = (function () {
     startSequence: startSequence, stopSequence: stopSequence, viewSequence: viewSequence,
     loadAiSuggestions: loadAiSuggestions, useSuggestion: useSuggestion,
     officialize: officialize, promptClose: promptClose,
+    archiveLead: archiveLead, restoreLead: restoreLead, bulkArchive: bulkArchive, toggleArchiveView: toggleArchiveView,
     batchStartOutreach: batchStartOutreach, exportPipeline: exportPipeline,
     loadAutoReplyConfig: loadAutoReplyConfig, renderAutoReplyPanel: renderAutoReplyPanel, updateAutoReply: updateAutoReply, manualPoll: manualPoll,
     unsendMsg: unsendMsg, editMsg: editMsg, reactMsg: reactMsg,

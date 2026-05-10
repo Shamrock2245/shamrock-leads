@@ -1732,6 +1732,15 @@
       </div>
     </div>
 
+    <!-- Docket Monitor — Real-Time Court Event Surveillance -->
+    <div style="margin-top:22px">
+      <div class="int-chart-panel" style="padding:20px">
+        <div id="docketMonitorContainer">
+          <div style="padding:16px;text-align:center;color:var(--muted)"><span class="spinner-sm"></span> Loading docket monitor...</div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -2022,6 +2031,48 @@
       </div>
     </div>
 
+    <!-- ═══ COMPLIANCE & ANALYTICS REPORTS ═══ -->
+    <div class="rpt-card rpt-card-premium" data-report="fldfs-filing" onclick="SLCompliance.generateFLDFS()">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap" style="background:linear-gradient(135deg,#059669,#10b981)">🏛️</div>
+        <div class="rpt-card-badge rpt-badge-new">DOI</div>
+      </div>
+      <div class="rpt-card-title">FLDFS Compliance Filing</div>
+      <div class="rpt-card-desc">Monthly premium · BUF · liability · estreature · DOI package</div>
+      <div class="rpt-card-stat" id="rptStatFLDFS">Ready</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Compliance</span>
+        <span class="rpt-card-run">Generate Filing →</span>
+      </div>
+    </div>
+
+    <div class="rpt-card rpt-card-premium" data-report="agent-analytics" onclick="SLCompliance.generateAgentScorecard()">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap" style="background:linear-gradient(135deg,#7c3aed,#a78bfa)">🤖</div>
+        <div class="rpt-card-badge rpt-badge-new">AI</div>
+      </div>
+      <div class="rpt-card-title">Agent Workforce Analytics</div>
+      <div class="rpt-card-desc">Digital workforce scorecard · scraper accuracy · conversion rates</div>
+      <div class="rpt-card-stat" id="rptStatWorkforce">Ready</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">Analytics</span>
+        <span class="rpt-card-run">Run Scorecard →</span>
+      </div>
+    </div>
+
+    <div class="rpt-card" data-report="poa-depletion" onclick="SLCompliance.generatePOADepletion()">
+      <div class="rpt-card-top">
+        <div class="rpt-card-icon-wrap rpt-color-orange">📉</div>
+      </div>
+      <div class="rpt-card-title">POA Depletion Forecast</div>
+      <div class="rpt-card-desc">Inventory velocity · days to depletion · reorder alerts</div>
+      <div class="rpt-card-stat" id="rptStatDepletion">Ready</div>
+      <div class="rpt-card-footer">
+        <span class="rpt-card-tag">POA</span>
+        <span class="rpt-card-run">Run Forecast →</span>
+      </div>
+    </div>
+
   </div><!-- /rpt-grid -->
   </div><!-- /panel -->
 
@@ -2160,6 +2211,23 @@
           <div id="rbSearchResults" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:999;max-height:280px;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:0 0 8px 8px;box-shadow:0 8px 24px rgba(0,0,0,0.4)"></div>
           <div id="rbSearchHint" style="font-size:11px;color:var(--muted);margin-top:4px">Search arrest records to auto-fill, or skip this and fill every field manually for unscraped defendants.</div>
         </div>
+        <!-- 🔗 URL Ingestion — paste a jail booking link to auto-fill -->
+        <div class="rb-url-wrap" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <input type="text" id="rbFetchUrl"
+            placeholder="🔗 Paste a jail booking URL to auto-fill (JailTracker, Odyssey, etc.)"
+            style="flex:1;padding:8px 12px;font-size:13px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();SLRecordBond.fetchFromURL()}"
+            autocomplete="off">
+          <button onclick="SLRecordBond.fetchFromURL()"
+            style="padding:8px 14px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#3b82f6,#6366f1);color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;transition:transform .15s"
+            onmouseenter="this.style.transform='scale(1.03)'"
+            onmouseleave="this.style.transform='scale(1)'">
+            🔍 Fetch
+          </button>
+        </div>
+        <div id="rbUrlStatus" style="font-size:11px;margin-bottom:8px"></div>
+        <!-- 🧠 NLP Risk Badge -->
+        <div id="rbRiskBadge" style="margin-bottom:10px"></div>
         <div class="rb-row">
           <div class="rb-field rb-field-2">
             <label for="rbDefendantName">Full Name *</label>
@@ -2617,6 +2685,7 @@
 <script src="/sl-analytics.js?v=4"></script>
 <script src="/sl-analytics-apex.js?v=4"></script>
 <script src="/sl-intelligence.js?v=1"></script>
+<script src="/sl-docket-monitor.js?v=1"></script>
 <script src="/sl-calendar.js?v=4"></script>
 <script src="/sl-calendar-ext.js?v=4"></script>
 <script src="/sl-record-bond.js?v=4"></script>
@@ -2627,6 +2696,7 @@
 <script src="/sl-refinements.js?v=4"></script>
 <script src="/sl-pipeline-ui.js?v=4"></script>
 <script src="/sl-reports-ui.js?v=4"></script>
+<script src="/sl-compliance.js?v=1"></script>
 <script src="/sl-tab-polish.js?v=4"></script>
 <script src="/sl-overhaul.js?v=4"></script>
 

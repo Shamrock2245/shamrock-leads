@@ -138,6 +138,7 @@ async def api_record_bond():
         "bond_date": bond_date.isoformat(),
         "status": "active",
         "source": "retrospective_manual",
+        "manual_entry": booking_number.startswith("MANUAL-"),
         "agent_name": agent_name,
         "indemnitor_name": indemnitor_name,
         "indemnitor_phone": indemnitor_phone,

@@ -149,6 +149,28 @@ async def build_training_dataset(db, target: str = "lead_quality", limit: int = 
                 logger.debug("Skipping bond in training: %s", e)
                 continue
 
+        # ── COMPAS Bootstrap: cold-start fallback when internal data is sparse ──
+        if len(X_rows) < 100:
+            logger.info(
+                "📊 FTA internal data sparse (%d samples) — bootstrapping from COMPAS dataset",
+                len(X_rows)
+            )
+            try:
+                from scoring.compas_bootstrap import generate_bootstrap_dataset
+                X_boot, y_boot, _ = await generate_bootstrap_dataset(
+                    db=db, max_samples=6000, include_internal=False
+                )
+                # Append COMPAS data
+                for i in range(len(y_boot)):
+                    X_rows.append(X_boot[i].tolist())
+                    y_labels.append(float(y_boot[i]))
+                logger.info(
+                    "📊 COMPAS bootstrap added %d samples (total now: %d)",
+                    len(y_boot), len(X_rows)
+                )
+            except Exception as e:
+                logger.warning("⚠️ COMPAS bootstrap failed: %s", e)
+
     if not X_rows:
         raise ValueError(f"No training data found for target '{target}'")
 
@@ -232,7 +254,19 @@ async def train_model(
             logger.warning("XGBoost not available, falling back to RandomForest")
             algorithm = "random_forest"
 
-    if algorithm == "random_forest" or algorithm == "ensemble":
+    if algorithm == "gradient_boosting":
+        from sklearn.ensemble import GradientBoostingClassifier
+        model = GradientBoostingClassifier(
+            n_estimators=200,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+        )
+
+    if algorithm in ("random_forest", "ensemble"):
         model = RandomForestClassifier(
             n_estimators=200,
             max_depth=12,
@@ -279,7 +313,31 @@ async def train_model(
     else:
         feature_importance = []
 
-    # ── 5. Save model ────────────────────────────────────────────────────────
+    # ── 5. Confusion matrix + ROC curve data ──────────────────────────────────
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_test, y_pred)
+    cm_data = {
+        "tn": int(cm[0][0]) if len(cm) > 1 else int(cm[0][0]),
+        "fp": int(cm[0][1]) if len(cm) > 1 else 0,
+        "fn": int(cm[1][0]) if len(cm) > 1 else 0,
+        "tp": int(cm[1][1]) if len(cm) > 1 else 0,
+    }
+
+    # ROC curve points (sampled for compact storage)
+    roc_data = None
+    try:
+        from sklearn.metrics import roc_curve
+        fpr, tpr, thresholds = roc_curve(y_test, y_proba)
+        # Sample ~50 points for dashboard chart
+        step = max(1, len(fpr) // 50)
+        roc_data = {
+            "fpr": [round(float(x), 4) for x in fpr[::step]],
+            "tpr": [round(float(x), 4) for x in tpr[::step]],
+        }
+    except Exception:
+        pass
+
+    # ── 6. Save model ────────────────────────────────────────────────────────
     model_path = MODEL_DIR / f"{target}_{algorithm}.joblib"
     meta_path = MODEL_DIR / f"{target}_{algorithm}_meta.json"
 
@@ -303,6 +361,8 @@ async def train_model(
             "cv_f1_mean": round(cv_mean, 4),
             "cv_f1_std": round(cv_std, 4),
         },
+        "confusion_matrix": cm_data,
+        "roc_curve": roc_data,
         "feature_importance": feature_importance[:15],  # Top 15
         "feature_names": feature_names,
         "model_path": str(model_path),
@@ -479,7 +539,7 @@ def get_all_model_status() -> Dict[str, Any]:
     """Return status of all trained models."""
     models = {}
     for target in ["lead_quality", "fta_risk"]:
-        for algo in ["random_forest", "xgboost"]:
+        for algo in ["random_forest", "xgboost", "gradient_boosting"]:
             _, meta = load_model(target, algo)
             if meta:
                 models[f"{target}_{algo}"] = {
@@ -487,7 +547,11 @@ def get_all_model_status() -> Dict[str, Any]:
                     "algorithm": algo,
                     "trained_at": meta.get("trained_at"),
                     "training_samples": meta.get("training_samples"),
+                    "positive_rate": meta.get("positive_rate"),
+                    "training_source": meta.get("training_source"),
                     "metrics": meta.get("metrics"),
+                    "confusion_matrix": meta.get("confusion_matrix"),
+                    "roc_curve": meta.get("roc_curve"),
                     "top_features": [
                         f[0] for f in meta.get("feature_importance", [])[:5]
                     ],

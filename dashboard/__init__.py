@@ -181,6 +181,57 @@ def create_app():
     from dashboard.api.accounting import accounting_bp
     app.register_blueprint(accounting_bp, url_prefix="/api")
 
+    # ── Legal NLP + URL Ingestion ─────────────────────────────────────────
+    from dashboard.api.legal_nlp import legal_nlp_bp
+    app.register_blueprint(legal_nlp_bp, url_prefix="/api")
+
+    # ── Docket Monitor (Real-Time Court Event Surveillance) ──────────────
+    from dashboard.api.docket_monitor_api import docket_monitor_bp
+    app.register_blueprint(docket_monitor_bp)  # Routes: /api/docket-monitor/*
+
+    # ── FLDFS / DOI Compliance Reports (Monthly Filing Package) ───────────
+    from dashboard.api.fldfs_compliance import fldfs_bp
+    app.register_blueprint(fldfs_bp, url_prefix="/api")
+
+    # ── Agent Performance Analytics (Digital Workforce Scorecard) ─────────
+    from dashboard.api.agent_analytics import agent_analytics_bp
+    app.register_blueprint(agent_analytics_bp, url_prefix="/api")
+
+    # ── Docket Monitor — Background Scan (every 4 hours) ─────────────────
+    async def _docket_monitor_cron_loop():
+        """Background loop: scan active bond dockets every 4 hours.
+
+        Queries CourtListener for docket entries matching defendants
+        on active bonds. Classifies events by severity and fires
+        Slack alerts for critical/high events.
+        """
+        import asyncio
+        interval_seconds = 4 * 60 * 60  # 4 hours
+        # Wait 120s after boot to let DB connections establish
+        await asyncio.sleep(120)
+        while True:
+            try:
+                from dashboard.services.docket_monitor import run_docket_scan
+                from dashboard.extensions import get_db
+                db = get_db()
+                logger.info("[DocketMonitor] ⏰ Scheduled scan starting...")
+                result = await run_docket_scan(db, limit=100)
+                logger.info(
+                    "[DocketMonitor] ✅ Scan complete — %d bonds, %d events, %d alerts",
+                    result.get("bonds_scanned", 0),
+                    result.get("events_found", 0),
+                    result.get("alerts_created", 0),
+                )
+            except Exception as e:
+                logger.error("[DocketMonitor] ❌ Scheduled scan failed: %s", e)
+            await asyncio.sleep(interval_seconds)
+
+    @app.before_serving
+    async def _start_docket_monitor_cron():
+        import asyncio
+        asyncio.ensure_future(_docket_monitor_cron_loop())
+        logger.info("[DocketMonitor] 📡 Background docket scan scheduled (every 4h, first run in 120s)")
+
     # ── Court Intelligence — Scheduled Ingestion (every 6 hours) ─────────
     async def _court_intel_cron_loop():
         """Background loop: ingest court opinions every 6 hours.
@@ -492,6 +543,60 @@ def create_app():
             logger.info("☘️  Revenue Automation: indexes ensured")
         except Exception as exc:
             logger.warning("Automation index setup warning: %s", exc)
+
+    # ── TTL & Storage Optimization — M0 512MB compliance ─────────────────────
+    @app.before_serving
+    async def _ensure_ttl_storage_indexes():
+        """TTL indexes for auto-purge + compound indexes for compliance queries."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+
+            # audit_events: TTL 90 days (immutable but purgeable for storage)
+            await db["audit_events"].create_index(
+                [("timestamp", 1)], name="idx_audit_ttl_90d", background=True,
+                expireAfterSeconds=7776000,  # 90 days
+            )
+            await db["audit_events"].create_index(
+                [("entity_type", 1), ("entity_id", 1), ("timestamp", -1)],
+                name="idx_audit_entity_lookup", background=True,
+            )
+
+            # error_log: TTL 30 days
+            await db["error_log"].create_index(
+                [("timestamp", 1)], name="idx_error_ttl_30d", background=True,
+                expireAfterSeconds=2592000,  # 30 days
+            )
+
+            # notifications: TTL 60 days (read notifications auto-purge)
+            await db["notifications"].create_index(
+                [("created_at_dt", 1)], name="idx_notif_ttl_60d", background=True,
+                expireAfterSeconds=5184000,  # 60 days
+            )
+
+            # active_bonds: compound indexes for compliance/reports queries
+            await db["active_bonds"].create_index(
+                [("bond_date", 1), ("surety", 1)],
+                name="idx_bonds_date_surety", background=True,
+            )
+            await db["active_bonds"].create_index(
+                [("status", 1), ("updated_at", -1)],
+                name="idx_bonds_status_updated", background=True,
+            )
+            await db["active_bonds"].create_index(
+                [("agent_name", 1), ("bond_date", 1)],
+                name="idx_bonds_agent_date", background=True,
+            )
+
+            # rearrest_alerts: TTL 60 days
+            await db["rearrest_alerts"].create_index(
+                [("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True,
+                expireAfterSeconds=5184000,
+            )
+
+            logger.info("☘️  TTL/Storage Optimization: indexes ensured")
+        except Exception as exc:
+            logger.warning("TTL index setup warning: %s", exc)
 
     # BB health monitor loop — checks every 10 minutes, alerts Slack on issues
     @app.before_serving

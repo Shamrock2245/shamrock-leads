@@ -378,3 +378,85 @@ async def api_poa_restore():
          "$unset": {"voided_at": "", "void_reason": ""}},
     )
     return jsonify({"success": True, "poa_number": poa_number, "message": f"POA {poa_number} restored to available"})
+
+
+@poa_bp.route("/poa/alert-check", methods=["POST"])
+async def api_poa_alert_check():
+    """Check all POA tiers and fire Slack alerts for low/critical inventory.
+
+    Called on-demand from the dashboard or on a cron schedule.
+    Thresholds: CRITICAL ≤ 2, LOW ≤ 5.
+    """
+    import os, aiohttp, logging
+
+    poa_inventory = get_collection("poa_inventory")
+    LOW = 5
+    CRITICAL = 2
+
+    pipeline = [
+        {"$match": {"status": "available"}},
+        {"$group": {
+            "_id": {"surety_id": "$surety_id", "poa_prefix": "$poa_prefix"},
+            "available": {"$sum": 1},
+            "max_bond_value": {"$max": "$max_bond_value"},
+        }},
+        {"$sort": {"_id.surety_id": 1, "_id.max_bond_value": 1}},
+    ]
+
+    critical_tiers = []
+    low_tiers = []
+    all_tiers = []
+
+    async for r in poa_inventory.aggregate(pipeline):
+        tier = {
+            "surety": r["_id"]["surety_id"].upper(),
+            "prefix": r["_id"]["poa_prefix"],
+            "available": r["available"],
+            "max_bond": r.get("max_bond_value", 0),
+        }
+        all_tiers.append(tier)
+        if tier["available"] <= CRITICAL:
+            critical_tiers.append(tier)
+        elif tier["available"] <= LOW:
+            low_tiers.append(tier)
+
+    alerts_sent = 0
+    webhook = os.getenv("SLACK_WEBHOOK_LEADS", "")
+
+    if (critical_tiers or low_tiers) and webhook:
+        blocks = []
+        if critical_tiers:
+            lines = [f"• *{t['prefix']}* ({t['surety']}): *{t['available']}* left" for t in critical_tiers]
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"🔴 *CRITICAL POA INVENTORY*\n{'chr(10)'.join(lines)}"},
+            })
+
+        if low_tiers:
+            lines = [f"• *{t['prefix']}* ({t['surety']}): {t['available']} left" for t in low_tiers]
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"⚠️ *Low POA Stock*\n{'chr(10)'.join(lines)}"},
+            })
+
+        payload = {
+            "text": f"POA Inventory Alert: {len(critical_tiers)} critical, {len(low_tiers)} low",
+            "blocks": blocks,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(webhook, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        alerts_sent = 1
+        except Exception as exc:
+            logging.getLogger(__name__).warning("POA Slack alert failed: %s", exc)
+
+    return jsonify({
+        "success": True,
+        "critical_count": len(critical_tiers),
+        "low_count": len(low_tiers),
+        "critical_tiers": critical_tiers,
+        "low_tiers": low_tiers,
+        "slack_alert_sent": alerts_sent > 0,
+    })
