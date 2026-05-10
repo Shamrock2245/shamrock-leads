@@ -300,6 +300,23 @@ def create_app():
             await pkts_col.create_index(
                 [("packet_id", 1)], unique=True, name="idx_pkt_packet_id", background=True
             )
+            # SignNow webhook correlation indexes (required for document.complete lookup)
+            await pkts_col.create_index(
+                [("signnow_document_id", 1)], name="idx_pkt_signnow_doc_id",
+                background=True, sparse=True
+            )
+            await pkts_col.create_index(
+                [("signnow_invite_id", 1)], name="idx_pkt_signnow_invite_id",
+                background=True, sparse=True
+            )
+            await pkts_col.create_index(
+                [("bond_case_id", 1)], name="idx_pkt_bond_case_id",
+                background=True, sparse=True
+            )
+            await pkts_col.create_index(
+                [("voided", 1), ("status", 1)], name="idx_pkt_voided_status",
+                background=True
+            )
             logger.info("☘️  Phase 10: outreach + paperwork indexes ensured")
         except Exception as exc:
             logger.warning("Phase 10 index setup warning: %s", exc)

@@ -3,6 +3,27 @@ ShamrockLeads — Webhooks API Blueprint
 Handles inbound webhooks from SignNow, Twilio, and SwipeSimple.
 
 Uses extensions.get_collection() to avoid circular imports from app.py.
+
+Security:
+  - SignNow: HMAC-SHA256 signature verification (SIGNNOW_WEBHOOK_SECRET).
+             If secret is NOT set, webhook is REJECTED (fail-closed, not fail-open).
+  - SwipeSimple: HMAC-SHA256 signature verification (SWIPESIMPLE_WEBHOOK_SECRET).
+  - Twilio: Twilio request validator (TWILIO_AUTH_TOKEN).
+
+Data Flow (SignNow document.complete):
+  1. Verify HMAC signature — reject if invalid or secret missing.
+  2. Log raw payload to audit_events.
+  3. Look up paperwork_packets by signnow_document_id (primary) OR
+     by signnow_invite_id (fallback) to handle group-invite completions.
+  4. Verify packet is bound to an active bond case (policy Rule 1 + Rule 5).
+  5. Download signed PDF from SignNow.
+  6. Upload signed PDF to Google Drive case folder.
+  7. Update paperwork_packets: status=signed, signnow_status=signed, signed_at.
+  8. Update bond_cases: Packet_Status=signed, Signature_Status=signed, signed_at.
+  9. Publish SSE event to dashboard.
+  10. Fire Slack alert.
+  11. Fire Telegram staff alert.
+  12. Escalate if packet references unknown bond case (policy Rule 5 / Escalation).
 """
 from __future__ import annotations
 
@@ -19,14 +40,41 @@ webhooks_bp = Blueprint('webhooks', __name__)
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Security helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
 def verify_signnow_signature(payload: bytes, signature: str) -> bool:
+    """
+    Verify the SignNow HMAC-SHA256 webhook signature.
+
+    SECURITY: Fail-CLOSED — if SIGNNOW_WEBHOOK_SECRET is not configured,
+    we REJECT the request rather than accepting it blindly. This prevents
+    spoofed document.complete events from triggering Drive uploads and
+    status updates on forged data.
+
+    SignNow sends the signature in the 'x-signnow-signature' header as a
+    hex-encoded HMAC-SHA256 of the raw request body.
+    """
     secret = os.getenv('SIGNNOW_WEBHOOK_SECRET', '').encode('utf-8')
     if not secret:
-        return True  # Skip verification if no secret configured
+        logger.error(
+            "[signnow_webhook] SIGNNOW_WEBHOOK_SECRET is not set — "
+            "rejecting webhook (fail-closed). Set this secret in .env to enable webhooks."
+        )
+        return False  # CHANGED: was True (fail-open) — now fail-closed
+
+    if not signature:
+        logger.warning("[signnow_webhook] No x-signnow-signature header present — rejecting")
+        return False
 
     expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return hmac.compare_digest(expected, signature.lower())
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/signnow
+# ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.route('/webhooks/signnow', methods=['POST'])
 async def signnow_webhook():
@@ -34,171 +82,312 @@ async def signnow_webhook():
     Handle document.complete (and other) events from SignNow.
 
     On document.complete:
-      1. Verify HMAC signature.
-      2. Log to audit_events.
-      3. Look up the bond case by signnow_document_id.
-      4. Download the signed PDF from SignNow.
-      5. Upload the signed PDF to the Google Drive case folder.
-      6. Update bond_cases: Packet_Status=signed, Signature_Status=signed, signed_at.
-      7. Publish SSE event to dashboard.
-      8. Fire Slack alert.
+      1.  Verify HMAC signature (fail-closed — rejects if secret not set).
+      2.  Log raw payload to audit_events.
+      3.  Look up paperwork_packets by signnow_document_id OR signnow_invite_id.
+      4.  Verify packet is bound to an active bond case (policy Rule 1 + 5).
+      5.  Download signed PDF from SignNow.
+      6.  Upload signed PDF to Google Drive case folder.
+      7.  Update paperwork_packets: status=signed, signnow_status=signed, signed_at,
+          signed_pdf_drive_id, signed_pdf_drive_url.
+      8.  Update bond_cases: Packet_Status=signed, Signature_Status=signed, signed_at.
+      9.  Publish SSE event to dashboard.
+      10. Fire Slack alert.
+      11. Fire Telegram staff alert.
+      12. Escalate (Slack + log) if packet references unknown bond case.
     """
     import httpx
     from dashboard.api.events import publish_event
 
+    # ── Step 1: Verify HMAC signature ────────────────────────────────────────
     signature = request.headers.get('x-signnow-signature', '')
     payload = await request.get_data()
 
     if not verify_signnow_signature(payload, signature):
+        logger.warning(
+            "[signnow_webhook] Rejected — invalid or missing HMAC signature. "
+            "Headers: %s", dict(request.headers)
+        )
         return jsonify({"error": "Invalid signature"}), 401
 
     data = await request.get_json(force=True) or {}
     now_iso = datetime.now(timezone.utc).isoformat()
+    event_type = data.get('event', 'unknown')
 
-    # Step 2: Log to audit_events
+    # ── Step 2: Log raw payload to audit_events ───────────────────────────────
     audit_events = get_collection("audit_events")
     await audit_events.insert_one({
         "source": "signnow_webhook",
-        "event_type": data.get('event', 'unknown'),
+        "event_type": event_type,
         "payload": data,
         "timestamp": now_iso,
     })
 
-    if data.get('event') == 'document.complete':
-        doc_id = (
-            data.get('document_id')
-            or data.get('content', {}).get('document_id')
-            or ""
-        )
-        logger.info("[signnow_webhook] document.complete for doc_id=%s", doc_id)
+    logger.info("[signnow_webhook] Received event=%s", event_type)
 
-        # Step 3: Look up bond case
-        bond_cases = get_collection("bond_cases")
+    if event_type != 'document.complete':
+        # Log non-complete events (e.g. document.update, invite.complete) but take no action
+        return jsonify({"success": True, "action": "logged_only"}), 200
+
+    # ── Extract document ID ───────────────────────────────────────────────────
+    doc_id = (
+        data.get('document_id')
+        or data.get('content', {}).get('document_id')
+        or data.get('meta', {}).get('document_id')
+        or ""
+    )
+    logger.info("[signnow_webhook] document.complete for doc_id=%s", doc_id)
+
+    # ── Step 3: Look up paperwork_packets ────────────────────────────────────
+    # Primary: match by signnow_document_id (stored when packet is pushed)
+    # Fallback: match by signnow_invite_id (for group-invite completions where
+    #           the webhook carries the invite ID rather than a single doc ID)
+    packets_col = get_collection("paperwork_packets")
+    packet = None
+    if doc_id:
+        packet = await packets_col.find_one({"signnow_document_id": doc_id})
+    if not packet and doc_id:
+        # Fallback: the invite_id stored as "embed_<doc_id>"
+        packet = await packets_col.find_one({"signnow_invite_id": f"embed_{doc_id}"})
+    if not packet:
+        # Last resort: search by any document_id in the documents[] array
+        packet = await packets_col.find_one({"documents.signnow_doc_id": doc_id})
+
+    if not packet:
+        # ── Escalation: unknown packet (policy Escalation Rule) ───────────────
+        logger.error(
+            "[signnow_webhook] ESCALATION: document.complete for doc_id=%s "
+            "has no matching paperwork_packets record. "
+            "Possible causes: packet sent outside this system, or doc_id mismatch.",
+            doc_id,
+        )
+        await _send_escalation_slack(
+            f"⚠️ *SignNow Escalation* — `document.complete` received for doc `{doc_id}` "
+            f"but no matching packet found in paperwork_packets.\n"
+            f"This may indicate a forged webhook or a packet sent outside the dashboard."
+        )
+        # Still return 200 so SignNow doesn't retry indefinitely
+        return jsonify({"success": True, "warning": "packet_not_found"}), 200
+
+    packet_id = packet.get("packet_id", "")
+    intake_id = packet.get("intake_id", "")
+    defendant_name = packet.get("defendant_name", "Unknown")
+    booking_number = packet.get("booking_number") or packet.get("defendant_booking_number", doc_id[:8])
+
+    # ── Step 4: Verify packet is bound to an active bond case ─────────────────
+    bond_cases = get_collection("bond_cases")
+    bond_case = None
+
+    # Try bond_case_id first (policy Rule 1 — packet must reference Bond_Case_ID)
+    bond_case_id = packet.get("bond_case_id")
+    if bond_case_id:
+        bond_case = await bond_cases.find_one({"bond_case_id": bond_case_id})
+
+    # Fallback: look up by signnow_document_id (legacy path)
+    if not bond_case and doc_id:
         bond_case = await bond_cases.find_one({"signnow_document_id": doc_id})
 
-        # Step 4: Download signed PDF
-        pdf_bytes = None
-        signnow_token = os.getenv("SIGNNOW_API_TOKEN", "")
-        if doc_id and signnow_token:
-            try:
-                async with httpx.AsyncClient(timeout=60) as client:
-                    dl_resp = await client.get(
-                        f"https://api.signnow.com/document/{doc_id}/download?type=collapsed",
-                        headers={"Authorization": f"Bearer {signnow_token}"},
-                    )
-                    dl_resp.raise_for_status()
-                    pdf_bytes = dl_resp.content
-                    logger.info(
-                        "[signnow_webhook] Downloaded signed PDF (%d bytes) for doc %s",
-                        len(pdf_bytes), doc_id,
-                    )
-            except Exception as exc:
-                logger.error("[signnow_webhook] PDF download failed: %s", exc)
+    # Fallback: look up by packet_id
+    if not bond_case and packet_id:
+        bond_case = await bond_cases.find_one({"packet_id": packet_id})
 
-        # Step 5: Upload to Google Drive case folder
-        drive_file_id = None
-        drive_url = None
-        if pdf_bytes and bond_case:
-            try:
-                from googleapiclient.discovery import build as gdrive_build
-                from googleapiclient.http import MediaIoBaseUpload
-                from google.oauth2 import service_account
-                import io
+    # Fallback: look up by intake_id
+    if not bond_case and intake_id:
+        bond_case = await bond_cases.find_one({"intake_id": intake_id})
 
-                creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-                if creds_path and os.path.exists(creds_path):
-                    creds = service_account.Credentials.from_service_account_file(
-                        creds_path,
-                        scopes=["https://www.googleapis.com/auth/drive"],
-                    )
-                    drive_svc = gdrive_build("drive", "v3", credentials=creds)
+    if not bond_case:
+        logger.warning(
+            "[signnow_webhook] No bond_case found for packet %s (doc %s) — "
+            "will still update packet record and file to Drive, but bond_case update skipped.",
+            packet_id, doc_id,
+        )
+        await _send_escalation_slack(
+            f"⚠️ *SignNow Warning* — Packet `{packet_id}` signed (doc `{doc_id}`) "
+            f"but no matching bond_case found. "
+            f"Defendant: {defendant_name}. Manual review required."
+        )
+    else:
+        # Verify bond case is still open/posted (policy Rule 4)
+        case_status = bond_case.get("status", "")
+        if case_status not in ("open", "posted", "active", "pending", ""):
+            logger.warning(
+                "[signnow_webhook] Bond case %s has status=%s — "
+                "packet %s signed but case may be closed.",
+                bond_case.get("bond_case_id", ""), case_status, packet_id,
+            )
 
-                    defendant_name = bond_case.get("defendant_name", "Unknown")
-                    booking_number = bond_case.get("booking_number", doc_id[:8])
-                    folder_id = bond_case.get("google_drive_folder_id", "")
+    # ── Step 5: Download signed PDF from SignNow ──────────────────────────────
+    pdf_bytes = None
+    signnow_token = os.getenv("SIGNNOW_API_TOKEN", "")
+    if doc_id and signnow_token:
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                dl_resp = await client.get(
+                    f"https://api.signnow.com/document/{doc_id}/download?type=collapsed",
+                    headers={"Authorization": f"Bearer {signnow_token}"},
+                )
+                dl_resp.raise_for_status()
+                pdf_bytes = dl_resp.content
+                logger.info(
+                    "[signnow_webhook] Downloaded signed PDF (%d bytes) for doc %s",
+                    len(pdf_bytes), doc_id,
+                )
+        except Exception as exc:
+            logger.error("[signnow_webhook] PDF download failed: %s", exc)
+    elif not signnow_token:
+        logger.warning("[signnow_webhook] SIGNNOW_API_TOKEN not set — cannot download signed PDF")
 
-                    file_name = f"SIGNED_{defendant_name}_{booking_number}_{doc_id[:8]}.pdf"
-                    file_meta = {"name": file_name}
-                    if folder_id:
-                        file_meta["parents"] = [folder_id]
+    # ── Step 6: Upload to Google Drive case folder ────────────────────────────
+    drive_file_id = None
+    drive_url = None
+    if pdf_bytes:
+        try:
+            from googleapiclient.discovery import build as gdrive_build
+            from googleapiclient.http import MediaIoBaseUpload
+            from google.oauth2 import service_account
+            import io
 
-                    media = MediaIoBaseUpload(
-                        io.BytesIO(pdf_bytes),
-                        mimetype="application/pdf",
-                        resumable=False,
-                    )
-                    uploaded = drive_svc.files().create(
-                        body=file_meta,
-                        media_body=media,
-                        fields="id,webViewLink",
-                    ).execute()
-                    drive_file_id = uploaded.get("id")
-                    drive_url = uploaded.get("webViewLink")
-                    logger.info(
-                        "[signnow_webhook] Filed signed PDF to Google Drive: %s", drive_url
-                    )
-                else:
-                    logger.warning(
-                        "[signnow_webhook] GOOGLE_APPLICATION_CREDENTIALS not set "
-                        "-- skipping Drive upload"
-                    )
-            except Exception as exc:
-                logger.error("[signnow_webhook] Google Drive upload failed: %s", exc)
+            creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+            if creds_path and os.path.exists(creds_path):
+                creds = service_account.Credentials.from_service_account_file(
+                    creds_path,
+                    scopes=["https://www.googleapis.com/auth/drive"],
+                )
+                drive_svc = gdrive_build("drive", "v3", credentials=creds)
 
-        # Step 6: Update bond case
-        update_fields = {
+                # Use bond_case folder if available, else fall back to packet folder
+                folder_id = (
+                    (bond_case or {}).get("google_drive_folder_id")
+                    or packet.get("google_drive_folder_id", "")
+                )
+
+                # Descriptive filename: SIGNED_<LastFirst>_<Booking>_<PacketID>_<DocID8>.pdf
+                safe_name = defendant_name.replace(" ", "_").replace(",", "")
+                file_name = f"SIGNED_{safe_name}_{booking_number}_{packet_id}_{doc_id[:8]}.pdf"
+                file_meta = {"name": file_name}
+                if folder_id:
+                    file_meta["parents"] = [folder_id]
+
+                media = MediaIoBaseUpload(
+                    io.BytesIO(pdf_bytes),
+                    mimetype="application/pdf",
+                    resumable=False,
+                )
+                uploaded = drive_svc.files().create(
+                    body=file_meta,
+                    media_body=media,
+                    fields="id,webViewLink",
+                ).execute()
+                drive_file_id = uploaded.get("id")
+                drive_url = uploaded.get("webViewLink")
+                logger.info(
+                    "[signnow_webhook] Filed signed PDF to Google Drive: %s", drive_url
+                )
+            else:
+                logger.warning(
+                    "[signnow_webhook] GOOGLE_APPLICATION_CREDENTIALS not set "
+                    "— skipping Drive upload"
+                )
+        except Exception as exc:
+            logger.error("[signnow_webhook] Google Drive upload failed: %s", exc)
+
+    # ── Step 7: Update paperwork_packets ─────────────────────────────────────
+    packet_update = {
+        "status": "signed",
+        "signnow_status": "signed",
+        "signed_at": now_iso,
+        "signnow_document_id": doc_id,  # ensure it's stored for future lookups
+    }
+    if drive_file_id:
+        packet_update["signed_pdf_drive_id"] = drive_file_id
+        packet_update["signed_pdf_drive_url"] = drive_url
+
+    await packets_col.update_one(
+        {"packet_id": packet_id},
+        {"$set": packet_update},
+    )
+
+    # ── Step 8: Update bond_cases ─────────────────────────────────────────────
+    if bond_case:
+        bond_update = {
             "Packet_Status": "signed",
             "Signature_Status": "signed",
             "signed_at": now_iso,
         }
         if drive_file_id:
-            update_fields["signed_pdf_drive_id"] = drive_file_id
-            update_fields["signed_pdf_drive_url"] = drive_url
+            bond_update["signed_pdf_drive_id"] = drive_file_id
+            bond_update["signed_pdf_drive_url"] = drive_url
 
-        await bond_cases.update_one(
-            {"signnow_document_id": doc_id},
-            {"$set": update_fields},
+        # Match by the most specific key available
+        match_key = (
+            {"bond_case_id": bond_case.get("bond_case_id")}
+            if bond_case.get("bond_case_id")
+            else {"signnow_document_id": doc_id}
         )
+        await bond_cases.update_one(match_key, {"$set": bond_update})
+        logger.info("[signnow_webhook] Bond case updated: %s", match_key)
 
-        # Step 7: Publish SSE event
-        defendant_name = (bond_case or {}).get("defendant_name", "Unknown")
-        await publish_event('document_signed', {
-            "document_id": doc_id,
-            "defendant_name": defendant_name,
-            "drive_url": drive_url,
-            "signed_at": now_iso,
-        })
+    # ── Step 9: Publish SSE event ─────────────────────────────────────────────
+    from dashboard.api.events import publish_event
+    await publish_event('document_signed', {
+        "document_id": doc_id,
+        "packet_id": packet_id,
+        "defendant_name": defendant_name,
+        "drive_url": drive_url,
+        "signed_at": now_iso,
+    })
 
-        # Step 8: Slack alert
-        slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
-        if slack_webhook:
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    drive_link = f" -- <{drive_url}|View in Drive>" if drive_url else ""
-                    await client.post(slack_webhook, json={
-                        "text": (
-                            f":white_check_mark: *SignNow Complete* -- "
-                            f"{defendant_name} signed their paperwork.{drive_link}"
-                        )
-                    })
-            except Exception as exc:
-                logger.warning("[signnow_webhook] Slack alert failed: %s", exc)
-
-        # Step 9: Telegram staff alert
+    # ── Step 10: Slack alert ──────────────────────────────────────────────────
+    slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+    if slack_webhook:
         try:
-            from dashboard.services.telegram_service import get_telegram_service
-            tg = get_telegram_service()
-            booking_number = (bond_case or {}).get("booking_number", doc_id[:8])
-            await tg.send_document_signed_alert(
-                defendant_name=defendant_name,
-                booking_number=booking_number,
-                drive_url=drive_url or "",
-            )
-        except Exception as tg_exc:
-            logger.warning("[signnow_webhook] Telegram alert failed: %s", tg_exc)
+            drive_link = f" — <{drive_url}|View in Drive>" if drive_url else ""
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(slack_webhook, json={
+                    "text": (
+                        f":white_check_mark: *SignNow Complete* — "
+                        f"{defendant_name} signed their paperwork "
+                        f"(Packet: `{packet_id}`).{drive_link}"
+                    )
+                })
+        except Exception as exc:
+            logger.warning("[signnow_webhook] Slack alert failed: %s", exc)
+
+    # ── Step 11: Telegram staff alert ────────────────────────────────────────
+    try:
+        from dashboard.services.telegram_service import get_telegram_service
+        tg = get_telegram_service()
+        await tg.send_document_signed_alert(
+            defendant_name=defendant_name,
+            booking_number=booking_number,
+            drive_url=drive_url or "",
+        )
+    except Exception as tg_exc:
+        logger.warning("[signnow_webhook] Telegram alert failed: %s", tg_exc)
 
     return jsonify({"success": True}), 200
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: escalation Slack alert
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _send_escalation_slack(message: str) -> None:
+    """Send an escalation alert to Slack (non-fatal — logs on failure)."""
+    import httpx
+    slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+    if not slack_webhook:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(slack_webhook, json={"text": message})
+    except Exception as exc:
+        logger.warning("[signnow_webhook] Escalation Slack alert failed: %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/twilio
+# ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.route('/webhooks/twilio', methods=['POST'])
 async def twilio_webhook():
@@ -226,6 +415,10 @@ async def twilio_webhook():
 
     return "<Response></Response>", 200, {'Content-Type': 'text/xml'}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/payment
+# ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.route('/webhooks/payment', methods=['POST'])
 async def payment_webhook():
@@ -266,315 +459,156 @@ async def payment_webhook():
         raw_body = await request.get_data()
         sig_header = request.headers.get("X-SwipeSimple-Signature", "")
         expected_sig = hmac.new(
-            webhook_secret.encode(), raw_body, hashlib.sha256
+            webhook_secret.encode(),
+            raw_body,
+            hashlib.sha256,
         ).hexdigest()
-        if not hmac.compare_digest(f"sha256={expected_sig}", sig_header):
-            logger.warning("[payment_webhook] Invalid HMAC signature -- rejecting")
+        if not hmac.compare_digest(expected_sig, sig_header):
+            logger.warning("[payment_webhook] Invalid SwipeSimple signature — rejecting")
             return jsonify({"error": "Invalid signature"}), 401
 
-    data = await request.get_json(silent=True) or {}
-    event_type = data.get("event_type", "payment.completed")
+    data = await request.get_json(force=True) or {}
+
+    # -- 2. Parse booking number -----------------------------------------------
+    custom_fields = data.get("custom_fields", {})
+    booking_number = (
+        custom_fields.get("booking_number")
+        or request.args.get("booking_number", "")
+    )
+
+    # -- 3. Update bond case ---------------------------------------------------
+    amount = data.get("amount", 0)
+    status = data.get("status", "")
     transaction_id = data.get("transaction_id", "")
-    amount = float(data.get("amount", 0))
-    status = data.get("status", "approved").lower()
     card_last4 = data.get("card_last4", "")
     card_brand = data.get("card_brand", "")
     customer_name = data.get("customer_name", "")
-    created_at = data.get("created_at", now.isoformat())
+    indemnitor_phone = custom_fields.get("indemnitor_phone", "")
 
-    # Extract booking_number from custom_fields or top-level
-    custom = data.get("custom_fields", {})
-    booking_number = (
-        custom.get("booking_number")
-        or data.get("booking_number")
-        or request.args.get("booking_number", "")
-    )
-    indemnitor_name = custom.get("indemnitor_name", customer_name)
-    indemnitor_phone = custom.get("indemnitor_phone", "")
-    county = custom.get("county", "")
+    payment_update = {
+        "last_payment_amount": amount,
+        "last_payment_at": now.isoformat(),
+        "last_payment_status": status,
+        "last_transaction_id": transaction_id,
+    }
 
-    logger.info(
-        "[payment_webhook] event=%s txn=%s amount=$%.2f status=%s booking=%s",
-        event_type, transaction_id, amount, status, booking_number
-    )
-
-    # -- 2. Determine payment outcome -----------------------------------------
-    is_success = status in ("approved", "completed", "success")
-    is_refund = event_type == "payment.refunded" or status == "refunded"
-    is_failed = status in ("declined", "failed")
-
-    # -- 3. Update bond case ---------------------------------------------------
     if booking_number:
-        active_bonds_col = get_collection("active_bonds")
-        prospective_bonds_col = get_collection("prospective_bonds")
-
-        payment_update = {
-            "last_payment_amount": amount,
-            "last_payment_date": now,
-            "last_payment_txn": transaction_id,
-            "last_payment_status": status,
-            "updated_at": now,
-        }
-        if is_success:
-            payment_update["payment_status"] = "paid"
-            payment_update["payment_received"] = True
-        elif is_refund:
-            payment_update["payment_status"] = "refunded"
-        elif is_failed:
-            payment_update["payment_status"] = "failed"
-
-        # Try active_bonds first, then prospective_bonds
-        result = await active_bonds_col.update_one(
+        bond_cases = get_collection("bond_cases")
+        await bond_cases.update_one(
             {"booking_number": booking_number},
-            {"$set": payment_update, "$inc": {"total_paid": amount if is_success else 0}},
+            {"$set": payment_update},
         )
-        if result.matched_count == 0:
-            await prospective_bonds_col.update_one(
-                {"booking_number": booking_number},
-                {"$set": payment_update, "$inc": {"total_paid": amount if is_success else 0}},
-            )
+        # Also try active_bonds for legacy records
+        active_bonds = get_collection("active_bonds")
+        await active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": payment_update},
+        )
 
     # -- 4. Log to payments collection ----------------------------------------
-    payments_col = get_collection("payments")
-    payment_doc = {
-        "booking_number": booking_number,
+    payments = get_collection("payments")
+    await payments.insert_one({
         "transaction_id": transaction_id,
+        "booking_number": booking_number,
         "amount": amount,
         "status": status,
-        "event_type": event_type,
         "card_last4": card_last4,
         "card_brand": card_brand,
         "customer_name": customer_name,
-        "indemnitor_name": indemnitor_name,
         "indemnitor_phone": indemnitor_phone,
-        "county": county,
-        "method": "swipesimple",
-        "source": "webhook",
-        "created_at": created_at,
-        "recorded_at": now.isoformat(),
-    }
-    await payments_col.insert_one(payment_doc)
+        "custom_fields": custom_fields,
+        "raw_payload": data,
+        "created_at": now.isoformat(),
+    })
 
-    # -- 5. BlueBubbles receipt to indemnitor ---------------------------------
-    if is_success and indemnitor_phone:
-        first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
-        defendant_name = ""
-        if booking_number:
-            bond_doc = await get_collection("active_bonds").find_one(
-                {"booking_number": booking_number}, {"defendant_name": 1}
-            )
-            if bond_doc:
-                defendant_name = bond_doc.get("defendant_name", "")
-
-        payment_date = now.strftime("%B %d, %Y")
-        card_info = f"{card_brand} ending in {card_last4}" if card_last4 else "card on file"
-        receipt_msg = (
-            f"Hi {first_name}! \u2705 We received your payment of ${amount:,.2f} "
-            f"on {payment_date}"
-            + (f" for {defendant_name}'s bond" if defendant_name else "")
-            + f" via {card_info}.\n\n"
-            f"Thank you! Your receipt has been recorded. "
-            f"Reply anytime if you need anything. \u2014 Shamrock Bail Bonds \U0001f340"
-        )
+    # -- 5. Send BlueBubbles receipt ------------------------------------------
+    if indemnitor_phone and status == "approved":
         try:
-            bb_result = await send_message_universal(indemnitor_phone, receipt_msg)
-            logger.info(
-                "[payment_webhook] Receipt sent to %s: %s",
-                indemnitor_phone, bb_result.get("success")
+            receipt_msg = (
+                f"✅ Payment received! Thank you, {customer_name}.\n"
+                f"Amount: ${amount:.2f} ({card_brand} ending {card_last4})\n"
+                f"Transaction: {transaction_id}\n"
+                f"Shamrock Bail Bonds — (239) 332-2245"
             )
+            await send_message_universal(indemnitor_phone, receipt_msg)
         except Exception as exc:
             logger.warning("[payment_webhook] BB receipt failed: %s", exc)
 
     # -- 6. Slack alert -------------------------------------------------------
-    slack_url = os.getenv("SLACK_WEBHOOK_URL", "")
-    if slack_url:
-        import httpx as _httpx
-        emoji = "\u2705" if is_success else ("\U0001f504" if is_refund else "\u274c")
-        slack_text = (
-            f"{emoji} *SwipeSimple Payment {status.title()}*\n"
-            f"Amount: *${amount:,.2f}*\n"
-            f"Booking: `{booking_number or 'N/A'}`\n"
-            f"Indemnitor: {indemnitor_name or 'Unknown'}\n"
-            f"Card: {card_brand} ****{card_last4}\n"
-            f"TXN: `{transaction_id}`"
-        )
+    slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", "")
+    if slack_webhook_url and status == "approved":
         try:
-            async with _httpx.AsyncClient(timeout=5) as client:
-                await client.post(slack_url, json={"text": slack_text})
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(slack_webhook_url, json={
+                    "text": (
+                        f":moneybag: *Payment Received* — ${amount:.2f} from {customer_name} "
+                        f"({card_brand} ****{card_last4}) | Booking: {booking_number or 'N/A'}"
+                    )
+                })
         except Exception as exc:
             logger.warning("[payment_webhook] Slack alert failed: %s", exc)
 
-    # -- 7. SSE event ---------------------------------------------------------
-    await publish_event("payment_confirmed", {
+    # -- 7. Publish SSE event -------------------------------------------------
+    await publish_event('payment_received', {
+        "transaction_id": transaction_id,
         "booking_number": booking_number,
         "amount": amount,
         "status": status,
-        "transaction_id": transaction_id,
-        "indemnitor_name": indemnitor_name,
+        "customer_name": customer_name,
     })
 
-    # -- 8. Audit log ---------------------------------------------------------
+    # -- 8. Log audit event ---------------------------------------------------
     audit_events = get_collection("audit_events")
     await audit_events.insert_one({
-        "source": "payment_webhook",
-        "event_type": event_type,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "transaction_id": transaction_id,
-        "indemnitor_name": indemnitor_name,
+        "source": "swipesimple_webhook",
+        "event_type": f"payment.{status}",
+        "payload": data,
         "timestamp": now.isoformat(),
     })
 
-    # -- 9. Telegram staff alert ----------------------------------------------
-    try:
-        from dashboard.services.telegram_service import get_telegram_service
-        tg = get_telegram_service()
-        emoji = "\u2705" if is_success else ("\U0001f504" if is_refund else "\u274c")
-        tg_msg = (
-            f"{emoji} *SwipeSimple {status.title()}*\n"
-            f"Amount: *${amount:,.2f}*\n"
-            f"Booking: `{booking_number or 'N/A'}`\n"
-            f"Indemnitor: {indemnitor_name or 'Unknown'}\n"
-            f"TXN: `{transaction_id}`"
-        )
-        await tg.send_staff_alert(tg_msg)
-    except Exception as tg_exc:
-        logger.warning("[payment_webhook] Telegram alert failed: %s", tg_exc)
-
-    return jsonify({"success": True, "recorded": True, "booking_number": booking_number}), 200
+    return jsonify({"success": True}), 200
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Wix Intake Webhooks
-#  Called by Wix Velo backend when a new IntakeQueue record is created.
-#  Mirrors handleNewIntake() from GAS WixPortalIntegration.js.
-# ═══════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/wix-intake
+# ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.route('/webhooks/wix-intake', methods=['POST'])
 async def wix_intake_webhook():
     """
-    Receive a new intake from the Wix/Velo IntakeQueue CMS collection.
-    Validates the API key, stores in intake_queue, and publishes SSE event.
-    """
-    from dashboard.api.events import publish_event
-    from dashboard.api.intake import _extract_indemnitor, _extract_defendant, SOURCE_LABELS
-    import uuid
+    Handle intake submissions from the Wix indemnitor portal.
 
-    # Validate API key
-    api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").replace("Bearer ", "")
+    Validates the WIX_WEBHOOK_SECRET (or GAS_API_KEY fallback) then
+    forwards the payload to the intake pipeline.
+    """
+    from dashboard.api.intake import _normalize_intake
+
+    # Auth check
+    wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")
+    provided = (
+        request.headers.get("X-Wix-Webhook-Secret", "")
+        or request.headers.get("X-Api-Key", "")
+        or request.args.get("api_key", "")
     )
-    expected_key = os.getenv("WIX_WEBHOOK_SECRET") or os.getenv("GAS_API_KEY", "")
-    if expected_key and api_key != expected_key:
+    if wix_secret and provided != wix_secret:
+        logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
         return jsonify({"error": "Unauthorized"}), 401
 
     data = await request.get_json(force=True) or {}
-    data.setdefault("source", "wix_portal")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    audit_events = get_collection("audit_events")
+    await audit_events.insert_one({
+        "source": "wix_intake_webhook",
+        "event_type": "intake_submission",
+        "payload": data,
+        "timestamp": now_iso,
+    })
 
     try:
-        indemnitor = _extract_indemnitor(data)
-        defendant = _extract_defendant(data)
-
-        ind_full = " ".join(filter(None, [indemnitor["firstName"], indemnitor["lastName"]])) or "Unknown"
-        def_full = defendant["name"] or "Unknown"
-
-        intake_id = (
-            data.get("intakeId")
-            or data.get("caseId")
-            or data.get("_id")
-            or f"WX-{uuid.uuid4().hex[:10].upper()}"
-        )
-
-        now = datetime.now(timezone.utc)
-        doc = {
-            "intake_id": intake_id,
-            "source": "wix_portal",
-            "source_label": SOURCE_LABELS.get("wix_portal", "🌐 Wix Portal"),
-            "status": "pending",
-            "created_at": now,
-            "updated_at": now,
-            "indemnitor": indemnitor,
-            "indemnitor_name": ind_full,
-            "indemnitor_email": indemnitor.get("email", ""),
-            "indemnitor_phone": indemnitor.get("phone", ""),
-            "defendant": defendant,
-            "defendant_name": def_full,
-            "defendant_booking_number": defendant.get("bookingNumber", ""),
-            "defendant_county": defendant.get("county", ""),
-            "defendant_facility": defendant.get("facility", ""),
-            "consent_given": bool(data.get("consent") or data.get("consentGiven")),
-            "consent_timestamp": data.get("consentTimestamp", now.isoformat()),
-            "ai_risk": "",
-            "ai_score": None,
-            "ai_rationale": "",
-            "gas_sync_status": "pending",
-            "gas_sync_timestamp": None,
-            "_raw": data,
-        }
-
-        intake_queue = get_collection("intake_queue")
-        await intake_queue.update_one(
-            {"intake_id": intake_id},
-            {"$set": doc},
-            upsert=True,
-        )
-
-        # Real-time SSE push to dashboard
-        await publish_event('new_intake', {
-            "intake_id": intake_id,
-            "source": "wix_portal",
-            "defendant_name": def_full,
-            "indemnitor_name": ind_full,
-        })
-
-        # Audit log
-        audit_events = get_collection("audit_events")
-        await audit_events.insert_one({
-            "source": "wix_intake_webhook",
-            "event_type": "new_intake",
-            "intake_id": intake_id,
-            "defendant_name": def_full,
-            "indemnitor_name": ind_full,
-            "timestamp": now.isoformat(),
-        })
-
-        return jsonify({
-            "success": True,
-            "intake_id": intake_id,
-            "message": f"Intake received for {def_full}",
-        })
-
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@webhooks_bp.route('/webhooks/wix-intake-update', methods=['POST'])
-async def wix_intake_update_webhook():
-    """
-    Receive an intake status update from Wix (consent confirmed, status changed, AI score).
-    """
-    api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").replace("Bearer ", "")
-    )
-    expected_key = os.getenv("WIX_WEBHOOK_SECRET") or os.getenv("GAS_API_KEY", "")
-    if expected_key and api_key != expected_key:
-        return jsonify({"error": "Unauthorized"}), 401
-
-    data = await request.get_json(force=True) or {}
-    intake_id = data.get("intakeId") or data.get("caseId") or data.get("intake_id")
-    if not intake_id:
-        return jsonify({"error": "intake_id required"}), 400
-
-    allowed = {"status", "gas_sync_status", "ai_risk", "ai_score", "ai_rationale", "notes"}
-    updates = {k: v for k, v in data.items() if k in allowed}
-    updates["updated_at"] = datetime.now(timezone.utc)
-
-    intake_queue = get_collection("intake_queue")
-    result = await intake_queue.update_one({"intake_id": intake_id}, {"$set": updates})
-    if result.matched_count == 0:
-        return jsonify({"error": f"Intake {intake_id} not found"}), 404
-
-    return jsonify({"success": True, "intake_id": intake_id})
+        intake_id, intake_doc = await _normalize_intake(data, source="wix_webhook")
+        logger.info("[wix_intake_webhook] Intake %s created from Wix webhook", intake_id)
+        return jsonify({"success": True, "intake_id": intake_id}), 201
+    except Exception as exc:
+        logger.exception("[wix_intake_webhook] Intake normalization failed")
+        return jsonify({"success": False, "error": str(exc)}), 500

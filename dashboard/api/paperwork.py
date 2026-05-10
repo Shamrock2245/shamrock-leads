@@ -8,12 +8,21 @@ Generates, delivers, and tracks all bail bond paperwork:
   - Power of Attorney (POA)
 
 Endpoints:
-  POST /api/paperwork/generate/<intake_id>     — Generate full packet for an intake
-  POST /api/paperwork/generate/bond/<intake_id> — Generate appearance bond PDFs only
-  GET  /api/paperwork/<packet_id>              — Get packet status + download links
-  POST /api/paperwork/<packet_id>/deliver      — Deliver via BlueBubbles iMessage
-  POST /api/paperwork/<packet_id>/signnow      — Push to SignNow for e-signature
-  GET  /api/paperwork/list/<intake_id>         — List all packets for an intake
+  POST /api/paperwork/generate/<intake_id>          — Generate full packet for an intake
+  POST /api/paperwork/generate/bond/<intake_id>     — Generate appearance bond PDFs only
+  GET  /api/paperwork/<packet_id>                   — Get packet status + download links
+  POST /api/paperwork/<packet_id>/deliver           — Deliver via BlueBubbles iMessage
+  POST /api/paperwork/<packet_id>/signnow           — Push to SignNow for e-signature
+  POST /api/paperwork/<packet_id>/void              — Void a packet (policy Rule 3)
+  GET  /api/paperwork/list/<intake_id>              — List all packets for an intake
+  GET  /api/paperwork/signnow/validate-templates    — Validate all TEMPLATE_MAP entries
+
+Policy Compliance (docs/policies/signature-policy.md):
+  Rule 1: Packet must be bound to Bond_Case_ID before SignNow push.
+  Rule 2: Surety-specific template set (OSI vs Palmetto).
+  Rule 3: No in-place mutation after send/sign — void + new version.
+  Rule 4: Recipient verification before sending signing link.
+  Rule 5: Completion tracking via webhook with Drive filing.
 """
 from __future__ import annotations
 import io
@@ -104,7 +113,6 @@ def _build_bond_data(intake: dict) -> dict:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/generate/<intake_id>
-# Generate the full paperwork packet for an intake record.
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.route("/paperwork/generate/<intake_id>", methods=["POST"])
 async def generate_packet(intake_id: str):
@@ -184,22 +192,47 @@ async def generate_packet(intake_id: str):
             })
 
         # ── Store packet metadata ──────────────────────────────────────────
+        # Resolve bond_case_id from intake or bond_cases collection (policy Rule 1)
+        bond_case_id = intake.get("bond_case_id") or data.get("bond_case_id")
+        if not bond_case_id:
+            # Try to look up by intake_id in bond_cases
+            bond_cases_col = get_collection("bond_cases")
+            bc = await bond_cases_col.find_one({"intake_id": intake_id}, {"bond_case_id": 1})
+            if bc:
+                bond_case_id = bc.get("bond_case_id")
+
         packet_doc = {
             "packet_id": packet_id,
             "intake_id": intake_id,
+            "bond_case_id": bond_case_id,           # policy Rule 1
             "packet_type": packet_type,
             "template": template,
+            "surety_id": template,                  # alias for SignNow service
             "status": "generated",
             "documents": documents,
             "defendant_name": intake.get("defendant_name", ""),
             "defendant_county": intake.get("defendant_county", ""),
+            "defendant_booking_number": (
+                intake.get("defendant_booking_number")
+                or intake.get("defendant", {}).get("bookingNumber", "")
+            ),
             "indemnitor_name": intake.get("indemnitor_name", ""),
-            "indemnitor_phone": intake.get("indemnitor_phone", ""),
+            "indemnitor_email": (
+                intake.get("indemnitor_email")
+                or intake.get("indemnitor", {}).get("email", "")
+            ),
+            "indemnitor_phone": (
+                intake.get("indemnitor_phone")
+                or intake.get("indemnitor", {}).get("phone", "")
+            ),
             "created_at": now,
             "updated_at": now,
             "delivered_via": None,
             "signnow_invite_id": None,
+            "signnow_document_id": None,            # populated on SignNow push
             "signnow_status": None,
+            "packet_version": 1,                    # policy Rule 3
+            "voided": False,
         }
 
         packets_col = get_collection("paperwork_packets")
@@ -216,11 +249,13 @@ async def generate_packet(intake_id: str):
             }},
         )
 
-        logger.info("[paperwork] Packet %s generated for intake %s", packet_id, intake_id)
+        logger.info("[paperwork] Packet %s generated for intake %s (bond_case_id=%s)",
+                    packet_id, intake_id, bond_case_id or "not_yet_linked")
         return jsonify({
             "success": True,
             "packet_id": packet_id,
             "intake_id": intake_id,
+            "bond_case_id": bond_case_id,
             "packet_type": packet_type,
             "documents": documents,
             "document_count": len(documents),
@@ -233,7 +268,6 @@ async def generate_packet(intake_id: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/<packet_id>
-# Get packet status and document list.
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.route("/paperwork/<packet_id>", methods=["GET"])
 async def get_packet(packet_id: str):
@@ -255,8 +289,6 @@ async def get_packet(packet_id: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/deliver
-# Deliver the packet via BlueBubbles iMessage.
-# Body: { "phone": "+12395551234", "message": "Here is your paperwork..." }
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.route("/paperwork/<packet_id>/deliver", methods=["POST"])
 async def deliver_packet(packet_id: str):
@@ -277,6 +309,28 @@ async def deliver_packet(packet_id: str):
         packet = await _load_packet(packet_id)
         if not packet:
             return jsonify({"error": f"Packet {packet_id} not found"}), 404
+
+        # Policy Rule 4: verify recipient phone matches stored indemnitor phone
+        stored_phone = packet.get("indemnitor_phone", "")
+        if stored_phone:
+            # Normalize both to digits only for comparison
+            def _digits(p: str) -> str:
+                return "".join(c for c in p if c.isdigit())
+            if _digits(stored_phone) and _digits(phone) and _digits(stored_phone) != _digits(phone):
+                logger.warning(
+                    "[paperwork] deliver_packet: phone mismatch for packet %s — "
+                    "stored=%s, provided=%s. Proceeding but logging for audit.",
+                    packet_id, stored_phone, phone,
+                )
+                audit_events = get_collection("audit_events")
+                await audit_events.insert_one({
+                    "source": "paperwork_deliver",
+                    "event_type": "phone_mismatch_warning",
+                    "packet_id": packet_id,
+                    "stored_phone": stored_phone,
+                    "provided_phone": phone,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
 
         defendant_name = packet.get("defendant_name", "your defendant")
         intake_id = packet.get("intake_id", "")
@@ -299,7 +353,7 @@ async def deliver_packet(packet_id: str):
 
         # Append geolocator link (mandatory per project standards)
         if include_geo:
-            geo_url = f"{dashboard_url}/g/{intake_id}"  # branded domain, /g/<token> route
+            geo_url = f"{dashboard_url}/g/{intake_id}"
             message += f"\n\n\U0001f4cd Confirm your location: {geo_url}"
 
         # Send via BlueBubbles (iMessage-first, universal bridge)
@@ -352,7 +406,19 @@ async def deliver_packet(packet_id: str):
 async def push_to_signnow(packet_id: str):
     """
     Push the paperwork packet to SignNow for e-signature.
-    Uses the existing signnow_packet_service.
+
+    Policy compliance:
+      Rule 1: Warns if bond_case_id is not set on the packet.
+      Rule 2: Passes surety_id (template set) to SignNowPacketService.
+      Rule 3: Rejects if packet is already signed (no in-place mutation).
+      Rule 4: Passes phase and signer_email explicitly.
+
+    Body (all optional — defaults to packet/intake values):
+      phase:          1 (indemnitor) or 2 (post-approval). Default: 1.
+      surety_id:      "osi" or "palmetto". Default: packet.template.
+      signer_email:   Override indemnitor email.
+      poa_number:     Required for phase 2.
+      telegram_chat_id: If set, also sends signing link via Telegram.
     """
     try:
         data = (await request.get_json()) or {}
@@ -361,14 +427,73 @@ async def push_to_signnow(packet_id: str):
         if not packet:
             return jsonify({"error": f"Packet {packet_id} not found"}), 404
 
+        # Policy Rule 3: reject if already signed
+        if packet.get("status") == "signed":
+            return jsonify({
+                "error": "Packet is already signed. Create a new packet version (Rule 3).",
+                "packet_id": packet_id,
+                "status": "signed",
+            }), 409
+
+        # Policy Rule 3: reject if voided
+        if packet.get("voided"):
+            return jsonify({
+                "error": "Packet has been voided. Create a new packet.",
+                "packet_id": packet_id,
+            }), 409
+
+        # Policy Rule 1: warn if bond_case_id not set
+        bond_case_id = packet.get("bond_case_id")
+        if not bond_case_id:
+            logger.warning(
+                "[paperwork] push_to_signnow: packet %s has no bond_case_id — "
+                "proceeding but this violates signature policy Rule 1.",
+                packet_id,
+            )
+
         intake_id = packet.get("intake_id", "")
         intake = await _load_intake(intake_id)
         if not intake:
             return jsonify({"error": f"Intake {intake_id} not found"}), 404
 
+        # Resolve parameters — body overrides packet defaults
+        phase = int(data.get("phase", 1))
+        surety_id = data.get("surety_id") or packet.get("surety_id") or packet.get("template", "osi")
+        poa_number = data.get("poa_number") or intake.get("poa_number", "")
+        signer_email = (
+            data.get("signer_email")
+            or packet.get("indemnitor_email")
+            or intake.get("indemnitor_email")
+            or intake.get("indemnitor", {}).get("email", "")
+        )
+        signer_name = (
+            packet.get("indemnitor_name")
+            or intake.get("indemnitor_name", "Indemnitor")
+        )
+        telegram_chat_id = data.get("telegram_chat_id") or intake.get("telegram_chat_id")
+
+        if phase == 2 and not poa_number:
+            return jsonify({
+                "error": "Phase 2 requires a poa_number. "
+                         "Provide it in the request body or set it on the intake record.",
+            }), 400
+
         from dashboard.services.signnow_packet_service import SignNowPacketService
         svc = SignNowPacketService()
-        result = await svc.create_packet(intake_doc=intake, packet_id=packet_id)
+        result = await svc.create_packet(
+            intake_doc=intake,
+            packet_id=packet_id,
+            phase=phase,
+            surety_id=surety_id,
+            signer_email=signer_email,
+            signer_name=signer_name,
+            poa_number=poa_number or None,
+        )
+
+        # Store the primary SignNow document ID for webhook correlation
+        # The first document_id is the primary signing document
+        primary_doc_id = (result.get("document_ids") or [""])[0]
+        signing_link = result.get("signing_link", "")
 
         now = datetime.now(timezone.utc)
         packets_col = get_collection("paperwork_packets")
@@ -376,8 +501,13 @@ async def push_to_signnow(packet_id: str):
             {"packet_id": packet_id},
             {"$set": {
                 "signnow_invite_id": result.get("invite_id"),
+                "signnow_document_id": primary_doc_id,   # KEY: enables webhook lookup
+                "signnow_document_ids": result.get("document_ids", []),
+                "signnow_group_id": result.get("group_id", ""),
                 "signnow_status": "sent",
                 "signnow_sent_at": now,
+                "signnow_phase": phase,
+                "signnow_surety_id": surety_id,
                 "status": "pending_signature",
                 "updated_at": now,
             }},
@@ -390,32 +520,39 @@ async def push_to_signnow(packet_id: str):
             {"$set": {"paperwork_status": "pending_signature", "updated_at": now}},
         )
 
-        logger.info("[paperwork] Packet %s pushed to SignNow: %s", packet_id, result.get("invite_id"))
+        logger.info(
+            "[paperwork] Packet %s pushed to SignNow: invite=%s doc=%s phase=%d surety=%s",
+            packet_id, result.get("invite_id"), primary_doc_id, phase, surety_id,
+        )
 
         # ── Telegram delivery (if indemnitor has a Telegram chat_id stored) ──
-        signing_link = result.get("signing_link", "")
-        tg_chat_id = intake.get("telegram_chat_id") or data.get("telegram_chat_id")
-        if signing_link and tg_chat_id:
+        if signing_link and telegram_chat_id:
             try:
                 from dashboard.services.telegram_service import get_telegram_service
                 tg = get_telegram_service()
-                phase = intake.get("phase", 1)
                 await tg.send_signing_link(
-                    chat_id=tg_chat_id,
+                    chat_id=telegram_chat_id,
                     defendant_name=intake.get("defendant_name", ""),
                     signing_link=signing_link,
-                    indemnitor_name=intake.get("indemnitor_name", ""),
+                    indemnitor_name=signer_name,
                     phase=phase,
                 )
-                logger.info("[paperwork] Telegram signing link sent to chat_id=%s", tg_chat_id)
+                logger.info("[paperwork] Telegram signing link sent to chat_id=%s", telegram_chat_id)
             except Exception as tg_exc:
                 logger.warning("[paperwork] Telegram delivery failed: %s", tg_exc)
 
         return jsonify({
             "success": True,
             "packet_id": packet_id,
+            "bond_case_id": bond_case_id,
+            "phase": phase,
+            "surety_id": surety_id,
             "signnow_invite_id": result.get("invite_id"),
+            "signnow_document_id": primary_doc_id,
+            "signnow_document_ids": result.get("document_ids", []),
+            "signnow_group_id": result.get("group_id", ""),
             "signnow_signing_link": signing_link,
+            "manifest_size": result.get("manifest_size", 0),
         })
 
     except Exception as exc:
@@ -424,8 +561,78 @@ async def push_to_signnow(packet_id: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# POST /api/paperwork/<packet_id>/void
+# Void a packet (policy Rule 3 — no in-place mutation after send/sign).
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.route("/paperwork/<packet_id>/void", methods=["POST"])
+async def void_packet(packet_id: str):
+    """
+    Void a paperwork packet.
+
+    Policy Rule 3: Once a packet has been sent or signed, it must be voided
+    (not mutated). A new packet version should be created.
+
+    Body:
+      reason: (required) Human-readable reason for voiding.
+      voided_by: (optional) Staff member name/ID.
+    """
+    try:
+        data = (await request.get_json()) or {}
+        reason = data.get("reason", "").strip()
+        voided_by = data.get("voided_by", "staff")
+
+        if not reason:
+            return jsonify({"error": "reason is required to void a packet"}), 400
+
+        packet = await _load_packet(packet_id)
+        if not packet:
+            return jsonify({"error": f"Packet {packet_id} not found"}), 404
+
+        if packet.get("voided"):
+            return jsonify({"error": "Packet is already voided", "packet_id": packet_id}), 409
+
+        now = datetime.now(timezone.utc)
+        packets_col = get_collection("paperwork_packets")
+        await packets_col.update_one(
+            {"packet_id": packet_id},
+            {"$set": {
+                "voided": True,
+                "voided_at": now.isoformat(),
+                "voided_by": voided_by,
+                "void_reason": reason,
+                "status": "voided",
+                "updated_at": now,
+            }},
+        )
+
+        # Log to audit_events
+        audit_events = get_collection("audit_events")
+        await audit_events.insert_one({
+            "source": "paperwork_void",
+            "event_type": "packet_voided",
+            "packet_id": packet_id,
+            "bond_case_id": packet.get("bond_case_id"),
+            "reason": reason,
+            "voided_by": voided_by,
+            "timestamp": now.isoformat(),
+        })
+
+        logger.info("[paperwork] Packet %s voided by %s: %s", packet_id, voided_by, reason)
+        return jsonify({
+            "success": True,
+            "packet_id": packet_id,
+            "voided": True,
+            "void_reason": reason,
+            "voided_at": now.isoformat(),
+        })
+
+    except Exception as exc:
+        logger.exception("void_packet error for %s", packet_id)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/list/<intake_id>
-# List all packets for an intake record.
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.route("/paperwork/list/<intake_id>", methods=["GET"])
 async def list_packets(intake_id: str):
@@ -462,9 +669,10 @@ async def validate_signnow_templates():
     """
     Validate all SignNow TEMPLATE_MAP entries against the production account.
     For each template:
-      - Calls GET /template/{id} to confirm it exists and is accessible
-      - Reports template name, field count, and role list
+      - Calls GET /document/{id} to confirm it exists and is accessible
+      - Reports template name, field count, role list, and page count
       - Flags any missing or inaccessible templates
+      - Lists all field names for field-mapping verification
 
     Returns:
         {
@@ -511,21 +719,23 @@ async def validate_signnow_templates():
                     headers=svc._headers,
                 )
                 if resp.status_code == 200:
-                    data = resp.json()
-                    field_count = len(data.get("fields", []))
+                    doc_data = resp.json()
+                    fields = doc_data.get("fields", [])
+                    field_names = [f.get("field_name", f.get("name", "")) for f in fields]
                     roles = list({
                         f.get("role", "")
-                        for f in data.get("fields", [])
+                        for f in fields
                         if f.get("role")
                     })
                     results.append({
                         "slug": slug,
                         "template_id": template_id,
                         "status": "valid",
-                        "document_name": data.get("document_name", ""),
-                        "field_count": field_count,
-                        "roles": roles,
-                        "page_count": data.get("page_count", 0),
+                        "document_name": doc_data.get("document_name", ""),
+                        "field_count": len(fields),
+                        "field_names": sorted(field_names),  # for field-mapping audit
+                        "roles": sorted(roles),
+                        "page_count": doc_data.get("page_count", 0),
                     })
                     valid += 1
                 elif resp.status_code == 404:
@@ -533,7 +743,7 @@ async def validate_signnow_templates():
                         "slug": slug,
                         "template_id": template_id,
                         "status": "not_found",
-                        "message": "Template does not exist in this account",
+                        "message": "Template does not exist in this SignNow account",
                     })
                     invalid += 1
                 else:
