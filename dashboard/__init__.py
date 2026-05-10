@@ -175,6 +175,41 @@ def create_app():
     from dashboard.api.court_dockets import court_intel_bp
     app.register_blueprint(court_intel_bp)  # Routes: /api/court-intel/*
 
+    # ── Court Intelligence — Scheduled Ingestion (every 6 hours) ─────────
+    async def _court_intel_cron_loop():
+        """Background loop: ingest court opinions every 6 hours.
+
+        Schedule: 4x/day (06:00, 12:00, 18:00, 00:00 relative to boot).
+        Each cycle pulls 30 days of opinions (deduped against existing).
+        The 180-day deep pull is available manually via the dashboard button.
+        """
+        import asyncio
+        interval_seconds = 6 * 60 * 60  # 6 hours
+        # Wait 60s after boot before first run to let everything initialize
+        await asyncio.sleep(60)
+        while True:
+            try:
+                from dashboard.services.court_data_ingestor import run_ingestion
+                from dashboard.extensions import get_db
+                db = get_db()
+                logger.info("[CourtIntel] ⏰ Scheduled ingestion starting (30-day window)...")
+                result = await run_ingestion(db, days_back=30)
+                ingested = result.get("ingested", 0)
+                dupes = result.get("duplicates", 0)
+                logger.info(
+                    "[CourtIntel] ✅ Scheduled ingestion complete — %d new, %d dupes",
+                    ingested, dupes,
+                )
+            except Exception as e:
+                logger.error("[CourtIntel] ❌ Scheduled ingestion failed: %s", e)
+            await asyncio.sleep(interval_seconds)
+
+    @app.before_serving
+    async def _start_court_intel_cron():
+        import asyncio
+        asyncio.ensure_future(_court_intel_cron_loop())
+        logger.info("[CourtIntel] 📡 Background ingestion scheduled (every 6h, first run in 60s)")
+
     # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving
     async def _start_inbox_poller():
