@@ -81,14 +81,25 @@ def classify_docket_entry(text: str) -> list:
 
 
 class DocketMonitor:
-    """Async docket monitoring engine for active bonds."""
+    """Async docket monitoring engine for active bonds.
+
+    FLP-compliant: proper User-Agent, retry with exponential backoff
+    on 429/5xx, and maintenance-window awareness.
+    """
+
+    MAX_RETRIES = 3
+    BACKOFF_BASE = 2.0
 
     def __init__(self, db, courtlistener_token: str = ""):
         self.db = db
-        self._headers = {"User-Agent": "ShamrockLeads/1.0 (admin@shamrockbailbonds.biz)"}
+        self._headers = {
+            "User-Agent": "ShamrockLeads/1.0 (https://shamrockbailbonds.biz; admin@shamrockbailbonds.biz)",
+        }
         if courtlistener_token:
             self._headers["Authorization"] = f"Token {courtlistener_token}"
         self._client: Optional[httpx.AsyncClient] = None
+        self._requests = 0
+        self._rate_limited = 0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -97,6 +108,35 @@ class DocketMonitor:
                 headers=self._headers, timeout=30.0, follow_redirects=True,
             )
         return self._client
+
+    async def _request_with_retry(self, url: str, params: dict) -> Optional[dict]:
+        """GET with retry + backoff on 429/5xx."""
+        client = await self._get_client()
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                self._requests += 1
+                resp = await client.get(url, params=params)
+                if resp.status_code == 429:
+                    self._rate_limited += 1
+                    wait = self.BACKOFF_BASE * (2 ** attempt)
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        wait = max(wait, int(retry_after))
+                    log.warning("[DocketMonitor] Rate limited, retry in %.1fs", wait)
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code >= 500 and attempt < self.MAX_RETRIES:
+                    await asyncio.sleep(self.BACKOFF_BASE * (2 ** attempt))
+                    continue
+                if resp.status_code == 200:
+                    return resp.json()
+                return None
+            except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                if attempt < self.MAX_RETRIES:
+                    await asyncio.sleep(self.BACKOFF_BASE * (2 ** attempt))
+                else:
+                    log.warning("[DocketMonitor] Request failed after retries: %s", str(e)[:80])
+        return None
 
     async def close(self):
         if self._client and not self._client.is_closed:
@@ -159,20 +199,20 @@ class DocketMonitor:
         }
 
     async def _search_dockets(self, name: str, case_number: str = None, county: str = None) -> list:
-        """Search CourtListener for docket entries matching a defendant."""
+        """Search CourtListener for docket entries matching a defendant.
+
+        Uses retry-safe requests against RECAP (dockets) and Opinions APIs.
+        """
         events = []
-        client = await self._get_client()
         # RECAP docket search
         try:
             params = {"type": "r", "q": f'"{name}"'}
             if county:
                 params["court"] = "flsd flmd flnd"
-            resp = await client.get("/search/", params=params)
-            if resp.status_code == 200:
-                for r in (resp.json().get("results") or [])[:10]:
+            data = await self._request_with_retry("/search/", params)
+            if data:
+                for r in (data.get("results") or [])[:10]:
                     events.extend(self._classify_result(r, name))
-            elif resp.status_code == 429:
-                await asyncio.sleep(5)
         except Exception as e:
             log.debug("Docket search error: %s", str(e)[:80])
 
@@ -183,9 +223,9 @@ class DocketMonitor:
                       "filed_after": (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")}
             if county:
                 params["court"] = "fla fladistctapp_2 flsd flmd"
-            resp = await client.get("/search/", params=params)
-            if resp.status_code == 200:
-                for r in (resp.json().get("results") or [])[:5]:
+            data = await self._request_with_retry("/search/", params)
+            if data:
+                for r in (data.get("results") or [])[:5]:
                     events.extend(self._classify_result(r, name))
         except Exception:
             pass

@@ -164,3 +164,56 @@ async def api_defendant_court_history(defendant_id: str):
     except Exception as e:
         log.exception("Defendant history error: %s", e)
         return jsonify({"error": str(e)}), 500
+
+
+# ── API Health ───────────────────────────────────────────────────────────────
+
+@court_intel_bp.route("/api/court-intel/api-health", methods=["GET"])
+async def api_court_intel_health():
+    """Return CourtListener API health metrics and maintenance status."""
+    try:
+        from dashboard.services.courtlistener_client import CourtListenerClient
+        import os
+        token = os.getenv("COURTLISTENER_API_TOKEN", "")
+        client = CourtListenerClient(api_token=token if token else None)
+        health = client.get_api_health()
+        health["token_configured"] = bool(token)
+        return jsonify({"success": True, **health}), 200
+    except Exception as e:
+        log.exception("API health error: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# ── High-Impact Opinions ─────────────────────────────────────────────────────
+
+@court_intel_bp.route("/api/court-intel/high-impact", methods=["GET"])
+async def api_high_impact_opinions():
+    """Return the highest bail-impact opinions for dashboard surfacing.
+
+    Query params:
+        min_score: minimum bail_impact score (default 50)
+        limit: max results (default 20)
+    """
+    try:
+        db = _get_db()
+        min_score = int(request.args.get("min_score", 50))
+        limit = min(int(request.args.get("limit", 20)), 50)
+
+        cursor = db.court_outcomes.find(
+            {"bail_impact.score": {"$gte": min_score}},
+            {"snippet": 0},
+        ).sort("bail_impact.score", -1).limit(limit)
+
+        results = await cursor.to_list(length=limit)
+        for r in results:
+            r["_id"] = str(r["_id"])
+
+        return jsonify({
+            "success": True,
+            "count": len(results),
+            "min_score": min_score,
+            "results": results,
+        }), 200
+    except Exception as e:
+        log.exception("High-impact query error: %s", e)
+        return jsonify({"error": str(e)}), 500
