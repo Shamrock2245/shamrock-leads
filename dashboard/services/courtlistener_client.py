@@ -150,10 +150,20 @@ class CourtListenerClient:
 
     async def search_opinions(self, query="", courts=None,
                               date_filed_after=None, date_filed_before=None,
-                              page_size=20) -> dict:
-        """Search case law opinions via the search endpoint."""
+                              page_size=20, max_pages=5) -> dict:
+        """Search case law opinions via the search endpoint.
+
+        Uses cursor-based pagination (CourtListener v4) to fetch up to
+        ``max_pages`` pages of results.  Each page returns up to ``page_size``
+        items; the default cap of 5 pages × 20 items = 100 results per call
+        keeps latency reasonable while covering the vast majority of queries.
+
+        Args:
+            max_pages: Maximum number of cursor pages to follow (default 5).
+                       Set to 1 to replicate the old single-page behaviour.
+        """
         client = await self._get_client()
-        params = {"type": "o"}
+        params = {"type": "o", "page_size": page_size}
         if query:
             params["q"] = query
         if courts:
@@ -162,13 +172,36 @@ class CourtListenerClient:
             params["filed_after"] = date_filed_after
         if date_filed_before:
             params["filed_before"] = date_filed_before
+
+        all_results: list = []
+        total_count: int = 0
+        next_url: str | None = None
+        page = 0
+
         try:
-            resp = await client.get("/search/", params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            results = data.get("results", [])
-            log.info("CourtListener search: %d results for q='%s'", len(results), query[:50])
-            return {"success": True, "count": data.get("count", len(results)), "results": results}
+            while page < max_pages:
+                if next_url:
+                    # Follow the full cursor URL returned by the API
+                    resp = await client.get(next_url)
+                else:
+                    resp = await client.get("/search/", params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                page_results = data.get("results", [])
+                all_results.extend(page_results)
+                if page == 0:
+                    total_count = data.get("count", len(page_results))
+                next_url = data.get("next")  # full cursor URL or None
+                page += 1
+                if not next_url:
+                    break  # no more pages
+                await asyncio.sleep(0.2)  # polite rate-limit between pages
+
+            log.info(
+                "CourtListener search: %d results (%d pages) for q='%s'",
+                len(all_results), page, (query or "")[:50],
+            )
+            return {"success": True, "count": total_count, "results": all_results}
         except httpx.HTTPStatusError as e:
             log.error("CourtListener HTTP %d: %s", e.response.status_code, str(e)[:200])
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
@@ -220,6 +253,7 @@ class CourtListenerClient:
                     courts=state_courts,
                     date_filed_after=date_after,
                     page_size=page_size,
+                    max_pages=3,  # Up to 3 pages × page_size per state
                 )
 
                 if result.get("success") and result.get("results"):

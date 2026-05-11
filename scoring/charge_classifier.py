@@ -211,15 +211,34 @@ KEYWORD_MAP = {
     "failure to appear": ("public_order", "felony_3", 20, False),
     "fta": ("public_order", "felony_3", 20, False),
     "violation of probation": ("public_order", "felony_3", 15, False),
+    "probation violation": ("public_order", "felony_3", 15, False),
     "vop": ("public_order", "felony_3", 15, False),
     "resisting": ("public_order", "misdemeanor_1", 3, False),
+    "resist officer": ("public_order", "misdemeanor_1", 3, False),
+    "obstruct": ("public_order", "misdemeanor_1", 3, False),
+    "flee": ("traffic", "felony_3", 12, False),
+    "elude": ("traffic", "felony_3", 12, False),
     "disorderly": ("public_order", "misdemeanor_2", 2, False),
     "trespass": ("public_order", "misdemeanor_1", 3, False),
+
+    # Child / Elder offenses
+    "child abuse": ("violent", "felony_3", 8, False),
+    "neglect of child": ("violent", "felony_3", 8, False),
+    "child neglect": ("violent", "felony_3", 8, False),
+    "exploitation of elderly": ("fraud", "felony_2", 8, False),
+    "elder abuse": ("violent", "felony_3", 8, False),
+    "exploitation of a disabled": ("fraud", "felony_2", 8, False),
+
+    # Property (additional)
+    "criminal mischief": ("property", "misdemeanor_2", 2, False),
+    "vandalism": ("property", "misdemeanor_2", 2, False),
 
     # Disqualifiers
     "federal": ("other", "felony_1", 0, True),
     "no bond": ("other", "capital", 0, True),
     "hold": ("other", "capital", 0, True),
+    "ice hold": ("other", "capital", 0, True),
+    "immigration detainer": ("other", "capital", 0, True),
 }
 
 # ── Statute regex patterns ─────────────────────────────────────────────────

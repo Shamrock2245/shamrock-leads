@@ -293,10 +293,58 @@ class GeoIntelligenceService:
         )
         return result.modified_count > 0
 
+    def _zone_is_active(self, zone: dict, ts: str) -> bool:
+        """Return True if the zone's schedule is active at the given timestamp.
+
+        The ``schedule`` field is optional.  When absent the zone is always
+        active.  When present it must contain:
+            - ``days``:       list of weekday integers 0=Mon ... 6=Sun
+            - ``start_hour``: 0-23 (inclusive, local ET)
+            - ``end_hour``:   0-23 (exclusive, i.e. end_hour=22 means until 21:59)
+
+        All times are interpreted in US/Eastern (Lee County).  If pytz is
+        unavailable we fall back to UTC (zone always active).
+        """
+        schedule = zone.get("schedule")
+        if not schedule:
+            return True  # No schedule = always enforced
+        try:
+            import pytz
+            from datetime import datetime as _dt
+            tz = pytz.timezone("US/Eastern")
+            dt_utc = _dt.fromisoformat(ts.replace("Z", "+00:00"))
+            dt_local = dt_utc.astimezone(tz)
+        except Exception:
+            return True  # pytz unavailable or bad ts — default active
+
+        weekday = dt_local.weekday()  # 0=Mon, 6=Sun
+        hour = dt_local.hour
+
+        allowed_days = schedule.get("days")
+        if allowed_days is not None and weekday not in allowed_days:
+            return False  # Not an enforcement day
+
+        start_h = schedule.get("start_hour")
+        end_h = schedule.get("end_hour")
+        if start_h is not None and end_h is not None:
+            if start_h <= end_h:
+                if not (start_h <= hour < end_h):
+                    return False
+            else:
+                # Overnight window e.g. curfew 22:00-06:00
+                if not (hour >= start_h or hour < end_h):
+                    return False
+        return True
+
     async def _check_geofence_violations(
         self, device: dict, lat: float, lng: float, ts: str
     ):
-        """Check if a position violates any geofence for this defendant."""
+        """Check if a position violates any geofence for this defendant.
+
+        Respects the zone ``schedule`` field for time-based curfew enforcement:
+        if a zone has a schedule and the current time is outside the enforcement
+        window, the zone is skipped (no false positives during allowed hours).
+        """
         booking_number = device.get("booking_number")
         if not booking_number:
             return
@@ -305,6 +353,14 @@ class GeoIntelligenceService:
         for zone in zones:
             center = zone.get("center", {})
             if not center.get("lat") or not center.get("lng"):
+                continue
+
+            # ── Curfew / schedule gate ────────────────────────────────
+            if not self._zone_is_active(zone, ts):
+                logger.debug(
+                    "Zone '%s' schedule inactive at %s — skipping",
+                    zone.get("name", zone.get("zone_id", "")), ts,
+                )
                 continue
 
             distance = haversine_miles(lat, lng, center["lat"], center["lng"])
