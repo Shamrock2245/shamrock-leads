@@ -93,7 +93,7 @@
   <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">🔍 Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">👤 Defendants</button>
   <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📱 Outreach <span class="badge" id="prospectiveBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
+  <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()">🏥 Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
@@ -771,6 +771,83 @@
       <div class="panel-title" id="drillTitle">&#x1F50D; County Detail</div>
       <div id="drillContent"></div>
     </div>
+
+    <!-- ═══ SERVICE CONTROL CENTER ═══ -->
+    <div class="panel svc-control-panel" style="margin-top:24px">
+      <div class="svc-control-header">
+        <div>
+          <div class="panel-title" style="margin:0">🎛️ Service Control Center</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Start/stop background services · Real-time status monitoring · 30s auto-refresh</div>
+        </div>
+        <button class="btn-export" onclick="SLServiceControl.refresh()" style="font-size:12px">↻ Refresh</button>
+      </div>
+
+      <!-- Summary KPI -->
+      <div class="svc-summary-bar" id="svcSummaryKpi">
+        Loading service status…
+      </div>
+
+      <!-- Category: Revenue Automation -->
+      <div class="svc-category">
+        <div class="svc-category-label">
+          💰 Revenue Automation
+          <div class="svc-category-actions">
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('revenue',true)">▶ Start All</button>
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('revenue',false)">■ Stop All</button>
+          </div>
+        </div>
+        <div class="svc-grid" id="svcRevenueGrid"></div>
+      </div>
+
+      <!-- Category: Intelligence Pipeline -->
+      <div class="svc-category">
+        <div class="svc-category-label">
+          🧠 Intelligence Pipeline
+          <div class="svc-category-actions">
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('intel',true)">▶ Start All</button>
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('intel',false)">■ Stop All</button>
+          </div>
+        </div>
+        <div class="svc-grid" id="svcIntelGrid"></div>
+      </div>
+
+      <!-- Category: Monitoring & Compliance -->
+      <div class="svc-category">
+        <div class="svc-category-label">
+          🛡️ Monitoring & Compliance
+          <div class="svc-category-actions">
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('monitor',true)">▶ Start All</button>
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('monitor',false)">■ Stop All</button>
+          </div>
+        </div>
+        <div class="svc-grid" id="svcMonitorGrid"></div>
+      </div>
+
+      <!-- Category: Geo Intelligence -->
+      <div class="svc-category">
+        <div class="svc-category-label">
+          🛰️ Geo Intelligence
+          <div class="svc-category-actions">
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('geo',true)">▶ Start All</button>
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('geo',false)">■ Stop All</button>
+          </div>
+        </div>
+        <div class="svc-grid" id="svcGeoGrid"></div>
+      </div>
+
+      <!-- Category: Content -->
+      <div class="svc-category">
+        <div class="svc-category-label">
+          ✍️ Content
+          <div class="svc-category-actions">
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('content',true)">▶ Start All</button>
+            <button class="svc-cat-btn" onclick="SLServiceControl.toggleCategory('content',false)">■ Stop All</button>
+          </div>
+        </div>
+        <div class="svc-grid" id="svcContentGrid"></div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -2779,6 +2856,7 @@
 <script src="/sl-geo-intelligence.js?v=1"></script>
 <script src="/sl-intake.js?v=4"></script>
 <script src="/sl-health.js?v=4"></script>
+<script src="/sl-service-control.js?v=1"></script>
 <script src="/sl-prospective.js?v=4"></script>
 <script src="/sl-defendant-lifecycle.js?v=4"></script>
 <script src="/sl-indemnitor.js?v=4"></script>

@@ -216,6 +216,15 @@ def create_app():
         await asyncio.sleep(120)
         while True:
             try:
+                from dashboard.services.automation_config import should_run
+                from dashboard.extensions import get_db as _gdb
+                if not await should_run(_gdb(), "docket_monitor"):
+                    logger.debug("[DocketMonitor] Disabled via config — skipping cycle")
+                    await asyncio.sleep(interval_seconds)
+                    continue
+            except Exception:
+                pass
+            try:
                 from dashboard.services.docket_monitor import run_docket_scan
                 from dashboard.extensions import get_db
                 db = get_db()
@@ -251,6 +260,15 @@ def create_app():
         await asyncio.sleep(60)
         while True:
             try:
+                from dashboard.services.automation_config import should_run
+                from dashboard.extensions import get_db as _gdb
+                if not await should_run(_gdb(), "court_intel"):
+                    logger.debug("[CourtIntel] Disabled via config — skipping cycle")
+                    await asyncio.sleep(interval_seconds)
+                    continue
+            except Exception:
+                pass
+            try:
                 from dashboard.services.court_data_ingestor import run_ingestion
                 from dashboard.extensions import get_db
                 db = get_db()
@@ -285,6 +303,15 @@ def create_app():
         # Wait 90s after boot to let DB and other services initialize
         await asyncio.sleep(90)
         while True:
+            try:
+                from dashboard.services.automation_config import should_run
+                from dashboard.extensions import get_db as _gdb
+                if not await should_run(_gdb(), "nlp_enrichment"):
+                    logger.debug("[NLP-Enrich] Disabled via config — skipping cycle")
+                    await asyncio.sleep(interval_seconds)
+                    continue
+            except Exception:
+                pass
             try:
                 from dashboard.extensions import get_db
                 from dashboard.services.legal_nlp_service import analyze_charges, extract_citations
@@ -726,6 +753,15 @@ def create_app():
             await asyncio.sleep(30)  # Initial delay — let servers start first
             while True:
                 try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "bb_health"):
+                        logger.debug("[BB-Health] Disabled via config — skipping cycle")
+                        await asyncio.sleep(600)
+                        continue
+                except Exception:
+                    pass
+                try:
                     await run_health_check_all()
                 except Exception as e:
                     logger.warning("BB health check error: %s", e)
@@ -743,6 +779,15 @@ def create_app():
             _cycle = 0
             while True:
                 _cycle += 1
+                try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "court_reminders"):
+                        logger.debug("[CourtReminder] Disabled via config — skipping cycle")
+                        await asyncio.sleep(3600)
+                        continue
+                except Exception:
+                    pass
                 try:
                     from dashboard.services.court_reminder_service import CourtReminderService
                     service = CourtReminderService(app.db)
@@ -769,6 +814,15 @@ def create_app():
         async def _delinquency_loop():
             await asyncio.sleep(120)  # Initial delay
             while True:
+                try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "delinquency_scanner"):
+                        logger.debug("[Delinquency] Disabled via config — skipping cycle")
+                        await asyncio.sleep(14400)
+                        continue
+                except Exception:
+                    pass
                 try:
                     from dashboard.extensions import get_db
                     from dashboard.api.notifications import create_notification
@@ -817,6 +871,15 @@ def create_app():
             await asyncio.sleep(180)  # Initial delay
             while True:
                 try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "rearrest_detection"):
+                        logger.debug("[ReArrest] Disabled via config — skipping cycle")
+                        await asyncio.sleep(7200)
+                        continue
+                except Exception:
+                    pass
+                try:
                     from dashboard.api.rearrest_detector import scan_for_rearrests
                     result = await scan_for_rearrests(hours=3)
                     if result.get("detected", 0) > 0:
@@ -839,6 +902,15 @@ def create_app():
         async def _retention_loop():
             await asyncio.sleep(300)  # Initial delay
             while True:
+                try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "data_retention"):
+                        logger.debug("[DataRetention] Disabled via config — skipping cycle")
+                        await asyncio.sleep(604800)
+                        continue
+                except Exception:
+                    pass
                 try:
                     from dashboard.api.data_retention import _execute_purge
                     result = await _execute_purge(dry_run=False)
@@ -884,6 +956,15 @@ def create_app():
             _cycle = 0
             while True:
                 _cycle += 1
+                try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "court_email"):
+                        logger.debug("[DischargeMonitor] Disabled via config — skipping cycle")
+                        await asyncio.sleep(900)
+                        continue
+                except Exception:
+                    pass
                 try:
                     result = await asyncio.to_thread(_sync_process_emails)
                     processed = result.get("processed", 0)
@@ -942,6 +1023,15 @@ def create_app():
         async def _blog_loop():
             await asyncio.sleep(300)  # Initial delay — 5 min after startup
             while True:
+                try:
+                    from dashboard.services.automation_config import should_run
+                    from dashboard.extensions import get_db as _gdb
+                    if not await should_run(_gdb(), "blog_publisher"):
+                        logger.debug("[BlogPublisher] Disabled via config — skipping cycle")
+                        await asyncio.sleep(21600)
+                        continue
+                except Exception:
+                    pass
                 try:
                     result = await asyncio.to_thread(_sync_publish)
                     published = result.get("published", 0)

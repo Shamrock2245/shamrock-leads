@@ -72,6 +72,58 @@ DEFAULT_CONFIG = {
         "alert_channel": "slack",        # "slack" | "telegram" | "both"
     },
 
+    # ─── Intelligence Pipeline (default: ON) ─────────────────────────────────
+    "docket_monitor": {
+        "enabled": True,
+        "interval_seconds": 14400,       # 4 hours
+    },
+    "court_intel": {
+        "enabled": True,
+        "interval_seconds": 21600,       # 6 hours
+    },
+    "nlp_enrichment": {
+        "enabled": True,
+        "interval_seconds": 7200,        # 2 hours
+    },
+
+    # ─── Monitoring & Compliance (default: ON) ───────────────────────────────
+    "court_reminders": {
+        "enabled": True,
+        "interval_seconds": 3600,        # 1 hour
+    },
+    "rearrest_detection": {
+        "enabled": True,
+        "interval_seconds": 7200,        # 2 hours
+    },
+    "delinquency_scanner": {
+        "enabled": True,
+        "interval_seconds": 14400,       # 4 hours
+    },
+    "court_email": {
+        "enabled": True,
+        "interval_seconds": 900,         # 15 minutes
+    },
+    "bb_health": {
+        "enabled": True,
+        "interval_seconds": 600,         # 10 minutes
+    },
+    "data_retention": {
+        "enabled": True,
+        "interval_seconds": 604800,      # 7 days
+    },
+
+    # ─── Geo Intelligence (default: OFF — opt-in) ───────────────────────────
+    "geo_intelligence": {
+        "enabled": False,
+        "interval_seconds": 300,         # 5 minutes
+    },
+
+    # ─── Content (default: ON) ──────────────────────────────────────────────
+    "blog_publisher": {
+        "enabled": True,
+        "interval_seconds": 21600,       # 6 hours
+    },
+
     # ── Metadata ──
     "updated_at": None,
     "updated_by": None,
@@ -133,3 +185,26 @@ async def is_enabled(db, automation_key: str) -> bool:
     cfg = await get_automation_config(db)
     section = cfg.get(automation_key, {})
     return section.get("enabled", False)
+
+
+async def should_run(db, key: str, default: bool = True) -> bool:
+    """Check if a background service should run this cycle.
+
+    Unlike is_enabled(), this defaults to True so system services
+    keep running even if the config document doesn't exist yet.
+
+    Args:
+        db: Motor database instance
+        key: Service key (e.g. "docket_monitor", "court_reminders")
+        default: Value to return if config can't be read
+
+    Returns:
+        True if the service should execute, False to skip.
+    """
+    try:
+        cfg = await get_automation_config(db)
+        section = cfg.get(key, {})
+        return section.get("enabled", default)
+    except Exception:
+        return default
+
