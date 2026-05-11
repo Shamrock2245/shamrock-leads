@@ -47,6 +47,7 @@ services:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:
       - shamrock-leads
+      - traccar
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
       interval: 30s
@@ -56,6 +57,38 @@ services:
     volumes:
       - dashboard-uploads:/app/dashboard/uploads  # Persistent KYC uploads
       - ./config:/app/config:ro                   # Firebase admin SDK + secrets
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Traccar GPS Intelligence Engine ──
+  # Real-time GPS tracking server (Java) — 200+ device protocols
+  # REST API on 8082 (internal), webhooks to dashboard:5050
+  traccar:
+    image: traccar/traccar:latest
+    container_name: shamrock-traccar
+    restart: unless-stopped
+    hostname: traccar
+    volumes:
+      - traccar-data:/opt/traccar/data        # H2 database (persistent)
+      - traccar-logs:/opt/traccar/logs         # Server logs
+      - ./config/traccar/traccar.xml:/opt/traccar/conf/traccar.xml:ro  # Custom config
+    ports:
+      - "8082:8082"                            # Traccar REST API + Web UI
+      - "5055:5055"                            # OsmAnd protocol (phone app tracking)
+      - "5055:5055/udp"                        # OsmAnd UDP
+      - "5001:5001"                            # GPS103/TK103 (vehicle trackers)
+      - "5013:5013"                            # H02 (personal/ankle trackers)
+      - "5023:5023"                            # GT06 (OBD2 vehicle)
+      - "5027:5027"                            # Teltonika (professional fleet)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/api/server"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging:
       driver: "json-file"
       options:
@@ -94,4 +127,8 @@ volumes:
   node-red-data:
     driver: local
   dashboard-uploads:
+    driver: local
+  traccar-data:
+    driver: local
+  traccar-logs:
     driver: local

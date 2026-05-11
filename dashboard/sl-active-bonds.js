@@ -28,6 +28,18 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/* ── FTA Risk Badge (mirrors leads-engine.js ftaBadge) ──────── */
+function _abFtaBadge(b) {
+  const lvl = (b.fta_risk_level || '').toLowerCase();
+  const score = b.fta_risk_score;
+  if (!lvl || score == null) return '—';
+  const colors = { critical: '#ff4444', high: '#ff8800', moderate: '#ffcc00', low: '#44bb44', disqualified: '#888' };
+  const icons  = { critical: '🔴', high: '🟠', moderate: '🟡', low: '🟢', disqualified: '⛔' };
+  const clr = colors[lvl] || '#888';
+  const ico = icons[lvl] || '⚪';
+  return `<span class="fta-badge" style="background:${clr}22;color:${clr};border:1px solid ${clr}44;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;white-space:nowrap;cursor:help" title="FTA Risk: ${lvl} (${score}/100) | Confidence: ${b.fta_risk_confidence != null ? (b.fta_risk_confidence * 100).toFixed(0) + '%' : 'N/A'}">${ico} ${lvl.charAt(0).toUpperCase()+lvl.slice(1)} <span style="opacity:0.7;font-size:9px">${score}</span></span>`;
+}
+
 /* ── State ────────────────────────────────────────────────────────── */
 let _abBonds = [];
 let _abFilter = 'all';
@@ -66,7 +78,7 @@ async function loadActiveBonds() {
   } catch (e) {
     console.error('loadActiveBonds error:', e);
     const tbody = document.getElementById('abTableBody');
-    if (tbody) tbody.innerHTML = `<tr><td colspan="12" style="color:var(--danger);text-align:center;padding:24px">Error loading active bonds: ${e.message}</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="15" style="color:var(--danger);text-align:center;padding:24px">Error loading active bonds: ${e.message}</td></tr>`;
   }
 }
 
@@ -191,7 +203,7 @@ function renderActiveBondsTable() {
   }
 
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:32px;color:var(--muted)">No bonds match this filter.<br><button class="btn-export" style="margin-top:12px" onclick="openAddBondModal()">➕ Add First Bond</button></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:32px;color:var(--muted)">No bonds match this filter.<br><button class="btn-export" style="margin-top:12px" onclick="openAddBondModal()">➕ Add First Bond</button></td></tr>`;
     return;
   }
 
@@ -275,6 +287,7 @@ function renderActiveBondsTable() {
           ${risk} ${risk >= 75 ? '🔴' : risk >= 50 ? '🟡' : '🟢'}
         </span>
       </td>
+      <td style="text-align:center">${_abFtaBadge(b)}</td>
       <td style="text-align:center;min-width:70px">${courtCountdown}</td>
       <td>${lastCI}</td>
       <td style="${nextDueStyle}">${nextDue}${overdueLabel}</td>
@@ -721,20 +734,43 @@ function showRiskBreakdown(bookingNumber, defName, risk, factorsEncoded) {
     `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px;color:var(--muted)">${k.replace(/_/g,' ')}</span><span style="font-size:12px;font-weight:600;color:${v > 0 ? 'var(--danger)' : 'var(--accent)'}">${v > 0 ? '+' : ''}${v}</span></div>`
   ).join('') || '<p style="color:var(--muted);font-size:12px">No factor breakdown available.</p>';
 
+  // Look up FTA data from the bond record
+  const bond = (_abBonds || []).find(b => b.booking_number === bookingNumber) || {};
+  const ftaScore = bond.fta_risk_score;
+  const ftaLevel = (bond.fta_risk_level || '').toLowerCase();
+  const ftaConf = bond.fta_risk_confidence;
+  const ftaColors = { critical: '#ff4444', high: '#ff8800', moderate: '#ffcc00', low: '#44bb44' };
+  const ftaColor = ftaColors[ftaLevel] || '#888';
+  const ftaSection = ftaScore != null ? `
+    <div style="margin-top:16px;padding:14px;background:${ftaColor}11;border:1px solid ${ftaColor}33;border-radius:8px">
+      <div style="font-size:11px;font-weight:600;color:${ftaColor};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">⚡ FTA Predictive Intelligence</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:12px;color:var(--muted)">FTA Risk Score</span>
+        <span style="font-size:16px;font-weight:700;color:${ftaColor}">${ftaScore}<span style="font-size:11px;color:var(--muted)">/100</span></span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span style="font-size:12px;color:var(--muted)">Risk Level</span>
+        <span style="font-size:12px;font-weight:600;color:${ftaColor}">${ftaLevel.charAt(0).toUpperCase() + ftaLevel.slice(1)}</span>
+      </div>
+      ${ftaConf != null ? `<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:12px;color:var(--muted)">Model Confidence</span><span style="font-size:12px;font-weight:600;color:var(--text)">${(ftaConf * 100).toFixed(1)}%</span></div>` : ''}
+    </div>` : '';
+
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1003;display:flex;align-items:center;justify-content:center';
   modal.innerHTML = `
     <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(400px,90vw);max-height:80vh;overflow-y:auto">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel);border-radius:12px 12px 0 0">
-        <h3 style="margin:0;font-size:15px">⚠️ Risk Score — ${escHtml(defName || bookingNumber)}</h3>
+        <h3 style="margin:0;font-size:15px">⚠️ Risk Profile — ${escHtml(defName || bookingNumber)}</h3>
         <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div style="padding:20px">
         <div style="text-align:center;margin-bottom:20px">
           <div style="font-size:52px;font-weight:700;color:${risk >= 70 ? 'var(--danger)' : risk >= 40 ? '#f59e0b' : 'var(--accent)'}">${risk}<span style="font-size:20px;color:var(--muted)">/100</span></div>
           <div style="color:var(--muted);font-size:13px">${risk >= 70 ? '🔴 High Risk' : risk >= 40 ? '🟡 Medium Risk' : '🟢 Low Risk'}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">Forfeiture Risk Score</div>
         </div>
         ${lines}
+        ${ftaSection}
         <p style="margin-top:14px;font-size:11px;color:var(--muted);text-align:center">Score updates automatically as check-ins and alerts are recorded.</p>
       </div>
       <div style="padding:12px 20px;border-top:1px solid var(--border);text-align:right;background:var(--panel);border-radius:0 0 12px 12px">
@@ -1191,6 +1227,7 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
         <span class="kb-tag kb-tag-amount">${amount}</span>
         <span class="kb-tag ${courtClass}">${courtLabel}</span>
         ${surety ? `<span class="kb-tag">${escHtml(surety)}</span>` : ''}
+        ${bond.fta_risk_score != null ? `<span class="kb-tag" style="font-size:9px">${_abFtaBadge(bond)}</span>` : ''}
       </div>
       <div class="kb-card-poa">
         <span class="kb-card-poa-label">POA:</span>

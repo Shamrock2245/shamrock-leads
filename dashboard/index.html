@@ -95,11 +95,12 @@
   <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📱 Outreach <span class="badge" id="prospectiveBadge">—</span></button>
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this)">🏥 Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
   <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
   <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
   <button class="tab-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()">🧠 Intelligence</button>
+  <button class="tab-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')">🧬 Legal NLP</button>
   <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
   <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
@@ -847,6 +848,7 @@
               <th>Indemnitor</th>
               <th>Charges</th>
               <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('risk_score')">⇵ Risk</th>
+              <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('fta_risk_score')">⇵ FTA Risk</th>
               <th style="cursor:pointer" onclick="SLActiveBonds.sortTable('court_date')">⇵ Court Date</th>
               <th id="abCourtCountdownHdr" style="cursor:pointer" onclick="SLActiveBonds.sortTable('court_days')">⇵ Days to Court</th>
               <th>Last Check-In</th>
@@ -855,7 +857,7 @@
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="abTableBody"><tr><td colspan="14" class="loading">Loading active bonds…</td></tr></tbody>
+          <tbody id="abTableBody"><tr><td colspan="15" class="loading">Loading active bonds…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1184,6 +1186,95 @@
       </div>
       <button class="btn-primary" onclick="SLTracking.scheduleReminders()">📅 Schedule 4-Touch Reminders</button>
       <div id="crResult" style="margin-top:10px;font-size:13px"></div>
+    </div>
+
+    <!-- ═══ GEO INTELLIGENCE CONTROL PANEL ═══ -->
+    <div class="panel" style="margin-top:24px;border:1px solid rgba(16,185,129,0.2);background:linear-gradient(135deg,rgba(16,185,129,0.03),transparent)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div>
+          <div class="panel-title" style="margin:0">🛰️ Geo Intelligence — GPS Tracking Engine</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Traccar device management · Geofence zones · Violation alerts · Vehicle watch</div>
+        </div>
+        <button class="btn-export" onclick="SLGeoIntel.refreshAll()">↻ Refresh All</button>
+      </div>
+
+      <!-- Traccar Health -->
+      <div id="geoTraccarHealth" style="margin-bottom:14px"></div>
+
+      <!-- GeoIntel KPIs -->
+      <div class="stats-grid" style="margin-bottom:18px">
+        <div class="stat-card"><div class="stat-label">📡 Devices</div><div class="stat-value" id="geoKpiDevices">—</div></div>
+        <div class="stat-card"><div class="stat-label">🎯 Zones</div><div class="stat-value" id="geoKpiZones">—</div></div>
+        <div class="stat-card"><div class="stat-label">🚨 Violations (24h)</div><div class="stat-value" id="geoKpiViolations">—</div></div>
+        <div class="stat-card"><div class="stat-label">🚗 Vehicles</div><div class="stat-value" id="geoKpiVehicles">—</div></div>
+        <div class="stat-card"><div class="stat-label">⚠️ Stale Devices</div><div class="stat-value" id="geoKpiStale">—</div></div>
+        <div class="stat-card"><div class="stat-label">📣 Unacked</div><div class="stat-value" id="geoKpiUnacked">—</div></div>
+      </div>
+
+      <!-- Sub-tabs -->
+      <div class="btn-group" style="margin-bottom:14px">
+        <button class="active" onclick="document.querySelectorAll('[data-geo-pane]').forEach(p=>p.style.display='none');document.getElementById('geoDevicePane').style.display='';this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));this.classList.add('active')">📡 Devices</button>
+        <button onclick="document.querySelectorAll('[data-geo-pane]').forEach(p=>p.style.display='none');document.getElementById('geoZonePane').style.display='';this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));this.classList.add('active')">🎯 Geofences</button>
+        <button onclick="document.querySelectorAll('[data-geo-pane]').forEach(p=>p.style.display='none');document.getElementById('geoViolationPane').style.display='';this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));this.classList.add('active')">🚨 Violations</button>
+        <button onclick="document.querySelectorAll('[data-geo-pane]').forEach(p=>p.style.display='none');document.getElementById('geoVehiclePane').style.display='';this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));this.classList.add('active')">🚗 Vehicles</button>
+      </div>
+
+      <!-- Device Pane -->
+      <div data-geo-pane id="geoDevicePane">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:12px;align-items:end">
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Booking #</label><input id="geoNewDeviceBooking" type="text" placeholder="202504-12345" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">County</label><input id="geoNewDeviceCounty" type="text" placeholder="Lee" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Device Type</label>
+            <select id="geoNewDeviceType" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+              <option value="phone_app">📱 Phone App</option>
+              <option value="vehicle_tracker">🚗 Vehicle Tracker</option>
+              <option value="personal_tracker">📍 Personal</option>
+              <option value="ankle_monitor">⌚ Ankle Monitor</option>
+            </select></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Unique ID / IMEI</label><input id="geoNewDeviceUid" type="text" placeholder="IMEI or app ID" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <button class="btn-primary" onclick="SLGeoIntel.registerDevice()" style="padding:7px 14px;font-size:12px;white-space:nowrap">+ Register</button>
+        </div>
+        <input id="geoNewDeviceLabel" type="hidden" value="">
+        <div id="geoDeviceList" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
+
+      <!-- Zone Pane -->
+      <div data-geo-pane id="geoZonePane" style="display:none">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:12px;align-items:end">
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Booking #</label><input id="geoNewZoneBooking" type="text" placeholder="202504-12345" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Zone Name</label><input id="geoNewZoneName" type="text" placeholder="Home" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Type</label>
+            <select id="geoNewZoneType" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
+              <option value="inclusion">🟢 Inclusion</option><option value="exclusion">🔴 Exclusion</option>
+            </select></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Latitude</label><input id="geoNewZoneLat" type="number" step="any" placeholder="26.6406" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Longitude</label><input id="geoNewZoneLng" type="number" step="any" placeholder="-81.8723" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Radius (mi)</label><input id="geoNewZoneRadius" type="number" step="0.1" value="5" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <button class="btn-primary" onclick="SLGeoIntel.createZone()" style="padding:7px 14px;font-size:12px;white-space:nowrap">+ Create</button>
+        </div>
+        <input id="geoNewZoneAddress" type="hidden" value="">
+        <div id="geoZoneList" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
+
+      <!-- Violation Pane -->
+      <div data-geo-pane id="geoViolationPane" style="display:none">
+        <div id="geoViolationFeed" style="display:flex;flex-direction:column;gap:6px;max-height:500px;overflow-y:auto"></div>
+      </div>
+
+      <!-- Vehicle Pane -->
+      <div data-geo-pane id="geoVehiclePane" style="display:none">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:12px;align-items:end">
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Booking #</label><input id="geoNewVehicleBooking" type="text" placeholder="202504-12345" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Make</label><input id="geoNewVehicleMake" type="text" placeholder="Toyota" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Model</label><input id="geoNewVehicleModel" type="text" placeholder="Camry" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Year</label><input id="geoNewVehicleYear" type="text" placeholder="2020" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Color</label><input id="geoNewVehicleColor" type="text" placeholder="Black" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <div><label style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:block;margin-bottom:3px">Plate</label><input id="geoNewVehiclePlate" type="text" placeholder="ABC123" style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;font-family:inherit"></div>
+          <button class="btn-primary" onclick="SLGeoIntel.addVehicle()" style="padding:7px 14px;font-size:12px;white-space:nowrap">+ Add</button>
+        </div>
+        <input id="geoNewVehicleReason" type="hidden" value="">
+        <div id="geoVehicleList" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
     </div>
 
   </div>
@@ -1755,6 +1846,15 @@
     <div class="modal-footer">
       <button class="btn-cancel" onclick="document.getElementById('intFeatureModal').classList.remove('show')">Close</button>
     </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: LEGAL NLP INTELLIGENCE
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabLegalNLP">
+  <div class="container">
+    <div id="legalNlpContainer"></div>
   </div>
 </div>
 
@@ -2676,6 +2776,7 @@
 <script src="/sl-active-bonds.js?v=4"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-tracking.js?v=4"></script>
+<script src="/sl-geo-intelligence.js?v=1"></script>
 <script src="/sl-intake.js?v=4"></script>
 <script src="/sl-health.js?v=4"></script>
 <script src="/sl-prospective.js?v=4"></script>
@@ -2686,6 +2787,7 @@
 <script src="/sl-analytics-apex.js?v=4"></script>
 <script src="/sl-intelligence.js?v=1"></script>
 <script src="/sl-docket-monitor.js?v=1"></script>
+<script src="/sl-legal-nlp.js?v=1"></script>
 <script src="/sl-calendar.js?v=4"></script>
 <script src="/sl-calendar-ext.js?v=4"></script>
 <script src="/sl-record-bond.js?v=4"></script>

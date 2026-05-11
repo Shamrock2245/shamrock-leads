@@ -158,14 +158,26 @@ window.SLProspective = (function () {
     });
   }
 
-  // ── Risk tier inline badge (NLP/COMPAS data) ─────────────────────────────
+  // ── Risk tier inline badge (NLP/COMPAS data + FTA intelligence) ────────────
   function riskBadge(b) {
+    var badges = '';
+    // NLP/COMPAS risk tier
     var tier = (b.nlp_risk_tier || b.risk_tier || '').toLowerCase();
-    if (!tier) return '';
-    var colors = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#10b981' };
-    var icons = { critical: '🔴', high: '🟡', medium: '🔵', low: '🟢' };
-    var c = colors[tier] || '#6b7280';
-    return '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:' + c + '22;color:' + c + ';margin-left:4px">' + (icons[tier] || '') + ' ' + tier.toUpperCase() + '</span>';
+    if (tier) {
+      var colors = { critical: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#10b981' };
+      var icons = { critical: '🔴', high: '🟡', medium: '🔵', low: '🟢' };
+      var c = colors[tier] || '#6b7280';
+      badges += '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:' + c + '22;color:' + c + ';margin-left:4px">' + (icons[tier] || '') + ' ' + tier.toUpperCase() + '</span>';
+    }
+    // FTA risk intelligence
+    var ftaLvl = (b.fta_risk_level || '').toLowerCase();
+    var ftaScore = b.fta_risk_score;
+    if (ftaLvl && ftaScore != null) {
+      var fc = { critical: '#ff4444', high: '#ff8800', moderate: '#ffcc00', low: '#44bb44' }[ftaLvl] || '#888';
+      var fi = { critical: '🔴', high: '🟠', moderate: '🟡', low: '🟢' }[ftaLvl] || '⚪';
+      badges += '<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:4px;background:' + fc + '22;color:' + fc + ';margin-left:4px" title="FTA Risk: ' + ftaScore + '/100">' + fi + ' FTA ' + ftaLvl.charAt(0).toUpperCase() + ftaLvl.slice(1) + '</span>';
+    }
+    return badges;
   }
 
   function renderCard(b) {
@@ -481,6 +493,7 @@ window.SLProspective = (function () {
             '<div class="prosp-field"><span>Bond Amount</span><span style="font-weight:800;color:var(--accent)">' + money(bond.bond_amount) + '</span></div>' +
             '<div class="prosp-field"><span>Charges</span><span style="font-size:12px">' + (bond.charges || '—') + '</span></div>' +
             '<div class="prosp-field"><span>Lead Score</span><span class="score-pill ' + ((bond.lead_status || '').toLowerCase() === 'hot' ? 'score-hot' : (bond.lead_status || '').toLowerCase() === 'warm' ? 'score-warm' : 'score-cold') + '">' + (bond.lead_score || 0) + ' · ' + (bond.lead_status || '—') + '</span></div>' +
+            '<div class="prosp-field"><span>FTA Risk</span><span>' + (riskBadge(bond) || '—') + '</span></div>' +
             (bond.detail_url ? '<div style="margin-top:8px"><a href="' + bond.detail_url + '" target="_blank" class="prosp-ext-link">🔗 View Arrest Record</a></div>' : '') +
           '</div>' +
           '<div class="prosp-info-card" style="margin-bottom:12px">' +

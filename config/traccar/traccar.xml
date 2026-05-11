@@ -1,0 +1,88 @@
+<?xml version='1.0' encoding='UTF-8'?>
+
+<!DOCTYPE properties SYSTEM 'http://java.sun.com/dtd/properties.dtd'>
+<properties>
+
+    <!-- ── ShamrockLeads × Traccar GPS Intelligence Engine ── -->
+    <!-- Tuned for bail bond defendant monitoring: low overhead, high precision -->
+
+    <!-- Database: H2 embedded (zero-config, persistent to Docker volume) -->
+    <entry key='database.driver'>org.h2.Driver</entry>
+    <entry key='database.url'>jdbc:h2:/opt/traccar/data/database</entry>
+    <entry key='database.user'>sa</entry>
+    <entry key='database.password'></entry>
+
+    <!-- Web/API Server (internal Docker network only) -->
+    <entry key='web.port'>8082</entry>
+    <entry key='web.address'>0.0.0.0</entry>
+
+    <!-- Default admin credentials (overridden via API on first boot) -->
+    <entry key='admin.email'>admin@shamrockbailbonds.biz</entry>
+    <entry key='admin.password'>shamrock-traccar-2245</entry>
+
+    <!-- ── Protocol Listeners ── -->
+    <!-- OsmAnd (Android/iOS app — primary defendant tracking app) -->
+    <entry key='osmand.port'>5055</entry>
+
+    <!-- GPS103/TK103 (cheap vehicle trackers — Vehicle Watch feature) -->
+    <entry key='gps103.port'>5001</entry>
+    <entry key='tk103.port'>5002</entry>
+
+    <!-- H02 (common $15-25 personal trackers for ankle monitors) -->
+    <entry key='h02.port'>5013</entry>
+
+    <!-- GT06 (vehicle OBD2 trackers — skip tracing asset tracking) -->
+    <entry key='gt06.port'>5023</entry>
+
+    <!-- Teltonika (professional fleet/asset trackers) -->
+    <entry key='teltonika.port'>5027</entry>
+
+    <!-- T55 (basic NMEA protocol — legacy hardware) -->
+    <entry key='t55.port'>5005</entry>
+
+    <!-- Queclink (GV series — high-end asset trackers) -->
+    <entry key='queclink.port'>5009</entry>
+
+    <!-- Meitrack (personal + vehicle trackers) -->
+    <entry key='meitrack.port'>5020</entry>
+
+    <!-- ── Geofencing Engine ── -->
+    <entry key='geofence.enablePushNotify'>true</entry>
+    <entry key='event.geofenceHandler'>true</entry>
+    <entry key='event.overspeedHandler'>true</entry>
+    <entry key='event.motionHandler'>true</entry>
+    <entry key='event.ignitionHandler'>true</entry>
+
+    <!-- ── Notification Channels ── -->
+    <!-- Forward events to our dashboard API via webhook -->
+    <entry key='forward.enable'>true</entry>
+    <entry key='forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
+    <entry key='forward.json'>true</entry>
+
+    <!-- ── Performance Tuning ── -->
+    <!-- Position filtering — discard duplicate/close positions to save storage -->
+    <entry key='filter.enable'>true</entry>
+    <entry key='filter.distance'>50</entry>
+    <entry key='filter.maxSpeed'>300</entry>
+    <entry key='filter.time'>30</entry>
+    <entry key='filter.duplicate'>true</entry>
+
+    <!-- Data retention: auto-purge positions older than 90 days -->
+    <entry key='database.positionsHistoryDays'>90</entry>
+    <entry key='database.eventsHistoryDays'>90</entry>
+
+    <!-- Connection pool -->
+    <entry key='database.pool.size'>5</entry>
+    <entry key='database.pool.idleSize'>2</entry>
+
+    <!-- ── Geocoding (reverse geocode positions to addresses) ── -->
+    <entry key='geocoder.enable'>true</entry>
+    <entry key='geocoder.type'>nominatim</entry>
+    <entry key='geocoder.url'>https://nominatim.openstreetmap.org/reverse</entry>
+
+    <!-- ── Logging ── -->
+    <entry key='logger.enable'>true</entry>
+    <entry key='logger.level'>info</entry>
+    <entry key='logger.file'>/opt/traccar/logs/tracker-server.log</entry>
+
+</properties>

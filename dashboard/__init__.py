@@ -66,6 +66,11 @@ def create_app():
     app.register_blueprint(match_manager_bp, url_prefix="/api")  # ← Manual Bond Matching
     app.register_blueprint(geo_bp)  # ← Geo routes: /api/geo/* and /g/<token>
 
+    # ── Geo Intelligence (Traccar GPS Tracking + Geofencing + Vehicle Watch) ──
+    from dashboard.api.geo_intelligence import geo_intel_bp, traccar_webhook_bp
+    app.register_blueprint(geo_intel_bp)    # Routes: /api/geo-intel/*
+    app.register_blueprint(traccar_webhook_bp)  # Routes: /api/traccar/webhook
+
     # ── AI Agent Brain API (Pipeline AI feature bar) ──────────────────────────
     from dashboard.api.agent_brain_api import agent_brain_api_bp
     app.register_blueprint(agent_brain_api_bp, url_prefix="/api")  # ← AI Outreach Endpoints
@@ -266,6 +271,81 @@ def create_app():
         import asyncio
         asyncio.ensure_future(_court_intel_cron_loop())
         logger.info("[CourtIntel] 📡 Background ingestion scheduled (every 6h, first run in 60s)")
+
+    # ── NLP Auto-Enrichment — Process un-enriched arrests (every 2 hours) ──
+    async def _nlp_enrichment_cron_loop():
+        """Background loop: auto-enrich arrest records with NLP analysis.
+
+        Finds arrests missing `nlp_enriched_at` and runs charge analysis,
+        FTA risk scoring, statute extraction, and citation parsing.
+        Batch processes up to 200 records per cycle.
+        """
+        import asyncio
+        interval_seconds = 2 * 60 * 60  # 2 hours
+        # Wait 90s after boot to let DB and other services initialize
+        await asyncio.sleep(90)
+        while True:
+            try:
+                from dashboard.extensions import get_db
+                from dashboard.services.legal_nlp_service import analyze_charges, extract_citations
+                from datetime import datetime, timezone
+                db = get_db()
+                arrests_col = db["arrests"]
+
+                # Find un-enriched records (no nlp_enriched_at field)
+                cursor = arrests_col.find(
+                    {"nlp_enriched_at": {"$exists": False}, "charges": {"$exists": True, "$ne": ""}},
+                    {"_id": 1, "charges": 1, "booking_number": 1, "county": 1}
+                ).limit(200)
+
+                enriched = 0
+                errors = 0
+                async for doc in cursor:
+                    try:
+                        charges_text = doc.get("charges", "")
+                        if not charges_text:
+                            continue
+                        analysis = analyze_charges(charges_text)
+                        citations = extract_citations(charges_text)
+                        now = datetime.now(timezone.utc)
+
+                        enrichment = {
+                            "nlp_severity": analysis["max_severity"],
+                            "nlp_severity_level": analysis["severity_level"],
+                            "nlp_fta_risk": analysis["fta_risk_score"],
+                            "nlp_statutes": analysis["statutes"],
+                            "nlp_citations": citations,
+                            "nlp_risk_factors": analysis["risk_factors"],
+                            "nlp_charge_count": analysis.get("charge_count", 0),
+                            "nlp_enriched_at": now.isoformat() + "Z",
+                        }
+                        await arrests_col.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": enrichment}
+                        )
+                        enriched += 1
+                    except Exception as inner_e:
+                        errors += 1
+                        if errors <= 3:  # Only log first few per cycle
+                            logger.warning(
+                                "[NLP-Enrich] Error enriching %s: %s",
+                                doc.get("booking_number", "?"), inner_e,
+                            )
+
+                if enriched > 0 or errors > 0:
+                    logger.info(
+                        "[NLP-Enrich] ✅ Cycle complete — %d enriched, %d errors",
+                        enriched, errors,
+                    )
+            except Exception as e:
+                logger.error("[NLP-Enrich] ❌ Enrichment cycle failed: %s", e)
+            await asyncio.sleep(interval_seconds)
+
+    @app.before_serving
+    async def _start_nlp_enrichment_cron():
+        import asyncio
+        asyncio.ensure_future(_nlp_enrichment_cron_loop())
+        logger.info("[NLP-Enrich] 🧠 Background NLP enrichment scheduled (every 2h, first run in 90s)")
 
     # Start background inbox poller (fallback — webhook is primary)
     @app.before_serving
@@ -511,6 +591,45 @@ def create_app():
             logger.info("☘️  Phase 16: portal + checkin indexes ensured")
         except Exception as exc:
             logger.warning("Phase 16 index setup warning: %s", exc)
+
+    # ── Geo Intelligence — ensure indexes on startup ──────────────────────────
+    @app.before_serving
+    async def _ensure_geo_intel_indexes():
+        """Create MongoDB indexes for geo_devices, geo_zones, geo_events, geo_vehicle_watch."""
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            # geo_devices: lookup by traccar ID and booking number
+            await db["geo_devices"].create_index(
+                [("traccar_device_id", 1)], name="idx_geo_traccar_id", background=True,
+            )
+            await db["geo_devices"].create_index(
+                [("booking_number", 1), ("status", 1)], name="idx_geo_booking_status", background=True,
+            )
+            # geo_zones: lookup by booking
+            await db["geo_zones"].create_index(
+                [("booking_number", 1), ("active", 1)], name="idx_zone_booking_active", background=True,
+            )
+            # geo_events: violation feed queries
+            await db["geo_events"].create_index(
+                [("event_type", 1), ("created_at", -1)], name="idx_geo_evt_type_created", background=True,
+            )
+            await db["geo_events"].create_index(
+                [("booking_number", 1), ("acknowledged", 1)],
+                name="idx_geo_evt_booking_ack", background=True,
+            )
+            # geo_vehicle_watch: active watches
+            await db["geo_vehicle_watch"].create_index(
+                [("status", 1), ("created_at", -1)], name="idx_vwatch_status", background=True,
+            )
+            # TTL: auto-purge old geo_events after 90 days
+            await db["geo_events"].create_index(
+                [("created_at", 1)], name="idx_geo_evt_ttl_90d", background=True,
+                expireAfterSeconds=7776000,
+            )
+            logger.info("☘️  Geo Intelligence: indexes ensured")
+        except Exception as exc:
+            logger.warning("Geo Intelligence index setup warning: %s", exc)
 
     # ── Revenue Automation Engine — ensure indexes on startup ─────────────────
     @app.before_serving

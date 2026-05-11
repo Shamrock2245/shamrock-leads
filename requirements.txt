@@ -57,6 +57,9 @@ firebase-admin>=6.4.0
 # Court Intelligence (Juriscraper + CourtListener SE US pipeline)
 juriscraper>=2.6.0
 
+# Phonetic name matching (Metaphone, Soundex, Jaro-Winkler)
+jellyfish>=1.0.0
+
 # Development
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

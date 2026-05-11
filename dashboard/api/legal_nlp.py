@@ -232,3 +232,131 @@ async def api_enrich_arrest(booking_number: str):
     except Exception as e:
         log.exception("Enrich error: %s", e)
         return jsonify({"error": str(e)}), 500
+
+
+# ── NLP Intelligence Dashboard Stats ─────────────────────────────────────────
+
+@legal_nlp_bp.route("/legal-nlp/stats", methods=["GET"])
+async def api_nlp_stats():
+    """Aggregate NLP enrichment statistics for the Intelligence dashboard.
+
+    Returns: severity distribution, enrichment coverage, top statutes,
+    high-FTA records, risk factor frequencies, and charge pattern breakdown.
+    """
+    try:
+        arrests_col = get_collection("arrests")
+
+        # Total arrest count
+        total_arrests = await arrests_col.count_documents({})
+        enriched_count = await arrests_col.count_documents({"nlp_enriched_at": {"$exists": True}})
+        unenriched_count = total_arrests - enriched_count
+
+        # Severity distribution pipeline
+        severity_pipeline = [
+            {"$match": {"nlp_severity": {"$exists": True}}},
+            {"$group": {"_id": "$nlp_severity", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+        ]
+        severity_dist = {}
+        async for doc in arrests_col.aggregate(severity_pipeline):
+            severity_dist[doc["_id"]] = doc["count"]
+
+        # FTA risk distribution (bucket into tiers)
+        fta_pipeline = [
+            {"$match": {"nlp_fta_risk": {"$exists": True, "$gt": 0}}},
+            {"$bucket": {
+                "groupBy": "$nlp_fta_risk",
+                "boundaries": [0, 0.1, 0.15, 0.20, 0.25, 0.50, 1.0],
+                "default": "other",
+                "output": {"count": {"$sum": 1}}
+            }},
+        ]
+        fta_dist = []
+        try:
+            async for doc in arrests_col.aggregate(fta_pipeline):
+                fta_dist.append({"bucket": str(doc["_id"]), "count": doc["count"]})
+        except Exception:
+            pass  # $bucket may fail on some field types
+
+        # Top 10 highest FTA risk records
+        high_fta_cursor = arrests_col.find(
+            {"nlp_fta_risk": {"$exists": True, "$gt": 0.15}},
+            {"_id": 0, "full_name": 1, "booking_number": 1, "county": 1,
+             "charges": 1, "nlp_fta_risk": 1, "nlp_severity": 1,
+             "nlp_severity_level": 1, "nlp_risk_factors": 1}
+        ).sort("nlp_fta_risk", -1).limit(10)
+        high_fta_records = await high_fta_cursor.to_list(length=10)
+
+        # Top statutes across all enriched records
+        statute_pipeline = [
+            {"$match": {"nlp_statutes": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$nlp_statutes"},
+            {"$group": {"_id": "$nlp_statutes.full", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 15},
+        ]
+        top_statutes = []
+        async for doc in arrests_col.aggregate(statute_pipeline):
+            top_statutes.append({"statute": doc["_id"], "count": doc["count"]})
+
+        # Risk factor frequency
+        rf_pipeline = [
+            {"$match": {"nlp_risk_factors": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$nlp_risk_factors"},
+            {"$group": {"_id": "$nlp_risk_factors.keyword", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10},
+        ]
+        risk_factor_freq = []
+        async for doc in arrests_col.aggregate(rf_pipeline):
+            risk_factor_freq.append({"factor": doc["_id"], "count": doc["count"]})
+
+        # Average severity level
+        avg_pipeline = [
+            {"$match": {"nlp_severity_level": {"$exists": True, "$gt": 0}}},
+            {"$group": {"_id": None, "avg_severity": {"$avg": "$nlp_severity_level"},
+                        "max_severity": {"$max": "$nlp_severity_level"}}},
+        ]
+        avg_severity = 0
+        max_sev_level = 0
+        async for doc in arrests_col.aggregate(avg_pipeline):
+            avg_severity = round(doc.get("avg_severity", 0), 2)
+            max_sev_level = doc.get("max_severity", 0)
+
+        # Enrichment rate by county
+        county_pipeline = [
+            {"$group": {
+                "_id": "$county",
+                "total": {"$sum": 1},
+                "enriched": {"$sum": {"$cond": [{"$ifNull": ["$nlp_enriched_at", False]}, 1, 0]}},
+            }},
+            {"$sort": {"total": -1}},
+            {"$limit": 20},
+        ]
+        county_coverage = []
+        async for doc in arrests_col.aggregate(county_pipeline):
+            county_coverage.append({
+                "county": doc["_id"],
+                "total": doc["total"],
+                "enriched": doc["enriched"],
+                "coverage_pct": round(doc["enriched"] / doc["total"] * 100, 1) if doc["total"] > 0 else 0,
+            })
+
+        return jsonify({
+            "success": True,
+            "total_arrests": total_arrests,
+            "enriched_count": enriched_count,
+            "unenriched_count": unenriched_count,
+            "coverage_pct": round(enriched_count / total_arrests * 100, 1) if total_arrests > 0 else 0,
+            "severity_distribution": severity_dist,
+            "fta_distribution": fta_dist,
+            "high_fta_records": high_fta_records,
+            "top_statutes": top_statutes,
+            "risk_factor_frequency": risk_factor_freq,
+            "avg_severity_level": avg_severity,
+            "max_severity_level": max_sev_level,
+            "county_coverage": county_coverage,
+        }), 200
+    except Exception as e:
+        log.exception("NLP stats error: %s", e)
+        return jsonify({"error": str(e)}), 500

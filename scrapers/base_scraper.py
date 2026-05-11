@@ -21,6 +21,13 @@ from datetime import datetime, timezone
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 
+# Hybrid scorer: ML + rule-based blending + FTA risk overlay
+try:
+    from scoring.hybrid_scorer import hybrid_score as _hybrid_score
+    _hybrid_available = True
+except ImportError:
+    _hybrid_available = False
+
 try:
     from dashboard.server import update_scraper_status
     _dashboard_available = True
@@ -224,7 +231,7 @@ class BaseScraper(ABC):
                 f"✅ {self.county}: scraped {len(records)} records in {elapsed:.1f}s"
             )
 
-            # ── Step 2: Score every record ──
+            # ── Step 2: Score every record (rule-based) ──
             for record in records:
                 if record.Lead_Score == 0:
                     _scorer.score_and_update(record)
@@ -238,6 +245,46 @@ class BaseScraper(ABC):
                 f"🔥 {hot_count} Hot | 🟡 {warm_count} Warm | "
                 f"❌ {disqualified} Disqualified"
             )
+
+            # ── Step 2b: Hybrid ML scoring + FTA risk overlay ──
+            fta_high_count = 0
+            if _hybrid_available:
+                for record in records:
+                    try:
+                        record_dict = record.to_mongo_doc()
+                        hybrid_result = _hybrid_score(record_dict)
+
+                        # Store FTA risk data in extra_data for MongoDB persistence
+                        if not record.extra_data:
+                            record.extra_data = {}
+                        record.extra_data["fta_risk_score"] = hybrid_result.get("fta_risk_score")
+                        record.extra_data["fta_risk_level"] = hybrid_result.get("fta_risk_level")
+                        record.extra_data["fta_risk_confidence"] = hybrid_result.get("fta_risk_confidence")
+                        record.extra_data["scoring_method"] = hybrid_result.get("method", "rule_based")
+                        record.extra_data["ml_score"] = hybrid_result.get("ml_score")
+
+                        # If ML produced a higher-confidence score, upgrade the lead score
+                        if hybrid_result.get("method") in ("ml", "hybrid") and hybrid_result.get("score"):
+                            record.Lead_Score = hybrid_result["score"]
+                            record.Lead_Status = hybrid_result["status"]
+
+                        # Track FTA stats for logging
+                        fta_level = hybrid_result.get("fta_risk_level")
+                        if fta_level in ("high", "critical"):
+                            fta_high_count += 1
+                    except Exception as hybrid_err:
+                        logger.debug(f"⚠️ Hybrid score failed for {record.Booking_Number}: {hybrid_err}")
+
+                # Recount after potential ML upgrades
+                hot_count = sum(1 for r in records if r.Lead_Status == "Hot")
+                warm_count = sum(1 for r in records if r.Lead_Status == "Warm")
+                disqualified = sum(1 for r in records if r.Lead_Status == "Disqualified")
+
+                if fta_high_count > 0:
+                    logger.info(
+                        f"🧠 {self.county}: ML scoring complete — "
+                        f"⚠️ {fta_high_count} high/critical FTA risk"
+                    )
 
             self.total_records_scraped += len(records)
             self.last_run = datetime.now(timezone.utc)

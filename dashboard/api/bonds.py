@@ -119,6 +119,23 @@ async def api_record_bond():
         except ValueError:
             pass  # Fall back to now
 
+    # ── 0. Snapshot FTA risk intelligence from arrest record ─────────────────
+    fta_risk_score = None
+    fta_risk_level = ""
+    fta_risk_confidence = None
+    try:
+        arrests = get_collection("arrests")
+        arrest_doc = await arrests.find_one(
+            {"booking_number": booking_number},
+            {"fta_risk_score": 1, "fta_risk_level": 1, "fta_risk_confidence": 1},
+        )
+        if arrest_doc:
+            fta_risk_score = arrest_doc.get("fta_risk_score")
+            fta_risk_level = arrest_doc.get("fta_risk_level", "")
+            fta_risk_confidence = arrest_doc.get("fta_risk_confidence")
+    except Exception as exc:
+        logger.warning("[record-bond] FTA lookup error: %s", exc)
+
     # ── 1. Create / upsert active_bonds document ────────────────────────────
     active_bonds = get_collection("active_bonds")
     bond_doc = {
@@ -147,6 +164,9 @@ async def api_record_bond():
         "payment_method": payment_method,
         "notes": notes,
         "check_in_required": False,
+        "fta_risk_score": fta_risk_score,
+        "fta_risk_level": fta_risk_level,
+        "fta_risk_confidence": fta_risk_confidence,
         "created_at": bond_date,
         "updated_at": now,
     }
@@ -459,16 +479,40 @@ async def api_write_bond():
 
 @bonds_bp.route("/active-bonds", methods=["GET"])
 async def api_active_bonds_list():
-    """List all active bonds with risk scores and check-in status."""
+    """List all active bonds with risk scores, check-in status, and FTA intelligence."""
     active_bonds = get_collection("active_bonds")
     try:
         cursor = active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(100)
         bonds = await cursor.to_list(length=100)
+
+        # ── Bulk-enrich FTA intelligence from arrests for bonds missing it ─────
+        needs_fta = [b["booking_number"] for b in bonds
+                     if b.get("fta_risk_score") is None and b.get("booking_number")]
+        fta_map = {}
+        if needs_fta:
+            try:
+                arrests = get_collection("arrests")
+                fta_cursor = arrests.find(
+                    {"booking_number": {"$in": needs_fta}, "fta_risk_score": {"$exists": True}},
+                    {"_id": 0, "booking_number": 1, "fta_risk_score": 1, "fta_risk_level": 1, "fta_risk_confidence": 1},
+                )
+                async for adoc in fta_cursor:
+                    fta_map[adoc["booking_number"]] = adoc
+            except Exception as fta_err:
+                logger.warning("[active-bonds] FTA enrichment error: %s", fta_err)
+
         for b in bonds:
             if hasattr(b.get("created_at"), "isoformat"):
                 b["created_at"] = b["created_at"].isoformat()
             if hasattr(b.get("last_checkin"), "isoformat"):
                 b["last_checkin"] = b["last_checkin"].isoformat()
+            # Merge FTA data from arrest lookup if bond record doesn't have it
+            if b.get("fta_risk_score") is None and b.get("booking_number") in fta_map:
+                adoc = fta_map[b["booking_number"]]
+                b["fta_risk_score"] = adoc.get("fta_risk_score")
+                b["fta_risk_level"] = adoc.get("fta_risk_level", "")
+                b["fta_risk_confidence"] = adoc.get("fta_risk_confidence")
+
         return jsonify({"success": True, "bonds": bonds, "count": len(bonds)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "bonds": []}), 500
@@ -502,6 +546,9 @@ async def api_active_bonds_create():
         "indemnitor_name": data.get("indemnitor_name", ""),
         "indemnitor_phone": data.get("indemnitor_phone", ""),
         "indemnitor_email": data.get("indemnitor_email", ""),
+        "fta_risk_score": data.get("fta_risk_score"),
+        "fta_risk_level": data.get("fta_risk_level", ""),
+        "fta_risk_confidence": data.get("fta_risk_confidence"),
         "created_at": now,
         "updated_at": now,
     }

@@ -2784,3 +2784,72 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   cursor: pointer; touch-action: manipulation; transition: all .2s; min-height: 32px;
 }
 .btn-lifecycle:hover { background: rgba(16,185,129,.15); border-color: rgba(16,185,129,.4); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LEGAL NLP INTELLIGENCE TAB
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Panel cards */
+.lnlp-panel {
+  background: var(--card, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  transition: border-color .2s, box-shadow .2s;
+}
+.lnlp-panel:hover {
+  border-color: rgba(99,102,241,.25);
+  box-shadow: 0 4px 20px rgba(0,0,0,.2);
+}
+
+/* Panel title */
+.lnlp-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary, #e2e8f0);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border, #334155);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Accent badge */
+.lnlp-badge-accent {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  background: rgba(99,102,241,.12);
+  color: #818cf8;
+  border: 1px solid rgba(99,102,241,.2);
+  margin-left: auto;
+}
+
+/* Spinner (small inline loader) */
+.spinner-sm {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(148,163,184,.2);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: spinSm .7s linear infinite;
+}
+@keyframes spinSm {
+  to { transform: rotate(360deg); }
+}
+
+/* Mobile: stack two-column grids */
+@media (max-width: 768px) {
+  .lnlp-root > div[style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+

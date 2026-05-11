@@ -19,6 +19,12 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
+try:
+    import jellyfish
+    _HAS_JELLYFISH = True
+except ImportError:
+    _HAS_JELLYFISH = False
+
 logger = logging.getLogger(__name__)
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
@@ -72,8 +78,55 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
+def _phonetic_match(a: str, b: str) -> float:
+    """Return 0.0–1.0 phonetic similarity using Metaphone + Jaro-Winkler.
+    
+    Falls back to basic Levenshtein-based similarity if jellyfish is unavailable.
+    Compares individual name parts (first, last) for higher accuracy.
+    """
+    if not _HAS_JELLYFISH:
+        return 0.0
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return 0.0
+    if na == nb:
+        return 1.0
+
+    # Split into parts and compare each
+    parts_a = na.split()
+    parts_b = nb.split()
+
+    if not parts_a or not parts_b:
+        return 0.0
+
+    # Jaro-Winkler on full normalized name
+    jw_full = jellyfish.jaro_winkler_similarity(na, nb)
+
+    # Metaphone comparison on individual parts
+    metaphone_hits = 0
+    total_parts = max(len(parts_a), len(parts_b))
+    for pa in parts_a:
+        for pb in parts_b:
+            if len(pa) < 2 or len(pb) < 2:
+                continue
+            ma = jellyfish.metaphone(pa)
+            mb = jellyfish.metaphone(pb)
+            if ma and mb and ma == mb:
+                metaphone_hits += 1
+                break  # Each part matches at most once
+
+    metaphone_score = metaphone_hits / total_parts if total_parts > 0 else 0.0
+
+    # Blend: 40% Jaro-Winkler + 60% Metaphone match ratio
+    return 0.4 * jw_full + 0.6 * metaphone_score
+
+
 def _name_similarity(a: str, b: str) -> float:
-    """Return 0.0–1.0 name similarity score."""
+    """Return 0.0–1.0 name similarity score.
+    
+    Blends Levenshtein edit distance with phonetic matching (jellyfish)
+    for robust handling of misspelled and transliterated names.
+    """
     na, nb = _norm(a), _norm(b)
     if not na or not nb:
         return 0.0
@@ -81,7 +134,15 @@ def _name_similarity(a: str, b: str) -> float:
         return 1.0
     max_len = max(len(na), len(nb))
     dist = _levenshtein(na, nb)
-    return max(0.0, 1.0 - dist / max_len)
+    lev_score = max(0.0, 1.0 - dist / max_len)
+
+    # Blend with phonetic score if available
+    phon_score = _phonetic_match(a, b)
+    if phon_score > 0:
+        # 70% Levenshtein + 30% phonetic for balanced matching
+        return 0.7 * lev_score + 0.3 * phon_score
+
+    return lev_score
 
 
 class MatchResult:
@@ -229,6 +290,29 @@ class MatchingEngine:
                     best_doc = doc
             if best_doc:
                 candidates.append(MatchResult(best_doc, best_score, "fuzzy_name_dob"))
+
+        # ── Strategy 3.5: Phonetic name match + DOB (jellyfish) ──────────
+        if def_name and def_dob and not candidates and _HAS_JELLYFISH:
+            norm_dob = _norm_dob(def_dob)
+            query = {}
+            if county:
+                query["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+
+            cursor = self.arrests.find(query, {"_id": 0}).limit(500)
+            best_score = 0
+            best_doc = None
+            async for doc in cursor:
+                doc_dob = _norm_dob(str(doc.get("dob", "")))
+                if doc_dob != norm_dob:
+                    continue
+                phon = _phonetic_match(def_name, doc.get("full_name", ""))
+                if phon >= 0.75:  # Strong phonetic match
+                    score = int(phon * 85)  # Max 85 for phonetic + DOB
+                    if score > best_score and score >= REVIEW_THRESHOLD:
+                        best_score = score
+                        best_doc = doc
+            if best_doc:
+                candidates.append(MatchResult(best_doc, best_score, "phonetic_name_dob"))
 
         # ── Strategy 4: Name only (weak) ───────────────────────────────────
         if def_name and not candidates:

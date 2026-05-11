@@ -90,6 +90,8 @@
           av = a.bond_amount || 0; bv = b.bond_amount || 0;
         } else if (_sortKey === 'risk_score') {
           av = a.risk_score || 0; bv = b.risk_score || 0;
+        } else if (_sortKey === 'fta_risk_score') {
+          av = a.fta_risk_score || 0; bv = b.fta_risk_score || 0;
         } else if (_sortKey === 'court_date') {
           av = a.court_date ? new Date(a.court_date).getTime() : 9e15;
           bv = b.court_date ? new Date(b.court_date).getTime() : 9e15;
@@ -103,7 +105,7 @@
       });
 
       if (!bonds.length) {
-        tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:32px;color:var(--muted)">No bonds match current filters</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:32px;color:var(--muted)">No bonds match current filters</td></tr>';
         return;
       }
 
@@ -155,6 +157,7 @@
           + '<td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + escHtml(indemnitorName) + '">' + (indemnitorName && indemnitorName !== '—' ? '<a href="#" style="color:var(--accent);text-decoration:none" onclick="event.preventDefault();crossLinkToDefendants(\'' + escHtml(indemnitorName).replace(/'/g, "\\'") + '\')">' + escHtml(indemnitorName) + '</a>' : '—') + '</td>'
           + '<td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escHtml(charges) + '</td>'
           + '<td><span class="score-pill ' + rCls + '" style="cursor:pointer" onclick="showRiskBreakdown(\'' + bkSafe + '\',\'' + nameSafe + '\',' + risk + ',\'' + factorsSafe + '\')">' + risk + ' ' + (risk >= 75 ? '🔴' : risk >= 50 ? '🟡' : '🟢') + '</span></td>'
+          + '<td style="text-align:center">' + (typeof _abFtaBadge === 'function' ? _abFtaBadge(b) : '—') + '</td>'
           + '<td style="font-size:11px;white-space:nowrap">' + cdStr + '</td>'
           + '<td style="text-align:center">' + _courtCountdownBadge(days) + '</td>'
           + '<td>' + lastCI + overdueLabel + '</td>'
@@ -183,7 +186,7 @@
   function exportCSV() {
     var bonds = window._abBonds || [];
     if (!bonds.length) { toast('No bonds to export', 'info'); return; }
-    var headers = ['Booking Number', 'Defendant Name', 'County', 'Bond Amount', 'Surety', 'Indemnitor Name', 'Indemnitor Phone', 'Charges', 'Risk Score', 'Court Date', 'Days to Court', 'Status', 'Last Check-In', 'Case Number'];
+    var headers = ['Booking Number', 'Defendant Name', 'County', 'Bond Amount', 'Surety', 'Indemnitor Name', 'Indemnitor Phone', 'Charges', 'Risk Score', 'FTA Risk Level', 'FTA Risk Score', 'Court Date', 'Days to Court', 'Status', 'Last Check-In', 'Case Number'];
     var rows = bonds.map(function (b) {
       var days = _courtDays(b);
       var cdStr = '';
@@ -192,7 +195,7 @@
       var indPhone = ((b.indemnitor && b.indemnitor.phone) ? b.indemnitor.phone : '') || b.indemnitor_phone || '';
       var rawCharges = b.charges_raw || b.charges;
       var charges = typeof rawCharges === 'string' ? rawCharges : (Array.isArray(rawCharges) ? rawCharges.join('; ') : '');
-      return [b.booking_number || '', b.defendant_name || '', b.county || '', b.bond_amount || 0, b.insurance_company || b.surety || '', indName, indPhone, charges, b.risk_score || 0, cdStr, days !== null ? days : '', b.status || '', b.last_check_in ? new Date(b.last_check_in).toLocaleString() : '', b.case_number || ''].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
+      return [b.booking_number || '', b.defendant_name || '', b.county || '', b.bond_amount || 0, b.insurance_company || b.surety || '', indName, indPhone, charges, b.risk_score || 0, b.fta_risk_level || '', b.fta_risk_score || '', cdStr, days !== null ? days : '', b.status || '', b.last_check_in ? new Date(b.last_check_in).toLocaleString() : '', b.case_number || ''].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
     });
     var csv = [headers.map(function (h) { return '"' + h + '"'; }).join(',')].concat(rows).join('\n');
     var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

@@ -129,6 +129,18 @@ async function applyFilters() {
   } catch(e) { console.error(e); }
 }
 
+// ── FTA Risk Badge Helper ──
+function ftaBadge(l) {
+  const lvl = (l.fta_risk_level || '').toLowerCase();
+  const score = l.fta_risk_score;
+  if (!lvl || score == null) return '';
+  const colors = { critical: '#ff4444', high: '#ff8800', moderate: '#ffcc00', low: '#44bb44', disqualified: '#888' };
+  const icons = { critical: '🔴', high: '🟠', moderate: '🟡', low: '🟢', disqualified: '⛔' };
+  const clr = colors[lvl] || '#888';
+  const ico = icons[lvl] || '⚪';
+  return `<span class="fta-badge" style="background:${clr}22;color:${clr};border:1px solid ${clr}44;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;white-space:nowrap" title="FTA Risk: ${lvl} (${score}/100)">${ico} ${lvl.charAt(0).toUpperCase()+lvl.slice(1)}</span>`;
+}
+
 // ── Render Leads Table ──
 function renderLeads() {
   const tb = document.getElementById('leadsBody');
@@ -141,12 +153,13 @@ function renderLeads() {
     const charges = (l.charges||'').length > 50 ? (l.charges||'').slice(0,47)+'…' : (l.charges||'—');
     const custBadge = (l.status||'').toLowerCase().includes('custody') ? '<span class="def-status-badge custody">In Custody</span>' : (l.status||'').toLowerCase().includes('release') ? '<span class="def-status-badge released">Released</span>' : `<span class="def-status-badge other">${l.status||'—'}</span>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
+    const fta = ftaBadge(l);
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
       <td><span class="county-count">${l.county||'—'}</span></td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
-      <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></td>
+      <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span>${fta ? '<br>'+fta : ''}</td>
       <td>${custBadge}</td>
       <td>${fmtDate(l.arrest_date || l.booking_date)}</td>
       <td class="${courtCls}">${l.court_date || '—'}</td>
@@ -246,7 +259,7 @@ async function loadDefendants() {
       return `<div class="def-card">
         <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'—'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
         <div class="def-body">
-          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'—'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'—'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'—'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="def-value">${l.lead_score||0} (${l.lead_status||'—'})</span></div></div></div>
+          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'—'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'—'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'—'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="def-value">${l.lead_score||0} (${l.lead_status||'—'})</span></div><div class="def-field"><span class="def-label">FTA Risk</span><span class="def-value">${ftaBadge(l)||'—'}</span></div></div></div>
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'—'}</div></div></div>
         </div>
         <div class="def-card-footer"><button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button><button class="btn-contact-indem" onclick="SLContact.openModal('${(l.booking_number||'')}','${(l.full_name||'').replace(/'/g,"\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact Indem</button><button class="btn-write-bond" onclick="SL.openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write Bond</button></div>

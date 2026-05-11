@@ -88,6 +88,45 @@ def hybrid_score(record: Dict[str, Any], enrichment: Optional[Dict] = None) -> D
     except Exception as e:
         logger.debug("ML fta_risk prediction unavailable: %s", e)
 
+    # ── 2c. Charge classifier fallback for FTA risk ──────────────────────────
+    # When ML model is unavailable, use FL statute lookup for charge-based risk
+    if fta_risk_score is None:
+        try:
+            from scoring.charge_classifier import get_charge_summary
+            charges_text = record.get("charges", "") or record.get("Charges", "")
+            if charges_text:
+                charge_summary = get_charge_summary(str(charges_text))
+                fta_boost = charge_summary.get("total_fta_boost", 0)
+                max_sev = charge_summary.get("max_severity_weight", 3)
+
+                # Convert charge signals to a 0-100 FTA risk estimate
+                # Formula: base 20 + severity contribution + charge-specific boost
+                heuristic_fta = min(95, 20 + (max_sev * 5) + fta_boost)
+                fta_risk_score = heuristic_fta
+                fta_risk_confidence = "heuristic"
+
+                if heuristic_fta >= 70:
+                    fta_risk_level = "critical"
+                elif heuristic_fta >= 50:
+                    fta_risk_level = "high"
+                elif heuristic_fta >= 30:
+                    fta_risk_level = "moderate"
+                else:
+                    fta_risk_level = "low"
+
+                # Flag capital/disqualifier charges
+                if charge_summary.get("has_disqualifier"):
+                    fta_risk_level = "disqualified"
+                    fta_risk_score = 0
+
+                fta_factors = [
+                    {"feature": "charge_severity", "value": max_sev},
+                    {"feature": "fta_boost", "value": fta_boost},
+                    {"feature": "categories", "value": ",".join(charge_summary.get("categories", []))},
+                ]
+        except Exception as e:
+            logger.debug("Charge classifier fallback failed: %s", e)
+
     # ── 3. Determine final score using hybrid logic ──────────────────────────
     if ml_score is not None and ml_confidence == "high":
         # High confidence ML — trust the model

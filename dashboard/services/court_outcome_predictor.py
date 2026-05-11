@@ -130,8 +130,32 @@ def predict_outcome(record: dict, defendant_history: list = None) -> dict:
     if has_fta:
         history_adj += 0.20
 
+    # ── Factor 5: ML FTA Model Intelligence ────────────────────────────────
+    # When the hybrid_scorer has produced an ML FTA prediction, use it to
+    # calibrate our heuristic estimate (weighted blend).
+    ml_fta_adj = 0.0
+    ml_fta_score = record.get("fta_risk_score")
+    ml_fta_level = record.get("fta_risk_level")
+
+    if ml_fta_score is not None:
+        # Normalize ML score (0-100) to probability (0-1) and blend
+        ml_fta_prob = ml_fta_score / 100.0
+        ml_fta_adj = ml_fta_prob * 0.30  # ML contributes 30% of final signal
+    elif record.get("extra", {}).get("fta_risk_score") is not None:
+        # Fall back to nested extra_data
+        ml_fta_prob = record["extra"]["fta_risk_score"] / 100.0
+        ml_fta_adj = ml_fta_prob * 0.30
+        ml_fta_level = record["extra"].get("fta_risk_level")
+
     # ── Composite FTA probability ──────────────────────────────────────────
-    fta_raw = base_fta + severity_fta_adj + bond_risk + history_adj
+    fta_heuristic = base_fta + severity_fta_adj + bond_risk + history_adj
+
+    if ml_fta_adj > 0:
+        # Blend: 70% heuristic + 30% ML calibration
+        fta_raw = fta_heuristic * 0.70 + ml_fta_adj
+    else:
+        fta_raw = fta_heuristic
+
     fta_probability = max(0.02, min(0.95, fta_raw))
 
     # ── Conviction likelihood (inverse-ish of FTA for serious charges) ─────
@@ -194,6 +218,10 @@ def predict_outcome(record: dict, defendant_history: list = None) -> dict:
             "severity_adjustment": round(severity_fta_adj, 3),
             "bond_amount_risk": round(bond_risk, 3),
             "history_adjustment": round(history_adj, 3),
+            "ml_fta_adjustment": round(ml_fta_adj, 3),
+            "ml_fta_score": ml_fta_score,
+            "ml_fta_level": ml_fta_level,
+            "ml_calibrated": ml_fta_adj > 0,
         },
         "computed_at": datetime.utcnow().isoformat() + "Z",
     }

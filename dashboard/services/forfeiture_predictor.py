@@ -30,7 +30,8 @@ COUNTY_FORFEITURE_RATES = {
 
 
 def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
-               court_dates: list = None, docket_events: list = None) -> dict:
+               court_dates: list = None, docket_events: list = None,
+               fta_intelligence: dict = None) -> dict:
     """
     Score an active bond for forfeiture risk.
 
@@ -39,6 +40,8 @@ def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
         defendant: Optional defendant record for enrichment
         check_ins: Optional list of check-in records
         court_dates: Optional list of court date records
+        docket_events: Optional list of docket events from docket monitor
+        fta_intelligence: Optional dict with fta_risk_score/level from ML model
 
     Returns:
         dict with forfeiture_probability, risk_tier, days_at_risk,
@@ -162,6 +165,34 @@ def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
             else:
                 signals.append(f"Docket activity detected — {docket_risk:+.0%} risk shift")
 
+    # ── Factor 10: ML FTA Risk Intelligence ──────────────────────────────────
+    # Pull from explicit fta_intelligence param, or from bond/defendant arrest data
+    fta_score = None
+    fta_level = None
+
+    if fta_intelligence:
+        fta_score = fta_intelligence.get("fta_risk_score")
+        fta_level = fta_intelligence.get("fta_risk_level")
+    else:
+        # Fall back to FTA data stored on the linked arrest record
+        fta_score = bond.get("fta_risk_score")
+        fta_level = bond.get("fta_risk_level")
+        if fta_score is None and defendant:
+            fta_score = defendant.get("fta_risk_score")
+            fta_level = defendant.get("fta_risk_level")
+
+    if fta_score is not None:
+        if fta_level == "critical":
+            risk_score += 0.25
+            signals.append(f"🧠 ML FTA risk: CRITICAL ({fta_score:.0f}/100) — highest flight risk")
+        elif fta_level == "high":
+            risk_score += 0.15
+            signals.append(f"🧠 ML FTA risk: HIGH ({fta_score:.0f}/100) — elevated flight risk")
+        elif fta_level == "moderate":
+            risk_score += 0.05
+            signals.append(f"🧠 ML FTA risk: Moderate ({fta_score:.0f}/100)")
+        # Low FTA risk: no adjustment (good signal, no penalty)
+
     # ── Composite ──────────────────────────────────────────────────────────
     forfeiture_prob = max(0.01, min(0.95, risk_score))
 
@@ -229,10 +260,11 @@ async def score_portfolio(db, limit: int = 50) -> dict:
 
     results = []
     for bond in bonds:
-        # Fetch check-ins, court dates, and docket events
+        # Fetch check-ins, court dates, docket events, and FTA intelligence
         check_ins = []
         court_dates = []
         docket_events = []
+        fta_intelligence = None
         defendant = None
         try:
             did = bond.get("Defendant_ID")
@@ -243,6 +275,20 @@ async def score_portfolio(db, limit: int = 50) -> dict:
                 check_ins = await ci_cursor.to_list(length=20)
                 cd_cursor = db.court_reminders.find({"defendant_id": did}).limit(10)
                 court_dates = await cd_cursor.to_list(length=10)
+
+                # Fetch FTA intelligence from defendant's latest arrest record
+                # The hybrid_scorer stores fta_risk_score on each arrest via mongo_writer
+                arrest_with_fta = await db.arrests.find_one(
+                    {"defendant_id": did, "fta_risk_score": {"$exists": True}},
+                    sort=[("scraped_at", -1)],
+                )
+                if arrest_with_fta and arrest_with_fta.get("fta_risk_score") is not None:
+                    fta_intelligence = {
+                        "fta_risk_score": arrest_with_fta["fta_risk_score"],
+                        "fta_risk_level": arrest_with_fta.get("fta_risk_level"),
+                        "fta_risk_confidence": arrest_with_fta.get("fta_risk_confidence"),
+                    }
+
             # Fetch docket events for this bond
             if bid:
                 de_cursor = db.docket_events.find({"bond_case_id": bid}).limit(50)
@@ -250,7 +296,7 @@ async def score_portfolio(db, limit: int = 50) -> dict:
         except Exception:
             pass
 
-        scored = score_bond(bond, defendant, check_ins, court_dates, docket_events)
+        scored = score_bond(bond, defendant, check_ins, court_dates, docket_events, fta_intelligence)
         results.append(scored)
 
     # Sort by priority (highest risk first)

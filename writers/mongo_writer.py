@@ -83,6 +83,13 @@ class MongoWriter:
             name="idx_scraper_status_county",
         )
 
+        # FTA intelligence fields (populated by hybrid_scorer via base_scraper)
+        self.arrests.create_index(
+            [("fta_risk_level", ASCENDING), ("fta_risk_score", DESCENDING)],
+            name="idx_fta_risk",
+            sparse=True,
+        )
+
         # Phase 2: defendant_id back-reference on arrests (sparse — only set after normalization)
         self.arrests.create_index(
             [("defendant_id", ASCENDING)],
@@ -117,6 +124,17 @@ class MongoWriter:
             doc = record.to_mongo_doc()
             doc["updated_at"] = now  # Track when record was last refreshed
             doc["scraped_at"] = now.isoformat()  # ISO string for dashboard
+
+            # ── Promote FTA intelligence fields to top-level for querying ──
+            extra = record.extra_data or {}
+            if extra.get("fta_risk_score") is not None:
+                doc["fta_risk_score"] = extra["fta_risk_score"]
+                doc["fta_risk_level"] = extra.get("fta_risk_level")
+                doc["fta_risk_confidence"] = extra.get("fta_risk_confidence")
+                doc["scoring_method"] = extra.get("scoring_method", "rule_based")
+                if extra.get("ml_score") is not None:
+                    doc["ml_score"] = extra["ml_score"]
+
             operations.append(
                 UpdateOne(
                     {"county": record.County, "booking_number": record.Booking_Number},
