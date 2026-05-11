@@ -14,12 +14,33 @@ See: https://www.courtlistener.com/api/rest/v4/
 
 import logging
 import asyncio
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
 
 log = logging.getLogger("shamrock.courtlistener")
+
+# ── FLP Maintenance Window (Thu 21:00–23:59 PT) ────────────────────────────
+_MAINTENANCE_DOW = 3  # Thursday
+_MAINTENANCE_START_HOUR_UTC = 4  # 21:00 PT ≈ 04:00 UTC (next day)
+_MAINTENANCE_END_HOUR_UTC = 7   # 23:59 PT ≈ 07:00 UTC
+
+# ── Bail-Relevant Charge Patterns ───────────────────────────────────────────
+_BAIL_KEYWORDS = re.compile(
+    r"bail|bond|surety|pretrial|detention|release|custody|remand"
+    r"|arraign|indictment|arrest|warrant|capias"
+    r"|felony|misdemeanor|criminal|probation|parole"
+    r"|sentenc|convict|acquit|dismiss|plea|guilty|not guilty"
+    r"|forfeiture|estreat|revok|fta|failure to appear"
+    r"|drug|dui|dwi|assault|battery|theft|burglary|robbery"
+    r"|murder|manslaughter|homicide|weapon|firearm",
+    re.IGNORECASE,
+)
+
+MAX_RETRIES = 3
+BACKOFF_BASE = 2.0  # seconds
 
 # ── Southeast US Court Registry ─────────────────────────────────────────────
 # CourtListener court IDs mapped to display names
@@ -127,14 +148,25 @@ def courts_for_states(states: list) -> list:
 
 
 class CourtListenerClient:
-    """Async client for CourtListener REST API v4."""
+    """Async client for CourtListener REST API v4.
+
+    FLP-compliant: proper User-Agent with contact URL, retry with
+    exponential backoff on 429/5xx, maintenance-window awareness,
+    and bail-relevant opinion filtering.
+    """
 
     def __init__(self, api_token: Optional[str] = None):
         self.api_token = api_token
-        self._headers = {"User-Agent": "ShamrockLeads/1.0 (admin@shamrockbailbonds.biz)"}
+        self._headers = {
+            "User-Agent": "ShamrockLeads/1.0 (https://shamrockbailbonds.biz; admin@shamrockbailbonds.biz)",
+        }
         if api_token:
             self._headers["Authorization"] = f"Token {api_token}"
         self._client: Optional[httpx.AsyncClient] = None
+        # API health tracking
+        self._requests_made = 0
+        self._errors = 0
+        self._rate_limited = 0
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -143,6 +175,54 @@ class CourtListenerClient:
                 timeout=30.0, follow_redirects=True,
             )
         return self._client
+
+    async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """Execute HTTP request with exponential backoff on 429/5xx."""
+        client = await self._get_client()
+        last_exc = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                self._requests_made += 1
+                resp = await getattr(client, method)(url, **kwargs)
+                if resp.status_code == 429:
+                    self._rate_limited += 1
+                    wait = BACKOFF_BASE * (2 ** attempt)
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after and retry_after.isdigit():
+                        wait = max(wait, int(retry_after))
+                    log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                    await asyncio.sleep(wait)
+                    continue
+                if resp.status_code >= 500 and attempt < MAX_RETRIES:
+                    self._errors += 1
+                    wait = BACKOFF_BASE * (2 ** attempt)
+                    log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
+                    await asyncio.sleep(wait)
+                    continue
+                return resp
+            except (httpx.ConnectError, httpx.ReadTimeout) as e:
+                self._errors += 1
+                last_exc = e
+                if attempt < MAX_RETRIES:
+                    wait = BACKOFF_BASE * (2 ** attempt)
+                    log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
+                    await asyncio.sleep(wait)
+        raise last_exc or httpx.ReadTimeout("Max retries exceeded")
+
+    def _in_maintenance_window(self) -> bool:
+        """Check if FLP is in scheduled maintenance (Thu 21:00-23:59 PT)."""
+        now = datetime.utcnow()
+        return (now.weekday() == _MAINTENANCE_DOW
+                and _MAINTENANCE_START_HOUR_UTC <= now.hour < _MAINTENANCE_END_HOUR_UTC)
+
+    def get_api_health(self) -> dict:
+        """Return API health metrics."""
+        return {
+            "requests_made": self._requests_made,
+            "errors": self._errors,
+            "rate_limited": self._rate_limited,
+            "in_maintenance": self._in_maintenance_window(),
+        }
 
     async def close(self):
         if self._client and not self._client.is_closed:
@@ -153,16 +233,13 @@ class CourtListenerClient:
                               page_size=20, max_pages=5) -> dict:
         """Search case law opinions via the search endpoint.
 
-        Uses cursor-based pagination (CourtListener v4) to fetch up to
-        ``max_pages`` pages of results.  Each page returns up to ``page_size``
-        items; the default cap of 5 pages × 20 items = 100 results per call
-        keeps latency reasonable while covering the vast majority of queries.
-
-        Args:
-            max_pages: Maximum number of cursor pages to follow (default 5).
-                       Set to 1 to replicate the old single-page behaviour.
+        Uses cursor-based pagination (CourtListener v4) with retry logic.
+        Respects FLP maintenance windows (Thu 21-23:59 PT).
         """
-        client = await self._get_client()
+        if self._in_maintenance_window():
+            log.info("Skipping search — FLP maintenance window active")
+            return {"success": True, "count": 0, "results": [], "skipped": "maintenance"}
+
         params = {"type": "o", "page_size": page_size}
         if query:
             params["q"] = query
@@ -181,21 +258,20 @@ class CourtListenerClient:
         try:
             while page < max_pages:
                 if next_url:
-                    # Follow the full cursor URL returned by the API
-                    resp = await client.get(next_url)
+                    resp = await self._request_with_retry("get", next_url)
                 else:
-                    resp = await client.get("/search/", params=params)
+                    resp = await self._request_with_retry("get", "/search/", params=params)
                 resp.raise_for_status()
                 data = resp.json()
                 page_results = data.get("results", [])
                 all_results.extend(page_results)
                 if page == 0:
                     total_count = data.get("count", len(page_results))
-                next_url = data.get("next")  # full cursor URL or None
+                next_url = data.get("next")
                 page += 1
                 if not next_url:
-                    break  # no more pages
-                await asyncio.sleep(0.2)  # polite rate-limit between pages
+                    break
+                await asyncio.sleep(0.3)  # polite rate-limit between pages
 
             log.info(
                 "CourtListener search: %d results (%d pages) for q='%s'",
@@ -226,21 +302,23 @@ class CourtListenerClient:
             query=f'"{name}"', courts=courts, date_filed_after=date_after,
         )
 
-    async def ingest_recent_opinions(self, days_back=180, states=None, page_size=20) -> list:
+    async def ingest_recent_opinions(self, days_back=180, states=None, page_size=20,
+                                     bail_relevant_only=True) -> list:
         """Pull recent opinions for ingestion into court_outcomes.
 
         Batches courts by state for efficiency (12 queries vs 67).
-        Focuses on criminal cases relevant to bail bond intelligence.
-
-        Args:
-            days_back: How many days back to search (default 180 for good coverage)
-            states: List of state codes (defaults to all SE US)
-            page_size: Max results per state batch
+        Filters to bail/criminal-relevant cases when bail_relevant_only=True.
+        Uses retry-safe requests and respects FLP maintenance windows.
         """
+        if self._in_maintenance_window():
+            log.info("Skipping ingestion — FLP maintenance window active")
+            return []
+
         date_after = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         target_states = [s.upper() for s in states] if states else SE_US_STATES
 
         all_results = []
+        skipped_irrelevant = 0
 
         for state in target_states:
             state_courts = courts_for_state(state)
@@ -248,32 +326,35 @@ class CourtListenerClient:
                 continue
 
             try:
-                # Batch all courts for this state in one query
                 result = await self.search_opinions(
                     courts=state_courts,
                     date_filed_after=date_after,
                     page_size=page_size,
-                    max_pages=3,  # Up to 3 pages × page_size per state
+                    max_pages=3,
                 )
 
                 if result.get("success") and result.get("results"):
                     for r in result["results"]:
-                        # Determine which court this result belongs to
                         court_id = r.get("court_id", "")
                         if court_id not in SE_US_COURTS:
-                            # Fallback: use the first court for this state
                             court_id = state_courts[0]
                         normalized = self._normalize_opinion(r, court_id)
-                        if normalized:
-                            all_results.append(normalized)
+                        if not normalized:
+                            continue
+                        # Filter to bail-relevant cases
+                        if bail_relevant_only and not self._is_bail_relevant(normalized):
+                            skipped_irrelevant += 1
+                            continue
+                        all_results.append(normalized)
 
                 log.info("State %s: fetched %d results",
                          state, len(result.get("results", [])) if result.get("success") else 0)
-                await asyncio.sleep(0.3)  # Rate-limit between states
+                await asyncio.sleep(0.5)  # Rate-limit between states
             except Exception as e:
                 log.warning("Ingestion skip for state %s: %s", state, str(e)[:100])
 
-        log.info("Ingested %d opinions from %d states", len(all_results), len(target_states))
+        log.info("Ingested %d bail-relevant opinions from %d states (skipped %d irrelevant)",
+                 len(all_results), len(target_states), skipped_irrelevant)
         return all_results
 
     def _normalize_opinion(self, raw: dict, court_id: str) -> Optional[dict]:
@@ -308,29 +389,78 @@ class CourtListenerClient:
 
     @staticmethod
     def _classify_disposition(text: str, case_name: str = "") -> str:
-        """Classify court disposition from opinion text/snippet."""
+        """Classify court disposition from opinion text/snippet.
+
+        Enhanced with bail-specific patterns for accurate bond intelligence.
+        Priority-ordered: most specific patterns first.
+        """
         t = (text + " " + case_name).lower()
+        # ── Bail-Specific (highest priority) ────────────────────────────────
+        if re.search(r"bond\s+(forfeited|estreated|forfeiture)", t):
+            return "bond_forfeiture"
+        if re.search(r"motion\s+to\s+revoke\s+bond|bond\s+revoc", t):
+            return "bond_revoked"
+        if re.search(r"failure\s+to\s+appear|\bfta\b", t):
+            return "fta"
+        if re.search(r"bond\s+(reduced|lowered|decreased)", t):
+            return "bond_reduced"
+        if re.search(r"bond\s+(increased|raised)", t):
+            return "bond_increased"
+        # ── Standard Dispositions ───────────────────────────────────────────
         if "acquit" in t or "not guilty" in t:
             return "acquittal"
         if "plea" in t and ("guilty" in t or "nolo" in t):
             return "plea"
+        if re.search(r"nolle\s+prosequi|nol\s*pros", t):
+            return "nolle_prosequi"
         if "dismiss" in t:
             return "dismissed"
+        if re.search(r"probation\s+violat|\bvop\b", t):
+            return "probation_violation"
         if "reversed" in t or "reverse" in t:
             return "reversed"
         if "remand" in t:
             return "remanded"
         if "affirm" in t:
             return "affirmed"
-        if "convict" in t or "guilty" in t:
+        if "convict" in t or ("guilty" in t and "not guilty" not in t):
             return "conviction"
         if "sentence" in t:
-            return "conviction"
+            return "sentencing"
         if "vacat" in t:
             return "vacated"
         if "denied" in t:
             return "denied"
+        if re.search(r"pretrial\s+(release|detention|diversion)", t):
+            return "pretrial_order"
         return "unknown"
+
+    @staticmethod
+    def _is_bail_relevant(opinion: dict) -> bool:
+        """Filter opinions to bail/criminal law relevance.
+
+        Excludes civil, family, contract, administrative, and other
+        non-criminal matters that don't inform bail bond intelligence.
+        """
+        searchable = " ".join(filter(None, [
+            opinion.get("case_name", ""),
+            opinion.get("snippet", ""),
+            opinion.get("disposition", ""),
+        ]))
+        # Criminal case name patterns ("State v.", "People v.", etc.)
+        if re.search(r"state\s+(?:of\s+\w+\s+)?v\.", searchable, re.I):
+            return True
+        if re.search(r"people\s+v\.|united\s+states\s+v\.|commonwealth\s+v\.", searchable, re.I):
+            return True
+        # Bail-specific keyword match
+        if _BAIL_KEYWORDS.search(searchable):
+            return True
+        # Known bail-relevant dispositions
+        disp = opinion.get("disposition", "")
+        if disp in ("bond_forfeiture", "bond_revoked", "fta", "bond_reduced",
+                    "bond_increased", "probation_violation", "pretrial_order"):
+            return True
+        return False
 
     def get_coverage_summary(self) -> dict:
         """Return coverage stats for the SE US court registry."""

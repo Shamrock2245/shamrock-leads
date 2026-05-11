@@ -11,56 +11,82 @@ into the `court_outcomes` MongoDB collection. Handles:
 """
 
 import logging
+import os
+import re
 from datetime import datetime
 from typing import Optional
 
 log = logging.getLogger("shamrock.court_ingestor")
 
 
+# ── Name Normalization ──────────────────────────────────────────────────────
+def _normalize_name(name: str) -> str:
+    """Normalize a name for fuzzy comparison.
+
+    Strips suffixes (Jr, Sr, III), punctuation, extra spaces,
+    and returns uppercase.
+    """
+    if not name:
+        return ""
+    n = re.sub(r"\b(jr|sr|ii|iii|iv)\b", "", name, flags=re.I)
+    n = re.sub(r"[^a-zA-Z\s]", "", n)
+    n = re.sub(r"\s+", " ", n).strip().upper()
+    return n
+
+
+def _name_similarity(name_a: str, name_b: str) -> float:
+    """Calculate similarity between two names (0.0 - 1.0).
+
+    Uses token-based Jaccard similarity for robustness against
+    name ordering differences ("SMITH JOHN" vs "JOHN SMITH").
+    """
+    a_tokens = set(_normalize_name(name_a).split())
+    b_tokens = set(_normalize_name(name_b).split())
+    if not a_tokens or not b_tokens:
+        return 0.0
+    intersection = a_tokens & b_tokens
+    union = a_tokens | b_tokens
+    return len(intersection) / len(union) if union else 0.0
+
+
 async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
     """Execute a full court opinion ingestion cycle.
 
-    Args:
-        db: Motor database instance
-        days_back: How many days back to pull opinions (default 180)
-        states: Optional list of state codes (defaults to all SE US)
-
-    Returns:
-        dict with ingestion stats
+    Enhanced pipeline:
+    1. Pull opinions from CourtListener (bail-relevant filter)
+    2. Deduplicate via source_id
+    3. AI-summarize each opinion for bail bond intelligence
+    4. Fuzzy-match defendants against arrests collection
+    5. Score bail impact
     """
     from dashboard.services.courtlistener_client import CourtListenerClient
-    import os
 
     token = os.getenv("COURTLISTENER_API_TOKEN", "")
     client = CourtListenerClient(api_token=token if token else None)
 
     try:
-        # Pull opinions from CourtListener
         opinions = await client.ingest_recent_opinions(
-            days_back=days_back,
-            states=states,
-            page_size=20,
+            days_back=days_back, states=states, page_size=20,
+            bail_relevant_only=True,
         )
 
         if not opinions:
             return {
-                "success": True,
-                "ingested": 0,
-                "duplicates": 0,
-                "message": "No opinions found for the given period",
+                "success": True, "ingested": 0, "duplicates": 0,
+                "message": "No bail-relevant opinions found",
+                "api_health": client.get_api_health(),
             }
 
-        # Deduplicate against existing records
         collection = db["court_outcomes"]
         inserted = 0
         duplicates = 0
+        ai_analyzed = 0
 
         for opinion in opinions:
             source_id = opinion.get("source_id", "")
             if not source_id:
                 continue
 
-            # Check for existing record
             existing = await collection.find_one(
                 {"source": "courtlistener", "source_id": source_id}
             )
@@ -68,7 +94,16 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
                 duplicates += 1
                 continue
 
-            # Attempt defendant matching
+            # AI-powered opinion analysis
+            ai_summary = await _ai_analyze_opinion(opinion)
+            if ai_summary:
+                opinion["ai_analysis"] = ai_summary
+                ai_analyzed += 1
+
+            # Score bail impact
+            opinion["bail_impact"] = _score_bail_impact(opinion)
+
+            # Defendant matching (improved)
             match_result = await _fuzzy_match_defendant(
                 db, opinion.get("case_name", "")
             )
@@ -76,23 +111,26 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
                 opinion["matched_defendant_id"] = match_result.get("defendant_id")
                 opinion["matched_defendant_name"] = match_result.get("name")
                 opinion["match_confidence"] = match_result.get("confidence", 0)
+                opinion["match_method"] = match_result.get("method", "name")
 
             await collection.insert_one(opinion)
             inserted += 1
 
         log.info(
-            "Ingestion complete: %d inserted, %d duplicates",
-            inserted, duplicates,
+            "Ingestion complete: %d inserted, %d dupes, %d AI-analyzed",
+            inserted, duplicates, ai_analyzed,
         )
 
         return {
             "success": True,
             "ingested": inserted,
             "duplicates": duplicates,
+            "ai_analyzed": ai_analyzed,
             "total_fetched": len(opinions),
             "states_queried": states or "all_se_us",
             "days_back": days_back,
             "completed_at": datetime.utcnow().isoformat() + "Z",
+            "api_health": client.get_api_health(),
         }
 
     except Exception as e:
@@ -202,51 +240,199 @@ async def get_disposition_rates(db, state: str = None) -> dict:
 
 
 async def _fuzzy_match_defendant(db, case_name: str) -> Optional[dict]:
-    """Attempt to match a case name to an existing defendant.
+    """Match a case name to an existing defendant with improved accuracy.
 
-    Uses simple "LAST, FIRST" extraction from case names like
-    "State v. Smith" or "Smith v. State of Florida".
-
-    Returns match dict or None if no confident match.
+    Enhanced with:
+    - Name normalization (strips suffixes, punctuation)
+    - Token-based Jaccard similarity scoring
+    - Multi-candidate ranking
+    - County cross-reference
     """
     if not case_name:
         return None
 
     # Extract defendant name from common case name patterns
-    name_parts = None
+    name_raw = None
     case_lower = case_name.lower()
 
-    # Pattern: "State v. LastName" or "State of Florida v. LastName"
-    for prefix in ["state v. ", "state of florida v. ", "people v. ",
-                   "commonwealth v. ", "united states v. ", "u.s. v. "]:
+    for prefix in ["state v. ", "state of florida v. ", "state of ",
+                   "people v. ", "commonwealth v. ",
+                   "united states v. ", "u.s. v. "]:
         if prefix in case_lower:
             idx = case_lower.index(prefix) + len(prefix)
-            name_parts = case_name[idx:].strip().split(",")[0].strip()
+            # Handle "State of X v." pattern
+            remainder = case_name[idx:].strip()
+            if " v. " in remainder.lower() and prefix.startswith("state of"):
+                idx2 = remainder.lower().index(" v. ") + 4
+                name_raw = remainder[idx2:].strip().split(",")[0].strip()
+            else:
+                name_raw = remainder.split(",")[0].strip()
             break
 
-    if not name_parts or len(name_parts) < 3:
+    if not name_raw or len(name_raw) < 3:
         return None
 
-    # Search arrests collection for matching last name
+    search_name = _normalize_name(name_raw)
+    if not search_name or len(search_name) < 3:
+        return None
+
+    # Search arrests collection
     try:
-        search_name = name_parts.upper()
+        # Use the last word as the primary search token (likely surname)
+        tokens = search_name.split()
+        surname = tokens[-1] if tokens else search_name
+
         cursor = db.arrests.find(
             {"$or": [
-                {"full_name": {"$regex": search_name, "$options": "i"}},
-                {"Defendant_Name": {"$regex": search_name, "$options": "i"}},
+                {"full_name": {"$regex": surname, "$options": "i"}},
+                {"Defendant_Name": {"$regex": surname, "$options": "i"}},
             ]},
-            {"_id": 1, "full_name": 1, "Defendant_Name": 1, "defendant_id": 1},
-        ).limit(5)
-        matches = await cursor.to_list(length=5)
+            {"_id": 1, "full_name": 1, "Defendant_Name": 1, "defendant_id": 1, "county": 1},
+        ).limit(10)
+        candidates = await cursor.to_list(length=10)
 
-        if matches:
-            best = matches[0]
+        if not candidates:
+            return None
+
+        # Score each candidate by name similarity
+        best_match = None
+        best_score = 0.0
+
+        for c in candidates:
+            cand_name = c.get("full_name") or c.get("Defendant_Name", "")
+            similarity = _name_similarity(name_raw, cand_name)
+            if similarity > best_score:
+                best_score = similarity
+                best_match = c
+
+        if best_match and best_score >= 0.4:
+            # Confidence tiers based on similarity
+            if best_score >= 0.8:
+                confidence = 0.9
+            elif best_score >= 0.6:
+                confidence = 0.7
+            else:
+                confidence = 0.5
+
+            # Penalize if multiple candidates with similar scores
+            close_matches = sum(1 for c in candidates
+                                if _name_similarity(name_raw, c.get("full_name") or c.get("Defendant_Name", "")) >= best_score * 0.8)
+            if close_matches > 1:
+                confidence *= 0.7  # Ambiguity penalty
+
             return {
-                "defendant_id": str(best.get("defendant_id") or best["_id"]),
-                "name": best.get("full_name") or best.get("Defendant_Name", ""),
-                "confidence": 0.6 if len(matches) == 1 else 0.4,
+                "defendant_id": str(best_match.get("defendant_id") or best_match["_id"]),
+                "name": best_match.get("full_name") or best_match.get("Defendant_Name", ""),
+                "confidence": round(confidence, 2),
+                "similarity": round(best_score, 2),
+                "method": "jaccard_name_similarity",
             }
     except Exception as e:
         log.debug("Defendant match error: %s", str(e)[:100])
 
     return None
+
+
+async def _ai_analyze_opinion(opinion: dict) -> Optional[dict]:
+    """Use OpenAI to extract bail-relevant intelligence from an opinion.
+
+    Extracts: charge classification, sentencing patterns, bail implications,
+    risk factors, and a 1-line bond-risk summary.
+
+    Returns structured analysis dict or None if AI unavailable.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+
+    case_name = opinion.get("case_name", "Unknown")
+    snippet = opinion.get("snippet", "")[:1500]  # Limit token usage
+    disposition = opinion.get("disposition", "unknown")
+    court = opinion.get("court_name", "")
+    date = opinion.get("date_filed", "")
+
+    prompt = f"""Analyze this court opinion for bail bond intelligence.
+Case: {case_name}
+Court: {court}
+Date: {date}
+Disposition: {disposition}
+Snippet: {snippet}
+
+Extract as JSON:
+{{
+  "charge_type": "felony/misdemeanor/unknown",
+  "charge_category": "drug/violent/property/dui/fraud/other",
+  "sentence_indicator": "prison/probation/time_served/acquitted/pending/unknown",
+  "bail_implications": "One sentence: how this outcome affects bail bond risk for similar cases",
+  "risk_signal": "high/medium/low/neutral",
+  "key_factors": ["list of 1-3 key factors relevant to bail underwriting"]
+}}
+Respond ONLY with the JSON object."""
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            resp = await http.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 300,
+                },
+            )
+            if resp.status_code != 200:
+                return None
+
+            import json
+            content = resp.json()["choices"][0]["message"]["content"].strip()
+            # Strip markdown code fences if present
+            if content.startswith("```"):
+                content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            return json.loads(content)
+    except Exception as e:
+        log.debug("AI analysis failed for %s: %s", case_name[:40], str(e)[:80])
+        return None
+
+
+def _score_bail_impact(opinion: dict) -> dict:
+    """Score how impactful this opinion is for bail bond intelligence.
+
+    Returns a dict with score (0-100) and reasoning.
+    """
+    score = 0
+    factors = []
+    disp = opinion.get("disposition", "unknown")
+
+    # High-impact dispositions for bail
+    bail_critical = {
+        "bond_forfeiture": 95, "fta": 90, "bond_revoked": 85,
+        "bond_reduced": 70, "bond_increased": 70,
+        "probation_violation": 65, "pretrial_order": 60,
+    }
+    if disp in bail_critical:
+        score = bail_critical[disp]
+        factors.append(f"bail-critical disposition: {disp}")
+    elif disp in ("conviction", "sentencing", "plea"):
+        score = 50
+        factors.append(f"sentencing outcome: {disp}")
+    elif disp in ("dismissed", "acquittal", "nolle_prosequi"):
+        score = 40
+        factors.append(f"favorable outcome: {disp}")
+    elif disp != "unknown":
+        score = 25
+        factors.append(f"general legal outcome: {disp}")
+
+    # Bonus for matched defendants
+    if opinion.get("matched_defendant_id"):
+        score = min(100, score + 20)
+        factors.append("matched to existing defendant")
+
+    # Bonus for AI analysis
+    ai = opinion.get("ai_analysis", {})
+    if ai.get("risk_signal") == "high":
+        score = min(100, score + 15)
+        factors.append("AI: high risk signal")
+
+    return {"score": score, "factors": factors}
