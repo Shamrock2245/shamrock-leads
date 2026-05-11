@@ -1179,8 +1179,20 @@ def create_app():
         register_trigger("wix_sync", _trigger)
         async def _wix_sync_loop():
             await asyncio.sleep(600)  # Initial delay — 10 min after startup
+            _cycle = 0
             while True:
+                _cycle += 1
                 try:
+                    from dashboard.services.automation_config import should_run
+                    if not await should_run(_gdb(), "wix_sync"):
+                        if _cycle % 4 == 1:
+                            logger.debug("Wix sync cron: DISABLED (toggle in dashboard)")
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=14400.0)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
                     from wix.sync import WixSyncEngine
                     engine = WixSyncEngine(db=app.db)
                     if engine.is_configured:
@@ -1203,6 +1215,213 @@ def create_app():
                 except asyncio.TimeoutError:
                     pass
         asyncio.ensure_future(_wix_sync_loop())
+
+    # ── Geo Intelligence Polling Cron (every 5 minutes) ───────────────────────
+    @app.before_serving
+    async def _start_geo_intelligence_cron():
+        """Poll Traccar for missed position updates and check curfew violations.
+        Gated by automation_config.geo_intelligence.enabled (default: OFF).
+        Supplements the real-time Traccar webhook — catches any missed events.
+        """
+        import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("geo_intelligence", _trigger)
+        async def _geo_loop():
+            await asyncio.sleep(120)  # Initial delay
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    from dashboard.services.automation_config import should_run
+                    if not await should_run(_gdb(), "geo_intelligence", default=False):
+                        if _cycle % 60 == 1:
+                            logger.debug("Geo Intelligence cron: DISABLED (toggle in dashboard)")
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=300.0)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+                    from dashboard.services.geo_intelligence import GeoIntelligenceService
+                    from dashboard.extensions import get_db
+                    svc = GeoIntelligenceService(db=get_db())
+                    devices = await svc.list_devices()
+                    active = [d for d in devices if d.get("status") == "active"]
+                    synced = 0
+                    for dev in active:
+                        try:
+                            traccar_id = dev.get("traccar_device_id")
+                            if not traccar_id:
+                                continue
+                            from dashboard.services.traccar_client import TraccarClient
+                            client = TraccarClient()
+                            pos = await client.get_latest_position(traccar_id)
+                            if pos:
+                                await svc.sync_position(
+                                    device_id=str(dev["_id"]),
+                                    lat=pos["latitude"],
+                                    lng=pos["longitude"],
+                                    accuracy=pos.get("accuracy"),
+                                    source="geo_cron",
+                                )
+                                synced += 1
+                        except Exception as dev_err:
+                            logger.debug("Geo cron device sync error: %s", dev_err)
+                    if synced > 0:
+                        logger.info("☘️  Geo Intelligence [cycle %s]: synced %s devices", _cycle, synced)
+                    elif _cycle % 12 == 0:
+                        logger.debug("☘️  Geo Intelligence heartbeat: cycle=%s active_devices=%s", _cycle, len(active))
+                except Exception as e:
+                    logger.warning("Geo Intelligence cron error [cycle %s]: %s", _cycle, e)
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=300.0)
+                    logger.info("[GeoIntelligence] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
+        asyncio.ensure_future(_geo_loop())
+
+    # ── FindMy Geofence Polling Cron (every 15 minutes) ───────────────────────
+    @app.before_serving
+    async def _start_findmy_geofence_cron():
+        """Poll BlueBubbles FindMy API for defendant locations and check Lee County boundary.
+        Gated by automation_config.findmy_geofence.enabled (default: OFF).
+        """
+        import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("findmy_geofence", _trigger)
+        async def _findmy_loop():
+            await asyncio.sleep(180)  # Initial delay
+            _cycle = 0
+            while True:
+                _cycle += 1
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    cfg = await get_automation_config(_gdb())
+                    fm = cfg.get("findmy_geofence", {})
+                    if not fm.get("enabled", False):
+                        if _cycle % 4 == 1:
+                            logger.debug("FindMy Geofence cron: DISABLED (toggle in dashboard)")
+                        _trigger.clear()
+                        interval = float(fm.get("poll_interval_minutes", 15)) * 60
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=interval)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+                    import os
+                    from dashboard.api.bb_private_api import BlueBubblesPrivateClient
+                    from dashboard.api.geo_geofence_patch import haversine_distance
+                    center_lat = fm.get("center_lat", 26.5629)
+                    center_lng = fm.get("center_lng", -81.8723)
+                    radius_miles = fm.get("geofence_miles", 25)
+                    bb_url = os.getenv("BB_SERVER_URL")
+                    bb_pass = os.getenv("BB_SERVER_PASSWORD")
+                    if not bb_url:
+                        logger.debug("FindMy cron: BB_SERVER_URL not configured, skipping")
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=900.0)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+                    client = BlueBubblesPrivateClient(base_url=bb_url, password=bb_pass)
+                    try:
+                        result = await client.findmy_devices()
+                        devices = result.get("data", {}).get("devices", [])
+                        violations = []
+                        for dev in devices:
+                            lat = dev.get("location", {}).get("latitude")
+                            lng = dev.get("location", {}).get("longitude")
+                            if lat is None or lng is None:
+                                continue
+                            dist = haversine_distance(center_lat, center_lng, lat, lng)
+                            if dist > radius_miles:
+                                violations.append({
+                                    "device_name": dev.get("name", "Unknown"),
+                                    "distance_miles": round(dist, 2),
+                                    "lat": lat,
+                                    "lng": lng,
+                                })
+                        if violations:
+                            logger.warning(
+                                "☘️  FindMy Geofence [cycle %s]: %s violation(s): %s",
+                                _cycle, len(violations),
+                                [v["device_name"] for v in violations],
+                            )
+                            from datetime import datetime, timezone
+                            for v in violations:
+                                await _gdb()["geo_events"].insert_one({
+                                    "event_type": "findmy_boundary_breach",
+                                    "source": "findmy_cron",
+                                    "device_name": v["device_name"],
+                                    "distance_miles": v["distance_miles"],
+                                    "lat": v["lat"],
+                                    "lng": v["lng"],
+                                    "created_at": datetime.now(timezone.utc),
+                                    "acknowledged": False,
+                                })
+                        elif _cycle % 4 == 0:
+                            logger.debug("☘️  FindMy Geofence heartbeat: cycle=%s devices=%s", _cycle, len(devices))
+                    except Exception as bb_err:
+                        logger.debug("FindMy cron BB error: %s", bb_err)
+                except Exception as e:
+                    logger.warning("FindMy Geofence cron error [cycle %s]: %s", _cycle, e)
+                _trigger.clear()
+                fm_cfg = {}
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    _c = await get_automation_config(_gdb())
+                    fm_cfg = _c.get("findmy_geofence", {})
+                except Exception:
+                    pass
+                interval = float(fm_cfg.get("poll_interval_minutes", 15)) * 60
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=interval)
+                    logger.info("[FindMyGeofence] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
+        asyncio.ensure_future(_findmy_loop())
+
+    # ── Auto-Reply Bridge: sync automation_config toggle → outreach_config ────
+    @app.before_serving
+    async def _start_auto_reply_bridge():
+        """Sync the automation_config auto_reply.enabled toggle into outreach_config.
+        Runs every 60 seconds so dashboard service-control toggles take effect promptly.
+        The inbox poller reads from outreach_config; this bridge keeps them in sync.
+        """
+        import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("auto_reply", _trigger)
+        async def _bridge_loop():
+            await asyncio.sleep(30)  # Initial delay
+            _last_state = None
+            while True:
+                try:
+                    from dashboard.services.automation_config import get_automation_config
+                    from dashboard.extensions import get_collection
+                    cfg = await get_automation_config(_gdb())
+                    new_state = cfg.get("auto_reply", {}).get("enabled", False)
+                    if new_state != _last_state:
+                        outreach_coll = get_collection("outreach_config")
+                        await outreach_coll.update_one(
+                            {"type": "auto_reply"},
+                            {"$set": {"enabled": new_state}},
+                            upsert=False,
+                        )
+                        if _last_state is not None:
+                            logger.info(
+                                "☘️  Auto-Reply bridge: synced enabled=%s → outreach_config",
+                                new_state,
+                            )
+                        _last_state = new_state
+                except Exception as e:
+                    logger.debug("Auto-reply bridge error: %s", e)
+                await asyncio.sleep(60)
+        asyncio.ensure_future(_bridge_loop())
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     #  REVENUE AUTOMATION ENGINE — All gated by automation_config toggles

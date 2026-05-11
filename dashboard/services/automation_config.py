@@ -123,6 +123,10 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "interval_seconds": 21600,       # 6 hours
     },
+    "wix_sync": {
+        "enabled": True,
+        "interval_seconds": 14400,       # 4 hours — sync MongoDB → Wix CMS
+    },
 
     # ── Metadata ──
     "updated_at": None,
