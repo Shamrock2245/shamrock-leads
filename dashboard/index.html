@@ -2603,6 +2603,7 @@
         <table class="inv-table">
           <thead>
             <tr>
+              <th style="width:36px;text-align:center"><input type="checkbox" id="invSelectAll" onchange="SLInventory.toggleSelectAll(this.checked)" title="Select all"></th>
               <th>POA #</th>
               <th>Surety</th>
               <th>Tier</th>
@@ -2617,6 +2618,18 @@
         </table>
       </div>
       <div class="inv-pagination" id="invDetailPagination"></div>
+      <!-- Floating Bulk Action Bar -->
+      <div id="invBulkBar" class="inv-bulk-bar" style="display:none">
+        <div class="inv-bulk-left">
+          <span class="inv-bulk-count" id="invBulkCount">0</span>
+          <span class="inv-bulk-label">POA(s) selected</span>
+        </div>
+        <div class="inv-bulk-actions">
+          <button class="inv-bulk-btn inv-bulk-assign" onclick="SLInventory.openBulkAssignModal()">📌 Assign to Defendant</button>
+          <button class="inv-bulk-btn inv-bulk-void" onclick="SLInventory.bulkVoid()">🗑️ Void Selected</button>
+          <button class="inv-bulk-btn inv-bulk-clear" onclick="SLInventory.clearSelection()">✕ Clear</button>
+        </div>
+      </div>
     </div>
 
     <!-- Add Pane -->
@@ -2683,6 +2696,59 @@
 </div>
 
 <!-- Chart.js for Revenue Analytics -->
+
+<!-- ═══ BULK ASSIGN MODAL ═══ -->
+<div class="inv-overlay" id="bulkAssignModal" style="display:none" onclick="if(event.target===this)SLInventory.closeBulkAssignModal()">
+  <div class="inv-modal" style="max-width:640px">
+    <div class="inv-header">
+      <div class="inv-header-left">
+        <span class="inv-header-icon">📌</span>
+        <div>
+          <div class="inv-header-title">Assign POAs to Defendant</div>
+          <div class="inv-header-subtitle" id="bulkAssignSubtitle">0 powers selected</div>
+        </div>
+      </div>
+      <button class="inv-close" onclick="SLInventory.closeBulkAssignModal()">✕</button>
+    </div>
+    <div style="padding:20px 24px">
+      <!-- Selected POAs Preview -->
+      <div class="ba-selected-strip" id="baSelectedStrip"></div>
+
+      <!-- Defendant Search -->
+      <div class="ba-section">
+        <label class="ba-label">DEFENDANT / BOOKING</label>
+        <div class="ba-search-wrap">
+          <input type="text" id="baDefendantSearch" class="ba-search-input"
+            placeholder="🔍 Search by name, booking #, or case #…"
+            oninput="SLInventory.searchDefendantsForAssign(this.value)"
+            autocomplete="off">
+        </div>
+        <div id="baSearchResults" class="ba-search-results" style="display:none"></div>
+      </div>
+
+      <!-- Or Manual Entry -->
+      <div class="ba-divider"><span>or enter manually</span></div>
+      <div class="ba-manual-grid">
+        <div class="ba-field">
+          <label class="ba-label">Booking Number *</label>
+          <input type="text" id="baBookingNumber" class="ba-input" placeholder="e.g. 2025-001234">
+        </div>
+        <div class="ba-field">
+          <label class="ba-label">Defendant Name</label>
+          <input type="text" id="baDefendantName" class="ba-input" placeholder="e.g. John Smith">
+        </div>
+      </div>
+
+      <!-- Submit -->
+      <div id="baBulkStatus" style="margin-top:12px"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;padding:14px 24px;border-top:1px solid var(--border,#334155)">
+      <button class="inv-btn-cancel" onclick="SLInventory.closeBulkAssignModal()" style="padding:10px 20px;border-radius:10px;border:1px solid var(--border,#334155);background:transparent;color:var(--text-muted,#94a3b8);cursor:pointer;font-family:inherit">Cancel</button>
+      <button class="inv-btn-submit" id="baSubmitBtn" onclick="SLInventory.submitBulkAssign()" style="padding:10px 24px;border-radius:10px;border:none;background:linear-gradient(135deg,#10b981,#059669);color:#fff;font-weight:700;cursor:pointer;font-family:inherit;transition:all .2s">📌 Assign <span id="baSubmitCount">0</span> POA(s)</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <!-- PWA Install Banner -->

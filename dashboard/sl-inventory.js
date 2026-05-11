@@ -10,6 +10,8 @@ const SLInventory = (() => {
   let _filter = { surety: 'all', status: 'all', search: '' };
   let _detailPage = 1;
   const PAGE_SIZE = 50;
+  const _selected = new Set(); // track selected POA keys: "poaNum|suretyId"
+  let _searchDebounce = null;
 
   // ── Open / Close Modal ──
   function open() {
@@ -168,12 +170,13 @@ const SLInventory = (() => {
     const pages = d.pages || 1;
 
     if (powers.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="8" class="inv-empty-state">No powers found matching filters</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="inv-empty-state">No powers found matching filters</td></tr>';
     } else {
       tbody.innerHTML = powers.map(p => {
+        const key = `${p.poa_number}|${p.surety_id}`;
+        const checked = _selected.has(key) ? 'checked' : '';
         const statusCls = p.status === 'available' ? 'inv-st-available' : p.status === 'assigned' ? 'inv-st-assigned' : p.status === 'voided' ? 'inv-st-voided' : 'inv-st-other';
         const maxBondFmt = p.max_bond_value >= 1000 ? `$${(p.max_bond_value / 1000).toFixed(0)}K` : `$${p.max_bond_value || 0}`;
-        // Expiration display
         let expHtml = '—';
         if (p.expiration) {
           const expDate = new Date(p.expiration);
@@ -200,7 +203,8 @@ const SLInventory = (() => {
         } else if (p.status === 'voided') {
           actions.push(`<button class="inv-btn inv-btn-restore" onclick="SLInventory.restorePower('${p.poa_number}','${p.surety_id}')" title="Restore">♻️ Restore</button>`);
         }
-        return `<tr class="inv-row">
+        return `<tr class="inv-row ${checked ? 'inv-row-selected' : ''}" onclick="SLInventory.toggleRowSelect(event,'${p.poa_number}','${p.surety_id}')">
+          <td style="text-align:center"><input type="checkbox" class="inv-cb" data-key="${key}" ${checked} onclick="event.stopPropagation();SLInventory.toggleSelect('${p.poa_number}','${p.surety_id}')"></td>
           <td><span class="inv-poa-mono">${p.poa_full || p.poa_number}</span></td>
           <td><span class="inv-surety-chip ${p.surety_id === 'osi' ? 'inv-chip-osi' : 'inv-chip-palm'}">${p.surety_id === 'osi' ? '🛡️ OSI' : '🌴 PSC'}</span></td>
           <td class="inv-cell-tier">${p.poa_prefix}</td>
@@ -212,6 +216,7 @@ const SLInventory = (() => {
         </tr>`;
       }).join('');
     }
+    _updateBulkBar();
 
     // Pagination
     document.getElementById('invDetailPagination').innerHTML = `
@@ -275,11 +280,49 @@ const SLInventory = (() => {
     }
   }
 
-  // ── Assign Power to Defendant ──
+  // ── Selection Management ──
+  function toggleSelect(poaNum, surety) {
+    const key = `${poaNum}|${surety}`;
+    if (_selected.has(key)) _selected.delete(key); else _selected.add(key);
+    // Update row highlight
+    const cb = document.querySelector(`.inv-cb[data-key="${key}"]`);
+    if (cb) { cb.checked = _selected.has(key); cb.closest('tr')?.classList.toggle('inv-row-selected', _selected.has(key)); }
+    _updateBulkBar();
+  }
+  function toggleRowSelect(event, poaNum, surety) {
+    if (event.target.tagName === 'INPUT' || event.target.tagName === 'BUTTON') return;
+    toggleSelect(poaNum, surety);
+  }
+  function toggleSelectAll(checked) {
+    _allPowers.forEach(p => {
+      const key = `${p.poa_number}|${p.surety_id}`;
+      if (checked) _selected.add(key); else _selected.delete(key);
+    });
+    document.querySelectorAll('.inv-cb').forEach(cb => { cb.checked = checked; cb.closest('tr')?.classList.toggle('inv-row-selected', checked); });
+    _updateBulkBar();
+  }
+  function clearSelection() {
+    _selected.clear();
+    document.querySelectorAll('.inv-cb').forEach(cb => { cb.checked = false; cb.closest('tr')?.classList.remove('inv-row-selected'); });
+    const sa = document.getElementById('invSelectAll'); if (sa) sa.checked = false;
+    _updateBulkBar();
+  }
+  function _updateBulkBar() {
+    const bar = document.getElementById('invBulkBar');
+    const countEl = document.getElementById('invBulkCount');
+    if (!bar) return;
+    const n = _selected.size;
+    if (n === 0) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    if (countEl) countEl.textContent = n;
+  }
+
+  // ── Assign Power to Defendant (single — now opens modal with 1 selected) ──
   function openAssignDialog(poaNum, surety, prefix) {
-    const booking = prompt(`Assign POA ${prefix} ${poaNum} to which Booking Number?`);
-    if (!booking || !booking.trim()) return;
-    assignPower(poaNum, surety, prefix, booking.trim());
+    _selected.clear();
+    _selected.add(`${poaNum}|${surety}`);
+    _updateBulkBar();
+    openBulkAssignModal();
   }
 
   async function assignPower(poaNum, surety, prefix, bookingNumber) {
@@ -293,6 +336,137 @@ const SLInventory = (() => {
       if (d.error) { toast('error', d.error); }
       else { toast('success', `POA ${d.poa_full} assigned to ${bookingNumber}`); loadDetailView(); loadSummary(); }
     } catch (e) { toast('error', e.message); }
+  }
+
+  // ── Bulk Assign Modal ──
+  function openBulkAssignModal() {
+    const modal = document.getElementById('bulkAssignModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    // Update subtitle and chip strip
+    const n = _selected.size;
+    const sub = document.getElementById('bulkAssignSubtitle');
+    if (sub) sub.textContent = `${n} power${n !== 1 ? 's' : ''} selected`;
+    const submitCount = document.getElementById('baSubmitCount');
+    if (submitCount) submitCount.textContent = n;
+    // Render selected POAs as chips
+    const strip = document.getElementById('baSelectedStrip');
+    if (strip) {
+      const chips = [..._selected].map(k => {
+        const [num] = k.split('|');
+        const pw = _allPowers.find(p => p.poa_number === num);
+        const label = pw ? (pw.poa_full || `${pw.poa_prefix} ${num}`) : num;
+        return `<span class="ba-chip">${label}<button onclick="SLInventory.removeFromSelection('${k}')" class="ba-chip-x">✕</button></span>`;
+      });
+      strip.innerHTML = chips.join('');
+    }
+    // Reset form fields
+    const s = document.getElementById('baDefendantSearch'); if (s) s.value = '';
+    const b = document.getElementById('baBookingNumber'); if (b) b.value = '';
+    const d = document.getElementById('baDefendantName'); if (d) d.value = '';
+    const r = document.getElementById('baSearchResults'); if (r) { r.innerHTML = ''; r.style.display = 'none'; }
+    const st = document.getElementById('baBulkStatus'); if (st) st.innerHTML = '';
+  }
+  function closeBulkAssignModal() {
+    const modal = document.getElementById('bulkAssignModal');
+    if (modal) modal.style.display = 'none';
+  }
+  function removeFromSelection(key) {
+    _selected.delete(key);
+    if (_selected.size === 0) { closeBulkAssignModal(); clearSelection(); return; }
+    openBulkAssignModal(); // re-render
+    // Also update table checkboxes
+    const cb = document.querySelector(`.inv-cb[data-key="${key}"]`);
+    if (cb) { cb.checked = false; cb.closest('tr')?.classList.remove('inv-row-selected'); }
+    _updateBulkBar();
+  }
+
+  // ── Defendant Search in Bulk Assign Modal ──
+  function searchDefendantsForAssign(query) {
+    clearTimeout(_searchDebounce);
+    if (!query || query.length < 2) {
+      const r = document.getElementById('baSearchResults'); if (r) r.style.display = 'none';
+      return;
+    }
+    _searchDebounce = setTimeout(async () => {
+      try {
+        const r = await fetch(`${API}/api/leads?search=${encodeURIComponent(query)}&days=0&limit=8`);
+        const d = await r.json();
+        const results = d.leads || d.records || [];
+        const el = document.getElementById('baSearchResults');
+        if (!el) return;
+        if (results.length === 0) {
+          el.innerHTML = '<div class="ba-no-results">No matching defendants found</div>';
+          el.style.display = 'block';
+          return;
+        }
+        el.innerHTML = results.map(rec => {
+          const name = rec.full_name || rec.Name || `${rec.First_Name || ''} ${rec.Last_Name || ''}`.trim() || 'Unknown';
+          const booking = rec.booking_number || rec.Booking_Number || '';
+          const county = rec.county || rec.County || '';
+          const charges = rec.charges || rec.Charges || '';
+          const bond = rec.bond_amount || rec.Bond_Amount || 0;
+          const bondFmt = bond >= 1000 ? `$${(bond/1000).toFixed(0)}K` : `$${bond}`;
+          return `<div class="ba-result-row" onclick="SLInventory.selectDefendantForAssign('${booking.replace(/'/g,'\\\'')}','${name.replace(/'/g,'\\\'')}')">
+            <div class="ba-result-name">${name}</div>
+            <div class="ba-result-meta">${county ? county + ' · ' : ''}${booking} · ${bondFmt}${charges ? ' · ' + charges.substring(0,40) : ''}</div>
+          </div>`;
+        }).join('');
+        el.style.display = 'block';
+      } catch (_) {}
+    }, 300);
+  }
+  function selectDefendantForAssign(booking, name) {
+    const b = document.getElementById('baBookingNumber'); if (b) b.value = booking;
+    const d = document.getElementById('baDefendantName'); if (d) d.value = name;
+    const r = document.getElementById('baSearchResults'); if (r) r.style.display = 'none';
+    const s = document.getElementById('baDefendantSearch'); if (s) s.value = `${name} — ${booking}`;
+  }
+
+  // ── Submit Bulk Assign ──
+  async function submitBulkAssign() {
+    const bookingNum = (document.getElementById('baBookingNumber')?.value || '').trim();
+    const defName = (document.getElementById('baDefendantName')?.value || '').trim();
+    const statusEl = document.getElementById('baBulkStatus');
+    if (!bookingNum) { if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;font-size:13px">❌ Booking number is required</span>'; return; }
+    if (_selected.size === 0) { if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;font-size:13px">❌ No POAs selected</span>'; return; }
+    const poaNums = [..._selected].map(k => k.split('|')[0]);
+    const suretyIds = [...new Set([..._selected].map(k => k.split('|')[1]))];
+    if (statusEl) statusEl.innerHTML = '<div class="inv-loading inv-loading-sm"><div class="btn-spinner"></div><span>Assigning…</span></div>';
+    try {
+      const r = await fetch(`${API}/api/poa/bulk-assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poa_numbers: poaNums, surety_id: suretyIds[0] || '', bond_case_id: bookingNum, defendant_name: defName }),
+      });
+      const d = await r.json();
+      if (d.error) { if (statusEl) statusEl.innerHTML = `<span style="color:#f87171;font-size:13px">❌ ${d.error}</span>`; return; }
+      const msg = `✅ ${d.assigned_count} POA(s) assigned to ${defName || bookingNum}` + (d.skipped_count ? ` (${d.skipped_count} skipped)` : '');
+      toast('success', msg);
+      closeBulkAssignModal();
+      clearSelection();
+      loadDetailView();
+      loadSummary();
+    } catch (e) { if (statusEl) statusEl.innerHTML = `<span style="color:#f87171;font-size:13px">❌ ${e.message}</span>`; }
+  }
+
+  // ── Bulk Void ──
+  async function bulkVoid() {
+    const n = _selected.size;
+    if (!n || !confirm(`Void ${n} selected POA(s)? This marks them as unusable.`)) return;
+    let voided = 0;
+    for (const key of _selected) {
+      const [num, surety] = key.split('|');
+      try {
+        const r = await fetch(`${API}/api/poa/void`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ poa_number: num, surety_id: surety }) });
+        const d = await r.json();
+        if (d.success) voided++;
+      } catch (_) {}
+    }
+    toast('success', `Voided ${voided} of ${n} POA(s)`);
+    clearSelection();
+    loadDetailView();
+    loadSummary();
   }
 
   // ── Void Power ──
@@ -486,5 +660,10 @@ const SLInventory = (() => {
     openAssignDialog, voidPower, reassignPower, restorePower,
     handleUpload, handleDrop, confirmUploadedPOAs,
     checkLowStockBanner: _checkLowStockBanner,
+    // Bulk selection
+    toggleSelect, toggleRowSelect, toggleSelectAll, clearSelection,
+    openBulkAssignModal, closeBulkAssignModal, removeFromSelection,
+    searchDefendantsForAssign, selectDefendantForAssign,
+    submitBulkAssign, bulkVoid,
   };
 })();

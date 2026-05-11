@@ -1184,6 +1184,46 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
   .inv-filter-row{flex-direction:column}
 }
 
+/* ── Bulk Selection & Assign Modal ── */
+.inv-row-selected{background:rgba(16,185,129,.06) !important}
+.inv-row-selected:hover{background:rgba(16,185,129,.1) !important}
+.inv-cb{width:16px;height:16px;accent-color:#10b981;cursor:pointer}
+.inv-bulk-bar{position:sticky;bottom:0;display:flex;align-items:center;justify-content:space-between;padding:14px 22px;background:linear-gradient(135deg,rgba(16,185,129,.12),rgba(16,185,129,.06));border-top:1px solid rgba(16,185,129,.2);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);animation:invSlideUp .25s ease;z-index:10}
+.inv-bulk-left{display:flex;align-items:center;gap:10px}
+.inv-bulk-count{font-size:22px;font-weight:900;color:#34d399;font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.inv-bulk-label{font-size:13px;color:var(--text-secondary);font-weight:600}
+.inv-bulk-actions{display:flex;gap:8px}
+.inv-bulk-btn{padding:8px 18px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;border:1px solid var(--border);background:var(--card);color:var(--text-secondary);transition:all .2s ease;font-family:inherit}
+.inv-bulk-btn:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.inv-bulk-assign:hover{border-color:#10b981;color:#34d399;background:rgba(16,185,129,.08)}
+.inv-bulk-void:hover{border-color:#ef4444;color:#f87171;background:rgba(239,68,68,.06)}
+.inv-bulk-clear{border:none;background:transparent;color:var(--muted);font-size:13px;padding:8px 12px}
+.inv-bulk-clear:hover{color:var(--text)}
+
+/* ── Bulk Assign Modal Inner ── */
+.ba-selected-strip{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
+.ba-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;font-family:'SF Mono','Fira Code',monospace;font-size:12px;font-weight:700;background:linear-gradient(135deg,rgba(16,185,129,.12),rgba(16,185,129,.06));color:#6ee7b7;border:1px solid rgba(16,185,129,.15);border-radius:8px;letter-spacing:-.1px}
+.ba-chip-x{background:none;border:none;color:rgba(255,255,255,.4);font-size:13px;cursor:pointer;padding:0 2px;transition:color .15s}
+.ba-chip-x:hover{color:#f87171}
+.ba-section{margin-bottom:16px}
+.ba-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:6px;display:block}
+.ba-search-wrap{position:relative}
+.ba-search-input{width:100%;padding:12px 16px;border-radius:10px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:14px;font-family:inherit;transition:all .2s;box-sizing:border-box}
+.ba-search-input:focus{border-color:rgba(16,185,129,.5);outline:none;box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+.ba-search-results{max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;background:var(--card);margin-top:6px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.ba-result-row{padding:12px 16px;cursor:pointer;transition:background .15s;border-bottom:1px solid var(--border)}
+.ba-result-row:last-child{border-bottom:none}
+.ba-result-row:hover{background:rgba(16,185,129,.06)}
+.ba-result-name{font-weight:700;font-size:14px;color:var(--text)}
+.ba-result-meta{font-size:12px;color:var(--muted);margin-top:2px}
+.ba-no-results{padding:16px;text-align:center;color:var(--muted);font-size:13px}
+.ba-divider{display:flex;align-items:center;gap:14px;margin:20px 0;color:var(--muted);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px}
+.ba-divider::before,.ba-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+.ba-manual-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.ba-field{display:flex;flex-direction:column;gap:5px}
+.ba-input{padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:13px;font-family:inherit;transition:border-color .2s}
+.ba-input:focus{border-color:rgba(16,185,129,.5);outline:none;box-shadow:0 0 0 3px rgba(16,185,129,.1)}
+@media(max-width:600px){.ba-manual-grid{grid-template-columns:1fr}}
 /* ═══════════════════════════════════════════════════════
    REPEAT OFFENDER ALERTS — High-Visibility Panel
    ═══════════════════════════════════════════════════════ */

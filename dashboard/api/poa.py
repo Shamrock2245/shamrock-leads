@@ -380,6 +380,84 @@ async def api_poa_restore():
     return jsonify({"success": True, "poa_number": poa_number, "message": f"POA {poa_number} restored to available"})
 
 
+@poa_bp.route("/poa/bulk-assign", methods=["POST"])
+async def api_poa_bulk_assign():
+    """Assign multiple POAs to a single defendant/case in one operation.
+
+    Body: {
+        poa_numbers: ["12345", "12346", ...],
+        surety_id: "osi" | "palmetto",
+        bond_case_id: "booking_number or case reference",
+        defendant_name: "optional — for audit trail"
+    }
+    """
+    poa_inventory = get_collection("poa_inventory")
+    body = (await request.get_json(force=True)) or {}
+
+    poa_numbers = body.get("poa_numbers", [])
+    surety_id = str(body.get("surety_id", "")).lower().strip()
+    bond_case_id = str(body.get("bond_case_id", "")).strip()
+    defendant_name = body.get("defendant_name", "")
+
+    if not poa_numbers or not isinstance(poa_numbers, list):
+        return jsonify({"error": "poa_numbers must be a non-empty array"}), 400
+    if not bond_case_id:
+        return jsonify({"error": "bond_case_id (booking number) is required"}), 400
+    if len(poa_numbers) > 50:
+        return jsonify({"error": "Cannot bulk-assign more than 50 POAs at once"}), 400
+
+    now = datetime.now(timezone.utc).isoformat()
+    assigned = []
+    skipped = []
+    errors = []
+
+    for poa_num in poa_numbers:
+        poa_num = str(poa_num).strip()
+        query = {"poa_number": poa_num}
+        if surety_id in ("osi", "palmetto"):
+            query["surety_id"] = surety_id
+
+        doc = await poa_inventory.find_one(query)
+        if not doc:
+            errors.append({"poa_number": poa_num, "reason": "not found"})
+            continue
+        if doc.get("status") != "available":
+            skipped.append({
+                "poa_number": poa_num,
+                "reason": f"already {doc.get('status')}",
+                "current_case": doc.get("bond_case_id"),
+            })
+            continue
+
+        await poa_inventory.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {
+                "status": "assigned",
+                "bond_case_id": bond_case_id,
+                "defendant_name": defendant_name or None,
+                "used_at": now,
+                "bulk_assigned": True,
+            }},
+        )
+        assigned.append({
+            "poa_number": poa_num,
+            "poa_full": doc.get("poa_full", f"{doc.get('poa_prefix', '')} {poa_num}"),
+            "poa_prefix": doc.get("poa_prefix", ""),
+        })
+
+    return jsonify({
+        "success": True,
+        "bond_case_id": bond_case_id,
+        "defendant_name": defendant_name,
+        "assigned_count": len(assigned),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+        "assigned": assigned,
+        "skipped": skipped,
+        "errors": errors,
+    })
+
+
 @poa_bp.route("/poa/alert-check", methods=["POST"])
 async def api_poa_alert_check():
     """Check all POA tiers and fire Slack alerts for low/critical inventory.
