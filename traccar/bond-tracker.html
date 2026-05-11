@@ -1,0 +1,1659 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🍀 Shamrock Bond Tracker</title>
+
+<!-- Leaflet.js for maps -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- ApexCharts for analytics -->
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+<style>
+/* ══════════════════════════════════════════════════════════════
+   SHAMROCK DESIGN SYSTEM — matches shamrock-leads dashboard
+   ══════════════════════════════════════════════════════════════ */
+:root {
+  --accent:       #10b981;
+  --accent-light: #34d399;
+  --gold:         #f59e0b;
+  --red:          #ef4444;
+  --blue:         #3b82f6;
+  --purple:       #8b5cf6;
+  --cyan:         #06b6d4;
+  --pink:         #ec4899;
+  --radius:       14px;
+  --radius-sm:    10px;
+  --transition:   all .25s cubic-bezier(.4,0,.2,1);
+}
+[data-theme="dark"] {
+  --bg:             #06090f;
+  --surface:        #0d1117;
+  --card:           #131a27;
+  --card-hover:     #1a2436;
+  --border:         rgba(255,255,255,.06);
+  --border-accent:  rgba(16,185,129,.15);
+  --text:           #e2e8f0;
+  --text-secondary: #94a3b8;
+  --muted:          #475569;
+  --hover:          rgba(16,185,129,.04);
+  --input-bg:       #0d1117;
+  --badge-bg:       rgba(16,185,129,.1);
+  --badge-text:     #34d399;
+  --glow:           0 0 40px rgba(16,185,129,.08);
+  --shadow-card:    0 1px 3px rgba(0,0,0,.3),0 0 0 1px rgba(255,255,255,.03);
+  --profile-gradient: linear-gradient(135deg,rgba(16,185,129,.08),rgba(59,130,246,.06));
+}
+[data-theme="light"] {
+  --bg:             #f8fafc;
+  --surface:        #ffffff;
+  --card:           #ffffff;
+  --card-hover:     #f1f5f9;
+  --border:         rgba(0,0,0,.08);
+  --border-accent:  rgba(16,185,129,.2);
+  --text:           #0f172a;
+  --text-secondary: #475569;
+  --muted:          #94a3b8;
+  --hover:          rgba(16,185,129,.04);
+  --input-bg:       #f8fafc;
+  --badge-bg:       rgba(16,185,129,.08);
+  --badge-text:     #059669;
+  --glow:           0 0 40px rgba(16,185,129,.06);
+  --shadow-card:    0 1px 3px rgba(0,0,0,.08);
+  --profile-gradient: linear-gradient(135deg,rgba(16,185,129,.04),rgba(59,130,246,.03));
+}
+
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; }
+body {
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ── Topbar ── */
+.topbar {
+  position: sticky; top:0; z-index:200;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+  height: 66px;
+  display: flex; align-items: center; justify-content: space-between;
+  backdrop-filter: blur(12px);
+}
+.topbar-brand {
+  display: flex; align-items: center; gap: 12px;
+}
+.topbar-logo {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 900; color: #fff;
+  box-shadow: 0 2px 12px rgba(16,185,129,.35);
+}
+.topbar-title { font-size: 18px; font-weight: 800; letter-spacing: -.4px; }
+.topbar-sub   { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.conn-badge {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 20px;
+  font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+.conn-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted);
+  transition: background .3s;
+}
+.conn-dot.online  { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,.6); }
+.conn-dot.offline { background: #ef4444; }
+.btn-settings {
+  padding: 8px 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--text); font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: var(--transition);
+}
+.btn-settings:hover { border-color: var(--accent); color: var(--accent); }
+.theme-btn {
+  width: 36px; height: 36px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--text); cursor: pointer; font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+}
+.theme-btn:hover { border-color: var(--accent); }
+
+/* ── Tab Bar ── */
+.tab-bar {
+  display: flex; gap: 2px; padding: 0 28px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 66px; z-index: 99;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tab-bar::-webkit-scrollbar { display: none; }
+.tab-btn {
+  padding: 14px 22px; font-size: 13px; font-weight: 600;
+  color: var(--muted); border: none; background: none;
+  cursor: pointer; position: relative; font-family: inherit;
+  transition: color .2s; white-space: nowrap;
+  display: flex; align-items: center; gap: 7px;
+}
+.tab-btn:hover { color: var(--text-secondary); }
+.tab-btn.active { color: var(--accent); }
+.tab-btn.active::after {
+  content: ''; position: absolute; bottom: 0; left: 12px; right: 12px;
+  height: 2px; background: var(--accent); border-radius: 2px 2px 0 0;
+}
+.badge {
+  background: var(--badge-bg); color: var(--badge-text);
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700;
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ── Layout ── */
+.container { max-width: 1480px; margin: 0 auto; padding: 24px 28px; }
+.stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr));
+  gap: 14px; margin-bottom: 24px;
+}
+.stat-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+  position: relative; overflow: hidden;
+  transition: var(--transition); box-shadow: var(--shadow-card);
+}
+.stat-card:hover { border-color: var(--border-accent); box-shadow: var(--glow); }
+.stat-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+}
+.stat-card:nth-child(1)::before { background: linear-gradient(90deg,var(--accent),var(--cyan)); }
+.stat-card:nth-child(2)::before { background: linear-gradient(90deg,var(--blue),var(--purple)); }
+.stat-card:nth-child(3)::before { background: linear-gradient(90deg,var(--gold),#fb923c); }
+.stat-card:nth-child(4)::before { background: linear-gradient(90deg,var(--purple),var(--pink)); }
+.stat-card:nth-child(5)::before { background: linear-gradient(90deg,var(--red),#f97316); }
+.stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px; font-weight: 600; }
+.stat-value { font-size: 28px; font-weight: 800; letter-spacing: -1.5px; background: linear-gradient(135deg,var(--text),var(--text-secondary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.stat-sub   { font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 24px; }
+.grid-3 { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; margin-bottom: 24px; }
+@media(max-width:900px) { .grid-2,.grid-3 { grid-template-columns: 1fr; } }
+
+.panel {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 22px;
+  transition: var(--transition); box-shadow: var(--shadow-card);
+}
+.panel:hover { border-color: var(--border-accent); }
+.panel-title {
+  font-size: 14px; font-weight: 700; margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px; letter-spacing: -.2px;
+}
+
+/* ── Map ── */
+#traccarMap {
+  width: 100%; height: 520px; border-radius: var(--radius);
+  border: 1px solid var(--border); overflow: hidden;
+}
+.leaflet-container { background: #0d1117; }
+
+/* ── Defendant Cards ── */
+.def-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(380px,1fr)); gap: 16px; }
+@media(max-width:520px) { .def-grid { grid-template-columns: 1fr; } }
+.def-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  transition: var(--transition); box-shadow: var(--shadow-card);
+}
+.def-card:hover { border-color: var(--border-accent); box-shadow: var(--glow); transform: translateY(-2px); }
+.def-card-header {
+  background: var(--profile-gradient);
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+}
+.def-name { font-size: 16px; font-weight: 800; letter-spacing: -.3px; }
+.def-booking { font-size: 11px; color: var(--muted); margin-top: 2px; font-family: monospace; }
+.status-pill {
+  font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 8px;
+  white-space: nowrap;
+}
+.status-active   { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.2); }
+.status-warning  { background: rgba(245,158,11,.12);  color: #f59e0b; border: 1px solid rgba(245,158,11,.2); }
+.status-breach   { background: rgba(239,68,68,.12);   color: #ef4444; border: 1px solid rgba(239,68,68,.2); animation: pulse-red 1.5s infinite; }
+.status-offline  { background: rgba(100,116,139,.1);  color: var(--muted); border: 1px solid var(--border); }
+@keyframes pulse-red { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.4); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); } }
+
+.def-body { padding: 14px 18px; }
+.def-row { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; font-size: 12px; }
+.def-field { display: flex; flex-direction: column; padding: 3px 0; }
+.def-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-weight: 500; }
+.def-value { font-weight: 500; margin-top: 1px; }
+.def-value.accent { color: var(--accent); font-weight: 700; }
+
+.def-location {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--surface); border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+.def-location-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--muted);
+}
+.def-location-dot.live { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,.6); animation: blink 2s infinite; }
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+.def-location-text { font-size: 12px; flex: 1; min-width: 0; }
+.def-location-addr { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.def-location-time { font-size: 11px; color: var(--muted); }
+
+.def-card-footer {
+  padding: 10px 18px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.btn-sm {
+  display: flex; align-items: center; gap: 5px;
+  padding: 7px 13px; border-radius: var(--radius-sm);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: var(--transition); border: 1px solid;
+}
+.btn-locate  { border-color: rgba(16,185,129,.3); background: rgba(16,185,129,.08); color: var(--accent-light); }
+.btn-locate:hover  { background: rgba(16,185,129,.18); border-color: var(--accent); }
+.btn-history { border-color: rgba(59,130,246,.3);  background: rgba(59,130,246,.08); color: #93c5fd; }
+.btn-history:hover { background: rgba(59,130,246,.18); border-color: var(--blue); }
+.btn-geofence { border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.08); color: #fcd34d; }
+.btn-geofence:hover { background: rgba(245,158,11,.18); border-color: var(--gold); }
+.btn-danger  { border-color: rgba(239,68,68,.3);   background: rgba(239,68,68,.08);  color: #fca5a5; }
+.btn-danger:hover  { background: rgba(239,68,68,.18);  border-color: var(--red); }
+
+/* ── Table ── */
+.table-wrap { overflow-x: auto; margin-top: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-weight: 600; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .8px; white-space: nowrap;
+}
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tr:hover td { background: var(--hover); }
+
+/* ── Filters ── */
+.filters { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.filters select, .filters input {
+  background: var(--input-bg); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 14px; border-radius: var(--radius-sm);
+  font-size: 13px; font-family: inherit; transition: var(--transition);
+}
+.filters select:focus, .filters input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16,185,129,.1);
+}
+
+/* ── Add Defendant Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 500;
+  background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+  display: none; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 28px;
+  width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.modal-title { font-size: 18px; font-weight: 800; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-grid.full { grid-template-columns: 1fr; }
+.form-field { display: flex; flex-direction: column; gap: 5px; }
+.form-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.form-input, .form-select {
+  padding: 9px 12px; background: var(--input-bg);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-size: 13px; font-family: inherit;
+  transition: var(--transition);
+}
+.form-input:focus, .form-select:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16,185,129,.1);
+}
+.modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.btn-primary {
+  padding: 10px 22px; border-radius: var(--radius-sm);
+  background: var(--accent); border: none; color: #000;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  font-family: inherit; transition: var(--transition);
+}
+.btn-primary:hover { background: var(--accent-light); transform: translateY(-1px); }
+.btn-cancel {
+  padding: 10px 18px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 13px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: var(--transition);
+}
+.btn-cancel:hover { border-color: var(--text-secondary); }
+
+/* ── Settings Panel ── */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 400;
+  background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
+  display: none; align-items: flex-start; justify-content: flex-end;
+}
+.settings-overlay.open { display: flex; }
+.settings-panel {
+  background: var(--card); border-left: 1px solid var(--border);
+  width: 380px; height: 100%; padding: 28px;
+  overflow-y: auto; box-shadow: -20px 0 60px rgba(0,0,0,.4);
+}
+.settings-title { font-size: 18px; font-weight: 800; margin-bottom: 24px; display: flex; align-items: center; gap: 10px; }
+.settings-section { margin-bottom: 24px; }
+.settings-section-title { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+.settings-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+
+/* ── Toast ── */
+#toastContainer {
+  position: fixed; bottom: 24px; right: 24px; z-index: 999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 12px 18px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600;
+  background: var(--card); border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  animation: slideIn .25s ease; max-width: 320px;
+}
+.toast.success { border-color: rgba(16,185,129,.4); color: #10b981; }
+.toast.error   { border-color: rgba(239,68,68,.4);  color: #ef4444; }
+.toast.info    { border-color: rgba(59,130,246,.4);  color: #93c5fd; }
+@keyframes slideIn { from { transform: translateX(100%); opacity:0; } to { transform: translateX(0); opacity:1; } }
+
+/* ── Loading spinner ── */
+.loading { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+.spinner {
+  width: 32px; height: 32px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite; margin: 0 auto 12px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Empty state ── */
+.empty-state {
+  text-align: center; padding: 60px 20px; color: var(--muted);
+}
+.empty-state-icon { font-size: 48px; margin-bottom: 16px; }
+.empty-state-title { font-size: 16px; font-weight: 700; color: var(--text-secondary); margin-bottom: 8px; }
+.empty-state-sub { font-size: 13px; }
+
+/* ── Alert banner ── */
+.alert-banner {
+  padding: 12px 18px; border-radius: var(--radius-sm);
+  margin-bottom: 16px; font-size: 13px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px;
+}
+.alert-warn  { background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.3); color: #f59e0b; }
+.alert-error { background: rgba(239,68,68,.1);  border: 1px solid rgba(239,68,68,.3);  color: #ef4444; }
+.alert-ok    { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3); color: #10b981; }
+
+/* ── History trail ── */
+.history-item {
+  display: flex; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.history-item:last-child { border-bottom: none; }
+.history-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0; margin-top: 4px;
+}
+.history-text { flex: 1; font-size: 13px; }
+.history-time { font-size: 11px; color: var(--muted); }
+
+/* ── Geofence list ── */
+.geofence-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.geofence-item:last-child { border-bottom: none; }
+.geofence-name { font-weight: 600; font-size: 13px; }
+.geofence-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Map controls ── */
+.map-controls {
+  display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center;
+}
+.map-legend {
+  display: flex; gap: 16px; align-items: center;
+  padding: 8px 14px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.legend-item { display: flex; align-items: center; gap: 5px; }
+.legend-dot  { width: 10px; height: 10px; border-radius: 50%; }
+
+/* ── Responsive ── */
+@media(max-width:768px) {
+  .topbar { padding: 0 16px; }
+  .container { padding: 16px; }
+  .tab-bar { padding: 0 16px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .def-grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════
+     TOPBAR
+     ══════════════════════════════════════════════════════════ -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <div class="topbar-logo">🍀</div>
+    <div>
+      <div class="topbar-title">Bond Tracker</div>
+      <div class="topbar-sub">Shamrock Bail Bonds — Defendant Location Intelligence</div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div class="conn-badge" id="connBadge">
+      <div class="conn-dot" id="connDot"></div>
+      <span id="connLabel">Connecting...</span>
+    </div>
+    <button class="btn-settings" onclick="BT.openSettings()">⚙️ Settings</button>
+    <button class="theme-btn" onclick="BT.toggleTheme()" title="Toggle theme">🌙</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB BAR
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tabMap"        onclick="BT.switchTab(this)">🗺️ Live Map</button>
+  <button class="tab-btn"        data-tab="tabDefendants" onclick="BT.switchTab(this)">👤 Defendants <span class="badge" id="defBadge">—</span></button>
+  <button class="tab-btn"        data-tab="tabHistory"    onclick="BT.switchTab(this)">📍 Location History</button>
+  <button class="tab-btn"        data-tab="tabGeofences"  onclick="BT.switchTab(this)">🔵 Geofences</button>
+  <button class="tab-btn"        data-tab="tabAlerts"     onclick="BT.switchTab(this)">🔔 Alerts <span class="badge" id="alertBadge" style="display:none"></span></button>
+  <button class="tab-btn"        data-tab="tabDevices"    onclick="BT.switchTab(this)">📡 Devices</button>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: LIVE MAP
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content active" id="tabMap">
+  <div class="container">
+
+    <!-- KPI Row -->
+    <div class="stats-grid" id="kpiRow">
+      <div class="stat-card">
+        <div class="stat-label">On Bond</div>
+        <div class="stat-value" id="kpiOnBond">—</div>
+        <div class="stat-sub">Active defendants</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Live GPS</div>
+        <div class="stat-value" id="kpiLiveGPS">—</div>
+        <div class="stat-sub">Devices reporting</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Geofence Alerts</div>
+        <div class="stat-value" id="kpiAlerts">—</div>
+        <div class="stat-sub">Last 24 hours</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Missing Check-in</div>
+        <div class="stat-value" id="kpiMissing">—</div>
+        <div class="stat-sub">No update &gt;24h</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Bond Exposure</div>
+        <div class="stat-value" id="kpiBondTotal">—</div>
+        <div class="stat-sub">Active bonds</div>
+      </div>
+    </div>
+
+    <!-- Map Controls -->
+    <div class="map-controls">
+      <div class="map-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div> Live</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Stale (&gt;1h)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> Breach</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#475569"></div> Offline</div>
+      </div>
+      <button class="btn-sm btn-locate" onclick="BT.refreshMap()">🔄 Refresh</button>
+      <button class="btn-sm btn-history" onclick="BT.fitAll()">⊞ Fit All</button>
+      <button class="btn-sm btn-primary" style="border:none" onclick="BT.openAddDefendant()">+ Add Defendant</button>
+    </div>
+
+    <!-- Map -->
+    <div id="traccarMap"></div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: DEFENDANTS
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabDefendants">
+  <div class="container">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <h2 style="font-size:18px;font-weight:800">Defendants on Bond</h2>
+      <button class="btn-sm btn-primary" style="border:none;padding:10px 20px" onclick="BT.openAddDefendant()">+ Add Defendant</button>
+    </div>
+
+    <div class="filters">
+      <input type="text" id="defSearch" placeholder="Search name, booking #..." oninput="BT.filterDefendants()" style="min-width:220px">
+      <select id="defStatusFilter" onchange="BT.filterDefendants()">
+        <option value="">All Statuses</option>
+        <option value="active">Active</option>
+        <option value="warning">Warning</option>
+        <option value="breach">Breach</option>
+        <option value="offline">Offline</option>
+      </select>
+      <select id="defSortFilter" onchange="BT.filterDefendants()">
+        <option value="name">Sort: Name</option>
+        <option value="bond_desc">Sort: Bond ↓</option>
+        <option value="recent">Sort: Recent Activity</option>
+      </select>
+    </div>
+
+    <div class="def-grid" id="defGrid">
+      <div class="loading"><div class="spinner"></div>Loading defendants...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: LOCATION HISTORY
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabHistory">
+  <div class="container">
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:18px">Location History</h2>
+    <div class="grid-3">
+      <div>
+        <div class="panel">
+          <div class="panel-title">🔍 Query</div>
+          <div class="form-field" style="margin-bottom:12px">
+            <label class="form-label">Defendant</label>
+            <select class="form-select" id="histDefSelect">
+              <option value="">Select defendant...</option>
+            </select>
+          </div>
+          <div class="form-grid" style="margin-bottom:12px">
+            <div class="form-field">
+              <label class="form-label">From</label>
+              <input type="datetime-local" class="form-input" id="histFrom">
+            </div>
+            <div class="form-field">
+              <label class="form-label">To</label>
+              <input type="datetime-local" class="form-input" id="histTo">
+            </div>
+          </div>
+          <button class="btn-primary" style="width:100%" onclick="BT.loadHistory()">Load History</button>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="panel-title">📍 Position Log</div>
+          <div id="historyList">
+            <div class="empty-state">
+              <div class="empty-state-icon">📍</div>
+              <div class="empty-state-title">No history loaded</div>
+              <div class="empty-state-sub">Select a defendant and date range</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- History map -->
+    <div class="panel" style="margin-top:0">
+      <div class="panel-title">🗺️ Route Map</div>
+      <div id="historyMap" style="height:400px;border-radius:var(--radius-sm);overflow:hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: GEOFENCES
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabGeofences">
+  <div class="container">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <h2 style="font-size:18px;font-weight:800">Geofences</h2>
+      <button class="btn-sm btn-primary" style="border:none;padding:10px 20px" onclick="BT.openAddGeofence()">+ Add Geofence</button>
+    </div>
+    <div class="grid-2">
+      <div class="panel">
+        <div class="panel-title">🔵 Active Geofences</div>
+        <div id="geofenceList">
+          <div class="loading"><div class="spinner"></div>Loading...</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">🗺️ Geofence Map</div>
+        <div id="geofenceMap" style="height:380px;border-radius:var(--radius-sm);overflow:hidden"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">📋 Recent Geofence Events</div>
+      <div id="geofenceEvents">
+        <div class="loading"><div class="spinner"></div>Loading events...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: ALERTS
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabAlerts">
+  <div class="container">
+    <h2 style="font-size:18px;font-weight:800;margin-bottom:18px">Alerts &amp; Events</h2>
+    <div class="panel">
+      <div class="panel-title">🔔 Recent Events</div>
+      <div id="alertsList">
+        <div class="loading"><div class="spinner"></div>Loading alerts...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     TAB: DEVICES
+     ══════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabDevices">
+  <div class="container">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <h2 style="font-size:18px;font-weight:800">Tracking Devices</h2>
+      <button class="btn-sm btn-primary" style="border:none;padding:10px 20px" onclick="BT.openAddDevice()">+ Register Device</button>
+    </div>
+    <div class="panel">
+      <div class="panel-title">📡 Registered Devices</div>
+      <div id="devicesList">
+        <div class="loading"><div class="spinner"></div>Loading devices...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     ADD DEFENDANT MODAL
+     ══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="addDefModal">
+  <div class="modal">
+    <div class="modal-title">👤 Add Defendant to Bond Tracker</div>
+    <div id="addDefAlert"></div>
+    <div class="form-grid">
+      <div class="form-field">
+        <label class="form-label">First Name *</label>
+        <input class="form-input" id="defFirstName" placeholder="John">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Last Name *</label>
+        <input class="form-input" id="defLastName" placeholder="Smith">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Booking Number</label>
+        <input class="form-input" id="defBookingNum" placeholder="BK-2026-001">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Case Number</label>
+        <input class="form-input" id="defCaseNum" placeholder="2026-CF-001">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Bond Amount ($)</label>
+        <input class="form-input" type="number" id="defBondAmount" placeholder="5000">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Court Date</label>
+        <input class="form-input" type="date" id="defCourtDate">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Phone Number</label>
+        <input class="form-input" type="tel" id="defPhone" placeholder="(239) 555-0100">
+      </div>
+      <div class="form-field">
+        <label class="form-label">County</label>
+        <select class="form-select" id="defCounty">
+          <option value="Lee">Lee</option>
+          <option value="Collier">Collier</option>
+          <option value="Charlotte">Charlotte</option>
+          <option value="Hendry">Hendry</option>
+          <option value="DeSoto">DeSoto</option>
+          <option value="Manatee">Manatee</option>
+          <option value="Sarasota">Sarasota</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-grid full" style="margin-top:14px">
+      <div class="form-field">
+        <label class="form-label">Address</label>
+        <input class="form-input" id="defAddress" placeholder="123 Main St, Fort Myers, FL 33901">
+      </div>
+    </div>
+    <div class="form-grid" style="margin-top:14px">
+      <div class="form-field">
+        <label class="form-label">Assign Traccar Device ID</label>
+        <select class="form-select" id="defDeviceSelect">
+          <option value="">No device assigned</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label class="form-label">Tracking Method</label>
+        <select class="form-select" id="defTrackMethod">
+          <option value="gps_device">GPS Device</option>
+          <option value="phone_app">Phone App (Traccar Client)</option>
+          <option value="manual">Manual Check-in</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="BT.closeAddDefendant()">Cancel</button>
+      <button class="btn-primary" onclick="BT.saveDefendant()">Add to Tracker</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     ADD DEVICE MODAL
+     ══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="addDeviceModal">
+  <div class="modal">
+    <div class="modal-title">📡 Register Tracking Device</div>
+    <div class="form-grid">
+      <div class="form-field">
+        <label class="form-label">Device Name *</label>
+        <input class="form-input" id="devName" placeholder="Tracker-001">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Unique ID (IMEI) *</label>
+        <input class="form-input" id="devUniqueId" placeholder="123456789012345">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Phone Number</label>
+        <input class="form-input" id="devPhone" placeholder="+1 239 555 0100">
+      </div>
+      <div class="form-field">
+        <label class="form-label">Model</label>
+        <input class="form-input" id="devModel" placeholder="GL300 / iPhone / Android">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="BT.closeAddDevice()">Cancel</button>
+      <button class="btn-primary" onclick="BT.saveDevice()">Register Device</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SETTINGS PANEL
+     ══════════════════════════════════════════════════════════ -->
+<div class="settings-overlay" id="settingsOverlay" onclick="BT.closeSettings(event)">
+  <div class="settings-panel" onclick="event.stopPropagation()">
+    <div class="settings-title">⚙️ Settings</div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Traccar Connection</div>
+      <div class="settings-row">
+        <label class="form-label">Traccar Server URL</label>
+        <input class="form-input" id="settTraccarUrl" placeholder="http://YOUR_VPS_IP:8082">
+      </div>
+      <div class="settings-row">
+        <label class="form-label">API Token</label>
+        <input class="form-input" id="settApiToken" type="password" placeholder="Paste your API token">
+      </div>
+      <button class="btn-primary" style="width:100%;margin-top:4px" onclick="BT.saveSettings()">Save &amp; Connect</button>
+      <button class="btn-sm btn-history" style="width:100%;margin-top:8px;justify-content:center" onclick="BT.testConnection()">Test Connection</button>
+      <div id="settConnStatus" style="margin-top:8px"></div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Refresh Interval</div>
+      <div class="settings-row">
+        <label class="form-label">Auto-refresh every</label>
+        <select class="form-select" id="settRefreshInterval">
+          <option value="15000">15 seconds</option>
+          <option value="30000" selected>30 seconds</option>
+          <option value="60000">1 minute</option>
+          <option value="300000">5 minutes</option>
+          <option value="0">Manual only</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Map Tile Layer</div>
+      <div class="settings-row">
+        <select class="form-select" id="settMapTile" onchange="BT.changeMapTile()">
+          <option value="dark">Dark (CartoDB Dark Matter)</option>
+          <option value="osm">OpenStreetMap</option>
+          <option value="satellite">Satellite (Esri)</option>
+          <option value="topo">Topo (OpenTopo)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Alerts</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0">
+        <span style="font-size:13px">Geofence breach alerts</span>
+        <input type="checkbox" id="settGeoAlerts" checked style="width:16px;height:16px;accent-color:var(--accent)">
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0">
+        <span style="font-size:13px">No check-in &gt;24h alert</span>
+        <input type="checkbox" id="settCheckinAlerts" checked style="width:16px;height:16px;accent-color:var(--accent)">
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">About</div>
+      <p style="font-size:12px;color:var(--muted);line-height:1.6">
+        Shamrock Bond Tracker v1.0<br>
+        Powered by Traccar v6.13.3<br>
+        Shamrock Bail Bonds · Fort Myers, FL
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toastContainer"></div>
+
+<!-- ══════════════════════════════════════════════════════════
+     JAVASCRIPT
+     ══════════════════════════════════════════════════════════ -->
+<script>
+const BT = (() => {
+  'use strict';
+
+  // ── State ─────────────────────────────────────────────────
+  let _cfg = {
+    traccarUrl:      localStorage.getItem('bt_traccarUrl')      || '',
+    apiToken:        localStorage.getItem('bt_apiToken')        || '',
+    refreshInterval: parseInt(localStorage.getItem('bt_refreshInterval') || '30000'),
+    mapTile:         localStorage.getItem('bt_mapTile')         || 'dark',
+    geoAlerts:       localStorage.getItem('bt_geoAlerts')       !== 'false',
+    checkinAlerts:   localStorage.getItem('bt_checkinAlerts')   !== 'false',
+  };
+
+  let _map        = null;
+  let _histMap    = null;
+  let _geoMap     = null;
+  let _markers    = {};
+  let _devices    = [];
+  let _positions  = {};
+  let _defendants = JSON.parse(localStorage.getItem('bt_defendants') || '[]');
+  let _events     = [];
+  let _geofences  = [];
+  let _refreshTimer = null;
+  let _connected  = false;
+
+  // ── Tile layers ───────────────────────────────────────────
+  const TILES = {
+    dark:      { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', attr: '&copy; CartoDB' },
+    osm:       { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',            attr: '&copy; OSM' },
+    satellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr: '&copy; Esri' },
+    topo:      { url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',              attr: '&copy; OpenTopoMap' },
+  };
+  let _tileLayer = null;
+
+  // ── API helpers ───────────────────────────────────────────
+  function apiHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    if (_cfg.apiToken) h['Authorization'] = 'Bearer ' + _cfg.apiToken;
+    return h;
+  }
+
+  async function apiGet(path) {
+    const url = _cfg.traccarUrl + '/api' + path;
+    const r = await fetch(url, { headers: apiHeaders() });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+    return r.json();
+  }
+
+  async function apiPost(path, body) {
+    const url = _cfg.traccarUrl + '/api' + path;
+    const r = await fetch(url, { method: 'POST', headers: apiHeaders(), body: JSON.stringify(body) });
+    if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+    return r.json();
+  }
+
+  async function apiDelete(path) {
+    const url = _cfg.traccarUrl + '/api' + path;
+    const r = await fetch(url, { method: 'DELETE', headers: apiHeaders() });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.status;
+  }
+
+  // ── Init ─────────────────────────────────────────────────
+  function init() {
+    _initMap();
+    _loadSettings();
+    if (_cfg.traccarUrl && _cfg.apiToken) {
+      _connect();
+    } else {
+      _setConnStatus(false, 'Not configured');
+      setTimeout(() => openSettings(), 800);
+    }
+    // Populate history date defaults
+    const now = new Date();
+    const yesterday = new Date(now - 86400000);
+    document.getElementById('histFrom').value = _toLocalInput(yesterday);
+    document.getElementById('histTo').value   = _toLocalInput(now);
+  }
+
+  function _toLocalInput(d) {
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+  }
+
+  // ── Map init ─────────────────────────────────────────────
+  function _initMap() {
+    _map = L.map('traccarMap', { zoomControl: true, attributionControl: true });
+    _map.setView([26.6406, -81.8723], 10); // Fort Myers, FL default
+
+    const t = TILES[_cfg.mapTile] || TILES.dark;
+    _tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_map);
+
+    // History map
+    _histMap = L.map('historyMap', { zoomControl: true });
+    _histMap.setView([26.6406, -81.8723], 10);
+    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
+
+    // Geofence map
+    _geoMap = L.map('geofenceMap', { zoomControl: true });
+    _geoMap.setView([26.6406, -81.8723], 10);
+    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
+  }
+
+  function changeMapTile() {
+    const key = document.getElementById('settMapTile').value;
+    _cfg.mapTile = key;
+    localStorage.setItem('bt_mapTile', key);
+    const t = TILES[key] || TILES.dark;
+    if (_tileLayer) { _map.removeLayer(_tileLayer); _histMap.removeLayer(_tileLayer); }
+    _tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_map);
+    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
+    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
+  }
+
+  // ── Connection ────────────────────────────────────────────
+  async function _connect() {
+    try {
+      const server = await apiGet('/server');
+      _connected = true;
+      _setConnStatus(true, 'Traccar v' + server.version);
+      toast('✅ Connected to Traccar ' + server.version, 'success');
+      await _refreshAll();
+      _startRefreshTimer();
+    } catch (e) {
+      _connected = false;
+      _setConnStatus(false, 'Connection failed');
+      toast('❌ Cannot connect to Traccar: ' + e.message, 'error');
+    }
+  }
+
+  function _setConnStatus(online, label) {
+    const dot   = document.getElementById('connDot');
+    const lbl   = document.getElementById('connLabel');
+    dot.className = 'conn-dot ' + (online ? 'online' : 'offline');
+    lbl.textContent = label;
+  }
+
+  // ── Refresh ───────────────────────────────────────────────
+  async function _refreshAll() {
+    try {
+      const [devices, positions, events, geofences] = await Promise.all([
+        apiGet('/devices'),
+        apiGet('/positions'),
+        apiGet('/events?all=true&limit=50').catch(() => []),
+        apiGet('/geofences').catch(() => []),
+      ]);
+      _devices   = devices   || [];
+      _events    = events    || [];
+      _geofences = geofences || [];
+
+      // Index positions by deviceId
+      _positions = {};
+      (positions || []).forEach(p => { _positions[p.deviceId] = p; });
+
+      _updateKPIs();
+      _renderMapMarkers();
+      _renderDefendants();
+      _renderDevices();
+      _renderAlerts();
+      _renderGeofences();
+      _populateDefSelect();
+    } catch (e) {
+      console.warn('[BT] refresh error:', e);
+      _setConnStatus(false, 'Refresh failed');
+    }
+  }
+
+  function _startRefreshTimer() {
+    if (_refreshTimer) clearInterval(_refreshTimer);
+    if (_cfg.refreshInterval > 0) {
+      _refreshTimer = setInterval(_refreshAll, _cfg.refreshInterval);
+    }
+  }
+
+  function refreshMap() { _refreshAll(); }
+
+  // ── KPIs ──────────────────────────────────────────────────
+  function _updateKPIs() {
+    const onBond   = _defendants.length;
+    const liveGPS  = _devices.filter(d => d.status === 'online').length;
+    const now      = Date.now();
+    const missing  = _defendants.filter(def => {
+      const dev = _getDefDevice(def);
+      if (!dev) return false;
+      const pos = _positions[dev.id];
+      if (!pos) return true;
+      return (now - new Date(pos.fixTime).getTime()) > 86400000;
+    }).length;
+    const totalBond = _defendants.reduce((s, d) => s + (parseFloat(d.bondAmount) || 0), 0);
+    const alertCount = _events.filter(e => e.type === 'geofenceExit' || e.type === 'geofenceEnter').length;
+
+    _set('kpiOnBond',    onBond);
+    _set('kpiLiveGPS',   liveGPS);
+    _set('kpiAlerts',    alertCount);
+    _set('kpiMissing',   missing);
+    _set('kpiBondTotal', '$' + _fmtMoney(totalBond));
+    _set('defBadge',     onBond || '—');
+    if (alertCount > 0) {
+      _set('alertBadge', alertCount);
+      document.getElementById('alertBadge').style.display = '';
+    }
+  }
+
+  // ── Map Markers ───────────────────────────────────────────
+  function _renderMapMarkers() {
+    // Clear old markers
+    Object.values(_markers).forEach(m => _map.removeLayer(m));
+    _markers = {};
+
+    _devices.forEach(dev => {
+      const pos = _positions[dev.id];
+      if (!pos || !pos.latitude || !pos.longitude) return;
+
+      const def      = _getDefByDevice(dev.id);
+      const isOnline = dev.status === 'online';
+      const age      = Date.now() - new Date(pos.fixTime).getTime();
+      const isStale  = age > 3600000;
+      const color    = isOnline && !isStale ? '#10b981' : isStale ? '#f59e0b' : '#475569';
+
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="
+          width:14px;height:14px;border-radius:50%;
+          background:${color};
+          border:2px solid rgba(255,255,255,.6);
+          box-shadow:0 0 ${isOnline ? '10px ' + color : '0'};
+        "></div>`,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      });
+
+      const name  = def ? def.firstName + ' ' + def.lastName : dev.name;
+      const speed = pos.speed ? (pos.speed * 1.852).toFixed(1) + ' mph' : '0 mph';
+      const time  = _fmtTime(pos.fixTime);
+
+      const marker = L.marker([pos.latitude, pos.longitude], { icon })
+        .bindPopup(`
+          <div style="font-family:-apple-system,sans-serif;min-width:200px">
+            <div style="font-weight:800;font-size:14px;margin-bottom:6px">${_esc(name)}</div>
+            ${def ? `<div style="font-size:11px;color:#64748b;margin-bottom:8px">Booking: ${_esc(def.bookingNum || '—')}</div>` : ''}
+            <div style="font-size:12px;margin-bottom:3px">📍 ${pos.latitude.toFixed(5)}, ${pos.longitude.toFixed(5)}</div>
+            <div style="font-size:12px;margin-bottom:3px">🚗 ${speed}</div>
+            <div style="font-size:12px;color:#64748b">🕐 ${time}</div>
+            ${def ? `<div style="margin-top:8px;font-size:11px;color:#10b981;font-weight:700">Bond: $${_fmtMoney(def.bondAmount)}</div>` : ''}
+          </div>
+        `, { maxWidth: 260 })
+        .addTo(_map);
+
+      _markers[dev.id] = marker;
+    });
+  }
+
+  function fitAll() {
+    const pts = Object.values(_markers).map(m => m.getLatLng());
+    if (pts.length > 0) _map.fitBounds(L.latLngBounds(pts), { padding: [40, 40] });
+  }
+
+  // ── Defendants ────────────────────────────────────────────
+  function _renderDefendants() {
+    const grid = document.getElementById('defGrid');
+    if (!_defendants.length) {
+      grid.innerHTML = `
+        <div class="empty-state" style="grid-column:1/-1">
+          <div class="empty-state-icon">👤</div>
+          <div class="empty-state-title">No defendants added yet</div>
+          <div class="empty-state-sub">Click "Add Defendant" to start tracking</div>
+        </div>`;
+      return;
+    }
+    filterDefendants();
+  }
+
+  function filterDefendants() {
+    const q      = (document.getElementById('defSearch')?.value || '').toLowerCase();
+    const status = document.getElementById('defStatusFilter')?.value || '';
+    const sort   = document.getElementById('defSortFilter')?.value || 'name';
+    const grid   = document.getElementById('defGrid');
+
+    let list = [..._defendants];
+    if (q) list = list.filter(d => (d.firstName + ' ' + d.lastName + ' ' + d.bookingNum).toLowerCase().includes(q));
+
+    list.sort((a, b) => {
+      if (sort === 'bond_desc') return (parseFloat(b.bondAmount) || 0) - (parseFloat(a.bondAmount) || 0);
+      if (sort === 'name') return (a.lastName + a.firstName).localeCompare(b.lastName + b.firstName);
+      return 0;
+    });
+
+    grid.innerHTML = list.map(def => _defCard(def)).join('');
+  }
+
+  function _defCard(def) {
+    const dev   = _getDefDevice(def);
+    const pos   = dev ? _positions[dev.id] : null;
+    const now   = Date.now();
+    const age   = pos ? now - new Date(pos.fixTime).getTime() : Infinity;
+    const isLive = dev && dev.status === 'online' && age < 3600000;
+    const isStale = dev && age >= 3600000 && age < 86400000;
+    const isMissing = dev && age >= 86400000;
+
+    const statusClass = !dev ? 'status-offline' : isLive ? 'status-active' : isStale ? 'status-warning' : isMissing ? 'status-breach' : 'status-offline';
+    const statusLabel = !dev ? 'No Device' : isLive ? 'Live' : isStale ? 'Stale' : isMissing ? 'Missing' : 'Offline';
+
+    const addr = pos ? `${pos.latitude.toFixed(4)}, ${pos.longitude.toFixed(4)}` : 'No position data';
+    const lastSeen = pos ? _fmtTime(pos.fixTime) : 'Never';
+
+    return `
+      <div class="def-card">
+        <div class="def-card-header">
+          <div>
+            <div class="def-name">${_esc(def.lastName)}, ${_esc(def.firstName)}</div>
+            <div class="def-booking">${_esc(def.bookingNum || 'No booking #')} · ${_esc(def.county || 'Unknown')} County</div>
+          </div>
+          <div class="status-pill ${statusClass}">${statusLabel}</div>
+        </div>
+        <div class="def-body">
+          <div class="def-row">
+            <div class="def-field">
+              <span class="def-label">Bond Amount</span>
+              <span class="def-value accent">$${_fmtMoney(def.bondAmount)}</span>
+            </div>
+            <div class="def-field">
+              <span class="def-label">Court Date</span>
+              <span class="def-value">${_esc(def.courtDate || '—')}</span>
+            </div>
+            <div class="def-field">
+              <span class="def-label">Case #</span>
+              <span class="def-value" style="font-family:monospace;font-size:11px">${_esc(def.caseNum || '—')}</span>
+            </div>
+            <div class="def-field">
+              <span class="def-label">Phone</span>
+              <span class="def-value">${_esc(def.phone || '—')}</span>
+            </div>
+          </div>
+          <div class="def-location" style="margin-top:10px">
+            <div class="def-location-dot ${isLive ? 'live' : ''}"></div>
+            <div class="def-location-text">
+              <div class="def-location-addr">${_esc(addr)}</div>
+              <div class="def-location-time">Last seen: ${lastSeen}</div>
+            </div>
+          </div>
+        </div>
+        <div class="def-card-footer">
+          <button class="btn-sm btn-locate"   onclick="BT.locateDefendant('${def.id}')">📍 Locate</button>
+          <button class="btn-sm btn-history"  onclick="BT.showDefHistory('${def.id}')">📋 History</button>
+          <button class="btn-sm btn-geofence" onclick="BT.manageGeofence('${def.id}')">🔵 Fence</button>
+          <button class="btn-sm btn-danger"   onclick="BT.removeDefendant('${def.id}')">✕</button>
+        </div>
+      </div>`;
+  }
+
+  function locateDefendant(defId) {
+    const def = _defendants.find(d => d.id === defId);
+    if (!def) return;
+    const dev = _getDefDevice(def);
+    if (!dev) { toast('No device assigned to this defendant', 'error'); return; }
+    const pos = _positions[dev.id];
+    if (!pos) { toast('No position data available', 'error'); return; }
+    switchTabById('tabMap');
+    _map.setView([pos.latitude, pos.longitude], 16);
+    if (_markers[dev.id]) _markers[dev.id].openPopup();
+    toast('📍 Locating ' + def.firstName + ' ' + def.lastName, 'info');
+  }
+
+  function showDefHistory(defId) {
+    const def = _defendants.find(d => d.id === defId);
+    if (!def) return;
+    document.getElementById('histDefSelect').value = defId;
+    switchTabById('tabHistory');
+    loadHistory();
+  }
+
+  function manageGeofence(defId) {
+    switchTabById('tabGeofences');
+    toast('Select or draw a geofence on the map to assign to this defendant', 'info');
+  }
+
+  function removeDefendant(defId) {
+    if (!confirm('Remove this defendant from tracking? This will not delete them from Traccar.')) return;
+    _defendants = _defendants.filter(d => d.id !== defId);
+    _saveDefendants();
+    _renderDefendants();
+    _updateKPIs();
+    toast('Defendant removed from tracker', 'info');
+  }
+
+  // ── Add Defendant ─────────────────────────────────────────
+  function openAddDefendant() {
+    _populateDeviceDropdown();
+    document.getElementById('addDefModal').classList.add('open');
+  }
+  function closeAddDefendant() {
+    document.getElementById('addDefModal').classList.remove('open');
+  }
+
+  function saveDefendant() {
+    const firstName  = document.getElementById('defFirstName').value.trim();
+    const lastName   = document.getElementById('defLastName').value.trim();
+    if (!firstName || !lastName) {
+      _showModalAlert('addDefAlert', 'First and last name are required.', 'error');
+      return;
+    }
+    const def = {
+      id:          'def_' + Date.now(),
+      firstName,
+      lastName,
+      bookingNum:  document.getElementById('defBookingNum').value.trim(),
+      caseNum:     document.getElementById('defCaseNum').value.trim(),
+      bondAmount:  document.getElementById('defBondAmount').value,
+      courtDate:   document.getElementById('defCourtDate').value,
+      phone:       document.getElementById('defPhone').value.trim(),
+      county:      document.getElementById('defCounty').value,
+      address:     document.getElementById('defAddress').value.trim(),
+      deviceId:    document.getElementById('defDeviceSelect').value || null,
+      trackMethod: document.getElementById('defTrackMethod').value,
+      addedAt:     new Date().toISOString(),
+    };
+    _defendants.push(def);
+    _saveDefendants();
+    closeAddDefendant();
+    _renderDefendants();
+    _updateKPIs();
+    _renderMapMarkers();
+    toast('✅ ' + firstName + ' ' + lastName + ' added to tracker', 'success');
+    // Clear form
+    ['defFirstName','defLastName','defBookingNum','defCaseNum','defBondAmount','defCourtDate','defPhone','defAddress'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  }
+
+  function _saveDefendants() {
+    localStorage.setItem('bt_defendants', JSON.stringify(_defendants));
+  }
+
+  // ── Add Device ────────────────────────────────────────────
+  function openAddDevice() {
+    document.getElementById('addDeviceModal').classList.add('open');
+  }
+  function closeAddDevice() {
+    document.getElementById('addDeviceModal').classList.remove('open');
+  }
+
+  async function saveDevice() {
+    const name     = document.getElementById('devName').value.trim();
+    const uniqueId = document.getElementById('devUniqueId').value.trim();
+    if (!name || !uniqueId) { toast('Name and Unique ID are required', 'error'); return; }
+    try {
+      const dev = await apiPost('/devices', {
+        name, uniqueId,
+        phone: document.getElementById('devPhone').value.trim(),
+        model: document.getElementById('devModel').value.trim(),
+      });
+      toast('✅ Device "' + dev.name + '" registered (ID: ' + dev.id + ')', 'success');
+      closeAddDevice();
+      await _refreshAll();
+    } catch (e) {
+      toast('❌ Failed to register device: ' + e.message, 'error');
+    }
+  }
+
+  // ── Devices tab ───────────────────────────────────────────
+  function _renderDevices() {
+    const el = document.getElementById('devicesList');
+    if (!_devices.length) {
+      el.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📡</div>
+          <div class="empty-state-title">No devices registered</div>
+          <div class="empty-state-sub">Register a GPS tracker or phone app to start tracking</div>
+        </div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Device Name</th><th>Unique ID</th><th>Status</th>
+            <th>Last Position</th><th>Speed</th><th>Assigned To</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${_devices.map(dev => {
+              const pos = _positions[dev.id];
+              const def = _getDefByDevice(dev.id);
+              const status = dev.status === 'online'
+                ? '<span style="color:#10b981;font-weight:700">● Online</span>'
+                : '<span style="color:#475569">● Offline</span>';
+              const lastPos = pos ? _fmtTime(pos.fixTime) : '—';
+              const speed   = pos ? (pos.speed * 1.852).toFixed(1) + ' mph' : '—';
+              const assignedTo = def ? `<span style="color:var(--accent);font-weight:600">${_esc(def.firstName + ' ' + def.lastName)}</span>` : '<span style="color:var(--muted)">Unassigned</span>';
+              return `<tr>
+                <td style="font-weight:600">${_esc(dev.name)}</td>
+                <td style="font-family:monospace;font-size:11px">${_esc(dev.uniqueId)}</td>
+                <td>${status}</td>
+                <td>${lastPos}</td>
+                <td>${speed}</td>
+                <td>${assignedTo}</td>
+                <td>
+                  <button class="btn-sm btn-locate" style="padding:4px 10px;font-size:11px" onclick="BT._focusDevice(${dev.id})">📍</button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function _focusDevice(devId) {
+    const pos = _positions[devId];
+    if (!pos) { toast('No position data for this device', 'error'); return; }
+    switchTabById('tabMap');
+    _map.setView([pos.latitude, pos.longitude], 16);
+    if (_markers[devId]) _markers[devId].openPopup();
+  }
+
+  // ── History ───────────────────────────────────────────────
+  async function loadHistory() {
+    const defId = document.getElementById('histDefSelect').value;
+    const from  = document.getElementById('histFrom').value;
+    const to    = document.getElementById('histTo').value;
+    if (!defId) { toast('Select a defendant first', 'error'); return; }
+    const def = _defendants.find(d => d.id === defId);
+    if (!def) return;
+    const dev = _getDefDevice(def);
+    if (!dev) { toast('No device assigned to this defendant', 'error'); return; }
+
+    const listEl = document.getElementById('historyList');
+    listEl.innerHTML = '<div class="loading"><div class="spinner"></div>Loading history...</div>';
+
+    try {
+      const fromISO = new Date(from).toISOString();
+      const toISO   = new Date(to).toISOString();
+      const positions = await apiGet(`/positions?deviceId=${dev.id}&from=${fromISO}&to=${toISO}`);
+
+      if (!positions.length) {
+        listEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📍</div><div class="empty-state-title">No positions found</div><div class="empty-state-sub">No location data in this time range</div></div>';
+        return;
+      }
+
+      // Render list
+      listEl.innerHTML = positions.slice(0, 50).map(p => `
+        <div class="history-item">
+          <div class="history-dot"></div>
+          <div class="history-text">
+            <div style="font-weight:600">${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</div>
+            <div style="font-size:11px;color:var(--muted)">Speed: ${(p.speed * 1.852).toFixed(1)} mph · Accuracy: ${p.accuracy || '—'}m</div>
+          </div>
+          <div class="history-time">${_fmtTime(p.fixTime)}</div>
+        </div>`).join('');
+
+      // Draw route on map
+      const latlngs = positions.map(p => [p.latitude, p.longitude]);
+      _histMap.eachLayer(l => { if (l instanceof L.Polyline || l instanceof L.Marker) _histMap.removeLayer(l); });
+      L.polyline(latlngs, { color: '#10b981', weight: 3, opacity: .8 }).addTo(_histMap);
+      if (latlngs.length) {
+        L.circleMarker(latlngs[0],  { radius: 8, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 1 }).bindTooltip('Start').addTo(_histMap);
+        L.circleMarker(latlngs[latlngs.length-1], { radius: 8, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 1 }).bindTooltip('End').addTo(_histMap);
+        _histMap.fitBounds(L.latLngBounds(latlngs), { padding: [30, 30] });
+      }
+      toast(`Loaded ${positions.length} positions`, 'success');
+    } catch (e) {
+      listEl.innerHTML = `<div class="alert-banner alert-error">❌ ${_esc(e.message)}</div>`;
+    }
+  }
+
+  // ── Geofences ─────────────────────────────────────────────
+  function _renderGeofences() {
+    const el = document.getElementById('geofenceList');
+    if (!_geofences.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🔵</div><div class="empty-state-title">No geofences</div><div class="empty-state-sub">Add geofences to get breach alerts</div></div>`;
+      return;
+    }
+    el.innerHTML = _geofences.map(g => `
+      <div class="geofence-item">
+        <div>
+          <div class="geofence-name">${_esc(g.name)}</div>
+          <div class="geofence-meta">${_esc(g.description || 'No description')}</div>
+        </div>
+        <button class="btn-sm btn-danger" style="padding:4px 10px;font-size:11px" onclick="BT._deleteGeofence(${g.id})">✕</button>
+      </div>`).join('');
+  }
+
+  async function _deleteGeofence(id) {
+    if (!confirm('Delete this geofence?')) return;
+    try {
+      await apiDelete('/geofences/' + id);
+      toast('Geofence deleted', 'info');
+      await _refreshAll();
+    } catch (e) {
+      toast('Failed: ' + e.message, 'error');
+    }
+  }
+
+  function openAddGeofence() {
+    toast('Use the Traccar web UI to draw geofences, then they will appear here automatically.', 'info');
+    window.open(_cfg.traccarUrl, '_blank');
+  }
+
+  // ── Alerts ────────────────────────────────────────────────
+  function _renderAlerts() {
+    const el = document.getElementById('alertsList');
+    if (!_events.length) {
+      el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">🔔</div><div class="empty-state-title">No recent events</div><div class="empty-state-sub">Events will appear here as they occur</div></div>`;
+      return;
+    }
+    const eventIcons = {
+      geofenceEnter: '🟢', geofenceExit: '🔴', deviceOnline: '✅',
+      deviceOffline: '⚫', deviceMoving: '🚗', deviceStopped: '🅿️',
+      deviceOverspeed: '⚡', alarm: '🚨',
+    };
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Type</th><th>Device</th><th>Defendant</th><th>Time</th></tr></thead>
+          <tbody>
+            ${_events.slice(0,50).map(ev => {
+              const dev = _devices.find(d => d.id === ev.deviceId);
+              const def = dev ? _getDefByDevice(dev.id) : null;
+              const icon = eventIcons[ev.type] || '📌';
+              return `<tr>
+                <td>${icon} ${_esc(ev.type)}</td>
+                <td>${dev ? _esc(dev.name) : '—'}</td>
+                <td>${def ? `<span style="color:var(--accent);font-weight:600">${_esc(def.firstName + ' ' + def.lastName)}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
+                <td style="color:var(--muted);font-size:12px">${_fmtTime(ev.eventTime)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────
+  function _getDefDevice(def) {
+    if (!def.deviceId) return null;
+    return _devices.find(d => String(d.id) === String(def.deviceId)) || null;
+  }
+
+  function _getDefByDevice(deviceId) {
+    return _defendants.find(d => String(d.deviceId) === String(deviceId)) || null;
+  }
+
+  function _populateDefSelect() {
+    const sel = document.getElementById('histDefSelect');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Select defendant...</option>' +
+      _defendants.map(d => `<option value="${d.id}">${_esc(d.lastName + ', ' + d.firstName)}</option>`).join('');
+    if (cur) sel.value = cur;
+  }
+
+  function _populateDeviceDropdown() {
+    const sel = document.getElementById('defDeviceSelect');
+    sel.innerHTML = '<option value="">No device assigned</option>' +
+      _devices.map(d => `<option value="${d.id}">${_esc(d.name)} (${_esc(d.uniqueId)})</option>`).join('');
+  }
+
+  function _showModalAlert(id, msg, type) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = `<div class="alert-banner alert-${type}" style="margin-bottom:14px">${_esc(msg)}</div>`;
+    setTimeout(() => { el.innerHTML = ''; }, 4000);
+  }
+
+  function _fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+           d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function _fmtMoney(v) {
+    const n = parseFloat(v) || 0;
+    if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+    if (n >= 1000)    return (n/1000).toFixed(0) + 'K';
+    return n.toLocaleString();
+  }
+
+  function _esc(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function _set(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  // ── Settings ──────────────────────────────────────────────
+  function _loadSettings() {
+    document.getElementById('settTraccarUrl').value      = _cfg.traccarUrl;
+    document.getElementById('settApiToken').value        = _cfg.apiToken;
+    document.getElementById('settRefreshInterval').value = String(_cfg.refreshInterval);
+    document.getElementById('settMapTile').value         = _cfg.mapTile;
+    document.getElementById('settGeoAlerts').checked     = _cfg.geoAlerts;
+    document.getElementById('settCheckinAlerts').checked = _cfg.checkinAlerts;
+  }
+
+  function saveSettings() {
+    _cfg.traccarUrl      = document.getElementById('settTraccarUrl').value.trim().replace(/\/$/, '');
+    _cfg.apiToken        = document.getElementById('settApiToken').value.trim();
+    _cfg.refreshInterval = parseInt(document.getElementById('settRefreshInterval').value);
+    _cfg.mapTile         = document.getElementById('settMapTile').value;
+    _cfg.geoAlerts       = document.getElementById('settGeoAlerts').checked;
+    _cfg.checkinAlerts   = document.getElementById('settCheckinAlerts').checked;
+    localStorage.setItem('bt_traccarUrl',      _cfg.traccarUrl);
+    localStorage.setItem('bt_apiToken',        _cfg.apiToken);
+    localStorage.setItem('bt_refreshInterval', _cfg.refreshInterval);
+    localStorage.setItem('bt_mapTile',         _cfg.mapTile);
+    localStorage.setItem('bt_geoAlerts',       _cfg.geoAlerts);
+    localStorage.setItem('bt_checkinAlerts',   _cfg.checkinAlerts);
+    closeSettings();
+    _connect();
+    _startRefreshTimer();
+  }
+
+  async function testConnection() {
+    const url   = document.getElementById('settTraccarUrl').value.trim().replace(/\/$/, '');
+    const token = document.getElementById('settApiToken').value.trim();
+    const statusEl = document.getElementById('settConnStatus');
+    statusEl.innerHTML = '<div class="alert-banner alert-warn">Testing...</div>';
+    try {
+      const r = await fetch(url + '/api/server', { headers: { Authorization: 'Bearer ' + token } });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      statusEl.innerHTML = `<div class="alert-banner alert-ok">✅ Connected — Traccar v${data.version}</div>`;
+    } catch (e) {
+      statusEl.innerHTML = `<div class="alert-banner alert-error">❌ Failed: ${_esc(e.message)}</div>`;
+    }
+  }
+
+  function openSettings() {
+    document.getElementById('settingsOverlay').classList.add('open');
+  }
+  function closeSettings(e) {
+    if (!e || e.target === document.getElementById('settingsOverlay')) {
+      document.getElementById('settingsOverlay').classList.remove('open');
+    }
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────
+  function switchTab(btn) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    // Invalidate maps on tab show
+    setTimeout(() => {
+      if (_map)     _map.invalidateSize();
+      if (_histMap) _histMap.invalidateSize();
+      if (_geoMap)  _geoMap.invalidateSize();
+    }, 100);
+  }
+
+  function switchTabById(tabId) {
+    const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if (btn) switchTab(btn);
+  }
+
+  // ── Theme ─────────────────────────────────────────────────
+  function toggleTheme() {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    document.querySelector('.theme-btn').textContent = isDark ? '🌙' : '☀️';
+  }
+
+  // ── Toast ─────────────────────────────────────────────────
+  function toast(msg, type = 'info') {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    t.className = 'toast ' + type;
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 4000);
+  }
+
+  // ── Public API ────────────────────────────────────────────
+  return {
+    init, refreshMap, fitAll, changeMapTile,
+    switchTab, toggleTheme, toast,
+    openSettings, closeSettings, saveSettings, testConnection,
+    openAddDefendant, closeAddDefendant, saveDefendant,
+    openAddDevice, closeAddDevice, saveDevice,
+    filterDefendants, locateDefendant, showDefHistory,
+    manageGeofence, removeDefendant, loadHistory,
+    openAddGeofence, _deleteGeofence, _focusDevice,
+  };
+})();
+
+// Boot
+document.addEventListener('DOMContentLoaded', BT.init);
+</script>
+</body>
+</html>

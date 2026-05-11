@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN pip install flask requests --no-cache-dir
+
+COPY traccar/traccar_proxy.py /app/traccar_proxy.py
+COPY traccar/bond-tracker.html /app/bond-tracker.html
+
+EXPOSE 5051
+
+CMD ["python", "traccar_proxy.py"]

@@ -1,0 +1,77 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE properties SYSTEM 'http://java.sun.com/dtd/properties.dtd'>
+<!--
+  Shamrock Bail Bonds — Traccar Server Configuration
+  Place this file at: /opt/traccar/conf/traccar.xml
+  Or mount via Docker: ./traccar/traccar.xml:/opt/traccar/conf/traccar.xml
+-->
+<properties>
+
+  <!-- ── Database ─────────────────────────────────────────────────────── -->
+  <!-- Default: H2 embedded (fine for single-server use) -->
+  <!-- For production, switch to MySQL/PostgreSQL: -->
+  <!--
+  <entry key='database.driver'>com.mysql.cj.jdbc.Driver</entry>
+  <entry key='database.url'>jdbc:mysql://localhost/traccar?serverTimezone=UTC&amp;allowMultiQueries=true&amp;autoReconnect=true&amp;useSSL=false</entry>
+  <entry key='database.user'>traccar</entry>
+  <entry key='database.password'>CHANGE_ME</entry>
+  -->
+
+  <!-- ── Web Server ───────────────────────────────────────────────────── -->
+  <entry key='web.enable'>true</entry>
+  <entry key='web.port'>8082</entry>
+  <entry key='web.path'>/opt/traccar/web</entry>
+
+  <!-- ── Geocoder (reverse geocoding for human-readable addresses) ─────── -->
+  <entry key='geocoder.enable'>true</entry>
+  <entry key='geocoder.type'>nominatim</entry>
+  <!-- Nominatim is free; for production consider Google Maps geocoder -->
+  <!-- <entry key='geocoder.type'>google</entry> -->
+  <!-- <entry key='geocoder.key'>YOUR_GOOGLE_MAPS_KEY</entry> -->
+
+  <!-- ── Device Protocols (GPS tracker ports) ─────────────────────────── -->
+  <!-- OsmAnd (Android/iOS Traccar Client app) -->
+  <entry key='osmand.port'>5055</entry>
+  <!-- Traccar Client protocol -->
+  <entry key='t55.port'>5001</entry>
+  <!-- GT06 / Concox (most cheap GPS trackers) -->
+  <entry key='gt06.port'>5013</entry>
+  <!-- Teltonika (professional GPS trackers) -->
+  <entry key='teltonika.port'>5023</entry>
+  <!-- Queclink -->
+  <entry key='gl200.port'>5093</entry>
+
+  <!-- ── Filtering (reduce GPS noise) ─────────────────────────────────── -->
+  <entry key='filter.enable'>true</entry>
+  <entry key='filter.zero'>true</entry>
+  <entry key='filter.invalid'>true</entry>
+  <entry key='filter.accuracy'>100</entry>
+  <entry key='filter.maxSpeed'>250</entry>
+  <!-- Minimum distance between stored points (meters) -->
+  <entry key='filter.distance'>50</entry>
+  <!-- Minimum time between stored points (seconds) -->
+  <entry key='filter.period'>60</entry>
+
+  <!-- ── Events / Notifications ────────────────────────────────────────── -->
+  <entry key='event.enable'>true</entry>
+  <!-- Geofence alerts -->
+  <entry key='event.geofenceEnter'>true</entry>
+  <entry key='event.geofenceExit'>true</entry>
+  <!-- Device online/offline -->
+  <entry key='event.deviceOnline'>true</entry>
+  <entry key='event.deviceOffline'>true</entry>
+  <!-- Motion events -->
+  <entry key='event.deviceMoving'>true</entry>
+  <entry key='event.deviceStopped'>true</entry>
+  <!-- Overspeed (mph * 1.852 = km/h; 80mph = ~129km/h) -->
+  <entry key='event.deviceOverspeed'>true</entry>
+  <entry key='speedLimit'>129</entry>
+
+  <!-- ── Storage ───────────────────────────────────────────────────────── -->
+  <!-- Keep position history for 90 days -->
+  <entry key='database.positionsHistoryDays'>90</entry>
+
+  <!-- ── Timezone ──────────────────────────────────────────────────────── -->
+  <entry key='time.zone'>America/New_York</entry>
+
+</properties>

@@ -1,0 +1,56 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Shamrock Bond Tracker — Docker Compose Extension
+# ══════════════════════════════════════════════════════════════════════════════
+# This file adds the Bond Tracker proxy service to your existing stack.
+#
+# Usage (merge with your existing docker-compose.yml):
+#   docker compose -f docker-compose.yml -f traccar/docker-compose.traccar.yml up -d
+#
+# Or copy the `bond-tracker` service block into your main docker-compose.yml
+# ══════════════════════════════════════════════════════════════════════════════
+
+version: '3.8'
+
+services:
+
+  # ── Traccar GPS Server ──────────────────────────────────────────────────────
+  traccar:
+    image: traccar/traccar:latest
+    container_name: shamrock-traccar
+    restart: unless-stopped
+    ports:
+      - "8082:8082"       # Web UI + REST API
+      - "5055:5055"       # OsmAnd protocol
+      - "5001:5001"       # Traccar Client protocol
+      - "5013:5013"       # GT06 / Concox protocol (common GPS tracker)
+      - "5023:5023"       # Teltonika protocol
+    volumes:
+      - traccar_data:/opt/traccar/data
+      - ./traccar/traccar.xml:/opt/traccar/conf/traccar.xml:ro
+    environment:
+      - TZ=America/New_York
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/api/server"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Bond Tracker Proxy + Dashboard ─────────────────────────────────────────
+  bond-tracker:
+    build:
+      context: .
+      dockerfile: traccar/Dockerfile.tracker
+    container_name: shamrock-bond-tracker
+    restart: unless-stopped
+    ports:
+      - "5051:5051"       # Bond Tracker dashboard UI
+    environment:
+      - TRACCAR_URL=http://traccar:8082
+      - TRACCAR_TOKEN=${TRACCAR_TOKEN}
+    depends_on:
+      - traccar
+    volumes:
+      - ./traccar:/app/traccar:ro
+
+volumes:
+  traccar_data:
