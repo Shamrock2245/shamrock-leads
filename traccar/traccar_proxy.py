@@ -25,9 +25,16 @@ TRACCAR_TOKEN = os.environ.get('TRACCAR_TOKEN', '')
 def register_traccar_proxy(app):
     """Register Traccar proxy routes on an existing Flask app."""
 
-    @app.route('/traccar/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+    @app.route('/traccar/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
     def traccar_proxy(path):
         """Proxy all /traccar/* requests to Traccar API."""
+        # Handle CORS preflight
+        if request.method == 'OPTIONS':
+            resp = Response('', status=204)
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            resp.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+            return resp
         target = f"{TRACCAR_URL}/api/{path}"
         headers = {
             'Content-Type': 'application/json',
@@ -68,7 +75,7 @@ def register_traccar_proxy(app):
             'bond-tracker.html'
         )
 
-    @app.route('/traccar/health')
+    @app.route('/traccar/health', methods=['GET', 'OPTIONS'])
     def traccar_health():
         """Quick health check for Traccar connectivity."""
         try:

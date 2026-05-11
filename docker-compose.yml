@@ -36,6 +36,7 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
     container_name: shamrock-dashboard
+    hostname: shamrock-dashboard
     restart: unless-stopped
     dns:
       - 8.8.8.8                         # Force Google DNS — resolves Wix CNAME for bb.shamrockbailbonds.biz

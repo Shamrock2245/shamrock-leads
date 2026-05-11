@@ -2,24 +2,21 @@
 <!DOCTYPE properties SYSTEM 'http://java.sun.com/dtd/properties.dtd'>
 <!--
   Shamrock Bail Bonds — Traccar Server Configuration
-  Place this file at: /opt/traccar/conf/traccar.xml
-  Or mount via Docker: ./traccar/traccar.xml:/opt/traccar/conf/traccar.xml
+  Mounted via Docker: ./config/traccar/traccar.xml:/opt/traccar/conf/traccar.xml:ro
+  After editing, restart: docker compose restart traccar
 -->
 <properties>
 
-  <!-- ── Database ─────────────────────────────────────────────────────── -->
-  <!-- Default: H2 embedded (fine for single-server use) -->
-  <!-- For production, switch to MySQL/PostgreSQL: -->
-  <!--
-  <entry key='database.driver'>com.mysql.cj.jdbc.Driver</entry>
-  <entry key='database.url'>jdbc:mysql://localhost/traccar?serverTimezone=UTC&amp;allowMultiQueries=true&amp;autoReconnect=true&amp;useSSL=false</entry>
-  <entry key='database.user'>traccar</entry>
-  <entry key='database.password'>CHANGE_ME</entry>
-  -->
+  <!-- ── Database (H2 embedded — zero-config, persists to Docker volume) ── -->
+  <entry key='database.driver'>org.h2.Driver</entry>
+  <entry key='database.url'>jdbc:h2:/opt/traccar/data/database</entry>
+  <entry key='database.user'>sa</entry>
+  <entry key='database.password'></entry>
 
   <!-- ── Web Server ───────────────────────────────────────────────────── -->
   <entry key='web.enable'>true</entry>
   <entry key='web.port'>8082</entry>
+  <entry key='web.address'>0.0.0.0</entry>
   <entry key='web.path'>/opt/traccar/web</entry>
 
   <!-- ── Geocoder (reverse geocoding for human-readable addresses) ─────── -->
@@ -30,16 +27,23 @@
   <!-- <entry key='geocoder.key'>YOUR_GOOGLE_MAPS_KEY</entry> -->
 
   <!-- ── Device Protocols (GPS tracker ports) ─────────────────────────── -->
-  <!-- OsmAnd (Android/iOS Traccar Client app) -->
+  <!-- OsmAnd (Android/iOS Traccar Client app — primary defendant tracking) -->
   <entry key='osmand.port'>5055</entry>
-  <!-- Traccar Client protocol -->
-  <entry key='t55.port'>5001</entry>
-  <!-- GT06 / Concox (most cheap GPS trackers) -->
-  <entry key='gt06.port'>5013</entry>
-  <!-- Teltonika (professional GPS trackers) -->
-  <entry key='teltonika.port'>5023</entry>
-  <!-- Queclink -->
-  <entry key='gl200.port'>5093</entry>
+  <!-- GPS103/TK103 (cheap vehicle trackers) -->
+  <entry key='gps103.port'>5001</entry>
+  <entry key='tk103.port'>5002</entry>
+  <!-- H02 (personal/ankle trackers) -->
+  <entry key='h02.port'>5013</entry>
+  <!-- GT06 / Concox (OBD2 vehicle trackers) -->
+  <entry key='gt06.port'>5023</entry>
+  <!-- Teltonika (professional fleet/asset trackers) -->
+  <entry key='teltonika.port'>5027</entry>
+  <!-- T55 / NMEA (legacy hardware) -->
+  <entry key='t55.port'>5005</entry>
+  <!-- Queclink GV series -->
+  <entry key='queclink.port'>5009</entry>
+  <!-- Meitrack (personal + vehicle trackers) -->
+  <entry key='meitrack.port'>5020</entry>
 
   <!-- ── Filtering (reduce GPS noise) ─────────────────────────────────── -->
   <entry key='filter.enable'>true</entry>
@@ -51,6 +55,7 @@
   <entry key='filter.distance'>50</entry>
   <!-- Minimum time between stored points (seconds) -->
   <entry key='filter.period'>60</entry>
+  <entry key='filter.duplicate'>true</entry>
 
   <!-- ── Events / Notifications ────────────────────────────────────────── -->
   <entry key='event.enable'>true</entry>
@@ -63,13 +68,34 @@
   <!-- Motion events -->
   <entry key='event.deviceMoving'>true</entry>
   <entry key='event.deviceStopped'>true</entry>
-  <!-- Overspeed (mph * 1.852 = km/h; 80mph = ~129km/h) -->
+  <!-- Overspeed (80mph = ~129km/h) -->
   <entry key='event.deviceOverspeed'>true</entry>
   <entry key='speedLimit'>129</entry>
+  <!-- Handler flags -->
+  <entry key='event.geofenceHandler'>true</entry>
+  <entry key='event.overspeedHandler'>true</entry>
+  <entry key='event.motionHandler'>true</entry>
+  <entry key='event.ignitionHandler'>true</entry>
+
+  <!-- ── Webhook Forward (push events to Shamrock dashboard) ──────────── -->
+  <!-- Traccar forwards every position update + event to our Flask API     -->
+  <!-- The dashboard container is reachable at shamrock-dashboard:5050     -->
+  <entry key='forward.enable'>true</entry>
+  <entry key='forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
+  <entry key='forward.json'>true</entry>
 
   <!-- ── Storage ───────────────────────────────────────────────────────── -->
   <!-- Keep position history for 90 days -->
   <entry key='database.positionsHistoryDays'>90</entry>
+  <entry key='database.eventsHistoryDays'>90</entry>
+  <!-- Connection pool -->
+  <entry key='database.pool.size'>5</entry>
+  <entry key='database.pool.idleSize'>2</entry>
+
+  <!-- ── Logging ───────────────────────────────────────────────────────── -->
+  <entry key='logger.enable'>true</entry>
+  <entry key='logger.level'>info</entry>
+  <entry key='logger.file'>/opt/traccar/logs/tracker-server.log</entry>
 
   <!-- ── Timezone ──────────────────────────────────────────────────────── -->
   <entry key='time.zone'>America/New_York</entry>

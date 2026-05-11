@@ -883,6 +883,8 @@ const BT = (() => {
 
   let _map        = null;
   let _histMap    = null;
+  let _histTileLayer = null;
+  let _geoTileLayer  = null;
   let _geoMap     = null;
   let _markers    = {};
   let _devices    = [];
@@ -962,12 +964,11 @@ const BT = (() => {
     // History map
     _histMap = L.map('historyMap', { zoomControl: true });
     _histMap.setView([26.6406, -81.8723], 10);
-    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
-
+    _histTileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
     // Geofence map
     _geoMap = L.map('geofenceMap', { zoomControl: true });
     _geoMap.setView([26.6406, -81.8723], 10);
-    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
+    _geoTileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
   }
 
   function changeMapTile() {
@@ -975,10 +976,12 @@ const BT = (() => {
     _cfg.mapTile = key;
     localStorage.setItem('bt_mapTile', key);
     const t = TILES[key] || TILES.dark;
-    if (_tileLayer) { _map.removeLayer(_tileLayer); _histMap.removeLayer(_tileLayer); }
-    _tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_map);
-    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
-    L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
+    if (_tileLayer)     { _map.removeLayer(_tileLayer); }
+    if (_histTileLayer) { _histMap.removeLayer(_histTileLayer); }
+    if (_geoTileLayer)  { _geoMap.removeLayer(_geoTileLayer); }
+    _tileLayer     = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_map);
+    _histTileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_histMap);
+    _geoTileLayer  = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 19 }).addTo(_geoMap);
   }
 
   // ── Connection ────────────────────────────────────────────
@@ -1010,7 +1013,7 @@ const BT = (() => {
       const [devices, positions, events, geofences] = await Promise.all([
         apiGet('/devices'),
         apiGet('/positions'),
-        apiGet('/events?all=true&limit=50').catch(() => []),
+        apiGet('/reports/events?all=true&from=' + encodeURIComponent(new Date(Date.now()-86400000).toISOString()) + '&to=' + encodeURIComponent(new Date().toISOString())).catch(() => []),
         apiGet('/geofences').catch(() => []),
       ]);
       _devices   = devices   || [];
@@ -1386,18 +1389,26 @@ const BT = (() => {
     const from  = document.getElementById('histFrom').value;
     const to    = document.getElementById('histTo').value;
     if (!defId) { toast('Select a defendant first', 'error'); return; }
+    if (!from)  { toast('Select a start date', 'error'); return; }
+    if (!to)    { toast('Select an end date', 'error'); return; }
     const def = _defendants.find(d => d.id === defId);
     if (!def) return;
     const dev = _getDefDevice(def);
     if (!dev) { toast('No device assigned to this defendant', 'error'); return; }
-
     const listEl = document.getElementById('historyList');
     listEl.innerHTML = '<div class="loading"><div class="spinner"></div>Loading history...</div>';
-
     try {
-      const fromISO = new Date(from).toISOString();
-      const toISO   = new Date(to).toISOString();
-      const positions = await apiGet(`/positions?deviceId=${dev.id}&from=${fromISO}&to=${toISO}`);
+      // Traccar requires ISO 8601 with timezone for date-range queries
+      const fromISO = new Date(from + 'T00:00:00').toISOString();
+      const toISO   = new Date(to   + 'T23:59:59').toISOString();
+      // Use /reports/route for historical position data (not /positions which is live-only)
+      let positions;
+      try {
+        positions = await apiGet(`/reports/route?deviceId=${dev.id}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`);
+      } catch (_) {
+        // Fallback to /positions for older Traccar versions
+        positions = await apiGet(`/positions?deviceId=${dev.id}&from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`);
+      }
 
       if (!positions.length) {
         listEl.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📍</div><div class="empty-state-title">No positions found</div><div class="empty-state-sub">No location data in this time range</div></div>';
