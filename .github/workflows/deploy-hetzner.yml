@@ -72,17 +72,18 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
-            # ── Clean up disk space (prevents build failures) ─────
+            # ── Clean up disk space (targeted, preserves base images) ──
             echo ""
             echo "🧹 Cleaning up disk space..."
-            docker system prune -f --all
-            apt-get clean
+            docker container prune -f
+            docker image prune -f
+            apt-get clean 2>/dev/null || true
             echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
 
             # ── Rebuild Docker images ─────────────────────────────
             echo ""
             echo "🐳 Rebuilding Docker images..."
-            docker compose build --no-cache shamrock-leads dashboard
+            docker compose build shamrock-leads dashboard
 
             # ── Restart services ──────────────────────────────────
             echo ""

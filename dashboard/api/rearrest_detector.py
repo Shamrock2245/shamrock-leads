@@ -88,10 +88,13 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
     """
     Scan recent arrests (last N hours) against active bonds.
     Returns detected re-arrests.
+
+    Writes to `rearrest_notifications` collection — the same collection
+    consumed by the Command Center UI (/api/rearrest/pending).
     """
     arrests_col = get_collection("arrests")
     bonds_col = get_collection("active_bonds")
-    rearrest_col = get_collection("rearrest_alerts")
+    rearrest_col = get_collection("rearrest_notifications")
 
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=hours)).isoformat()
@@ -131,26 +134,78 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                     continue  # DOBs don't match, skip
 
             # Check if we already alerted on this
+            # Check both old field name (bond_id) and new schema (defendant_name_norm + booking_number)
+            arrest_booking = arrest.get("booking_number", "")
             existing = await rearrest_col.find_one({
-                "booking_number": arrest.get("booking_number"),
-                "bond_id": str(bond.get("_id", "")),
+                "$or": [
+                    {"booking_number": arrest_booking, "bond_id": str(bond.get("_id", ""))},
+                    {"defendant_name_norm": _normalize_name(arrest_name).upper(), "booking_number": arrest_booking},
+                    {"booking_number": arrest_booking, "prior_booking_number": bond.get("booking_number", "")},
+                ]
             })
             if existing:
                 continue
 
+            # ── Build notification in the unified schema expected by the UI ──
+            # Matches the document shape written by writers/rearrest_checker.py
+            # and consumed by sl-rearrest.js via /api/rearrest/pending
+            indemnitor = bond.get("indemnitor") or {}
+            indemnitor_name = (
+                bond.get("indemnitor_name")
+                or indemnitor.get("name", "")
+                or indemnitor.get("firstName", "")
+            )
+            indemnitor_phone = (
+                bond.get("indemnitor_phone")
+                or indemnitor.get("phone", "")
+            )
+            indemnitor_email = (
+                bond.get("indemnitor_email")
+                or indemnitor.get("email", "")
+            )
+
+            # Normalize charges to string for UI consistency
+            raw_charges = arrest.get("charges", "")
+            if isinstance(raw_charges, list):
+                charges_str = "; ".join(str(c) for c in raw_charges)
+            else:
+                charges_str = str(raw_charges)
+
             alert = {
+                # New arrest details
                 "defendant_name": arrest_name,
-                "booking_number": arrest.get("booking_number", ""),
+                "defendant_name_norm": _normalize_name(arrest_name).upper(),
+                "booking_number": arrest_booking,
                 "county": arrest.get("county", ""),
-                "new_charges": arrest.get("charges", []),
-                "new_bond_amount": arrest.get("bond_amount", 0),
-                "original_bond_id": str(bond.get("_id", "")),
+                "charges": charges_str,
+                "bond_amount": arrest.get("bond_amount", 0),
+                "arrest_date": arrest.get("arrest_date", ""),
+                "custody_status": arrest.get("custody_status", ""),
+                # Prior bond / indemnitor details
+                "indemnitor_name": indemnitor_name,
+                "indemnitor_phone": indemnitor_phone,
+                "indemnitor_email": indemnitor_email,
+                "prior_booking_number": bond.get("booking_number", ""),
+                "prior_bond_amount": bond.get("bond_amount", 0),
+                "prior_bond_date": bond.get("created_at", bond.get("bond_date", "")),
+                "prior_defendant_name": bond.get("defendant_name", ""),
+                "prior_county": bond.get("county", ""),
+                "prior_bonds_count": 1,
+                "prior_bonds_source": "active_bonds",
+                # Backward compat fields
+                "bond_id": str(bond.get("_id", "")),
                 "original_bond_amount": bond.get("bond_amount", 0),
                 "original_case_number": bond.get("case_number", ""),
                 "original_poa": bond.get("poa_number", ""),
                 "confidence": confidence,
+                # Workflow state — matches what the UI queries
+                "status": "pending_review",
+                "created_at": now,
+                "updated_at": now,
                 "detected_at": now.isoformat(),
-                "status": "new",
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "contacted_at": None,
             }
 
             await rearrest_col.insert_one(alert)
@@ -207,14 +262,18 @@ async def manual_scan():
 
 @rearrest_bp.route('/rearrest/alerts', methods=['GET'])
 async def get_alerts():
-    """Get recent re-arrest alerts."""
-    rearrest_col = get_collection("rearrest_alerts")
+    """Get recent re-arrest alerts (reads from unified rearrest_notifications)."""
+    rearrest_col = get_collection("rearrest_notifications")
     limit = min(50, int(request.args.get('limit', 20)))
 
-    cursor = rearrest_col.find().sort("detected_at", -1).limit(limit)
+    cursor = rearrest_col.find().sort("created_at", -1).limit(limit)
     results = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
+        for dt_field in ("created_at", "updated_at", "reviewed_at", "contacted_at", "prior_bond_date"):
+            val = doc.get(dt_field)
+            if hasattr(val, "isoformat"):
+                doc[dt_field] = val.isoformat()
         results.append(doc)
 
     return jsonify({"alerts": results, "total": len(results)})
