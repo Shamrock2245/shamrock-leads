@@ -3,6 +3,16 @@
 # Runs: Scraper Engine + Dashboard
 # Node-RED: only on VPS (use --profile ops)
 # ============================================
+#
+# Network: all services share `shamrock-net` so that Docker DNS
+# resolves container hostnames (e.g. `shamrock-dashboard`, `traccar`)
+# across services.  Traccar forwards webhooks to:
+#   http://shamrock-dashboard:5050/api/traccar/webhook
+# This explicit network guarantees that hostname is reachable.
+
+networks:
+  shamrock-net:
+    driver: bridge
 
 services:
   # ── Core: Scraper + Scoring Engine ──
@@ -18,6 +28,8 @@ services:
     volumes:
       - ./creds:/app/creds:ro           # GCP service account key
       - ./logs:/app/logs                # Persistent logs
+    networks:
+      - shamrock-net
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -58,6 +70,8 @@ services:
     volumes:
       - dashboard-uploads:/app/dashboard/uploads  # Persistent KYC uploads
       - ./config:/app/config:ro                   # Firebase admin SDK + secrets
+    networks:
+      - shamrock-net
     logging:
       driver: "json-file"
       options:
@@ -84,6 +98,8 @@ services:
       - "5013:5013"                            # H02 (personal/ankle trackers)
       - "5023:5023"                            # GT06 (OBD2 vehicle)
       - "5027:5027"                            # Teltonika (professional fleet)
+    networks:
+      - shamrock-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/api/server"]
       interval: 30s
@@ -112,6 +128,8 @@ services:
       - node-red-data:/data             # Persistent flows + config
     ports:
       - "1880:1880"                     # Node-RED dashboard
+    networks:
+      - shamrock-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1880/"]
       interval: 30s

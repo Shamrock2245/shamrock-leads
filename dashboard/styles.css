@@ -3078,6 +3078,38 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   transform: translateX(18px);
 }
 
+/* ── Run Now button ── */
+.svc-run-btn {
+  margin-left: auto;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--accent, #10b981);
+  background: transparent;
+  border: 1px solid rgba(16,185,129,.35);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  flex-shrink: 0;
+}
+.svc-run-btn:hover:not(:disabled) {
+  background: rgba(16,185,129,.12);
+  border-color: var(--accent, #10b981);
+}
+.svc-run-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+/* Triggered flash animation */
+@keyframes svc-trigger-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(16,185,129,.6); }
+  60%  { box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+  100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+}
+.svc-card.svc-triggered {
+  animation: svc-trigger-flash .6s ease-out 2;
+}
 /* ── Summary KPI bar ── */
 .svc-summary-bar {
   display: flex;

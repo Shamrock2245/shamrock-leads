@@ -211,6 +211,9 @@ def create_app():
         Slack alerts for critical/high events.
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("docket_monitor", _trigger)
         interval_seconds = 4 * 60 * 60  # 4 hours
         # Wait 120s after boot to let DB connections establish
         await asyncio.sleep(120)
@@ -220,7 +223,11 @@ def create_app():
                 from dashboard.extensions import get_db as _gdb
                 if not await should_run(_gdb(), "docket_monitor"):
                     logger.debug("[DocketMonitor] Disabled via config — skipping cycle")
-                    await asyncio.sleep(interval_seconds)
+                    _trigger.clear()
+                    try:
+                        await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                    except asyncio.TimeoutError:
+                        pass
                     continue
             except Exception:
                 pass
@@ -238,7 +245,12 @@ def create_app():
                 )
             except Exception as e:
                 logger.error("[DocketMonitor] ❌ Scheduled scan failed: %s", e)
-            await asyncio.sleep(interval_seconds)
+            _trigger.clear()
+            try:
+                await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                logger.info("[DocketMonitor] ▶ Manual trigger received — running immediately")
+            except asyncio.TimeoutError:
+                pass
 
     @app.before_serving
     async def _start_docket_monitor_cron():
@@ -255,6 +267,9 @@ def create_app():
         The 180-day deep pull is available manually via the dashboard button.
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("court_intel", _trigger)
         interval_seconds = 6 * 60 * 60  # 6 hours
         # Wait 60s after boot before first run to let everything initialize
         await asyncio.sleep(60)
@@ -264,7 +279,11 @@ def create_app():
                 from dashboard.extensions import get_db as _gdb
                 if not await should_run(_gdb(), "court_intel"):
                     logger.debug("[CourtIntel] Disabled via config — skipping cycle")
-                    await asyncio.sleep(interval_seconds)
+                    _trigger.clear()
+                    try:
+                        await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                    except asyncio.TimeoutError:
+                        pass
                     continue
             except Exception:
                 pass
@@ -282,7 +301,12 @@ def create_app():
                 )
             except Exception as e:
                 logger.error("[CourtIntel] ❌ Scheduled ingestion failed: %s", e)
-            await asyncio.sleep(interval_seconds)
+            _trigger.clear()
+            try:
+                await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                logger.info("[CourtIntel] ▶ Manual trigger received — running immediately")
+            except asyncio.TimeoutError:
+                pass
 
     @app.before_serving
     async def _start_court_intel_cron():
@@ -299,6 +323,9 @@ def create_app():
         Batch processes up to 200 records per cycle.
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("nlp_enrichment", _trigger)
         interval_seconds = 2 * 60 * 60  # 2 hours
         # Wait 90s after boot to let DB and other services initialize
         await asyncio.sleep(90)
@@ -308,7 +335,11 @@ def create_app():
                 from dashboard.extensions import get_db as _gdb
                 if not await should_run(_gdb(), "nlp_enrichment"):
                     logger.debug("[NLP-Enrich] Disabled via config — skipping cycle")
-                    await asyncio.sleep(interval_seconds)
+                    _trigger.clear()
+                    try:
+                        await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                    except asyncio.TimeoutError:
+                        pass
                     continue
             except Exception:
                 pass
@@ -366,7 +397,12 @@ def create_app():
                     )
             except Exception as e:
                 logger.error("[NLP-Enrich] ❌ Enrichment cycle failed: %s", e)
-            await asyncio.sleep(interval_seconds)
+            _trigger.clear()
+            try:
+                await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                logger.info("[NLP-Enrich] ▶ Manual trigger received — running immediately")
+            except asyncio.TimeoutError:
+                pass
 
     @app.before_serving
     async def _start_nlp_enrichment_cron():
@@ -749,6 +785,9 @@ def create_app():
     async def _start_bb_health_monitor():
         import asyncio
         from dashboard.api.bb_health_monitor import run_health_check_all
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("bb_health", _trigger)
         async def _health_loop():
             await asyncio.sleep(30)  # Initial delay — let servers start first
             while True:
@@ -757,7 +796,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "bb_health"):
                         logger.debug("[BB-Health] Disabled via config — skipping cycle")
-                        await asyncio.sleep(600)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=600.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -765,7 +808,12 @@ def create_app():
                     await run_health_check_all()
                 except Exception as e:
                     logger.warning("BB health check error: %s", e)
-                await asyncio.sleep(600)  # Every 10 minutes
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=600.0)
+                    logger.info("[BB-Health] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_health_loop())
 
     # ── Feature I: Court Reminder Auto-Scan (hourly cron) ───────────────────
@@ -774,6 +822,9 @@ def create_app():
         """Hourly background loop: scan active bonds for upcoming court dates,
         auto-schedule 4-touch reminders, and send any that are due."""
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("court_reminders", _trigger)
         async def _reminder_loop():
             await asyncio.sleep(60)  # Initial delay — let DB connect first
             _cycle = 0
@@ -784,7 +835,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "court_reminders"):
                         logger.debug("[CourtReminder] Disabled via config — skipping cycle")
-                        await asyncio.sleep(3600)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=3600.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -803,7 +858,12 @@ def create_app():
                         logger.info("☘️  Court reminder cron heartbeat: cycle=%s still running", _cycle)
                 except Exception as e:
                     logger.warning("Court reminder cron error [cycle %s]: %s", _cycle, e)
-                await asyncio.sleep(3600)  # Every hour
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=3600.0)
+                    logger.info("[CourtReminder] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_reminder_loop())
 
     # ── Phase 8: Payment Delinquency Scanner (every 4 hours) ─────────────────
@@ -811,6 +871,9 @@ def create_app():
     async def _start_delinquency_scanner():
         """Check for overdue payment plans and create notifications."""
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("delinquency_scanner", _trigger)
         async def _delinquency_loop():
             await asyncio.sleep(120)  # Initial delay
             while True:
@@ -819,7 +882,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "delinquency_scanner"):
                         logger.debug("[Delinquency] Disabled via config — skipping cycle")
-                        await asyncio.sleep(14400)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=14400.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -859,7 +926,12 @@ def create_app():
                         logger.info("☘️  Delinquency scanner: flagged %s plans", flagged)
                 except Exception as e:
                     logger.warning("Delinquency scanner error: %s", e)
-                await asyncio.sleep(14400)  # Every 4 hours
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=14400.0)
+                    logger.info("[Delinquency] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_delinquency_loop())
 
     # ── Re-Arrest Detection Cron (every 2 hours) ────────────────────────────
@@ -867,6 +939,9 @@ def create_app():
     async def _start_rearrest_cron():
         """Scan recent arrests against active bonds to detect re-arrests."""
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("rearrest_detection", _trigger)
         async def _rearrest_loop():
             await asyncio.sleep(180)  # Initial delay
             while True:
@@ -875,7 +950,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "rearrest_detection"):
                         logger.debug("[ReArrest] Disabled via config — skipping cycle")
-                        await asyncio.sleep(7200)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=7200.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -891,7 +970,12 @@ def create_app():
                         logger.debug("Re-arrest scan: clean (%s arrests checked)", result.get("scanned_arrests", 0))
                 except Exception as e:
                     logger.warning("Re-arrest scan error: %s", e)
-                await asyncio.sleep(7200)  # Every 2 hours
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=7200.0)
+                    logger.info("[ReArrest] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_rearrest_loop())
 
     # ── Data Retention Cron (weekly purge) ──────────────────────────────────
@@ -899,6 +983,9 @@ def create_app():
     async def _start_retention_cron():
         """Weekly auto-purge of old low-value records to stay under MongoDB M0 512MB."""
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("data_retention", _trigger)
         async def _retention_loop():
             await asyncio.sleep(300)  # Initial delay
             while True:
@@ -907,7 +994,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "data_retention"):
                         logger.debug("[DataRetention] Disabled via config — skipping cycle")
-                        await asyncio.sleep(604800)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=604800.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -919,7 +1010,12 @@ def create_app():
                         logger.info("☘️  Data retention: purged %s records", total)
                 except Exception as e:
                     logger.warning("Data retention error: %s", e)
-                await asyncio.sleep(604800)  # Every 7 days
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=604800.0)
+                    logger.info("[DataRetention] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_retention_loop())
 
     # ── Feature K: Court Email Intelligence Pipeline (every 15 minutes) ──────
@@ -951,6 +1047,9 @@ def create_app():
                 logger.error("[CourtEmailCron] Sync process error: %s", e)
                 return {"error": str(e)}
 
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("court_email", _trigger)
         async def _email_loop():
             await asyncio.sleep(90)  # Initial delay — let Gmail OAuth warm up
             _cycle = 0
@@ -961,7 +1060,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "court_email"):
                         logger.debug("[DischargeMonitor] Disabled via config — skipping cycle")
-                        await asyncio.sleep(900)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=900.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -989,7 +1092,12 @@ def create_app():
                         )
                 except Exception as e:
                     logger.warning("Court email cron error [cycle %s]: %s", _cycle, e)
-                await asyncio.sleep(900)  # Every 15 minutes
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=900.0)
+                    logger.info("[CourtEmail] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
 
         asyncio.ensure_future(_email_loop())
 
@@ -1020,6 +1128,9 @@ def create_app():
                 logger.warning("[BlogCron] Error: %s", e)
                 return {"error": str(e)}
 
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("blog_publisher", _trigger)
         async def _blog_loop():
             await asyncio.sleep(300)  # Initial delay — 5 min after startup
             while True:
@@ -1028,7 +1139,11 @@ def create_app():
                     from dashboard.extensions import get_db as _gdb
                     if not await should_run(_gdb(), "blog_publisher"):
                         logger.debug("[BlogPublisher] Disabled via config — skipping cycle")
-                        await asyncio.sleep(21600)
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=21600.0)
+                        except asyncio.TimeoutError:
+                            pass
                         continue
                 except Exception:
                     pass
@@ -1045,7 +1160,12 @@ def create_app():
                         logger.debug("Blog cron: %s pending, 0 due", result.get("pending", 0))
                 except Exception as e:
                     logger.warning("Blog cron error: %s", e)
-                await asyncio.sleep(21600)  # Every 6 hours
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=21600.0)
+                    logger.info("[BlogPublisher] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
 
         asyncio.ensure_future(_blog_loop())
 
@@ -1054,6 +1174,9 @@ def create_app():
     async def _start_wix_sync_cron():
         """Sync MongoDB data → Wix CMS (IntakeQueue, Cases) + CRM contacts."""
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("wix_sync", _trigger)
         async def _wix_sync_loop():
             await asyncio.sleep(600)  # Initial delay — 10 min after startup
             while True:
@@ -1073,7 +1196,12 @@ def create_app():
                         logger.debug("Wix sync cron: disabled (no API key)")
                 except Exception as e:
                     logger.warning("Wix sync cron error: %s", e)
-                await asyncio.sleep(14400)  # Every 4 hours
+                _trigger.clear()
+                try:
+                    await asyncio.wait_for(_trigger.wait(), timeout=14400.0)
+                    logger.info("[WixSync] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_wix_sync_loop())
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1088,6 +1216,9 @@ def create_app():
         Gated by automation_config.speed_to_contact.enabled (default: OFF).
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("speed_to_contact", _trigger)
         async def _stc_loop():
             await asyncio.sleep(90)  # Initial delay
             _cycle = 0
@@ -1101,7 +1232,11 @@ def create_app():
                     if not stc.get("enabled", False):
                         if _cycle % 20 == 1:  # Log once per ~10h
                             logger.debug("Speed-to-Contact cron: DISABLED (toggle in dashboard)")
-                        await asyncio.sleep(stc.get("interval_seconds", 1800))
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=float(stc.get("interval_seconds", 1800)))
+                        except asyncio.TimeoutError:
+                            pass
                         continue
 
                     from dashboard.services.outreach_sequencer import OutreachSequencer
@@ -1130,7 +1265,13 @@ def create_app():
 
                 except Exception as e:
                     logger.warning("Speed-to-Contact cron error [cycle %s]: %s", _cycle, e)
-                await asyncio.sleep(stc.get("interval_seconds", 1800) if 'stc' in dir() else 1800)
+                _trigger.clear()
+                try:
+                    _interval = stc.get("interval_seconds", 1800) if 'stc' in dir() else 1800
+                    await asyncio.wait_for(_trigger.wait(), timeout=float(_interval))
+                    logger.info("[SpeedToContact] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_stc_loop())
 
     # ── Tier 1B: Unsigned Paperwork Chase Cron (every hour) ──────────────────
@@ -1140,6 +1281,9 @@ def create_app():
         Gated by automation_config.paperwork_chase.enabled (default: OFF).
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("paperwork_chase", _trigger)
         async def _chase_loop():
             await asyncio.sleep(150)  # Initial delay
             _cycle = 0
@@ -1153,7 +1297,11 @@ def create_app():
                     if not chase.get("enabled", False):
                         if _cycle % 12 == 1:
                             logger.debug("Paperwork Chase cron: DISABLED")
-                        await asyncio.sleep(chase.get("interval_seconds", 3600))
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=float(chase.get("interval_seconds", 3600)))
+                        except asyncio.TimeoutError:
+                            pass
                         continue
 
                     from dashboard.services.paperwork_chase_service import PaperworkChaseService
@@ -1176,7 +1324,13 @@ def create_app():
 
                 except Exception as e:
                     logger.warning("Paperwork Chase cron error [cycle %s]: %s", _cycle, e)
-                await asyncio.sleep(chase.get("interval_seconds", 3600) if 'chase' in dir() else 3600)
+                _trigger.clear()
+                try:
+                    _interval = chase.get("interval_seconds", 3600) if 'chase' in dir() else 3600
+                    await asyncio.wait_for(_trigger.wait(), timeout=float(_interval))
+                    logger.info("[PaperworkChase] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_chase_loop())
 
     # ── Tier 1C: Abandoned Intake Recovery Cron (every hour) ─────────────────
@@ -1186,6 +1340,9 @@ def create_app():
         Gated by automation_config.intake_recovery.enabled (default: OFF).
         """
         import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("intake_recovery", _trigger)
         async def _recovery_loop():
             await asyncio.sleep(200)  # Initial delay
             _cycle = 0
@@ -1199,7 +1356,11 @@ def create_app():
                     if not recovery.get("enabled", False):
                         if _cycle % 12 == 1:
                             logger.debug("Intake Recovery cron: DISABLED")
-                        await asyncio.sleep(recovery.get("interval_seconds", 3600))
+                        _trigger.clear()
+                        try:
+                            await asyncio.wait_for(_trigger.wait(), timeout=float(recovery.get("interval_seconds", 3600)))
+                        except asyncio.TimeoutError:
+                            pass
                         continue
 
                     from dashboard.services.intake_recovery_service import IntakeRecoveryService
@@ -1222,7 +1383,13 @@ def create_app():
 
                 except Exception as e:
                     logger.warning("Intake Recovery cron error [cycle %s]: %s", _cycle, e)
-                await asyncio.sleep(recovery.get("interval_seconds", 3600) if 'recovery' in dir() else 3600)
+                _trigger.clear()
+                try:
+                    _interval = recovery.get("interval_seconds", 3600) if 'recovery' in dir() else 3600
+                    await asyncio.wait_for(_trigger.wait(), timeout=float(_interval))
+                    logger.info("[IntakeRecovery] ▶ Manual trigger received — running immediately")
+                except asyncio.TimeoutError:
+                    pass
         asyncio.ensure_future(_recovery_loop())
 
     # ── Firebase BB URL Sync (polls Firestore for live BB tunnel URL) ────────

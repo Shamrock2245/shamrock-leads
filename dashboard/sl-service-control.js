@@ -168,6 +168,12 @@ const SLServiceControl = (() => {
           <span class="svc-led ${ledCls}"></span>
           <span class="svc-status-label">${statusLabel}</span>
           <span class="svc-meta">Last run: ${lastRun}</span>
+          <button
+            id="svc-run-${svc.key}"
+            class="svc-run-btn"
+            title="Run ${svc.name || svc.key} now"
+            onclick="SLServiceControl.runNow('${svc.key}')"
+          >▶</button>
         </div>
       </div>
     `;
@@ -203,6 +209,43 @@ const SLServiceControl = (() => {
     }, AUTO_REFRESH_MS);
   }
 
+  // ── Run Now (manual trigger) ──
+  async function runNow(key) {
+    const card = document.getElementById(`svc-${key}`);
+    const btn = document.getElementById(`svc-run-${key}`);
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⏳';
+    }
+    try {
+      const res = await fetch(`/api/automation/trigger/${key}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof SL !== 'undefined' && SL.toast) {
+          SL.toast(data.message || `▶ ${key} triggered`, 'success');
+        }
+        // Brief visual feedback on the card
+        if (card) {
+          card.classList.add('svc-triggered');
+          setTimeout(() => card.classList.remove('svc-triggered'), 2000);
+        }
+      } else {
+        if (typeof SL !== 'undefined' && SL.toast) {
+          SL.toast(`Trigger failed: ${data.error || 'unknown'}`, 'error');
+        }
+      }
+    } catch (err) {
+      console.error('[SvcControl] runNow error:', err);
+      if (typeof SL !== 'undefined' && SL.toast) {
+        SL.toast(`Trigger error: ${err.message}`, 'error');
+      }
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '▶';
+      }
+    }
+  }
   // ── Expose public API ──
-  return { init, refresh, toggle, toggleCategory };
+  return { init, refresh, toggle, toggleCategory, runNow };
 })();
