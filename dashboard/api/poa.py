@@ -198,7 +198,8 @@ async def api_poa_list():
         match,
         {"_id": 0, "poa_number": 1, "poa_full": 1, "poa_prefix": 1,
          "surety_id": 1, "max_bond_value": 1, "status": 1,
-         "bond_case_id": 1, "used_at": 1, "expiration": 1},
+         "bond_case_id": 1, "defendant_name": 1, "charge": 1,
+         "appearance_bond_number": 1, "used_at": 1, "expiration": 1},
     ).sort([("surety_id", 1), ("poa_prefix", 1), ("poa_number", 1)]).skip(skip).limit(limit)
 
     powers = []
@@ -384,26 +385,58 @@ async def api_poa_restore():
 async def api_poa_bulk_assign():
     """Assign multiple POAs to a single defendant/case in one operation.
 
-    Body: {
-        poa_numbers: ["12345", "12346", ...],
+    Supports two formats:
+
+    NEW format (charge-level mapping):
+    {
+        assignments: [
+            { poa_number: "12345", charge: "BATTERY", appearance_bond_number: "26-CF-001234" },
+            { poa_number: "12346", charge: "DUI", appearance_bond_number: "26-CF-001235" }
+        ],
         surety_id: "osi" | "palmetto",
         bond_case_id: "booking_number or case reference",
         defendant_name: "optional — for audit trail"
+    }
+
+    LEGACY format (flat list, no charge data):
+    {
+        poa_numbers: ["12345", "12346"],
+        surety_id: "osi" | "palmetto",
+        bond_case_id: "booking_number or case reference",
+        defendant_name: "optional"
     }
     """
     poa_inventory = get_collection("poa_inventory")
     body = (await request.get_json(force=True)) or {}
 
-    poa_numbers = body.get("poa_numbers", [])
     surety_id = str(body.get("surety_id", "")).lower().strip()
     bond_case_id = str(body.get("bond_case_id", "")).strip()
     defendant_name = body.get("defendant_name", "")
 
-    if not poa_numbers or not isinstance(poa_numbers, list):
-        return jsonify({"error": "poa_numbers must be a non-empty array"}), 400
+    # ── Normalize both formats into per-POA assignment dicts ──
+    assignments_raw = body.get("assignments", [])
+    poa_numbers_legacy = body.get("poa_numbers", [])
+
+    if assignments_raw and isinstance(assignments_raw, list):
+        # New format: each entry has poa_number + optional charge/bond info
+        work_items = []
+        for a in assignments_raw:
+            if isinstance(a, dict) and a.get("poa_number"):
+                work_items.append({
+                    "poa_number": str(a["poa_number"]).strip(),
+                    "charge": str(a.get("charge", "")).strip() or None,
+                    "appearance_bond_number": str(a.get("appearance_bond_number", "")).strip() or None,
+                })
+    elif poa_numbers_legacy and isinstance(poa_numbers_legacy, list):
+        # Legacy format: flat list, no charge data
+        work_items = [{"poa_number": str(n).strip(), "charge": None, "appearance_bond_number": None}
+                      for n in poa_numbers_legacy]
+    else:
+        return jsonify({"error": "Either 'assignments' or 'poa_numbers' must be a non-empty array"}), 400
+
     if not bond_case_id:
         return jsonify({"error": "bond_case_id (booking number) is required"}), 400
-    if len(poa_numbers) > 50:
+    if len(work_items) > 50:
         return jsonify({"error": "Cannot bulk-assign more than 50 POAs at once"}), 400
 
     now = datetime.now(timezone.utc).isoformat()
@@ -411,8 +444,8 @@ async def api_poa_bulk_assign():
     skipped = []
     errors = []
 
-    for poa_num in poa_numbers:
-        poa_num = str(poa_num).strip()
+    for item in work_items:
+        poa_num = item["poa_number"]
         query = {"poa_number": poa_num}
         if surety_id in ("osi", "palmetto"):
             query["surety_id"] = surety_id
@@ -429,20 +462,29 @@ async def api_poa_bulk_assign():
             })
             continue
 
+        update_fields = {
+            "status": "assigned",
+            "bond_case_id": bond_case_id,
+            "defendant_name": defendant_name or None,
+            "used_at": now,
+            "bulk_assigned": True,
+        }
+        # Attach charge-level data when provided
+        if item["charge"]:
+            update_fields["charge"] = item["charge"]
+        if item["appearance_bond_number"]:
+            update_fields["appearance_bond_number"] = item["appearance_bond_number"]
+
         await poa_inventory.update_one(
             {"_id": doc["_id"]},
-            {"$set": {
-                "status": "assigned",
-                "bond_case_id": bond_case_id,
-                "defendant_name": defendant_name or None,
-                "used_at": now,
-                "bulk_assigned": True,
-            }},
+            {"$set": update_fields},
         )
         assigned.append({
             "poa_number": poa_num,
             "poa_full": doc.get("poa_full", f"{doc.get('poa_prefix', '')} {poa_num}"),
             "poa_prefix": doc.get("poa_prefix", ""),
+            "charge": item["charge"],
+            "appearance_bond_number": item["appearance_bond_number"],
         })
 
     return jsonify({

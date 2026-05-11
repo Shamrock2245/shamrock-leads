@@ -12,6 +12,7 @@ const SLInventory = (() => {
   const PAGE_SIZE = 50;
   const _selected = new Set(); // track selected POA keys: "poaNum|suretyId"
   let _searchDebounce = null;
+  let _defendantCharges = []; // parsed from selected defendant's record
 
   // ── Open / Close Modal ──
   function open() {
@@ -211,7 +212,9 @@ const SLInventory = (() => {
           <td class="inv-cell-bond">${maxBondFmt}</td>
           <td class="inv-cell-exp">${expHtml}</td>
           <td><span class="inv-status-pill ${statusCls}">${p.status}</span></td>
-          <td class="inv-cell-case">${p.bond_case_id || '—'}</td>
+          <td class="inv-cell-case">${p.bond_case_id
+            ? `<div style="font-weight:600">${p.bond_case_id}${p.defendant_name ? ` <span style="color:var(--muted);font-weight:400">· ${p.defendant_name}</span>` : ''}</div>${p.charge ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px">⚖️ ${p.charge}</div>` : ''}${p.appearance_bond_number ? `<div style="font-size:11px;color:#6ee7b7;margin-top:1px">📄 Bond #${p.appearance_bond_number}</div>` : ''}`
+            : '—'}</td>
           <td class="inv-cell-actions">${actions.join('')}</td>
         </tr>`;
       }).join('');
@@ -366,6 +369,10 @@ const SLInventory = (() => {
     const d = document.getElementById('baDefendantName'); if (d) d.value = '';
     const r = document.getElementById('baSearchResults'); if (r) { r.innerHTML = ''; r.style.display = 'none'; }
     const st = document.getElementById('baBulkStatus'); if (st) st.innerHTML = '';
+    // Reset charge mapping
+    _defendantCharges = [];
+    const cms = document.getElementById('baChargeMappingSection'); if (cms) cms.style.display = 'none';
+    const cmb = document.getElementById('baChargeMappingBody'); if (cmb) cmb.innerHTML = '';
   }
   function closeBulkAssignModal() {
     const modal = document.getElementById('bulkAssignModal');
@@ -407,20 +414,86 @@ const SLInventory = (() => {
           const charges = rec.charges || rec.Charges || '';
           const bond = rec.bond_amount || rec.Bond_Amount || 0;
           const bondFmt = bond >= 1000 ? `$${(bond/1000).toFixed(0)}K` : `$${bond}`;
-          return `<div class="ba-result-row" onclick="SLInventory.selectDefendantForAssign('${booking.replace(/'/g,'\\\'')}','${name.replace(/'/g,'\\\'')}')">
+          // Escape for inline onclick — store charges in data attribute
+          const escapedCharges = charges.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+          return `<div class="ba-result-row" onclick="SLInventory.selectDefendantForAssign('${booking.replace(/'/g,'\\\'')}','${name.replace(/'/g,'\\\'')}','${escapedCharges}')">
             <div class="ba-result-name">${name}</div>
-            <div class="ba-result-meta">${county ? county + ' · ' : ''}${booking} · ${bondFmt}${charges ? ' · ' + charges.substring(0,40) : ''}</div>
+            <div class="ba-result-meta">${county ? county + ' · ' : ''}${booking} · ${bondFmt}${charges ? ' · ' + charges.substring(0,60) : ''}</div>
           </div>`;
         }).join('');
         el.style.display = 'block';
       } catch (_) {}
     }, 300);
   }
-  function selectDefendantForAssign(booking, name) {
+  function selectDefendantForAssign(booking, name, chargesStr) {
     const b = document.getElementById('baBookingNumber'); if (b) b.value = booking;
     const d = document.getElementById('baDefendantName'); if (d) d.value = name;
     const r = document.getElementById('baSearchResults'); if (r) r.style.display = 'none';
     const s = document.getElementById('baDefendantSearch'); if (s) s.value = `${name} — ${booking}`;
+    // Parse charges (semicolon-delimited) and show charge mapping
+    _defendantCharges = (chargesStr || '')
+      .split(/[;|]/)
+      .map(c => c.trim())
+      .filter(c => c.length > 0);
+    _renderChargeMapping();
+  }
+  function _renderChargeMapping() {
+    const section = document.getElementById('baChargeMappingSection');
+    const body = document.getElementById('baChargeMappingBody');
+    if (!section || !body) return;
+    const poaKeys = [..._selected];
+    if (poaKeys.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+    // Build charge options
+    const chargeOpts = _defendantCharges.length > 0
+      ? _defendantCharges.map((c, i) => `<option value="${c.replace(/"/g,'&quot;')}">${c}</option>`).join('')
+      : '';
+    const hasCharges = _defendantCharges.length > 0;
+    body.innerHTML = poaKeys.map((key, idx) => {
+      const [num] = key.split('|');
+      const pw = _allPowers.find(p => p.poa_number === num);
+      const label = pw ? (pw.poa_full || `${pw.poa_prefix} ${num}`) : num;
+      // Auto-map 1:1 if counts match
+      const autoCharge = (_defendantCharges.length === poaKeys.length) ? _defendantCharges[idx] : '';
+      return `
+        <div class="ba-map-row" data-poa-key="${key}">
+          <div class="ba-map-poa">
+            <span class="ba-chip" style="margin:0">${label}</span>
+          </div>
+          <div class="ba-map-fields">
+            <div class="ba-field" style="flex:2">
+              <label class="ba-label">Charge</label>
+              ${hasCharges
+                ? `<select class="ba-input ba-charge-select" data-idx="${idx}">
+                    <option value="">— Select charge —</option>
+                    ${chargeOpts}
+                    <option value="__custom">✏️ Enter manually…</option>
+                  </select>
+                  <input type="text" class="ba-input ba-charge-custom" data-idx="${idx}" placeholder="Type charge description…" style="display:none;margin-top:6px">`
+                : `<input type="text" class="ba-input ba-charge-custom-only" data-idx="${idx}" placeholder="e.g. BATTERY - DOMESTIC VIOLENCE">`
+              }
+            </div>
+            <div class="ba-field" style="flex:1">
+              <label class="ba-label">Appearance Bond #</label>
+              <input type="text" class="ba-input ba-bond-input" data-idx="${idx}" placeholder="e.g. 26-CF-001234">
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+    // Auto-select if 1:1 match
+    if (_defendantCharges.length === poaKeys.length && hasCharges) {
+      body.querySelectorAll('.ba-charge-select').forEach((sel, i) => {
+        sel.value = _defendantCharges[i] || '';
+      });
+    }
+    // Wire up "Enter manually" toggle for dropdowns
+    body.querySelectorAll('.ba-charge-select').forEach(sel => {
+      sel.addEventListener('change', (e) => {
+        const idx = e.target.dataset.idx;
+        const customInput = body.querySelector(`.ba-charge-custom[data-idx="${idx}"]`);
+        if (customInput) customInput.style.display = e.target.value === '__custom' ? 'block' : 'none';
+      });
+    });
   }
 
   // ── Submit Bulk Assign ──
@@ -430,14 +503,35 @@ const SLInventory = (() => {
     const statusEl = document.getElementById('baBulkStatus');
     if (!bookingNum) { if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;font-size:13px">❌ Booking number is required</span>'; return; }
     if (_selected.size === 0) { if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;font-size:13px">❌ No POAs selected</span>'; return; }
-    const poaNums = [..._selected].map(k => k.split('|')[0]);
     const suretyIds = [...new Set([..._selected].map(k => k.split('|')[1]))];
+    // Build per-POA assignments with charge + appearance bond data
+    const poaKeys = [..._selected];
+    const mappingBody = document.getElementById('baChargeMappingBody');
+    const assignments = poaKeys.map((key, idx) => {
+      const [poaNum] = key.split('|');
+      let charge = '';
+      let bondNum = '';
+      if (mappingBody) {
+        // Check dropdown first, then custom input
+        const sel = mappingBody.querySelector(`.ba-charge-select[data-idx="${idx}"]`);
+        if (sel && sel.value && sel.value !== '__custom') {
+          charge = sel.value;
+        } else {
+          const custom = mappingBody.querySelector(`.ba-charge-custom[data-idx="${idx}"]`);
+          const customOnly = mappingBody.querySelector(`.ba-charge-custom-only[data-idx="${idx}"]`);
+          charge = (custom?.value || customOnly?.value || '').trim();
+        }
+        const bondInput = mappingBody.querySelector(`.ba-bond-input[data-idx="${idx}"]`);
+        bondNum = (bondInput?.value || '').trim();
+      }
+      return { poa_number: poaNum, charge, appearance_bond_number: bondNum };
+    });
     if (statusEl) statusEl.innerHTML = '<div class="inv-loading inv-loading-sm"><div class="btn-spinner"></div><span>Assigning…</span></div>';
     try {
       const r = await fetch(`${API}/api/poa/bulk-assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ poa_numbers: poaNums, surety_id: suretyIds[0] || '', bond_case_id: bookingNum, defendant_name: defName }),
+        body: JSON.stringify({ assignments, surety_id: suretyIds[0] || '', bond_case_id: bookingNum, defendant_name: defName }),
       });
       const d = await r.json();
       if (d.error) { if (statusEl) statusEl.innerHTML = `<span style="color:#f87171;font-size:13px">❌ ${d.error}</span>`; return; }
@@ -660,7 +754,7 @@ const SLInventory = (() => {
     openAssignDialog, voidPower, reassignPower, restorePower,
     handleUpload, handleDrop, confirmUploadedPOAs,
     checkLowStockBanner: _checkLowStockBanner,
-    // Bulk selection
+    // Bulk selection + charge mapping
     toggleSelect, toggleRowSelect, toggleSelectAll, clearSelection,
     openBulkAssignModal, closeBulkAssignModal, removeFromSelection,
     searchDefendantsForAssign, selectDefendantForAssign,

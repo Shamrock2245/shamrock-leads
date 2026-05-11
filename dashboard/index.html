@@ -2699,7 +2699,7 @@
 
 <!-- ═══ BULK ASSIGN MODAL ═══ -->
 <div class="inv-overlay" id="bulkAssignModal" style="display:none" onclick="if(event.target===this)SLInventory.closeBulkAssignModal()">
-  <div class="inv-modal" style="max-width:640px">
+  <div class="inv-modal" style="max-width:720px">
     <div class="inv-header">
       <div class="inv-header-left">
         <span class="inv-header-icon">📌</span>
@@ -2710,13 +2710,13 @@
       </div>
       <button class="inv-close" onclick="SLInventory.closeBulkAssignModal()">✕</button>
     </div>
-    <div style="padding:20px 24px">
+    <div style="padding:20px 24px;max-height:70vh;overflow-y:auto">
       <!-- Selected POAs Preview -->
       <div class="ba-selected-strip" id="baSelectedStrip"></div>
 
-      <!-- Defendant Search -->
+      <!-- STEP 1: Defendant Search -->
       <div class="ba-section">
-        <label class="ba-label">DEFENDANT / BOOKING</label>
+        <label class="ba-label">STEP 1 — SELECT DEFENDANT</label>
         <div class="ba-search-wrap">
           <input type="text" id="baDefendantSearch" class="ba-search-input"
             placeholder="🔍 Search by name, booking #, or case #…"
@@ -2736,6 +2736,15 @@
         <div class="ba-field">
           <label class="ba-label">Defendant Name</label>
           <input type="text" id="baDefendantName" class="ba-input" placeholder="e.g. John Smith">
+        </div>
+      </div>
+
+      <!-- STEP 2: Charge Mapping (appears after defendant selection) -->
+      <div id="baChargeMappingSection" style="display:none">
+        <div class="ba-divider"><span>STEP 2 — MAP CHARGES & APPEARANCE BONDS</span></div>
+        <div class="ba-section">
+          <p style="font-size:12px;color:var(--muted,#64748b);margin:0 0 12px;line-height:1.5">Each POA covers one charge. Select which charge each power covers and enter the appearance bond number.</p>
+          <div id="baChargeMappingBody"></div>
         </div>
       </div>
 
