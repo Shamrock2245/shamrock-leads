@@ -42,8 +42,9 @@ logger = logging.getLogger(__name__)
 
 bb_health_bp = Blueprint("bb_health_monitor", __name__)
 
-_SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_URL", "")
-_SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "#shamrock-alerts")
+# BB health alerts → #signing-errors (infrastructure/errors channel)
+_SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_ERRORS") or os.getenv("SLACK_WEBHOOK_URL", "")
+_SLACK_CHANNEL = "#signing-errors"
 
 # ── Sustained-offline tracking ────────────────────────────────────────────────
 # Prevents alert storms: only fires the "offline >30 min" Slack alert once per

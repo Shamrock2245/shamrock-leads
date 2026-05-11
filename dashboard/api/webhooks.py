@@ -337,8 +337,9 @@ async def signnow_webhook():
         "signed_at": now_iso,
     })
 
-    # ── Step 10: Slack alert ──────────────────────────────────────────────────
-    slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+    # ── Step 10: Slack alert ────────────────────────────────────────────────────────────────────────
+    # SignNow complete → #bonds-live (real-time signing updates channel)
+    slack_webhook = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL", "")
     if slack_webhook:
         try:
             drive_link = f" — <{drive_url}|View in Drive>" if drive_url else ""
@@ -375,7 +376,8 @@ async def signnow_webhook():
 async def _send_escalation_slack(message: str) -> None:
     """Send an escalation alert to Slack (non-fatal — logs on failure)."""
     import httpx
-    slack_webhook = os.getenv("SLACK_WEBHOOK_URL", "")
+    # Escalation alerts (unknown packets, forged webhooks) → #signing-errors
+    slack_webhook = os.getenv("SLACK_WEBHOOK_ERRORS") or os.getenv("SLACK_WEBHOOK_URL", "")
     if not slack_webhook:
         return
     try:
@@ -535,7 +537,8 @@ async def payment_webhook():
             logger.warning("[payment_webhook] BB receipt failed: %s", exc)
 
     # -- 6. Slack alert -------------------------------------------------------
-    slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", "")
+    # Payment received → #intake (bond operations / intake channel)
+    slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
     if slack_webhook_url and status == "approved":
         try:
             async with httpx.AsyncClient(timeout=10) as client:

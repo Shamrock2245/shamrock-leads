@@ -884,7 +884,8 @@ async def intake_promote(intake_id: str):
         pass
 
     # ── 13. Slack alert ──────────────────────────────────────────────────────
-    slack_url = os.getenv("SLACK_WEBHOOK_URL", "")
+    # Bond case created from intake -> #new-cases
+    slack_url = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL", "")
     if slack_url:
         try:
             import httpx
