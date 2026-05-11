@@ -233,7 +233,7 @@ def init_app(app):
     # ── Public URL config ─────────────────────────────────────────────────────
     # DASHBOARD_PUBLIC_URL: the branded public URL of this VPS dashboard.
     # Used for geo-tracking links (/g/<token>) and BB webhook registration.
-    # Set to https://leads.shamrockbailbonds.biz in production.
+    # Set to https://shamrockbailbonds.biz in production.
     dashboard_public_url = os.getenv(
         "DASHBOARD_PUBLIC_URL",
         os.getenv("BB_WEBHOOK_PUBLIC_URL", "")  # fallback to BB URL if not set

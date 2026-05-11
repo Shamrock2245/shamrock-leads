@@ -29,7 +29,7 @@ SWIPESIMPLE_PAYMENT_LINK = os.getenv(
     "SWIPESIMPLE_PAYMENT_LINK",
     "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd",
 )
-PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
+PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
 
 
 # ── Token Generation ──────────────────────────────────────────────────────────

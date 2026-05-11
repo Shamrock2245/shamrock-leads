@@ -493,7 +493,7 @@ async def tracking_send_geo_link(booking_number):
         defendant_name = bond.get("defendant_name", "defendant")
         geo_pings = get_collection("geo_pings")
         token = secrets.token_urlsafe(12)
-        public_url = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
+        public_url = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
         geo_url = f"{public_url}/g/{token}"
 
         await geo_pings.insert_one({
