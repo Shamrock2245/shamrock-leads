@@ -181,17 +181,11 @@ class OutreachSequencer:
         sequence_id = f"SEQ-{uuid.uuid4().hex[:10].upper()}"
         now = datetime.now(timezone.utc)
 
-        # Build portal link
         # PORTAL_BASE_URL: Wix indemnitor portal (intake magic link)
-        # DASHBOARD_PUBLIC_URL: branded VPS domain (geo-tracking link)
+        # No dashboard/geo links in automated outreach — brand URLs only
         import os
         portal_base = os.getenv("PORTAL_BASE_URL", "https://shamrockbailbonds.biz").rstrip("/")
-        dashboard_url = os.getenv(
-            "DASHBOARD_PUBLIC_URL",
-            os.getenv("BB_WEBHOOK_PUBLIC_URL", portal_base)
-        ).rstrip("/")
         portal_link = f"{portal_base}/intake?booking={booking_number}&county={county}"
-        geo_link = f"{dashboard_url}/g/{booking_number}"  # uses /g/<token> route
 
         # Build scheduled steps
         steps_meta = []

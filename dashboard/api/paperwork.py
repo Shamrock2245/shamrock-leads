@@ -351,10 +351,8 @@ async def deliver_packet(packet_id: str):
                 f"Shamrock Bail Bonds — Fort Myers, FL"
             )
 
-        # Append geolocator link (mandatory per project standards)
-        if include_geo:
-            geo_url = f"{dashboard_url}/g/{intake_id}"
-            message += f"\n\n\U0001f4cd Confirm your location: {geo_url}"
+        # NOTE: Geo-tracking links are not auto-appended to paperwork messages.
+        # Use /api/tracking/<booking>/send-geo-link for explicit geo-link delivery.
 
         # Send via BlueBubbles (iMessage-first, universal bridge)
         bb = get_bb_client(phone)

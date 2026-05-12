@@ -231,14 +231,18 @@ def init_app(app):
     app.db = get_db()
 
     # ── Public URL config ─────────────────────────────────────────────────────
-    # DASHBOARD_PUBLIC_URL: the branded public URL of this VPS dashboard.
-    # Used for geo-tracking links (/g/<token>) and BB webhook registration.
-    # Set to https://shamrockbailbonds.biz in production.
-    dashboard_public_url = os.getenv(
-        "DASHBOARD_PUBLIC_URL",
-        os.getenv("BB_WEBHOOK_PUBLIC_URL", "")  # fallback to BB URL if not set
-    ).rstrip("/")
+    # DASHBOARD_PUBLIC_URL: the branded public URL that resolves to this VPS.
+    # Used for geo-tracking links (/g/<token>) and portal tokens (/c/<token>).
+    # IMPORTANT: Do NOT fall back to BB_WEBHOOK_PUBLIC_URL — that's for webhook
+    # registration only and may expose internal infrastructure to clients.
+    dashboard_public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
     app.config["DASHBOARD_PUBLIC_URL"] = dashboard_public_url
+
+    # CLIENT_BRAND_URL: the public-facing brand URL shown in client messages.
+    # Always the main website — never the dashboard or internal VPS.
+    app.config["CLIENT_BRAND_URL"] = os.getenv(
+        "CLIENT_BRAND_URL", "https://www.shamrockbailbonds.biz"
+    ).rstrip("/")
 
     # PORTAL_BASE_URL: the Wix indemnitor portal (for intake magic links).
     # Defaults to the main website; override if using a custom portal domain.

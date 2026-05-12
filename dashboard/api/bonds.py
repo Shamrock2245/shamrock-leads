@@ -973,9 +973,7 @@ async def api_active_bond_release(booking_number: str):
             f"We'll send the remaining paperwork shortly. "
             f"— Shamrock Bail Bonds \U0001f340 (239) 332-2245"
         )
-        dashboard_url = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
-        geo_url = f"{dashboard_url}/g/{booking_number}"
-        walkout_result = await send_message_universal(indemnitor_phone, walkout_msg, geo_url=geo_url)
+        walkout_result = await send_message_universal(indemnitor_phone, walkout_msg)
         results["walkout_msg"] = {
             "success": walkout_result.get("success"),
             "channel": walkout_result.get("channel"),

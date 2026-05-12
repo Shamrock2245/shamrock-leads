@@ -28,11 +28,11 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 def _get_public_url() -> str:
-    """Return the branded public URL, falling back to env var."""
+    """Return the branded public URL for geo links, falling back to env var."""
     try:
         url = current_app.config.get("DASHBOARD_PUBLIC_URL", "")
     except RuntimeError:
-        url = os.getenv("DASHBOARD_PUBLIC_URL", "") or os.getenv("BB_WEBHOOK_PUBLIC_URL", "")
+        url = os.getenv("DASHBOARD_PUBLIC_URL", "")
     return url.rstrip("/") if url else ""
 
 _REDIRECT_AFTER = os.getenv("GEO_REDIRECT_URL", "https://www.shamrockbailbonds.biz")

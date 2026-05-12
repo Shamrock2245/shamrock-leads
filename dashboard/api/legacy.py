@@ -307,42 +307,9 @@ async def imessage_send():
     if not srv:
         return jsonify({"error": f"No BlueBubbles server configured for {from_number}"}), 503
 
-    # ── Geo-link: generate a silent tracking token and append to message ──
-    geo_link = ""
-    try:
-        from datetime import timedelta as _td
-        _geo_pings = get_collection("geo_pings")
-        _token = secrets.token_urlsafe(12)
-        try:
-            from quart import current_app as _ca
-            _public_url = _ca.config.get("DASHBOARD_PUBLIC_URL", "").rstrip("/")
-        except RuntimeError:
-            _public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
-        _expires = (datetime.now(timezone.utc) + _td(hours=72)).isoformat()
-        await _geo_pings.insert_one({
-            "token": _token,
-            "phone": phone,
-            "booking_number": booking_number,
-            "defendant_name": defendant_name,
-            "county": county,
-            "recipient_label": recipient_label,
-            "agent_name": agent_name,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "expires_at": _expires,
-            "pings": [],
-            "ping_count": 0,
-            "status": "pending",
-        })
-        # Only expose geo link if using a proper domain (never raw IP in customer messages)
-        _is_ip = bool(re_mod.search(r'://\d+\.\d+\.\d+\.\d+', _public_url)) if _public_url else True
-        if _public_url and not _is_ip:
-            geo_link = f"{_public_url}/g/{_token}"
-    except Exception as _ge:
-        logger.warning(f"geo-link generation failed: {_ge}")
-
-    # Append geo-link only if it's a proper domain URL
-    if geo_link:
-        message = f"{message}\n{geo_link}"
+    # NOTE: Geo-tracking links are NOT auto-appended to outbound messages.
+    # Use /api/tracking/<booking>/send-geo-link for explicit geo-link delivery.
+    # This prevents the internal dashboard URL from leaking to clients.
 
     chat_guid = f"any;-;{phone}"
     temp_guid = f"shamrock-{uuid.uuid4().hex[:16]}"

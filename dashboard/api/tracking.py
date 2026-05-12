@@ -514,7 +514,7 @@ async def tracking_send_geo_link(booking_number):
             f"Please tap the link below — it only takes a second:\n{geo_url}\n\n"
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
-        result = await send_message_universal(phone, msg, geo_url=geo_url)
+        result = await send_message_universal(phone, msg)
         return jsonify({
             "success": result.get("success", False),
             "token": token,

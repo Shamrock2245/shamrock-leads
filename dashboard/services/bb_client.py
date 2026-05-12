@@ -91,11 +91,10 @@ async def check_imessage(phone: str) -> bool:
 async def send_imessage(
     phone: str,
     message: str,
-    geo_url: Optional[str] = None,
     method: str = "private-api",
 ) -> dict:
     """
-    Send a message via BlueBubbles with optional geolocator link.
+    Send a message via BlueBubbles.
 
     Uses `any;-;` chat GUID prefix so BlueBubbles auto-selects the best
     transport: iMessage for iPhones, SMS/RCS for everyone else.
@@ -103,7 +102,6 @@ async def send_imessage(
     Args:
         phone:    Recipient phone number (E.164 or 10-digit)
         message:  Message text to send
-        geo_url:  Optional geolocator URL to append
         method:   BlueBubbles send method ("private-api" or "apple-script")
 
     Returns:
@@ -112,9 +110,6 @@ async def send_imessage(
     bb = get_bb_client(phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
-
-    if geo_url:
-        message = f"{message}\n\n📍 {geo_url}"
 
     chat_guid = f"any;-;{phone}"
     try:
@@ -127,7 +122,6 @@ async def send_imessage(
 async def send_message_universal(
     phone: str,
     message: str,
-    geo_url: Optional[str] = None,
     method: str = "private-api",
 ) -> dict:
     """
@@ -146,15 +140,11 @@ async def send_message_universal(
     Args:
         phone:    Recipient phone number (E.164 or 10-digit)
         message:  Message text to send
-        geo_url:  Optional geolocator URL to append
         method:   BlueBubbles send method ("private-api" or "apple-script")
 
     Returns:
         { success: bool, channel: "imessage"|"sms"|"failed", ... }
     """
-    if geo_url:
-        message = f"{message}\n\n📍 {geo_url}"
-
     bb = get_bb_client(phone)
     if not bb:
         logger.error("[bb_client] No BB server configured for %s", phone)
@@ -188,7 +178,6 @@ async def send_imessage_with_attachment(
     phone: str,
     message: str,
     file_path: str,
-    geo_url: Optional[str] = None,
 ) -> dict:
     """
     Send an iMessage with a file attachment via BlueBubbles.
@@ -197,7 +186,6 @@ async def send_imessage_with_attachment(
         phone:      Recipient phone number
         message:    Message text
         file_path:  Absolute path to the file to attach
-        geo_url:    Optional geolocator URL to append to the message
 
     Returns:
         BlueBubbles API response dict
@@ -205,9 +193,6 @@ async def send_imessage_with_attachment(
     bb = get_bb_client(phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
-
-    if geo_url:
-        message = f"{message}\n\n📍 {geo_url}"
 
     chat_guid = f"any;-;{phone}"
     try:
