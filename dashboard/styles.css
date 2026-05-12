@@ -761,8 +761,10 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .slc-badge-comm{background:rgba(59,130,246,.12);color:#93c5fd;border:1px solid rgba(59,130,246,.2)}
 .slc-badge-followup{background:rgba(245,158,11,.12);color:#fcd34d;border:1px solid rgba(245,158,11,.2)}
 .slc-badge-action{background:rgba(168,85,247,.12);color:#d8b4fe;border:1px solid rgba(168,85,247,.2);cursor:default}
-.slc-notes-btn{margin-left:auto;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.25);color:#93c5fd;padding:3px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:background .15s}
+.slc-notes-btn{background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.25);color:#93c5fd;padding:6px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;transition:background .15s}
 .slc-notes-btn:hover{background:rgba(59,130,246,.2)}
+.btn-imessage-send{display:inline-flex;align-items:center;gap:3px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid rgba(6,182,212,.3);background:rgba(6,182,212,.08);color:#67e8f9;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:var(--transition)}
+.btn-imessage-send:hover{background:rgba(6,182,212,.18);border-color:#06b6d4;transform:translateY(-1px)}
 .slc-dnb-filter-btn{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:#f87171;padding:6px 14px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;transition:background .15s}
 .slc-dnb-filter-btn:hover{background:rgba(239,68,68,.2)}
 .slc-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9100;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px);-webkit-overflow-scrolling:touch;touch-action:manipulation;will-change:opacity;isolation:isolate;-webkit-transform:translateZ(0);transform:translateZ(0)}

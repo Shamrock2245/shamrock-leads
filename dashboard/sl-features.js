@@ -62,11 +62,11 @@ async function loadDefendants() {
         <div class="def-card-footer">
           <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
-          <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMessage</button>
-          <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact Indem</button>
-          <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track Lead</button>
-            <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Write Bond</button>
-          <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Lifecycle</button>
+          <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
+          <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact</button>
+          <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track</button>
+            <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Bond</button>
+          <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Life</button>
         </div>    </div>
       </div>`;
     }).join('') || '<div class="loading">No defendants found</div>';
