@@ -158,18 +158,19 @@ canvas{max-height:280px}
 .def-status-badge.released{background:rgba(16,185,129,.1);color:#34d399}
 .def-status-badge.other{background:rgba(100,116,139,.1);color:var(--text-secondary)}
 
-.def-card-footer{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:rgba(0,0,0,.02)}
+.def-card-footer{padding:10px 14px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-start;background:rgba(0,0,0,.02)}
 [data-theme="dark"] .def-card-footer{background:rgba(0,0,0,.15)}
+.def-card-footer>button,.def-card-footer>a{flex:1 1 calc(25% - 4px);min-width:0;max-width:calc(50% - 3px);box-sizing:border-box;justify-content:center;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:6px 8px !important;font-size:11px !important;gap:3px !important}
 
-.btn-write-bond{display:flex;align-items:center;gap:6px;padding:8px 18px;border-radius:var(--radius-sm);border:1px solid rgba(16,185,129,.3);background:rgba(16,185,129,.08);color:var(--accent-light);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:var(--transition);letter-spacing:.2px}
+.btn-write-bond{display:inline-flex;align-items:center;gap:3px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid rgba(16,185,129,.3);background:rgba(16,185,129,.08);color:var(--accent-light);font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;transition:var(--transition);letter-spacing:.2px}
 .btn-write-bond:hover{background:rgba(16,185,129,.18);border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 16px rgba(16,185,129,.15)}
 .btn-write-bond.active{background:var(--accent);color:#000;border-color:var(--accent)}
 
-.btn-detail{display:flex;align-items:center;gap:5px;padding:8px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-secondary);font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;transition:var(--transition)}
+.btn-detail{display:inline-flex;align-items:center;gap:3px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);background:transparent;color:var(--text-secondary);font-size:11px;font-weight:500;cursor:pointer;font-family:inherit;transition:var(--transition)}
 .btn-detail:hover{border-color:var(--text-secondary);color:var(--text)}
 
 /* ── Contact Indemnitor Button ── */
-.btn-contact-indem{display:flex;align-items:center;gap:5px;padding:8px 14px;border-radius:var(--radius-sm);border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);color:#93c5fd;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:var(--transition);letter-spacing:.2px}
+.btn-contact-indem{display:inline-flex;align-items:center;gap:3px;padding:6px 10px;border-radius:var(--radius-sm);border:1px solid rgba(59,130,246,.35);background:rgba(59,130,246,.08);color:#93c5fd;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:var(--transition);letter-spacing:.2px}
 .btn-contact-indem:hover{background:rgba(59,130,246,.18);border-color:#3b82f6;transform:translateY(-1px);box-shadow:0 4px 12px rgba(59,130,246,.2)}
 
 /* ── Spinner for send buttons ── */
@@ -448,7 +449,7 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 .def-status-badge.custody{background:rgba(245,158,11,.12);color:#fbbf24}
 .def-status-badge.released{background:rgba(100,116,139,.12);color:#94a3b8}
 .def-status-badge.other{background:rgba(59,130,246,.08);color:#60a5fa}
-.def-card-footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.def-card-footer{display:flex;flex-wrap:wrap;gap:5px;padding:10px 14px;border-top:1px solid var(--border)}
 .btn-detail{background:var(--surface);border:1px solid var(--border);color:var(--text-secondary);padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;transition:var(--transition)}
 .btn-detail:hover{border-color:var(--accent);color:var(--accent)}
 
@@ -565,7 +566,7 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
    ═══════════════════════════════════════════════════════════ */
 
 /* ── Track Lead Button (Defendant Card) ── */
-.btn-track-lead{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border-radius:8px;border:1px solid rgba(16,185,129,.3);background:linear-gradient(135deg,rgba(16,185,129,.06),rgba(59,130,246,.04));color:var(--accent-light);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:var(--transition)}
+.btn-track-lead{display:inline-flex;align-items:center;gap:3px;padding:6px 10px;border-radius:8px;border:1px solid rgba(16,185,129,.3);background:linear-gradient(135deg,rgba(16,185,129,.06),rgba(59,130,246,.04));color:var(--accent-light);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:var(--transition)}
 .btn-track-lead:hover{background:linear-gradient(135deg,rgba(16,185,129,.15),rgba(59,130,246,.08));border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 12px rgba(16,185,129,.15)}
 .btn-track-lead.tracked{background:rgba(16,185,129,.08);color:var(--muted);border-color:var(--border);cursor:default;pointer-events:none}
 .btn-track-lead.tracked::before{content:'✓ '}
@@ -2596,8 +2597,8 @@ button,
 @keyframes lcpShimmer { 0%{background-position:200% 0}100%{background-position:-200% 0} }
 
 .btn-lifecycle {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 6px 12px; border-radius: 8px;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 6px 10px; border-radius: 8px;
   border: 1px solid rgba(16,185,129,.25);
   background: rgba(16,185,129,.06);
   color: var(--accent-light); font-size: 11px; font-weight: 600;
@@ -2661,25 +2662,24 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   cursor: pointer;
 }
 
-/* Mobile: larger touch targets on defendant card buttons */
+/* Mobile: touch-friendly defendant card buttons */
 @media (max-width: 768px) {
   .def-card-footer {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 8px 10px;
   }
-  .def-card-footer button {
-    min-height: 40px;
-    padding: 8px 12px;
-    font-size: 12px;
-    flex: 1 1 auto;
-    min-width: 80px;
+  .def-card-footer>button,
+  .def-card-footer>a {
+    min-height: 38px;
+    padding: 6px 8px !important;
+    font-size: 11px !important;
+    flex: 1 1 calc(33.33% - 3px);
+    min-width: 0;
     touch-action: manipulation;
-  }
-  .slc-notes-btn {
-    min-height: 44px !important;
-    font-size: 13px !important;
+    justify-content: center;
+    text-align: center;
   }
 }
 
@@ -2820,14 +2820,14 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   border-radius: 6px;
 }
 
-/* Lifecycle button in defendant cards */
+/* Lifecycle button in defendant cards — keep compact */
 .btn-lifecycle {
   background: rgba(16,185,129,.08);
   border: 1px solid rgba(16,185,129,.25);
   color: #10b981;
-  padding: 5px 10px; border-radius: 7px;
+  padding: 6px 10px; border-radius: 7px;
   font-size: 11px; font-weight: 600;
-  cursor: pointer; touch-action: manipulation; transition: all .2s; min-height: 32px;
+  cursor: pointer; touch-action: manipulation; transition: all .2s; min-height: 30px;
 }
 .btn-lifecycle:hover { background: rgba(16,185,129,.15); border-color: rgba(16,185,129,.4); }
 
