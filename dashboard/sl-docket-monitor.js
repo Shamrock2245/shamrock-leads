@@ -48,7 +48,7 @@ window.SLDocketMonitor = (function () {
   }
 
   function _riskBadge(adj) {
-    if (adj === 0) return "";
+    if (!adj || adj === 0) return "";
     const sign = adj > 0 ? "+" : "";
     const col = adj > 0 ? "#ef4444" : "#10b981";
     return `<span style="font-size:11px;font-weight:600;color:${col};
@@ -171,7 +171,7 @@ window.SLDocketMonitor = (function () {
       if (kpiEl) {
         kpiEl.innerHTML = [
           _kpiCard("Total Events", data.total_events, "📊"),
-          _kpiCard("Unacked", data.unacknowledged, "🔔", data.unacknowledged > 0 ? "#ef4444" : null),
+          _kpiCard("Unacknowledged", data.unacknowledged, "🔔", data.unacknowledged > 0 ? "#ef4444" : null),
           _kpiCard("Critical", data.critical_alerts, "🚨", data.critical_alerts > 0 ? "#ef4444" : null),
           _kpiCard("This Week", data.events_last_7d, "📅"),
           _kpiCard("Bonds Watched", data.active_bonds_monitored, "👁️"),

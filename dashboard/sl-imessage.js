@@ -10,6 +10,7 @@
      GET  /api/bb-health/status          → connection health + server info
      GET  /api/imessage/inbox            → recent inbound messages (MongoDB)
      POST /api/imessage/inbox/poll       → trigger live BB fetch
+     GET  /api/imessage/thread/<phone>   → full conversation history for a phone number
      GET  /api/imessage/findmy           → FindMy device/friend list
      POST /api/imessage/send             → send iMessage {phone, message}
      POST /api/imessage/mark-read        → mark conversation read
@@ -183,12 +184,12 @@ window.SLiMessage = (() => {
     if (refreshBtn) {
       refreshBtn.removeAttribute('onclick');
       refreshBtn.addEventListener('click', async () => {
-        const orig = refreshBtn.textContent;
-        refreshBtn.textContent = '⏳';
+        const origHtml = refreshBtn.innerHTML;
+        refreshBtn.innerHTML = '⏳ Polling…';
         refreshBtn.disabled = true;
         await safeFetch('/api/imessage/inbox/poll', { method: 'POST' });
         await loadInbox();
-        refreshBtn.textContent = orig;
+        refreshBtn.innerHTML = origHtml;
         refreshBtn.disabled = false;
       });
     }
@@ -494,24 +495,27 @@ window.SLiMessage = (() => {
       const ts      = timeAgo(m.sent_at || m.date || m.timestamp);
       const unread  = m.unread || m.is_unread;
       const tag     = m.category || m.classification || m.intent;
-      const booking = m.booking_number ? `<span style="font-size:9px;color:var(--text-muted)">#${m.booking_number}</span>` : '';
+      const booking = m.booking_number ? `<span style="font-size:9px;color:var(--text-muted)">#${_esc(m.booking_number)}</span>` : '';
       const active  = _state.activeThread === handle ? 'active' : '';
       const dir     = m.direction === 'outbound' ? '↗' : '↙';
+      /* Escape handle/name for safe embedding in onclick attribute */
+      const safeHandle = handle.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      const safeName   = _esc(name).replace(/'/g,"\\'");
 
       return `
         <div class="bb-thread-row ${active} ${unread ? 'unread' : ''}"
-             onclick="SLiMessage.openThread('${handle.replace(/'/g,"\\'")}', '${name.replace(/'/g,"\\'")}')">
-          <div class="bb-thread-avatar" style="background:${_avatarColor(handle)}">${name.charAt(0).toUpperCase()}</div>
+             onclick="SLiMessage.openThread('${safeHandle}', '${safeName}')">
+          <div class="bb-thread-avatar" style="background:${_avatarColor(handle)}">${_esc(name).charAt(0).toUpperCase()}</div>
           <div class="bb-thread-meta">
             <div class="bb-thread-name">
-              ${name} ${booking}
+              ${_esc(name)} ${booking}
               ${unread ? '<span class="bb-unread-dot"></span>' : ''}
             </div>
-            <div class="bb-thread-preview">${dir} ${preview || '<em style="opacity:.5">No preview</em>'}</div>
+            <div class="bb-thread-preview">${dir} ${_esc(preview) || '<em style="opacity:.5">No preview</em>'}</div>
           </div>
           <div class="bb-thread-right">
             <div class="bb-thread-time">${ts}</div>
-            ${tag ? `<span class="sl-badge ${tagClass(tag)}" style="font-size:9px;margin-top:2px">${tag}</span>` : ''}
+            ${tag ? `<span class="sl-badge ${tagClass(tag)}" style="font-size:9px;margin-top:2px">${_esc(tag)}</span>` : ''}
           </div>
         </div>`;
     }).join('');
@@ -526,18 +530,139 @@ window.SLiMessage = (() => {
 
   function openThread(handle, name) {
     _state.activeThread = handle;
+    _state.activeThreadName = name;
     renderInbox();
+
     const target = $('bbComposeTarget');
     if (target) { target.value = handle; target.dataset.name = name; }
-    const toLabel = $('bbComposeTo');
-    if (toLabel) toLabel.textContent = `To: ${name} (${fmtPhone(handle)})`;
-    const composeArea = $('bbComposeArea');
-    if (composeArea) composeArea.style.display = 'flex';
     const newRecip = $('bbNewRecipient');
     if (newRecip) newRecip.value = handle;
+
+    /* Hide the "To:" row when viewing an existing thread */
+    const toRow = document.querySelector('.im-to-row');
+    if (toRow) toRow.style.display = 'none';
+
+    /* Show loading state in thread view */
+    const composeArea = $('bbComposeArea');
+    if (composeArea) {
+      composeArea.style.padding = '';
+      composeArea.style.overflow = '';
+      composeArea.innerHTML = `
+        <div class="im-thread-loading">
+          <div class="im-thread-loading-spinner"></div>
+          <div style="font-size:12px;color:var(--muted)">Loading conversation…</div>
+        </div>`;
+    }
+
+    /* Enable compose */
+    const sendBtn = $('bbSendBtn');
+    if (sendBtn) sendBtn.disabled = !$('bbComposeText')?.value.trim();
+
+    /* Fetch thread history */
+    _loadThread(handle, name);
     markRead(handle);
-    /* Scroll compose into view on mobile */
-    $('bbComposeText')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  async function _loadThread(handle, name) {
+    const composeArea = $('bbComposeArea');
+    if (!composeArea) return;
+
+    const { ok, data } = await safeFetch(`/api/imessage/thread/${encodeURIComponent(handle)}?limit=100`);
+
+    if (!ok || !data?.messages?.length) {
+      composeArea.style.padding = '';
+      composeArea.style.overflow = '';
+      composeArea.innerHTML = `
+        <div class="im-thread-header">
+          <div class="im-thread-header-avatar" style="background:${_avatarColor(handle)}">${(name||'?').charAt(0).toUpperCase()}</div>
+          <div class="im-thread-header-info">
+            <div class="im-thread-header-name">${_esc(name)}</div>
+            <div class="im-thread-header-phone">${fmtPhone(handle)}</div>
+          </div>
+        </div>
+        <div class="im-empty-state" style="flex:1">
+          <div class="im-empty-icon">💬</div>
+          <div class="im-empty-title">No messages yet</div>
+          <div class="im-empty-sub">Start the conversation by typing a message below.</div>
+        </div>`;
+      return;
+    }
+
+    const messages = data.messages;
+    _state.threadMessages = messages;
+
+    /* Build thread HTML with date separators */
+    let html = `
+      <div class="im-thread-header">
+        <div class="im-thread-header-avatar" style="background:${_avatarColor(handle)}">${(name||'?').charAt(0).toUpperCase()}</div>
+        <div class="im-thread-header-info">
+          <div class="im-thread-header-name">${_esc(name)}</div>
+          <div class="im-thread-header-phone">${fmtPhone(handle)}</div>
+        </div>
+        <div class="im-thread-header-count">${messages.length} message${messages.length !== 1 ? 's' : ''}</div>
+      </div>
+      <div id="bbThreadMessages" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding:16px;min-height:0">`;
+
+    let lastDateStr = '';
+    for (const msg of messages) {
+      const ts = msg.sent_at || msg.timestamp || msg.date;
+      const dateObj = ts ? new Date(ts) : null;
+      const dateStr = dateObj ? dateObj.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '';
+
+      /* Insert date separator when date changes */
+      if (dateStr && dateStr !== lastDateStr) {
+        html += `<div class="im-date-sep">${dateStr}</div>`;
+        lastDateStr = dateStr;
+      }
+
+      const dir = msg.direction === 'outbound' ? 'outbound' : 'inbound';
+      const text = msg.message || msg.text || '';
+      const time = dateObj ? dateObj.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }) : '';
+      const agent = msg.sent_by || msg.agent || '';
+      const status = msg.status || '';
+
+      /* Status icon for outbound */
+      let statusIcon = '';
+      if (dir === 'outbound') {
+        if (status === 'read') statusIcon = '<span class="im-bubble-status">✓✓</span>';
+        else if (status === 'delivered') statusIcon = '<span class="im-bubble-status">✓</span>';
+        else if (status === 'sent') statusIcon = '<span class="im-bubble-status">↑</span>';
+        else if (status === 'failed') statusIcon = '<span class="im-bubble-status" style="color:#ef4444">✕</span>';
+      }
+
+      html += `
+        <div class="im-bubble-row ${dir}">
+          <div>
+            <div class="im-bubble">${_esc(text)}</div>
+            <div class="im-bubble-meta">
+              ${time ? `<span>${time}</span>` : ''}
+              ${agent && dir === 'outbound' ? `<span>• ${_esc(agent)}</span>` : ''}
+              ${statusIcon}
+            </div>
+          </div>
+        </div>`;
+    }
+
+    html += '</div>';
+    composeArea.innerHTML = html;
+    /* Override parent scroll/padding — inner bbThreadMessages handles it now */
+    composeArea.style.padding = '0';
+    composeArea.style.overflow = 'hidden';
+
+    /* Scroll to bottom — target inner message list, fall back to parent */
+    requestAnimationFrame(() => {
+      const inner = $('bbThreadMessages');
+      const target = inner || composeArea;
+      if (target) target.scrollTop = target.scrollHeight;
+    });
+
+    /* Focus compose */
+    $('bbComposeText')?.focus();
+  }
+
+  function _esc(s) {
+    if (!s) return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   async function markRead(handle) {
@@ -562,7 +687,8 @@ window.SLiMessage = (() => {
 
     _state.sending = true;
     const btn = $('bbSendBtn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="sl-spinner"></span> Sending…'; }
+    const _sendSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="sl-spinner"></span>'; }
 
     const { ok, status, data } = await safeFetch('/api/imessage/send', {
       method: 'POST',
@@ -579,27 +705,64 @@ window.SLiMessage = (() => {
 
     if (ok) {
       if ($('bbComposeText')) $('bbComposeText').value = '';
-      if (btn) btn.innerHTML = '✅ Sent';
-      setTimeout(() => { if (btn) { btn.innerHTML = '⬆ Send'; btn.disabled = false; } }, 1800);
+      if (btn) btn.innerHTML = '✅';
+      setTimeout(() => { if (btn) { btn.innerHTML = _sendSvg; btn.disabled = false; } }, 1800);
       showToast('Message sent via iMessage', 'success');
+
+      /* Append sent bubble to thread immediately (optimistic) */
+      const threadView = $('bbThreadMessages');
+      if (threadView) {
+        const now = new Date();
+        const time = now.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+        const bubbleHtml = `
+          <div class="im-bubble-row outbound">
+            <div>
+              <div class="im-bubble">${_esc(text)}</div>
+              <div class="im-bubble-meta">
+                <span>${time}</span>
+                <span>• dashboard</span>
+                <span class="im-bubble-status">↑</span>
+              </div>
+            </div>
+          </div>`;
+        threadView.insertAdjacentHTML('beforeend', bubbleHtml);
+        threadView.scrollTop = threadView.scrollHeight;
+      }
+
       await loadInbox();
     } else {
       showToast(`Send failed (${status}) — ${data?.error || 'check BB connection'}`, 'error');
-      if (btn) { btn.innerHTML = '⬆ Send'; btn.disabled = false; }
+      if (btn) { btn.innerHTML = _sendSvg; btn.disabled = false; }
     }
     _state.sending = false;
   }
 
   function newCompose() {
     _state.activeThread = null;
+    _state.activeThreadName = null;
     const target = $('bbComposeTarget');
     if (target) { target.value = ''; target.dataset.name = ''; }
     const newRecip = $('bbNewRecipient');
     if (newRecip) { newRecip.value = ''; newRecip.focus(); }
+
+    /* Show the "To:" row for new compose */
+    const toRow = document.querySelector('.im-to-row');
+    if (toRow) toRow.style.display = 'flex';
+
     const toLabel = $('bbComposeTo');
     if (toLabel) toLabel.textContent = 'New Message';
     const composeArea = $('bbComposeArea');
-    if (composeArea) composeArea.style.display = 'flex';
+    if (composeArea) {
+      /* Restore default layout when leaving thread view */
+      composeArea.style.padding = '';
+      composeArea.style.overflow = '';
+      composeArea.innerHTML = `
+        <div class="im-empty-state" style="flex:1">
+          <div class="im-empty-icon">✏️</div>
+          <div class="im-empty-title">New Message</div>
+          <div class="im-empty-sub">Enter a phone number above to start a new iMessage conversation.</div>
+        </div>`;
+    }
     const sendBtn = $('bbSendBtn');
     if (sendBtn) sendBtn.disabled = true;
   }
@@ -779,13 +942,20 @@ window.SLiMessage = (() => {
     if (typeof SL !== 'undefined' && typeof SL.switchTab === 'function') {
       SL.switchTab('tabImessage');
     }
-    // Pre-fill the compose area
+    // Pre-fill the compose area with correct element IDs
     setTimeout(() => {
-      const phoneEl = $('bbComposePhone');
-      const nameEl  = $('bbComposeName');
-      if (phoneEl) phoneEl.value = bookingOrPhone || '';
-      if (nameEl)  nameEl.value  = name || '';
-      const textEl = $('bbComposeTxt');
+      const phoneEl  = $('bbNewRecipient');
+      const targetEl = $('bbComposeTarget');
+      if (phoneEl)  phoneEl.value = bookingOrPhone || '';
+      if (targetEl) targetEl.value = bookingOrPhone || '';
+      const toLabel = $('bbComposeTo');
+      if (toLabel && name) toLabel.textContent = name;
+      // Show the To: row for new compose
+      const toRow = document.querySelector('.im-to-row');
+      if (toRow) toRow.style.display = 'flex';
+      const sendBtn = $('bbSendBtn');
+      if (sendBtn) sendBtn.disabled = !(bookingOrPhone || '').trim();
+      const textEl = $('bbComposeText');
       if (textEl) textEl.focus();
     }, 150);
   }

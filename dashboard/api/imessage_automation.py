@@ -160,15 +160,40 @@ async def update_auto_reply_config():
 
 @imessage_auto_bp.route("/imessage/inbox", methods=["GET"])
 async def get_inbox():
-    """Fetch recent inbound messages from MongoDB outreach log."""
+    """Fetch recent messages from MongoDB outreach log.
+
+    Returns the latest message per unique phone number (grouped threads)
+    with both inbound and outbound messages, so the sidebar shows
+    all conversations — not just inbound.
+    """
     limit = int(request.args.get("limit", "50"))
     outreach = get_collection("imessage_outreach")
+
+    # Aggregate: group by recipient_phone, get latest message per thread
+    pipeline = [
+        {"$sort": {"sent_at": -1}},
+        {"$group": {
+            "_id": "$recipient_phone",
+            "recipient_phone": {"$first": "$recipient_phone"},
+            "message": {"$first": "$message"},
+            "direction": {"$first": "$direction"},
+            "sent_at": {"$first": "$sent_at"},
+            "status": {"$first": "$status"},
+            "contact_name": {"$first": "$contact_name"},
+            "booking_number": {"$first": "$booking_number"},
+            "unread": {"$first": "$unread"},
+            "category": {"$first": "$category"},
+            "total_messages": {"$sum": 1},
+        }},
+        {"$sort": {"sent_at": -1}},
+        {"$limit": limit},
+    ]
+
     docs = []
-    async for doc in outreach.find(
-        {"direction": "inbound"},
-        {"_id": 0},
-    ).sort("sent_at", -1).limit(limit):
+    async for doc in outreach.aggregate(pipeline):
+        doc.pop("_id", None)
         docs.append(doc)
+
     return jsonify({"messages": docs, "count": len(docs)})
 
 
@@ -177,6 +202,41 @@ async def manual_poll():
     """Manually trigger one inbox poll cycle."""
     result = await _poll_inbox_once()
     return jsonify(result)
+
+
+@imessage_auto_bp.route("/imessage/thread/<phone>", methods=["GET"])
+async def get_thread(phone):
+    """Fetch full conversation history for a specific phone number.
+
+    Returns all inbound + outbound messages sorted chronologically (oldest first)
+    so the UI can render a chat-style thread view.
+    """
+    limit = int(request.args.get("limit", "100"))
+    clean_phone = format_phone(phone)
+    if not clean_phone:
+        return jsonify({"error": "Invalid phone number"}), 400
+
+    outreach = get_collection("imessage_outreach")
+
+    # Match messages where recipient_phone matches (covers both directions)
+    query = {"recipient_phone": clean_phone}
+
+    docs = []
+    async for doc in outreach.find(
+        query,
+        {"_id": 0},
+    ).sort("sent_at", 1).limit(limit):
+        docs.append(doc)
+
+    # Mark inbound messages as read in MongoDB
+    if docs:
+        await outreach.update_many(
+            {"recipient_phone": clean_phone, "direction": "inbound", "unread": True},
+            {"$set": {"unread": False}},
+        )
+
+    return jsonify({"messages": docs, "count": len(docs), "phone": clean_phone})
+
 
 
 
