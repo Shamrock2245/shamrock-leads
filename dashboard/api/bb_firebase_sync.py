@@ -7,7 +7,7 @@ up to date on the VPS — no manual restarts or URL updates needed.
 How It Works
 ------------
 When BlueBubbles Server starts on the office iMac, it writes its current
-tunnel URL (Cloudflare, ngrok, etc.) to a Firestore document. This module
+tunnel URL (ngrok) to a Firestore document. This module
 reads that document every 5 minutes and automatically updates the in-memory
 BB_SERVERS config on the VPS.
 
@@ -111,7 +111,7 @@ def _fetch_bb_url_from_firestore() -> Optional[str]:
                 data.get("server_url") or
                 data.get("url") or
                 data.get("ngrokUrl") or
-                data.get("cloudflareUrl") or
+                data.get("cloudflareUrl") or  # legacy field — older BB versions wrote this
                 data.get("proxyUrl")
             )
             if url and url.startswith("http"):

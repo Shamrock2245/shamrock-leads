@@ -87,7 +87,7 @@ class BlueBubblesClient:
         try:
             # Headers required to bypass tunnel browser interstitial pages:
             #   - ngrok free-tier: ngrok-skip-browser-warning
-            #   - Cloudflare trycloudflare.com: proper User-Agent + Accept
+            #   - ngrok: ngrok-skip-browser-warning header (already set above)
             #   Both headers are safe to send together for either tunnel type.
             headers = {
                 "ngrok-skip-browser-warning": "true",

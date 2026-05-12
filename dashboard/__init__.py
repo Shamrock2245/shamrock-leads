@@ -1677,7 +1677,7 @@ def create_app():
     @app.before_serving
     async def _start_firebase_bb_sync():
         """Poll Firebase Firestore every 5 min for the current BlueBubbles URL.
-        Auto-updates BB_SERVERS when the tunnel URL changes (Cloudflare rotates).
+        Auto-updates BB_SERVERS when the ngrok tunnel URL changes.
         Requires FIREBASE_ADMINSDK_PATH env var or default path in config/.
         """
         import asyncio

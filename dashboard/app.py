@@ -3641,7 +3641,7 @@ def update_custody():
 
 # Headers required to bypass tunnel browser interstitial pages:
 #   - ngrok free-tier: ngrok-skip-browser-warning
-#   - Cloudflare trycloudflare.com: proper User-Agent + Accept
+#   - ngrok: ngrok-skip-browser-warning header (already set above)
 _BB_HEADERS = {
     "ngrok-skip-browser-warning": "true",
     "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
@@ -3800,7 +3800,7 @@ def imessage_send():
             return jsonify({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}), 502
 
     except http_requests.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach BlueBubbles server — tunnel may be down. Check ngrok tunnel status."}), 502
+        return jsonify({"error": "Cannot reach BlueBubbles server — ngrok tunnel may be down. Check ngrok status on the office iMac."}), 502
     except http_requests.exceptions.Timeout:
         return jsonify({"error": "BlueBubbles request timed out after 15s — tunnel may be slow or iMac is asleep."}), 504
     except Exception as e:

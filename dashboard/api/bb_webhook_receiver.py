@@ -302,7 +302,7 @@ async def receive_bb_event():
 async def register_bb_webhook():
     """Register our VPS webhook URL with the BlueBubbles server.
 
-    Call this endpoint once after startup (or when the BB Cloudflare URL changes).
+    Call this endpoint once after startup (or when the BB ngrok tunnel URL changes).
     It is idempotent — safe to call multiple times.
 
     Body (optional):

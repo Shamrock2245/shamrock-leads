@@ -40,7 +40,7 @@ legacy_bp = Blueprint("legacy", __name__)
 
 @legacy_bp.route("/config/bluebubbles-url", methods=["POST"])
 async def update_bluebubbles_url():
-    """Accept a new Cloudflare tunnel URL from the iMac sync script."""
+    """Accept a new ngrok tunnel URL from the iMac sync script."""
     auth = request.headers.get("X-API-Key", "")
     if auth != BB_CONFIG_API_KEY:
         return jsonify({"error": "unauthorized"}), 401
