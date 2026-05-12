@@ -202,6 +202,68 @@ def create_app():
     from dashboard.api.agent_analytics import agent_analytics_bp
     app.register_blueprint(agent_analytics_bp, url_prefix="/api")
 
+    # ── Alpha Engine — Source Performance (Self-Replicating Pipeline) ─────
+    from dashboard.api.source_performance import source_performance_bp
+    app.register_blueprint(source_performance_bp, url_prefix="/api")
+
+    # ── Alpha Engine — Background Scoring Cycle (every 4 hours) ──────────
+    async def _alpha_engine_cron_loop():
+        """Background loop: recalculate source performance scores every 4 hours.
+
+        Computes composite county scores from lead volume, outreach metrics,
+        conversion rates, revenue data, and scraper health. Updates the
+        source_performance collection with tier assignments and action
+        recommendations. Mirrors the trading bot's discovery daemon pattern.
+        """
+        import asyncio
+        from dashboard.api.automation_control import register_trigger
+        _trigger = asyncio.Event()
+        register_trigger("alpha_engine", _trigger)
+        interval_seconds = 4 * 60 * 60  # 4 hours
+        # Wait 180s after boot to let DB and scrapers initialize
+        await asyncio.sleep(180)
+        while True:
+            try:
+                from dashboard.services.automation_config import should_run
+                from dashboard.extensions import get_db as _gdb
+                if not await should_run(_gdb(), "alpha_engine"):
+                    logger.debug("[AlphaEngine] Disabled via config — skipping cycle")
+                    _trigger.clear()
+                    try:
+                        await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+            except Exception:
+                pass
+            try:
+                from dashboard.services.source_performance_tracker import SourcePerformanceTracker
+                from dashboard.extensions import get_db
+                db = get_db()
+                tracker = SourcePerformanceTracker(db)
+                logger.info("[AlphaEngine] ⏰ Scheduled scoring cycle starting...")
+                result = await tracker.run_scoring_cycle()
+                logger.info(
+                    "[AlphaEngine] ✅ Scoring complete — %d counties scored (%d alpha, %d growth)",
+                    result.get("counties_scored", 0),
+                    result.get("alpha_counties", 0),
+                    result.get("growth_counties", 0),
+                )
+            except Exception as e:
+                logger.error("[AlphaEngine] ❌ Scoring cycle failed: %s", e)
+            _trigger.clear()
+            try:
+                await asyncio.wait_for(_trigger.wait(), timeout=float(interval_seconds))
+                logger.info("[AlphaEngine] ▶ Manual trigger received — running immediately")
+            except asyncio.TimeoutError:
+                pass
+
+    @app.before_serving
+    async def _start_alpha_engine_cron():
+        import asyncio
+        asyncio.ensure_future(_alpha_engine_cron_loop())
+        logger.info("[AlphaEngine] 🧬 Background source scoring scheduled (every 4h, first run in 180s)")
+
     # ── Docket Monitor — Background Scan (every 4 hours) ─────────────────
     async def _docket_monitor_cron_loop():
         """Background loop: scan active bond dockets every 4 hours.
