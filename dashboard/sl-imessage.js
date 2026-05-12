@@ -327,7 +327,7 @@ window.SLiMessage = (() => {
       ${_reconnectPanelHTML()}`;
   }
 
-  /* ── Reconnect Panel — paste Cloudflare URL, hot-swap without rebuild ──── */
+  /* ── Reconnect Panel — paste ngrok URL, hot-swap without rebuild ──────── */
   function _reconnectPanelHTML() {
     return `
     <div class="bb-reconnect-panel" id="bbReconnectPanel">
@@ -335,7 +335,7 @@ window.SLiMessage = (() => {
         <span class="bb-reconnect-icon">🔗</span>
         <div>
           <div class="bb-reconnect-title">Update Tunnel URL</div>
-          <div class="bb-reconnect-subtitle">Cloudflare trycloudflare.com URLs rotate on every BlueBubbles restart. Paste the new URL here — no VPS rebuild needed.</div>
+          <div class="bb-reconnect-subtitle">Paste the ngrok tunnel URL from BlueBubbles → Settings → Connection. No VPS rebuild needed.</div>
         </div>
       </div>
       <div class="bb-reconnect-fields">
@@ -350,7 +350,7 @@ window.SLiMessage = (() => {
           <label class="bb-reconnect-label">New Tunnel URL <span style="color:var(--text-muted);font-weight:400">(from BlueBubbles → Settings → Connection)</span></label>
           <div class="bb-reconnect-url-row">
             <input id="bbReconnectUrl" class="sl-input sl-input-sm" type="url"
-              placeholder="https://something-new.trycloudflare.com"
+              placeholder="https://your-subdomain.ngrok-free.dev"
               onkeydown="if(event.key==='Enter')SLiMessage.updateTunnelUrl()"
             />
             <button id="bbReconnectBtn" class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLiMessage.updateTunnelUrl()">

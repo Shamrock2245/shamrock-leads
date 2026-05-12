@@ -3800,7 +3800,7 @@ def imessage_send():
             return jsonify({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}), 502
 
     except http_requests.exceptions.ConnectionError:
-        return jsonify({"error": "Cannot reach BlueBubbles server — tunnel may be down. Check ngrok/Cloudflare tunnel status."}), 502
+        return jsonify({"error": "Cannot reach BlueBubbles server — tunnel may be down. Check ngrok tunnel status."}), 502
     except http_requests.exceptions.Timeout:
         return jsonify({"error": "BlueBubbles request timed out after 15s — tunnel may be slow or iMac is asleep."}), 504
     except Exception as e:
