@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="/sl-overhaul.css?v=5">
   <link rel="stylesheet" href="/sl-imessage.css?v=4">
   <link rel="stylesheet" href="/sl-intelligence.css?v=1">
+  <link rel="stylesheet" href="/sl-alpha-intel.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -105,6 +106,7 @@
   <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
   <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
   <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
+  <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">⚡ Alpha Intel</button>
   <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">💰 Accounting</button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
@@ -3622,9 +3624,112 @@
 
 </div><!-- end tabAccounting -->
 
+<!-- ═══════════════════════════════════════════════════════════════════
+     TAB: ALPHA INTELLIGENCE — Source Performance Engine
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabAlphaIntel">
+  <div class="container" id="alphaIntelContent">
+
+    <!-- Header -->
+    <div class="ai-header">
+      <div class="ai-header-left">
+        <h2>⚡ Alpha Intelligence</h2>
+        <p>Autonomous Lead Source Scoring · County Performance Rankings · Closed-Loop Conversion Feedback</p>
+      </div>
+      <div class="ai-header-right">
+        <span class="ai-status-dot" id="alphaStatusDot"></span>
+        <span class="ai-header-ts">Last scored: <strong id="alphaLastCalc">—</strong></span>
+        <button class="ai-recalc-btn" id="alphaRecalcBtn" onclick="SLAlphaIntel.recalculate()">⚡ Recalculate</button>
+      </div>
+    </div>
+
+    <!-- KPI Row -->
+    <div class="ai-kpi-grid">
+      <div class="ai-kpi-card" style="--kpi-accent:#10b981">
+        <div class="ai-kpi-label">Tracked Counties</div>
+        <div class="ai-kpi-value" id="aiKpiCounties">—</div>
+        <div class="ai-kpi-sub">sources with data</div>
+      </div>
+      <div class="ai-kpi-card" style="--kpi-accent:#10b981">
+        <div class="ai-kpi-label">🟢 Alpha Tier</div>
+        <div class="ai-kpi-value" id="aiKpiAlpha">—</div>
+        <div class="ai-kpi-sub">top-performing sources</div>
+      </div>
+      <div class="ai-kpi-card" style="--kpi-accent:#3b82f6">
+        <div class="ai-kpi-label">🔵 Growth Tier</div>
+        <div class="ai-kpi-value" id="aiKpiGrowth">—</div>
+        <div class="ai-kpi-sub">proven & expanding</div>
+      </div>
+      <div class="ai-kpi-card" style="--kpi-accent:#f59e0b">
+        <div class="ai-kpi-label">Avg Score</div>
+        <div class="ai-kpi-value" id="aiKpiAvgScore">—</div>
+        <div class="ai-kpi-sub">fleet-wide composite</div>
+      </div>
+      <div class="ai-kpi-card" style="--kpi-accent:#8b5cf6">
+        <div class="ai-kpi-label">Conversions (90d)</div>
+        <div class="ai-kpi-value" id="aiKpiConversions">—</div>
+        <div class="ai-kpi-sub">bonds written from leads</div>
+      </div>
+    </div>
+
+    <!-- Tier Distribution -->
+    <div class="ai-tier-grid" id="alphaTierGrid"></div>
+
+    <!-- Deep Dive (hidden by default) -->
+    <div class="ai-dd-panel" id="alphaDeepDive" style="display:none">
+      <div class="ai-dd-header">
+        <span class="ai-dd-title">📊 County — Deep Dive</span>
+        <button class="ai-dd-close" onclick="SLAlphaIntel.selectCounty(null)">✕ Close</button>
+      </div>
+      <div class="ai-dd-body"></div>
+    </div>
+
+    <!-- Two-Column: Leaderboard + Recommendations -->
+    <div class="ai-two-col">
+
+      <!-- Leaderboard -->
+      <div class="ai-lb-panel">
+        <div class="ai-lb-header">
+          <span class="ai-lb-title">🏆 Source Leaderboard</span>
+          <span class="ai-lb-count" id="alphaLbCount">—</span>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="ai-lb-table">
+            <thead>
+              <tr>
+                <th style="width:40px">#</th>
+                <th onclick="SLAlphaIntel.sortBy('county')">County ⇕</th>
+                <th>Tier</th>
+                <th onclick="SLAlphaIntel.sortBy('score')" style="min-width:130px">Score ⇕</th>
+                <th>Trend</th>
+                <th onclick="SLAlphaIntel.sortBy('lead_volume_30d')">Leads ⇕</th>
+                <th onclick="SLAlphaIntel.sortBy('hot_lead_ratio')">Hot% ⇕</th>
+                <th onclick="SLAlphaIntel.sortBy('conversion_rate')">Conv% ⇕</th>
+                <th onclick="SLAlphaIntel.sortBy('total_premium_90d')">Revenue ⇕</th>
+              </tr>
+            </thead>
+            <tbody id="alphaLeaderboardBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recommendations -->
+      <div class="ai-rec-panel">
+        <div class="ai-rec-header">
+          <span class="ai-rec-title">💡 Recommendations</span>
+        </div>
+        <div class="ai-rec-list" id="alphaRecList"></div>
+      </div>
+
+    </div>
+
+  </div>
+</div><!-- end tabAlphaIntel -->
+
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-imessage.js?v=4"></script>
 <script src="/sl-accounting.js?v=1"></script>
+<script src="/sl-alpha-intel.js?v=1"></script>
 
 </body>
 </html>
