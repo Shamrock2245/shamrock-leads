@@ -238,10 +238,13 @@ class DefendantNormalizationService:
         }
 
     async def get_defendant(self, defendant_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch a single defendant by UUID."""
+        """Fetch a single defendant by UUID, enriched with detail_url."""
         doc = await self._defendants.find_one(
             {"defendant_id": defendant_id}, {"_id": 0}
         )
+        if doc:
+            doc = _serialize_doc(doc)
+            await self._enrich_detail_urls([doc])
         return doc
 
     async def get_defendant_arrests(self, defendant_id: str) -> List[Dict[str, Any]]:
@@ -289,12 +292,79 @@ class DefendantNormalizationService:
         async for doc in cursor:
             results.append(_serialize_doc(doc))
 
+        # ── Enrich with detail_url from the latest arrest record ─────────
+        # The defendants collection is person-level and doesn't store
+        # detail_url (which is per-booking). Batch-fetch from arrests.
+        await self._enrich_detail_urls(results)
+
         return {
             "defendants": results,
             "total": total,
             "page": page,
             "pages": max(1, (total + limit - 1) // limit),
         }
+
+    async def _enrich_detail_urls(self, defendants: List[Dict[str, Any]]) -> None:
+        """Batch-enrich defendant dicts with ``detail_url`` from the ``arrests`` collection.
+
+        Each defendant document stores ``arrest_ids`` as ``["County:BookingNumber", ...]``.
+        This method parses those keys, queries the ``arrests`` collection in a single
+        batch ``$or`` query, and attaches the most recent non-empty ``detail_url``
+        to each defendant dict (mutating in place).
+        """
+        if not defendants:
+            return
+
+        # Build a map: defendant_index -> list of (county, booking_number) tuples
+        idx_to_keys: Dict[int, List[Tuple[str, str]]] = {}
+        or_clauses: List[Dict[str, Any]] = []
+        for i, d in enumerate(defendants):
+            arrest_ids = d.get("arrest_ids", [])
+            if not arrest_ids:
+                continue
+            keys = []
+            for aid in arrest_ids:
+                parts = aid.split(":", 1)
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    keys.append((parts[0], parts[1]))
+                    or_clauses.append({"county": parts[0], "booking_number": parts[1]})
+            if keys:
+                idx_to_keys[i] = keys
+
+        if not or_clauses:
+            return
+
+        # Single batch query — only fetch the fields we need
+        cursor = self._arrests.find(
+            {"$or": or_clauses},
+            {"_id": 0, "county": 1, "booking_number": 1, "detail_url": 1, "scraped_at": 1},
+        )
+
+        # Build lookup: (county, booking_number) -> detail_url
+        url_map: Dict[Tuple[str, str], Tuple[str, str]] = {}  # key -> (detail_url, scraped_at)
+        async for doc in cursor:
+            url = doc.get("detail_url", "")
+            if not url:
+                continue
+            key = (doc.get("county", ""), doc.get("booking_number", ""))
+            scraped = doc.get("scraped_at", "")
+            # Keep the most recent detail_url per key
+            existing = url_map.get(key)
+            if not existing or (scraped and scraped > existing[1]):
+                url_map[key] = (url, scraped)
+
+        # Attach the best detail_url to each defendant
+        for i, keys in idx_to_keys.items():
+            best_url = ""
+            best_scraped = ""
+            for k in keys:
+                entry = url_map.get(k)
+                if entry and entry[0]:
+                    if not best_scraped or entry[1] > best_scraped:
+                        best_url = entry[0]
+                        best_scraped = entry[1]
+            if best_url:
+                defendants[i]["detail_url"] = best_url
 
     async def update_defendant_contact(
         self,
