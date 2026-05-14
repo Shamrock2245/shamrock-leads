@@ -430,6 +430,29 @@
     observer.observe(strip, { childList: true, subtree: true, characterData: true });
   }
 
+  /* ── 9b. Fetch real period-over-period trend data from API ─────────────── */
+  function fetchAndApplyTrends() {
+    fetch('/api/reports/kpi-trends?days=30')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || !d.success) return;
+        function applyTrend(elId, data) {
+          var el = $(elId + 'Trend');
+          if (!el) return;
+          var pct = data && data.pct_change;
+          if (pct == null) { el.textContent = '—'; el.className = 'sl-rpt-kpi-trend flat'; return; }
+          var arrow = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
+          var cls   = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+          el.textContent = arrow + ' ' + Math.abs(pct).toFixed(1) + '% vs prior 30d';
+          el.className = 'sl-rpt-kpi-trend ' + cls;
+        }
+        applyTrend('rptKpiBonds',     d.bonds);
+        applyTrend('rptKpiDischarged', d.discharged);
+        applyTrend('rptKpiLiability',  d.surety_liability);
+        applyTrend('rptKpiPOA',        d.poa_used);
+      })
+      .catch(function() {});
+  }
   /* ── 10. Init ───────────────────────────────────────────────────────────── */
   function init() {
     upgradeLayout();
@@ -439,6 +462,7 @@
     upgradeOutputPanel();
     patchSLReports();
     watchKPIs();
+    setTimeout(fetchAndApplyTrends, 800);
   }
 
   // Run after DOM ready

@@ -139,7 +139,8 @@ async def tracking_map_data():
                 except Exception:
                     pass
 
-            risk = bond.get("risk_score") or compute_risk_score(bond)
+            risk_result = bond.get("risk_score") or compute_risk_score(bond)
+            risk = risk_result.get("score", risk_result) if isinstance(risk_result, dict) else risk_result
             if is_overdue:
                 overdue += 1
             if risk >= 75:

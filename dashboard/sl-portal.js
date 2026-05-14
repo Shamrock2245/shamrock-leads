@@ -132,10 +132,13 @@ const SLPortal = {
 
   async _loadTokenStats() {
     try {
-      // We can estimate portal link count by querying a few bonds
-      // For now just show placeholder — will be populated as tokens are generated
+      const res = await fetch('/api/portal/stats');
+      if (!res.ok) return;
+      const data = await res.json();
       const el = document.getElementById('kpiPortalLinks');
-      if (el) el.textContent = '—';
+      if (el) el.textContent = data.active_tokens ?? '—';
+      const elCheckins = document.getElementById('kpiPortalCheckins');
+      if (elCheckins) elCheckins.textContent = data.total_checkins ?? '—';
     } catch(e) { /* silent */ }
   },
 

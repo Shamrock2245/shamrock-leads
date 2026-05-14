@@ -96,6 +96,12 @@ async def api_leads():
         for k, v in doc.items():
             if isinstance(v, datetime):
                 doc[k] = v.isoformat()
+        # Promote fta_risk fields from extra_data to top-level for easier JS access
+        extra = doc.get("extra_data") or {}
+        if doc.get("fta_risk_score") is None and extra.get("fta_risk_score") is not None:
+            doc["fta_risk_score"] = extra["fta_risk_score"]
+            doc["fta_risk_level"] = extra.get("fta_risk_level", "")
+            doc["fta_risk_confidence"] = extra.get("fta_risk_confidence")
         results.append(doc)
 
     return jsonify({

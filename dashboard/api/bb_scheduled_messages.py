@@ -247,6 +247,143 @@ async def schedule_court_reminders_for_case(
     }
 
 
+async def schedule_payment_reminders_for_case(
+    booking_number: str,
+    defendant_name: str,
+    phone: str,
+    due_date: datetime,
+    amount: float,
+    indemnitor_name: str = "",
+    overdue: bool = False,
+) -> dict:
+    """Schedule payment reminders for a bond case.
+
+    Creates up to 2 reminders:
+      - 3 days before payment due
+      - 1 day before payment due
+    Or 1 overdue notice if overdue=True.
+
+    Returns:
+        { "scheduled": list[dict], "bb_server_side": bool }
+    """
+    phone = format_phone(phone)
+    chat_guid = f"any;-;{phone}"
+    bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
+    bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"]) if bb_server else None
+    is_imessage = False
+    if bb_client:
+        try:
+            avail = await bb_client.check_imessage_availability(phone)
+            is_imessage = avail.get("available", False)
+        except Exception:
+            pass
+    first_name = (indemnitor_name or defendant_name or "").split()[0] or "there"
+    context = {
+        "name": first_name,
+        "defendant_name": defendant_name,
+        "amount": amount,
+        "due_date": due_date.strftime("%B %d, %Y"),
+    }
+    if overdue:
+        reminders = [("payment_overdue", datetime.now(timezone.utc))]
+    else:
+        reminders = [
+            ("payment_reminder_3d", due_date - timedelta(days=3)),
+            ("payment_reminder_1d", due_date - timedelta(days=1)),
+        ]
+    scheduled = []
+    scheduled_coll = get_collection("scheduled_messages")
+    for template_key, send_at in reminders:
+        if not overdue and send_at <= datetime.now(timezone.utc):
+            logger.info("Skipping %s for %s — send time is in the past", template_key, booking_number)
+            continue
+        message = _build_reminder_message(template_key, context)
+        send_at_ms = _to_epoch_ms(send_at)
+        schedule_doc = {
+            "booking_number": booking_number,
+            "defendant_name": defendant_name,
+            "phone": phone,
+            "chat_guid": chat_guid,
+            "channel": "imessage" if is_imessage else "sms",
+            "template_key": template_key,
+            "message": message,
+            "send_at": send_at.isoformat(),
+            "send_at_ms": send_at_ms,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "reminder_type": "payment",
+            "amount": amount,
+        }
+        bb_schedule_id = None
+        if is_imessage and bb_client and not overdue:
+            result = await bb_client.schedule_message(chat_guid, message, send_at_ms)
+            if result.get("success"):
+                bb_schedule_id = (result.get("data") or {}).get("id")
+                schedule_doc["bb_schedule_id"] = bb_schedule_id
+                schedule_doc["scheduling_method"] = "bb_server"
+                logger.info("📅 BB server-side scheduled %s for %s at %s",
+                            template_key, defendant_name, send_at.strftime("%m/%d %H:%M"))
+            else:
+                schedule_doc["scheduling_method"] = "vps_fallback"
+        else:
+            schedule_doc["scheduling_method"] = "vps_fallback"
+        await scheduled_coll.insert_one(schedule_doc)
+        scheduled.append({
+            "template_key": template_key,
+            "send_at": send_at.isoformat(),
+            "channel": schedule_doc["channel"],
+            "scheduling_method": schedule_doc["scheduling_method"],
+        })
+    return {
+        "booking_number": booking_number,
+        "scheduled": scheduled,
+        "total_scheduled": len(scheduled),
+        "bb_server_side": is_imessage and bb_client is not None,
+    }
+
+
+@bb_schedule_bp.route("/bb-schedule/payment-reminders", methods=["POST"])
+async def api_schedule_payment_reminders():
+    """Schedule payment reminders for a bond case.
+
+    Body (JSON):
+      booking_number  — required
+      defendant_name  — required
+      phone           — required (indemnitor or defendant)
+      due_date        — required (ISO 8601 datetime)
+      amount          — required (float, payment amount in dollars)
+      indemnitor_name — optional
+      overdue         — optional bool (default false); if true, sends overdue notice immediately
+    """
+    try:
+        data = await request.get_json(force=True) or {}
+        booking_number = data.get("booking_number", "").strip()
+        defendant_name = data.get("defendant_name", "").strip()
+        phone = data.get("phone", "").strip()
+        due_date_str = data.get("due_date", "").strip()
+        amount = float(data.get("amount", 0) or 0)
+        indemnitor_name = data.get("indemnitor_name", "").strip()
+        overdue = bool(data.get("overdue", False))
+        if not booking_number or not phone or not due_date_str:
+            return jsonify({"success": False, "error": "booking_number, phone, and due_date are required"}), 400
+        due_date = datetime.fromisoformat(due_date_str.replace("Z", "+00:00"))
+        if due_date.tzinfo is None:
+            due_date = due_date.replace(tzinfo=timezone.utc)
+        result = await schedule_payment_reminders_for_case(
+            booking_number=booking_number,
+            defendant_name=defendant_name,
+            phone=phone,
+            due_date=due_date,
+            amount=amount,
+            indemnitor_name=indemnitor_name,
+            overdue=overdue,
+        )
+        return jsonify({"success": True, **result}), 201
+    except Exception as e:
+        logger.error("Payment reminder scheduling error: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 async def process_vps_scheduled_messages() -> dict:
     """Process VPS-side scheduled messages that are due to be sent.
 

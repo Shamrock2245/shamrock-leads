@@ -574,3 +574,56 @@ async def poa_inventory_summary():
     except Exception as exc:
         logger.exception("reports/poa-inventory error: %s", exc)
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@reports_bp.route("/reports/kpi-trends", methods=["GET"])
+async def kpi_trends():
+    """Return period-over-period KPI comparison for the Reports tab trend indicators."""
+    try:
+        from datetime import timezone, timedelta
+        now = datetime.now(timezone.utc)
+        period_days = int(request.args.get("days", 30))
+        cur_start = (now - timedelta(days=period_days)).isoformat()
+        prev_start = (now - timedelta(days=period_days * 2)).isoformat()
+        prev_end = cur_start
+
+        db = get_db()
+        active_col = db["active_bonds"]
+        poa_col = db["poa_inventory"]
+
+        async def _count(col, query):
+            return await col.count_documents(query)
+
+        async def _sum_field(col, field, query):
+            pipe = [{"$match": query}, {"$group": {"_id": None, "total": {"$sum": f"${field}"}}}]
+            res = await col.aggregate(pipe).to_list(1)
+            return (res[0]["total"] if res else 0) or 0
+
+        cur_bonds  = await _count(active_col, {"created_at": {"$gte": cur_start}})
+        prev_bonds = await _count(active_col, {"created_at": {"$gte": prev_start, "$lt": prev_end}})
+
+        cur_disc  = await _count(active_col, {"status": {"$in": ["discharged", "exonerated"]}, "discharged_at": {"$gte": cur_start}})
+        prev_disc = await _count(active_col, {"status": {"$in": ["discharged", "exonerated"]}, "discharged_at": {"$gte": prev_start, "$lt": prev_end}})
+
+        cur_liab  = await _sum_field(active_col, "bond_amount", {"status": "active"})
+        prev_liab = await _sum_field(active_col, "bond_amount", {"status": "active", "created_at": {"$lt": cur_start}})
+
+        cur_poa  = await _count(poa_col, {"status": "used", "used_at": {"$gte": cur_start}})
+        prev_poa = await _count(poa_col, {"status": "used", "used_at": {"$gte": prev_start, "$lt": prev_end}})
+
+        def _pct(cur, prev):
+            if prev == 0:
+                return None
+            return round((cur - prev) / prev * 100, 1)
+
+        return jsonify({
+            "success": True,
+            "period_days": period_days,
+            "bonds":            {"current": cur_bonds,  "prior": prev_bonds, "pct_change": _pct(cur_bonds,  prev_bonds)},
+            "discharged":       {"current": cur_disc,   "prior": prev_disc,  "pct_change": _pct(cur_disc,   prev_disc)},
+            "surety_liability": {"current": cur_liab,   "prior": prev_liab,  "pct_change": _pct(cur_liab,   prev_liab)},
+            "poa_used":         {"current": cur_poa,    "prior": prev_poa,   "pct_change": _pct(cur_poa,    prev_poa)},
+        })
+    except Exception as exc:
+        logger.exception("reports/kpi-trends error: %s", exc)
+        return jsonify({"success": False, "error": str(exc)}), 500

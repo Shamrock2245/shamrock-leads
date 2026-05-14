@@ -241,6 +241,24 @@ async def send_portal_link():
     })
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GET  /api/portal/stats  — aggregate portal token stats for dashboard KPI
+# ─────────────────────────────────────────────────────────────────────────────
+@portal_bp.route("/api/portal/stats", methods=["GET"])
+async def portal_stats():
+    """Return aggregate portal token stats for the dashboard KPI panel."""
+    col = get_collection("portal_tokens")
+    now = datetime.now(timezone.utc)
+    total_active = await col.count_documents({"expires_at": {"$gt": now}, "revoked": {"$ne": True}})
+    total_checkins = await col.count_documents({"last_checkin": {"$exists": True}})
+    total_all_time = await col.count_documents({})
+    return jsonify({
+        "active_tokens": total_active,
+        "total_checkins": total_checkins,
+        "total_all_time": total_all_time,
+    })
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
