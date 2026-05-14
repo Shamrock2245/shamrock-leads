@@ -1265,3 +1265,203 @@ async def api_bulk_exonerate():
     except Exception as e:
         logger.error("[bulk-exonerate] Fatal error: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PER-DEFENDANT COMPLIANCE SUMMARY
+# GET /api/active-bonds/<booking_number>/compliance
+# Returns check-in compliance, court appearance, and payment status
+# ═══════════════════════════════════════════════════════════════════════════════
+@bonds_bp.route("/active-bonds/<booking_number>/compliance", methods=["GET"])
+async def api_bond_compliance(booking_number):
+    """
+    Captira-style per-defendant compliance summary.
+    Returns:
+      - check_in: last check-in date, streak, overdue status, compliance %
+      - court: next court date, days until, missed court dates
+      - payment: plan status, balance remaining, days overdue
+      - overall_score: 0-100 composite compliance score
+    """
+    try:
+        db_active = get_collection("active_bonds")
+        db_checkins = get_collection("bond_checkins")
+        db_plans = get_collection("payment_plans")
+        db_payments = get_collection("payments")
+
+        bond = await db_active.find_one({"booking_number": booking_number})
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+
+        # ── Check-In Compliance ─────────────────────────────────────────────
+        freq_days = bond.get("check_in_frequency_days") or 30
+        last_checkin_raw = bond.get("last_checkin") or bond.get("last_check_in")
+        next_due_raw = bond.get("next_checkin_due") or bond.get("next_check_in_due")
+        missed = bond.get("missed_check_ins", 0)
+        ci_required = bond.get("check_in_required", False)
+
+        # Count check-ins in last 90 days
+        cutoff_90 = (now - timedelta(days=90)).isoformat()
+        ci_count = await db_checkins.count_documents({
+            "booking_number": booking_number,
+            "checkin_at": {"$gte": cutoff_90},
+        })
+        # Expected check-ins in 90 days
+        expected_ci = max(1, 90 // max(1, freq_days))
+        ci_compliance_pct = min(100, round((ci_count / expected_ci) * 100)) if expected_ci > 0 else 100
+
+        # Last check-in details
+        last_ci_doc = await db_checkins.find_one(
+            {"booking_number": booking_number},
+            sort=[("checkin_at", -1)],
+        )
+        last_ci_str = None
+        if last_ci_doc:
+            lc = last_ci_doc.get("checkin_at")
+            last_ci_str = lc.isoformat() if hasattr(lc, "isoformat") else str(lc)
+
+        # Overdue check
+        ci_overdue = False
+        hours_overdue = 0
+        if ci_required and next_due_raw:
+            nd_str = next_due_raw.isoformat() if hasattr(next_due_raw, "isoformat") else str(next_due_raw)
+            if nd_str < now_iso:
+                ci_overdue = True
+                try:
+                    nd_dt = datetime.fromisoformat(nd_str.replace("Z", "+00:00"))
+                    if nd_dt.tzinfo is None:
+                        nd_dt = nd_dt.replace(tzinfo=timezone.utc)
+                    hours_overdue = max(0, int((now - nd_dt).total_seconds() / 3600))
+                except Exception:
+                    hours_overdue = 0
+
+        # ── Court Appearance ────────────────────────────────────────────────
+        court_date_raw = bond.get("court_date")
+        court_date_str = None
+        days_until_court = None
+        court_status = "unknown"
+        if court_date_raw:
+            court_date_str = str(court_date_raw)[:10]
+            try:
+                cd = datetime.fromisoformat(court_date_str)
+                diff = (cd.date() - now.date()).days
+                days_until_court = diff
+                if diff < 0:
+                    court_status = "past"
+                elif diff == 0:
+                    court_status = "today"
+                elif diff <= 3:
+                    court_status = "imminent"
+                elif diff <= 14:
+                    court_status = "upcoming"
+                else:
+                    court_status = "scheduled"
+            except Exception:
+                court_status = "scheduled"
+
+        # ── Payment Compliance ──────────────────────────────────────────────
+        plan = await db_plans.find_one({"booking_number": booking_number})
+        payment_status = "no_plan"
+        balance_remaining = 0.0
+        payment_days_overdue = 0
+        total_paid = 0.0
+        plan_amount = 0.0
+        if plan:
+            plan_status = plan.get("status", "active")
+            balance_remaining = plan.get("balance_remaining", 0.0)
+            total_paid = plan.get("total_paid", 0.0)
+            plan_amount = plan.get("total_amount", 0.0)
+            next_due_plan = plan.get("next_due_date", "")
+            if plan_status == "paid":
+                payment_status = "paid"
+            elif next_due_plan and next_due_plan < now_iso:
+                payment_status = "overdue"
+                try:
+                    nd_dt = datetime.fromisoformat(next_due_plan.replace("Z", "+00:00"))
+                    if nd_dt.tzinfo is None:
+                        nd_dt = nd_dt.replace(tzinfo=timezone.utc)
+                    payment_days_overdue = max(0, (now - nd_dt).days)
+                except Exception:
+                    payment_days_overdue = 0
+            else:
+                payment_status = "current"
+        else:
+            # Check if premium was paid (one-time)
+            premium_paid = await db_payments.count_documents({
+                "booking_number": booking_number,
+                "status": "completed",
+                "type": {"$in": ["premium", "payment_plan"]},
+            })
+            if premium_paid > 0:
+                payment_status = "paid"
+                total_paid = bond.get("premium", 0.0)
+
+        # ── Composite Compliance Score (0-100) ──────────────────────────────
+        # Weights: check-in 40%, court 30%, payment 30%
+        ci_score = ci_compliance_pct * 0.40
+        if not ci_required:
+            ci_score = 40  # Full credit if check-in not required
+
+        court_score = 30
+        if court_status == "past" and days_until_court is not None and days_until_court < -1:
+            court_score = 0  # Missed court date
+        elif court_status in ("today", "imminent"):
+            court_score = 20  # Needs attention
+
+        pay_score = 30
+        if payment_status == "paid":
+            pay_score = 30
+        elif payment_status == "current":
+            pay_score = 25
+        elif payment_status == "overdue":
+            pay_score = max(0, 25 - payment_days_overdue)
+        elif payment_status == "no_plan":
+            pay_score = 15  # Unknown
+
+        overall_score = min(100, round(ci_score + court_score + pay_score))
+
+        # ── Compliance Level ────────────────────────────────────────────────
+        if overall_score >= 80:
+            compliance_level = "compliant"
+        elif overall_score >= 50:
+            compliance_level = "warning"
+        else:
+            compliance_level = "critical"
+
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "defendant_name": bond.get("defendant_name", ""),
+            "overall_score": overall_score,
+            "compliance_level": compliance_level,
+            "check_in": {
+                "required": ci_required,
+                "frequency_days": freq_days,
+                "last_checkin": last_ci_str,
+                "next_due": (next_due_raw.isoformat() if hasattr(next_due_raw, "isoformat") else str(next_due_raw)) if next_due_raw else None,
+                "overdue": ci_overdue,
+                "hours_overdue": hours_overdue,
+                "missed_count": missed,
+                "checkins_90d": ci_count,
+                "compliance_pct": ci_compliance_pct,
+            },
+            "court": {
+                "court_date": court_date_str,
+                "court_location": bond.get("court_location", ""),
+                "days_until": days_until_court,
+                "status": court_status,
+            },
+            "payment": {
+                "status": payment_status,
+                "plan_amount": round(plan_amount, 2),
+                "total_paid": round(total_paid, 2),
+                "balance_remaining": round(balance_remaining, 2),
+                "days_overdue": payment_days_overdue,
+            },
+            "evaluated_at": now_iso,
+        })
+    except Exception as exc:
+        logger.exception("active-bonds/%s/compliance error: %s", booking_number, exc)
+        return jsonify({"success": False, "error": str(exc)}), 500

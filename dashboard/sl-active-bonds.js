@@ -378,6 +378,8 @@ function openEditDrawer(bookingNumber) {
 
   document.getElementById('abEditDrawer').classList.add('open');
   document.getElementById('abEditOverlay').classList.add('show');
+  // Load compliance data for this defendant
+  _loadCompliancePanel(bookingNumber);
 }
 
 function closeEditDrawer() {
@@ -483,6 +485,12 @@ function _buildEditDrawer() {
       ${_es('Notes', `
         <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Internal Notes<textarea id="abEditNotes" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:80px;resize:vertical" placeholder="Internal notes…"></textarea></label>
       `)}
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Compliance Status</div>
+        <div id="abCompliancePanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:14px;min-height:60px">
+          <div style="color:var(--muted);font-size:12px;text-align:center">Loading compliance data…</div>
+        </div>
+      </div>
     </div>
     <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel)">
       <button onclick="closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
@@ -1669,3 +1677,78 @@ function sendBondImessage(bookingNumber, defendantName, phone) {
   }
 
 })();
+
+/* ══════════════════════════════════════════════════════════════════
+   COMPLIANCE PANEL — Per-defendant compliance status
+   Captira-style: check-in, court, payment compliance
+   ══════════════════════════════════════════════════════════════════ */
+async function _loadCompliancePanel(bookingNumber) {
+  const panel = document.getElementById('abCompliancePanel');
+  if (!panel) return;
+  panel.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:8px">Loading compliance data…</div>';
+  try {
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(bookingNumber)}/compliance`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error || 'Unknown error');
+
+    const score = d.overall_score || 0;
+    const level = d.compliance_level || 'unknown';
+    const scoreColor = level === 'compliant' ? 'var(--accent)' : level === 'warning' ? '#f59e0b' : 'var(--danger)';
+    const scoreLabel = level === 'compliant' ? '✅ Compliant' : level === 'warning' ? '⚠️ Warning' : '🚨 Critical';
+
+    // Check-in row
+    const ci = d.check_in || {};
+    const ciStatus = !ci.required ? 'N/A' : ci.overdue ? `<span style="color:var(--danger);font-weight:700">Overdue ${ci.hours_overdue}h</span>` : `<span style="color:var(--accent)">${ci.compliance_pct}% (${ci.checkins_90d} in 90d)</span>`;
+    const ciLast = ci.last_checkin ? new Date(ci.last_checkin).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '<span style="color:var(--muted)">Never</span>';
+
+    // Court row
+    const ct = d.court || {};
+    let courtStatus = '—';
+    if (ct.court_date) {
+      const daysUntil = ct.days_until;
+      if (ct.status === 'past') courtStatus = `<span style="color:var(--danger)">Past (${Math.abs(daysUntil)}d ago)</span>`;
+      else if (ct.status === 'today') courtStatus = `<span style="color:var(--danger);font-weight:700">TODAY</span>`;
+      else if (ct.status === 'imminent') courtStatus = `<span style="color:var(--danger)">${daysUntil}d away</span>`;
+      else if (ct.status === 'upcoming') courtStatus = `<span style="color:#f59e0b">${daysUntil}d away</span>`;
+      else courtStatus = `<span style="color:var(--muted)">${daysUntil}d away</span>`;
+    }
+
+    // Payment row
+    const pay = d.payment || {};
+    let payStatus = '—';
+    if (pay.status === 'paid') payStatus = `<span style="color:var(--accent)">Paid in Full</span>`;
+    else if (pay.status === 'current') payStatus = `<span style="color:var(--accent)">Current ($${(pay.balance_remaining||0).toLocaleString()} remaining)</span>`;
+    else if (pay.status === 'overdue') payStatus = `<span style="color:var(--danger);font-weight:700">Overdue ${pay.days_overdue}d ($${(pay.balance_remaining||0).toLocaleString()})</span>`;
+    else payStatus = `<span style="color:var(--muted)">No plan on file</span>`;
+
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:700;color:${scoreColor}">${scoreLabel}</div>
+        <div style="font-size:22px;font-weight:800;color:${scoreColor}">${score}<span style="font-size:13px;font-weight:400;color:var(--muted)">/100</span></div>
+      </div>
+      <div style="background:var(--border);border-radius:4px;height:6px;margin-bottom:14px;overflow:hidden">
+        <div style="background:${scoreColor};height:100%;width:${score}%;border-radius:4px;transition:width .4s ease"></div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 0;color:var(--muted);width:40%">📍 Check-In</td>
+          <td style="padding:6px 0">${ciStatus}</td>
+          <td style="padding:6px 0;color:var(--muted);font-size:11px;text-align:right">Last: ${ciLast}</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 0;color:var(--muted)">⚖️ Court Date</td>
+          <td style="padding:6px 0">${courtStatus}</td>
+          <td style="padding:6px 0;color:var(--muted);font-size:11px;text-align:right">${ct.court_date ? new Date(ct.court_date).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>
+        </tr>
+        <tr>
+          <td style="padding:6px 0;color:var(--muted)">💳 Payment</td>
+          <td style="padding:6px 0" colspan="2">${payStatus}</td>
+        </tr>
+      </table>
+      <div style="margin-top:8px;font-size:10px;color:var(--muted);text-align:right">Updated ${new Date(d.evaluated_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center;padding:8px">Compliance data unavailable</div>`;
+  }
+}
