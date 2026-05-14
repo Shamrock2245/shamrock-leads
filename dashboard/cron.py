@@ -156,6 +156,21 @@ async def _run_rearrest():
     if result.get("detected", 0) > 0:
         logger.warning("🔄 RE-ARREST: %s match(es)!", result["detected"])
 
+async def _run_fta_alert():
+    """Every 4h: scan active bonds for missed court dates, fire BB alert pipeline."""
+    from dashboard.extensions import get_db
+    from dashboard.services.fta_alert_service import FTAAlertService
+    db = get_db()
+    svc = FTAAlertService(db)
+    result = await svc.scan_and_alert()
+    if result.get("fta_detected", 0) > 0:
+        logger.warning(
+            "[FTAAlert] 🚨 %d new FTA(s) detected | alerts_sent=%d | escalated=%d",
+            result["fta_detected"], result["alerts_sent"], result["escalated"],
+        )
+    else:
+        logger.info("[FTAAlert] scanned=%d — no new FTAs", result.get("scanned", 0))
+
 async def _run_retention():
     from dashboard.api.data_retention import _execute_purge
     result = await _execute_purge(dry_run=False)
@@ -310,6 +325,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("court_reminders",    "CourtReminder",      3600,  60, _run_court_reminders),
     CronDef("delinquency_scanner","Delinquency",       14400, 120, _run_delinquency),
     CronDef("rearrest_detection", "ReArrest",           7200, 180, _run_rearrest),
+    CronDef("fta_alert",          "FTAAlert",          14400, 120, _run_fta_alert),
     CronDef("data_retention",     "DataRetention",    604800, 300, _run_retention),
     CronDef("court_email",        "CourtEmail",          900,  90, _run_court_email),
     CronDef("blog_publisher",     "Blog",              21600, 300, _run_blog),

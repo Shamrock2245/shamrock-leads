@@ -113,6 +113,7 @@ class CourtReminderService:
 
             return {
                 "success": True,
+                "scheduled": len(reminders),
                 "scheduled_count": len(reminders),
                 "recipients": len(all_phones),
             }
@@ -198,6 +199,7 @@ class CourtReminderService:
 
             return {
                 "success": True,
+                "scheduled": len(reminders),
                 "scheduled_count": len(reminders),
                 "recipients": len(all_phones),
             }
@@ -318,6 +320,33 @@ class CourtReminderService:
         except Exception as e:
             logger.error("[reminder] all phones lookup error: %s", e)
         return result
+
+    async def cancel_reminders(self, booking_number: str) -> int:
+        """
+        Cancel all pending court reminders for a booking number.
+        Used when a bond is renewed, exonerated, or surrendered.
+
+        Returns:
+            Number of reminders cancelled.
+        """
+        try:
+            col = get_collection("court_reminders")
+            result = await col.update_many(
+                {"booking_number": booking_number, "status": "pending"},
+                {"$set": {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            count = result.modified_count
+            if count:
+                logger.info("[court_reminder] Cancelled %d pending reminders for %s",
+                            count, booking_number)
+            return count
+        except Exception as exc:
+            logger.error("[court_reminder] cancel_reminders error for %s: %s",
+                         booking_number, exc)
+            return 0
 
     async def auto_scan_and_schedule(self) -> dict:
         """

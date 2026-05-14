@@ -1465,3 +1465,173 @@ async def api_bond_compliance(booking_number):
     except Exception as exc:
         logger.exception("active-bonds/%s/compliance error: %s", booking_number, exc)
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Bond Renewal / Re-Write
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bonds_bp.route("/active-bonds/<booking_number>/renew", methods=["POST"])
+async def api_renew_bond(booking_number: str):
+    """
+    Re-write / renew an active bond.
+
+    Handles:
+      - New court date (continuance)
+      - Bond amount reduction / increase
+      - Charge amendment
+      - New POA assignment
+      - Cancels old court reminders, schedules new ones
+
+    Body JSON:
+      new_court_date     (str, ISO)   — required
+      new_court_location (str)        — optional, defaults to existing
+      new_bond_amount    (float)      — optional, defaults to existing
+      new_charges        (str)        — optional, defaults to existing
+      new_poa_number     (str)        — optional, assign new POA
+      renewal_reason     (str)        — required: continuance|reduction|amendment|other
+      notes              (str)        — optional agent notes
+    """
+    try:
+        data = await request.get_json() or {}
+        new_court_date = data.get("new_court_date")
+        renewal_reason = data.get("renewal_reason", "continuance")
+
+        if not new_court_date:
+            return jsonify({"success": False, "error": "new_court_date is required"}), 400
+
+        db = get_db()
+        col = db["active_bonds"]
+        bond = await col.find_one({"booking_number": booking_number})
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Build update fields
+        update_fields = {
+            "updated_at": now_iso,
+            "last_renewed_at": now_iso,
+            "renewal_count": bond.get("renewal_count", 0) + 1,
+            "renewal_reason": renewal_reason,
+            "previous_court_date": bond.get("court_date"),
+        }
+
+        if new_court_date:
+            update_fields["court_date"] = new_court_date
+        if data.get("new_court_location"):
+            update_fields["court_location"] = data["new_court_location"]
+        if data.get("new_bond_amount") is not None:
+            old_amount = bond.get("bond_amount", 0)
+            update_fields["bond_amount"] = float(data["new_bond_amount"])
+            update_fields["previous_bond_amount"] = old_amount
+        if data.get("new_charges"):
+            update_fields["charges"] = data["new_charges"]
+            update_fields["previous_charges"] = bond.get("charges")
+        if data.get("notes"):
+            update_fields["renewal_notes"] = data["notes"]
+
+        # Handle POA re-assignment
+        new_poa = data.get("new_poa_number")
+        old_poa = bond.get("poa_number")
+        if new_poa and new_poa != old_poa:
+            # Release old POA back to available
+            if old_poa:
+                await db["poa_inventory"].update_one(
+                    {"poa_number": old_poa},
+                    {"$set": {"status": "available", "released_at": now_iso,
+                              "released_reason": "bond_renewal"}}
+                )
+            # Mark new POA as used
+            await db["poa_inventory"].update_one(
+                {"poa_number": new_poa},
+                {"$set": {"status": "used", "used_at": now_iso,
+                          "booking_number": booking_number}}
+            )
+            update_fields["poa_number"] = new_poa
+            update_fields["previous_poa_number"] = old_poa
+
+        # Append to renewal history
+        renewal_record = {
+            "renewed_at": now_iso,
+            "reason": renewal_reason,
+            "old_court_date": bond.get("court_date"),
+            "new_court_date": new_court_date,
+            "old_bond_amount": bond.get("bond_amount"),
+            "new_bond_amount": data.get("new_bond_amount", bond.get("bond_amount")),
+            "agent": data.get("agent", "system"),
+            "notes": data.get("notes", ""),
+        }
+        await col.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": update_fields,
+                "$push": {"renewal_history": renewal_record},
+            }
+        )
+
+        # Cancel old court reminders and schedule new ones via BlueBubbles (iMessage)
+        try:
+            from dashboard.services.court_reminder_service import CourtReminderService
+            svc = CourtReminderService(db)
+
+            # Cancel all pending reminders for this booking
+            cancelled = await svc.cancel_reminders(booking_number)
+            logger.info("[BondRenewal] Cancelled %d old reminders for %s", cancelled, booking_number)
+
+            defendant_name = bond.get("defendant_name", "")
+            # Prefer indemnitor_phone on the bond doc; fall back to phone field
+            phone = bond.get("indemnitor_phone") or bond.get("phone", "")
+            court_location = update_fields.get("court_location", bond.get("court_location", ""))
+            case_number = bond.get("case_number", "")
+
+            # Collect all indemnitor phones from the indemnitors collection
+            indemnitor_phones = []
+            async for ind in db["indemnitors"].find({"booking_number": booking_number}, {"phone": 1}):
+                if ind.get("phone"):
+                    indemnitor_phones.append(ind["phone"])
+
+            if phone and defendant_name:
+                # schedule_reminders persists to court_reminders collection;
+                # CourtReminderService processor delivers via BB iMessage
+                sched_result = await svc.schedule_reminders(
+                    booking_number=booking_number,
+                    defendant_name=defendant_name,
+                    phone=phone,
+                    court_date_str=new_court_date,
+                    court_location=court_location,
+                    case_number=case_number,
+                    indemnitor_phones=indemnitor_phones,
+                )
+                reminders_scheduled = sched_result.get("scheduled", 0) if isinstance(sched_result, dict) else 0
+            else:
+                reminders_scheduled = 0
+        except Exception as rem_exc:
+            logger.warning("[BondRenewal] BB reminder reschedule failed for %s: %s",
+                           booking_number, rem_exc)
+            reminders_scheduled = 0
+
+        # Fire SSE event
+        try:
+            from dashboard.api.events import emit_event
+            await emit_event("bond_renewed", {
+                "booking_number": booking_number,
+                "renewal_reason": renewal_reason,
+                "new_court_date": new_court_date,
+            })
+        except Exception:
+            pass
+
+        logger.info("[BondRenewal] %s renewed (%s) — %d new reminders",
+                    booking_number, renewal_reason, reminders_scheduled)
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "renewal_reason": renewal_reason,
+            "new_court_date": new_court_date,
+            "reminders_scheduled": reminders_scheduled,
+            "renewal_count": update_fields["renewal_count"],
+        })
+    except Exception as exc:
+        logger.exception("active-bonds/%s/renew error: %s", booking_number, exc)
+        return jsonify({"success": False, "error": str(exc)}), 500

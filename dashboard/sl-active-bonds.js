@@ -318,6 +318,7 @@ function renderActiveBondsTable() {
             <option value="forfeited">Forfeited</option>
             <option value="reinstated">Reinstated</option>
           </select>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#fff" onclick="openRenewBondModal('${bkSafe}','${nameSafe}')">🔄 Renew</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#6b7280;color:#fff" onclick="SLKanban&&SLKanban.loadStatusHistory('${bkSafe}')">📋 History</button>
         </div>
       </td>
@@ -376,6 +377,7 @@ function openEditDrawer(bookingNumber) {
   const hdr = document.getElementById('abEditDrawerTitle');
   if (hdr) hdr.textContent = `✏️ Edit Bond — ${bond.defendant_name || bookingNumber}`;
 
+  window._abEditBookingNumber = bookingNumber;
   document.getElementById('abEditDrawer').classList.add('open');
   document.getElementById('abEditOverlay').classList.add('show');
   // Load compliance data for this defendant
@@ -494,6 +496,7 @@ function _buildEditDrawer() {
     </div>
     <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel)">
       <button onclick="closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
+      <button onclick="openRenewBondModal(window._abEditBookingNumber||'','')" style="padding:8px 16px;background:#f59e0b;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">🔄 Renew Bond</button>
       <button id="abEditSaveBtn" onclick="saveEditDrawer()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">💾 Save Changes</button>
     </div>`;
   document.body.appendChild(drawer);
@@ -1750,5 +1753,125 @@ async function _loadCompliancePanel(bookingNumber) {
     `;
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center;padding:8px">Compliance data unavailable</div>`;
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   BOND RENEWAL / RE-WRITE MODAL
+   Captira-style: update court date, reason, optional new POA/bond amount
+   ══════════════════════════════════════════════════════════════════ */
+function openRenewBondModal(bookingNumber, defendantName) {
+  const bn = bookingNumber || window._abEditBookingNumber || '';
+  if (!bn) { toast('No booking number — open from a bond row', 'error'); return; }
+
+  const bond = _abBonds.find(b => b.booking_number === bn);
+  const name = defendantName || (bond && bond.defendant_name) || bn;
+
+  // Remove any stale modal
+  const old = document.getElementById('abRenewModal');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'abRenewModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;width:480px;max-width:95vw;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <h3 style="margin:0;font-size:17px">🔄 Renew / Re-Write Bond</h3>
+        <button onclick="document.getElementById('abRenewModal').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+      </div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:18px;padding:10px;background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:6px">
+        Defendant: <strong style="color:var(--text)">${escHtml(name)}</strong><br>
+        Booking: <code style="font-size:12px">${escHtml(bn)}</code>
+      </div>
+      <div style="display:grid;gap:14px">
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          Renewal Reason *
+          <select id="abRenewReason" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+            <option value="">— Select reason —</option>
+            <option value="new_court_date">New Court Date Set</option>
+            <option value="charge_amendment">Charge Amendment</option>
+            <option value="bond_reduction">Bond Reduction</option>
+            <option value="bond_increase">Bond Increase</option>
+            <option value="poa_replacement">POA Replacement</option>
+            <option value="continuance">Continuance</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          New Court Date *
+          <input id="abRenewCourtDate" type="date" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"
+            value="${bond && bond.court_date ? String(bond.court_date).substring(0,10) : ''}">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          New Court Location (optional)
+          <input id="abRenewCourtLoc" type="text" placeholder="e.g. Lee County Courthouse Rm 4A"
+            style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"
+            value="${bond && bond.court_location ? escHtml(bond.court_location) : ''}">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          New Bond Amount (optional — leave blank to keep current)
+          <input id="abRenewBondAmount" type="number" min="0" step="500" placeholder="${bond ? (bond.bond_amount || '') : ''}"
+            style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          New POA Number (optional)
+          <input id="abRenewPOA" type="text" placeholder="e.g. PSC2 2644680"
+            style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
+          Notes (optional)
+          <textarea id="abRenewNotes" rows="2" placeholder="Internal notes about this renewal…"
+            style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;resize:vertical"></textarea>
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:20px">
+        <button onclick="document.getElementById('abRenewModal').remove()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
+        <button id="abRenewSubmitBtn" onclick="_submitRenewBond('${escHtml(bn)}')" style="padding:8px 20px;background:#f59e0b;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">🔄 Confirm Renewal</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  // Close on backdrop click
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+
+async function _submitRenewBond(bookingNumber) {
+  const reason    = document.getElementById('abRenewReason')?.value?.trim();
+  const courtDate = document.getElementById('abRenewCourtDate')?.value?.trim();
+  const courtLoc  = document.getElementById('abRenewCourtLoc')?.value?.trim();
+  const bondAmt   = document.getElementById('abRenewBondAmount')?.value?.trim();
+  const poa       = document.getElementById('abRenewPOA')?.value?.trim();
+  const notes     = document.getElementById('abRenewNotes')?.value?.trim();
+
+  if (!reason) { toast('Please select a renewal reason', 'error'); return; }
+  if (!courtDate) { toast('New court date is required', 'error'); return; }
+
+  const btn = document.getElementById('abRenewSubmitBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const payload = { renewal_reason: reason, new_court_date: courtDate };
+  if (courtLoc) payload.court_location = courtLoc;
+  if (bondAmt)  payload.bond_amount = parseFloat(bondAmt);
+  if (poa)      payload.poa_number = poa;
+  if (notes)    payload.renewal_notes = notes;
+
+  try {
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(bookingNumber)}/renew`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success) throw new Error(d.error || `HTTP ${r.status}`);
+
+    document.getElementById('abRenewModal')?.remove();
+    toast(`✅ Bond renewed — ${d.reminders_scheduled} court reminder(s) scheduled via iMessage`, 'success', 5000);
+
+    // Refresh the table so the new court date shows immediately
+    await loadActiveBonds();
+  } catch (e) {
+    toast(`Renewal failed: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Confirm Renewal'; }
   }
 }
