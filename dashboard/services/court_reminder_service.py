@@ -15,12 +15,16 @@ Both defendant AND indemnitor phone numbers are resolved from
 the bond record and messaged independently.
 """
 
+import os
+import secrets
 import logging
 from datetime import datetime, timedelta, timezone
 
 from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
+
+_PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
 
 
 class CourtReminderService:
@@ -86,6 +90,24 @@ class CourtReminderService:
                     ).isoformat()
 
                 for recipient in all_phones:
+                    # Generate a unique geolocator link per reminder (mandatory project requirement)
+                    geo_token = secrets.token_urlsafe(12)
+                    geo_url = f"{_PUBLIC_URL.rstrip('/')}/g/{geo_token}"
+                    try:
+                        geo_col = get_collection("geo_pings")
+                        await geo_col.insert_one({
+                            "token": geo_token,
+                            "booking_number": booking_number,
+                            "phone": recipient["phone"],
+                            "recipient": f"court_reminder_{touch_id}_{recipient['role']}",
+                            "status": "pending",
+                            "ping_count": 0,
+                            "pings": [],
+                            "created_at": now_iso,
+                        })
+                    except Exception:
+                        geo_url = ""  # non-fatal — message still sends without link
+
                     msg = self._build_court_message(
                         defendant_name,
                         date_str,
@@ -93,6 +115,7 @@ class CourtReminderService:
                         case_number,
                         urgency_text,
                         recipient["role"],
+                        geo_url=geo_url,
                     )
                     reminders.append({
                         "booking_number": booking_number,
@@ -103,6 +126,7 @@ class CourtReminderService:
                         "touch": touch_id,
                         "send_at": send_at,
                         "message": msg,
+                        "geo_token": geo_token,
                         "status": "pending",
                         "reminder_type": "court",
                         "created_at": now_iso,
@@ -468,22 +492,26 @@ class CourtReminderService:
     def _build_court_message(
         name: str, date: str, location: str, case: str,
         urgency: str, role: str,
+        geo_url: str = "",
     ) -> str:
-        """Build court reminder message text."""
+        """Build court reminder message text. geo_url is mandatory per project rules."""
+        geo_line = f"\nConfirm your location: {geo_url}" if geo_url else ""
         if role == "indemnitor":
             return (
                 f"SHAMROCK BAIL BONDS — Court Reminder\n\n"
                 f"This is a reminder that {name} has court {urgency} "
                 f"({date}) at {location} County (Case: {case}).\n\n"
                 f"As a co-signer, please ensure they attend. "
-                f"Reply for assistance."
+                f"Reply for assistance.{geo_line}\n"
+                f"☘️ Shamrock Bail Bonds (239) 332-2245"
             )
         return (
             f"SHAMROCK BAIL BONDS — Court Reminder\n\n"
             f"{name}, you have court {urgency} ({date}) at "
             f"{location} County (Case: {case}).\n\n"
             f"Please arrive early and dress appropriately. "
-            f"Reply for assistance."
+            f"Reply for assistance.{geo_line}\n"
+            f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
 
     @staticmethod

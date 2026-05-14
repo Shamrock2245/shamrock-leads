@@ -17,9 +17,12 @@ Staff-only (session-authed):
 from __future__ import annotations
 
 import os
+import secrets
 import logging
 from datetime import datetime, timezone
 from quart import Blueprint, jsonify, request, make_response
+
+_PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
 
 from dashboard.extensions import get_collection
 from dashboard.services.client_portal_service import (
@@ -200,17 +203,37 @@ async def send_portal_link():
     portal_url = token_result["url"]
     defendant_name = token_result.get("defendant_name", "defendant")
 
+    # Generate a geolocator link (mandatory project requirement for all outbound texts)
+    geo_token = secrets.token_urlsafe(12)
+    geo_url = f"{_PUBLIC_URL.rstrip('/')}/g/{geo_token}"
+    try:
+        geo_col = get_collection("geo_pings")
+        await geo_col.insert_one({
+            "token": geo_token,
+            "booking_number": booking_number,
+            "phone": phone,
+            "recipient": f"portal_link_{role}",
+            "status": "pending",
+            "ping_count": 0,
+            "pings": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        geo_url = ""  # non-fatal
+
+    geo_line = f"\nConfirm your location: {geo_url}" if geo_url else ""
+
     if role == "indemnitor":
         msg = (
             f"Hi! Here's your Shamrock Bail Bonds portal link for "
             f"{defendant_name}'s bond. View status, make payments, and "
-            f"manage everything in one place:\n\n{portal_url}\n\n"
+            f"manage everything in one place:\n\n{portal_url}{geo_line}\n\n"
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
     else:
         msg = (
             f"Hi {defendant_name}! Here's your Shamrock Bail Bonds portal. "
-            f"Check in, view court dates, and stay compliant:\n\n{portal_url}\n\n"
+            f"Check in, view court dates, and stay compliant:\n\n{portal_url}{geo_line}\n\n"
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
 

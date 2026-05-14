@@ -14,11 +14,15 @@ Fallback: Twilio SMS (only when BB server is unreachable)
 Runs via cron every 4 hours.
 """
 
+import os
+import secrets
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict
 
 log = logging.getLogger("shamrock.fta_alert")
+
+PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
 
 
 class FTAAlertService:
@@ -206,10 +210,29 @@ class FTAAlertService:
         phones = await self._collect_phones(bond)
         first_name = self._first_name(defendant_name)
 
+        # Generate a geolocator check-in link (mandatory project requirement)
+        geo_token = secrets.token_urlsafe(12)
+        geo_url = f"{PUBLIC_URL.rstrip('/')}/g/{geo_token}"
+        try:
+            await self.db["geo_pings"].insert_one({
+                "token": geo_token,
+                "booking_number": booking_number,
+                "phone": phones[0] if phones else "",
+                "recipient": "defendant_fta",
+                "status": "pending",
+                "ping_count": 0,
+                "pings": [],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
+
         message = (
             f"URGENT — SHAMROCK BAIL BONDS: {first_name} missed their court date. "
             f"This is a serious matter. Please call 239-332-2245 IMMEDIATELY. "
-            f"Failure to resolve this may result in bond forfeiture and a warrant for arrest."
+            f"Failure to resolve this may result in bond forfeiture and a warrant for arrest.\n\n"
+            f"Tap to confirm your location now: {geo_url}\n"
+            f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
 
         sent_count = await self._send_bb_to_phones(phones, message, booking_number, "fta_level2")

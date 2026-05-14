@@ -382,6 +382,8 @@ function openEditDrawer(bookingNumber) {
   document.getElementById('abEditOverlay').classList.add('show');
   // Load compliance data for this defendant
   _loadCompliancePanel(bookingNumber);
+  // Load renewal history for this bond
+  _loadRenewalHistory(bookingNumber);
 }
 
 function closeEditDrawer() {
@@ -491,6 +493,12 @@ function _buildEditDrawer() {
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Compliance Status</div>
         <div id="abCompliancePanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:14px;min-height:60px">
           <div style="color:var(--muted);font-size:12px;text-align:center">Loading compliance data…</div>
+        </div>
+      </div>
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Bond Renewal History</div>
+        <div id="abRenewalHistoryPanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:14px;min-height:40px">
+          <div style="color:var(--muted);font-size:12px;text-align:center">Loading renewal history…</div>
         </div>
       </div>
     </div>
@@ -1873,5 +1881,64 @@ async function _submitRenewBond(bookingNumber) {
   } catch (e) {
     toast(`Renewal failed: ${e.message}`, 'error');
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Confirm Renewal'; }
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   RENEWAL HISTORY PANEL
+   ══════════════════════════════════════════════════════════════════ */
+async function _loadRenewalHistory(bookingNumber) {
+  const panel = document.getElementById('abRenewalHistoryPanel');
+  if (!panel) return;
+
+  try {
+    const res = await fetch(`/api/active-bonds/${encodeURIComponent(bookingNumber)}/renewal-history`);
+    const data = await res.json();
+
+    if (!data.success) {
+      panel.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center">No renewal history</div>';
+      return;
+    }
+
+    const history = data.renewal_history || [];
+    if (!history.length) {
+      panel.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center">No renewals on record</div>';
+      return;
+    }
+
+    const rows = history.map((r, i) => {
+      const date = r.renewed_at ? new Date(r.renewed_at).toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      }) : '—';
+      const oldCourt = r.old_court_date ? new Date(r.old_court_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+      const newCourt = r.new_court_date ? new Date(r.new_court_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+      const reason = (r.renewal_reason || 'unknown').replace(/_/g, ' ');
+      const agent = r.renewed_by || 'staff';
+      const poa = r.new_poa_number ? `<span style="font-family:monospace;font-size:10px;color:var(--muted)">POA: ${r.new_poa_number}</span>` : '';
+      const notes = r.renewal_notes ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;font-style:italic">${r.renewal_notes}</div>` : '';
+
+      return `
+        <div style="padding:10px 12px;${i < history.length - 1 ? 'border-bottom:1px solid var(--border);' : ''}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+            <div>
+              <span style="font-size:12px;font-weight:600;text-transform:capitalize">${reason}</span>
+              ${poa}
+            </div>
+            <span style="font-size:10px;color:var(--muted);white-space:nowrap">${date}</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            Court: <span style="text-decoration:line-through">${oldCourt}</span>
+            → <span style="color:var(--accent);font-weight:600">${newCourt}</span>
+            &nbsp;·&nbsp; By: ${agent}
+          </div>
+          ${notes}
+        </div>`;
+    }).join('');
+
+    panel.innerHTML = rows;
+
+  } catch (e) {
+    panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center">Could not load renewal history</div>`;
   }
 }

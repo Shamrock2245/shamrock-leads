@@ -206,6 +206,9 @@ def create_app():
     from dashboard.api.source_performance import source_performance_bp
     app.register_blueprint(source_performance_bp, url_prefix="/api")
 
+    from dashboard.api.fta import fta_bp  # ← FTA Alert Center
+    app.register_blueprint(fta_bp, url_prefix="/api")
+
     # ── Alpha Engine — Background Scoring Cycle (every 4 hours) ──────────
     async def _alpha_engine_cron_loop():
         """Background loop: recalculate source performance scores every 4 hours.

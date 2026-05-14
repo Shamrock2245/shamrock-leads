@@ -1635,3 +1635,33 @@ async def api_renew_bond(booking_number: str):
     except Exception as exc:
         logger.exception("active-bonds/%s/renew error: %s", booking_number, exc)
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/active-bonds/<booking_number>/renewal-history
+# ─────────────────────────────────────────────────────────────────────────────
+@bonds_bp.route("/active-bonds/<booking_number>/renewal-history", methods=["GET"])
+async def api_bond_renewal_history(booking_number: str):
+    """Return the renewal_history array for a bond."""
+    try:
+        active_bonds = get_collection("active_bonds")
+        bond = await active_bonds.find_one(
+            {"booking_number": booking_number},
+            {"_id": 0, "renewal_history": 1, "renewal_count": 1},
+        )
+        if not bond:
+            return jsonify({"success": False, "error": "Bond not found"}), 404
+
+        history = bond.get("renewal_history", [])
+        # Sort newest first
+        history = sorted(history, key=lambda r: r.get("renewed_at", ""), reverse=True)
+
+        return jsonify({
+            "success": True,
+            "booking_number": booking_number,
+            "renewal_count": bond.get("renewal_count", len(history)),
+            "renewal_history": history,
+        })
+    except Exception as exc:
+        logger.exception("renewal-history error for %s: %s", booking_number, exc)
+        return jsonify({"success": False, "error": str(exc)}), 500

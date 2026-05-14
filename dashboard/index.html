@@ -107,6 +107,7 @@
   <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
   <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
   <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">⚡ Alpha Intel</button>
+  <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">🚨 FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
   <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">💰 Accounting</button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
 </div>
@@ -3726,11 +3727,75 @@
   </div>
 </div><!-- end tabAlphaIntel -->
 
+<!-- ═══════════════════════════════════════════════════════════════════
+     FTA ALERTS TAB
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabFTA">
+  <div style="padding:20px 24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2 style="margin:0;font-size:20px">🚨 FTA Alert Center</h2>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">Failure-to-appear monitoring — auto-escalates at 0h / 24h / 48h</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select id="ftaFilterLevel" onchange="SLFTA.load()" style="padding:6px 10px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px">
+          <option value="">All Levels</option>
+          <option value="1">Level 1 (0–24h)</option>
+          <option value="2">Level 2 (24–48h)</option>
+          <option value="3">Level 3 (48h+ / Surrender)</option>
+        </select>
+        <button onclick="SLFTA.load()" style="padding:6px 14px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer">🔄 Refresh</button>
+        <button onclick="SLFTA.runScan()" style="padding:6px 14px;background:var(--danger);border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer;font-weight:600">⚡ Run FTA Scan Now</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px">
+      <div class="stat-card" style="text-align:center;padding:16px">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Open FTAs</div>
+        <div id="ftaKpiOpen" style="font-size:28px;font-weight:800;color:var(--danger)">—</div>
+      </div>
+      <div class="stat-card" style="text-align:center;padding:16px">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Level 3 / Surrender</div>
+        <div id="ftaKpiLevel3" style="font-size:28px;font-weight:800;color:#ff4444">—</div>
+      </div>
+      <div class="stat-card" style="text-align:center;padding:16px">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Resolved (30d)</div>
+        <div id="ftaKpiResolved" style="font-size:28px;font-weight:800;color:var(--accent)">—</div>
+      </div>
+      <div class="stat-card" style="text-align:center;padding:16px">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Exposure at Risk</div>
+        <div id="ftaKpiExposure" style="font-size:28px;font-weight:800;color:#f59e0b">—</div>
+      </div>
+    </div>
+    <div class="panel" style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border)">
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Level</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Defendant</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Booking #</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Bond Amount</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Court Date</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Hours Past</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">County</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Detected</th>
+            <th style="padding:10px 12px;text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="ftaTableBody">
+          <tr><td colspan="9" style="text-align:center;padding:32px;color:var(--muted)">Loading FTA alerts…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div><!-- end tabFTA -->
+
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-imessage.js?v=4"></script>
 <script src="/sl-accounting.js?v=1"></script>
 <script src="/sl-alpha-intel.js?v=1"></script>
+<script src="/sl-fta.js?v=1"></script>
 
 </body>
 </html>
+
 
