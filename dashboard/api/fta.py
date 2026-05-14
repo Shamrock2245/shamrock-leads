@@ -122,9 +122,37 @@ async def api_fta_resolve(booking_number: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
+# POST /api/fta/<booking_number>/surrender
+# ───────────────────────────────────────────────────────────────────────────────
+@fta_bp.route("/fta/<booking_number>/surrender", methods=["POST"])
+async def api_fta_initiate_surrender(booking_number: str):
+    """Initiate the Level 3 FTA surrender workflow."""
+    try:
+        data = await request.get_json(force=True) or {}
+        initiated_by = data.get("initiated_by", "staff")
+        notes = data.get("notes", "")
+
+        from dashboard.services.fta_surrender_service import FTASurrenderService
+        from dashboard.extensions import get_db
+
+        db = get_db()
+        svc = FTASurrenderService(db)
+        result = await svc.initiate_surrender(
+            booking_number=booking_number,
+            initiated_by=initiated_by,
+            notes=notes,
+        )
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        log.error("[FTA API] surrender error for %s: %s", booking_number, e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ───────────────────────────────────────────────────────────────────────────────
 # GET /api/fta/stats
-# ─────────────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────────────────────
 @fta_bp.route("/fta/stats", methods=["GET"])
 async def api_fta_stats():
     """Aggregate FTA stats for the command center widget."""

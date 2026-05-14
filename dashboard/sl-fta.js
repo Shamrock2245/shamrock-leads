@@ -39,6 +39,28 @@ const SLFTA = (() => {
     }
   }
 
+  async function initiateSurrender(bookingNumber) {
+    const confirmed = await _confirmSurrender(bookingNumber);
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/fta/${encodeURIComponent(bookingNumber)}/surrender`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initiated_by: 'staff' }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const snMsg = data.signnow_sent ? ' · SignNow authorization sent to agent email.' : '';
+        _toast(`🆘 Surrender initiated (${data.surrender_id})${snMsg}`, 'error');
+        await load();
+      } else {
+        _toast('Surrender failed: ' + (data.error || 'unknown'), 'error');
+      }
+    } catch (e) {
+      _toast('Request failed: ' + e.message, 'error');
+    }
+  }
+
   async function resolve(bookingNumber) {
     const resolution = await _promptResolution();
     if (!resolution) return;
@@ -161,9 +183,33 @@ const SLFTA = (() => {
               style="padding:4px 10px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;cursor:pointer">
               📍 Geo Link
             </button>
+            ${level >= 3 ? `<button onclick="SLFTA.initiateSurrender('${_esc(f.booking_number)}')"
+              style="padding:4px 10px;background:#dc2626;border:none;border-radius:4px;color:#fff;font-size:11px;cursor:pointer;font-weight:700">
+              🆘 Surrender
+            </button>` : ''}
           </div>
         </td>
       </tr>`;
+  }
+
+  async function _confirmSurrender(bookingNumber) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:20000;display:flex;align-items:center;justify-content:center';
+      overlay.innerHTML = `
+        <div style="background:var(--panel,#1e293b);border:2px solid #dc2626;border-radius:14px;padding:24px;width:380px;max-width:90vw">
+          <h3 style="margin:0 0 8px;font-size:1rem;color:#dc2626">🆘 Initiate Surrender</h3>
+          <p style="font-size:13px;color:var(--text);margin:0 0 16px">This will send a SignNow surrender authorization to the agent and notify the indemnitor via iMessage. This action cannot be undone.</p>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 16px">Booking: <strong>${bookingNumber}</strong></p>
+          <div style="display:flex;gap:8px">
+            <button id="_ftaSurrConfirm" style="flex:1;padding:10px;background:#dc2626;border:none;border-radius:8px;color:#fff;font-weight:700;cursor:pointer">🆘 Confirm Surrender</button>
+            <button id="_ftaSurrCancel" style="flex:1;padding:10px;background:var(--border);border:none;border-radius:8px;color:var(--text);cursor:pointer">Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      document.getElementById('_ftaSurrConfirm').onclick = () => { document.body.removeChild(overlay); resolve(true); };
+      document.getElementById('_ftaSurrCancel').onclick = () => { document.body.removeChild(overlay); resolve(false); };
+    });
   }
 
   async function _promptResolution() {
@@ -223,5 +269,5 @@ const SLFTA = (() => {
     setTimeout(() => t.remove(), 3500);
   }
 
-  return { load, runScan, resolve, sendGeoLink };
+  return { load, runScan, resolve, sendGeoLink, initiateSurrender };
 })();

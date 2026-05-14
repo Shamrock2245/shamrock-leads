@@ -2,201 +2,501 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>ShamrockLeads — Mobile Pulse</title>
+  <meta name="theme-color" content="#064e3b" />
+  <title>☘️ ShamrockLeads</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --green: #22c55e; --yellow: #eab308; --red: #ef4444;
       --blue: #3b82f6; --orange: #f97316; --purple: #a855f7;
+      --teal: #14b8a6; --pink: #ec4899;
       --bg: #0a0f1a; --card: #111827; --border: #1f2937;
       --text: #f1f5f9; --muted: #9ca3af; --surface: #151c2c;
+      --accent: #10b981;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; overflow: hidden; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 
-    /* Header */
-    .header { background: linear-gradient(135deg, #064e3b, #047857); padding: 16px; display: flex; justify-content: space-between; align-items: center; }
-    .header h1 { font-size: 1.1rem; font-weight: 800; display: flex; align-items: center; gap: 6px; }
-    .live-pill { font-size: 0.6rem; background: rgba(34,197,94,0.2); color: var(--green); padding: 3px 8px; border-radius: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px; }
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #064e3b 0%, #047857 100%);
+      padding: 12px 16px;
+      padding-top: calc(12px + env(safe-area-inset-top, 0px));
+      display: flex; justify-content: space-between; align-items: center;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header h1 { font-size: 1rem; font-weight: 800; display: flex; align-items: center; gap: 6px; }
+    .header-right { display: flex; align-items: center; gap: 8px; }
+    .live-pill {
+      font-size: 0.6rem; background: rgba(34,197,94,0.2); color: var(--green);
+      padding: 3px 8px; border-radius: 12px; font-weight: 700;
+      display: flex; align-items: center; gap: 4px;
+    }
     .live-pill::before { content: ''; width: 6px; height: 6px; background: var(--green); border-radius: 50%; animation: blink 2s infinite; }
     @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .fta-badge-pill {
+      font-size: 0.6rem; background: rgba(239,68,68,0.2); color: var(--red);
+      padding: 3px 8px; border-radius: 12px; font-weight: 700;
+      display: none;
+    }
+    .fta-badge-pill.show { display: flex; align-items: center; gap: 4px; }
 
-    /* KPI Grid */
-    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
-    .kpi-card { background: var(--card); border-radius: 12px; padding: 12px; text-align: center; border: 1px solid var(--border); }
-    .kpi-num { font-size: 1.8rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-    .kpi-lbl { font-size: 0.55rem; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    /* ── Scroll area ── */
+    .scroll-area {
+      position: absolute; top: 0; bottom: 60px;
+      left: 0; right: 0;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding-top: calc(44px + env(safe-area-inset-top, 0px));
+    }
 
-    /* Sections */
-    .section { padding: 0 12px 12px; }
-    .section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 8px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
-
-    /* County List */
-    .county-list { display: flex; flex-direction: column; gap: 4px; }
-    .county-row { background: var(--card); border-radius: 8px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border); border-left: 3px solid var(--green); }
-    .county-row.error { border-left-color: var(--red); }
-    .county-row.pending { border-left-color: var(--muted); opacity: 0.6; }
-    .county-row .name { font-weight: 700; font-size: 0.85rem; }
-    .county-row .stats { display: flex; gap: 10px; font-size: 0.7rem; }
-    .county-row .stats span { font-weight: 600; }
-    .stat-db { color: var(--blue); }
-    .stat-hot { color: var(--orange); }
-    .stat-time { color: var(--muted); }
-
-    /* Hot Leads */
-    .lead-card { background: var(--card); border-radius: 8px; padding: 10px 12px; margin-bottom: 4px; border: 1px solid var(--border); border-left: 3px solid var(--orange); }
-    .lead-card .name { font-weight: 700; font-size: 0.85rem; }
-    .lead-card .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 3px; font-size: 0.7rem; }
-    .lead-card .county-tag { color: var(--muted); }
-    .lead-card .bond { color: var(--green); font-weight: 700; }
-    .lead-card .score { background: var(--orange); color: #fff; padding: 1px 6px; border-radius: 10px; font-weight: 700; font-size: 0.65rem; }
-
-    /* Tab bar */
-    .tab-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; padding: 8px 0; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
-    .tab { flex: 1; text-align: center; font-size: 0.6rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 6px 0; cursor: pointer; }
-    .tab.active { color: var(--green); }
-    .tab-icon { font-size: 1.2rem; display: block; margin-bottom: 2px; }
-
-    /* Tabs content */
-    .tab-content { display: none; padding-bottom: 70px; }
+    /* ── Tab content ── */
+    .tab-content { display: none; padding-bottom: 16px; }
     .tab-content.active { display: block; }
 
-    /* Pull to refresh indicator */
-    .refresh-bar { text-align: center; padding: 6px; font-size: 0.6rem; color: var(--muted); }
+    /* ── KPI Grid ── */
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
+    .kpi-card { background: var(--card); border-radius: 12px; padding: 12px 8px; text-align: center; border: 1px solid var(--border); }
+    .kpi-num { font-size: 1.6rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    .kpi-lbl { font-size: 0.5rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
+    /* ── Alert Banner ── */
+    .alert-banner {
+      margin: 0 12px 8px; padding: 10px 14px; border-radius: 10px;
+      background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+      color: var(--red); font-size: 0.75rem; font-weight: 700;
+      display: none; align-items: center; gap: 8px;
+    }
+    .alert-banner.show { display: flex; }
+
+    /* ── Section ── */
+    .section { padding: 0 12px 8px; }
+    .section-title { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 8px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+
+    /* ── Card List ── */
+    .card-list { display: flex; flex-direction: column; gap: 6px; }
+    .item-card { background: var(--card); border-radius: 10px; padding: 12px; border: 1px solid var(--border); }
+    .item-card.red { border-left: 3px solid var(--red); }
+    .item-card.orange { border-left: 3px solid var(--orange); }
+    .item-card.green { border-left: 3px solid var(--green); }
+    .item-card.blue { border-left: 3px solid var(--blue); }
+    .item-card.yellow { border-left: 3px solid var(--yellow); }
+    .item-card.purple { border-left: 3px solid var(--purple); }
+    .item-name { font-weight: 700; font-size: 0.85rem; }
+    .item-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.7rem; color: var(--muted); }
+    .item-badge { padding: 2px 7px; border-radius: 10px; font-weight: 700; font-size: 0.6rem; }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-orange { background: rgba(249,115,22,0.15); color: var(--orange); }
+    .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-purple { background: rgba(168,85,247,0.15); color: var(--purple); }
+
+    /* ── Quick Actions ── */
+    .quick-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 12px; }
+    .qa-btn {
+      background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px 10px; text-align: center; cursor: pointer;
+      font-size: 0.75rem; font-weight: 600; color: var(--text);
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      transition: background 0.15s;
+    }
+    .qa-btn:active { background: var(--surface); }
+    .qa-btn .qa-icon { font-size: 1.4rem; }
+    .qa-btn.danger { border-color: rgba(239,68,68,0.4); color: var(--red); }
+    .qa-btn.success { border-color: rgba(34,197,94,0.4); color: var(--green); }
+    .qa-btn.info { border-color: rgba(59,130,246,0.4); color: var(--blue); }
+    .qa-btn.warn { border-color: rgba(249,115,22,0.4); color: var(--orange); }
+
+    /* ── Tab Bar ── */
+    .tab-bar {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: var(--card); border-top: 1px solid var(--border);
+      display: flex;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      z-index: 100;
+    }
+    .tab { flex: 1; text-align: center; font-size: 0.5rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; padding: 8px 0 6px; cursor: pointer; position: relative; }
+    .tab.active { color: var(--green); }
+    .tab-icon { font-size: 1.1rem; display: block; margin-bottom: 2px; }
+    .tab-dot { position: absolute; top: 6px; right: calc(50% - 14px); width: 7px; height: 7px; background: var(--red); border-radius: 50%; display: none; border: 1px solid var(--bg); }
+    .tab-dot.show { display: block; }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; color: var(--muted); padding: 24px; font-size: 0.8rem; }
+
+    /* ── Refresh bar ── */
+    .refresh-bar { text-align: center; padding: 6px; font-size: 0.55rem; color: var(--muted); }
+
+    /* ── Court calendar ── */
+    .court-item { background: var(--card); border-radius: 10px; padding: 12px; border: 1px solid var(--border); margin-bottom: 6px; }
+    .court-date-badge { font-size: 0.65rem; font-weight: 700; padding: 3px 8px; border-radius: 8px; }
+    .court-today { background: rgba(239,68,68,0.15); color: var(--red); }
+    .court-soon { background: rgba(249,115,22,0.15); color: var(--orange); }
+    .court-upcoming { background: rgba(59,130,246,0.15); color: var(--blue); }
   </style>
 </head>
 <body>
+
   <div class="header">
     <h1>☘️ ShamrockLeads</h1>
-    <span class="live-pill">LIVE</span>
-  </div>
-
-  <!-- Tab: Pulse -->
-  <div class="tab-content active" id="tabPulse">
-    <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--green)" id="mActive">—</div><div class="kpi-lbl">Active</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--blue)" id="mRecords">—</div><div class="kpi-lbl">Records</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--orange)" id="mHot">—</div><div class="kpi-lbl">🔥 Hot</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--yellow)" id="mWarm">—</div><div class="kpi-lbl">🟡 Warm</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--purple)" id="mCounties">—</div><div class="kpi-lbl">Counties</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="mErrors">—</div><div class="kpi-lbl">Errors</div></div>
-    </div>
-    <div class="section">
-      <div class="section-title">Top Counties by Records</div>
-      <div class="county-list" id="topCounties"></div>
+    <div class="header-right">
+      <span class="fta-badge-pill" id="ftaHeaderBadge">🚨 <span id="ftaHeaderCount">0</span> FTA</span>
+      <span class="live-pill">LIVE</span>
     </div>
   </div>
 
-  <!-- Tab: Fleet -->
-  <div class="tab-content" id="tabFleet">
-    <div class="section" style="padding-top:8px;">
-      <div class="section-title">All Scrapers</div>
-      <div class="county-list" id="allCounties"></div>
+  <div class="scroll-area" id="scrollArea">
+
+    <!-- ── Tab: Pulse ── -->
+    <div class="tab-content active" id="tabPulse">
+      <div class="alert-banner" id="ftaAlertBanner">
+        🚨 <span id="ftaBannerText">Open FTA alerts require attention</span>
+        <span style="margin-left:auto;font-size:0.65rem;cursor:pointer" onclick="switchTab('tabFTA')">View →</span>
+      </div>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--green)" id="mActive">—</div><div class="kpi-lbl">Active Bonds</div></div>
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--blue)" id="mRecords">—</div><div class="kpi-lbl">Records</div></div>
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--orange)" id="mHot">—</div><div class="kpi-lbl">🔥 Hot</div></div>
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="mFTA">—</div><div class="kpi-lbl">🚨 FTAs</div></div>
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--yellow)" id="mDelinquent">—</div><div class="kpi-lbl">💸 Overdue</div></div>
+        <div class="kpi-card"><div class="kpi-num" style="color:var(--purple)" id="mCourtToday">—</div><div class="kpi-lbl">📅 Court Today</div></div>
+      </div>
+      <div class="section">
+        <div class="section-title">Top Counties</div>
+        <div class="card-list" id="topCounties"></div>
+      </div>
+      <div class="refresh-bar" id="refreshBar">Auto-refresh in 30s</div>
     </div>
-  </div>
 
-  <!-- Tab: Leads -->
-  <div class="tab-content" id="tabLeads">
-    <div class="section" style="padding-top:8px;">
-      <div class="section-title">🔥 Hot Leads (24h)</div>
-      <div id="mobileLeads"></div>
+    <!-- ── Tab: FTA Alerts ── -->
+    <div class="tab-content" id="tabFTA">
+      <div class="section" style="padding-top:10px">
+        <div class="section-title">🚨 Open FTA Alerts</div>
+        <div class="card-list" id="ftaList"></div>
+      </div>
     </div>
-  </div>
 
-  <div class="refresh-bar" id="refreshBar">Auto-refresh in 30s</div>
+    <!-- ── Tab: Active Bonds ── -->
+    <div class="tab-content" id="tabBonds">
+      <div class="section" style="padding-top:10px">
+        <div class="section-title">Active Bonds</div>
+        <div class="card-list" id="bondsList"></div>
+      </div>
+    </div>
 
+    <!-- ── Tab: Court Calendar ── -->
+    <div class="tab-content" id="tabCourt">
+      <div class="section" style="padding-top:10px">
+        <div class="section-title">📅 Upcoming Court Dates</div>
+        <div id="courtList"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Leads ── -->
+    <div class="tab-content" id="tabLeads">
+      <div class="section" style="padding-top:10px">
+        <div class="section-title">🔥 Hot Leads</div>
+        <div class="card-list" id="leadsList"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab: Actions ── -->
+    <div class="tab-content" id="tabActions">
+      <div class="section" style="padding-top:10px">
+        <div class="section-title">Quick Actions</div>
+      </div>
+      <div class="quick-actions">
+        <div class="qa-btn success" onclick="runFTAScan()">
+          <span class="qa-icon">⚡</span>Run FTA Scan
+        </div>
+        <div class="qa-btn warn" onclick="runMissedPaymentScan()">
+          <span class="qa-icon">💸</span>Payment Scan
+        </div>
+        <div class="qa-btn info" onclick="openDesktop()">
+          <span class="qa-icon">🖥️</span>Full Dashboard
+        </div>
+        <div class="qa-btn" onclick="fetchAll()">
+          <span class="qa-icon">🔄</span>Refresh Now
+        </div>
+        <div class="qa-btn info" onclick="window.location.href='/portal'">
+          <span class="qa-icon">🔑</span>Client Portal
+        </div>
+        <div class="qa-btn" onclick="window.location.href='/tablet'">
+          <span class="qa-icon">📱</span>Tablet View
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">System Status</div>
+        <div id="systemStatus" class="card-list"></div>
+      </div>
+    </div>
+
+  </div><!-- /scroll-area -->
+
+  <!-- ── Tab Bar ── -->
   <div class="tab-bar">
-    <div class="tab active" data-tab="tabPulse"><span class="tab-icon">📊</span>Pulse</div>
-    <div class="tab" data-tab="tabFleet"><span class="tab-icon">🗺️</span>Fleet</div>
-    <div class="tab" data-tab="tabLeads"><span class="tab-icon">🔥</span>Leads</div>
+    <div class="tab active" data-tab="tabPulse" onclick="switchTab('tabPulse')">
+      <span class="tab-icon">📊</span>Pulse
+    </div>
+    <div class="tab" data-tab="tabFTA" onclick="switchTab('tabFTA')">
+      <span class="tab-icon">🚨</span>FTA
+      <span class="tab-dot" id="ftaTabDot"></span>
+    </div>
+    <div class="tab" data-tab="tabBonds" onclick="switchTab('tabBonds')">
+      <span class="tab-icon">⛓️</span>Bonds
+    </div>
+    <div class="tab" data-tab="tabCourt" onclick="switchTab('tabCourt')">
+      <span class="tab-icon">📅</span>Court
+    </div>
+    <div class="tab" data-tab="tabLeads" onclick="switchTab('tabLeads')">
+      <span class="tab-icon">🔥</span>Leads
+    </div>
+    <div class="tab" data-tab="tabActions" onclick="switchTab('tabActions')">
+      <span class="tab-icon">⚡</span>Actions
+    </div>
   </div>
 
 <script>
+'use strict';
 const API = window.location.origin;
-let scraperData = {}, mongoData = {};
+let _data = {};
 
-async function fetchData() {
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(tabId) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabId));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === tabId));
+  document.getElementById('scrollArea').scrollTop = 0;
+  if (tabId === 'tabFTA') document.getElementById('ftaTabDot').classList.remove('show');
+}
+
+// ── Data fetching ────────────────────────────────────────────────────────────
+async function fetchAll() {
   try {
-    const [s, m] = await Promise.all([
-      fetch(`${API}/api/status`).then(r => r.json()),
-      fetch(`${API}/api/mongo-stats`).then(r => r.json()),
+    const [status, mongo, fta, bonds, delinquent] = await Promise.all([
+      fetch(`${API}/api/status`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/mongo-stats`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/fta/open`).then(r => r.json()).catch(() => ({ ftas: [], stats: {} })),
+      fetch(`${API}/api/active-bonds?limit=30`).then(r => r.json()).catch(() => ({ bonds: [] })),
+      fetch(`${API}/api/payments/delinquent?days=3`).then(r => r.json()).catch(() => ({ delinquent: [] })),
     ]);
-    scraperData = s; mongoData = m;
+    _data = { status, mongo, fta, bonds, delinquent };
     render();
-  } catch (e) { console.error(e); }
+  } catch (e) { console.error('fetchAll error', e); }
 }
 
+// ── Render ───────────────────────────────────────────────────────────────────
 function render() {
-  const sc = scraperData.scrapers || {};
-  const by = mongoData.by_county || {};
-  const scores = mongoData.scores || {};
-  const ok = Object.values(sc).filter(s => s.status === "ok").length;
-  const err = Object.values(sc).filter(s => s.status !== "ok").length;
+  const { status = {}, mongo = {}, fta = {}, bonds = {}, delinquent = {} } = _data;
+  const sc = status.scrapers || {};
+  const by = mongo.by_county || {};
+  const scores = mongo.scores || {};
+  const ftaList = fta.ftas || [];
+  const bondList = bonds.bonds || [];
+  const delinqList = delinquent.delinquent || [];
+  const ftaStats = fta.stats || {};
 
-  document.getElementById("mActive").textContent = ok;
-  document.getElementById("mRecords").textContent = fmt(mongoData.total_records || 0);
-  document.getElementById("mHot").textContent = scores.hot || 0;
-  document.getElementById("mWarm").textContent = scores.warm || 0;
-  document.getElementById("mCounties").textContent = Object.keys(by).length;
-  document.getElementById("mErrors").textContent = err;
+  // ── KPIs ──
+  const courtToday = bondList.filter(b => {
+    if (!b.court_date) return false;
+    const d = new Date(b.court_date);
+    const now = new Date();
+    return d.toDateString() === now.toDateString();
+  }).length;
 
-  // Top counties
+  _set('mActive', bondList.length || ftaStats.active_bonds || '—');
+  _set('mRecords', _fmt(mongo.total_records || 0));
+  _set('mHot', scores.hot || 0);
+  _set('mFTA', ftaStats.open_count || ftaList.length || 0);
+  _set('mDelinquent', delinqList.length);
+  _set('mCourtToday', courtToday);
+
+  // ── FTA alert banner ──
+  const openFTAs = ftaList.length;
+  const ftaBanner = document.getElementById('ftaAlertBanner');
+  const ftaHeaderBadge = document.getElementById('ftaHeaderBadge');
+  const ftaTabDot = document.getElementById('ftaTabDot');
+  if (openFTAs > 0) {
+    ftaBanner.classList.add('show');
+    document.getElementById('ftaBannerText').textContent = `${openFTAs} open FTA alert${openFTAs > 1 ? 's' : ''} require attention`;
+    ftaHeaderBadge.classList.add('show');
+    document.getElementById('ftaHeaderCount').textContent = openFTAs;
+    ftaTabDot.classList.add('show');
+  } else {
+    ftaBanner.classList.remove('show');
+    ftaHeaderBadge.classList.remove('show');
+    ftaTabDot.classList.remove('show');
+  }
+
+  // ── Top Counties ──
   const sorted = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  document.getElementById("topCounties").innerHTML = sorted.map(([c, n]) => {
+  document.getElementById('topCounties').innerHTML = sorted.map(([c, n]) => {
     const d = sc[c]; const hot = d?.hot_leads || 0;
-    return `<div class="county-row"><span class="name">${c}</span><div class="stats"><span class="stat-db">${fmt(n)}</span><span class="stat-hot">🔥${hot}</span></div></div>`;
-  }).join('');
+    return `<div class="item-card green">
+      <div class="item-name">${c}</div>
+      <div class="item-meta"><span>${_fmt(n)} records</span>${hot > 0 ? `<span class="item-badge badge-orange">🔥 ${hot} hot</span>` : ''}</div>
+    </div>`;
+  }).join('') || '<div class="empty">No county data</div>';
 
-  // All scrapers
-  const all = Object.entries(sc).sort((a, b) => a[0].localeCompare(b[0]));
-  document.getElementById("allCounties").innerHTML = all.map(([c, d]) => {
-    const cls = d.status !== "ok" ? "error" : "";
-    const ago = d.last_run ? timeAgo(d.last_run) : "—";
-    return `<div class="county-row ${cls}"><span class="name">${c}</span><div class="stats"><span class="stat-db">${d.records}</span><span class="stat-time">${ago}</span></div></div>`;
-  }).join('');
+  // ── FTA List ──
+  document.getElementById('ftaList').innerHTML = ftaList.length === 0
+    ? '<div class="empty">No open FTA alerts ✅</div>'
+    : ftaList.slice(0, 20).map(f => {
+        const level = f.escalation_level || 1;
+        const cls = level >= 3 ? 'red' : level >= 2 ? 'orange' : 'yellow';
+        const badge = level >= 3 ? 'badge-red' : level >= 2 ? 'badge-orange' : 'badge-yellow';
+        const label = level >= 3 ? '🆘 L3' : level >= 2 ? '🔴 L2' : '⚠️ L1';
+        const hrs = f.hours_past_court ? `${Math.round(f.hours_past_court)}h past` : '';
+        return `<div class="item-card ${cls}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div class="item-name">${_esc(f.defendant_name || f.booking_number || '—')}</div>
+            <span class="item-badge ${badge}">${label}</span>
+          </div>
+          <div class="item-meta">
+            <span>${_esc(f.county || '—')}</span>
+            <span>${_esc(f.booking_number || '')}</span>
+            ${hrs ? `<span style="color:var(--red)">${hrs}</span>` : ''}
+          </div>
+          ${f.surrender_initiated ? '<div style="font-size:0.6rem;color:var(--red);margin-top:4px;font-weight:700">🆘 Surrender initiated</div>' : ''}
+        </div>`;
+      }).join('');
 
-  // Hot leads
-  const leads = mongoData.recent_hot_leads || [];
-  document.getElementById("mobileLeads").innerHTML = leads.length === 0
-    ? '<div style="text-align:center;color:var(--muted);padding:20px;">No hot leads in last 24h</div>'
-    : leads.map(l => `
-      <div class="lead-card">
-        <div class="name">${l.full_name || 'Unknown'}</div>
-        <div class="meta">
-          <span class="county-tag">${l.county || '—'}</span>
-          <span class="bond">${l.bond_amount ? '$' + Number(l.bond_amount).toLocaleString() : '—'}</span>
-          <span class="score">${l.lead_score}</span>
-        </div>
+  // ── Active Bonds ──
+  document.getElementById('bondsList').innerHTML = bondList.length === 0
+    ? '<div class="empty">No active bonds</div>'
+    : bondList.slice(0, 30).map(b => {
+        const daysUntil = b.court_date ? Math.ceil((new Date(b.court_date) - Date.now()) / 86400000) : null;
+        let courtBadge = '';
+        if (daysUntil !== null) {
+          if (daysUntil <= 0) courtBadge = `<span class="item-badge badge-red">Court TODAY</span>`;
+          else if (daysUntil <= 3) courtBadge = `<span class="item-badge badge-orange">Court in ${daysUntil}d</span>`;
+          else if (daysUntil <= 7) courtBadge = `<span class="item-badge badge-blue">Court in ${daysUntil}d</span>`;
+        }
+        const amt = b.bond_amount ? `$${Number(b.bond_amount).toLocaleString()}` : '—';
+        return `<div class="item-card ${daysUntil !== null && daysUntil <= 0 ? 'red' : daysUntil !== null && daysUntil <= 3 ? 'orange' : 'green'}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
+            ${courtBadge}
+          </div>
+          <div class="item-meta">
+            <span>${_esc(b.county || '—')}</span>
+            <span style="color:var(--green);font-weight:700">${amt}</span>
+            <span>${_esc(b.booking_number || '')}</span>
+          </div>
+        </div>`;
+      }).join('');
+
+  // ── Court Calendar ──
+  const withCourt = bondList.filter(b => b.court_date).sort((a, b) => new Date(a.court_date) - new Date(b.court_date)).slice(0, 20);
+  document.getElementById('courtList').innerHTML = withCourt.length === 0
+    ? '<div class="empty">No upcoming court dates</div>'
+    : withCourt.map(b => {
+        const d = new Date(b.court_date);
+        const daysUntil = Math.ceil((d - Date.now()) / 86400000);
+        let badgeCls = 'court-upcoming', label = `In ${daysUntil}d`;
+        if (daysUntil <= 0) { badgeCls = 'court-today'; label = 'TODAY'; }
+        else if (daysUntil <= 3) { badgeCls = 'court-soon'; label = `${daysUntil}d`; }
+        const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const amt = b.bond_amount ? `$${Number(b.bond_amount).toLocaleString()}` : '';
+        return `<div class="court-item">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
+            <span class="court-date-badge ${badgeCls}">${label}</span>
+          </div>
+          <div class="item-meta" style="margin-top:4px">
+            <span>${dateStr}</span>
+            <span>${_esc(b.county || '—')}</span>
+            ${amt ? `<span style="color:var(--green);font-weight:700">${amt}</span>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+
+  // ── Hot Leads ──
+  const leads = mongo.recent_hot_leads || [];
+  document.getElementById('leadsList').innerHTML = leads.length === 0
+    ? '<div class="empty">No hot leads in last 24h</div>'
+    : leads.map(l => {
+        const amt = l.bond_amount ? `$${Number(l.bond_amount).toLocaleString()}` : '—';
+        return `<div class="item-card orange">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div class="item-name">${_esc(l.full_name || 'Unknown')}</div>
+            <span class="item-badge badge-orange">Score ${l.lead_score}</span>
+          </div>
+          <div class="item-meta">
+            <span>${_esc(l.county || '—')}</span>
+            <span style="color:var(--green);font-weight:700">${amt}</span>
+          </div>
+        </div>`;
+      }).join('');
+
+  // ── System Status ──
+  const scrapers = Object.entries(sc);
+  const ok = scrapers.filter(([,s]) => s.status === 'ok').length;
+  const err = scrapers.filter(([,s]) => s.status !== 'ok').length;
+  document.getElementById('systemStatus').innerHTML = `
+    <div class="item-card ${err > 0 ? 'orange' : 'green'}">
+      <div class="item-name">Scraper Fleet</div>
+      <div class="item-meta">
+        <span style="color:var(--green)">${ok} online</span>
+        ${err > 0 ? `<span style="color:var(--red)">${err} errors</span>` : ''}
+        <span>${scrapers.length} total</span>
       </div>
-    `).join('');
+    </div>`;
 }
 
-function fmt(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'K' : n; }
-function timeAgo(iso) {
-  const d = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (d < 60) return Math.round(d) + 's';
-  if (d < 3600) return Math.round(d / 60) + 'm';
-  return Math.round(d / 3600) + 'h';
+// ── Quick Actions ────────────────────────────────────────────────────────────
+async function runFTAScan() {
+  try {
+    const r = await fetch(`${API}/api/fta/scan`, { method: 'POST' });
+    const d = await r.json();
+    alert(`FTA Scan: ${d.fta_detected || 0} detected, ${d.alerts_sent || 0} alerts sent`);
+    await fetchAll();
+  } catch (e) { alert('Scan failed: ' + e.message); }
 }
 
-// Tabs
-document.querySelectorAll('.tab').forEach(t => {
-  t.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
-    t.classList.add('active');
-    document.getElementById(t.dataset.tab).classList.add('active');
+async function runMissedPaymentScan() {
+  try {
+    const r = await fetch(`${API}/api/payments/delinquent`);
+    const d = await r.json();
+    alert(`Payment scan: ${d.total || 0} overdue plans found`);
+    await fetchAll();
+  } catch (e) { alert('Scan failed: ' + e.message); }
+}
+
+function openDesktop() {
+  window.location.href = '/';
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function _set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+function _fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(1) + 'K' : n; }
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── SSE for real-time FTA badge ──────────────────────────────────────────────
+try {
+  const es = new EventSource(`${API}/api/events/stream`);
+  es.addEventListener('bond_fta_detected', () => {
+    document.getElementById('ftaTabDot').classList.add('show');
+    fetchAll();
   });
-});
+  es.addEventListener('payment_missed', () => fetchAll());
+  es.addEventListener('bond_written', () => fetchAll());
+} catch(_) {}
 
-// Refresh
+// ── Auto-refresh ─────────────────────────────────────────────────────────────
 let cd = 30;
-setInterval(() => { cd--; document.getElementById('refreshBar').textContent = `Auto-refresh in ${cd}s`; if (cd <= 0) { cd = 30; fetchData(); } }, 1000);
-fetchData();
+setInterval(() => {
+  cd--;
+  const el = document.getElementById('refreshBar');
+  if (el) el.textContent = `Auto-refresh in ${cd}s`;
+  if (cd <= 0) { cd = 30; fetchAll(); }
+}, 1000);
+
+fetchAll();
 </script>
 </body>
 </html>

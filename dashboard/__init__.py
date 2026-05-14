@@ -1699,6 +1699,16 @@ def create_app():
     async def index():
         return await send_from_directory(DASHBOARD_DIR, "index.html")
 
+    @app.route("/mobile")
+    async def mobile_view():
+        """iPhone-optimized mobile dashboard."""
+        return await send_from_directory(DASHBOARD_DIR, "mobile.html")
+
+    @app.route("/tablet")
+    async def tablet_view():
+        """iPad-optimized two-column tablet dashboard."""
+        return await send_from_directory(DASHBOARD_DIR, "tablet.html")
+
     @app.route("/<path:filename>")
     async def serve_static(filename):
         """Serve CSS, JS, images, and other static assets from the dashboard directory.

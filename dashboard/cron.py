@@ -171,6 +171,20 @@ async def _run_fta_alert():
     else:
         logger.info("[FTAAlert] scanned=%d — no new FTAs", result.get("scanned", 0))
 
+async def _run_missed_payment():
+    """Every 12h: scan payment plans for overdue installments, fire BB alert + geo link."""
+    from dashboard.services.missed_payment_alert_service import MissedPaymentAlertService
+    svc = MissedPaymentAlertService()
+    result = await svc.scan_and_alert()
+    if result.get("alerted", 0) > 0 or result.get("escalated", 0) > 0:
+        logger.warning(
+            "[MissedPayment] 💸 alerted=%d escalated=%d scanned=%d errors=%d",
+            result["alerted"], result["escalated"], result["scanned"], result["errors"],
+        )
+    else:
+        logger.info("[MissedPayment] scanned=%d — no overdue payments", result.get("scanned", 0))
+
+
 async def _run_retention():
     from dashboard.api.data_retention import _execute_purge
     result = await _execute_purge(dry_run=False)
@@ -326,6 +340,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("delinquency_scanner","Delinquency",       14400, 120, _run_delinquency),
     CronDef("rearrest_detection", "ReArrest",           7200, 180, _run_rearrest),
     CronDef("fta_alert",          "FTAAlert",          14400, 120, _run_fta_alert),
+    CronDef("missed_payment",     "MissedPayment",     43200, 240, _run_missed_payment),
     CronDef("data_retention",     "DataRetention",    604800, 300, _run_retention),
     CronDef("court_email",        "CourtEmail",          900,  90, _run_court_email),
     CronDef("blog_publisher",     "Blog",              21600, 300, _run_blog),

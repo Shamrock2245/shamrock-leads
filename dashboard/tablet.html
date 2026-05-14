@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#064e3b" />
+  <title>☘️ ShamrockLeads — Tablet</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+      --blue: #3b82f6; --orange: #f97316; --purple: #a855f7;
+      --teal: #14b8a6;
+      --bg: #0a0f1a; --card: #111827; --border: #1f2937;
+      --text: #f1f5f9; --muted: #9ca3af; --surface: #151c2c;
+      --accent: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #064e3b 0%, #047857 100%);
+      padding: 14px 20px;
+      padding-top: calc(14px + env(safe-area-inset-top, 0px));
+      display: flex; justify-content: space-between; align-items: center;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header h1 { font-size: 1.15rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+    .header-nav { display: flex; gap: 6px; }
+    .nav-btn {
+      padding: 6px 14px; border-radius: 8px; font-size: 0.75rem; font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.2); color: rgba(255,255,255,0.85);
+      cursor: pointer; background: transparent; transition: background 0.15s;
+    }
+    .nav-btn:active, .nav-btn.active { background: rgba(255,255,255,0.15); color: #fff; }
+    .live-pill { font-size: 0.65rem; background: rgba(34,197,94,0.2); color: var(--green); padding: 4px 10px; border-radius: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px; }
+    .live-pill::before { content: ''; width: 6px; height: 6px; background: var(--green); border-radius: 50%; animation: blink 2s infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* ── KPI Row ── */
+    .kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; padding: 14px 16px; }
+    .kpi-card { background: var(--card); border-radius: 12px; padding: 14px 10px; text-align: center; border: 1px solid var(--border); }
+    .kpi-num { font-size: 2rem; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    .kpi-lbl { font-size: 0.55rem; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
+    /* ── Alert Banner ── */
+    .alert-banner {
+      margin: 0 16px 10px; padding: 12px 16px; border-radius: 10px;
+      background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+      color: var(--red); font-size: 0.8rem; font-weight: 700;
+      display: none; align-items: center; gap: 10px;
+    }
+    .alert-banner.show { display: flex; }
+
+    /* ── Two-column layout ── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 0 16px 16px; }
+
+    /* ── Panel ── */
+    .panel { background: var(--card); border-radius: 14px; border: 1px solid var(--border); overflow: hidden; }
+    .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+    .panel-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+    .panel-badge { font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; }
+    .panel-body { padding: 12px; max-height: 320px; overflow-y: auto; }
+
+    /* ── List items ── */
+    .list-item { padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; border: 1px solid var(--border); background: var(--surface); }
+    .list-item:last-child { margin-bottom: 0; }
+    .list-item.red { border-left: 3px solid var(--red); }
+    .list-item.orange { border-left: 3px solid var(--orange); }
+    .list-item.green { border-left: 3px solid var(--green); }
+    .list-item.blue { border-left: 3px solid var(--blue); }
+    .list-item.yellow { border-left: 3px solid var(--yellow); }
+    .item-name { font-weight: 700; font-size: 0.85rem; }
+    .item-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.7rem; color: var(--muted); flex-wrap: wrap; gap: 4px; }
+    .badge { padding: 2px 7px; border-radius: 8px; font-weight: 700; font-size: 0.6rem; }
+    .badge-red { background: rgba(239,68,68,0.15); color: var(--red); }
+    .badge-orange { background: rgba(249,115,22,0.15); color: var(--orange); }
+    .badge-green { background: rgba(34,197,94,0.15); color: var(--green); }
+    .badge-blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .badge-yellow { background: rgba(234,179,8,0.15); color: var(--yellow); }
+    .badge-purple { background: rgba(168,85,247,0.15); color: var(--purple); }
+
+    /* ── Quick Actions ── */
+    .actions-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; }
+    .qa-btn {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px 8px; text-align: center; cursor: pointer;
+      font-size: 0.7rem; font-weight: 600; color: var(--text);
+      display: flex; flex-direction: column; align-items: center; gap: 5px;
+      transition: background 0.15s;
+    }
+    .qa-btn:active { background: var(--border); }
+    .qa-btn .qa-icon { font-size: 1.2rem; }
+    .qa-btn.success { border-color: rgba(34,197,94,0.4); color: var(--green); }
+    .qa-btn.warn { border-color: rgba(249,115,22,0.4); color: var(--orange); }
+    .qa-btn.info { border-color: rgba(59,130,246,0.4); color: var(--blue); }
+    .qa-btn.danger { border-color: rgba(239,68,68,0.4); color: var(--red); }
+
+    /* ── Empty ── */
+    .empty { text-align: center; color: var(--muted); padding: 20px; font-size: 0.8rem; }
+
+    /* ── Refresh bar ── */
+    .refresh-bar { text-align: center; padding: 8px; font-size: 0.6rem; color: var(--muted); }
+
+    /* ── View toggle ── */
+    .view-content { display: none; }
+    .view-content.active { display: block; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>☘️ ShamrockLeads <span style="font-size:0.7rem;font-weight:500;color:rgba(255,255,255,0.6)">Tablet</span></h1>
+    <div class="header-nav">
+      <button class="nav-btn active" onclick="showView('viewOverview', this)">Overview</button>
+      <button class="nav-btn" onclick="showView('viewFTA', this)">🚨 FTA</button>
+      <button class="nav-btn" onclick="showView('viewBonds', this)">Bonds</button>
+      <button class="nav-btn" onclick="showView('viewCourt', this)">Court</button>
+      <button class="nav-btn" onclick="showView('viewLeads', this)">Leads</button>
+      <button class="nav-btn" onclick="window.location.href='/'">Full Dashboard →</button>
+    </div>
+    <span class="live-pill">LIVE</span>
+  </div>
+
+  <!-- ── Overview ── -->
+  <div class="view-content active" id="viewOverview">
+    <div class="kpi-row">
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--green)" id="tActive">—</div><div class="kpi-lbl">Active Bonds</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--blue)" id="tRecords">—</div><div class="kpi-lbl">Records</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--orange)" id="tHot">—</div><div class="kpi-lbl">🔥 Hot Leads</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="tFTA">—</div><div class="kpi-lbl">🚨 Open FTAs</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--yellow)" id="tDelinquent">—</div><div class="kpi-lbl">💸 Overdue</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--purple)" id="tCourtToday">—</div><div class="kpi-lbl">📅 Court Today</div></div>
+    </div>
+
+    <div class="alert-banner" id="ftaAlertBanner">
+      🚨 <span id="ftaBannerText">Open FTA alerts require attention</span>
+      <span style="margin-left:auto;font-size:0.7rem;cursor:pointer" onclick="showView('viewFTA', document.querySelector('[onclick*=viewFTA]'))">View FTA Tab →</span>
+    </div>
+
+    <div class="two-col">
+      <!-- FTA Summary -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">🚨 FTA Alerts</span>
+          <span class="panel-badge badge-red" id="ftaPanelBadge">0 open</span>
+        </div>
+        <div class="panel-body" id="ftaPanel"></div>
+      </div>
+
+      <!-- Active Bonds -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">⛓️ Active Bonds — Court Soon</span>
+        </div>
+        <div class="panel-body" id="bondsPanel"></div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <!-- Hot Leads -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">🔥 Hot Leads</span>
+        </div>
+        <div class="panel-body" id="leadsPanel"></div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">⚡ Quick Actions</span>
+        </div>
+        <div class="actions-grid">
+          <div class="qa-btn success" onclick="runFTAScan()"><span class="qa-icon">⚡</span>FTA Scan</div>
+          <div class="qa-btn warn" onclick="runPaymentScan()"><span class="qa-icon">💸</span>Payment Scan</div>
+          <div class="qa-btn info" onclick="fetchAll()"><span class="qa-icon">🔄</span>Refresh</div>
+          <div class="qa-btn" onclick="window.location.href='/portal'"><span class="qa-icon">🔑</span>Portal</div>
+          <div class="qa-btn" onclick="window.location.href='/mobile'"><span class="qa-icon">📱</span>Mobile</div>
+          <div class="qa-btn" onclick="window.location.href='/'"><span class="qa-icon">🖥️</span>Full Dashboard</div>
+        </div>
+        <div class="panel-body" id="systemPanel"></div>
+      </div>
+    </div>
+    <div class="refresh-bar" id="refreshBar">Auto-refresh in 30s</div>
+  </div>
+
+  <!-- ── FTA View ── -->
+  <div class="view-content" id="viewFTA">
+    <div class="kpi-row" style="grid-template-columns:repeat(4,1fr)">
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="tFTA2">—</div><div class="kpi-lbl">Open FTAs</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--red)" id="tFTAL3">—</div><div class="kpi-lbl">Level 3</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--green)" id="tFTAResolved">—</div><div class="kpi-lbl">Resolved (30d)</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="color:var(--orange)" id="tFTAExposure">—</div><div class="kpi-lbl">$ Exposure</div></div>
+    </div>
+    <div style="padding:0 16px 16px">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">All Open FTA Alerts</span></div>
+        <div class="panel-body" style="max-height:none" id="ftaFullList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bonds View ── -->
+  <div class="view-content" id="viewBonds">
+    <div style="padding:14px 16px 16px">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">All Active Bonds</span></div>
+        <div class="panel-body" style="max-height:none" id="bondsFullList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Court View ── -->
+  <div class="view-content" id="viewCourt">
+    <div style="padding:14px 16px 16px">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">📅 Upcoming Court Dates</span></div>
+        <div class="panel-body" style="max-height:none" id="courtFullList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Leads View ── -->
+  <div class="view-content" id="viewLeads">
+    <div style="padding:14px 16px 16px">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">🔥 Hot Leads</span></div>
+        <div class="panel-body" style="max-height:none" id="leadsFullList"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+const API = window.location.origin;
+let _data = {};
+
+function showView(viewId, btn) {
+  document.querySelectorAll('.view-content').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(viewId).classList.add('active');
+  if (btn) btn.classList.add('active');
+}
+
+async function fetchAll() {
+  try {
+    const [status, mongo, fta, bonds, delinquent] = await Promise.all([
+      fetch(`${API}/api/status`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/mongo-stats`).then(r => r.json()).catch(() => ({})),
+      fetch(`${API}/api/fta/open`).then(r => r.json()).catch(() => ({ ftas: [], stats: {} })),
+      fetch(`${API}/api/active-bonds?limit=100`).then(r => r.json()).catch(() => ({ bonds: [] })),
+      fetch(`${API}/api/payments/delinquent?days=3`).then(r => r.json()).catch(() => ({ delinquent: [] })),
+    ]);
+    _data = { status, mongo, fta, bonds, delinquent };
+    render();
+  } catch (e) { console.error('fetchAll error', e); }
+}
+
+function render() {
+  const { status = {}, mongo = {}, fta = {}, bonds = {}, delinquent = {} } = _data;
+  const sc = status.scrapers || {};
+  const by = mongo.by_county || {};
+  const scores = mongo.scores || {};
+  const ftaList = fta.ftas || [];
+  const bondList = bonds.bonds || [];
+  const delinqList = delinquent.delinquent || [];
+  const ftaStats = fta.stats || {};
+
+  const courtToday = bondList.filter(b => {
+    if (!b.court_date) return false;
+    return new Date(b.court_date).toDateString() === new Date().toDateString();
+  }).length;
+
+  // KPIs
+  const sets = [
+    ['tActive', bondList.length || ftaStats.active_bonds || '—'],
+    ['tRecords', _fmt(mongo.total_records || 0)],
+    ['tHot', scores.hot || 0],
+    ['tFTA', ftaStats.open_count || ftaList.length || 0],
+    ['tDelinquent', delinqList.length],
+    ['tCourtToday', courtToday],
+    ['tFTA2', ftaStats.open_count || ftaList.length || 0],
+    ['tFTAL3', ftaList.filter(f => (f.escalation_level || 1) >= 3).length],
+    ['tFTAResolved', ftaStats.resolved_30d || '—'],
+    ['tFTAExposure', ftaStats.exposure_at_risk ? '$' + _fmt(ftaStats.exposure_at_risk) : '—'],
+  ];
+  sets.forEach(([id, val]) => { const el = document.getElementById(id); if (el) el.textContent = val; });
+
+  // FTA alert banner
+  if (ftaList.length > 0) {
+    document.getElementById('ftaAlertBanner').classList.add('show');
+    document.getElementById('ftaBannerText').textContent = `${ftaList.length} open FTA alert${ftaList.length > 1 ? 's' : ''} require attention`;
+    document.getElementById('ftaPanelBadge').textContent = `${ftaList.length} open`;
+  } else {
+    document.getElementById('ftaAlertBanner').classList.remove('show');
+    document.getElementById('ftaPanelBadge').textContent = '0 open';
+  }
+
+  // FTA panel (overview)
+  const ftaHtml = ftaList.length === 0
+    ? '<div class="empty">No open FTA alerts ✅</div>'
+    : ftaList.slice(0, 8).map(f => _ftaItem(f)).join('');
+  document.getElementById('ftaPanel').innerHTML = ftaHtml;
+  document.getElementById('ftaFullList').innerHTML = ftaList.length === 0
+    ? '<div class="empty">No open FTA alerts ✅</div>'
+    : ftaList.map(f => _ftaItem(f)).join('');
+
+  // Bonds panel — court soon
+  const courtSoon = bondList.filter(b => {
+    if (!b.court_date) return false;
+    const d = Math.ceil((new Date(b.court_date) - Date.now()) / 86400000);
+    return d <= 7;
+  }).sort((a, b) => new Date(a.court_date) - new Date(b.court_date));
+
+  document.getElementById('bondsPanel').innerHTML = courtSoon.length === 0
+    ? '<div class="empty">No bonds with court in 7 days</div>'
+    : courtSoon.slice(0, 8).map(b => _bondItem(b)).join('');
+  document.getElementById('bondsFullList').innerHTML = bondList.length === 0
+    ? '<div class="empty">No active bonds</div>'
+    : bondList.map(b => _bondItem(b)).join('');
+
+  // Court full list
+  const withCourt = bondList.filter(b => b.court_date).sort((a, b) => new Date(a.court_date) - new Date(b.court_date));
+  document.getElementById('courtFullList').innerHTML = withCourt.length === 0
+    ? '<div class="empty">No upcoming court dates</div>'
+    : withCourt.map(b => _bondItem(b)).join('');
+
+  // Leads
+  const leads = mongo.recent_hot_leads || [];
+  const leadsHtml = leads.length === 0
+    ? '<div class="empty">No hot leads in last 24h</div>'
+    : leads.map(l => {
+        const amt = l.bond_amount ? `$${Number(l.bond_amount).toLocaleString()}` : '—';
+        return `<div class="list-item orange">
+          <div style="display:flex;justify-content:space-between">
+            <div class="item-name">${_esc(l.full_name || 'Unknown')}</div>
+            <span class="badge badge-orange">Score ${l.lead_score}</span>
+          </div>
+          <div class="item-meta"><span>${_esc(l.county || '—')}</span><span style="color:var(--green);font-weight:700">${amt}</span></div>
+        </div>`;
+      }).join('');
+  document.getElementById('leadsPanel').innerHTML = leadsHtml;
+  document.getElementById('leadsFullList').innerHTML = leadsHtml;
+
+  // System panel
+  const scrapers = Object.entries(sc);
+  const ok = scrapers.filter(([,s]) => s.status === 'ok').length;
+  const err = scrapers.filter(([,s]) => s.status !== 'ok').length;
+  document.getElementById('systemPanel').innerHTML = `
+    <div class="list-item ${err > 0 ? 'orange' : 'green'}" style="margin:0">
+      <div class="item-name">Scraper Fleet</div>
+      <div class="item-meta">
+        <span style="color:var(--green)">${ok} online</span>
+        ${err > 0 ? `<span style="color:var(--red)">${err} errors</span>` : ''}
+        <span>${scrapers.length} total</span>
+      </div>
+    </div>`;
+}
+
+function _ftaItem(f) {
+  const level = f.escalation_level || 1;
+  const cls = level >= 3 ? 'red' : level >= 2 ? 'orange' : 'yellow';
+  const badge = level >= 3 ? 'badge-red' : level >= 2 ? 'badge-orange' : 'badge-yellow';
+  const label = level >= 3 ? '🆘 L3' : level >= 2 ? '🔴 L2' : '⚠️ L1';
+  const amt = f.bond_amount ? `$${Number(f.bond_amount).toLocaleString()}` : '—';
+  return `<div class="list-item ${cls}">
+    <div style="display:flex;justify-content:space-between">
+      <div class="item-name">${_esc(f.defendant_name || f.booking_number || '—')}</div>
+      <span class="badge ${badge}">${label}</span>
+    </div>
+    <div class="item-meta">
+      <span>${_esc(f.county || '—')}</span>
+      <span style="color:var(--green);font-weight:700">${amt}</span>
+      <span>${_esc(f.booking_number || '')}</span>
+      ${f.hours_past_court ? `<span style="color:var(--red)">${Math.round(f.hours_past_court)}h past</span>` : ''}
+    </div>
+    ${f.surrender_initiated ? '<div style="font-size:0.6rem;color:var(--red);margin-top:3px;font-weight:700">🆘 Surrender initiated</div>' : ''}
+  </div>`;
+}
+
+function _bondItem(b) {
+  const daysUntil = b.court_date ? Math.ceil((new Date(b.court_date) - Date.now()) / 86400000) : null;
+  let cls = 'green', courtBadge = '';
+  if (daysUntil !== null) {
+    if (daysUntil <= 0) { cls = 'red'; courtBadge = `<span class="badge badge-red">Court TODAY</span>`; }
+    else if (daysUntil <= 3) { cls = 'orange'; courtBadge = `<span class="badge badge-orange">In ${daysUntil}d</span>`; }
+    else if (daysUntil <= 7) { cls = 'blue'; courtBadge = `<span class="badge badge-blue">In ${daysUntil}d</span>`; }
+  }
+  const amt = b.bond_amount ? `$${Number(b.bond_amount).toLocaleString()}` : '—';
+  const dateStr = b.court_date ? new Date(b.court_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
+  return `<div class="list-item ${cls}">
+    <div style="display:flex;justify-content:space-between">
+      <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
+      ${courtBadge}
+    </div>
+    <div class="item-meta">
+      <span>${_esc(b.county || '—')}</span>
+      <span style="color:var(--green);font-weight:700">${amt}</span>
+      <span>${dateStr}</span>
+      <span style="color:var(--muted)">${_esc(b.booking_number || '')}</span>
+    </div>
+  </div>`;
+}
+
+async function runFTAScan() {
+  try {
+    const r = await fetch(`${API}/api/fta/scan`, { method: 'POST' });
+    const d = await r.json();
+    alert(`FTA Scan: ${d.fta_detected || 0} detected, ${d.alerts_sent || 0} alerts sent`);
+    await fetchAll();
+  } catch (e) { alert('Scan failed: ' + e.message); }
+}
+
+async function runPaymentScan() {
+  try {
+    const r = await fetch(`${API}/api/payments/delinquent`);
+    const d = await r.json();
+    alert(`Payment scan: ${d.total || 0} overdue plans found`);
+  } catch (e) { alert('Scan failed: ' + e.message); }
+}
+
+function _set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+function _fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(1) + 'K' : n; }
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// SSE
+try {
+  const es = new EventSource(`${API}/api/events/stream`);
+  es.addEventListener('bond_fta_detected', () => fetchAll());
+  es.addEventListener('payment_missed', () => fetchAll());
+  es.addEventListener('bond_written', () => fetchAll());
+} catch(_) {}
+
+// Auto-refresh
+let cd = 30;
+setInterval(() => {
+  cd--;
+  const el = document.getElementById('refreshBar');
+  if (el) el.textContent = `Auto-refresh in ${cd}s`;
+  if (cd <= 0) { cd = 30; fetchAll(); }
+}, 1000);
+
+fetchAll();
+</script>
+</body>
+</html>

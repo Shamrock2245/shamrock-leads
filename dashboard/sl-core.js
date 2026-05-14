@@ -46,7 +46,7 @@ function switchTab(btn) {
   const badgeMap = {
     tabLeads: 'leads', tabProspective: 'prospective', tabActiveBonds: 'activeBonds',
     tabTracking: 'tracking', tabIntake: 'intake', tabIndemnitor: 'indemnitor',
-    tabCalendar: 'calendar'
+    tabCalendar: 'calendar', tabFTA: 'fta'
   };
   if (badgeMap[tabId]) {
     SL_STATE.badges[badgeMap[tabId]] = 0;
@@ -64,7 +64,7 @@ function switchTab(btn) {
 const _badgeIds = {
   leads: 'leadsBadge', prospective: 'prospectiveBadge', activeBonds: 'activeBondsBadge',
   tracking: 'trackingBadge', intake: 'intakeBadge', indemnitor: 'indemnitorBadge',
-  calendar: 'calendarBadge'
+  calendar: 'calendarBadge', fta: 'ftaBadge'
 };
 
 function _updateBadgeEl(key, count) {
@@ -91,7 +91,7 @@ function _incrementBadge(key) {
   const tabMap = {
     leads: 'tabLeads', prospective: 'tabProspective', activeBonds: 'tabActiveBonds',
     tracking: 'tabTracking', intake: 'tabIntake', indemnitor: 'tabIndemnitor',
-    calendar: 'tabCalendar'
+    calendar: 'tabCalendar', fta: 'tabFTA'
   };
   const tabEl = document.getElementById(tabMap[key]);
   if (tabEl && tabEl.classList.contains('active')) return;
@@ -325,6 +325,45 @@ function initSSE() {
       if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('new_reply', data);
       playHotAlert();
       _desktopNotif('🔔 New Reply!', `${name}: ${(data.message || data.text || '').slice(0, 80)}`);
+    } catch(_) {}
+  });
+
+  // ── FTA detected ────────────────────────────────────────────────────────
+  es.addEventListener('bond_fta_detected', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const name = data.defendant_name || data.booking_number || 'Defendant';
+      const level = data.escalation_level || 1;
+      const levelLabel = level >= 3 ? '🆘 Level 3' : level >= 2 ? '🔴 Level 2' : '⚠️ Level 1';
+      toast(`🚨 FTA ${levelLabel}: ${name}`, 'error');
+      _addActivity('🚨', `FTA detected (${levelLabel}): ${name} — ${data.county || ''}`, 'error');
+      _incrementBadge('fta');
+      playHotAlert();
+      _desktopNotif('🚨 FTA Alert!', `${levelLabel} — ${name}`);
+      // Refresh FTA tab if open
+      if (typeof SLFTA !== 'undefined') SLFTA.load();
+    } catch(_) {}
+  });
+
+  // ── Bond renewed ────────────────────────────────────────────────────────
+  es.addEventListener('bond_renewed', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const name = data.defendant_name || data.booking_number || 'Bond';
+      toast(`🔄 Bond renewed: ${name} — new court date set`, 'success');
+      _addActivity('🔄', `Bond renewed: ${name} (${data.renewal_reason || ''})`, 'success');
+    } catch(_) {}
+  });
+
+  // ── Missed payment ───────────────────────────────────────────────────────
+  es.addEventListener('payment_missed', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      const name = data.defendant_name || data.booking_number || 'Defendant';
+      const amt = data.amount_due ? `$${Number(data.amount_due).toLocaleString()}` : '';
+      toast(`💸 Missed payment: ${name} ${amt}`, 'error');
+      _addActivity('💸', `Missed payment: ${name} — ${amt} overdue`, 'error');
+      _desktopNotif('💸 Missed Payment', `${name} — ${amt} overdue`);
     } catch(_) {}
   });
 
