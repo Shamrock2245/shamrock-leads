@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-05-08
+> **Last Updated:** 2026-05-15
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
@@ -11,7 +11,7 @@
 
 ShamrockLeads is a **statewide arrest intelligence and bonded-case management platform** that:
 
-1. **Scrapes** 50 Florida county jail rosters on scheduled intervals `[IMPLEMENTED]`
+1. **Scrapes** 51 Florida county jail rosters on scheduled intervals `[IMPLEMENTED]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
@@ -110,7 +110,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  50 County Scrapers  │  │  Slack relay               │ │
+│  │  51 County Scrapers  │  │  Slack relay               │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
 │  │  Lead Scorer         │            │                   │
@@ -122,9 +122,9 @@ Move records safely through this lifecycle:
 │  └──────────────────────┘  │   → Nginx :443            │ │
 │                            │   → external :8088)       │ │
 │  ┌──────────────────────┐  │                            │ │
-│  │  Nginx Reverse Proxy │  │  49 API modules            │ │
-│  │  leads.shamrock      │  │  21 service modules        │ │
-│  │  bailbonds.biz       │  │  32 frontend JS modules    │ │
+│  │  Nginx Reverse Proxy │  │  61 API modules            │ │
+│  │  leads.shamrock      │  │  36 service modules        │ │
+│  │  bailbonds.biz       │  │  42 frontend JS modules    │ │
 │  └──────────────────────┘  └──────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
          │                            │

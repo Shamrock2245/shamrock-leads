@@ -1,7 +1,7 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.
-> **Last Updated:** 2026-05-08
+> **Last Updated:** 2026-05-15
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
 
 ## Phase Overview
@@ -35,9 +35,9 @@
 
 ## Phase 1b: County Expansion ✅ COMPLETE
 
-Expanded from 20 to **50 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
+Expanded from 20 to **51 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
 
-**Scraper file count:** 50 files in `scrapers/counties/` (excluding `__init__.py`).
+**Scraper file count:** 51 files in `scrapers/counties/` (excluding `__init__.py`).
 
 **Scraper strategies:**
 | Strategy | Library | Counties |

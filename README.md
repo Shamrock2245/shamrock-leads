@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Active%20Scrapers-50-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Active%20Scrapers-51-orange)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-15%20Tabs-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
 
@@ -13,9 +13,13 @@
 
 ## What Is This?
 
-ShamrockLeads is a **statewide arrest intelligence and bail bond lifecycle platform** that:
+ShamrockLeads is the **core intelligence engine** for [Shamrock Bail Bonds](https://shamrockbailbonds.biz) — a Florida bail bond agency automating the full bond lifecycle from arrest scrape to signed paperwork to payment collection.
 
-1. **Scrapes** real-time booking data from **50 Florida county** jail rosters on scheduled intervals
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
+
+### What It Does
+
+1. **Scrapes** real-time booking data from **51 Florida county** jail rosters on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
@@ -32,7 +36,8 @@ ShamrockLeads is a **statewide arrest intelligence and bail bond lifecycle platf
 15. **Detects** re-arrests of defendants on active bonds
 16. **Monitors** Gmail for court discharge/exoneration emails
 17. **Syncs** court dates to Google Calendar with Twilio SMS reminders
-18. **Visualizes** everything through a **15-tab Intelligence Dashboard**
+18. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
+19. **Visualizes** everything through a **15-tab Intelligence Dashboard**
 
 ---
 
@@ -42,7 +47,7 @@ ShamrockLeads is a **statewide arrest intelligence and bail bond lifecycle platf
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        SCRAPER ENGINE                                │
 │                                                                      │
-│  50 County Scrapers (Python 3.12)                                    │
+│  51 County Scrapers (Python 3.12)                                    │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │DrissionPage│  │ curl_cffi  │  │ requests +   │  │ Patchright │  │
 │  │ (Chromium) │  │(TLS spoof) │  │BeautifulSoup │  │ (Stealth)  │  │
@@ -81,9 +86,17 @@ ShamrockLeads is a **statewide arrest intelligence and bail bond lifecycle platf
 │  📋 POA Inventory     │ 💬 iMessage          │ 📈 Analytics          │
 │  📅 Calendar          │ 📄 Reports           │ 🔔 Notifications      │
 │                                                                      │
-│  49 API modules  │  21 service modules  │  32 frontend JS modules    │
-│  ~25,700 LOC (frontend)  │  ~24,300 LOC (backend)                    │
-└──────────────────────────────────────────────────────────────────────┘
+│  61 API modules  │  36 service modules  │  42 frontend JS modules    │
+│  ~30,800 LOC (frontend JS+CSS)  │  ~37,500 LOC (backend)            │
+└──────────────┬───────────────────────────────────────────────────────┘
+               │
+    ┌──────────┼──────────────┐
+    ▼          ▼              ▼
+┌────────┐ ┌──────────┐ ┌──────────┐
+│Traccar │ │BlueBubbles│ │ SignNow  │
+│GPS     │ │ iMessage  │ │ E-Sign   │
+│Tracking│ │ Bridge    │ │ Packets  │
+└────────┘ └──────────┘ └──────────┘
 ```
 
 ---
@@ -117,7 +130,7 @@ python main.py lee
 
 ## Intelligence Dashboard
 
-A premium **15-tab operations center** with ~25,700 lines of frontend code across 32 JS modules:
+A premium **15-tab operations center** with ~22,400 lines of frontend JS and ~8,400 lines of CSS across 42 JS modules:
 
 | Tab | Module | Purpose |
 |-----|--------|---------|
@@ -126,8 +139,8 @@ A premium **15-tab operations center** with ~25,700 lines of frontend code acros
 | 👤 **Defendants** | `defendants.js`, `sl-defendant-lifecycle.js` | Card grid with lifecycle notes, contact log, DNB/DNC, bond finalize |
 | 📱 **Outreach** | `sl-prospective.js` | Kanban pipeline (Contacted → Negotiating → Paperwork → Ready), iMessage bridge |
 | 🏥 **Scraper Health** | `sl-health.js` | Fleet status, error drill-down, manual triggers, auto-recovery |
-| 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated), destructive drop confirmations, POA auto-release |
-| 📍 **Tracking** | `sl-tracking.js` | GPS/check-in tracking, compliance monitoring |
+| 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated) |
+| 📍 **Tracking** | `sl-tracking.js`, `sl-geo-intelligence.js` | GPS/check-in tracking, geofencing, Traccar integration |
 | 📥 **Intake Queue** | `sl-intake.js` | Wix/Telegram intake processing, defendant matching |
 | 🤝 **Indemnitors** | `sl-indemnitor.js` | Full indemnitor profiles, payment plans, document packets |
 | 📋 **POA Inventory** | `sl-inventory.js` | Power of Attorney management (OSI + Palmetto sureties) |
@@ -137,22 +150,11 @@ A premium **15-tab operations center** with ~25,700 lines of frontend code acros
 | 📄 **Reports** | `sl-reports.js`, `sl-reports-ui.js` | Liability, commissions, reconciliation reports |
 | 🔔 **Notifications** | `sl-notifications.js` | Notification center — re-arrest alerts, system events |
 
-### Additional Frontend Modules
-
-| Module | Purpose |
-|--------|---------|
-| `sl-overhaul.js` + `sl-overhaul.css` | Command Palette (Ctrl+K), unified toast system, county badges, KPI animations |
-| `sl-design-system.css` | Design tokens, CSS custom properties, component primitives |
-| `sl-record-bond.js` | Bond recording modal with surety/POA/case# selection |
-| `sl-tab-polish.js` | Tab transition animations |
-| `sl-animations.js` | Micro-animations (count-up, hover lift, fade-in) |
-| `sl-refinements.js` | UX polish and edge-case handling |
-
 ---
 
 ## County Coverage
 
-**50 county scrapers** across Florida, with 3 shared base classes for common JMS platforms:
+**51 county scraper files** across Florida, with 3 shared base classes for common JMS platforms:
 
 ### Scraper Strategies
 
@@ -172,41 +174,6 @@ A premium **15-tab operations center** with ~25,700 lines of frontend code acros
 | `GenericAdaptiveScraper` | Auto-detect (HTML tables) | Fallback for unknown platforms |
 
 > **Goal:** All 67 Florida counties. See [COUNTY_REGISTRY.md](docs/COUNTY_REGISTRY.md) for the full registry.
-
----
-
-## API Endpoints
-
-The dashboard exposes **200+ REST endpoints** across **49 API modules** and **21 service modules**:
-
-| Module | Prefix | Key Endpoints |
-|--------|--------|---------------|
-| `arrests` | `/api/arrests` | Search, filter, export arrests |
-| `leads` | `/api/leads` | Lead queries with scoring |
-| `defendants` | `/api/defendants` | Defendant search and detail |
-| `defendant_lifecycle` | `/api/defendant-notes` | Notes, contact log, DNB/DNC, promote-to-pipeline |
-| `prospective_bonds` | `/api/prospective` | Kanban pipeline CRUD, stage transitions |
-| `bonds` | `/api/bonds` | Active bond management, 7-status lifecycle, Kanban |
-| `bond_lifecycle` | `/api/bond-lifecycle` | SignNow webhook, court email processing, signing initiation |
-| `poa` | `/api/poa` | POA inventory (OSI + Palmetto), assign/release/swap |
-| `matching` | `/api/matching` | Defendant↔Indemnitor matching engine |
-| `intake` | `/api/intake` | Intake queue management |
-| `paperwork` | `/api/paperwork` | SignNow packet generation and delivery |
-| `payments` | `/api/payments` | Payment log, payment plans |
-| `contacts` | `/api/contacts` | OSINT contact discovery |
-| `outreach` | `/api/outreach` | iMessage drip campaign sequencing |
-| `tracking` | `/api/tracking` | GPS/check-in compliance |
-| `court_reminders` | `/api/court` | Court date reminders (Twilio SMS) |
-| `calendar` | `/api/calendar` | Google Calendar sync |
-| `discharge_monitor` | `/api/discharge` | Gmail discharge/exoneration scanner |
-| `rearrest_detector` | `/api/rearrest` | Re-arrest detection on active bonds |
-| `data_retention` | `/api/retention` | Tiered data purge for M0 512MB limit |
-| `events` | `/api/events` | Immutable audit event log |
-| `bb_*` (8 modules) | `/api/bb/*` | BlueBubbles iMessage bridge (health, webhook, prospecting, scheduling, documents, contacts, Firebase sync) |
-| `imessage_automation` | `/api/imessage` | AI-powered message automation |
-| `agent_brain` | `/api/agent` | Shannon AI auto-reply agent |
-| `scraper_control` | `/api/scraper` | Manual triggers, fleet status |
-| `stats` | `/api/stats` | KPIs, county breakdown |
 
 ---
 
@@ -234,7 +201,7 @@ shamrock-leads/
 ├── main.py                    # Entry point: APScheduler + CLI
 ├── config/settings.py         # Env-based config with feature flags
 ├── core/
-│   ├── models.py              # ArrestRecord (39-column dataclass)
+│   ├── models.py              # ArrestRecord (39-column dataclass) + SuretyConfig
 │   ├── dedup.py               # In-memory + MongoDB deduplication
 │   └── scheduler.py           # APScheduler with per-county intervals
 ├── scrapers/
@@ -242,7 +209,7 @@ shamrock-leads/
 │   ├── p2c_base.py            # P2C (Police-to-Citizen) platform base
 │   ├── smartcop_base.py       # SmartCOP platform base (19 counties)
 │   ├── generic_adaptive.py    # Auto-detect scraper for unknown JMS
-│   └── counties/              # One file per county (50 active)
+│   └── counties/              # One file per county (51 active)
 ├── scoring/
 │   └── lead_scorer.py         # Rule-based lead qualification (0–100)
 ├── writers/
@@ -257,68 +224,24 @@ shamrock-leads/
 │   ├── sl-overhaul.css        # Design overhaul layer
 │   ├── sl-imessage.css        # iMessage tab styles
 │   ├── sl-design-system.css   # Design tokens & primitives
-│   ├── sl-core.js             # Tab system, KPI cards, theme
-│   ├── sl-data.js             # Data fetching, caching, SSE
-│   ├── sl-features.js         # Lead explorer, filters, export
-│   ├── sl-health.js           # Scraper fleet health monitor
-│   ├── sl-prospective.js      # Outreach Kanban pipeline
-│   ├── sl-active-bonds.js     # Active Bonds 7-status Kanban
-│   ├── sl-defendant-lifecycle.js  # Notes, contact log, lifecycle bridge
-│   ├── sl-indemnitor.js       # Indemnitor management
-│   ├── sl-inventory.js        # POA inventory modal
-│   ├── sl-intake.js           # Intake queue processing
-│   ├── sl-tracking.js         # GPS/compliance tracking
-│   ├── sl-imessage.js         # iMessage control center
-│   ├── sl-analytics.js        # Analytics dashboard
-│   ├── sl-analytics-apex.js   # ApexCharts integration
-│   ├── sl-calendar.js         # Court calendar
-│   ├── sl-calendar-ext.js     # Calendar extensions
-│   ├── sl-reports.js          # Reports module
-│   ├── sl-reports-ui.js       # Reports UI components
-│   ├── sl-notifications.js    # Notification center
-│   ├── sl-overhaul.js         # Command palette, toasts, badges
-│   ├── sl-record-bond.js      # Bond recording modal
-│   ├── sl-tab-polish.js       # Tab transition polish
-│   ├── sl-animations.js       # Micro-animations
-│   ├── sl-refinements.js      # UX refinements
+│   ├── sl-*.js (39 files)     # Frontend modules (see Dashboard section)
 │   ├── defendants.js          # Defendant card grid
-│   ├── api/                   # 49 REST API blueprint modules
-│   │   ├── arrests.py         # Arrest search/filter
-│   │   ├── bonds.py           # Active bond management
-│   │   ├── bond_lifecycle.py  # Signing, webhooks, court emails
-│   │   ├── matching.py        # Matching engine
-│   │   ├── paperwork.py       # SignNow packet generation
-│   │   ├── payments.py        # Payment tracking
-│   │   ├── poa.py             # POA inventory
-│   │   ├── rearrest_detector.py  # Re-arrest detection
-│   │   ├── discharge_monitor.py  # Gmail discharge scanner
-│   │   ├── agent_brain.py     # Shannon AI agent
-│   │   ├── bb_*.py (8 files)  # BlueBubbles iMessage modules
-│   │   └── ...                # 38 more API modules
-│   └── services/              # 21 service modules
-│       ├── matching_engine.py     # 4-strategy matching pipeline
-│       ├── signnow_service.py     # SignNow API wrapper
-│       ├── signnow_packet_service.py  # Packet hydration + delivery
-│       ├── poa_service.py         # POA tier logic
-│       ├── bb_client.py           # BlueBubbles REST client
-│       ├── outreach_sequencer.py  # Drip campaign state machine
-│       ├── contact_discovery.py   # OSINT contact finder
-│       ├── court_reminder_service.py  # Twilio SMS reminders
-│       ├── twilio_service.py      # Twilio API wrapper
-│       └── ...                    # 12 more service modules
-├── docs/
-│   ├── SCHEMAS.md             # Data model reference
-│   ├── COUNTY_REGISTRY.md     # All 67 counties with JMS vendor info
-│   ├── agents/                # AI agent specs
-│   ├── policies/              # Business rule policies (surety, matching, signature)
-│   └── runbooks/              # Operational runbooks
+│   ├── api/                   # 61 REST API blueprint modules
+│   └── services/              # 36 service modules
+├── api/                       # External API integrations
+├── models/                    # Shared data models
+├── config/                    # Firebase admin SDK, Traccar config
+├── docs/                      # Documentation (schemas, policies, runbooks, agents)
 ├── .agent/skills/             # 34 AI agent skills
+├── nginx/                     # Nginx reverse proxy config
 ├── Dockerfile                 # Python 3.12-slim + Chromium
-├── docker-compose.yml         # Scraper + Dashboard + Node-RED
+├── docker-compose.yml         # Scraper + Dashboard + Traccar + Node-RED
 ├── BRAND.md                   # Identity, vision, design standards
 ├── AGENTS.md                  # Digital workforce handbook (15 agents)
 ├── ROADMAP.md                 # 15-phase lifecycle (all complete)
 ├── DATA_MODEL.md              # 16 MongoDB collections, full schemas
+├── CONTRIBUTING.md            # Development workflow & conventions
+├── SECURITY.md                # Security policy & PII protection
 └── GEMINI.md                  # AI agent configuration
 ```
 
@@ -327,8 +250,8 @@ shamrock-leads/
 ## Tech Stack
 
 | Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Language** | Python 3.12 | Core runtime (~24,300 lines backend) |
+|-------|-----------|---------| 
+| **Language** | Python 3.12 | Core runtime (~37,500 lines backend) |
 | **Scheduling** | APScheduler | Per-county cron with staggered first-runs |
 | **Browser** | DrissionPage 4.0+ | Headless Chromium for JS-heavy sites |
 | **Stealth Browser** | Patchright | Playwright fork for advanced anti-bot |
@@ -338,12 +261,13 @@ shamrock-leads/
 | **Legacy DB** | Google Sheets (gspread) | Optional fallback writer |
 | **Alerts** | Slack SDK | Webhook-based real-time notifications (12+ channels) |
 | **Dashboard** | Quart (async Flask) | 15-tab intelligence dashboard |
-| **Frontend** | Vanilla JS + CSS | ~25,700 lines, 32 modules, premium dark-theme design |
+| **Frontend** | Vanilla JS + CSS | ~30,800 lines, 42 modules, premium dark-theme design |
 | **iMessage** | BlueBubbles API | Office iMac via ngrok permanent tunnel |
 | **AI** | OpenAI GPT-4o | Lead enrichment, auto-reply agent (Shannon) |
 | **Signatures** | SignNow API | 14-doc packet orchestration |
 | **Payments** | SwipeSimple | Bond premium collection |
 | **SMS** | Twilio | Court reminders, 10DLC compliant |
+| **GPS** | Traccar | Real-time defendant location tracking (OsmAnd, vehicle) |
 | **Hosting** | Hetzner VPS (Docker) | Production at `178.156.179.237` |
 | **Proxy** | Nginx | Reverse proxy → `leads.shamrockbailbonds.biz` |
 | **Ops** | Node-RED | 39+ cron jobs, ops dashboard |
@@ -372,7 +296,31 @@ ssh root@178.156.179.237 "cd /opt/shamrock-leads && git pull origin main && dock
 |---------|-----------|---------------|---------------|---------|
 | `shamrock-leads` | `shamrock-leads` | — | — | Scraper engine + APScheduler |
 | `dashboard` | `shamrock-dashboard` | 5050 | 8088 | Intelligence dashboard |
-| `node-red` | `shamrock-node-red` | 1880 | 1880 | Operations dashboard |
+| `traccar` | `shamrock-traccar` | 8082 | 8082 | GPS tracking server |
+| `node-red` | `shamrock-node-red` | 1880 | 1880 | Operations dashboard (profile: `ops`) |
+
+---
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [BRAND.md](BRAND.md) | Identity, vision, design standards, non-negotiables |
+| [AGENTS.md](AGENTS.md) | Digital workforce (15 agents), scoring, safety rules |
+| [DATA_MODEL.md](DATA_MODEL.md) | 16 MongoDB collections, full schemas |
+| [ROADMAP.md](ROADMAP.md) | 15-phase lifecycle, all complete |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, code conventions, PR process |
+| [SECURITY.md](SECURITY.md) | Security policy, PII protection |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [API_REFERENCE.md](docs/API_REFERENCE.md) | REST API endpoint reference (61 modules) |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture & data flow diagrams |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment & operations guide |
+| [SCHEMAS.md](docs/SCHEMAS.md) | MongoDB collection schemas |
+| [COUNTY_REGISTRY.md](docs/COUNTY_REGISTRY.md) | All 67 counties with JMS vendor info |
+| [Surety Policy](docs/policies/surety-policy.md) | POA inventory, surety selection, premium splits |
+| [Matching Policy](docs/policies/matching-policy.md) | Match confidence scoring, validation gates |
+| [Signature Policy](docs/policies/signature-policy.md) | Packet binding, signing workflow |
+| [Intake-to-Signature](docs/runbooks/intake-to-signature.md) | End-to-end workflow runbook |
 
 ---
 
@@ -383,7 +331,7 @@ See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
-| 1b | County Expansion (50 scrapers) | ✅ Complete |
+| 1b | County Expansion (51 scrapers) | ✅ Complete |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Queue Processing | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -401,43 +349,10 @@ See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
 
 ---
 
-## AI Agent Skills
-
-**34 agent skills** in `.agent/skills/` for automated development workflows:
-
-| Skill | Purpose |
-|-------|---------|
-| `scraper-builder` | Add a new county scraper step-by-step |
-| `scraper-debugger` | Debug broken scrapers with self-healing |
-| `lead-scoring-tuning` | Adjust scoring weights and thresholds |
-| `frontend-design` | Premium dashboard UI/UX |
-| `docker-ops` | Container management on Hetzner |
-| `git-sync-deploy` | Multi-environment sync workflow |
-| `bluebubbles-integration` | iMessage automation (9-module Python layer) |
-| `contact-discovery` | OSINT family/friend contact finder |
-| `county-jms-patterns` | JMS vendor reverse-engineering |
-| `systematic-debugging` | Root-cause-first debugging |
-| `pdf-processing` | Bond paperwork PDF manipulation |
-| `programmatic-seo` | County-specific landing pages at scale |
-| `mongodb-*` (3 skills) | Query optimization, schema design, NL querying |
-| `gws-*` (4 skills) | Google Workspace: Calendar, Gmail, Drive, shared auth |
-| `cloudflare-*` (3 skills) | Platform, deploy, email |
-| `sentry-*` (2 skills) | Error monitoring + fix workflow |
-| `wix-*` (3 skills) | App builder, REST management, design system |
-| `openai-agents-sdk` | Multi-agent orchestration |
-| `elevenlabs-agents` | Shannon voice agent |
-| `mcp-builder` | MCP server development |
-| `seo-audit` | Page performance & SEO auditing |
-| `skill-creator` | Create new agent skills |
-| `self-improving-agent` | Session learning & knowledge base |
-| `verification-before-completion` | No claims without evidence |
-
----
-
 ## Related Repositories
 
 | Repo | Purpose |
-|------|---------|
+|------|---------| 
 | [`shamrock-bail-portal-site`](https://github.com/Shamrock2245/shamrock-bail-portal-site) | Wix Velo portal + GAS backend (190+ files) |
 | [`shamrock-node-red`](https://github.com/Shamrock2245/shamrock-node-red) | Ops dashboard + 39 cron jobs |
 | [`shamrock-bond-tracker`](https://github.com/Shamrock2245/shamrock-bond-tracker) | IP-based location tracking + flight risk scoring |
@@ -447,6 +362,8 @@ See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
 ---
 
 ## Environment Variables
+
+See [`.env.example`](.env.example) for the full list. Key variables:
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
@@ -475,3 +392,5 @@ See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
 ## License
 
 Proprietary — Shamrock Active Software LLC
+
+*Maintained by: Brendan / Shamrock Active Software LLC | `admin@shamrockbailbonds.biz`*

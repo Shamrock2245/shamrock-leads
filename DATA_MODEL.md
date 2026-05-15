@@ -1,6 +1,6 @@
 # DATA_MODEL.md — ShamrockLeads Entity & Schema Reference
 
-> **Last Updated:** 2026-05-08
+> **Last Updated:** 2026-05-15
 > **Database:** MongoDB Atlas — `ShamrockBailDB`
 > **Dedup Key:** `county` + `booking_number` (for arrests)
 > **Identity Rule:** ArrestLead ≠ Defendant ≠ Indemnitor ≠ Match ≠ BondCase. Never collapse.

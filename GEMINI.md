@@ -2,7 +2,7 @@
 
 > This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
-> **Last Updated:** 2026-05-08
+> **Last Updated:** 2026-05-15
 
 ---
 
@@ -49,8 +49,9 @@ Twilio               → SMS court reminders, 10DLC compliant
 | Service | Container | Internal | External | Purpose |
 |---------|-----------|----------|----------|---------|
 | `shamrock-leads` | `shamrock-leads` | — | — | Scraper engine + APScheduler |
-| `dashboard` | `shamrock-dashboard` | 5050 | 8088 | Quart dashboard (49 API modules, 21 services) |
-| `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs |
+| `dashboard` | `shamrock-dashboard` | 5050 | 8088 | Quart dashboard (61 API modules, 36 services) |
+| `traccar` | `shamrock-traccar` | 8082 | 8082 | GPS tracking (OsmAnd, vehicle trackers) |
+| `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs (profile: ops) |
 
 ---
 
@@ -82,15 +83,17 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| County scraper files | 50 (in `scrapers/counties/`) |
-| API blueprint modules | 49 (in `dashboard/api/`) |
-| Service modules | 21 (in `dashboard/services/`) |
-| Frontend JS modules | 32 (`sl-*.js` files) |
-| Frontend CSS files | 3 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`) |
-| Frontend total LOC | ~25,700 (JS + CSS + HTML) |
-| Backend total LOC | ~24,300 (API + services) |
+| County scraper files | 51 (in `scrapers/counties/`) |
+| API blueprint modules | 61 (in `dashboard/api/`) |
+| Service modules | 36 (in `dashboard/services/`) |
+| Frontend JS modules | 42 (`sl-*.js` + `defendants.js`) |
+| Frontend CSS files | 4 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`) |
+| Frontend JS LOC | ~22,400 |
+| Frontend CSS LOC | ~8,400 |
+| Backend API LOC | ~24,300 |
+| Backend services LOC | ~13,200 |
 | Agent skills | 34 (in `.agent/skills/`) |
-| Dashboard tabs | 15+ (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, POA, iMessage, Analytics, Calendar, Reports, Notifications) |
+| Dashboard tabs | 15 (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, POA, iMessage, Analytics, Calendar, Reports, Notifications) |
 
 ---
 

@@ -1,185 +1,324 @@
 """
-Pinellas County Arrest Scraper — Sheriff's Inmate Booking via DrissionPage.
+Pinellas County Arrest Scraper — Sheriff's Inmate Booking (ASP.NET WebForms).
 Source: Pinellas County Sheriff's Office
 URL: https://www.pinellassheriff.gov/InmateBooking/
-Method: DrissionPage browser automation (date search + table parsing)
+Method: requests POST with ViewState harvesting — no browser needed.
+
+The search page is an ASP.NET WebForms app. We:
+  1. GET the page to harvest __VIEWSTATE, __EVENTVALIDATION, etc.
+  2. POST with date + "include charge" checkbox to get results table.
+  3. Parse the HTML table: Name | R | S | Date of Birth | Booking Date/Location | Docket #
+
+Each name is a link to a detail page — we capture that for Detail_URL.
+The "Booking Date/Location" column contains both datetime + custody status (IN CUSTODY / RELEASED).
 """
-import logging, re, time
+import logging
+import re
+import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
+
 BASE_URL = "https://www.pinellassheriff.gov"
 SEARCH_URL = f"{BASE_URL}/InmateBooking/"
-DAYS_BACK = 14  # Extended from 3 to 14 (date-search based; 90 days would be too slow)
+DAYS_BACK = 3  # Runs every 90 min — 3 days covers plenty of ground
+PAGE_SIZE = 100  # Request max results per page
+
+# Race code expansion
+RACE_MAP = {
+    "W": "White", "B": "Black", "H": "Hispanic",
+    "A": "Asian", "I": "American Indian", "U": "Unknown",
+    "O": "Other",
+}
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Referer": SEARCH_URL,
+    "DNT": "1",
+    "Connection": "keep-alive",
+}
+
 
 class PinellasCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
         return "Pinellas"
+
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-        except ImportError:
-            logger.error("DrissionPage not installed"); return []
-        page = self._setup_browser()
         all_records = []
-        try:
-            for days_ago in range(DAYS_BACK):
-                target_date = datetime.now() - timedelta(days=days_ago)
-                date_str = target_date.strftime("%m/%d/%Y")
-                try:
-                    daily = self._scrape_date(page, date_str)
-                    all_records.extend(daily)
-                    logger.info(f"Pinellas {date_str}: {len(daily)} records")
-                except Exception as e:
-                    logger.warning(f"Pinellas {date_str}: {e}")
-                time.sleep(2)
-            logger.info(f"Pinellas: {len(all_records)} total records")
-            return all_records
-        except Exception as e:
-            logger.error(f"Pinellas fatal: {e}"); return []
-        finally:
-            try: page.quit()
-            except: pass
+        for days_ago in range(DAYS_BACK):
+            target_date = datetime.now() - timedelta(days=days_ago)
+            date_str = target_date.strftime("%m/%d/%Y")
+            try:
+                daily = self._scrape_date(date_str)
+                all_records.extend(daily)
+                logger.info(f"Pinellas {date_str}: {len(daily)} records")
+            except Exception as e:
+                logger.warning(f"Pinellas {date_str} error: {e}")
+            time.sleep(1)  # Rate-limit
 
-    def _setup_browser(self):
-        from DrissionPage import ChromiumPage
-        co = self._get_browser_options()
-        return ChromiumPage(addr_or_opts=co)
+        logger.info(f"Pinellas: {len(all_records)} total records")
+        return all_records
 
-    def _scrape_date(self, page, date_str):
-        """Use requests+BeautifulSoup against the ASP.NET InmateBooking endpoint."""
+    def _scrape_date(self, date_str: str) -> List[ArrestRecord]:
+        """Scrape a single date using requests POST to the ASP.NET form."""
         import requests
         from bs4 import BeautifulSoup
+
+        session = requests.Session()
+        session.headers.update(HEADERS)
         records = []
-        s = requests.Session()
-        s.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-            'Referer': SEARCH_URL,
-        })
-        # GET to harvest ViewState tokens
+
+        # Step 1: GET to harvest ViewState tokens
         try:
-            r0 = s.get(SEARCH_URL, timeout=20)
+            r0 = session.get(SEARCH_URL, timeout=30)
             r0.raise_for_status()
         except Exception as e:
-            logger.error(f'Pinellas GET failed: {e}'); return records
-        soup0 = BeautifulSoup(r0.text, 'html.parser')
-        def _gh(n):
-            el = soup0.find('input', {'name': n})
-            return el['value'] if el and el.get('value') else ''
+            logger.error(f"Pinellas GET failed: {e}")
+            return records
+
+        soup0 = BeautifulSoup(r0.text, "html.parser")
+
+        def _hidden(name):
+            el = soup0.find("input", {"name": name})
+            return el["value"] if el and el.get("value") else ""
+
+        # Step 2: POST with date, "include charge" checkbox, large page size
         post_data = {
-            '_TSM_HiddenField_': _gh('_TSM_HiddenField_'),
-            '__EVENTTARGET': '', '__EVENTARGUMENT': '', '__LASTFOCUS': '',
-            '__VIEWSTATE': _gh('__VIEWSTATE'),
-            '__VIEWSTATEGENERATOR': _gh('__VIEWSTATEGENERATOR'),
-            '__EVENTVALIDATION': _gh('__EVENTVALIDATION'),
-            '__ncforminfo': _gh('__ncforminfo'),
-            'txtLastName': '', 'txtFirstName': '', 'drpRace': 'Any', 'drpSex': 'Any',
-            'txtDocketNumber': '', 'txtBookingDate': date_str,
-            'drpAgencies': '', 'drpCharge': '', 'drpChargeType': '',
-            'drpSortBy': 'Name', 'drpPageSize': '100',
-            'btnSearch': 'Search', 'hdnType': '',
+            "_TSM_HiddenField_": _hidden("_TSM_HiddenField_"),
+            "__EVENTTARGET": "",
+            "__EVENTARGUMENT": "",
+            "__LASTFOCUS": "",
+            "__VIEWSTATE": _hidden("__VIEWSTATE"),
+            "__VIEWSTATEGENERATOR": _hidden("__VIEWSTATEGENERATOR"),
+            "__EVENTVALIDATION": _hidden("__EVENTVALIDATION"),
+            "__ncforminfo": _hidden("__ncforminfo"),
+            "txtLastName": "",
+            "txtFirstName": "",
+            "drpRace": "Any",
+            "drpSex": "Any",
+            "txtDocketNumber": "",
+            "txtBookingDate": date_str,
+            "drpAgencies": "",
+            "drpCharge": "",
+            "drpChargeType": "",
+            "chkIncludeCharge": "on",  # Include charge in response
+            "drpSortBy": "Name",
+            "drpPageSize": str(PAGE_SIZE),
+            "btnSearch": "Search",
+            "hdnType": "",
         }
+
         try:
-            r1 = s.post(SEARCH_URL, data=post_data, timeout=30)
+            r1 = session.post(SEARCH_URL, data=post_data, timeout=60)
             r1.raise_for_status()
         except Exception as e:
-            logger.error(f'Pinellas POST failed for {date_str}: {e}'); return records
-        soup1 = BeautifulSoup(r1.text, 'html.parser')
-        # Find the results table — it has name/docket/booking columns
-        result_table = None
-        for table in soup1.find_all('table'):
-            trows = table.find_all('tr')
-            if len(trows) > 2:
-                hdrs = [th.get_text(strip=True).lower() for th in trows[0].find_all(['th', 'td'])]
-                if any(k in ' '.join(hdrs) for k in ['name', 'docket', 'booking']):
-                    result_table = table
-                    break
-        if not result_table:
-            logger.debug(f'Pinellas: no results table for {date_str}')
+            logger.error(f"Pinellas POST failed for {date_str}: {e}")
             return records
-        trows = result_table.find_all('tr')
-        hdrs = [th.get_text(strip=True).lower() for th in trows[0].find_all(['th', 'td'])]
-        col = {h: i for i, h in enumerate(hdrs)}
-        def _gc(cells, keys):
-            for k in keys:
-                for h, i in col.items():
-                    if k in h and i < len(cells):
-                        return cells[i].get_text(strip=True)
-            return ''
-        for row in trows[1:]:
-            cells = row.find_all(['td', 'th'])
-            if not cells or len(cells) < 2: continue
-            name = _gc(cells, ['name'])
-            if not name: continue
-            docket = _gc(cells, ['docket'])
-            race = _gc(cells, ['race'])
-            sex = _gc(cells, ['sex', 'gender'])
-            charge = _gc(cells, ['charge', 'offense'])
-            agency = _gc(cells, ['agency'])
-            arrest_type = _gc(cells, ['arrest type', 'type'])
-            name_parts = name.split(',', 1)
-            last = name_parts[0].strip()
-            first = name_parts[1].strip() if len(name_parts) > 1 else ''
-            records.append(ArrestRecord(
-                County=self.county, Booking_Number=docket, Full_Name=name,
-                First_Name=first, Last_Name=last, Booking_Date=date_str,
-                Status='In Custody', Facility='Pinellas County Jail',
-                Race=race, Sex=sex, Charges=charge,
-                Bond_Amount='0', Detail_URL=SEARCH_URL, LastCheckedMode='INITIAL'
-            ))
+
+        soup1 = BeautifulSoup(r1.text, "html.parser")
+        records = self._parse_results_table(soup1, date_str)
         return records
 
-    def _parse_row(self, row, date_str):
-        cells = row.eles('tag:td')
-        if len(cells) < 3: return None
-        ct = [self._clean(c.text) for c in cells]
-        name = ct[0] if len(ct) > 0 else ""
-        booking_num = ct[1] if len(ct) > 1 else ""
-        booking_date = ct[2] if len(ct) > 2 else date_str
-        charges = ct[3] if len(ct) > 3 else ""
-        bond = ct[4] if len(ct) > 4 else "0"
-        race = ct[5] if len(ct) > 5 else ""
-        sex = ct[6] if len(ct) > 6 else ""
-        f, m, l = self._pn(name)
-        bond_amount = self._parse_bond(bond)
-        detail_url = ""
-        try:
-            link = row.ele('tag:a')
-            if link:
-                href = link.attr("href") or ""
-                if href and not href.startswith("http"): href = f"{BASE_URL}{href}"
-                detail_url = href
-        except: pass
-        return ArrestRecord(County=self.county, Booking_Number=self._clean(booking_num),
-            Full_Name=name, First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-            Booking_Date=booking_date, Status="In Custody",
-                        Release_Date="", Facility="Pinellas County Jail",
-            Race=self._clean(race), Sex=self._clean(sex), Charges=self._clean(charges),
-            Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-            Detail_URL=detail_url, LastCheckedMode="INITIAL")
+    def _parse_results_table(self, soup, date_str: str) -> List[ArrestRecord]:
+        """Parse the results table from the search response.
+
+        Table columns (from live recon):
+          Name | R | S | Date of Birth | Booking Date/Location | Docket #
+          (with optional Charge column when checkbox is checked)
+        """
+        records = []
+
+        # Find the green-header results table
+        result_table = None
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+            # Check header row for known columns
+            first_row_text = rows[0].get_text(" ", strip=True).lower()
+            if "name" in first_row_text and "docket" in first_row_text:
+                result_table = table
+                break
+
+        if not result_table:
+            logger.debug(f"Pinellas: no results table for {date_str}")
+            return records
+
+        rows = result_table.find_all("tr")
+        if len(rows) < 2:
+            return records
+
+        # Map header columns by index
+        header_cells = rows[0].find_all(["th", "td"])
+        headers = [h.get_text(strip=True).lower() for h in header_cells]
+        col_map = {}
+        for i, h in enumerate(headers):
+            if "name" in h:
+                col_map["name"] = i
+            elif h in ("r", "race"):
+                col_map["race"] = i
+            elif h in ("s", "sex", "gender"):
+                col_map["sex"] = i
+            elif "date of birth" in h or "dob" in h:
+                col_map["dob"] = i
+            elif "booking date" in h or "booking" in h:
+                col_map["booking"] = i
+            elif "docket" in h:
+                col_map["docket"] = i
+            elif "charge" in h:
+                col_map["charge"] = i
+
+        seen = set()
+
+        for row in rows[1:]:
+            cells = row.find_all(["td", "th"])
+            if not cells or len(cells) < 3:
+                continue
+
+            def _get(key):
+                idx = col_map.get(key)
+                if idx is not None and idx < len(cells):
+                    return cells[idx].get_text(strip=True)
+                return ""
+
+            # Name + detail URL
+            name = _get("name")
+            if not name:
+                continue
+
+            detail_url = ""
+            name_idx = col_map.get("name", 0)
+            if name_idx < len(cells):
+                link = cells[name_idx].find("a")
+                if link and link.get("href"):
+                    href = link["href"]
+                    if not href.startswith("http"):
+                        href = f"{BASE_URL}{href}"
+                    detail_url = href
+
+            # Race/Sex
+            race_code = _get("race")
+            sex = _get("sex")
+
+            # DOB
+            dob = _get("dob")
+
+            # Docket #
+            docket = _get("docket")
+
+            # Booking Date/Location column — contains datetime + status
+            booking_raw = _get("booking")
+            booking_date_parsed = date_str
+            status = "In Custody"
+            booking_time = ""
+
+            if booking_raw:
+                # Format: "5/10/2026 4:18:30 PM\nIN CUSTODY" or "5/10/2026 12:04:43 AM\nRELEASED"
+                lines = [l.strip() for l in booking_raw.split("\n") if l.strip()]
+                if lines:
+                    # First line is date/time
+                    dt_str = lines[0]
+                    try:
+                        dt = datetime.strptime(dt_str, "%m/%d/%Y %I:%M:%S %p")
+                        booking_date_parsed = dt.strftime("%Y-%m-%d")
+                        booking_time = dt.strftime("%H:%M:%S")
+                    except ValueError:
+                        try:
+                            dt = datetime.strptime(dt_str, "%m/%d/%Y %H:%M:%S")
+                            booking_date_parsed = dt.strftime("%Y-%m-%d")
+                            booking_time = dt.strftime("%H:%M:%S")
+                        except ValueError:
+                            booking_date_parsed = dt_str
+
+                    # Second line is status
+                    if len(lines) > 1:
+                        status_raw = lines[1].upper()
+                        if "RELEASED" in status_raw:
+                            status = "Released"
+                        else:
+                            status = "In Custody"
+
+            # Charges (if column exists)
+            charges = _get("charge")
+
+            # Dedup
+            dedup_key = docket or name
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            # Parse name
+            first, middle, last = self._parse_name(name)
+
+            records.append(ArrestRecord(
+                County=self.county,
+                Booking_Number=self._clean(docket),
+                Full_Name=self._clean(name),
+                First_Name=first,
+                Middle_Name=middle,
+                Last_Name=last,
+                DOB=dob,
+                Booking_Date=booking_date_parsed,
+                Booking_Time=booking_time,
+                Status=status,
+                Facility="Pinellas County Jail",
+                Race=RACE_MAP.get(race_code.upper(), race_code) if race_code else "",
+                Sex=self._clean(sex),
+                Charges=self._clean(charges),
+                Bond_Amount="0",  # Bond not on list page — requires detail page
+                Detail_URL=detail_url or SEARCH_URL,
+                LastCheckedMode="INITIAL",
+            ))
+
+        return records
+
+    # ── Helpers ─────────────────────────────────────────────────────────────
 
     @staticmethod
     def _clean(text):
-        if not text: return ""
+        if not text:
+            return ""
         return " ".join(str(text).strip().split())
+
     @staticmethod
-    def _pn(n):
-        if not n: return "","",""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",",1); l = p[0].strip(); fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm)>1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p)>2 else ""), p[-1] if len(p)>=2 else ""
+    def _parse_name(name):
+        """Parse 'LAST, FIRST MIDDLE' into components."""
+        if not name:
+            return "", "", ""
+        name = " ".join(name.strip().split())
+        if "," in name:
+            parts = name.split(",", 1)
+            last = parts[0].strip()
+            remainder = parts[1].strip().split()
+            first = remainder[0] if remainder else ""
+            middle = " ".join(remainder[1:]) if len(remainder) > 1 else ""
+            return first, middle, last
+        parts = name.split()
+        if len(parts) >= 3:
+            return parts[0], " ".join(parts[1:-1]), parts[-1]
+        if len(parts) == 2:
+            return parts[0], "", parts[1]
+        return name, "", ""
+
     @staticmethod
     def _parse_bond(bond_str):
-        if not bond_str: return 0.0
+        if not bond_str:
+            return 0.0
         cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND","NONE","N/A","HOLD"]): return 0.0
-        try: return float(cleaned)
-        except: return 0.0
+        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+            return 0.0
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return 0.0
