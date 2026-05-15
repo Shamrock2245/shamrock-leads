@@ -9,17 +9,26 @@
 
 # Documentation (not needed in container)
 docs/
-*.md
-!requirements.txt
+BRAND.md
+AGENTS.md
+GEMINI.md
+DATA_MODEL.md
+ROADMAP.md
+CONTRIBUTING.md
+SECURITY.md
+CHANGELOG.md
+README.md
 
-# Environment and secrets
+# Environment and secrets (mounted as volumes at runtime)
 .env
 *.env
+
+# Credential files (mounted via volumes, not baked into image)
 creds/
-config/
-*.json
-!counties.json
-!dashboard/manifest.json
+
+# Firebase/GCP secrets (mounted via config/ volume — but keep config/*.py!)
+config/firebase*.json
+config/google-services.json
 
 # Python artifacts
 __pycache__/
@@ -40,13 +49,13 @@ env/
 
 # OS
 .DS_Store
-Thumbbs.db
+Thumbs.db
 
 # Agent skills and CI (not needed at runtime)
 .agent/
 .github/
 
-# Logs and data
+# Logs and data (mounted as volumes)
 logs/
 *.log
 *.heapsnapshot
@@ -56,3 +65,7 @@ nginx/
 
 # Node modules (if any)
 node_modules/
+
+# Test files
+tests/
+*.test.py
