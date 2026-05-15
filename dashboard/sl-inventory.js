@@ -346,6 +346,8 @@ const SLInventory = (() => {
     const modal = document.getElementById('bulkAssignModal');
     if (!modal) return;
     modal.style.display = 'flex';
+    // Must add .show class for opacity transition (CSS: .inv-overlay starts at opacity:0)
+    requestAnimationFrame(() => modal.classList.add('show'));
     // Update subtitle and chip strip
     const n = _selected.size;
     const sub = document.getElementById('bulkAssignSubtitle');
@@ -396,7 +398,7 @@ const SLInventory = (() => {
   }
   function closeBulkAssignModal() {
     const modal = document.getElementById('bulkAssignModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) { modal.classList.remove('show'); modal.style.display = 'none'; }
   }
   function removeFromSelection(key) {
     _selected.delete(key);
