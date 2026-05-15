@@ -120,11 +120,13 @@ from dashboard.routers.arrests import router as arrests_router
 from dashboard.routers.stats import router as stats_router
 from dashboard.routers.leads import router as leads_router
 from dashboard.routers.defendants import router as defendants_router
+from dashboard.routers.indemnitors import router as indemnitors_router
 
 app.include_router(arrests_router)
 app.include_router(stats_router)
 app.include_router(leads_router)
 app.include_router(defendants_router)
+app.include_router(indemnitors_router)
 
 
 # ── Health Check ──
