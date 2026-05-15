@@ -5,6 +5,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.5.0] — 2026-05-15 (Documentation Suite Standardization)
+
+### Added — Documentation
+
+- **`CONTRIBUTING.md`** — Development workflow, code conventions (Python/JS/CSS), commit format, PR process, deployment guide
+- **`docs/README.md`** — Documentation index mapping all 30+ docs to purpose and audience
+- **`docs/ARCHITECTURE.md`** — System architecture: Docker services, data flow diagrams, external integrations, security model, codebase metrics
+- **`docs/API_REFERENCE.md`** — REST API reference covering 200+ endpoints across 61 API modules
+- **`docs/DEPLOYMENT.md`** — Production operations: 3 deploy methods, Docker ops, Nginx, health checks, troubleshooting, backup/recovery
+- **Agent docs (6 new):** `analyst-agent.md`, `watchdog-agent.md`, `discharge-monitor-agent.md`, `outreach-agent.md`, `court-clerk-agent.md`, `shannon-agent.md`, `rearrest-detector-agent.md`, `contact-finder-agent.md`, `data-retention-agent.md` — all 15 agents now have dedicated documentation
+
+### Changed — Documentation
+
+- **`README.md`** — Complete rewrite: accurate metrics (51 scrapers, 61 API modules, 36 services, 42 JS modules, 15 tabs), updated architecture diagram with Traccar GPS, comprehensive project structure tree
+- **`SECURITY.md`** — Complete rewrite: secrets management, PII protection, authentication, network security, audit trails, scraping ethics, data retention, incident response
+- **`AGENTS.md`** — Updated metrics (49→61 API, 21→36 services, 32→42 JS), restored architecture diagram, added Traccar
+- **`GEMINI.md`** — Updated all metrics, added Traccar Docker service row
+- **`ROADMAP.md`** — Updated scraper count (50→51), updated timestamp
+- **`DATA_MODEL.md`** — Updated timestamp
+
+### Archived
+
+- Moved stale root-level docs to `docs/archive/2026-05/`: `Antigravity_Handoff_May06.md`, `BlueBubblesApp_Recommendations.md`, `DEPLOY_COMMANDS.md`, `DEPLOY_NOTES.md`
+
+### Metrics Standardized
+
+All documentation now consistently references: 51 scrapers · 61 API modules · 36 services · 42 JS modules · 15 dashboard tabs · 34 agent skills · 16 MongoDB collections
+
+---
+
 ## [2.4.0] — 2026-05-08 (Documentation Overhaul + POA Modal Fix)
 
 ### Fixed

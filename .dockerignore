@@ -1,0 +1,58 @@
+# ============================================
+# ShamrockLeads — Docker Build Context Exclusions
+# ============================================
+# Reduces build context size and prevents secrets from leaking into images.
+
+# Version control
+.git
+.gitignore
+
+# Documentation (not needed in container)
+docs/
+*.md
+!requirements.txt
+
+# Environment and secrets
+.env
+*.env
+creds/
+config/
+*.json
+!counties.json
+!dashboard/manifest.json
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbbs.db
+
+# Agent skills and CI (not needed at runtime)
+.agent/
+.github/
+
+# Logs and data
+logs/
+*.log
+*.heapsnapshot
+
+# Nginx config (deployed separately on host)
+nginx/
+
+# Node modules (if any)
+node_modules/

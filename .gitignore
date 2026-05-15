@@ -4,9 +4,13 @@
 
 # Credentials
 creds/
+config/firebase*.json
+config/google-services.json
 *.json
 !counties.json
 !dashboard/manifest.json
+!package.json
+!package-lock.json
 
 # Python
 __pycache__/
@@ -33,6 +37,8 @@ Thumbs.db
 venv/
 .venv/
 env/
+
+# Secrets and tokens
 scripts/gmail_token.json
 *.heapsnapshot
 token.json
@@ -40,3 +46,22 @@ client_secret*.json
 service-account*.json
 *_credentials.json
 get_gmail_token.py
+
+# Uploads (KYC data — never commit PII)
+dashboard/uploads/
+
+# Coverage and testing
+htmlcov/
+.coverage
+*.cover
+.pytest_cache/
+
+# Crash dumps
+*.core
+core.*
+
+# Backup files
+*.bak
+*.orig
+*.swp
+*~

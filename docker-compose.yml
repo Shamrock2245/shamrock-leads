@@ -30,6 +30,13 @@ services:
       - ./logs:/app/logs                # Persistent logs
     networks:
       - shamrock-net
+    # ── Security Hardening ──
+    security_opt:
+      - no-new-privileges:true          # Prevent privilege escalation
+    tmpfs:
+      - /tmp:size=256m                  # Writable temp (browser profiles, xvfb)
+    mem_limit: 4g                       # Cap memory (scrapers + Chromium)
+    cpus: 2.0                           # Cap CPU
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 60s
@@ -72,6 +79,14 @@ services:
       - ./config:/app/config:ro                   # Firebase admin SDK + secrets
     networks:
       - shamrock-net
+    # ── Security Hardening ──
+    security_opt:
+      - no-new-privileges:true          # Prevent privilege escalation
+    read_only: true                     # Root filesystem read-only
+    tmpfs:
+      - /tmp:size=128m                  # Writable temp for Hypercorn
+    mem_limit: 2g                       # Cap memory (dashboard API)
+    cpus: 1.5                           # Cap CPU
     logging:
       driver: "json-file"
       options:

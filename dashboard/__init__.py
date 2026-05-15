@@ -20,8 +20,15 @@ def create_app():
     # which sets no-cache headers for JS/CSS. Without this, Quart intercepts
     # static file requests before our route and serves them with max-age=43200.
     app = Quart(__name__, static_folder=None)
-    # ── CORS — allow dashboard frontend and external callers ──
-    app = cors(app, allow_origin="*")
+    # ── CORS — restrict to known origins ──
+    # Production: leads.shamrockbailbonds.biz, dev: localhost
+    allowed_origins = [
+        "https://leads.shamrockbailbonds.biz",
+        "http://178.156.179.237:8088",
+        "http://localhost:5050",
+        "http://localhost:8088",
+    ]
+    app = cors(app, allow_origin=allowed_origins)
 
     # ── Initialize extensions (Motor, BlueBubbles, POA seed, secret key) ──
     from dashboard.extensions import init_app
@@ -1687,6 +1694,27 @@ def create_app():
         from dashboard.api.bb_firebase_sync import poll_firebase_for_bb_url
         asyncio.ensure_future(poll_firebase_for_bb_url())
         logger.info("☘️  Firebase BB URL sync scheduled")
+
+    # ── Security Response Headers (defense-in-depth) ──
+    @app.after_request
+    async def add_security_headers(response):
+        """Add security headers to all responses."""
+        # Prevent XSS by disabling MIME type sniffing
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        # Prevent clickjacking
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        # Enable XSS protection in older browsers
+        response.headers.setdefault("X-XSS-Protection", "1; mode=block")
+        # Referrer policy
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # Permissions policy — disable unused browser features
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), payment=(), usb=()"
+        )
+        # Remove server header
+        response.headers.pop("Server", None)
+        return response
 
     # ── PIN Auth (optional, guarded by DASHBOARD_PIN env var) ──
     pin = os.getenv("DASHBOARD_PIN")
