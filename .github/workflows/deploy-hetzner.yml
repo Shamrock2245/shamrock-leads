@@ -75,8 +75,9 @@ jobs:
             # ── Clean up disk space (targeted, preserves base images) ──
             echo ""
             echo "🧹 Cleaning up disk space..."
-            docker container prune -f
-            docker image prune -f
+                 docker system prune -af
+                  docker builder prune -af
+                         
             apt-get clean 2>/dev/null || true
             echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
 
