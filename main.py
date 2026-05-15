@@ -67,6 +67,7 @@ from scrapers.counties.putnam import PutnamCountyScraper
 
 # ── Wave 1 — Panhandle / NW FL ───────────────────────────────────────────────
 from scrapers.counties.escambia import EscambiaCountyScraper
+from scrapers.counties.miami_dade import MiamiDadeCountyScraper
 from scrapers.counties.okaloosa import OkaloosaCountyScraper
 from scrapers.counties.bay import BayCountyScraper
 from scrapers.counties.leon import LeonCountyScraper
@@ -167,6 +168,7 @@ def register_scrapers(sched):
 
     # ── Panhandle / NW FL ──────────────────────────────────────────────────────
     sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(MiamiDadeCountyScraper(), interval_minutes=60)
     sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
     sched.register_scraper(BayCountyScraper(), interval_minutes=120)
     sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
