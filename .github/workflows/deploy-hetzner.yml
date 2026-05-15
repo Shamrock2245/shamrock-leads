@@ -72,12 +72,11 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
-            # ── Clean up disk space (targeted, preserves base images) ──
+            # ── Clean up disk space (aggressive — prevents ENOSPC) ──
             echo ""
             echo "🧹 Cleaning up disk space..."
-                 docker system prune -af
-                  docker builder prune -af
-                         
+            docker system prune -af
+            docker builder prune -af
             apt-get clean 2>/dev/null || true
             echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
 
