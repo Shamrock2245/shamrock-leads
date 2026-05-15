@@ -373,6 +373,26 @@ const SLInventory = (() => {
     _defendantCharges = [];
     const cms = document.getElementById('baChargeMappingSection'); if (cms) cms.style.display = 'none';
     const cmb = document.getElementById('baChargeMappingBody'); if (cmb) cmb.innerHTML = '';
+    // Reset indemnitor section
+    const indSec = document.getElementById('baIndemnitorSection'); if (indSec) indSec.style.display = 'none';
+    ['baIndemName','baIndemPhone','baIndemEmail','baIndemRelationship','baBondAmount','baPremium','baCourtDate','baCourtLocation','baCaseNumber','baPaymentMethod'].forEach(id => {
+      const el = document.getElementById(id); if (el) { if (el.tagName === 'SELECT') el.selectedIndex = 0; else el.value = ''; }
+    });
+    const toggleEl = document.getElementById('baRecordBondToggle'); if (toggleEl) toggleEl.checked = true;
+    const extraFields = document.getElementById('baExtraBondFields'); if (extraFields) extraFields.style.display = '';
+    // Wire toggle for extra fields visibility
+    if (toggleEl && !toggleEl._wired) {
+      toggleEl._wired = true;
+      toggleEl.addEventListener('change', () => {
+        const ef = document.getElementById('baExtraBondFields');
+        if (ef) ef.style.display = toggleEl.checked ? '' : 'none';
+        // Update submit button text
+        const btn = document.getElementById('baSubmitBtn');
+        if (btn) btn.innerHTML = toggleEl.checked ? `☘️ Assign & Record Bond` : `📌 Assign <span id="baSubmitCount">${_selected.size}</span> POA(s)`;
+      });
+    }
+    // Store selected search result data for bond recording
+    _selectedArrestData = null;
   }
   function closeBulkAssignModal() {
     const modal = document.getElementById('bulkAssignModal');
@@ -416,7 +436,8 @@ const SLInventory = (() => {
           const bondFmt = bond >= 1000 ? `$${(bond/1000).toFixed(0)}K` : `$${bond}`;
           // Escape for inline onclick — store charges in data attribute
           const escapedCharges = charges.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-          return `<div class="ba-result-row" onclick="SLInventory.selectDefendantForAssign('${booking.replace(/'/g,'\\\'')}','${name.replace(/'/g,'\\\'')}','${escapedCharges}')">
+          const escapedCounty = county.replace(/'/g, "\\'");
+          return `<div class="ba-result-row" onclick="SLInventory.selectDefendantForAssign('${booking.replace(/'/g,'\\\'')}','${name.replace(/'/g,'\\\'')}','${escapedCharges}',${bond},'${escapedCounty}')">
             <div class="ba-result-name">${name}</div>
             <div class="ba-result-meta">${county ? county + ' · ' : ''}${booking} · ${bondFmt}${charges ? ' · ' + charges.substring(0,60) : ''}</div>
           </div>`;
@@ -425,7 +446,7 @@ const SLInventory = (() => {
       } catch (_) {}
     }, 300);
   }
-  function selectDefendantForAssign(booking, name, chargesStr) {
+  function selectDefendantForAssign(booking, name, chargesStr, bondAmount, county) {
     const b = document.getElementById('baBookingNumber'); if (b) b.value = booking;
     const d = document.getElementById('baDefendantName'); if (d) d.value = name;
     const r = document.getElementById('baSearchResults'); if (r) r.style.display = 'none';
@@ -436,6 +457,19 @@ const SLInventory = (() => {
       .map(c => c.trim())
       .filter(c => c.length > 0);
     _renderChargeMapping();
+    // Show indemnitor section (Step 3)
+    const indSec = document.getElementById('baIndemnitorSection'); if (indSec) indSec.style.display = '';
+    // Auto-fill bond amount if available from arrest record
+    if (bondAmount && parseFloat(bondAmount) > 0) {
+      const baEl = document.getElementById('baBondAmount'); if (baEl) baEl.value = parseFloat(bondAmount);
+      const premEl = document.getElementById('baPremium'); if (premEl) premEl.value = Math.round(parseFloat(bondAmount) * 0.10);
+    }
+    // Store arrest data for bond recording
+    _selectedArrestData = { booking_number: booking, defendant_name: name, charges: chargesStr || '', county: county || '', bond_amount: parseFloat(bondAmount || 0) };
+    // Update submit button to reflect Record Bond mode
+    const toggle = document.getElementById('baRecordBondToggle');
+    const btn = document.getElementById('baSubmitBtn');
+    if (toggle && toggle.checked && btn) btn.innerHTML = '☘️ Assign & Record Bond';
   }
   function _renderChargeMapping() {
     const section = document.getElementById('baChargeMappingSection');
@@ -496,6 +530,16 @@ const SLInventory = (() => {
     });
   }
 
+  // ── Auto-calc premium helper ──
+  function _autoCalcPremium() {
+    const amtEl = document.getElementById('baBondAmount');
+    const premEl = document.getElementById('baPremium');
+    if (amtEl && premEl) {
+      const amt = parseFloat(amtEl.value || 0);
+      if (amt > 0) premEl.value = Math.round(amt * 0.10);
+    }
+  }
+
   // ── Submit Bulk Assign ──
   async function submitBulkAssign() {
     const bookingNum = (document.getElementById('baBookingNumber')?.value || '').trim();
@@ -526,8 +570,14 @@ const SLInventory = (() => {
       }
       return { poa_number: poaNum, charge, appearance_bond_number: bondNum };
     });
-    if (statusEl) statusEl.innerHTML = '<div class="inv-loading inv-loading-sm"><div class="btn-spinner"></div><span>Assigning…</span></div>';
+
+    // Check if we should also record an active bond
+    const recordBondToggle = document.getElementById('baRecordBondToggle');
+    const shouldRecordBond = recordBondToggle && recordBondToggle.checked;
+
+    if (statusEl) statusEl.innerHTML = '<div class="inv-loading inv-loading-sm"><div class="btn-spinner"></div><span>' + (shouldRecordBond ? 'Assigning & recording bond…' : 'Assigning…') + '</span></div>';
     try {
+      // 1. POA assignment
       const r = await fetch(`${API}/api/poa/bulk-assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -535,7 +585,69 @@ const SLInventory = (() => {
       });
       const d = await r.json();
       if (d.error) { if (statusEl) statusEl.innerHTML = `<span style="color:#f87171;font-size:13px">❌ ${d.error}</span>`; return; }
-      const msg = `✅ ${d.assigned_count} POA(s) assigned to ${defName || bookingNum}` + (d.skipped_count ? ` (${d.skipped_count} skipped)` : '');
+      let msg = `✅ ${d.assigned_count} POA(s) assigned to ${defName || bookingNum}` + (d.skipped_count ? ` (${d.skipped_count} skipped)` : '');
+
+      // 2. Optionally record as active bond via /api/bonds/record
+      if (shouldRecordBond) {
+        const firstPOA = assignments[0]?.poa_number || '';
+        const allCharges = assignments.map(a => a.charge).filter(Boolean).join('; ');
+        const indemName = (document.getElementById('baIndemName')?.value || '').trim();
+        const indemPhone = (document.getElementById('baIndemPhone')?.value || '').trim();
+        const indemEmail = (document.getElementById('baIndemEmail')?.value || '').trim();
+        const indemRel = (document.getElementById('baIndemRelationship')?.value || '').trim();
+        const bondAmount = parseFloat(document.getElementById('baBondAmount')?.value || 0);
+        const premium = parseFloat(document.getElementById('baPremium')?.value || 0);
+        const courtDate = (document.getElementById('baCourtDate')?.value || '').trim();
+        const courtLocation = (document.getElementById('baCourtLocation')?.value || '').trim();
+        const caseNumber = (document.getElementById('baCaseNumber')?.value || '').trim();
+        const paymentMethod = (document.getElementById('baPaymentMethod')?.value || 'cash').trim();
+        const county = _selectedArrestData?.county || '';
+
+        const bondPayload = {
+          defendant_name: defName,
+          booking_number: bookingNum,
+          county: county,
+          bond_amount: bondAmount,
+          premium: premium,
+          surety: suretyIds[0] || 'osi',
+          poa_number: firstPOA,
+          case_number: caseNumber,
+          court_date: courtDate,
+          court_location: courtLocation,
+          bond_date: new Date().toISOString().split('T')[0],
+          charges: allCharges || _selectedArrestData?.charges || '',
+          indemnitor_name: indemName,
+          indemnitor_phone: indemPhone,
+          indemnitor_email: indemEmail,
+          indemnitor_relationship: indemRel,
+          payment_method: paymentMethod,
+          agent_name: "Brendan O'Neal",
+          notes: `POA assignment + bond recorded from POA Inventory (${_selected.size} POA(s))`,
+        };
+
+        try {
+          const br = await fetch(`${API}/api/bonds/record`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bondPayload),
+          });
+          const bd = await br.json();
+          if (bd.success) {
+            msg += ` · ☘️ Bond recorded ($${bondAmount.toLocaleString()})`;
+            // Refresh active bonds tab if loaded
+            setTimeout(() => {
+              if (window.loadActiveBonds) loadActiveBonds();
+              if (window.SLKanban?.render) SLKanban.render();
+            }, 300);
+          } else {
+            const errs = bd.errors ? bd.errors.join(', ') : (bd.error || 'Unknown error');
+            msg += ` · ⚠️ Bond record failed: ${errs}`;
+          }
+        } catch (bondErr) {
+          msg += ` · ⚠️ Bond record error: ${bondErr.message}`;
+        }
+      }
+
       toast('success', msg);
       closeBulkAssignModal();
       clearSelection();
@@ -747,6 +859,9 @@ const SLInventory = (() => {
     }, 12000);
   }
 
+  // ── State for arrest data from search ──
+  let _selectedArrestData = null;
+
   return {
     open, close, switchTab, loadSummary, loadDetailView,
     applyFilter, searchFilter, detailPage,
@@ -754,6 +869,7 @@ const SLInventory = (() => {
     openAssignDialog, voidPower, reassignPower, restorePower,
     handleUpload, handleDrop, confirmUploadedPOAs,
     checkLowStockBanner: _checkLowStockBanner,
+    _autoCalcPremium,
     // Bulk selection + charge mapping
     toggleSelect, toggleRowSelect, toggleSelectAll, clearSelection,
     openBulkAssignModal, closeBulkAssignModal, removeFromSelection,

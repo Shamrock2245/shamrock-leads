@@ -2734,7 +2734,7 @@
       <div class="ba-manual-grid">
         <div class="ba-field">
           <label class="ba-label">Booking Number *</label>
-          <input type="text" id="baBookingNumber" class="ba-input" placeholder="e.g. 2025-001234">
+          <input type="text" id="baBookingNumber" class="ba-input" placeholder="e.g. 2025-001234" oninput="if(this.value.length>=3){var s=document.getElementById('baIndemnitorSection');if(s)s.style.display=''}">
         </div>
         <div class="ba-field">
           <label class="ba-label">Defendant Name</label>
@@ -2748,6 +2748,84 @@
         <div class="ba-section">
           <p style="font-size:12px;color:var(--muted,#64748b);margin:0 0 12px;line-height:1.5">Each POA covers one charge. Select which charge each power covers and enter the appearance bond number.</p>
           <div id="baChargeMappingBody"></div>
+        </div>
+      </div>
+
+      <!-- STEP 3: Indemnitor & Bond Info (collapsible, appears after charge mapping) -->
+      <div id="baIndemnitorSection" style="display:none">
+        <div class="ba-divider"><span>STEP 3 — INDEMNITOR & BOND INFO</span></div>
+        <div class="ba-section">
+          <p style="font-size:12px;color:var(--muted,#64748b);margin:0 0 12px;line-height:1.5">Add the indemnitor who is co-signing. Toggle "Record as Active Bond" to create a full bond record in one shot.</p>
+          
+          <!-- Record as Active Bond Toggle -->
+          <label style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:10px 14px;border-radius:10px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.15);cursor:pointer;transition:all .2s" id="baRecordBondToggleWrap">
+            <input type="checkbox" id="baRecordBondToggle" style="width:18px;height:18px;accent-color:#10b981;cursor:pointer" checked>
+            <div>
+              <div style="font-size:13px;font-weight:700;color:var(--text,#e2e8f0)">☘️ Record as Active Bond</div>
+              <div style="font-size:11px;color:var(--muted,#64748b)">Creates an active bond record with POA, indemnitor, court info — all in one step</div>
+            </div>
+          </label>
+
+          <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr;gap:10px">
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor Name</label>
+              <input type="text" id="baIndemName" class="ba-input" placeholder="e.g. Jane Smith" autocomplete="off">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor Phone</label>
+              <input type="tel" id="baIndemPhone" class="ba-input" placeholder="(239) 555-0000" autocomplete="off">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor Email</label>
+              <input type="email" id="baIndemEmail" class="ba-input" placeholder="jane@email.com" autocomplete="off">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Relationship</label>
+              <select id="baIndemRelationship" class="ba-input">
+                <option value="">— Select —</option>
+                <option>Spouse</option><option>Parent</option><option>Sibling</option>
+                <option>Child</option><option>Friend</option><option>Employer</option>
+                <option>Attorney</option><option>Self</option><option>Other</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Extra bond fields (only shown when Record as Active Bond is checked) -->
+          <div id="baExtraBondFields" style="margin-top:12px">
+            <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div class="ba-field">
+                <label class="ba-label">Bond Amount ($)</label>
+                <input type="number" id="baBondAmount" class="ba-input" placeholder="e.g. 5000" min="0" oninput="SLInventory._autoCalcPremium&&SLInventory._autoCalcPremium()">
+              </div>
+              <div class="ba-field">
+                <label class="ba-label">Premium ($)</label>
+                <input type="number" id="baPremium" class="ba-input" placeholder="e.g. 500" min="0">
+              </div>
+              <div class="ba-field">
+                <label class="ba-label">Court Date</label>
+                <input type="date" id="baCourtDate" class="ba-input">
+              </div>
+            </div>
+            <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+              <div class="ba-field">
+                <label class="ba-label">Court Location</label>
+                <input type="text" id="baCourtLocation" class="ba-input" placeholder="e.g. Lee County Justice Center" autocomplete="off">
+              </div>
+              <div class="ba-field">
+                <label class="ba-label">Case Number</label>
+                <input type="text" id="baCaseNumber" class="ba-input" placeholder="e.g. 25-CF-001234" autocomplete="off">
+              </div>
+              <div class="ba-field">
+                <label class="ba-label">Payment Method</label>
+                <select id="baPaymentMethod" class="ba-input">
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="financing">Financing</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
