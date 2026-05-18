@@ -39,25 +39,24 @@ class FlaglerCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
+            from curl_cffi import requests as cf_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed")
+            logger.error("curl_cffi/bs4 not installed")
             return []
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = cf_requests.Session()
 
         # Phase 1: Collect inmate links from listing pages
         inmate_links = []
-        params = {"InCustody": "True"}
+        params = {"InCustody": "False"}
 
         for page_num in range(1, MAX_PAGES + 1):
             try:
                 if page_num > 1:
                     params["Page"] = str(page_num)
 
-                resp = session.get(BASE_URL, params=params, timeout=30)
+                resp = session.get(BASE_URL, params=params, headers=HEADERS, timeout=30, impersonate="chrome131")
                 if resp.status_code != 200:
                     logger.warning(f"Flagler page {page_num}: HTTP {resp.status_code}")
                     break
@@ -120,7 +119,7 @@ class FlaglerCountyScraper(BaseScraper):
 
             try:
                 detail_count += 1
-                resp = session.get(detail_url, timeout=20)
+                resp = session.get(detail_url, headers=HEADERS, timeout=20, impersonate="chrome131")
                 if resp.status_code != 200:
                     continue
 

@@ -1,38 +1,36 @@
 """
-Santa Rosa County Arrest Scraper — SmartWeb ASP.NET
+Santa Rosa County Arrest Scraper — SmartCop AJAX (AddMoreResults)
 Source: Santa Rosa County Sheriff's Office
 URL: https://jailview.srso.net/SmartWebClient/jail.aspx
-Method: requests POST — SmartWeb form (same pattern as Putnam/Suwannee)
-Fields: Last Name, First Name, Middle Name, Booking Date Range, Release Date Range,
-        Current Inmates Only, Released Inmates Only, Both Current And Released
+Method: curl_cffi POST to jail.aspx/AddMoreResults (ASP.NET PageMethods AJAX)
+Fix 2026-05-18: Replaced broken form POST with AJAX endpoint (same pattern as Suwannee/Putnam)
 """
-
 import logging
 import re
 from typing import List
-
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://jailview.srso.net/SmartWebClient/jail.aspx"
+BASE_URL = "https://jailview.srso.net/SmartWebClient"
+AJAX_URL = f"{BASE_URL}/jail.aspx/AddMoreResults"
 FACILITY = "Santa Rosa County Jail"
+IMPERSONATE = "chrome131"
+PAGE_SIZE = 185
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": SEARCH_URL,
-    "DNT": "1",
-    "Connection": "keep-alive",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Content-Type": "application/json; charset=utf-8",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": f"{BASE_URL}/jail.aspx",
+    "Origin": "https://jailview.srso.net",
 }
-IMPERSONATE = "chrome131"
 
 
 class SantaRosaCountyScraper(BaseScraper):
-    """Santa Rosa County (FL) — SmartWeb jail roster (Milton/Pensacola area)"""
+    """Santa Rosa County (FL) — SmartCop AJAX jail roster (Milton/Pensacola area)"""
 
     @property
     def county(self) -> str:
@@ -40,153 +38,121 @@ class SantaRosaCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from curl_cffi import requests as cffi_requests
+            from curl_cffi import requests as cf
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
             return []
 
-        session = cffi_requests.Session()
+        session = cf.Session()
+        records = []
+        seen = set()
+        offset = 0
 
-        try:
-            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"GET {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Santa Rosa GET failed: {e}")
-            return []
+        while True:
+            payload = {
+                "FirstName": "",
+                "MiddleName": "",
+                "LastName": "",
+                "BeginBookDate": "",
+                "EndBookDate": "",
+                "BeginReleaseDate": "",
+                "EndReleaseDate": "",
+                "TypeJailSearch": 0,
+                "RecordsLoaded": offset,
+                "SortOption": 1,
+                "SortOrder": 1,
+                "IsDefault": False,
+            }
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        viewstate = soup.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val = soup.find("input", {"name": "__EVENTVALIDATION"})
+            try:
+                r = session.post(
+                    AJAX_URL,
+                    json=payload,
+                    headers=HEADERS,
+                    timeout=30,
+                    impersonate=IMPERSONATE,
+                )
+                r.raise_for_status()
+            except Exception as e:
+                logger.error(f"Santa Rosa AJAX failed (offset={offset}): {e}")
+                break
 
-        post_data = {
-            "__VIEWSTATE": viewstate["value"] if viewstate else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen["value"] if viewstate_gen else "",
-            "__EVENTVALIDATION": event_val["value"] if event_val else "",
-            "txbLastName": "",
-            "txbFirstName": "",
-            "btnSumit": "Search",
-            "rdoCurrent": "rbCurrentInmates",
-        }
+            try:
+                data = r.json()
+                html_rows = data["d"]["Data"]["data"]
+            except Exception as e:
+                logger.error(f"Santa Rosa JSON parse failed: {e}")
+                break
 
-        try:
-            resp = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"POST {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Santa Rosa POST failed: {e}")
-            return []
+            if not html_rows or len(html_rows) < 10:
+                break
 
-        records = self._parse(resp.text)
+            batch = self._parse_rows(html_rows, seen)
+            if not batch:
+                break
+
+            records.extend(batch)
+            offset += PAGE_SIZE
+
+            if offset >= PAGE_SIZE * 3:
+                break
+
         logger.info(f"Santa Rosa: {len(records)} records")
         return records
 
-    def _parse(self, html: str) -> List[ArrestRecord]:
+    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
         records = []
-        seen = set()
 
-        full_text = soup.get_text("\n")
-        blocks = re.split(r'\n(?=[A-Z][A-Z\s,\'-]+\s*\([A-Z/]+\))', full_text)
+        for row in soup.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 10:
+                continue
+            texts = [td.get_text(separator=" ", strip=True) for td in cells]
 
-        for block in blocks:
-            block = block.strip()
-            if not block:
+            if "Booking No:" not in texts[1]:
                 continue
 
-            name_m = re.match(r'^([A-Z][A-Z\s,\'-]+?)(?:\s*\([A-Z/]+\))', block)
-            if not name_m:
+            full_name = texts[2] if len(texts) > 2 else texts[1]
+            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+            if not full_name or len(full_name) < 3:
                 continue
-            full_name = name_m.group(1).strip().rstrip(",")
 
-            booking_m = re.search(r'Booking\s*No[.:]?\s*([A-Z0-9]+)', block, re.I)
-            booking_num = booking_m.group(1) if booking_m else ""
+            booking_num = texts[6] if len(texts) > 6 else ""
+            booking_date = texts[10].split()[0] if len(texts) > 10 and texts[10] else ""
+            status = texts[4] if len(texts) > 4 else "In Custody"
+            bond_raw = texts[17] if len(texts) > 17 else "0"
+            address = texts[20] if len(texts) > 20 else ""
 
-            date_m = re.search(r'Booking\s*Date[.:]?\s*(\d{1,2}/\d{1,2}/\d{2,4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)', block, re.I)
-            booking_date = date_m.group(1) if date_m else ""
-
-            bond_m = re.search(r'Bond\s*Amount[.:]?\s*\$?([\d,]+\.?\d*)', block, re.I)
-            bond_raw = bond_m.group(1) if bond_m else "0"
-
-            demo_m = re.search(r'\(([A-Z]+)/([A-Z]+)\)', block)
-            race = demo_m.group(1) if demo_m else ""
-            sex = demo_m.group(2) if demo_m else ""
-
-            status_m = re.search(r'Status[.:]?\s*([A-Za-z\s]+?)(?:\n|Booking)', block, re.I)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower() or "in" in status.lower():
-                status = "In Custody"
-
-            charge_descs = re.findall(r'Charge[.:]?\s*([^\n]+)', block, re.I)
-            charges_str = " | ".join(c.strip() for c in charge_descs if c.strip())
+            race, sex = "", ""
+            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+            if rs_match:
+                race, sex = rs_match.group(1), rs_match.group(2)
 
             key = booking_num or full_name
-            if not key or key in seen:
+            if key in seen:
                 continue
             seen.add(key)
 
             f, m, l = self._parse_name(full_name)
-
             records.append(ArrestRecord(
                 County=self.county,
                 Booking_Number=booking_num,
                 Full_Name=full_name,
                 First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
+                DOB="",
                 Booking_Date=booking_date,
-                Status=status,
-                        Release_Date="",
+                Status="In Custody" if "jail" in status.lower() or "custody" in status.lower() else status,
+                Release_Date="",
                 Facility=FACILITY,
-                Race=race,
-                Sex=sex,
-                Charges=charges_str,
-                Bond_Amount=str(self._parse_bond(bond_raw)) if bond_raw else "0",
-                Detail_URL=SEARCH_URL,
-
+                Race=race, Sex=sex,
+                Address=address,
+                Bond_Amount=str(self._parse_bond(bond_raw)),
+                Detail_URL=f"{BASE_URL}/jail.aspx",
                 LastCheckedMode="INITIAL",
             ))
-
-        # Table fallback
-        if not records:
-            for table in soup.find_all("table"):
-                rows = table.find_all("tr")
-                if len(rows) < 2:
-                    continue
-                header_text = rows[0].get_text(" ").lower()
-                if "name" in header_text and ("booking" in header_text or "inmate" in header_text):
-                    for row in rows[1:]:
-                        cells = row.find_all("td")
-                        if len(cells) < 2:
-                            continue
-                        texts = [c.get_text(strip=True) for c in cells]
-                        full_name = texts[0]
-                        if not full_name:
-                            continue
-                        booking_num = texts[1] if len(texts) > 1 else ""
-                        key = booking_num or full_name
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        f, m, l = self._parse_name(full_name)
-                        records.append(ArrestRecord(
-                            County=self.county,
-                            Booking_Number=booking_num,
-                            Full_Name=full_name,
-                            First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                            Booking_Date=texts[2] if len(texts) > 2 else "",
-                            Status="In Custody",
-                        Release_Date="",
-                            Facility=FACILITY,
-                            Detail_URL=SEARCH_URL,
-
-                            LastCheckedMode="INITIAL",
-                        ))
-                    if records:
-                        break
 
         return records
 
@@ -199,9 +165,7 @@ class SantaRosaCountyScraper(BaseScraper):
             parts = name.split(",", 1)
             last = parts[0].strip()
             fm = parts[1].strip().split()
-            first = fm[0] if fm else ""
-            middle = " ".join(fm[1:]) if len(fm) > 1 else ""
-            return first, middle, last
+            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), last
         parts = name.split()
         if len(parts) == 1:
             return parts[0], "", ""

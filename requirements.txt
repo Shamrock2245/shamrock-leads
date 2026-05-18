@@ -64,3 +64,4 @@ jellyfish>=1.0.0
 # Development
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome via CDP)

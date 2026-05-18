@@ -1,222 +1,169 @@
 """
-Putnam County Arrest Scraper — SmartWeb ASP.NET
+Putnam County Arrest Scraper — SmartCop SmartWeb AJAX
 Source: Putnam County Sheriff's Office
 URL: https://smartweb.pcso.us/smartwebclient/Jail.aspx
-Method: requests POST — SmartWeb form with txbLastName/txbFirstName/btnSumit
-Returns card-style HTML: "AKERS, SHAWN ZACHARY (W/MALE) Status: In Jail Booking No: PCSO26JBN001058..."
+Method: curl_cffi POST to Jail.aspx/AddMoreResults JSON endpoint
+
+Fix 2026-05-18: Old scraper used wrong form POST (txbLastName etc).
+                SmartCop uses JSON AJAX: POST Jail.aspx/AddMoreResults
+                with the full SearchVals object (IsDefault=True for full roster).
+                Returns d.Data.data as HTML rows with booking numbers in img src.
 """
+import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import List
-from scrapers.base_scraper import BaseScraper
+
+from bs4 import BeautifulSoup
+
 from core.models import ArrestRecord
+from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://smartweb.pcso.us/smartwebclient/Jail.aspx"
+BASE_URL = "https://smartweb.pcso.us/smartwebclient/Jail.aspx"
+AJAX_URL = "https://smartweb.pcso.us/smartwebclient/Jail.aspx/AddMoreResults"
 FACILITY = "Putnam County Jail"
+IMPERSONATE = "chrome131"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": SEARCH_URL,
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": BASE_URL,
 }
-IMPERSONATE = "chrome131"
+
+SEARCH_VALS_BASE = {
+    "FirstName": "", "MiddleName": "", "LastName": "",
+    "BeginBookDate": "", "EndBookDate": "",
+    "BeginReleaseDate": "", "EndReleaseDate": "",
+    "TypeJailSearch": 0, "RecordsLoaded": 0,
+    "SortOption": 0, "SortOrder": 0, "IsDefault": True,
+}
 
 
 class PutnamCountyScraper(BaseScraper):
+    """Putnam County (FL) — SmartCop AJAX roster"""
+
     @property
     def county(self) -> str:
         return "Putnam"
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from curl_cffi import requests as cffi_requests
-            from bs4 import BeautifulSoup
+            from curl_cffi import requests as cf
         except ImportError:
-            logger.error("curl_cffi/bs4 not installed")
+            logger.error("Putnam: curl_cffi not installed")
             return []
 
-        session = cffi_requests.Session()
+        session = cf.Session()
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        offset = 0
 
-        # GET to get ViewState
-        try:
-            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} error")
-        except Exception as e:
-            logger.error(f"Putnam: GET failed: {e}")
-            return []
+        while True:
+            payload = {**SEARCH_VALS_BASE, "RecordsLoaded": offset}
+            try:
+                r = session.post(
+                    AJAX_URL, headers=HEADERS,
+                    data=json.dumps(payload),
+                    timeout=20, impersonate=IMPERSONATE,
+                )
+                if r.status_code != 200:
+                    logger.warning(f"Putnam: HTTP {r.status_code} at offset {offset}")
+                    break
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        viewstate = soup.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val = soup.find("input", {"name": "__EVENTVALIDATION"})
+                d = r.json()
+                inner = d.get("d", {})
+                if isinstance(inner, dict):
+                    inner = inner.get("Data", inner)
+                html = inner.get("data", "") if isinstance(inner, dict) else ""
+                returned = inner.get("resultsReturned", 0) if isinstance(inner, dict) else 0
 
-        post_data = {
-            "__VIEWSTATE": viewstate["value"] if viewstate else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen["value"] if viewstate_gen else "",
-            "__EVENTVALIDATION": event_val["value"] if event_val else "",
-            "txbLastName": "",
-            "txbFirstName": "",
-            "btnSumit": "Search",
-        }
+                if not html or returned == 0:
+                    break
 
-        try:
-            resp = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} error")
-        except Exception as e:
-            logger.error(f"Putnam: POST failed: {e}")
-            return []
+                batch = self._parse_html(html, seen)
+                records.extend(batch)
+                offset += returned
+                if returned < 20:
+                    break
 
-        return self._parse(resp.text)
-
-    def _parse(self, html: str) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        records = []
-        seen = set()
-
-        # SmartWeb Putnam uses card-style blocks
-        # Pattern: "LASTNAME, FIRSTNAME MIDDLENAME (RACE/SEX) Status: In Jail Booking No: PCSO26JBN001058 MniNo: ... Booking Date: 04/19/2026 03:52 AM Bond Amount: $0.00"
-        full_text = soup.get_text("\n")
-        # Split on booking number pattern to find individual records
-        blocks = re.split(r'\n(?=[A-Z][A-Z\s,\'-]+\s*\([A-Z/]+\))', full_text)
-
-        for block in blocks:
-            block = block.strip()
-            if not block:
-                continue
-
-            # Extract name (LASTNAME, FIRSTNAME MIDDLENAME)
-            name_m = re.match(r'^([A-Z][A-Z\s,\'-]+?)(?:\s*\([A-Z/]+\))', block)
-            if not name_m:
-                continue
-            full_name = name_m.group(1).strip().rstrip(",")
-
-            # Extract booking number
-            booking_m = re.search(r'Booking\s*No[.:]?\s*([A-Z0-9]+)', block, re.I)
-            booking_num = booking_m.group(1) if booking_m else ""
-
-            # Extract booking date
-            date_m = re.search(r'Booking\s*Date[.:]?\s*(\d{1,2}/\d{1,2}/\d{2,4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)', block, re.I)
-            booking_date = date_m.group(1) if date_m else ""
-
-            # Extract bond amount
-            bond_m = re.search(r'Bond\s*Amount[.:]?\s*\$?([\d,]+\.?\d*)', block, re.I)
-            bond_raw = bond_m.group(1) if bond_m else "0"
-
-            # Extract race/sex from parentheses
-            demo_m = re.search(r'\(([A-Z]+)/([A-Z]+)\)', block)
-            race = demo_m.group(1) if demo_m else ""
-            sex = demo_m.group(2) if demo_m else ""
-
-            # Extract status
-            status_m = re.search(r'Status[.:]?\s*([A-Za-z\s]+?)(?:\n|Booking)', block, re.I)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower() or "in" in status.lower():
-                status = "In Custody"
-
-            key = booking_num or full_name
-            if not key or key in seen:
-                continue
-            seen.add(key)
-
-            f, m, l = self._pn(full_name)
-            bond_amount = self._parse_bond(bond_raw)
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=booking_num,
-                Full_Name=full_name,
-                First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                Booking_Date=booking_date,
-                Status=status,
-                        Release_Date="",
-                Facility=FACILITY,
-                Race=race,
-                Sex=sex,
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                Detail_URL=SEARCH_URL,
-
-                LastCheckedMode="INITIAL",
-            ))
-
-        # Fallback: table parse
-        if not records:
-            for table in soup.find_all("table"):
-                rows = table.find_all("tr")
-                if len(rows) < 2:
-                    continue
-                header_text = rows[0].get_text(" ").lower()
-                if "name" in header_text and ("booking" in header_text or "inmate" in header_text):
-                    for row in rows[1:]:
-                        cells = row.find_all("td")
-                        if len(cells) < 2:
-                            continue
-                        texts = [c.get_text(strip=True) for c in cells]
-                        full_name = texts[0]
-                        if not full_name:
-                            continue
-                        booking_num = texts[1] if len(texts) > 1 else ""
-                        booking_date = texts[2] if len(texts) > 2 else ""
-                        key = booking_num or full_name
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        f, m, l = self._pn(full_name)
-                        records.append(ArrestRecord(
-                            County=self.county,
-                            Booking_Number=booking_num,
-                            Full_Name=full_name,
-                            First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                            Booking_Date=booking_date,
-                            Status="In Custody",
-                        Release_Date="",
-                            Facility=FACILITY,
-                            Detail_URL=SEARCH_URL,
-
-                            LastCheckedMode="INITIAL",
-                        ))
-                    if records:
-                        break
+            except Exception as e:
+                logger.warning(f"Putnam: error at offset {offset}: {e}")
+                break
 
         logger.info(f"Putnam: {len(records)} records")
         return records
 
-    @staticmethod
-    def _pn(n):
-        if not n:
-            return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
+    def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
+        soup = BeautifulSoup(html, "html.parser")
+        records = []
 
-    @staticmethod
-    def _parse_bond(bond_str):
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+        for img in soup.find_all("img", src=re.compile(r"bookno=")):
+            src = img.get("src", "")
+            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
+            if not bk_m:
+                continue
+            booking_num = bk_m.group(1)
+            if booking_num in seen:
+                continue
+            seen.add(booking_num)
+
+            # Collect text from this row and next 15 siblings
+            block_text = ""
+            try:
+                row = img.find_parent("tr")
+                current = row
+                for _ in range(15):
+                    if current:
+                        block_text += " " + current.get_text(" ", strip=True)
+                        current = current.find_next_sibling("tr")
+            except Exception:
+                pass
+
+            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
+            name_m = re.search(
+                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
+                block_text,
+            )
+            full_name = name_m.group(1).strip() if name_m else ""
+            race = name_m.group(2) if name_m else ""
+            sex = name_m.group(3) if name_m else ""
+
+            last, first, middle = "", "", ""
+            if "," in full_name:
+                parts = full_name.split(",", 1)
+                last = parts[0].strip()
+                fm = parts[1].strip().split()
+                first = fm[0] if fm else ""
+                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
+
+            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
+            dob = dob_m.group(1) if dob_m else ""
+
+            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
+            booking_date = bd_m.group(1) if bd_m else ""
+
+            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
+
+            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
+            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
+
+            if not full_name:
+                continue
+
+            records.append(ArrestRecord(
+                County=self.county, State="FL", Facility=FACILITY,
+                Full_Name=full_name.upper(),
+                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
+                DOB=dob, Race=race, Sex=sex,
+                Booking_Number=booking_num, Booking_Date=booking_date,
+                Charges=charges, Bond_Amount=bond,
+                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+                LastChecked=datetime.now(timezone.utc).isoformat(),
+                LastCheckedMode="INITIAL",
+            ))
+
+        return records

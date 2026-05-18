@@ -1,9 +1,9 @@
 """
-Glades County Arrest Scraper — SmartWeb ASP.NET
+Glades County Arrest Scraper — SmartCop AJAX (AddMoreResults)
 Source: Glades County Sheriff's Office
 URL: https://smartweb.gladessheriff.org/smartwebclient/Jail.aspx
-Method: requests POST — SmartWeb form with txbLastName/txbFirstName/btnSumit (typo is correct)
-Returns card-style HTML with inmate blocks
+Method: curl_cffi POST to Jail.aspx/AddMoreResults (ASP.NET PageMethods AJAX)
+Fix 2026-05-18: Replaced broken form POST with AJAX endpoint (same pattern as Suwannee/Putnam)
 """
 import logging
 import re
@@ -13,14 +13,19 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://smartweb.gladessheriff.org/smartwebclient/Jail.aspx"
+BASE_URL = "https://smartweb.gladessheriff.org/smartwebclient"
+AJAX_URL = f"{BASE_URL}/Jail.aspx/AddMoreResults"
 FACILITY = "Glades County Jail"
+IMPERSONATE = "chrome131"
+PAGE_SIZE = 185
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": SEARCH_URL,
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Content-Type": "application/json; charset=utf-8",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": f"{BASE_URL}/Jail.aspx",
+    "Origin": "https://smartweb.gladessheriff.org",
 }
 
 
@@ -31,148 +36,140 @@ class GladesCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
+            from curl_cffi import requests as cf
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed")
+            logger.error("curl_cffi/bs4 not installed")
             return []
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
-
-        # GET first to get ViewState tokens
-        try:
-            resp = session.get(SEARCH_URL, timeout=30)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Glades: GET failed: {e}")
-            return []
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        viewstate = soup.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val = soup.find("input", {"name": "__EVENTVALIDATION"})
-
-        post_data = {
-            "__VIEWSTATE": viewstate["value"] if viewstate else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen["value"] if viewstate_gen else "",
-            "__EVENTVALIDATION": event_val["value"] if event_val else "",
-            "txbLastName": "",
-            "txbFirstName": "",
-            "btnSumit": "Search",  # Note: typo in SmartWeb — btnSumit not btnSubmit
-        }
-
-        try:
-            resp = session.post(SEARCH_URL, data=post_data, timeout=60)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Glades: POST failed: {e}")
-            return []
-
-        return self._parse(resp.text)
-
-    def _parse(self, html: str) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
+        session = cf.Session()
         records = []
         seen = set()
+        offset = 0
 
-        # SmartWeb returns card-style divs OR a table
-        # Try table first
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
-                continue
-            header_text = rows[0].get_text(" ").lower()
-            if "name" in header_text and ("booking" in header_text or "inmate" in header_text):
-                for row in rows[1:]:
-                    cells = row.find_all("td")
-                    if len(cells) < 2:
-                        continue
-                    texts = [c.get_text(strip=True) for c in cells]
-                    full_name = texts[0]
-                    if not full_name:
-                        continue
-                    booking_num = texts[1] if len(texts) > 1 else ""
-                    booking_date = texts[2] if len(texts) > 2 else ""
-                    charges = texts[3] if len(texts) > 3 else ""
-                    bond_raw = texts[4] if len(texts) > 4 else "0"
-                    key = booking_num or full_name
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    f, m, l = self._pn(full_name)
-                    bond_amount = self._parse_bond(bond_raw)
-                    records.append(ArrestRecord(
-                        County=self.county,
-                        Booking_Number=booking_num,
-                        Full_Name=full_name,
-                        First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                        Booking_Date=booking_date,
-                        Status="In Custody",
-                        Release_Date="",
-                        Facility=FACILITY,
-                        Charges=charges,
-                        Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                        Detail_URL=SEARCH_URL,
+        while True:
+            payload = {
+                "FirstName": "",
+                "MiddleName": "",
+                "LastName": "",
+                "BeginBookDate": "",
+                "EndBookDate": "",
+                "BeginReleaseDate": "",
+                "EndReleaseDate": "",
+                "TypeJailSearch": 0,
+                "RecordsLoaded": offset,
+                "SortOption": 1,
+                "SortOrder": 1,
+                "IsDefault": False,
+            }
 
-                        LastCheckedMode="INITIAL",
-                    ))
-                if records:
-                    break
+            try:
+                r = session.post(
+                    AJAX_URL,
+                    json=payload,
+                    headers=HEADERS,
+                    timeout=30,
+                    impersonate=IMPERSONATE,
+                )
+                r.raise_for_status()
+            except Exception as e:
+                logger.error(f"Glades AJAX failed (offset={offset}): {e}")
+                break
 
-        # Card-style fallback
-        if not records:
-            for block in soup.find_all(class_=re.compile(r"inmate|record|card|row", re.I)):
-                text = block.get_text(" ", strip=True)
-                if not text or len(text) < 10:
-                    continue
-                name_m = re.search(r"^([A-Z][A-Z ,'-]+)", text)
-                booking_m = re.search(r"Booking\s*No[.:]?\s*([A-Z0-9]+)", text, re.I)
-                date_m = re.search(r"Booking\s*Date[.:]?\s*(\d{2}/\d{2}/\d{4}(?:\s+\d{2}:\d{2})?)", text, re.I)
-                bond_m = re.search(r"Bond[.:]?\s*\$?([\d,]+\.?\d*)", text, re.I)
-                full_name = name_m.group(1).strip() if name_m else ""
-                booking_num = booking_m.group(1) if booking_m else ""
-                booking_date = date_m.group(1) if date_m else ""
-                bond_raw = bond_m.group(1) if bond_m else "0"
-                key = booking_num or full_name
-                if not key or key in seen:
-                    continue
-                seen.add(key)
-                f, m, l = self._pn(full_name)
-                bond_amount = self._parse_bond(bond_raw)
-                records.append(ArrestRecord(
-                    County=self.county,
-                    Booking_Number=booking_num,
-                    Full_Name=full_name,
-                    First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                    Booking_Date=booking_date,
-                    Status="In Custody",
-                        Release_Date="",
-                    Facility=FACILITY,
-                    Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                    Detail_URL=SEARCH_URL,
+            try:
+                data = r.json()
+                html_rows = data["d"]["Data"]["data"]
+            except Exception as e:
+                logger.error(f"Glades JSON parse failed: {e}")
+                break
 
-                    LastCheckedMode="INITIAL",
-                ))
+            if not html_rows or len(html_rows) < 10:
+                break
+
+            batch = self._parse_rows(html_rows, seen)
+            if not batch:
+                break
+
+            records.extend(batch)
+            offset += PAGE_SIZE
+
+            if offset >= PAGE_SIZE * 3:
+                break
 
         logger.info(f"Glades: {len(records)} records")
         return records
 
+    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        records = []
+
+        for row in soup.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 10:
+                continue
+            texts = [td.get_text(separator=" ", strip=True) for td in cells]
+
+            if "Booking No:" not in texts[1]:
+                continue
+
+            full_name = texts[2] if len(texts) > 2 else texts[1]
+            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+            if not full_name or len(full_name) < 3:
+                continue
+
+            booking_num = texts[6] if len(texts) > 6 else ""
+            booking_date = texts[10].split()[0] if len(texts) > 10 and texts[10] else ""
+            status = texts[4] if len(texts) > 4 else "In Custody"
+            bond_raw = texts[17] if len(texts) > 17 else "0"
+            address = texts[20] if len(texts) > 20 else ""
+
+            race, sex = "", ""
+            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+            if rs_match:
+                race, sex = rs_match.group(1), rs_match.group(2)
+
+            key = booking_num or full_name
+            if key in seen:
+                continue
+            seen.add(key)
+
+            f, m, l = self._parse_name(full_name)
+            records.append(ArrestRecord(
+                County=self.county,
+                Booking_Number=booking_num,
+                Full_Name=full_name,
+                First_Name=f, Middle_Name=m, Last_Name=l,
+                DOB="",
+                Booking_Date=booking_date,
+                Status="In Custody" if "jail" in status.lower() or "custody" in status.lower() else status,
+                Release_Date="",
+                Facility=FACILITY,
+                Race=race, Sex=sex,
+                Address=address,
+                Bond_Amount=str(self._parse_bond(bond_raw)),
+                Detail_URL=f"{BASE_URL}/Jail.aspx",
+                LastCheckedMode="INITIAL",
+            ))
+
+        return records
+
     @staticmethod
-    def _pn(n):
-        if not n:
+    def _parse_name(name: str):
+        if not name:
             return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
+        name = " ".join(name.strip().split())
+        if "," in name:
+            parts = name.split(",", 1)
+            last = parts[0].strip()
+            fm = parts[1].strip().split()
+            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), last
+        parts = name.split()
+        if len(parts) == 1:
+            return parts[0], "", ""
+        if len(parts) == 2:
+            return parts[0], "", parts[1]
+        return parts[0], " ".join(parts[1:-1]), parts[-1]
 
     @staticmethod
     def _parse_bond(bond_str):

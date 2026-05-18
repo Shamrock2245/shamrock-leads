@@ -1,7 +1,7 @@
 # ============================================
 # ShamrockLeads — Docker Image
 # Python 3.12 + APScheduler + MongoDB
-# + Chromium for DrissionPage + patchright (Charlotte)
+# + Chromium for DrissionPage + patchright (Charlotte) + nodriver (Seminole, Lake)
 # ============================================
 FROM python:3.12-slim
 
@@ -46,6 +46,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Install patchright's Chromium browser (for Charlotte County Cloudflare bypass)
 RUN python -m patchright install chromium || true
+
+# Install nodriver's Chromium (for Seminole, Lake — JS-rendered jail portals)
+RUN python -m nodriver install || true
 
 # Copy application
 COPY . .
