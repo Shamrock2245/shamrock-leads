@@ -1,138 +1,51 @@
 """
-Seminole County Arrest Scraper — NorthPointe Suite Custody Portal.
-Source: https://seminole.northpointesuite.com/custodyportal
-Method: Selenium → click searchBtn → wait for results → extract goToDetails JSON
-Stack: Selenium (JS-rendered Angular portal)
+Seminole County Arrest Scraper — NorthPointe Custody Portal
+Source: Seminole County Sheriff's Office
+URL: https://seminole.northpointesuite.com/custodyportal
+Method: nodriver (headless Chromium) for roster page → curl_cffi for detail pages
 
-Ported from swfl-arrest-scrapers/counties/seminole/solver.py (proven working).
+Architecture:
+1. nodriver loads the custody portal and clicks Search (no filters) → 500 inmates
+2. Parse goToDetails JSON from each searchDataRow → name, DOB, race, sex, personId
+3. For each inmate, fetch /Home/Details?data=<JSON> via curl_cffi → booking#, date, charges
+4. Date-gate: only process inmates whose detail page shows booking within DAYS_BACK
+
+Fix 2026-05-18: Replaced Selenium with nodriver + curl_cffi.
+                Roster is JS-rendered; detail pages are accessible via plain HTTP.
 """
+
+import asyncio
+import json
 import logging
 import re
-import time
-import html
-import json
-import os
-from datetime import datetime, timezone
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-PORTAL_URL = "https://seminole.northpointesuite.com/custodyportal"
-DETAIL_BASE = "https://seminole.northpointesuite.com/custodyportal/details"
+BASE_URL = "https://seminole.northpointesuite.com"
+PORTAL_URL = f"{BASE_URL}/custodyportal"
+DETAIL_URL = f"{BASE_URL}/custodyportal/Home/Details"
 FACILITY = "John E Polk Correctional Facility"
-COUNTY = "Seminole"
+DAYS_BACK = 7
+MAX_DETAIL_FETCHES = 150  # Cap to avoid excessive bandwidth (each detail ~1.6MB)
+IMPERSONATE = "chrome131"
 
-
-def _setup_browser():
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-    chrome_path = os.getenv("CHROME_PATH", "/usr/bin/chromium-browser")
-    if os.path.exists(chrome_path):
-        options.binary_location = chrome_path
-
-    try:
-        from webdriver_manager.chrome import ChromeDriverManager
-        from webdriver_manager.core.os_manager import ChromeType
-        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
-    except Exception:
-        service = Service()
-
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.implicitly_wait(10)
-    driver.set_page_load_timeout(60)
-    return driver
-
-
-def _extract_records_from_source(page_source: str) -> list:
-    decoded = html.unescape(page_source)
-    pattern = r"javascript:goToDetails\((\{[^}]+\})\)"
-    matches = re.findall(pattern, decoded)
-    records = []
-    for match in matches:
-        try:
-            data = json.loads(match)
-            first = (data.get("firstName") or "").strip()
-            last = (data.get("lastName") or "").strip()
-            middle = (data.get("middleName") or "").strip()
-            if middle:
-                full_name = f"{last}, {first} {middle}".upper()
-            else:
-                full_name = f"{last}, {first}".upper()
-            records.append({
-                "full_name": full_name,
-                "first_name": first.upper(),
-                "middle_name": middle.upper(),
-                "last_name": last.upper(),
-                "person_id": str(data.get("personId", "")),
-                "age": str(data.get("age", "")),
-                "sex": (data.get("gender") or ""),
-                "race": (data.get("race") or ""),
-                "height": (data.get("height") or ""),
-                "weight": (data.get("weight") or ""),
-            })
-        except Exception:
-            continue
-    return records
-
-
-def _fetch_detail(driver, person_id: str) -> dict:
-    detail = {}
-    try:
-        driver.get(f"{DETAIL_BASE}/{person_id}")
-        time.sleep(2)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(driver.page_source, "html.parser")
-        for row in soup.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) >= 2:
-                label = cells[0].get_text(strip=True).lower()
-                val = cells[1].get_text(strip=True)
-                if "booking" in label and "number" in label:
-                    detail["booking_number"] = val
-                elif "booking" in label and "date" in label:
-                    detail["booking_date"] = val
-                elif "agency" in label:
-                    detail["agency"] = val
-                elif "bond" in label and "total" in label:
-                    detail["bond_amount"] = val
-                elif "status" in label:
-                    detail["status"] = val
-                elif "dob" in label or "date of birth" in label or "birth" in label:
-                    detail["dob"] = val
-                elif "release" in label and "date" in label:
-                    detail["release_date"] = val
-        charges = []
-        for row in soup.find_all("tr"):
-            cells = row.find_all("td")
-            if len(cells) >= 3:
-                charge_text = cells[0].get_text(strip=True)
-                if charge_text and len(charge_text) > 3 and "charge" not in charge_text.lower():
-                    charges.append(charge_text)
-        if charges:
-            detail["charges"] = " | ".join(charges[:5])
-    except Exception as e:
-        logger.debug(f"Seminole detail fetch error for {person_id}: {e}")
-    return detail
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": PORTAL_URL,
+}
 
 
 class SeminoleCountyScraper(BaseScraper):
-    """Seminole County — NorthPointe Suite Custody Portal"""
+    """Seminole County (FL) — NorthPointe Custody Portal (nodriver + curl_cffi)"""
 
     @property
     def county(self) -> str:
@@ -140,84 +53,219 @@ class SeminoleCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from selenium import webdriver  # noqa
-        except ImportError:
-            logger.error("Seminole: selenium not installed")
+            import nodriver as uc
+            from curl_cffi import requests as cf
+            from bs4 import BeautifulSoup  # noqa — imported in sub-methods
+        except ImportError as e:
+            logger.error(f"Seminole: missing dependency: {e}")
             return []
 
-        driver = _setup_browser()
+        # Step 1: Load roster via nodriver (JS-rendered page)
+        roster_html = asyncio.run(self._load_roster(uc))
+        if not roster_html:
+            logger.error("Seminole: failed to load roster")
+            return []
+
+        # Step 2: Parse all goToDetails JSON objects from roster
+        inmates = self._parse_roster(roster_html)
+        logger.info(f"Seminole: {len(inmates)} inmates on roster")
+        if not inmates:
+            return []
+
+        # Step 3: Fetch detail pages for recent inmates via curl_cffi
+        cutoff = datetime.now() - timedelta(days=DAYS_BACK)
+        session = cf.Session()
         records = []
+        seen: set = set()
+        fetched = 0
 
-        try:
-            logger.info("Seminole: loading custody portal")
-            driver.get(PORTAL_URL)
-            time.sleep(5)
-
+        for inmate in inmates:
+            if fetched >= MAX_DETAIL_FETCHES:
+                break
+            person_id = inmate.get("personId")
+            if not person_id or person_id in seen:
+                continue
             try:
-                from selenium.webdriver.common.by import By
-                from selenium.webdriver.support.ui import WebDriverWait
-                from selenium.webdriver.support import expected_conditions as EC
-
-                search_btn = WebDriverWait(driver, 15).until(
-                    EC.element_to_be_clickable((By.ID, "searchBtn"))
-                )
-                search_btn.click()
-                time.sleep(5)
-
-                for _ in range(20):
-                    if "goToDetails" in driver.page_source:
-                        break
-                    time.sleep(2)
+                record = self._fetch_detail(session, inmate, cutoff)
+                if record:
+                    seen.add(person_id)
+                    records.append(record)
+                    fetched += 1
             except Exception as e:
-                logger.warning(f"Seminole: search button error: {e}")
+                logger.debug(f"Seminole detail error for {inmate.get('lastName')}: {e}")
 
-            rows = _extract_records_from_source(driver.page_source)
-            logger.info(f"Seminole: found {len(rows)} inmates in portal")
+        logger.info(f"Seminole: {len(records)} records within {DAYS_BACK} days")
+        return records
 
-            for row in rows:
-                person_id = row["person_id"]
-                detail = _fetch_detail(driver, person_id) if person_id else {}
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-                status = detail.get("status", "In Custody")
-                release_date = detail.get("release_date", "")
-                if release_date and release_date.strip():
-                    status = "Released"
+    async def _load_roster(self, uc) -> Optional[str]:
+        """Use nodriver to load the custody portal and click Search."""
+        browser = None
+        try:
+            browser = await uc.start(
+                browser_executable_path="/usr/bin/chromium",
+                headless=True,
+                browser_args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-extensions",
+                ],
+            )
+            page = await browser.get(PORTAL_URL)
+            await asyncio.sleep(5)
 
-                records.append(ArrestRecord(
-                    County=COUNTY,
-                    State="FL",
-                    Facility=FACILITY,
-                    Full_Name=row["full_name"],
-                    First_Name=row["first_name"],
-                    Middle_Name=row["middle_name"],
-                    Last_Name=row["last_name"],
-                    Person_ID=person_id,
-                    DOB=detail.get("dob", ""),
-                    Booking_Number=detail.get("booking_number", person_id),
-                    Booking_Date=detail.get("booking_date", ""),
-                    Arrest_Date=detail.get("booking_date", ""),
-                    Agency=detail.get("agency", "Seminole County SO"),
-                    Status=status,
-                    Release_Date=release_date,
-                    Charges=detail.get("charges", ""),
-                    Bond_Amount=detail.get("bond_amount", "0"),
-                    Race=row["race"],
-                    Sex=row["sex"],
-                    Height=row["height"],
-                    Weight=row["weight"],
-                    Detail_URL=PORTAL_URL,
-                    Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                    LastChecked=datetime.now(timezone.utc).isoformat(),
-                    LastCheckedMode="scrape",
-                ))
+            # Click Search with no filters to get all current inmates
+            search_btn = await page.find("#searchBtn", timeout=10)
+            await search_btn.click()
+            await asyncio.sleep(8)
+
+            return await page.get_content()
 
         except Exception as e:
-            logger.error(f"Seminole: scraper error — {e}")
+            logger.error(f"Seminole nodriver error: {e}")
+            return None
         finally:
+            if browser:
+                try:
+                    browser.stop()
+                except Exception:
+                    pass
+
+    def _parse_roster(self, html: str) -> List[dict]:
+        """Parse goToDetails JSON from each searchDataRow div."""
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser")
+        inmates = []
+        for row in soup.find_all("div", class_="searchDataRow"):
+            link = row.find("a", href=re.compile(r"goToDetails"))
+            if not link:
+                continue
+            href = link.get("href", "")
+            json_match = re.search(r"goToDetails\((\{[^)]+\})\)", href)
+            if not json_match:
+                continue
             try:
-                driver.quit()
-            except:
+                inmates.append(json.loads(json_match.group(1)))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return inmates
+
+    def _fetch_detail(
+        self, session, inmate: dict, cutoff: datetime
+    ) -> Optional[ArrestRecord]:
+        """Fetch the detail page for one inmate and extract booking info."""
+        from bs4 import BeautifulSoup
+
+        data_param = json.dumps(inmate)
+        try:
+            r = session.get(
+                DETAIL_URL,
+                params={"data": data_param},
+                headers=HEADERS,
+                timeout=45,
+                impersonate=IMPERSONATE,
+            )
+            r.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"Detail fetch failed: {e}")
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Booking number from "Booking - 202600003587" header
+        booking_header = soup.find("div", class_="bookingHeader")
+        if not booking_header:
+            return None
+        bk_match = re.search(r"Booking\s*-\s*(\d+)", booking_header.get_text())
+        booking_num = bk_match.group(1) if bk_match else ""
+
+        # Booking date
+        booking_date = self._label_next(soup, r"^Booking Date$")
+
+        # Date gate — skip if older than cutoff
+        if booking_date:
+            try:
+                bd = datetime.strptime(booking_date, "%m/%d/%Y")
+                if bd < cutoff:
+                    return None
+            except ValueError:
                 pass
 
-        logger.info(f"Seminole: total {len(records)} records")
-        return records
+        # Other fields
+        status = self._label_next(soup, r"^Status$") or "In Custody"
+        bond = self._label_next(soup, r"^Total Bond$") or "0"
+        release_date = self._label_next(soup, r"^Projected Release Date$") or ""
+
+        # Charges
+        charges = []
+        for div in soup.find_all("div", class_=re.compile(r"chargeRow|chargeData", re.I)):
+            text = div.get_text(separator=" ", strip=True)
+            if text:
+                charges.append(text)
+
+        # Name components
+        first = inmate.get("firstName", "")
+        last = inmate.get("lastName", "")
+        middle = inmate.get("middleName") or ""
+        full_name = f"{last}, {first}" + (f" {middle}" if middle else "")
+
+        # DOB
+        dob_raw = inmate.get("dateOfBirth", "")
+        dob = ""
+        if dob_raw:
+            try:
+                dob = datetime.fromisoformat(dob_raw.replace("T00:00:00", "")).strftime(
+                    "%m/%d/%Y"
+                )
+            except ValueError:
+                dob = dob_raw[:10]
+
+        return ArrestRecord(
+            County=self.county,
+            State="FL",
+            Facility=FACILITY,
+            Full_Name=full_name.upper(),
+            First_Name=first.upper(),
+            Middle_Name=middle.upper(),
+            Last_Name=last.upper(),
+            DOB=dob,
+            Booking_Number=booking_num,
+            Booking_Date=booking_date,
+            Arrest_Date=booking_date,
+            Status=status,
+            Release_Date=release_date,
+            Charges=" | ".join(charges),
+            Bond_Amount=str(self._parse_bond(bond)),
+            Race=inmate.get("race", ""),
+            Sex=inmate.get("gender", ""),
+            Height=inmate.get("height", ""),
+            Weight=inmate.get("weight", ""),
+            Detail_URL=f"{DETAIL_URL}?data={data_param}",
+            Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+            LastChecked=datetime.now(timezone.utc).isoformat(),
+            LastCheckedMode="INITIAL",
+        )
+
+    @staticmethod
+    def _label_next(soup, label_pattern: str) -> str:
+        """Find a label by regex and return the text of the next sibling element."""
+        el = soup.find(string=re.compile(label_pattern))
+        if not el:
+            return ""
+        nxt = el.parent.find_next_sibling()
+        return nxt.get_text(strip=True) if nxt else ""
+
+    @staticmethod
+    def _parse_bond(bond_str: str) -> float:
+        if not bond_str:
+            return 0.0
+        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+            return 0.0
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return 0.0

@@ -1,12 +1,16 @@
 """
-Suwannee County Arrest Scraper — SmartWeb ASP.NET
+Suwannee County Arrest Scraper — SmartCop AJAX (AddMoreResults)
 Source: Suwannee County Sheriff's Office
 URL: https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx
-Method: requests POST — SmartWeb form (same pattern as Putnam)
-Fields: Status, Booking No, MniNo, Booking Date, Age, Bond Amount, Address,
-        Holds, Statute, Court Case Number, Charge, Degree Level, Bond
+Method: curl_cffi POST to jail.aspx/AddMoreResults (ASP.NET PageMethods AJAX)
+Fields: Name, Booking No, MniNo, Booking Date, Age, Bond Amount, Address, Status
+
+Fix 2026-05-18: The form POST only sets up JS state; actual data is loaded via
+                jail.aspx/AddMoreResults JSON endpoint returning HTML rows.
+                185 records per call, paginated via RecordsLoaded offset.
 """
 
+import json
 import logging
 import re
 from typing import List
@@ -16,23 +20,25 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URL = "https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx"
+BASE_URL = "https://smartcop.suwanneesheriff.com/smartwebclient"
+AJAX_URL = f"{BASE_URL}/jail.aspx/AddMoreResults"
+DETAIL_URL = f"{BASE_URL}/jail.aspx"
 FACILITY = "Suwannee County Jail"
+IMPERSONATE = "chrome131"
+PAGE_SIZE = 185  # SmartCop default batch size
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": SEARCH_URL,
-    "DNT": "1",
-    "Connection": "keep-alive",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Content-Type": "application/json; charset=utf-8",
+    "Accept": "application/json, text/javascript, */*; q=0.01",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": f"{BASE_URL}/jail.aspx",
+    "Origin": "https://smartcop.suwanneesheriff.com",
 }
-IMPERSONATE = "chrome131"
 
 
 class SuwanneeCountyScraper(BaseScraper):
-    """Suwannee County (FL) — SmartWeb jail roster (Live Oak area)"""
+    """Suwannee County (FL) — SmartCop AJAX jail roster (Live Oak)"""
 
     @property
     def county(self) -> str:
@@ -40,91 +46,122 @@ class SuwanneeCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from curl_cffi import requests as cffi_requests
+            from curl_cffi import requests as cf
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
             return []
 
-        session = cffi_requests.Session()
+        session = cf.Session()
+        records = []
+        seen = set()
+        offset = 0
 
-        try:
-            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"GET {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Suwannee GET failed: {e}")
-            return []
+        while True:
+            payload = {
+                "FirstName": "",
+                "MiddleName": "",
+                "LastName": "",
+                "BeginBookDate": "",
+                "EndBookDate": "",
+                "BeginReleaseDate": "",
+                "EndReleaseDate": "",
+                "TypeJailSearch": 0,
+                "RecordsLoaded": offset,
+                "SortOption": 1,   # 1 = BookingDate
+                "SortOrder": 1,    # 1 = Descending
+                "IsDefault": False,
+            }
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        viewstate = soup.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val = soup.find("input", {"name": "__EVENTVALIDATION"})
+            try:
+                r = session.post(
+                    AJAX_URL,
+                    json=payload,
+                    headers=HEADERS,
+                    timeout=30,
+                    impersonate=IMPERSONATE,
+                )
+                r.raise_for_status()
+            except Exception as e:
+                logger.error(f"Suwannee AJAX failed (offset={offset}): {e}")
+                break
 
-        post_data = {
-            "__VIEWSTATE": viewstate["value"] if viewstate else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen["value"] if viewstate_gen else "",
-            "__EVENTVALIDATION": event_val["value"] if event_val else "",
-            "txbLastName": "",
-            "txbFirstName": "",
-            "btnSumit": "Search",
-        }
+            try:
+                data = r.json()
+                html_rows = data["d"]["Data"]["data"]
+            except Exception as e:
+                logger.error(f"Suwannee JSON parse failed: {e}")
+                break
 
-        try:
-            resp = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"POST {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Suwannee POST failed: {e}")
-            return []
+            if not html_rows or len(html_rows) < 10:
+                break
 
-        records = self._parse(resp.text)
+            batch = self._parse_rows(html_rows, seen)
+            if not batch:
+                break
+
+            records.extend(batch)
+            offset += PAGE_SIZE
+
+            # SmartCop typically has < 300 inmates; stop after 2 pages
+            if offset >= PAGE_SIZE * 2:
+                break
+
         logger.info(f"Suwannee: {len(records)} records")
         return records
 
-    def _parse(self, html: str) -> List[ArrestRecord]:
+    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
         records = []
-        seen = set()
 
-        full_text = soup.get_text("\n")
-        blocks = re.split(r'\n(?=[A-Z][A-Z\s,\'-]+\s*\([A-Z/]+\))', full_text)
-
-        for block in blocks:
-            block = block.strip()
-            if not block:
+        rows = soup.find_all("tr")
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) < 10:
                 continue
 
-            name_m = re.match(r'^([A-Z][A-Z\s,\'-]+?)(?:\s*\([A-Z/]+\))', block)
-            if not name_m:
+            texts = [td.get_text(separator=" ", strip=True) for td in cells]
+
+            # Cell layout (confirmed from live data):
+            # 0=photo, 1=full name+status block, 2=name, 3="Status:", 4=status_val,
+            # 5="Booking No:", 6=booking_no, 7="MniNo:", 8=mni_no,
+            # 9="Booking Date:", 10=booking_date, 11=blank, 12="Age On Booking Date:",
+            # 13=age, 14=blank, 15=blank, 16="Bond Amount:", 17=bond,
+            # 18=blank, 19="Address Given:", 20=address
+
+            # Skip rows that don't have "Booking No:" pattern
+            if "Booking No:" not in texts[1]:
                 continue
-            full_name = name_m.group(1).strip().rstrip(",")
 
-            booking_m = re.search(r'Booking\s*No[.:]?\s*([A-Z0-9]+)', block, re.I)
-            booking_num = booking_m.group(1) if booking_m else ""
+            full_name = texts[2] if len(texts) > 2 else texts[1]
+            # Name is "LAST, FIRST MIDDLE (RACE/SEX)" — strip the (B/MALE) part
+            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+            if not full_name or len(full_name) < 3:
+                continue
 
-            date_m = re.search(r'Booking\s*Date[.:]?\s*(\d{1,2}/\d{1,2}/\d{2,4}(?:\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?)', block, re.I)
-            booking_date = date_m.group(1) if date_m else ""
+            booking_num = texts[6] if len(texts) > 6 else ""
+            booking_date = texts[10] if len(texts) > 10 else ""
+            # Normalize date: "05/17/2026 12:45 PM" -> "05/17/2026"
+            if booking_date:
+                booking_date = booking_date.split()[0]
 
-            bond_m = re.search(r'Bond\s*Amount[.:]?\s*\$?([\d,]+\.?\d*)', block, re.I)
-            bond_raw = bond_m.group(1) if bond_m else "0"
-
-            demo_m = re.search(r'\(([A-Z]+)/([A-Z]+)\)', block)
-            race = demo_m.group(1) if demo_m else ""
-            sex = demo_m.group(2) if demo_m else ""
-
-            status_m = re.search(r'Status[.:]?\s*([A-Za-z\s]+?)(?:\n|Booking)', block, re.I)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower() or "in" in status.lower():
+            status = texts[4] if len(texts) > 4 else "In Custody"
+            if "jail" in status.lower() or "custody" in status.lower():
                 status = "In Custody"
 
-            # Charges
-            charge_descs = re.findall(r'Charge[.:]?\s*([^\n]+)', block, re.I)
-            charges_str = " | ".join(c.strip() for c in charge_descs if c.strip())
+            bond_raw = texts[17] if len(texts) > 17 else "0"
+            address = texts[20] if len(texts) > 20 else ""
+
+            # Race/sex from the "(B/MALE)" pattern in cell 1
+            race, sex = "", ""
+            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+            if rs_match:
+                race = rs_match.group(1)
+                sex = rs_match.group(2)
 
             key = booking_num or full_name
-            if not key or key in seen:
+            if key in seen:
                 continue
             seen.add(key)
 
@@ -135,58 +172,18 @@ class SuwanneeCountyScraper(BaseScraper):
                 Booking_Number=booking_num,
                 Full_Name=full_name,
                 First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
+                DOB="",
                 Booking_Date=booking_date,
                 Status=status,
-                        Release_Date="",
+                Release_Date="",
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
-                Charges=charges_str,
-                Bond_Amount=str(self._parse_bond(bond_raw)) if bond_raw else "0",
-                Detail_URL=SEARCH_URL,
-
+                Address=address,
+                Bond_Amount=str(self._parse_bond(bond_raw)),
+                Detail_URL=DETAIL_URL,
                 LastCheckedMode="INITIAL",
             ))
-
-        # Table fallback
-        if not records:
-            for table in soup.find_all("table"):
-                rows = table.find_all("tr")
-                if len(rows) < 2:
-                    continue
-                header_text = rows[0].get_text(" ").lower()
-                if "name" in header_text and ("booking" in header_text or "inmate" in header_text):
-                    for row in rows[1:]:
-                        cells = row.find_all("td")
-                        if len(cells) < 2:
-                            continue
-                        texts = [c.get_text(strip=True) for c in cells]
-                        full_name = texts[0]
-                        if not full_name:
-                            continue
-                        booking_num = texts[1] if len(texts) > 1 else ""
-                        key = booking_num or full_name
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        f, m, l = self._parse_name(full_name)
-                        records.append(ArrestRecord(
-                            County=self.county,
-                            Booking_Number=booking_num,
-                            Full_Name=full_name,
-                            First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                            Booking_Date=texts[2] if len(texts) > 2 else "",
-                            Status="In Custody",
-                        Release_Date="",
-                            Facility=FACILITY,
-                            Detail_URL=SEARCH_URL,
-
-                            LastCheckedMode="INITIAL",
-                        ))
-                    if records:
-                        break
 
         return records
 

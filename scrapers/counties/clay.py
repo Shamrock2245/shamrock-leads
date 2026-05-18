@@ -34,15 +34,18 @@ class ClayCountyScraper(BaseScraper):
         return "Clay"
 
     def scrape(self) -> List[ArrestRecord]:
+        # Fix 2026-05-18: switched to curl_cffi to bypass Cloudflare-lite blocks
+        # Also fixed duplicate-row issue (Clay SO page lists each inmate twice)
         try:
-            import requests
+            from curl_cffi import requests as cf
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed")
+            logger.error("curl_cffi/bs4 not installed")
             return []
 
         try:
-            resp = requests.get(ROSTER_URL, headers=HEADERS, timeout=30)
+            session = cf.Session()
+            resp = session.get(ROSTER_URL, headers=HEADERS, timeout=30, impersonate="chrome131")
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Clay: fetch failed: {e}")
