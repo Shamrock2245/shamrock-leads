@@ -216,6 +216,9 @@ def create_app():
     from dashboard.api.fta import fta_bp  # ← FTA Alert Center
     app.register_blueprint(fta_bp, url_prefix="/api")
 
+    from dashboard.api.indemnitors import indemnitors_bp  # ← Indemnitor Management
+    app.register_blueprint(indemnitors_bp, url_prefix="/api")
+
     # ── Alpha Engine — Background Scoring Cycle (every 4 hours) ──────────
     async def _alpha_engine_cron_loop():
         """Background loop: recalculate source performance scores every 4 hours.
