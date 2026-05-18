@@ -201,3 +201,56 @@ async def get_error_stats():
         logger.error(f"Error stats query failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+
+# ── Lifecycle Notes ───────────────────────────────────────────────────────────
+
+@bond_lifecycle_bp.route('/lifecycle/notes/<booking_number>', methods=['POST'])
+async def add_lifecycle_note(booking_number: str):
+    """
+    POST /api/bond-lifecycle/lifecycle/notes/<booking_number>
+    Add a freeform note to a bond's lifecycle timeline.
+    Body: { "note": "text", "source": "lifecycle_panel" }
+    """
+    try:
+        from dashboard.extensions import get_db
+        from datetime import datetime, timezone
+
+        data = await request.get_json(force=True) or {}
+        note_text = (data.get('note') or '').strip()
+        if not note_text:
+            return jsonify({'ok': False, 'error': 'Note text is required'}), 400
+
+        source = data.get('source', 'dashboard')
+        agent = data.get('agent', 'Staff')
+        now = datetime.now(timezone.utc)
+
+        db = get_db()
+
+        # Try active_bonds first, then prospective_bonds
+        note_entry = {
+            'timestamp': now.isoformat(),
+            'event': 'note_added',
+            'detail': note_text[:500],
+            'agent': agent,
+            'source': source,
+        }
+
+        result = await db['active_bonds'].update_one(
+            {'booking_number': booking_number},
+            {'$push': {'timeline': note_entry}, '$set': {'updated_at': now}},
+        )
+
+        if result.matched_count == 0:
+            result = await db['prospective_bonds'].update_one(
+                {'booking_number': booking_number},
+                {'$push': {'timeline': note_entry}, '$set': {'updated_at': now}},
+            )
+
+        if result.matched_count == 0:
+            return jsonify({'ok': False, 'error': 'Bond not found'}), 404
+
+        return jsonify({'ok': True, 'note': note_entry})
+    except Exception as exc:
+        logger.exception('add_lifecycle_note error')
+        return jsonify({'ok': False, 'error': str(exc)}), 500

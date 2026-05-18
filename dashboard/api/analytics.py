@@ -268,6 +268,12 @@ async def county_performance():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+@analytics_bp.route("/analytics/county")
+async def county_performance_alias():
+    """Alias for /analytics/county-performance — used by sl-analytics-apex.js."""
+    return await county_performance()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SURETY BREAKDOWN
 # ─────────────────────────────────────────────────────────────────────────────
