@@ -1,8 +1,8 @@
 """
 ShamrockLeads Dashboard — FastAPI Application Factory
 
-Production entry point for the async dashboard API (Phase 0 migration).
-Runs in PARALLEL with Quart during migration — no production disruption.
+Production entry point for the async dashboard API.
+Migration from Quart is COMPLETE as of 2026-05-19.
 
 Usage:
     uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --workers 1 --access-log
@@ -11,7 +11,8 @@ Architecture:
     - deps.py         → DI providers (get_db, get_collection, get_settings)
     - cron.py         → Background task extraction (16+ loops)
     - auth/           → PIN auth middleware (itsdangerous signed cookies)
-    - routers/        → FastAPI APIRouter instances (migrated from api/ blueprints)
+    - routers/        → FastAPI APIRouter instances (63 routers, all Quart-free)
+    - routers/events  → SSE fan-out via sse-starlette EventSourceResponse
 """
 from __future__ import annotations
 
@@ -82,10 +83,16 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ── CORS ──
+# ── CORS ── restrict to known origins in production ──
+_ALLOWED_ORIGINS = [
+    "https://leads.shamrockbailbonds.biz",
+    "http://178.156.179.237:8088",
+    "http://localhost:5050",
+    "http://localhost:8088",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

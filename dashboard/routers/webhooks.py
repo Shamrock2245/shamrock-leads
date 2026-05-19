@@ -417,7 +417,12 @@ async def twilio_webhook(request: Request):
         "body": form_data.get('Body')
     })
 
-    return "<Response></Response>", 200, {'Content-Type': 'text/xml'}
+    from starlette.responses import Response as StarletteResponse
+    return StarletteResponse(
+        content="<Response></Response>",
+        status_code=200,
+        media_type="text/xml",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
