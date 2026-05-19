@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Gmail Discharge Monitor
@@ -29,7 +26,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_collection
@@ -358,12 +355,11 @@ async def discharge_manual(request: Request):
 
 
 @discharge_monitor_bp.get("/discharge-monitor/queue")
-async def discharge_queue_view(request: Request):
+async def discharge_queue_view(status: str = Query(default="")):
     """View the discharge_queue collection."""
-    _qp = dict(request.query_params)
     try:
         discharge_queue = get_collection("discharge_queue")
-        status_filter = _qp.get("status", "")
+        status_filter = status
         query = {}
         if status_filter:
             query["status"] = status_filter
@@ -377,6 +373,7 @@ async def discharge_queue_view(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+@discharge_monitor_bp.post("/discharge-monitor/process")
 @discharge_monitor_bp.post("/discharge-monitor/process")
 async def discharge_process():
     """

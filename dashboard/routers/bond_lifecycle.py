@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 """
 ShamrockLeads — Bond Lifecycle API Blueprint
 Handles Phase 1 (indemnitor signing), Phase 2 (agent approval + POA),

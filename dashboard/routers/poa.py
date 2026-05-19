@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — POA Inventory API Blueprint
@@ -11,29 +8,28 @@ Endpoints: /api/poa/next, /api/poa/assign, /api/poa/inventory,
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
 from dashboard.services.poa_service import get_poa_tier_for_bond
 
 poa_bp = APIRouter(prefix="/api", tags=["poa"])
 @poa_bp.get("/poa/next")
-async def api_poa_next(request: Request):
+async def api_poa_next(surety: str | None = Query(default=None), bond_amount: int = Query(default=0), count: int = Query(default=1)):
     """
-    _qp = dict(request.query_params)
     Suggest the next available POA number(s) for a given surety + bond amount.
     Query params: surety, bond_amount, count
     """
     poa_inventory = get_collection("poa_inventory")
 
-    surety = (_qp.get("surety") or "").lower().strip()
+    surety = (surety or "").lower().strip()
     if surety not in ("osi", "palmetto"):
         return JSONResponse({"error": "surety must be 'osi' or 'palmetto'"}, status_code=400)
     try:
-        bond_amount = float(_qp.get("bond_amount", 0) or 0)
+        bond_amount = float(bond_amount or 0)
     except ValueError:
         bond_amount = 0.0
-    count = max(1, int(_qp.get("count", 1) or 1))
+    count = max(1, int(count or 1))
 
     prefix = get_poa_tier_for_bond(surety, bond_amount)
 
@@ -63,6 +59,7 @@ async def api_poa_next(request: Request):
     }
 
 
+@poa_bp.post("/poa/assign")
 @poa_bp.post("/poa/assign")
 async def api_poa_assign(request: Request):
     """Mark a POA as assigned to a bond case."""
@@ -108,12 +105,11 @@ async def api_poa_assign(request: Request):
 
 
 @poa_bp.get("/poa/inventory")
-async def api_poa_inventory(request: Request):
+async def api_poa_inventory(surety: str | None = Query(default=None)):
     """Return a summary of available POA inventory by surety and tier."""
-    _qp = dict(request.query_params)
     poa_inventory = get_collection("poa_inventory")
 
-    surety_filter = (_qp.get("surety") or "").lower().strip()
+    surety_filter = (surety or "").lower().strip()
     match = {"status": "available"}
     if surety_filter in ("osi", "palmetto"):
         match["surety_id"] = surety_filter
@@ -146,6 +142,7 @@ async def api_poa_inventory(request: Request):
 
 
 @poa_bp.get("/poa/inventory-summary")
+@poa_bp.get("/poa/inventory-summary")
 async def api_poa_inventory_summary():
     """Lightweight summary for the dashboard low-stock alert banner.
     Returns tiers with available count, prefix, and surety label."""
@@ -173,16 +170,15 @@ async def api_poa_inventory_summary():
 
 
 @poa_bp.get("/poa/list")
-async def api_poa_list(request: Request):
+async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=50), surety: str | None = Query(default=None), status: str | None = Query(default=None), search: str | None = Query(default=None)):
     """Paginated list of all POA powers with filters."""
-    _qp = dict(request.query_params)
     poa_inventory = get_collection("poa_inventory")
 
-    page = max(1, int(_qp.get("page", 1) or 1))
-    limit = min(200, max(1, int(_qp.get("limit", 50) or 50)))
-    surety = (_qp.get("surety") or "").lower().strip()
-    status = (_qp.get("status") or "").lower().strip()
-    search = (_qp.get("search") or "").strip()
+    page = max(1, int(page or 1))
+    limit = min(200, max(1, int(limit or 50)))
+    surety = (surety or "").lower().strip()
+    status = (status or "").lower().strip()
+    search = (search or "").strip()
 
     match = {}
     if surety in ("osi", "palmetto"):
@@ -215,6 +211,7 @@ async def api_poa_list(request: Request):
     return {"powers": powers, "total": total, "page": page, "pages": pages}
 
 
+@poa_bp.post("/poa/add")
 @poa_bp.post("/poa/add")
 async def api_poa_add(request: Request):
     """Add one or more POA numbers to inventory (manual replenishment)."""

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Accounting & Revenue Intelligence API
@@ -18,7 +15,7 @@ import io
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from starlette.responses import Response
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
@@ -83,19 +80,18 @@ async def api_accounting_dashboard():
 #  GET /api/accounting/transactions — Paginated ledger
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/transactions")
-async def api_accounting_transactions(request: Request):
+async def api_accounting_transactions(page: int = Query(default=0), limit: int = Query(default=50), method: str = Query(default=""), status: str = Query(default=""), search: str = Query(default=""), date_from: str = Query(default=""), date_to: str = Query(default=""), surety: str = Query(default=""), unattributed: str = Query(default="")):
     """Paginated transaction ledger with filters."""
-    _qp = dict(request.query_params)
     txns = get_collection("transactions")
-    page = int(_qp.get("page", 0))
-    limit = min(int(_qp.get("limit", 50)), 200)
-    method = _qp.get("method", "")
-    status = _qp.get("status", "")
-    search = _qp.get("search", "").strip()
-    date_from = _qp.get("date_from", "")
-    date_to = _qp.get("date_to", "")
-    surety = _qp.get("surety", "")
-    unattributed = _qp.get("unattributed", "").lower() == "true"
+    page = int(page)
+    limit = min(int(limit), 200)
+    method = method
+    status = status
+    search = search.strip()
+    date_from = date_from
+    date_to = date_to
+    surety = surety
+    unattributed = unattributed.lower() == "true"
 
     query = {}
     if method:
@@ -130,6 +126,7 @@ async def api_accounting_transactions(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/accounting/transactions — Record a transaction (cash, check, etc.)
 # ═══════════════════════════════════════════════════════════════════════════════
+@accounting_bp.post("/accounting/transactions")
 @accounting_bp.post("/accounting/transactions")
 async def api_record_transaction(request: Request):
     """Record a manual transaction (cash, check, wire, etc.)."""
@@ -309,10 +306,9 @@ async def api_import_history():
 #  GET /api/accounting/premium-split — Calculate splits for a bond
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/premium-split")
-async def api_premium_split(request: Request):
-    _qp = dict(request.query_params)
-    bond_amount = float(_qp.get("bond_amount", 0))
-    surety = _qp.get("surety", "osi").lower()
+async def api_premium_split(bond_amount: int = Query(default=0), surety: str = Query(default="osi")):
+    bond_amount = float(bond_amount)
+    surety = surety.lower()
     if bond_amount <= 0:
         return JSONResponse({"error": "bond_amount required"}, status_code=400)
 
@@ -334,10 +330,10 @@ async def api_premium_split(request: Request):
 #  GET /api/accounting/revenue/monthly — Monthly revenue for charts
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/revenue/monthly")
-async def api_revenue_monthly(request: Request):
-    _qp = dict(request.query_params)
+@accounting_bp.get("/accounting/revenue/monthly")
+async def api_revenue_monthly(months: int = Query(default=12)):
     txns = get_collection("transactions")
-    months = int(_qp.get("months", 12))
+    months = int(months)
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=months * 31)).isoformat()
 
@@ -355,12 +351,12 @@ async def api_revenue_monthly(request: Request):
 #  GET /api/accounting/export/quickbooks — QuickBooks-compatible CSV export
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/export/quickbooks")
-async def api_export_quickbooks(request: Request):
+@accounting_bp.get("/accounting/export/quickbooks")
+async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export transactions as QuickBooks-compatible CSV (General Journal format)."""
-    _qp = dict(request.query_params)
     txns = get_collection("transactions")
-    date_from = _qp.get("date_from", "")
-    date_to = _qp.get("date_to", "")
+    date_from = date_from
+    date_to = date_to
 
     query = {"status": {"$in": ["completed", "settled"]}}
     if date_from:
@@ -425,12 +421,12 @@ async def api_export_quickbooks(request: Request):
 #  GET /api/accounting/export/csv — Raw transaction export
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/export/csv")
-async def api_export_csv(request: Request):
+@accounting_bp.get("/accounting/export/csv")
+async def api_export_csv(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export raw transaction data as CSV."""
-    _qp = dict(request.query_params)
     txns = get_collection("transactions")
-    date_from = _qp.get("date_from", "")
-    date_to = _qp.get("date_to", "")
+    date_from = date_from
+    date_to = date_to
     query = {}
     if date_from:
         query.setdefault("timestamp", {})["$gte"] = date_from
@@ -460,6 +456,7 @@ async def api_export_csv(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  DELETE /api/accounting/transactions/<txn_id> — Void a transaction
 # ═══════════════════════════════════════════════════════════════════════════════
+@accounting_bp.delete("/accounting/transactions/<txn_id>")
 @accounting_bp.delete("/accounting/transactions/<txn_id>")
 async def api_void_transaction(txn_id: str):
     """Void a transaction (soft-delete — marks as voided, doesn't remove)."""

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Webhooks API Blueprint
@@ -31,7 +28,7 @@ Data Flow (SignNow document.complete):
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 import hmac
 import hashlib
@@ -428,9 +425,8 @@ async def twilio_webhook(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/payment")
-async def payment_webhook(request: Request):
+async def payment_webhook(request: Request, booking_number: str = Query(default="")):
     """
-    _qp = dict(request.query_params)
     Handle SwipeSimple payment confirmation webhook.
 
     SwipeSimple sends a POST with JSON payload on payment events.
@@ -481,7 +477,7 @@ async def payment_webhook(request: Request):
     custom_fields = data.get("custom_fields", {})
     booking_number = (
         custom_fields.get("booking_number")
-        or _qp.get("booking_number", "")
+        or booking_number
     )
 
     # -- 3. Update bond case ---------------------------------------------------
@@ -583,9 +579,9 @@ async def payment_webhook(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/wix-intake")
-async def wix_intake_webhook(request: Request):
+@webhooks_bp.post("/webhooks/wix-intake")
+async def wix_intake_webhook(request: Request, api_key: str = Query(default="")):
     """
-    _qp = dict(request.query_params)
     Handle intake submissions from the Wix indemnitor portal.
 
     Validates the WIX_WEBHOOK_SECRET (or GAS_API_KEY fallback) then
@@ -598,7 +594,7 @@ async def wix_intake_webhook(request: Request):
     provided = (
         request.headers.get("X-Wix-Webhook-Secret", "")
         or request.headers.get("X-Api-Key", "")
-        or _qp.get("api_key", "")
+        or api_key
     )
     if wix_secret and provided != wix_secret:
         logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
@@ -622,3 +618,4 @@ async def wix_intake_webhook(request: Request):
     except Exception as exc:
         logger.exception("[wix_intake_webhook] Intake normalization failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

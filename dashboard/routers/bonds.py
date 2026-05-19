@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Bonds API Blueprint
@@ -810,6 +807,7 @@ async def api_appearance_bond_pdf(request: Request):
         from dashboard.bond_pdf_service import generate_appearance_bond, generate_safe_filename
 
         # Accept both GET query params and POST JSON body
+        _qp = dict(request.query_params)
         if request.method == "POST":
             try:
                 d = await request.json() or {}

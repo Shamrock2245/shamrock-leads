@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — BlueBubbles Scheduled Message Engine
@@ -52,7 +49,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.api.bb_private_api import BlueBubblesClient
@@ -534,12 +531,11 @@ async def api_schedule_document_ready(request: Request):
 
 
 @bb_schedule_bp.get("/bb-schedule/pending")
-async def api_pending_scheduled(request: Request):
+async def api_pending_scheduled(limit: int = Query(default=50), booking_number: str = Query(default="")):
     """View all pending scheduled messages."""
-    _qp = dict(request.query_params)
     try:
-        limit = int(_qp.get("limit", 50))
-        booking_number = _qp.get("booking_number", "")
+        limit = int(limit)
+        booking_number = booking_number
 
         query = {"status": "pending"}
         if booking_number:
@@ -556,6 +552,7 @@ async def api_pending_scheduled(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+@bb_schedule_bp.post("/bb-schedule/process")
 @bb_schedule_bp.post("/bb-schedule/process")
 async def api_process_scheduled():
     """Process VPS-side scheduled messages that are due. Called by cron."""

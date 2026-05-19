@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 Court Intelligence API — ShamrockLeads Dashboard
@@ -12,7 +9,7 @@ and SE US coverage metrics.
 """
 
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 log = logging.getLogger("shamrock.api.court_intel")
@@ -75,17 +72,15 @@ async def api_court_intel_ingest(request: Request):
 # ── Disposition Rates ────────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/disposition-rates")
-async def api_disposition_rates(request: Request):
+async def api_disposition_rates(state: str | None = Query(default=None)):
     """Get empirical disposition rates, optionally by state.
-
-    _qp = dict(request.query_params)
     Query params:
         state: two-letter state code (optional)
     """
     try:
         from dashboard.services.court_data_ingestor import get_disposition_rates
         db = _get_db()
-        state = _qp.get("state", None)
+        state = state
         rates = await get_disposition_rates(db, state=state)
         return JSONResponse(rates, status_code=200)
     except Exception as e:
@@ -96,10 +91,10 @@ async def api_disposition_rates(request: Request):
 # ── Search Court Outcomes ────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/search")
-async def api_court_intel_search(request: Request):
-    """Search court outcomes by case name, state, or disposition.
 
-    _qp = dict(request.query_params)
+@court_intel_bp.get("/api/court-intel/search")
+async def api_court_intel_search(q: str = Query(default=""), state: str = Query(default=""), disposition: str = Query(default=""), limit: int = Query(default=25)):
+    """Search court outcomes by case name, state, or disposition.
     Query params:
         q: search query (case name)
         state: state code
@@ -108,10 +103,10 @@ async def api_court_intel_search(request: Request):
     """
     try:
         db = _get_db()
-        q = _qp.get("q", "")
-        state = _qp.get("state", "")
-        disposition = _qp.get("disposition", "")
-        limit = min(int(_qp.get("limit", 25)), 100)
+        q = q
+        state = state
+        disposition = disposition
+        limit = min(int(limit), 100)
 
         query_filter = {}
         if q:
@@ -142,6 +137,8 @@ async def api_court_intel_search(request: Request):
 
 
 # ── Defendant Court History ──────────────────────────────────────────────────
+
+@court_intel_bp.get("/api/court-intel/defendant/<defendant_id>")
 
 @court_intel_bp.get("/api/court-intel/defendant/<defendant_id>")
 async def api_defendant_court_history(defendant_id: str):
@@ -188,18 +185,16 @@ async def api_court_intel_health():
 # ── High-Impact Opinions ─────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/high-impact")
-async def api_high_impact_opinions(request: Request):
+async def api_high_impact_opinions(min_score: int = Query(default=50), limit: int = Query(default=20)):
     """Return the highest bail-impact opinions for dashboard surfacing.
-
-    _qp = dict(request.query_params)
     Query params:
         min_score: minimum bail_impact score (default 50)
         limit: max results (default 20)
     """
     try:
         db = _get_db()
-        min_score = int(_qp.get("min_score", 50))
-        limit = min(int(_qp.get("limit", 20)), 50)
+        min_score = int(min_score)
+        limit = min(int(limit), 50)
 
         cursor = db.court_outcomes.find(
             {"bail_impact.score": {"$gte": min_score}},
@@ -218,4 +213,6 @@ async def api_high_impact_opinions(request: Request):
         }, 200
     except Exception as e:
         log.exception("High-impact query error: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
         return JSONResponse({"error": str(e)}, status_code=500)

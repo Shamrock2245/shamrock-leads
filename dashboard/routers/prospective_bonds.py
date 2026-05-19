@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Prospective Bonds (In Progress Pipeline) API Blueprint
@@ -18,7 +15,7 @@ Endpoints:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection
@@ -141,14 +138,13 @@ async def api_prospective_create(request: Request):
 #  GET /api/prospective-bonds  — List with filters
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.get("/prospective-bonds")
-async def api_prospective_list(request: Request):
+async def api_prospective_list(stage: str = Query(default=""), status: str = Query(default="active"), search: str = Query(default=""), show_archived: str = Query(default="")):
     """List prospective bonds with optional stage/status/search filters."""
-    _qp = dict(request.query_params)
     try:
-        stage = _qp.get("stage", "").strip()
-        status = _qp.get("status", "active").strip()
-        search = _qp.get("search", "").strip()
-        show_archived = _qp.get("show_archived", "").strip().lower() == "true"
+        stage = stage.strip()
+        status = status.strip()
+        search = search.strip()
+        show_archived = show_archived.strip().lower() == "true"
 
         col = get_collection("prospective_bonds")
 
@@ -214,6 +210,7 @@ async def api_prospective_list(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/stage
 # ─────────────────────────────────────────────────────────────────────────────
+@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/stage")
 @prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/stage")
 async def api_prospective_update_stage(request: Request, booking_number: str):
     """Move a prospective bond to a new pipeline stage."""

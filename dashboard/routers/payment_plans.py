@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Payment Plans API
@@ -16,7 +13,7 @@ Endpoints:
   GET  /payments/premium-calc          — Quick premium calculator
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -67,11 +64,10 @@ def calculate_premium(bond_amount: float, surety_id: str = "osi") -> dict:
 
 
 @payment_plans_bp.get("/payments/premium-calc")
-async def premium_calculator(request: Request):
+async def premium_calculator(bond_amount: int = Query(default=0), surety_id: str = Query(default='osi')):
     """Quick premium calculator — GET with query params."""
-    _qp = dict(request.query_params)
-    bond_amount = float(_qp.get('bond_amount', 0))
-    surety_id = _qp.get('surety_id', 'osi').lower()
+    bond_amount = float(bond_amount)
+    surety_id = surety_id.lower()
     if bond_amount <= 0:
         return JSONResponse({"error": "bond_amount must be positive"}, status_code=400)
     return calculate_premium(bond_amount, surety_id)
@@ -80,11 +76,11 @@ async def premium_calculator(request: Request):
 # ── Payment Plans CRUD ──────────────────────────────────────────────────────────
 
 @payment_plans_bp.get("/payments/plans")
-async def list_plans(request: Request):
+@payment_plans_bp.get("/payments/plans")
+async def list_plans(status: str = Query(default='')):
     """List all payment plans with optional status filter."""
-    _qp = dict(request.query_params)
     plans_col = get_collection("payment_plans")
-    status = _qp.get('status', '').strip()
+    status = status.strip()
     query = {}
     if status:
         query["status"] = status
@@ -98,6 +94,7 @@ async def list_plans(request: Request):
     return {"plans": results, "total": len(results)}
 
 
+@payment_plans_bp.get("/payments/plans/<booking_number>")
 @payment_plans_bp.get("/payments/plans/<booking_number>")
 async def get_plan(booking_number):
     """Get payment plan for a specific booking."""
@@ -281,12 +278,11 @@ async def record_payment(request: Request, plan_id):
 # ── Delinquency Detection ──────────────────────────────────────────────────────
 
 @payment_plans_bp.get("/payments/delinquent")
-async def get_delinquent(request: Request):
+async def get_delinquent(days: str = Query(default='30')):
     """Get all payment plans that are past due (>30 days since last payment or due date)."""
-    _qp = dict(request.query_params)
     plans_col = get_collection("payment_plans")
     now = datetime.now(timezone.utc)
-    threshold = _qp.get('days', '30')
+    threshold = days
     try:
         threshold_days = int(threshold)
     except ValueError:
@@ -316,6 +312,7 @@ async def get_delinquent(request: Request):
 
 # ── Revenue Summary ─────────────────────────────────────────────────────────────
 
+@payment_plans_bp.get("/payments/summary")
 @payment_plans_bp.get("/payments/summary")
 async def revenue_summary():
     """Revenue summary: total collected, outstanding, by period."""

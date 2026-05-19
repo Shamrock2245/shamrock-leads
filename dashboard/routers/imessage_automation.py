@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — iMessage Automation Blueprint
@@ -32,7 +29,7 @@ import os
 import uuid
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import (
     get_collection, get_db, format_phone,
@@ -163,15 +160,13 @@ async def update_auto_reply_config(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @imessage_auto_bp.get("/imessage/inbox")
-async def get_inbox(request: Request):
+async def get_inbox(limit: str = Query(default="50")):
     """Fetch recent messages from MongoDB outreach log.
-
-    _qp = dict(request.query_params)
     Returns the latest message per unique phone number (grouped threads)
     with both inbound and outbound messages, so the sidebar shows
     all conversations — not just inbound.
     """
-    limit = int(_qp.get("limit", "50"))
+    limit = int(limit)
     outreach = get_collection("imessage_outreach")
 
     # Aggregate: group by recipient_phone, get latest message per thread
@@ -203,6 +198,8 @@ async def get_inbox(request: Request):
 
 
 @imessage_auto_bp.post("/imessage/inbox/poll")
+
+@imessage_auto_bp.post("/imessage/inbox/poll")
 async def manual_poll():
     """Manually trigger one inbox poll cycle."""
     result = await _poll_inbox_once()
@@ -210,14 +207,12 @@ async def manual_poll():
 
 
 @imessage_auto_bp.get("/imessage/thread/<phone>")
-async def get_thread(request: Request, phone):
+async def get_thread(phone, limit: str = Query(default="100")):
     """Fetch full conversation history for a specific phone number.
-
-    _qp = dict(request.query_params)
     Returns all inbound + outbound messages sorted chronologically (oldest first)
     so the UI can render a chat-style thread view.
     """
-    limit = int(_qp.get("limit", "100"))
+    limit = int(limit)
     clean_phone = format_phone(phone)
     if not clean_phone:
         return JSONResponse({"error": "Invalid phone number"}, status_code=400)
@@ -250,6 +245,8 @@ async def get_thread(request: Request, phone):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Dedup Check
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@imessage_auto_bp.post("/imessage/dedup-check")
 
 @imessage_auto_bp.post("/imessage/dedup-check")
 async def dedup_check(request: Request):
@@ -411,15 +408,14 @@ async def message_status(message_guid):
 
 
 @imessage_auto_bp.get("/imessage/findmy")
-async def findmy_locations(request: Request):
+async def findmy_locations(type_: str = Query(default="friends"), refresh: str = Query(default="false")):
     """Fetch FindMy device and friend locations."""
-    _qp = dict(request.query_params)
     client = _get_bb_client()
     if not client:
         return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
-    target = _qp.get("type", "friends")  # "friends" or "devices"
-    refresh = _qp.get("refresh", "false").lower() == "true"
+    target = type_  # "friends" or "devices"
+    refresh = refresh.lower() == "true"
 
     if target == "devices":
         if refresh:
@@ -433,6 +429,7 @@ async def findmy_locations(request: Request):
     return result, 200 if result.get("success") else 502
 
 
+@imessage_auto_bp.post("/imessage/send-effect")
 @imessage_auto_bp.post("/imessage/send-effect")
 async def send_with_effect(request: Request):
     """Send a message with an iMessage bubble/screen effect."""

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """ShamrockLeads — Revenue Analytics API Blueprint
 
@@ -19,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -47,9 +44,8 @@ def _range_filter(days: int | None) -> dict:
 # REVENUE KPIs + TIME-SERIES
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/revenue")
-async def revenue_metrics(request: Request):
+async def revenue_metrics(days: int = Query(default=30)):
     """
-    _qp = dict(request.query_params)
     Returns:
       kpis: { total_collected, collected_30d, collected_7d,
               total_liability, avg_premium, conversion_rate,
@@ -58,7 +54,7 @@ async def revenue_metrics(request: Request):
     """
     try:
         db = get_db()
-        days = int(_qp.get("days", 30))
+        days = int(days)
 
         # ── Payment totals ────────────────────────────────────────────────────
         payments_col = db["payments"]
@@ -182,6 +178,7 @@ async def revenue_metrics(request: Request):
 # CONVERSION FUNNEL
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/funnel")
+@analytics_bp.get("/analytics/funnel")
 async def funnel_data():
     """Returns stage counts for the full lead → bonded → paid funnel."""
     try:
@@ -221,12 +218,11 @@ async def funnel_data():
 # COUNTY PERFORMANCE
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/county-performance")
-async def county_performance(request: Request):
+async def county_performance(days: int = Query(default=90)):
     """Returns per-county: lead volume, bond count, total premium, avg bond."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        days = int(_qp.get("days", 90))
+        days = int(days)
         cutoff = (_utc_now() - timedelta(days=days)).isoformat()
 
         arrests_col = db["arrests"]
@@ -273,6 +269,7 @@ async def county_performance(request: Request):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+@analytics_bp.get("/analytics/county")
 @analytics_bp.get("/analytics/county")
 async def county_performance_alias():
     """Alias for /analytics/county-performance — used by sl-analytics-apex.js."""
@@ -323,12 +320,11 @@ async def surety_breakdown():
 # ARREST HEATMAP (county × hour-of-day)
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/heatmap")
-async def arrest_heatmap(request: Request):
+async def arrest_heatmap(days: int = Query(default=30)):
     """Returns arrest counts grouped by county and hour of day."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        days = int(_qp.get("days", 30))
+        days = int(days)
         cutoff = (_utc_now() - timedelta(days=days)).isoformat()
         arrests_col = db["arrests"]
 
@@ -376,6 +372,7 @@ async def arrest_heatmap(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 # BOND AMOUNT DISTRIBUTION (histogram)
 # ─────────────────────────────────────────────────────────────────────────────
+@analytics_bp.get("/analytics/bond-distribution")
 @analytics_bp.get("/analytics/bond-distribution")
 async def bond_distribution():
     """Returns bond amount histogram buckets."""

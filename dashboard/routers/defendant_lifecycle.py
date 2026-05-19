@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Defendant Lifecycle API
@@ -16,7 +13,7 @@ Lifecycle-to-Pipeline Bridge:
   collection so the lead appears on the Outreach Kanban board.
 """
 from datetime import datetime, timezone
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
 import logging
@@ -298,9 +295,8 @@ async def log_contact(request: Request, booking_number: str):
 # Used by the frontend to batch-load notes for all visible cards.
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.get("/defendant-notes/bulk")
-async def bulk_get_notes(request: Request):
-    _qp = dict(request.query_params)
-    raw = _qp.get("booking_numbers", "")
+async def bulk_get_notes(booking_numbers: str = Query(default="")):
+    raw = booking_numbers
     booking_numbers = [b.strip() for b in raw.split(",") if b.strip()]
     if not booking_numbers:
         return {}
@@ -318,6 +314,7 @@ async def bulk_get_notes(request: Request):
 # POST  /api/finalize-bond/step1/<booking_number>
 # Step 1: Review — returns a summary for the agent to confirm
 # ─────────────────────────────────────────────────────────────────────────────
+@lifecycle_bp.post("/finalize-bond/step1/<booking_number>")
 @lifecycle_bp.post("/finalize-bond/step1/<booking_number>")
 async def finalize_bond_step1(request: Request, booking_number: str):
     arrests = get_collection("arrests")

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 FTA (Failure to Appear) Alert API — ShamrockLeads
@@ -17,7 +14,7 @@ Endpoints:
 import logging
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_collection
@@ -29,12 +26,11 @@ fta_bp = APIRouter(prefix="/api", tags=["fta"])
 # GET /api/fta/open
 # ─────────────────────────────────────────────────────────────────────────────
 @fta_bp.get("/fta/open")
-async def api_fta_open(request: Request):
+async def api_fta_open(level: str = Query(default=""), limit: int = Query(default=100)):
     """Return all open FTA alerts with KPI stats."""
-    _qp = dict(request.query_params)
     try:
-        level_filter = _qp.get("level", "")
-        limit = min(int(_qp.get("limit", 100)), 200)
+        level_filter = level
+        limit = min(int(limit), 200)
 
         fta_col = get_collection("fta_alerts")
         query = {"resolved": False}
@@ -78,6 +74,7 @@ async def api_fta_open(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/fta/scan
 # ─────────────────────────────────────────────────────────────────────────────
+@fta_bp.post("/fta/scan")
 @fta_bp.post("/fta/scan")
 async def api_fta_scan():
     """Trigger an immediate FTA scan."""

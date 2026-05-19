@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Source Performance API (Alpha Engine)
@@ -22,7 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -37,11 +34,10 @@ def _tracker():
 
 # ── Leaderboard ──────────────────────────────────────────────────────────
 @source_performance_bp.get("/alpha/leaderboard")
-async def leaderboard(request: Request):
+async def leaderboard(limit: str = Query(default="50")):
     """Full county source performance leaderboard."""
-    _qp = dict(request.query_params)
     try:
-        limit = int(_qp.get("limit", "50"))
+        limit = int(limit)
         tracker = _tracker()
         data = await tracker.get_leaderboard(limit=limit)
         stats = await tracker.get_system_stats()
@@ -57,6 +53,7 @@ async def leaderboard(request: Request):
 
 
 # ── County Deep-Dive ─────────────────────────────────────────────────────
+@source_performance_bp.get("/alpha/county/<county>")
 @source_performance_bp.get("/alpha/county/<county>")
 async def county_detail(county: str):
     """Detailed score breakdown for a single county."""
@@ -86,14 +83,13 @@ async def tiers():
 
 # ── Recommendations ──────────────────────────────────────────────────────
 @source_performance_bp.get("/alpha/recommendations")
-async def recommendations(request: Request):
+async def recommendations(limit: str = Query(default="20")):
     """
-    _qp = dict(request.query_params)
     Top actionable recommendations across all counties.
     Limit defaults to 20.
     """
     try:
-        limit = int(_qp.get("limit", "20"))
+        limit = int(limit)
         tracker = _tracker()
         data = await tracker.get_leaderboard(limit=100)
 
@@ -126,6 +122,7 @@ async def recommendations(request: Request):
 
 
 # ── System Stats ─────────────────────────────────────────────────────────
+@source_performance_bp.get("/alpha/stats")
 @source_performance_bp.get("/alpha/stats")
 async def stats():
     """High-level Alpha Engine KPIs for the dashboard header."""

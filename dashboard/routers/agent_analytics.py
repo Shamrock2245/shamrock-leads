@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """ShamrockLeads — Agent Performance Analytics API
 ==================================================
@@ -16,7 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -113,12 +110,11 @@ AGENT_PROFILES = {
 
 
 @agent_analytics_bp.get("/analytics/agent-performance")
-async def agent_performance(request: Request):
+async def agent_performance(days: str = Query(default="30")):
     """Full digital workforce scorecard."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        days = int(_qp.get("days", "30"))
+        days = int(days)
         start, end = _period_range(days)
         start_iso = start.isoformat()
 
@@ -355,12 +351,12 @@ async def agent_performance(request: Request):
 
 
 @agent_analytics_bp.get("/analytics/scraper-accuracy")
-async def scraper_accuracy(request: Request):
+@agent_analytics_bp.get("/analytics/scraper-accuracy")
+async def scraper_accuracy(days: str = Query(default="7")):
     """Per-county scraper accuracy and performance metrics."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        days = int(_qp.get("days", "7"))
+        days = int(days)
         start, _ = _period_range(days)
         start_iso = start.isoformat()
 
@@ -403,3 +399,4 @@ async def scraper_accuracy(request: Request):
     except Exception as exc:
         logger.exception("analytics/scraper-accuracy error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

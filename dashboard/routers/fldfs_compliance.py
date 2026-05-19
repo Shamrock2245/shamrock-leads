@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """ShamrockLeads — FLDFS / DOI Compliance Reports API
 =====================================================
@@ -22,7 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -116,13 +113,12 @@ def _serialize(doc: dict) -> dict:
 # MONTHLY SUMMARY — Core FLDFS filing data
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/monthly-summary")
-async def monthly_summary(request: Request):
+async def monthly_summary(month: str | None = Query(default=None), surety: str = Query(default="")):
     """Monthly premium volume, liability, BUF obligations by surety."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        month_str = _qp.get("month")
-        surety_filter = _qp.get("surety", "").strip().upper()
+        month_str = month
+        surety_filter = surety.strip().upper()
         start, end, period = _parse_month(month_str)
 
         col = db["active_bonds"]
@@ -230,14 +226,14 @@ async def monthly_summary(request: Request):
 # AGENT 1099 — Commission breakdown per writing agent
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/agent-1099")
-async def agent_1099(request: Request):
+@fldfs_bp.get("/compliance/agent-1099")
+async def agent_1099(month: str | None = Query(default=None), yearly: str = Query(default="")):
     """Per-agent commission data for 1099 reporting."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        month_str = _qp.get("month")
+        month_str = month
         start, end, period = _parse_month(month_str)
-        yearly = _qp.get("yearly", "").lower() == "true"
+        yearly = yearly.lower() == "true"
 
         col = db["active_bonds"]
         if yearly:
@@ -299,12 +295,12 @@ async def agent_1099(request: Request):
 # POA UTILIZATION — Usage rates, velocity, depletion forecast
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/poa-utilization")
-async def poa_utilization(request: Request):
+@fldfs_bp.get("/compliance/poa-utilization")
+async def poa_utilization(month: str | None = Query(default=None)):
     """POA inventory utilization rates and depletion forecasting."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        month_str = _qp.get("month")
+        month_str = month
         start, end, period = _parse_month(month_str)
 
         poa_col = db["poa_inventory"]
@@ -372,12 +368,12 @@ async def poa_utilization(request: Request):
 # FORFEITURE LOG — Estreature compliance tracking
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/forfeiture-log")
-async def forfeiture_log(request: Request):
+@fldfs_bp.get("/compliance/forfeiture-log")
+async def forfeiture_log(month: str | None = Query(default=None)):
     """Forfeiture/estreature compliance log with timelines."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        month_str = _qp.get("month")
+        month_str = month
         start, end, period = _parse_month(month_str)
 
         col = db["active_bonds"]
@@ -438,6 +434,7 @@ async def forfeiture_log(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 # FULL FILING — Combined package for DOI submission
 # ─────────────────────────────────────────────────────────────────────────────
+@fldfs_bp.get("/compliance/full-filing")
 @fldfs_bp.get("/compliance/full-filing")
 async def full_filing(request: Request):
     """Combined compliance package — all reports in one response."""

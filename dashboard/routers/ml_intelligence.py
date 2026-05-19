@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — ML Intelligence API Blueprint
@@ -22,7 +19,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -255,10 +252,8 @@ async def api_bootstrap_fta(request: Request):
 #  GET /api/ml/predict/<booking_number> — ML prediction for a lead
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/predict/<booking_number>")
-async def api_predict(request: Request, booking_number: str):
+async def api_predict(booking_number: str, target: str = Query(default="lead_quality"), algorithm: str = Query(default="random_forest")):
     """Get ML prediction for a specific arrest record.
-
-    _qp = dict(request.query_params)
     Query params:
         target: "lead_quality" (default) | "fta_risk"
         algorithm: "random_forest" (default) | "xgboost"
@@ -266,8 +261,8 @@ async def api_predict(request: Request, booking_number: str):
     try:
         from scoring.model_trainer import predict
 
-        target = _qp.get("target", "lead_quality")
-        algorithm = _qp.get("algorithm", "random_forest")
+        target = target
+        algorithm = algorithm
 
         db = get_db()
         arrest = await db["arrests"].find_one({"booking_number": booking_number})
@@ -303,6 +298,8 @@ async def api_predict(request: Request, booking_number: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/ml/batch-predict — Batch predictions
+# ─────────────────────────────────────────────────────────────────────────────
+@ml_bp.post("/ml/batch-predict")
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.post("/ml/batch-predict")
 async def api_batch_predict(request: Request):
@@ -381,10 +378,8 @@ async def api_model_status():
 #  GET /api/ml/feature-importance — Feature importance analysis
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/feature-importance")
-async def api_feature_importance(request: Request):
+async def api_feature_importance(target: str = Query(default="lead_quality"), algorithm: str = Query(default="random_forest")):
     """Get feature importance rankings for a trained model.
-
-    _qp = dict(request.query_params)
     Query params:
         target: "lead_quality" (default) | "fta_risk"
         algorithm: "random_forest" (default) | "xgboost"
@@ -392,8 +387,8 @@ async def api_feature_importance(request: Request):
     try:
         from scoring.model_trainer import load_model
 
-        target = _qp.get("target", "lead_quality")
-        algorithm = _qp.get("algorithm", "random_forest")
+        target = target
+        algorithm = algorithm
 
         _, metadata = load_model(target, algorithm)
         if not metadata:
@@ -421,6 +416,8 @@ async def api_feature_importance(request: Request):
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/ml/predictions/compare/<bn> — Rule-based vs ML comparison
+# ─────────────────────────────────────────────────────────────────────────────
+@ml_bp.get("/ml/predictions/compare/<booking_number>")
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/predictions/compare/<booking_number>")
 async def api_compare_predictions(booking_number: str):

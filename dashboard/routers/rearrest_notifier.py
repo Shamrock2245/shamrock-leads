@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Re-Arrest Notification Engine
@@ -40,7 +37,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.api.bb_private_api import BlueBubblesClient
@@ -371,18 +368,16 @@ async def api_rearrest_notify(request: Request):
 
 
 @rearrest_bp.get("/rearrest/history")
-async def api_rearrest_history(request: Request):
+async def api_rearrest_history(defendant_name: str = Query(default=""), county: str = Query(default=""), status: str = Query(default=""), limit: int = Query(default=50)):
     """Get re-arrest notification history with optional filters.
-
-    _qp = dict(request.query_params)
     Query params:
         defendant_name, county, status, limit (default 50)
     """
     try:
-        defendant_name = _qp.get("defendant_name", "")
-        county = _qp.get("county", "")
-        status = _qp.get("status", "")
-        limit = int(_qp.get("limit", 50))
+        defendant_name = defendant_name
+        county = county
+        status = status
+        limit = int(limit)
 
         query = {}
         if defendant_name:
@@ -401,6 +396,8 @@ async def api_rearrest_history(request: Request):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+
+@rearrest_bp.get("/rearrest/stats")
 
 @rearrest_bp.get("/rearrest/stats")
 async def api_rearrest_stats():
@@ -432,10 +429,8 @@ async def api_rearrest_stats():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @rearrest_bp.get("/rearrest/pending")
-async def api_rearrest_pending(request: Request):
+async def api_rearrest_pending(limit: int = Query(default=25)):
     """Get unreviewed re-arrest alerts for the dashboard Command Center.
-
-    _qp = dict(request.query_params)
     Returns rearrest_notifications with status 'pending_review' (written by
     the synchronous RearrestChecker in the scraper pipeline).
 
@@ -443,7 +438,7 @@ async def api_rearrest_pending(request: Request):
         limit (default 25)
     """
     try:
-        limit = int(_qp.get("limit", 25))
+        limit = int(limit)
         notifications_coll = get_collection("rearrest_notifications")
 
         cursor = notifications_coll.find(
@@ -466,6 +461,8 @@ async def api_rearrest_pending(request: Request):
         logger.error("Rearrest pending fetch error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+
+@rearrest_bp.patch("/rearrest/<notification_id>/dismiss")
 
 @rearrest_bp.patch("/rearrest/<notification_id>/dismiss")
 async def api_rearrest_dismiss(request: Request, notification_id):

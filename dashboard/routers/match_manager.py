@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Match Manager API Blueprint
@@ -15,7 +12,7 @@ Endpoints:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection
@@ -377,10 +374,9 @@ async def api_assign_indemnitor(request: Request, booking_number: str):
 #  GET /api/match-manager/search — Unified search across entities
 # ─────────────────────────────────────────────────────────────────────────────
 @match_manager_bp.get("/match-manager/search")
-async def api_match_search(request: Request):
+async def api_match_search(q: str = Query(default="")):
     """Search defendants, bonds, and arrest records for matching."""
-    _qp = dict(request.query_params)
-    q = _qp.get("q", "").strip()
+    q = q.strip()
     if not q or len(q) < 2:
         return {"results": []}, 200
     
@@ -436,3 +432,4 @@ async def api_match_search(request: Request):
     except Exception as exc:
         logger.exception("api_match_search error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

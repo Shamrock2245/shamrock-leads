@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 """
 ShamrockLeads — Automation & Service Control API
 ==================================================

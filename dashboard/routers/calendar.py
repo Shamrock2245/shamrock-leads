@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """ShamrockLeads — Court Calendar API Blueprint
 
@@ -18,7 +15,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db, get_collection
@@ -53,9 +50,8 @@ def _urgency(court_date: datetime | str | None) -> str:
 
 
 @calendar_bp.get("/calendar/events")
-async def calendar_events(request: Request):
+async def calendar_events(start: str | None = Query(default=None), end: str | None = Query(default=None), county: str = Query(default="")):
     """
-    _qp = dict(request.query_params)
     Returns court dates from active_bonds as calendar event objects.
     Query params:
       start  — ISO date string (default: today)
@@ -67,9 +63,9 @@ async def calendar_events(request: Request):
         active_bonds_col = db["active_bonds"]
         court_reminders_col = db["court_reminders"]
 
-        start_str = _qp.get("start")
-        end_str = _qp.get("end")
-        county = _qp.get("county", "")
+        start_str = start
+        end_str = end
+        county = county
 
         now = _utc_now()
         start = datetime.fromisoformat(start_str) if start_str else now - timedelta(days=7)
@@ -151,6 +147,7 @@ async def calendar_events(request: Request):
 
 
 @calendar_bp.get("/calendar/reminders")
+@calendar_bp.get("/calendar/reminders")
 async def calendar_reminders():
     """Returns scheduled reminder status for all active bonds with court dates."""
     try:
@@ -184,12 +181,11 @@ async def calendar_reminders():
 
 
 @calendar_bp.get("/calendar/upcoming")
-async def upcoming_events(request: Request):
+async def upcoming_events(days: int = Query(default=14)):
     """Returns the next N court dates (default 14 days)."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
-        days = int(_qp.get("days", 14))
+        days = int(days)
         active_bonds_col = db["active_bonds"]
 
         now = _utc_now()
@@ -221,6 +217,7 @@ async def upcoming_events(request: Request):
 
 # ── Google Calendar Sync (Feature K) ─────────────────────────────────────────
 
+@calendar_bp.post("/calendar/sync-gcal")
 @calendar_bp.post("/calendar/sync-gcal")
 async def calendar_sync_gcal(request: Request):
     """

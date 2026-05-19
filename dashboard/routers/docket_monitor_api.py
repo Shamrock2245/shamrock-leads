@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 Docket Monitor API — ShamrockLeads Intelligence Suite
@@ -18,7 +15,7 @@ Routes:
   POST /api/docket-monitor/acknowledge-all — Bulk acknowledge
 """
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_db
 
@@ -46,14 +43,13 @@ async def monitoring_status():
 
 
 @docket_monitor_bp.get("/events")
-async def recent_events(request: Request):
+async def recent_events(limit: int = Query(default=50), severity: str | None = Query(default=None), acknowledged: str | None = Query(default=None)):
     """Recent docket events. Query params: limit, severity, acknowledged."""
-    _qp = dict(request.query_params)
     try:
         monitor = _get_monitor()
-        limit = min(int(_qp.get("limit", 50)), 200)
-        severity = _qp.get("severity")
-        ack_str = _qp.get("acknowledged")
+        limit = min(int(limit), 200)
+        severity = severity
+        ack_str = acknowledged
         ack = None
         if ack_str == "true":
             ack = True
@@ -66,6 +62,7 @@ async def recent_events(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+@docket_monitor_bp.get("/events/<event_id>")
 @docket_monitor_bp.get("/events/<event_id>")
 async def event_detail(event_id):
     """Single event detail."""

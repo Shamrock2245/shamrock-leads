@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Intelligence API Blueprint
@@ -24,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -36,10 +33,8 @@ intelligence_bp = APIRouter(prefix="/api", tags=["intelligence"])
 #  GET /api/intelligence/forecast — Revenue Forecast
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/forecast")
-async def api_forecast(request: Request):
+async def api_forecast(history: int = Query(default=90), horizon: int = Query(default=30)):
     """Revenue forecast using exponential smoothing + Monte Carlo.
-
-    _qp = dict(request.query_params)
     Query params:
         history: Days of historical data (default: 90)
         horizon: Forecast horizon in days (default: 30)
@@ -47,8 +42,8 @@ async def api_forecast(request: Request):
     try:
         from dashboard.services.revenue_forecaster import generate_full_forecast
 
-        history = int(_qp.get("history", 90))
-        horizon = int(_qp.get("horizon", 30))
+        history = int(history)
+        horizon = int(horizon)
 
         db = get_db()
         forecast = await generate_full_forecast(db, days_history=history, horizon=horizon)
@@ -64,17 +59,17 @@ async def api_forecast(request: Request):
 #  GET /api/intelligence/heatmap/counties — County Risk Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/counties")
-async def api_county_heatmap(request: Request):
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/heatmap/counties")
+async def api_county_heatmap(days: int = Query(default=30)):
     """County-level risk heatmap with composite scoring.
-
-    _qp = dict(request.query_params)
     Query params:
         days: Period to analyze (default: 30)
     """
     try:
         from dashboard.services.risk_heatmap import get_county_risk_heatmap
 
-        days = int(_qp.get("days", 30))
+        days = int(days)
         db = get_db()
         data = await get_county_risk_heatmap(db, days=days)
 
@@ -89,10 +84,10 @@ async def api_county_heatmap(request: Request):
 #  GET /api/intelligence/heatmap/temporal — Temporal Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/temporal")
-async def api_temporal_heatmap(request: Request):
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/heatmap/temporal")
+async def api_temporal_heatmap(days: int = Query(default=30), county: str | None = Query(default=None)):
     """Hour × Day-of-week arrest pattern heatmap.
-
-    _qp = dict(request.query_params)
     Query params:
         days: Period to analyze (default: 30)
         county: Optional county filter
@@ -100,8 +95,8 @@ async def api_temporal_heatmap(request: Request):
     try:
         from dashboard.services.risk_heatmap import get_temporal_heatmap
 
-        days = int(_qp.get("days", 30))
-        county = _qp.get("county")
+        days = int(days)
+        county = county
 
         db = get_db()
         data = await get_temporal_heatmap(db, days=days, county=county)
@@ -117,17 +112,17 @@ async def api_temporal_heatmap(request: Request):
 #  GET /api/intelligence/heatmap/charges — Charge Category Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/charges")
-async def api_charge_heatmap(request: Request):
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/heatmap/charges")
+async def api_charge_heatmap(days: int = Query(default=30)):
     """County × Charge-category heatmap matrix.
-
-    _qp = dict(request.query_params)
     Query params:
         days: Period to analyze (default: 30)
     """
     try:
         from dashboard.services.risk_heatmap import get_charge_category_heatmap
 
-        days = int(_qp.get("days", 30))
+        days = int(days)
         db = get_db()
         data = await get_charge_category_heatmap(db, days=days)
 
@@ -142,10 +137,10 @@ async def api_charge_heatmap(request: Request):
 #  GET /api/intelligence/risk-trend — Risk Trend Over Time
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/risk-trend")
-async def api_risk_trend(request: Request):
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/risk-trend")
+async def api_risk_trend(days: int = Query(default=90), county: str | None = Query(default=None)):
     """Daily risk trend with 7-day moving averages.
-
-    _qp = dict(request.query_params)
     Query params:
         county: Optional county filter
         days: Period to analyze (default: 90)
@@ -153,8 +148,8 @@ async def api_risk_trend(request: Request):
     try:
         from dashboard.services.risk_heatmap import get_risk_trend
 
-        days = int(_qp.get("days", 90))
-        county = _qp.get("county")
+        days = int(days)
+        county = county
 
         db = get_db()
         data = await get_risk_trend(db, county=county, days=days)
@@ -168,6 +163,8 @@ async def api_risk_trend(request: Request):
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/dashboard — Combined Intelligence Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/dashboard")
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/dashboard")
 async def api_intelligence_dashboard():
@@ -314,10 +311,8 @@ def _assess_charge_risk(charges: str, features: dict) -> Dict:
 #  GET /api/intelligence/court-prediction — Batch Court Outcome Prediction
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/court-prediction")
-async def api_court_prediction_batch(request: Request):
+async def api_court_prediction_batch(limit: int = Query(default=20), min_bond: int = Query(default=5000)):
     """Predict court outcomes for recent high-value arrests.
-
-    _qp = dict(request.query_params)
     Query params:
         limit: Number of records to score (default: 20)
         min_bond: Minimum bond amount filter (default: 5000)
@@ -326,8 +321,8 @@ async def api_court_prediction_batch(request: Request):
         from dashboard.services.court_outcome_predictor import predict_outcome
 
         db = get_db()
-        limit = int(_qp.get("limit", 20))
-        min_bond = float(_qp.get("min_bond", 5000))
+        limit = int(limit)
+        min_bond = float(min_bond)
 
         cursor = db.arrests.find(
             {"bond_amount": {"$gte": min_bond}, "lead_status": {"$in": ["Hot", "Warm"]}},
@@ -364,10 +359,10 @@ async def api_court_prediction_batch(request: Request):
 #  GET /api/intelligence/forfeiture-risk — Portfolio Forfeiture Risk
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/forfeiture-risk")
-async def api_forfeiture_risk(request: Request):
+# ─────────────────────────────────────────────────────────────────────────────
+@intelligence_bp.get("/intelligence/forfeiture-risk")
+async def api_forfeiture_risk(limit: int = Query(default=50)):
     """Score all active bonds for forfeiture probability.
-
-    _qp = dict(request.query_params)
     Query params:
         limit: Max bonds to score (default: 50)
     """
@@ -375,11 +370,13 @@ async def api_forfeiture_risk(request: Request):
         from dashboard.services.forfeiture_predictor import score_portfolio
 
         db = get_db()
-        limit = int(_qp.get("limit", 50))
+        limit = int(limit)
         data = await score_portfolio(db, limit=limit)
 
         return data
 
     except Exception as e:
         logger.exception("Forfeiture risk error: %s", e)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

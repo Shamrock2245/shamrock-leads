@@ -192,17 +192,23 @@ def transform_file(content: str) -> tuple[str, dict]:
         body_slice = lines[body_start:body_end]
         body_text = "\n".join(body_slice)
 
-        # Skip if no _qp pattern in body (or only in docstring)
-        if "_qp = dict(request.query_params)" not in body_text:
+        # Skip if no _qp pattern anywhere in body
+        has_assignment = "_qp = dict(request.query_params)" in body_text
+        has_qp_calls = "_qp.get(" in body_text
+
+        if not has_qp_calls:
             continue
 
-        # Check it's not ONLY inside a docstring
-        # Strip docstrings and recheck
+        # Strip docstrings to get real code only
         body_no_docs = re.sub(r'""".*?"""', "", body_text, flags=re.DOTALL)
         body_no_docs = re.sub(r"'''.*?'''", "", body_no_docs, flags=re.DOTALL)
-        if "_qp = dict(request.query_params)" not in body_no_docs:
-            # Only in docstring — fix by removing the docstring line only if it's a stray
-            # (the _qp assignment in the docstring means the docstring just mentions it)
+        has_real_qp_calls = "_qp.get(" in body_no_docs
+        has_real_assignment = "_qp = dict(request.query_params)" in body_no_docs
+
+        # Case 1: assignment in docstring, _qp.get() in real code
+        # Case 2: both in real code (normal case)
+        # Either way — if there are real _qp.get() calls, we convert
+        if not has_real_qp_calls:
             continue
 
         # Collect params from the real body

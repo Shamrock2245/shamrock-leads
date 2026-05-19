@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Phase 10: Outreach Sequencing API Blueprint
@@ -15,7 +12,7 @@ Endpoints:
 """
 from __future__ import annotations
 import logging
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.services.outreach_sequencer import OutreachSequencer
 from dashboard.extensions import get_collection, get_db
@@ -139,14 +136,13 @@ async def batch_start(request: Request):
 # Query params: status, county, limit, offset
 # ─────────────────────────────────────────────────────────────────────────────
 @outreach_bp.get("/outreach/sequences")
-async def list_sequences(request: Request):
+async def list_sequences(status: str = Query(default=""), county: str = Query(default=""), limit: int = Query(default=50), offset: int = Query(default=0)):
     """Return paginated list of outreach sequences."""
-    _qp = dict(request.query_params)
     try:
-        status = _qp.get("status", "")
-        county = _qp.get("county", "")
-        limit = min(int(_qp.get("limit", 50)), 200)
-        offset = int(_qp.get("offset", 0))
+        status = status
+        county = county
+        limit = min(int(limit), 200)
+        offset = int(offset)
 
         query: dict = {}
         if status:
@@ -183,6 +179,7 @@ async def list_sequences(request: Request):
 # Called by the BB webhook receiver when an inbound iMessage arrives.
 # Body: { "phone": "+12395551234", "message": "...", "chat_guid": "..." }
 # ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.post("/outreach/reply")
 @outreach_bp.post("/outreach/reply")
 async def handle_reply(request: Request):
     """

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Scraper Control API Blueprint
@@ -21,7 +18,7 @@ the requested runs.
 """
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection, REGISTERED_COUNTIES
 
@@ -200,9 +197,8 @@ async def _set_scraper_enabled(request: Request, enabled: bool):
 #  GET /api/scraper/logs/<county>
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.get("/scraper/logs/<county>")
-async def api_scraper_logs(request: Request, county: str):
+async def api_scraper_logs(county: str, limit: int = Query(default=20)):
     """
-    _qp = dict(request.query_params)
     Return recent run log entries for a specific county.
     Reads from scraper_run_log collection (written by base_scraper after each run).
     Falls back to scraper_status if no detailed log exists.
@@ -213,7 +209,7 @@ async def api_scraper_logs(request: Request, county: str):
     if not matched:
         return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
 
-    limit = int(_qp.get("limit", 20))
+    limit = int(limit)
     scraper_run_log = get_collection("scraper_run_log")
     scraper_status_col = get_collection("scraper_status")
 
@@ -246,6 +242,7 @@ async def api_scraper_logs(request: Request, county: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/scraper/health-check
 # ─────────────────────────────────────────────────────────────────────────────
+@scraper_control_bp.post("/scraper/health-check")
 @scraper_control_bp.post("/scraper/health-check")
 async def api_scraper_health_check(request: Request):
     """
@@ -397,17 +394,16 @@ async def api_custody_recheck(request: Request):
 #  GET /api/scraper/custody-recheck/results
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.get("/scraper/custody-recheck/results")
-async def api_custody_recheck_results(request: Request):
+async def api_custody_recheck_results(trigger_id: str = Query(default=""), county: str = Query(default="")):
     """
-    _qp = dict(request.query_params)
     Poll for custody recheck results.
     Query params:
       ?trigger_id=...   — specific trigger
       ?county=Lee       — latest results for county
     Returns trigger status + list of diffs.
     """
-    trigger_id = _qp.get("trigger_id", "").strip()
-    county = _qp.get("county", "").strip()
+    trigger_id = trigger_id.strip()
+    county = county.strip()
 
     if not trigger_id and not county:
         return JSONResponse({"error": "trigger_id or county is required"}, status_code=400)
@@ -474,3 +470,4 @@ async def api_custody_recheck_results(request: Request):
         "not_found_count": not_found,
         "county": trigger_doc.get("county", ""),
     }
+

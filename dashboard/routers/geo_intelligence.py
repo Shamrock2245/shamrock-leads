@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Geo Intelligence API Blueprint
@@ -17,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -51,15 +48,15 @@ async def traccar_health():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/devices")
-async def list_devices(request: Request):
+async def list_devices(booking_number: str | None = Query(default=None)):
     """List all registered tracking devices, optionally by booking number."""
-    _qp = dict(request.query_params)
-    booking = _qp.get("booking_number")
+    booking = booking_number
     svc = _get_service()
     devices = await svc.list_devices(booking)
     return {"devices": devices, "count": len(devices)}
 
 
+@geo_intel_bp.post("/devices")
 @geo_intel_bp.post("/devices")
 async def register_device(request: Request):
     """Register a new tracking device and bind to a defendant.
@@ -152,15 +149,13 @@ async def latest_positions():
 
 
 @geo_intel_bp.get("/positions/route")
-async def device_route(request: Request):
+async def device_route(traccar_device_id: int = Query(default=0), from_: str = Query(default=""), to: str = Query(default="")):
     """Get full position trail for a device.
-
-    _qp = dict(request.query_params)
     Query: ?traccar_device_id=&from=&to= (ISO 8601)
     """
-    device_id = _qp.get("traccar_device_id", type=int)
-    from_dt = _qp.get("from", "")
-    to_dt = _qp.get("to", "")
+    device_id = traccar_device_id
+    from_dt = from_
+    to_dt = to
     if not device_id or not from_dt or not to_dt:
         return JSONResponse({"error": "traccar_device_id, from, and to are required"}, status_code=400)
 
@@ -177,15 +172,17 @@ async def device_route(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/zones")
-async def list_zones(request: Request):
+
+@geo_intel_bp.get("/zones")
+async def list_zones(booking_number: str | None = Query(default=None)):
     """List geofence zones, optionally by booking number."""
-    _qp = dict(request.query_params)
-    booking = _qp.get("booking_number")
+    booking = booking_number
     svc = _get_service()
     zones = await svc.list_zones(booking)
     return {"zones": zones, "count": len(zones)}
 
 
+@geo_intel_bp.post("/zones")
 @geo_intel_bp.post("/zones")
 async def create_zone(request: Request):
     """Create an inclusion or exclusion geofence zone.
@@ -313,16 +310,16 @@ async def record_vehicle_sighting(request: Request, watch_id: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/violations")
-async def violation_feed(request: Request):
+async def violation_feed(limit: int = Query(default=50), booking_number: str | None = Query(default=None)):
     """Get recent geofence violations."""
-    _qp = dict(request.query_params)
-    limit = _qp.get("limit", 50, type=int)
-    booking = _qp.get("booking_number")
+    limit = limit
+    booking = booking_number
     svc = _get_service()
     events = await svc.get_violation_feed(limit, booking)
     return {"violations": events, "count": len(events)}
 
 
+@geo_intel_bp.post("/violations/<event_id>/acknowledge")
 @geo_intel_bp.post("/violations/<event_id>/acknowledge")
 async def acknowledge_violation(request: Request, event_id: str):
     """Acknowledge a geofence violation alert."""

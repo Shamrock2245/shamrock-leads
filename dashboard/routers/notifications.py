@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Notification Center API
@@ -15,7 +12,7 @@ Endpoints:
   DELETE /notifications/<id>      — Dismiss a notification
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -79,13 +76,12 @@ async def create_notification(
 
 
 @notifications_bp.get("/notifications")
-async def get_notifications(request: Request):
+async def get_notifications(limit: int = Query(default=50), unread: str = Query(default=''), type_: str = Query(default='')):
     """Get recent notifications, sorted by priority then time."""
-    _qp = dict(request.query_params)
     notif_col = get_collection("notifications")
-    limit = min(100, int(_qp.get('limit', 50)))
-    unread_only = _qp.get('unread', '').lower() == 'true'
-    ntype = _qp.get('type', '').strip()
+    limit = min(100, int(limit))
+    unread_only = unread.lower() == 'true'
+    ntype = type_.strip()
 
     query = {"dismissed": {"$ne": True}}
     if unread_only:
@@ -106,6 +102,7 @@ async def get_notifications(request: Request):
     return {"notifications": results, "total": len(results)}
 
 
+@notifications_bp.post("/notifications")
 @notifications_bp.post("/notifications")
 async def post_notification(request: Request):
     """Manually create a notification."""

@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """ShamrockLeads — Agency Reports API Blueprint
 
@@ -21,7 +18,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
@@ -56,10 +53,10 @@ def _parse_date(s: str | None) -> datetime | None:
         return None
 
 
-def _date_filter(field: str = "bond_date") -> dict:
-    """Build a MongoDB date range filter from query params."""
-    start = _parse_date(_qp.get("start_date"))
-    end = _parse_date(_qp.get("end_date"))
+def _date_filter(field: str = "bond_date", start_date: str | None = None, end_date: str | None = None) -> dict:
+    """Build a MongoDB date range filter from optional date strings."""
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
     if not start and not end:
         return {}
     f = {}
@@ -100,13 +97,16 @@ def _calc_surety_split(bond_amount: float, surety: str, premium_rate: float = 0.
 # DISCHARGED BONDS (exonerated / surrendered)
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/discharged")
-async def discharged_bonds():
+async def discharged_bonds(
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """Bonds with status 'exonerated' or 'surrendered'."""
     try:
         db = get_db()
         col = db["active_bonds"]
         query = {"status": {"$in": ["exonerated", "surrendered"]}}
-        query.update(_date_filter("bond_date"))
+        query.update(_date_filter("bond_date", start_date, end_date))
 
         docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(500)
         for d in docs:
@@ -141,13 +141,16 @@ async def discharged_bonds():
 # SURETY LIABILITY STATEMENT
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/surety-liability")
-async def surety_liability(request: Request):
+async def surety_liability(
+    surety: str = Query(default=""),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """Per-surety financial breakdown: bond amounts, premium, surety owed, BUF, agent retains."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
         col = db["active_bonds"]
-        surety_filter = _qp.get("surety", "").strip().upper()
+        surety_filter = surety.strip().upper()
 
         # Build query — all non-voided bonds
         query = {"status": {"$nin": ["voided"]}}
@@ -156,7 +159,7 @@ async def surety_liability(request: Request):
                 {"surety": surety_filter},
                 {"insurance_company": {"$regex": surety_filter, "$options": "i"}},
             ]
-        query.update(_date_filter("bond_date"))
+        query.update(_date_filter("bond_date", start_date, end_date))
 
         docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(1000)
 
@@ -236,14 +239,14 @@ async def surety_liability(request: Request):
 # VOIDED POWERS
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/voided-powers")
-async def voided_powers(request: Request):
+@reports_bp.get("/reports/voided-powers")
+async def voided_powers(surety: str = Query(default="")):
     """POAs that were manually voided."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
         col = db["poa_inventory"]
         query = {"status": "voided"}
-        surety_filter = _qp.get("surety", "").strip().lower()
+        surety_filter = surety.strip().lower()
         if surety_filter:
             query["surety_id"] = surety_filter
 
@@ -266,9 +269,9 @@ async def voided_powers(request: Request):
 # EXPIRED POWERS (semi-annual expiration)
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/expired-powers")
-async def expired_powers(request: Request):
+@reports_bp.get("/reports/expired-powers")
+async def expired_powers(surety: str = Query(default="")):
     """POAs past their expiration date (semi-annual cycle)."""
-    _qp = dict(request.query_params)
     try:
         db = get_db()
         col = db["poa_inventory"]
@@ -278,7 +281,7 @@ async def expired_powers(request: Request):
             "expiration": {"$ne": None, "$lt": now_iso},
             "status": {"$nin": ["voided"]},  # Don't double-count voided ones
         }
-        surety_filter = _qp.get("surety", "").strip().lower()
+        surety_filter = surety.strip().lower()
         if surety_filter:
             query["surety_id"] = surety_filter
 
@@ -315,13 +318,16 @@ async def expired_powers(request: Request):
 # FORFEITURES
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/forfeitures")
-async def forfeitures():
+async def forfeitures(
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """Bonds with status 'forfeited'."""
     try:
         db = get_db()
         col = db["active_bonds"]
         query = {"status": "forfeited"}
-        query.update(_date_filter("bond_date"))
+        query.update(_date_filter("bond_date", start_date, end_date))
 
         docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(500)
         total_liability = 0.0
@@ -350,13 +356,16 @@ async def forfeitures():
 # AGENT PRODUCTION
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/agent-production")
-async def agent_production():
+async def agent_production(
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """Per-agent bond count, premium, avg bond, surety breakdown, production metrics."""
     try:
         db = get_db()
         col = db["active_bonds"]
         query = {}
-        query.update(_date_filter("bond_date"))
+        query.update(_date_filter("bond_date", start_date, end_date))
 
         # Normalize legacy short names → full names so they group correctly.
         # Old records may have "Brendan" instead of "Brendan O'Neal".
@@ -584,13 +593,12 @@ async def poa_inventory_summary():
 
 
 @reports_bp.get("/reports/kpi-trends")
-async def kpi_trends(request: Request):
+async def kpi_trends(days: int = Query(default=30)):
     """Return period-over-period KPI comparison for the Reports tab trend indicators."""
-    _qp = dict(request.query_params)
     try:
         from datetime import timezone, timedelta
         now = datetime.now(timezone.utc)
-        period_days = int(_qp.get("days", 30))
+        period_days = int(days)
         cur_start = (now - timedelta(days=period_days)).isoformat()
         prev_start = (now - timedelta(days=period_days * 2)).isoformat()
         prev_end = cur_start
@@ -635,3 +643,4 @@ async def kpi_trends(request: Request):
     except Exception as exc:
         logger.exception("reports/kpi-trends error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

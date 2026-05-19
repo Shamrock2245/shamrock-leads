@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — BlueBubbles Server Health Monitor
@@ -35,7 +32,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.api.bb_private_api import BlueBubblesClient
@@ -388,11 +385,10 @@ async def api_update_bb_url(request: Request):
 
 
 @bb_health_bp.get("/bb-health/history")
-async def api_health_history(request: Request):
+async def api_health_history(limit: int = Query(default=20)):
     """Get health check history."""
-    _qp = dict(request.query_params)
     try:
-        limit = int(_qp.get("limit", 20))
+        limit = int(limit)
         health_coll = get_collection("bb_health_checks")
         history = await health_coll.find(
             {}, {"_id": 0}
@@ -400,3 +396,4 @@ async def api_health_history(request: Request):
         return {"success": True, "count": len(history), "history": history}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+

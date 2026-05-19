@@ -1,6 +1,3 @@
-# ── AUTO-MIGRATED: Quart Blueprint → FastAPI APIRouter (v3) ──
-# _qp = dict(request.query_params) injected into fns that read query params.
-# Review each endpoint and move _qp.get() calls to typed fn signatures.
 
 """
 ShamrockLeads — Re-Arrest Detector
@@ -16,7 +13,7 @@ Endpoints:
   GET  /rearrest/alerts  — Recent re-arrest alerts
 """
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
 import re
@@ -265,11 +262,10 @@ async def manual_scan(request: Request):
 
 
 @rearrest_bp.get("/rearrest/alerts")
-async def get_alerts(request: Request):
+async def get_alerts(limit: int = Query(default=20)):
     """Get recent re-arrest alerts (reads from unified rearrest_notifications)."""
-    _qp = dict(request.query_params)
     rearrest_col = get_collection("rearrest_notifications")
-    limit = min(50, int(_qp.get('limit', 20)))
+    limit = min(50, int(limit))
 
     cursor = rearrest_col.find().sort("created_at", -1).limit(limit)
     results = []
@@ -282,3 +278,4 @@ async def get_alerts(request: Request):
         results.append(doc)
 
     return {"alerts": results, "total": len(results)}
+
