@@ -5,19 +5,21 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>ShamrockLeads — Intelligence Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <!-- Tabulator v6 — sortable/filterable tables with CSV export -->
   <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css">
   <!-- Vanilla Calendar Pro — court calendar -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.css">
-  <link rel="stylesheet" href="/sl-design-system.css?v=4">
-  <link rel="stylesheet" href="/styles.css?v=4">
-  <link rel="stylesheet" href="/responsive.css?v=4">
-  <link rel="stylesheet" href="/sl-overhaul.css?v=5">
-  <link rel="stylesheet" href="/sl-imessage.css?v=4">
-  <link rel="stylesheet" href="/sl-intelligence.css?v=1">
-  <link rel="stylesheet" href="/sl-alpha-intel.css?v=1">
+  <link rel="stylesheet" href="/sl-design-system.css?v=5">
+  <link rel="stylesheet" href="/styles.css?v=5">
+  <link rel="stylesheet" href="/responsive.css?v=5">
+  <link rel="stylesheet" href="/sl-overhaul.css?v=6">
+  <link rel="stylesheet" href="/sl-imessage.css?v=5">
+  <link rel="stylesheet" href="/sl-intelligence.css?v=2">
+  <link rel="stylesheet" href="/sl-alpha-intel.css?v=2">
+  <link rel="stylesheet" href="/sl-premium.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -90,26 +92,26 @@
 
 <!-- ═══ TAB BAR ═══ -->
 <div class="tab-bar">
-  <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">📊 Command Center</button>
-  <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">🔍 Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">👤 Defendants</button>
-  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">📱 Outreach <span class="badge" id="prospectiveBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()">🏥 Scraper Health</button>
-  <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">🔒 Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">📍 Tracking <span class="badge" id="trackingBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">📥 Intake Queue <span class="badge" id="intakeBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">🤝 Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">💰 Revenue <span class="badge" id="analyticsBadge"></span></button>
-  <button class="tab-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()">🧠 Intelligence</button>
-  <button class="tab-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')">🧬 Legal NLP</button>
-  <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">📅 Calendar <span class="badge" id="calendarBadge"></span></button>
-  <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">📋 Reports</button>
-  <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">🔗 Client Portal</button>
-  <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">📱 iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
-  <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">⚡ Alpha Intel</button>
-  <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">🚨 FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
-  <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">💰 Accounting</button>
-  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">📦 POA Inventory</button>
+  <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">Command Center</button>
+  <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">Defendants</button>
+  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">Outreach <span class="badge" id="prospectiveBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()">Scraper Health</button>
+  <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">Tracking <span class="badge" id="trackingBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">Intake Queue <span class="badge" id="intakeBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">Revenue <span class="badge" id="analyticsBadge"></span></button>
+  <button class="tab-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()">Intelligence</button>
+  <button class="tab-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')">Legal NLP</button>
+  <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">Calendar <span class="badge" id="calendarBadge"></span></button>
+  <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">Reports</button>
+  <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">Client Portal</button>
+  <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
+  <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">Alpha Intel</button>
+  <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
+  <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">Accounting</button>
+  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">POA Inventory</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════

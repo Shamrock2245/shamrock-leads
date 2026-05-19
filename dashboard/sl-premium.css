@@ -1,0 +1,470 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShamrockLeads — Premium Visual Layer  v1.0
+   Animations, glassmorphism, hover effects, grain texture, nav polish.
+   Loaded LAST so it overrides all other stylesheets.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Keyframe Animations ─────────────────────────────────────────────── */
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.18);
+  }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-underline {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+
+/* ── 2. Page-Load Staggered Fade-In ─────────────────────────────────────── */
+
+.stat-card,
+.panel,
+.sl-card,
+.def-card,
+.pipeline-card,
+.ra-panel {
+  animation: fadeInUp 0.45s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+
+/* Stagger delays for stat cards */
+.stats-grid .stat-card:nth-child(1) { animation-delay: 0.05s; }
+.stats-grid .stat-card:nth-child(2) { animation-delay: 0.10s; }
+.stats-grid .stat-card:nth-child(3) { animation-delay: 0.15s; }
+.stats-grid .stat-card:nth-child(4) { animation-delay: 0.20s; }
+.stats-grid .stat-card:nth-child(5) { animation-delay: 0.25s; }
+.stats-grid .stat-card:nth-child(6) { animation-delay: 0.30s; }
+
+/* Stagger for grid panels */
+.grid-2 .panel:nth-child(1) { animation-delay: 0.15s; }
+.grid-2 .panel:nth-child(2) { animation-delay: 0.22s; }
+
+/* Tab content fade-in on switch */
+.tab-content.active {
+  animation: fadeIn 0.25s ease both;
+}
+
+/* ── 3. Glassmorphism Cards ──────────────────────────────────────────────── */
+
+.glass-card {
+  background: rgba(13, 21, 32, 0.72) !important;
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Apply glass effect to main panels and cards */
+.panel,
+.sl-card,
+.stat-card {
+  background: rgba(13, 21, 32, 0.75);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    0 2px 12px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* ── 4. Hover Lift Effects ───────────────────────────────────────────────── */
+
+.stat-card {
+  transition:
+    transform 0.25s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.2s ease,
+    box-shadow 0.25s ease !important;
+  will-change: transform;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px) !important;
+  border-color: rgba(16, 185, 129, 0.25) !important;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(16, 185, 129, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+}
+
+.panel {
+  transition:
+    transform 0.25s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.2s ease,
+    box-shadow 0.25s ease !important;
+  will-change: transform;
+}
+
+.panel:hover {
+  transform: translateY(-2px) !important;
+  border-color: rgba(16, 185, 129, 0.18) !important;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+.def-card {
+  transition:
+    transform 0.25s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+    border-color 0.2s ease,
+    box-shadow 0.25s ease !important;
+}
+
+.def-card:hover {
+  transform: translateY(-3px) !important;
+  box-shadow:
+    0 10px 36px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(16, 185, 129, 0.15) !important;
+}
+
+/* ── 5. Stat Value — JetBrains Mono ─────────────────────────────────────── */
+
+.stat-value,
+.wb-bond-total,
+.def-bond-pill,
+.county-bond,
+.county-count,
+.ba-chip,
+.inv-poa-mono,
+.inv-tier-count,
+.inv-tier-prefix,
+.inv-next-serial,
+.inv-cell-tier,
+.inv-cell-case,
+.def-booking,
+.def-value.mono,
+.mono,
+.kbd,
+.slc-log-ts,
+.slc-modal-subtitle,
+.ra-indem-phone,
+td[data-bond],
+.bond-high,
+.bond-mid,
+.bond-low {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace) !important;
+}
+
+/* Stat value size + weight refinement */
+.stat-value {
+  font-size: 30px !important;
+  font-weight: 700 !important;
+  letter-spacing: -1px !important;
+  line-height: 1.1 !important;
+}
+
+/* ── 6. Navigation Tab Polish ────────────────────────────────────────────── */
+
+.tab-bar {
+  background: rgba(8, 13, 20, 0.92) !important;
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  padding: 0 20px !important;
+  gap: 0 !important;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar { display: none; }
+
+.tab-btn {
+  font-family: var(--font-sans, 'Space Grotesk', sans-serif) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.3px !important;
+  text-transform: uppercase !important;
+  padding: 14px 18px !important;
+  color: rgba(148, 163, 184, 0.7) !important;
+  border: none !important;
+  background: none !important;
+  cursor: pointer !important;
+  position: relative !important;
+  white-space: nowrap !important;
+  transition: color 0.18s ease !important;
+  border-radius: 0 !important;
+}
+
+.tab-btn:hover {
+  color: rgba(241, 245, 249, 0.9) !important;
+}
+
+.tab-btn.active {
+  color: #10b981 !important;
+}
+
+/* Animated sliding underline indicator */
+.tab-btn.active::after {
+  content: '' !important;
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 10px !important;
+  right: 10px !important;
+  height: 2px !important;
+  background: linear-gradient(90deg, #10b981, #06d6f0) !important;
+  border-radius: 2px 2px 0 0 !important;
+  animation: slide-underline 0.22s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both !important;
+  transform-origin: left center !important;
+}
+
+/* Badge refinement */
+.tab-btn .badge {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 1px 6px !important;
+  border-radius: 8px !important;
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: #34d399 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  vertical-align: middle !important;
+}
+
+/* ── 7. Grain Texture Overlay ────────────────────────────────────────────── */
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  background-repeat: repeat;
+}
+
+/* ── 8. Custom Scrollbar ─────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(8, 13, 20, 0.6);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(16, 185, 129, 0.35);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) rgba(8, 13, 20, 0.6);
+}
+
+/* ── 9. Focus Ring Styling ───────────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid rgba(16, 185, 129, 0.7) !important;
+  outline-offset: 2px !important;
+  border-radius: 4px !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2) !important;
+  border-color: #10b981 !important;
+}
+
+/* ── 10. Shimmer Loading States ──────────────────────────────────────────── */
+
+.sl-skeleton,
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(13, 21, 32, 0.8) 25%,
+    rgba(17, 28, 45, 0.9) 50%,
+    rgba(13, 21, 32, 0.8) 75%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: shimmer 1.6s infinite !important;
+  border-radius: 6px !important;
+}
+
+/* ── 11. Live Indicator Pulse Glow ───────────────────────────────────────── */
+
+.live::before {
+  animation: pulse-dot 2s infinite !important;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4) !important;
+}
+
+.live {
+  animation: pulse-glow 3s ease-in-out infinite !important;
+  border-radius: 20px !important;
+  padding: 3px 10px !important;
+}
+
+/* ── 12. Header Premium Refinement ──────────────────────────────────────── */
+
+.header {
+  background: linear-gradient(
+    135deg,
+    #040d0a 0%,
+    #060e1a 35%,
+    #0a0d1e 65%,
+    #060e1a 100%
+  ) !important;
+  border-bottom: 1px solid rgba(16, 185, 129, 0.08) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+}
+
+/* ── 13. Body Background Deepening ──────────────────────────────────────── */
+
+body,
+[data-theme="dark"] {
+  background: #080d14 !important;
+}
+
+[data-theme="dark"] {
+  --bg: #080d14 !important;
+  --surface: #0d1520 !important;
+  --card: #0d1520 !important;
+  --card-hover: #111c2d !important;
+}
+
+/* ── 14. Accent Card Premium Glow ────────────────────────────────────────── */
+
+.stat-card.accent-card {
+  background: linear-gradient(
+    135deg,
+    rgba(16, 185, 129, 0.08) 0%,
+    rgba(6, 214, 240, 0.04) 100%
+  ) !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+}
+
+.stat-card.accent-card:hover {
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(16, 185, 129, 0.2),
+    0 0 30px rgba(16, 185, 129, 0.08) !important;
+}
+
+/* ── 15. Table Row Hover Refinement ─────────────────────────────────────── */
+
+tr:hover td {
+  background: rgba(16, 185, 129, 0.04) !important;
+  transition: background 0.15s ease !important;
+}
+
+/* ── 16. Bond Amount Mono Formatting ─────────────────────────────────────── */
+
+/* Ensure all bond/dollar amounts use mono font */
+td:has(.bond-high),
+td:has(.bond-mid),
+td:has(.bond-low),
+.wb-bond-total,
+.wb-premium-value,
+.def-bond-pill {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* ── 17. Pipeline Card Hover ─────────────────────────────────────────────── */
+
+.pipeline-card {
+  transition:
+    transform 0.2s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)),
+    box-shadow 0.2s ease,
+    border-color 0.2s ease !important;
+}
+
+.pipeline-card:hover {
+  transform: translateY(-2px) !important;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5) !important;
+  border-color: rgba(16, 185, 129, 0.2) !important;
+}
+
+/* ── 18. Repeat Offender Alert Panel ─────────────────────────────────────── */
+
+.ra-panel {
+  background: rgba(13, 21, 32, 0.8) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+
+/* ── 19. Responsive — Reduce animations on mobile ───────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-card,
+  .panel,
+  .sl-card,
+  .def-card,
+  .pipeline-card,
+  .ra-panel,
+  .tab-content.active {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .stat-card:hover,
+  .panel:hover,
+  .def-card:hover {
+    transform: none !important;
+  }
+
+  .tab-btn {
+    font-size: 11px !important;
+    padding: 12px 14px !important;
+  }
+}
