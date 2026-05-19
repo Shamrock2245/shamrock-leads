@@ -13,6 +13,7 @@ import math
 import logging
 from datetime import datetime, timezone, timedelta
 from dashboard.extensions import get_collection
+from dashboard.deps import get_settings
 
 logger = logging.getLogger(__name__)
 geo_bp = APIRouter(prefix="/api", tags=["geo"])
@@ -28,10 +29,8 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 def _get_public_url() -> str:
     """Return the branded public URL for geo links, falling back to env var."""
-    try:
-        url = current_app.config.get("DASHBOARD_PUBLIC_URL", "")
-    except RuntimeError:
-        url = os.getenv("DASHBOARD_PUBLIC_URL", "")
+    settings = get_settings()
+    url = settings.dashboard_public_url
     return url.rstrip("/") if url else ""
 
 _REDIRECT_AFTER = os.getenv("GEO_REDIRECT_URL", "https://www.shamrockbailbonds.biz")

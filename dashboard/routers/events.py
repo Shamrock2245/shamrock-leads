@@ -1,39 +1,101 @@
+"""
+ShamrockLeads — Server-Sent Events (SSE) Router
+=================================================
+Provides a real-time event stream to the dashboard frontend.
 
-from fastapi import APIRouter
-from starlette.responses import Response
-from fastapi.responses import JSONResponse
+Endpoints:
+  GET /api/events/stream  — Persistent SSE connection; receives all domain events
+
+Published by other routers via:
+    from dashboard.routers.events import publish_event
+    await publish_event("event_type", {...})
+
+Uses sse-starlette for proper ASGI-native SSE (no Quart streaming Response).
+"""
+from __future__ import annotations
+
 import asyncio
 import json
+import logging
+from typing import AsyncGenerator
+
+from fastapi import APIRouter
+from sse_starlette.sse import EventSourceResponse
+
+logger = logging.getLogger(__name__)
 
 events_bp = APIRouter(prefix="/api", tags=["events"])
-# Global event queue (use Redis pub/sub in production)
-event_queues = set()
 
-async def publish_event(event_type: str, data: dict):
-    """Call this from other blueprints when something happens."""
-    # BUG FIX: `event_queues -= dead` is an augmented assignment which makes Python
-    # treat `event_queues` as a local variable, causing UnboundLocalError.
-    # Fix: declare it global so the in-place set-difference mutates the module-level set.
-    global event_queues
-    msg = f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
-    dead = set()
-    for q in event_queues:
+# ── In-process fan-out: set of live subscriber queues ────────────────────────
+# Each connected SSE client gets its own asyncio.Queue.
+# publish_event() drops a message into every live queue.
+# For multi-worker production, swap this with Redis pub/sub.
+_subscribers: set[asyncio.Queue] = set()
+
+
+async def publish_event(event_type: str, data: dict) -> None:
+    """Broadcast a typed event to all connected SSE clients.
+
+    Call from any router:
+        from dashboard.routers.events import publish_event
+        await publish_event("document_signed", {"packet_id": "..."})
+    """
+    msg = json.dumps({"type": event_type, **data})
+    dead: set[asyncio.Queue] = set()
+    for q in _subscribers:
         try:
-            await q.put(msg)
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            dead.add(q)
         except Exception:
             dead.add(q)
-    event_queues.difference_update(dead)
+    _subscribers.difference_update(dead)
+
+
+# Alias used by older call-sites that referenced emit_event
+emit_event = publish_event
+
+
+async def _event_generator(queue: asyncio.Queue) -> AsyncGenerator[dict, None]:
+    """Yield SSE-formatted messages from the subscriber queue."""
+    # Send an initial heartbeat so the client knows the connection is live
+    yield {"event": "connected", "data": json.dumps({"status": "ok"})}
+    try:
+        while True:
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield {"event": "message", "data": msg}
+            except asyncio.TimeoutError:
+                # Send periodic heartbeat to keep proxies/nginx from closing idle connections
+                yield {"event": "ping", "data": "{}"}
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _subscribers.discard(queue)
+
 
 @events_bp.get("/events/stream")
-async def event_stream():
-    q = asyncio.Queue()
-    event_queues.add(q)
-    try:
-        async def generate():
-            while True:
-                msg = await q.get()
-                yield msg
-        return Response(generate(), content_type='text/event-stream',
-                       headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-    finally:
-        event_queues.discard(q)
+async def event_stream() -> EventSourceResponse:
+    """Open a persistent Server-Sent Events stream.
+
+    The dashboard frontend connects here on load and receives real-time
+    domain events (document_signed, intake_promoted, bond_exonerated, etc.)
+
+    Nginx config: set proxy_buffering off; proxy_read_timeout 3600s;
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _subscribers.add(queue)
+    logger.debug("[SSE] New subscriber connected — total: %d", len(_subscribers))
+    return EventSourceResponse(
+        _event_generator(queue),
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",        # Disable Nginx response buffering
+        },
+    )
+
+
+@events_bp.get("/events/health")
+async def events_health() -> dict:
+    """Health check: returns number of active SSE subscribers."""
+    return {"success": True, "subscribers": len(_subscribers)}

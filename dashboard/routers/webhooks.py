@@ -99,7 +99,7 @@ async def signnow_webhook(request: Request):
       12. Escalate (Slack + log) if packet references unknown bond case.
     """
     import httpx
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
 
     # ── Step 1: Verify HMAC signature ────────────────────────────────────────
     signature = request.headers.get('x-signnow-signature', '')
@@ -330,7 +330,7 @@ async def signnow_webhook(request: Request):
         logger.info("[signnow_webhook] Bond case updated: %s", match_key)
 
     # ── Step 9: Publish SSE event ─────────────────────────────────────────────
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
     await publish_event('document_signed', {
         "document_id": doc_id,
         "packet_id": packet_id,
@@ -396,7 +396,7 @@ async def _send_escalation_slack(message: str) -> None:
 @webhooks_bp.post("/webhooks/twilio")
 async def twilio_webhook(request: Request):
     """Handle inbound SMS from Twilio."""
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
 
     # Twilio sends form data
     form_data = await request.form
@@ -452,7 +452,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
       8. Log audit event
     """
     import httpx
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
     from dashboard.services.bb_client import send_message_universal
 
     now = datetime.now(timezone.utc)

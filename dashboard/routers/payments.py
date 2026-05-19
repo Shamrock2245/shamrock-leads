@@ -16,7 +16,7 @@ payments_bp = APIRouter(prefix="/api", tags=["payments"])
 @payments_bp.post("/payments/log")
 async def log_payment(request: Request):
     """Record a payment to MongoDB 'payments' collection."""
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
 
     data = await request.json()
     if not data or 'booking_number' not in data or 'amount' not in data:

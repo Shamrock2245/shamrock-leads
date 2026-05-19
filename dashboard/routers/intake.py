@@ -655,7 +655,7 @@ async def intake_promote(request: Request, intake_id: str):
             "notes": "Walk-in client"    // Optional
         }
     """
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
 
     data = (await request.json()) or {}
     now = datetime.now(timezone.utc)

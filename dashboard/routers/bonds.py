@@ -1220,9 +1220,16 @@ async def api_bulk_exonerate(request: Request):
                     except Exception as notify_err:
                         notify_result = {"success": False, "error": str(notify_err)}
 
-                # 6. SSE event — TODO: re-wire to FastAPI EventSourceResponse
-                # current_app.sse_queue removed from Quart migration
-                pass
+                # 6. SSE event
+                try:
+                    from dashboard.routers.events import publish_event
+                    await publish_event("bond_exonerated", {
+                        "booking_number": booking_number,
+                        "defendant_name": defendant_name,
+                        "exonerated_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception:
+                    pass
 
                 exonerated_count += 1
                 results.append({
@@ -1606,7 +1613,7 @@ async def api_renew_bond(request: Request, booking_number: str):
 
         # Fire SSE event
         try:
-            from dashboard.api.events import emit_event
+            from dashboard.routers.events import emit_event
             await emit_event("bond_renewed", {
                 "booking_number": booking_number,
                 "renewal_reason": renewal_reason,

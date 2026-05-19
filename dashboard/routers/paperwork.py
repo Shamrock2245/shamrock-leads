@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request
+from dashboard.deps import get_settings
 """
 ShamrockLeads — Phase 6: Paperwork Generation API Blueprint
 
@@ -334,8 +335,9 @@ async def deliver_packet(request: Request, packet_id: str):
         intake_id = packet.get("intake_id", "")
 
         # Build the signing magic link
-        portal_base = current_app.config.get("PORTAL_BASE_URL", "https://shamrockbailbonds.biz")
-        dashboard_url = current_app.config.get("DASHBOARD_PUBLIC_URL", portal_base)
+        _settings = get_settings()
+        portal_base = _settings.portal_base_url
+        dashboard_url = _settings.dashboard_public_url or portal_base
         magic_link = f"{portal_base}/sign/{packet_id}"
 
         # Build the message

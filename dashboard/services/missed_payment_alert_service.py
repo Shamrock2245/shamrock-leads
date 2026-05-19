@@ -114,7 +114,7 @@ class MissedPaymentAlertService:
 
                 # Emit SSE event
                 try:
-                    from dashboard.api.events import emit_event
+                    from dashboard.routers.events import emit_event
                     defendant_name = (bond or {}).get("defendant_name", plan.get("defendant_name", ""))
                     await emit_event("payment_missed", {
                         "booking_number": booking,

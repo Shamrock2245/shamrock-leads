@@ -24,12 +24,14 @@ from wix.data import WixDataClient
 from wix.contacts import WixContactsClient
 from wix.client import WixClient, WixAPIError
 
+from dashboard.deps import get_db
+
 logger = logging.getLogger("dashboard.api.wix_cms")
 
 wix_cms_bp = APIRouter(prefix="/api", tags=["wix_cms"])
 def _get_sync_engine() -> WixSyncEngine:
-    """Get a WixSyncEngine with the current app's DB."""
-    return WixSyncEngine(db=current_app.db)
+    """Get a WixSyncEngine with the dashboard's MongoDB database handle."""
+    return WixSyncEngine(db=get_db())
 
 
 def _get_client() -> WixClient:

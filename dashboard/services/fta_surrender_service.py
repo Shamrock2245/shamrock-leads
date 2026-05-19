@@ -138,7 +138,7 @@ class FTASurrenderService:
 
         # 9. Emit SSE event
         try:
-            from dashboard.api.events import emit_event
+            from dashboard.routers.events import emit_event
             await emit_event("bond_surrender_initiated", {
                 "booking_number": booking_number,
                 "defendant_name": bond.get("defendant_name", ""),

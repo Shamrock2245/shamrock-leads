@@ -118,7 +118,7 @@ async def get_plan(booking_number):
 @payment_plans_bp.post("/payments/plans")
 async def create_plan(request: Request):
     """Create a new payment plan."""
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
     data = await request.json()
     required = ['booking_number', 'total_premium', 'down_payment']
     for field in required:
@@ -201,7 +201,7 @@ async def create_plan(request: Request):
 @payment_plans_bp.post("/payments/plans/<plan_id>/pay")
 async def record_payment(request: Request, plan_id):
     """Record a payment against an existing plan."""
-    from dashboard.api.events import publish_event
+    from dashboard.routers.events import publish_event
     data = await request.json()
     if not data or 'amount' not in data:
         return JSONResponse({"error": "Missing amount"}, status_code=400)

@@ -16,6 +16,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from dashboard.deps import get_db
 from dashboard.services.automation_config import (
     get_automation_config,
     update_automation_config,
@@ -80,7 +81,8 @@ SERVICE_META = {
 async def get_config():
     """Return the full automation configuration."""
     try:
-        cfg = await get_automation_config(current_app.db)
+        db = get_db()
+        cfg = await get_automation_config(db)
         return {"success": True, "config": cfg}
     except Exception as exc:
         logger.error("[automation-api] get_config error: %s", exc)
@@ -105,7 +107,8 @@ async def set_config(request: Request):
             return JSONResponse({"success": False, "error": "Missing JSON body"}, status_code=400)
 
         actor = body.pop("actor", "dashboard")
-        cfg = await update_automation_config(current_app.db, body, actor=actor)
+        db = get_db()
+        cfg = await update_automation_config(db, body, actor=actor)
         return {"success": True, "config": cfg}
     except Exception as exc:
         logger.error("[automation-api] set_config error: %s", exc)
@@ -137,11 +140,13 @@ async def toggle_automation(request: Request, key: str):
             new_state = bool(body["enabled"])
         else:
             # Toggle current state
-            currently_enabled = await is_enabled(current_app.db, key)
+            db = get_db()
+            currently_enabled = await is_enabled(db, key)
             new_state = not currently_enabled
 
+        db = get_db()
         cfg = await update_automation_config(
-            current_app.db,
+            db,
             {f"{key}.enabled": new_state},
             actor=body.get("actor", "dashboard"),
         )
@@ -196,7 +201,8 @@ async def trigger_automation(key: str):
 
     # Log the manual trigger to automation_run_log so the UI shows "triggered"
     try:
-        await current_app.db["automation_run_log"].insert_one({
+        db = get_db()
+        await db["automation_run_log"].insert_one({
             "automation": key,
             "run_at": datetime.now(timezone.utc),
             "result": {"manual_trigger": True, "event_fired": triggered},
@@ -228,8 +234,8 @@ async def get_status():
     Also includes service metadata (name, icon, category, description).
     """
     try:
-        cfg = await get_automation_config(current_app.db)
-        db = current_app.db
+        db = get_db()
+        cfg = await get_automation_config(db)
         status = {}
 
         for key in sorted(ALL_SERVICE_KEYS):

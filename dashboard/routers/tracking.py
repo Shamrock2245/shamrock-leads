@@ -418,6 +418,7 @@ async def tracking_exonerate(request: Request, booking_number):
 
         # Fire SSE event
         try:
+            from dashboard.routers.events import publish_event
             sse_payload = {
                 "booking_number": booking_number,
                 "defendant_name": defendant_name,
@@ -425,11 +426,7 @@ async def tracking_exonerate(request: Request, booking_number):
                 "source": source,
                 "exonerated_at": now.isoformat(),
             }
-            if hasattr(current_app, 'sse_queue') and current_app.sse_queue:
-                await current_app.sse_queue.put({
-                    "event": "bond_exonerated",
-                    "data": sse_payload,
-                })
+            await publish_event("bond_exonerated", sse_payload)
         except Exception as sse_err:
             logger.debug("[exonerate] SSE fire failed: %s", sse_err)
 
