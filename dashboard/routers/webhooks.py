@@ -592,7 +592,7 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     Validates the WIX_WEBHOOK_SECRET (or GAS_API_KEY fallback) then
     forwards the payload to the intake pipeline.
     """
-    from dashboard.api.intake import _normalize_intake
+    from dashboard.routers.intake import _normalize_intake
 
     # Auth check
     wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")

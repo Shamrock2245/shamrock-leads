@@ -42,9 +42,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from dashboard.api.agent_brain import process_inbound
-from dashboard.api.bb_private_api import BlueBubblesClient
-from dashboard.api.imessage_automation import _content_hash
+from dashboard.routers.agent_brain_api import process_inbound
+from dashboard.routers.bb_private_api import BlueBubblesClient
+from dashboard.routers.imessage_automation import _content_hash
 from dashboard.extensions import BB_SERVERS, get_bb_server, get_collection, format_phone
 
 logger = logging.getLogger(__name__)

@@ -215,7 +215,7 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
 
             # Create notification
             try:
-                from dashboard.api.notifications import create_notification
+                from dashboard.routers.notifications import create_notification
                 await create_notification(
                     notification_type="rearrest",
                     title=f"🔄 RE-ARREST: {arrest_name}",

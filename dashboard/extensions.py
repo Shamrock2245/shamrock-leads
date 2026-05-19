@@ -208,57 +208,15 @@ async def _seed_poa_inventory_async():
         print(f"⚠️  POA seed: {e}")
 
 
-def init_app(app):
-    """Initialize extensions for the Quart app factory."""
-    import secrets
+# ── init_app() RETIRED (2026-05-19) ──────────────────────────────────────────
+# The Quart app factory pattern has been replaced by FastAPI.
+# Startup logic now lives in dashboard/main.py lifespan():
+#   - init_bluebubbles() called directly
+#   - _seed_poa_inventory_async() awaited at startup
+#   - Settings injected via dashboard/deps.py get_settings()
+# This stub is kept so any legacy caller (dashboard/__init__.py, run.py)
+# does not crash at import time.
 
-    # Secret key for session cookies.
-    # IMPORTANT: must be stable across restarts so sessions survive Docker rebuilds.
-    # Priority: SECRET_KEY env var → derived from DASHBOARD_PIN → fixed fallback.
-    _secret = os.getenv("SECRET_KEY") or (
-        "shamrock-" + os.getenv("DASHBOARD_PIN", "leads-2245") + "-session-key-v1"
-    )
-    app.secret_key = _secret
-
-    # ── Disable static file caching (belt-and-suspenders with serve_static no-cache headers) ──
-    # Quart's send_from_directory uses SEND_FILE_MAX_AGE_DEFAULT to set Cache-Control max-age.
-    # Setting to 0 prevents 12-hour browser caching of JS/CSS after deploys.
-    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
-
-    # ── Motor DB handle ───────────────────────────────────────────────────────
-    # Many API blueprints pass `current_app.db` to service classes that do
-    # `self.db["collection_name"]`.  Wire it here so it's always available.
-    app.db = get_db()
-
-    # ── Public URL config ─────────────────────────────────────────────────────
-    # DASHBOARD_PUBLIC_URL: the branded public URL that resolves to this VPS.
-    # Used for geo-tracking links (/g/<token>) and portal tokens (/c/<token>).
-    # IMPORTANT: Do NOT fall back to BB_WEBHOOK_PUBLIC_URL — that's for webhook
-    # registration only and may expose internal infrastructure to clients.
-    dashboard_public_url = os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/")
-    app.config["DASHBOARD_PUBLIC_URL"] = dashboard_public_url
-
-    # CLIENT_BRAND_URL: the public-facing brand URL shown in client messages.
-    # Always the main website — never the dashboard or internal VPS.
-    app.config["CLIENT_BRAND_URL"] = os.getenv(
-        "CLIENT_BRAND_URL", "https://www.shamrockbailbonds.biz"
-    ).rstrip("/")
-
-    # PORTAL_BASE_URL: the Wix indemnitor portal (for intake magic links).
-    # Defaults to the main website; override if using a custom portal domain.
-    app.config["PORTAL_BASE_URL"] = os.getenv(
-        "PORTAL_BASE_URL", "https://shamrockbailbonds.biz"
-    ).rstrip("/")
-
-    # Init BlueBubbles
-    init_bluebubbles()
-
-    # Seed POA inventory on first request
-    _seeded = {"done": False}
-
-    @app.before_serving
-    async def on_startup():
-        if not _seeded["done"]:
-            await _seed_poa_inventory_async()
-            _seeded["done"] = True
-            print(f"☘️  Dashboard ready — Motor connected to {os.getenv('MONGODB_DB_NAME', 'ShamrockBailDB')}")
+def init_app(app=None):
+    """No-op stub — Quart factory retired. FastAPI lifespan handles startup."""
+    pass

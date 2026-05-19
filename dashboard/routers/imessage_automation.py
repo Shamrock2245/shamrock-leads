@@ -35,8 +35,8 @@ from dashboard.extensions import (
     get_collection, get_db, format_phone,
     BB_SERVERS, get_bb_server, init_bluebubbles,
 )
-from dashboard.api.bb_private_api import BlueBubblesClient, EFFECTS, REACTIONS
-from dashboard.api.agent_brain import process_inbound
+from dashboard.routers.bb_private_api import BlueBubblesClient, EFFECTS, REACTIONS
+from dashboard.routers.agent_brain_api import process_inbound
 
 logger = logging.getLogger(__name__)
 

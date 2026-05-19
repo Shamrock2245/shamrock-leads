@@ -163,7 +163,7 @@ class FTAAlertService:
         bond_amount = bond.get("bond_amount", 0)
 
         try:
-            from dashboard.api.notifications import create_notification
+            from dashboard.routers.notifications import create_notification
             await create_notification(
                 notification_type="fta_alert",
                 title=f"⚠️ FTA ALERT: {defendant_name}",
@@ -249,7 +249,7 @@ class FTAAlertService:
         )
 
         try:
-            from dashboard.api.notifications import create_notification
+            from dashboard.routers.notifications import create_notification
             await create_notification(
                 notification_type="fta_escalation",
                 title=f"🚨 FTA Level 2: {defendant_name}",
@@ -397,7 +397,7 @@ class FTAAlertService:
         )
 
         try:
-            from dashboard.api.notifications import create_notification
+            from dashboard.routers.notifications import create_notification
             await create_notification(
                 notification_type="fta_surrender_flag",
                 title=f"🔴 FTA Level 3 — SURRENDER REVIEW: {defendant_name}",

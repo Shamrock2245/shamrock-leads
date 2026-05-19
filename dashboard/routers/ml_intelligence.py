@@ -428,7 +428,7 @@ async def api_compare_predictions(booking_number: str):
     """
     try:
         from scoring.model_trainer import predict
-        from dashboard.api.lead_intelligence import build_score_explanation, classify_charge
+        from dashboard.routers.lead_intelligence import build_score_explanation, classify_charge
 
         db = get_db()
         arrest = await db["arrests"].find_one({"booking_number": booking_number})

@@ -40,7 +40,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from dashboard.api.bb_private_api import BlueBubblesClient
+from dashboard.routers.bb_private_api import BlueBubblesClient
 from dashboard.extensions import BB_SERVERS, get_bb_server, get_collection, format_phone
 
 logger = logging.getLogger(__name__)

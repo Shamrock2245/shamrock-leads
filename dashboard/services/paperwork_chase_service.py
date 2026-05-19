@@ -202,7 +202,7 @@ class PaperworkChaseService:
 
         # Dashboard notification
         try:
-            from dashboard.api.notifications import create_notification
+            from dashboard.routers.notifications import create_notification
             await create_notification(
                 notification_type="unsigned_paperwork",
                 title=f"⚠️ Unsigned: {defendant}",

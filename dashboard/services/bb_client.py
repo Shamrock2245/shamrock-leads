@@ -38,7 +38,7 @@ def get_bb_client(phone: Optional[str] = None):
     """
     try:
         from dashboard.extensions import BB_SERVERS, get_bb_server
-        from dashboard.api.bb_private_api import BlueBubblesClient
+        from dashboard.routers.bb_private_api import BlueBubblesClient
 
         if phone:
             server = get_bb_server(phone)

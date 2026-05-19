@@ -35,7 +35,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
-from dashboard.api.bb_private_api import BlueBubblesClient
+from dashboard.routers.bb_private_api import BlueBubblesClient
 from dashboard.extensions import BB_SERVERS, get_collection
 
 from datetime import timedelta
@@ -356,7 +356,7 @@ async def api_update_bb_url(request: Request):
         connectivity = {"reachable": False, "message": "Server key not found after update"}
         if server:
             try:
-                from dashboard.api.bb_private_api import BlueBubblesClient
+                from dashboard.routers.bb_private_api import BlueBubblesClient
                 client = BlueBubblesClient(server["url"], server["password"], timeout=8.0)
                 info = await client.server_info()
                 connectivity = {

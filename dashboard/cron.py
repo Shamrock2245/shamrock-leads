@@ -32,7 +32,7 @@ class CronDef:
 
 async def _cron_runner(cron: CronDef):
     """Generic cron loop with automation_config gating + manual trigger support."""
-    from dashboard.api.automation_control import register_trigger
+    from dashboard.routers.automation_control import register_trigger
     trigger = asyncio.Event()
     register_trigger(cron.name, trigger)
     await asyncio.sleep(cron.initial_delay)
@@ -118,7 +118,7 @@ async def _run_nlp_enrichment():
         logger.info("[NLP-Enrich] ✅ %d enriched", enriched)
 
 async def _run_bb_health():
-    from dashboard.api.bb_health_monitor import run_health_check_all
+    from dashboard.routers.bb_health_monitor import run_health_check_all
     await run_health_check_all()
 
 async def _run_court_reminders():
@@ -132,7 +132,7 @@ async def _run_court_reminders():
 
 async def _run_delinquency():
     from dashboard.extensions import get_db
-    from dashboard.api.notifications import create_notification
+    from dashboard.routers.notifications import create_notification
     from datetime import datetime, timezone, timedelta
     db = get_db()
     now = datetime.now(timezone.utc)
@@ -151,7 +151,7 @@ async def _run_delinquency():
         logger.info("[Delinquency] flagged %s plans", flagged)
 
 async def _run_rearrest():
-    from dashboard.api.rearrest_detector import scan_for_rearrests
+    from dashboard.routers.rearrest_detector import scan_for_rearrests
     result = await scan_for_rearrests(hours=3)
     if result.get("detected", 0) > 0:
         logger.warning("🔄 RE-ARREST: %s match(es)!", result["detected"])
@@ -186,7 +186,7 @@ async def _run_missed_payment():
 
 
 async def _run_retention():
-    from dashboard.api.data_retention import _execute_purge
+    from dashboard.routers.data_retention import _execute_purge
     result = await _execute_purge(dry_run=False)
     total = result.get("total_purged", 0)
     if total:
@@ -259,8 +259,8 @@ async def _run_findmy():
     bb_url = os.getenv("BB_SERVER_URL")
     if not bb_url:
         return
-    from dashboard.api.bb_private_api import BlueBubblesPrivateClient
-    from dashboard.api.geo_geofence_patch import haversine_distance
+    from dashboard.routers.bb_private_api import BlueBubblesPrivateClient
+    from dashboard.routers.geo import haversine_distance
     from datetime import datetime, timezone
     client = BlueBubblesPrivateClient(base_url=bb_url, password=os.getenv("BB_SERVER_PASSWORD"))
     result = await client.findmy_devices()
@@ -449,9 +449,9 @@ async def _startup_tasks():
     vps_url = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
     if vps_url:
         try:
-            from dashboard.api.bb_private_api import BlueBubblesClient
+            from dashboard.routers.bb_private_api import BlueBubblesClient
             from dashboard.extensions import BB_SERVERS
-            from dashboard.api.bb_webhook_receiver import BB_WEBHOOK_EVENTS
+            from dashboard.routers.bb_webhook_receiver import BB_WEBHOOK_EVENTS
             webhook_url = f"{vps_url}/api/webhooks/bluebubbles"
             for suffix, server in BB_SERVERS.items():
                 try:
@@ -465,14 +465,14 @@ async def _startup_tasks():
 
     # Firebase BB URL sync
     try:
-        from dashboard.api.bb_firebase_sync import poll_firebase_for_bb_url
+        from dashboard.routers.bb_firebase_sync import poll_firebase_for_bb_url
         asyncio.ensure_future(poll_firebase_for_bb_url())
     except Exception:
         pass
 
     # Inbox poller
     try:
-        from dashboard.api.imessage_automation import start_inbox_poller
+        from dashboard.routers.imessage_automation import start_inbox_poller
         asyncio.ensure_future(start_inbox_poller(None))
     except Exception:
         pass
