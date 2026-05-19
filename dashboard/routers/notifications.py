@@ -79,7 +79,7 @@ async def create_notification(
 
 
 @notifications_bp.get("/notifications")
-async def get_notifications():
+async def get_notifications(request: Request):
     """Get recent notifications, sorted by priority then time."""
     _qp = dict(request.query_params)
     notif_col = get_collection("notifications")
@@ -107,11 +107,11 @@ async def get_notifications():
 
 
 @notifications_bp.post("/notifications")
-async def post_notification():
+async def post_notification(request: Request):
     """Manually create a notification."""
     data = await request.json()
     if not data or 'title' not in data:
-        return {"error": "Missing title"}, 400
+        return JSONResponse({"error": "Missing title"}, status_code=400)
 
     doc = await create_notification(
         notification_type=data.get("type", "system"),

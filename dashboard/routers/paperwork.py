@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """
 ShamrockLeads — Phase 6: Paperwork Generation API Blueprint
 
@@ -111,21 +112,21 @@ def _build_bond_data(intake: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/generate/<intake_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/generate/<intake_id>", methods=["POST"])
-async def generate_packet(intake_id: str):
+@paperwork_bp.post("/paperwork/generate/<intake_id>")
+async def generate_packet(request: Request, intake_id: str):
     """
     Generate the full paperwork packet (appearance bonds + indemnity + SSA + POA).
     Stores packet metadata in `paperwork_packets` collection.
     Returns packet_id and document list.
     """
     try:
-        data = (await request.get_json()) or {}
+        data = (await request.json()) or {}
         packet_type = data.get("packet_type", "full")
         template = data.get("template", "osi")  # "osi" or "palmetto"
 
         intake = await _load_intake(intake_id)
         if not intake:
-            return jsonify({"error": f"Intake {intake_id} not found"}), 404
+            return JSONResponse({"error": f"Intake {intake_id} not found"}, status_code=404)
 
         packet_id = f"PKT-{uuid.uuid4().hex[:10].upper()}"
         now = datetime.now(timezone.utc)
@@ -248,7 +249,7 @@ async def generate_packet(intake_id: str):
 
         logger.info("[paperwork] Packet %s generated for intake %s (bond_case_id=%s)",
                     packet_id, intake_id, bond_case_id or "not_yet_linked")
-        return jsonify({
+        return {
             "success": True,
             "packet_id": packet_id,
             "intake_id": intake_id,
@@ -256,56 +257,56 @@ async def generate_packet(intake_id: str):
             "packet_type": packet_type,
             "documents": documents,
             "document_count": len(documents),
-        })
+        }
 
     except Exception as exc:
         logger.exception("generate_packet error for intake %s", intake_id)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/<packet_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/<packet_id>", methods=["GET"])
+@paperwork_bp.get("/paperwork/<packet_id>")
 async def get_packet(packet_id: str):
     """Return packet metadata and document list."""
     try:
         packet = await _load_packet(packet_id)
         if not packet:
-            return jsonify({"error": f"Packet {packet_id} not found"}), 404
+            return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
         # Serialize datetimes
         for field in ("created_at", "updated_at"):
             if hasattr(packet.get(field), "isoformat"):
                 packet[field] = packet[field].isoformat()
 
-        return jsonify(packet)
+        return packet
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/deliver
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/<packet_id>/deliver", methods=["POST"])
-async def deliver_packet(packet_id: str):
+@paperwork_bp.post("/paperwork/<packet_id>/deliver")
+async def deliver_packet(request: Request, packet_id: str):
     """
     Deliver the paperwork packet via BlueBubbles iMessage.
     Sends a message with a magic link to the packet's signing page.
     Includes a geolocator link as required by project standards.
     """
     try:
-        data = (await request.get_json()) or {}
+        data = (await request.json()) or {}
         phone = data.get("phone", "").strip()
         custom_message = data.get("message", "")
         include_geo = data.get("include_geo", True)
 
         if not phone:
-            return jsonify({"error": "phone is required"}), 400
+            return JSONResponse({"error": "phone is required"}, status_code=400)
 
         packet = await _load_packet(packet_id)
         if not packet:
-            return jsonify({"error": f"Packet {packet_id} not found"}), 404
+            return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
         # Policy Rule 4: verify recipient phone matches stored indemnitor phone
         stored_phone = packet.get("indemnitor_phone", "")
@@ -354,7 +355,7 @@ async def deliver_packet(packet_id: str):
         # Send via BlueBubbles (iMessage-first, universal bridge)
         bb = get_bb_client(phone)
         if not bb:
-            return jsonify({"error": "BlueBubbles server not configured"}), 503
+            return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
         chat_guid = f"iMessage;-;{phone}"
         result = await bb.send_text(chat_guid, message)
 
@@ -380,25 +381,25 @@ async def deliver_packet(packet_id: str):
         )
 
         logger.info("[paperwork] Packet %s delivered to %s", packet_id, phone)
-        return jsonify({
+        return {
             "success": result.get("success", False),
             "packet_id": packet_id,
             "delivered_to": phone,
             "magic_link": magic_link,
             "bb_result": result,
-        })
+        }
 
     except Exception as exc:
         logger.exception("deliver_packet error for %s", packet_id)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/signnow
 # Push the packet to SignNow for e-signature.
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/<packet_id>/signnow", methods=["POST"])
-async def push_to_signnow(packet_id: str):
+@paperwork_bp.post("/paperwork/<packet_id>/signnow")
+async def push_to_signnow(request: Request, packet_id: str):
     """
     Push the paperwork packet to SignNow for e-signature.
 
@@ -416,26 +417,26 @@ async def push_to_signnow(packet_id: str):
       telegram_chat_id: If set, also sends signing link via Telegram.
     """
     try:
-        data = (await request.get_json()) or {}
+        data = (await request.json()) or {}
 
         packet = await _load_packet(packet_id)
         if not packet:
-            return jsonify({"error": f"Packet {packet_id} not found"}), 404
+            return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
         # Policy Rule 3: reject if already signed
         if packet.get("status") == "signed":
-            return jsonify({
+            return {
                 "error": "Packet is already signed. Create a new packet version (Rule 3).",
                 "packet_id": packet_id,
                 "status": "signed",
-            }), 409
+            }, 409
 
         # Policy Rule 3: reject if voided
         if packet.get("voided"):
-            return jsonify({
+            return {
                 "error": "Packet has been voided. Create a new packet.",
                 "packet_id": packet_id,
-            }), 409
+            }, 409
 
         # Policy Rule 1: warn if bond_case_id not set
         bond_case_id = packet.get("bond_case_id")
@@ -449,7 +450,7 @@ async def push_to_signnow(packet_id: str):
         intake_id = packet.get("intake_id", "")
         intake = await _load_intake(intake_id)
         if not intake:
-            return jsonify({"error": f"Intake {intake_id} not found"}), 404
+            return JSONResponse({"error": f"Intake {intake_id} not found"}, status_code=404)
 
         # Resolve parameters — body overrides packet defaults
         phase = int(data.get("phase", 1))
@@ -468,10 +469,10 @@ async def push_to_signnow(packet_id: str):
         telegram_chat_id = data.get("telegram_chat_id") or intake.get("telegram_chat_id")
 
         if phase == 2 and not poa_number:
-            return jsonify({
+            return {
                 "error": "Phase 2 requires a poa_number. "
                          "Provide it in the request body or set it on the intake record.",
-            }), 400
+            }, 400
 
         from dashboard.services.signnow_packet_service import SignNowPacketService
         svc = SignNowPacketService()
@@ -536,7 +537,7 @@ async def push_to_signnow(packet_id: str):
             except Exception as tg_exc:
                 logger.warning("[paperwork] Telegram delivery failed: %s", tg_exc)
 
-        return jsonify({
+        return {
             "success": True,
             "packet_id": packet_id,
             "bond_case_id": bond_case_id,
@@ -548,19 +549,19 @@ async def push_to_signnow(packet_id: str):
             "signnow_group_id": result.get("group_id", ""),
             "signnow_signing_link": signing_link,
             "manifest_size": result.get("manifest_size", 0),
-        })
+        }
 
     except Exception as exc:
         logger.exception("push_to_signnow error for %s", packet_id)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/void
 # Void a packet (policy Rule 3 — no in-place mutation after send/sign).
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/<packet_id>/void", methods=["POST"])
-async def void_packet(packet_id: str):
+@paperwork_bp.post("/paperwork/<packet_id>/void")
+async def void_packet(request: Request, packet_id: str):
     """
     Void a paperwork packet.
 
@@ -572,19 +573,19 @@ async def void_packet(packet_id: str):
       voided_by: (optional) Staff member name/ID.
     """
     try:
-        data = (await request.get_json()) or {}
+        data = (await request.json()) or {}
         reason = data.get("reason", "").strip()
         voided_by = data.get("voided_by", "staff")
 
         if not reason:
-            return jsonify({"error": "reason is required to void a packet"}), 400
+            return JSONResponse({"error": "reason is required to void a packet"}, status_code=400)
 
         packet = await _load_packet(packet_id)
         if not packet:
-            return jsonify({"error": f"Packet {packet_id} not found"}), 404
+            return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
         if packet.get("voided"):
-            return jsonify({"error": "Packet is already voided", "packet_id": packet_id}), 409
+            return JSONResponse({"error": "Packet is already voided", "packet_id": packet_id}, status_code=409)
 
         now = datetime.now(timezone.utc)
         packets_col = get_collection("paperwork_packets")
@@ -613,23 +614,23 @@ async def void_packet(packet_id: str):
         })
 
         logger.info("[paperwork] Packet %s voided by %s: %s", packet_id, voided_by, reason)
-        return jsonify({
+        return {
             "success": True,
             "packet_id": packet_id,
             "voided": True,
             "void_reason": reason,
             "voided_at": now.isoformat(),
-        })
+        }
 
     except Exception as exc:
         logger.exception("void_packet error for %s", packet_id)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/list/<intake_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/list/<intake_id>", methods=["GET"])
+@paperwork_bp.get("/paperwork/list/<intake_id>")
 async def list_packets(intake_id: str):
     """Return all paperwork packets for an intake record."""
     try:
@@ -645,21 +646,21 @@ async def list_packets(intake_id: str):
                 if hasattr(p.get(field), "isoformat"):
                     p[field] = p[field].isoformat()
 
-        return jsonify({
+        return {
             "success": True,
             "intake_id": intake_id,
             "packets": packets,
             "count": len(packets),
-        })
+        }
     except Exception as exc:
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/signnow/validate-templates
 # Diagnostic: validate every TEMPLATE_MAP entry against production SignNow.
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.route("/paperwork/signnow/validate-templates", methods=["GET"])
+@paperwork_bp.get("/paperwork/signnow/validate-templates")
 async def validate_signnow_templates():
     """
     Validate all SignNow TEMPLATE_MAP entries against the production account.
@@ -686,10 +687,10 @@ async def validate_signnow_templates():
         try:
             await svc._get_token()
         except Exception as exc:
-            return jsonify({
+            return {
                 "success": False,
                 "error": f"SignNow auth failed: {exc}",
-            }), 500
+            }, 500
 
     results = []
     valid = 0
@@ -759,11 +760,11 @@ async def validate_signnow_templates():
                 })
                 invalid += 1
 
-    return jsonify({
+    return {
         "success": True,
         "valid_count": valid,
         "invalid_count": invalid,
         "todo_count": len(palmetto_todos),
         "palmetto_todos": palmetto_todos,
         "templates": results,
-    })
+    }

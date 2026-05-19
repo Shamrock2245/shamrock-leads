@@ -347,7 +347,7 @@ async def schedule_payment_reminders_for_case(
 
 
 @bb_schedule_bp.post("/bb-schedule/payment-reminders")
-async def api_schedule_payment_reminders():
+async def api_schedule_payment_reminders(request: Request):
     """Schedule payment reminders for a bond case.
 
     Body (JSON):
@@ -369,7 +369,7 @@ async def api_schedule_payment_reminders():
         indemnitor_name = data.get("indemnitor_name", "").strip()
         overdue = bool(data.get("overdue", False))
         if not booking_number or not phone or not due_date_str:
-            return {"success": False, "error": "booking_number, phone, and due_date are required"}, 400
+            return JSONResponse({"success": False, "error": "booking_number, phone, and due_date are required"}, status_code=400)
         due_date = datetime.fromisoformat(due_date_str.replace("Z", "+00:00"))
         if due_date.tzinfo is None:
             due_date = due_date.replace(tzinfo=timezone.utc)
@@ -385,7 +385,7 @@ async def api_schedule_payment_reminders():
         return {"success": True, **result}, 201
     except Exception as e:
         logger.error("Payment reminder scheduling error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 async def process_vps_scheduled_messages() -> dict:
@@ -441,7 +441,7 @@ async def process_vps_scheduled_messages() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_schedule_bp.post("/bb-schedule/court-reminders")
-async def api_schedule_court_reminders():
+async def api_schedule_court_reminders(request: Request):
     """Schedule the full set of court date reminders for a bond case.
 
     Body:
@@ -465,7 +465,7 @@ async def api_schedule_court_reminders():
         case_number = (data.get("case_number") or "").strip()
 
         if not all([booking_number, defendant_name, phone, court_date_str, court_location, case_number]):
-            return {"success": False, "error": "All fields required"}, 400
+            return JSONResponse({"success": False, "error": "All fields required"}, status_code=400)
 
         court_date = datetime.fromisoformat(court_date_str)
         if court_date.tzinfo is None:
@@ -485,11 +485,11 @@ async def api_schedule_court_reminders():
 
     except Exception as e:
         logger.error("Schedule court reminders error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_schedule_bp.post("/bb-schedule/document-ready")
-async def api_schedule_document_ready():
+async def api_schedule_document_ready(request: Request):
     """Send a 'documents ready to sign' notification via iMessage.
 
     Body:
@@ -508,11 +508,11 @@ async def api_schedule_document_ready():
         signing_url = data.get("signing_url", "")
 
         if not phone or not defendant_name or not signing_url:
-            return {"success": False, "error": "phone, defendant_name, signing_url required"}, 400
+            return JSONResponse({"success": False, "error": "phone, defendant_name, signing_url required"}, status_code=400)
 
         bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
         if not bb_server:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
         chat_guid = f"any;-;{phone}"
@@ -530,11 +530,11 @@ async def api_schedule_document_ready():
 
     except Exception as e:
         logger.error("Document ready notification error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_schedule_bp.get("/bb-schedule/pending")
-async def api_pending_scheduled():
+async def api_pending_scheduled(request: Request):
     """View all pending scheduled messages."""
     _qp = dict(request.query_params)
     try:
@@ -553,7 +553,7 @@ async def api_pending_scheduled():
         return {"success": True, "count": len(messages), "messages": messages}
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_schedule_bp.post("/bb-schedule/process")
@@ -564,4 +564,4 @@ async def api_process_scheduled():
         return {"success": True, **result}
     except Exception as e:
         logger.error("Process scheduled messages error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

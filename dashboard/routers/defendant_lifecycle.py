@@ -222,7 +222,7 @@ async def get_defendant_notes(booking_number: str):
 #   agent             — agent name who made the update
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.patch("/defendant-notes/<booking_number>")
-async def patch_defendant_notes(booking_number: str):
+async def patch_defendant_notes(request: Request, booking_number: str):
     col = get_collection("defendant_notes")
     body = await request.json() or {}
 
@@ -253,7 +253,7 @@ async def patch_defendant_notes(booking_number: str):
 #   contact   — who was contacted (defendant | cosigner name)
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.post("/defendant-contact-log/<booking_number>")
-async def log_contact(booking_number: str):
+async def log_contact(request: Request, booking_number: str):
     col = get_collection("defendant_notes")
     body = await request.json() or {}
 
@@ -298,7 +298,7 @@ async def log_contact(booking_number: str):
 # Used by the frontend to batch-load notes for all visible cards.
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.get("/defendant-notes/bulk")
-async def bulk_get_notes():
+async def bulk_get_notes(request: Request):
     _qp = dict(request.query_params)
     raw = _qp.get("booking_numbers", "")
     booking_numbers = [b.strip() for b in raw.split(",") if b.strip()]
@@ -319,13 +319,13 @@ async def bulk_get_notes():
 # Step 1: Review — returns a summary for the agent to confirm
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.post("/finalize-bond/step1/<booking_number>")
-async def finalize_bond_step1(booking_number: str):
+async def finalize_bond_step1(request: Request, booking_number: str):
     arrests = get_collection("arrests")
     notes_col = get_collection("defendant_notes")
 
     arrest = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
     if not arrest:
-        return {"success": False, "error": "Defendant not found"}, 404
+        return JSONResponse({"success": False, "error": "Defendant not found"}, status_code=404)
 
     notes = await _get_notes_doc(booking_number)
     body = await request.json() or {}
@@ -373,7 +373,7 @@ async def finalize_bond_step1(booking_number: str):
 #   notes          — any final notes
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.post("/finalize-bond/step2/<booking_number>")
-async def finalize_bond_step2(booking_number: str):
+async def finalize_bond_step2(request: Request, booking_number: str):
     arrests = get_collection("arrests")
     notes_col = get_collection("defendant_notes")
     active_bonds = get_collection("active_bonds")
@@ -383,17 +383,17 @@ async def finalize_bond_step2(booking_number: str):
 
     step1 = notes.get("finalization_step1", {})
     if not step1:
-        return {"success": False, "error": "Step 1 review not found. Please complete Step 1 first."}, 400
+        return JSONResponse({"success": False, "error": "Step 1 review not found. Please complete Step 1 first."}, status_code=400)
 
     # Token validation (soft check — tokens are informational, not cryptographic)
     provided_token = body.get("review_token", "")
     expected_token = step1.get("review_token", "")
     if provided_token and expected_token and provided_token != expected_token:
-        return {"success": False, "error": "Review token mismatch. Please restart the finalization process."}, 400
+        return JSONResponse({"success": False, "error": "Review token mismatch. Please restart the finalization process."}, status_code=400)
 
     arrest = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
     if not arrest:
-        return {"success": False, "error": "Defendant not found"}, 404
+        return JSONResponse({"success": False, "error": "Defendant not found"}, status_code=404)
 
     finalized_at = _now()
     confirmed_by = body.get("confirmed_by", step1.get("agent", ""))
@@ -477,7 +477,7 @@ async def get_dnb_list():
 #   agent   — agent name
 # ─────────────────────────────────────────────────────────────────────────────
 @lifecycle_bp.post("/defendant-notes/<booking_number>/promote-to-pipeline")
-async def promote_to_pipeline(booking_number: str):
+async def promote_to_pipeline(request: Request, booking_number: str):
     """Explicitly promote a defendant to the outreach (prospective bonds) pipeline."""
     try:
         body = await request.json() or {}
@@ -555,7 +555,7 @@ async def promote_to_pipeline(booking_number: str):
 
     except Exception as exc:
         logger.exception(f"promote_to_pipeline error for {booking_number}")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

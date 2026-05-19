@@ -16,14 +16,12 @@ from dashboard.extensions import get_collection
 
 log = logging.getLogger("shamrock.api.legal_nlp")
 legal_nlp_bp = APIRouter(prefix="/api", tags=["legal_nlp"])
-def _get_db():
-    return # current_app_removed.config.get("db") or # current_app_removed.db
 
 
 # ── URL Ingestion (for Record Bond modal) ────────────────────────────────────
 
 @legal_nlp_bp.post("/bonds/ingest-url")
-async def api_ingest_url():
+async def api_ingest_url(request: Request):
     """Fetch a booking URL and return structured arrest data.
 
     Body: { "url": "https://..." }
@@ -33,7 +31,7 @@ async def api_ingest_url():
         body = await request.json() or {}
         url = body.get("url", "").strip()
         if not url:
-            return {"success": False, "error": "URL required"}, 400
+            return JSONResponse({"success": False, "error": "URL required"}, status_code=400)
 
         from dashboard.services.url_ingest_service import ingest_url
         result = await ingest_url(url)
@@ -41,13 +39,13 @@ async def api_ingest_url():
         return result, status
     except Exception as e:
         log.exception("URL ingest error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ── Charge Analysis ──────────────────────────────────────────────────────────
 
 @legal_nlp_bp.post("/legal-nlp/analyze-charges")
-async def api_analyze_charges():
+async def api_analyze_charges(request: Request):
     """Analyze charge text for severity, risk, and FL statute references.
 
     Body: { "charges": "Battery DV; Grand Theft F.S. 812.014" }
@@ -56,20 +54,20 @@ async def api_analyze_charges():
         body = await request.json() or {}
         charges = body.get("charges", "")
         if not charges:
-            return {"error": "charges text required"}, 400
+            return JSONResponse({"error": "charges text required"}, status_code=400)
 
         from dashboard.services.legal_nlp_service import analyze_charges
         result = analyze_charges(charges)
         return {"success": True, **result}, 200
     except Exception as e:
         log.exception("Charge analysis error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Citation Extraction ──────────────────────────────────────────────────────
 
 @legal_nlp_bp.post("/legal-nlp/extract-citations")
-async def api_extract_citations():
+async def api_extract_citations(request: Request):
     """Extract legal citations from text.
 
     Body: { "text": "See State v. Smith, 123 So. 2d 456..." }
@@ -78,20 +76,20 @@ async def api_extract_citations():
         body = await request.json() or {}
         text = body.get("text", "")
         if not text:
-            return {"error": "text required"}, 400
+            return JSONResponse({"error": "text required"}, status_code=400)
 
         from dashboard.services.legal_nlp_service import extract_citations
         citations = extract_citations(text)
         return {"success": True, "citations": citations, "count": len(citations)}, 200
     except Exception as e:
         log.exception("Citation extraction error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Entity Extraction ────────────────────────────────────────────────────────
 
 @legal_nlp_bp.post("/legal-nlp/extract-entities")
-async def api_extract_entities():
+async def api_extract_entities(request: Request):
     """Extract legal entities (judges, courts, attorneys, statutes).
 
     Body: { "text": "Judge Williams of the 20th Circuit Court..." }
@@ -100,14 +98,14 @@ async def api_extract_entities():
         body = await request.json() or {}
         text = body.get("text", "")
         if not text:
-            return {"error": "text required"}, 400
+            return JSONResponse({"error": "text required"}, status_code=400)
 
         from dashboard.services.legal_nlp_service import extract_legal_entities
         entities = extract_legal_entities(text)
         return {"success": True, **entities}, 200
     except Exception as e:
         log.exception("Entity extraction error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Recidivism / FTA Risk Scoring ────────────────────────────────────────────
@@ -127,12 +125,12 @@ async def api_risk_score(booking_number: str):
             {"booking_number": booking_number}, {"_id": 0}
         )
         if not current:
-            return {"error": f"No arrest found: {booking_number}"}, 404
+            return JSONResponse({"error": f"No arrest found: {booking_number}"}, status_code=404)
 
         # Find all other arrests for same defendant (by name match)
         full_name = current.get("full_name", "")
         if not full_name:
-            return {"error": "No name on arrest record"}, 422
+            return JSONResponse({"error": "No name on arrest record"}, status_code=422)
 
         history_cursor = arrests_col.find(
             {"full_name": {"$regex": f"^{full_name}$", "$options": "i"},
@@ -152,13 +150,13 @@ async def api_risk_score(booking_number: str):
         return {"success": True, **result}, 200
     except Exception as e:
         log.exception("Risk score error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Batch Risk Scoring ───────────────────────────────────────────────────────
 
 @legal_nlp_bp.post("/legal-nlp/batch-risk")
-async def api_batch_risk():
+async def api_batch_risk(request: Request):
     """Score risk for multiple booking numbers.
 
     Body: { "booking_numbers": ["BK001", "BK002", ...] }
@@ -167,7 +165,7 @@ async def api_batch_risk():
         body = await request.json() or {}
         bks = body.get("booking_numbers", [])
         if not bks:
-            return {"error": "booking_numbers required"}, 400
+            return JSONResponse({"error": "booking_numbers required"}, status_code=400)
 
         arrests_col = get_collection("arrests")
         from dashboard.services.legal_nlp_service import compute_recidivism_risk
@@ -196,7 +194,7 @@ async def api_batch_risk():
         return {"success": True, "scored": len(results), "results": results}, 200
     except Exception as e:
         log.exception("Batch risk error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Charge Enrichment (enrich an arrest record inline) ────────────────────────
@@ -208,7 +206,7 @@ async def api_enrich_arrest(booking_number: str):
         arrests_col = get_collection("arrests")
         doc = await arrests_col.find_one({"booking_number": booking_number})
         if not doc:
-            return {"error": "Arrest not found"}, 404
+            return JSONResponse({"error": "Arrest not found"}, status_code=404)
 
         from dashboard.services.legal_nlp_service import analyze_charges, extract_citations
         charges = doc.get("charges", "")
@@ -233,7 +231,7 @@ async def api_enrich_arrest(booking_number: str):
         return {"success": True, "enrichment": enrichment}, 200
     except Exception as e:
         log.exception("Enrich error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── NLP Intelligence Dashboard Stats ─────────────────────────────────────────
@@ -361,4 +359,4 @@ async def api_nlp_stats():
         }, 200
     except Exception as e:
         log.exception("NLP stats error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)

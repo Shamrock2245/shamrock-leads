@@ -256,7 +256,7 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
 
 
 @rearrest_bp.post("/rearrest/scan")
-async def manual_scan():
+async def manual_scan(request: Request):
     """Run a manual re-arrest scan."""
     data = await request.json() or {}
     hours = int(data.get("hours", 24))
@@ -265,7 +265,7 @@ async def manual_scan():
 
 
 @rearrest_bp.get("/rearrest/alerts")
-async def get_alerts():
+async def get_alerts(request: Request):
     """Get recent re-arrest alerts (reads from unified rearrest_notifications)."""
     _qp = dict(request.query_params)
     rearrest_col = get_collection("rearrest_notifications")

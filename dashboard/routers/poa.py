@@ -18,7 +18,7 @@ from dashboard.services.poa_service import get_poa_tier_for_bond
 
 poa_bp = APIRouter(prefix="/api", tags=["poa"])
 @poa_bp.get("/poa/next")
-async def api_poa_next():
+async def api_poa_next(request: Request):
     """
     _qp = dict(request.query_params)
     Suggest the next available POA number(s) for a given surety + bond amount.
@@ -28,7 +28,7 @@ async def api_poa_next():
 
     surety = (_qp.get("surety") or "").lower().strip()
     if surety not in ("osi", "palmetto"):
-        return {"error": "surety must be 'osi' or 'palmetto'"}, 400
+        return JSONResponse({"error": "surety must be 'osi' or 'palmetto'"}, status_code=400)
     try:
         bond_amount = float(_qp.get("bond_amount", 0) or 0)
     except ValueError:
@@ -64,7 +64,7 @@ async def api_poa_next():
 
 
 @poa_bp.post("/poa/assign")
-async def api_poa_assign():
+async def api_poa_assign(request: Request):
     """Mark a POA as assigned to a bond case."""
     poa_inventory = get_collection("poa_inventory")
 
@@ -75,13 +75,13 @@ async def api_poa_assign():
     bond_case_id = body.get("bond_case_id") or body.get("booking_number", "")
 
     if not poa_number or not surety_id:
-        return {"error": "poa_number and surety_id are required"}, 400
+        return JSONResponse({"error": "poa_number and surety_id are required"}, status_code=400)
 
     doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
-        return {"error": f"POA {poa_number} not found for surety {surety_id}"}, 404
+        return JSONResponse({"error": f"POA {poa_number} not found for surety {surety_id}"}, status_code=404)
     if doc.get("status") != "available":
-        return {"error": f"POA {poa_number} is already {doc.get('status')} — cannot assign"}, 409
+        return JSONResponse({"error": f"POA {poa_number} is already {doc.get('status')} — cannot assign"}, status_code=409)
 
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
@@ -108,7 +108,7 @@ async def api_poa_assign():
 
 
 @poa_bp.get("/poa/inventory")
-async def api_poa_inventory():
+async def api_poa_inventory(request: Request):
     """Return a summary of available POA inventory by surety and tier."""
     _qp = dict(request.query_params)
     poa_inventory = get_collection("poa_inventory")
@@ -173,7 +173,7 @@ async def api_poa_inventory_summary():
 
 
 @poa_bp.get("/poa/list")
-async def api_poa_list():
+async def api_poa_list(request: Request):
     """Paginated list of all POA powers with filters."""
     _qp = dict(request.query_params)
     poa_inventory = get_collection("poa_inventory")
@@ -216,7 +216,7 @@ async def api_poa_list():
 
 
 @poa_bp.post("/poa/add")
-async def api_poa_add():
+async def api_poa_add(request: Request):
     """Add one or more POA numbers to inventory (manual replenishment)."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
@@ -229,20 +229,20 @@ async def api_poa_add():
     expiration = body.get("expiration")
 
     if not surety_id or surety_id not in ("osi", "palmetto"):
-        return {"error": "surety_id must be 'osi' or 'palmetto'"}, 400
+        return JSONResponse({"error": "surety_id must be 'osi' or 'palmetto'"}, status_code=400)
     if not poa_prefix or not start:
-        return {"error": "poa_prefix and start are required"}, 400
+        return JSONResponse({"error": "poa_prefix and start are required"}, status_code=400)
 
     try:
         start_int = int(start)
         end_int = int(end)
     except ValueError:
-        return {"error": "start and end must be numeric"}, 400
+        return JSONResponse({"error": "start and end must be numeric"}, status_code=400)
 
     if end_int < start_int:
-        return {"error": "end must be >= start"}, 400
+        return JSONResponse({"error": "end must be >= start"}, status_code=400)
     if (end_int - start_int) > 500:
-        return {"error": "Cannot add more than 500 at once"}, 400
+        return JSONResponse({"error": "Cannot add more than 500 at once"}, status_code=400)
 
     docs = []
     skipped = 0
@@ -279,7 +279,7 @@ async def api_poa_add():
 
 
 @poa_bp.post("/poa/void")
-async def api_poa_void():
+async def api_poa_void(request: Request):
     """Mark a POA as voided (unusable)."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
@@ -288,11 +288,11 @@ async def api_poa_void():
     reason = body.get("reason", "Manual void")
 
     if not poa_number or not surety_id:
-        return {"error": "poa_number and surety_id required"}, 400
+        return JSONResponse({"error": "poa_number and surety_id required"}, status_code=400)
 
     doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
-        return {"error": f"POA {poa_number} not found"}, 404
+        return JSONResponse({"error": f"POA {poa_number} not found"}, status_code=404)
 
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
@@ -306,7 +306,7 @@ async def api_poa_void():
 
 
 @poa_bp.post("/poa/release")
-async def api_poa_release():
+async def api_poa_release(request: Request):
     """Release an assigned POA back to available status."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
@@ -314,13 +314,13 @@ async def api_poa_release():
     surety_id = str(body.get("surety_id", "")).lower().strip()
 
     if not poa_number or not surety_id:
-        return {"error": "poa_number and surety_id required"}, 400
+        return JSONResponse({"error": "poa_number and surety_id required"}, status_code=400)
 
     doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
-        return {"error": f"POA {poa_number} not found"}, 404
+        return JSONResponse({"error": f"POA {poa_number} not found"}, status_code=404)
     if doc.get("status") != "assigned":
-        return {"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}, 409
+        return JSONResponse({"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}, status_code=409)
 
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
@@ -331,7 +331,7 @@ async def api_poa_release():
 
 
 @poa_bp.post("/poa/reassign")
-async def api_poa_reassign():
+async def api_poa_reassign(request: Request):
     """Reassign a POA from one case to another."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
@@ -340,11 +340,11 @@ async def api_poa_reassign():
     new_booking = str(body.get("new_booking_number", "")).strip()
 
     if not poa_number or not surety_id or not new_booking:
-        return {"error": "poa_number, surety_id, and new_booking_number required"}, 400
+        return JSONResponse({"error": "poa_number, surety_id, and new_booking_number required"}, status_code=400)
 
     doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
-        return {"error": f"POA {poa_number} not found"}, 404
+        return JSONResponse({"error": f"POA {poa_number} not found"}, status_code=404)
 
     old_case = doc.get("bond_case_id", "none")
     await poa_inventory.update_one(
@@ -363,7 +363,7 @@ async def api_poa_reassign():
 
 
 @poa_bp.post("/poa/restore")
-async def api_poa_restore():
+async def api_poa_restore(request: Request):
     """Restore a voided POA back to available."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
@@ -371,13 +371,13 @@ async def api_poa_restore():
     surety_id = str(body.get("surety_id", "")).lower().strip()
 
     if not poa_number or not surety_id:
-        return {"error": "poa_number and surety_id required"}, 400
+        return JSONResponse({"error": "poa_number and surety_id required"}, status_code=400)
 
     doc = await poa_inventory.find_one({"poa_number": poa_number, "surety_id": surety_id})
     if not doc:
-        return {"error": f"POA {poa_number} not found"}, 404
+        return JSONResponse({"error": f"POA {poa_number} not found"}, status_code=404)
     if doc.get("status") != "voided":
-        return {"error": f"POA {poa_number} is {doc.get('status')}, not voided"}, 409
+        return JSONResponse({"error": f"POA {poa_number} is {doc.get('status')}, not voided"}, status_code=409)
 
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
@@ -388,7 +388,7 @@ async def api_poa_restore():
 
 
 @poa_bp.post("/poa/bulk-assign")
-async def api_poa_bulk_assign():
+async def api_poa_bulk_assign(request: Request):
     """Assign multiple POAs to a single defendant/case in one operation.
 
     Supports two formats:
@@ -438,12 +438,12 @@ async def api_poa_bulk_assign():
         work_items = [{"poa_number": str(n).strip(), "charge": None, "appearance_bond_number": None}
                       for n in poa_numbers_legacy]
     else:
-        return {"error": "Either 'assignments' or 'poa_numbers' must be a non-empty array"}, 400
+        return JSONResponse({"error": "Either 'assignments' or 'poa_numbers' must be a non-empty array"}, status_code=400)
 
     if not bond_case_id:
-        return {"error": "bond_case_id (booking number) is required"}, 400
+        return JSONResponse({"error": "bond_case_id (booking number) is required"}, status_code=400)
     if len(work_items) > 50:
-        return {"error": "Cannot bulk-assign more than 50 POAs at once"}, 400
+        return JSONResponse({"error": "Cannot bulk-assign more than 50 POAs at once"}, status_code=400)
 
     now = datetime.now(timezone.utc).isoformat()
     assigned = []

@@ -47,7 +47,7 @@ def _range_filter(days: int | None) -> dict:
 # REVENUE KPIs + TIME-SERIES
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/revenue")
-async def revenue_metrics():
+async def revenue_metrics(request: Request):
     """
     _qp = dict(request.query_params)
     Returns:
@@ -175,7 +175,7 @@ async def revenue_metrics():
         }
     except Exception as exc:
         logger.exception("analytics/revenue error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -214,14 +214,14 @@ async def funnel_data():
         return {"success": True, "stages": stages}
     except Exception as exc:
         logger.exception("analytics/funnel error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # COUNTY PERFORMANCE
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/county-performance")
-async def county_performance():
+async def county_performance(request: Request):
     """Returns per-county: lead volume, bond count, total premium, avg bond."""
     _qp = dict(request.query_params)
     try:
@@ -270,7 +270,7 @@ async def county_performance():
         return {"success": True, "counties": result, "days": days}
     except Exception as exc:
         logger.exception("analytics/county-performance error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @analytics_bp.get("/analytics/county")
@@ -316,14 +316,14 @@ async def surety_breakdown():
         return {"success": True, "sureties": sureties}
     except Exception as exc:
         logger.exception("analytics/surety-breakdown error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ARREST HEATMAP (county × hour-of-day)
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/heatmap")
-async def arrest_heatmap():
+async def arrest_heatmap(request: Request):
     """Returns arrest counts grouped by county and hour of day."""
     _qp = dict(request.query_params)
     try:
@@ -370,7 +370,7 @@ async def arrest_heatmap():
         return {"success": True, "rows": rows, "days": days}
     except Exception as exc:
         logger.exception("analytics/heatmap error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -404,7 +404,7 @@ async def bond_distribution():
         return {"success": True, "buckets": result}
     except Exception as exc:
         logger.exception("analytics/bond-distribution error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,4 +445,4 @@ async def revenue_forecast():
         }
     except Exception as exc:
         logger.exception("analytics/forecast error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

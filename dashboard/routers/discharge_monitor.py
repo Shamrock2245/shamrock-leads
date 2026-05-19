@@ -211,7 +211,7 @@ async def discharge_status():
             "setup_docs": "docs/GMAIL_DISCHARGE_SETUP.md" if not _gmail_available() else None,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @discharge_monitor_bp.post("/discharge-monitor/scan")
@@ -298,11 +298,11 @@ async def discharge_scan():
         }, 501
     except Exception as e:
         logger.exception("[discharge-scan] Error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @discharge_monitor_bp.post("/discharge-monitor/manual")
-async def discharge_manual():
+async def discharge_manual(request: Request):
     """
     Manually submit an email body for discharge parsing.
     Useful for testing without Gmail credentials.
@@ -315,7 +315,7 @@ async def discharge_manual():
         auto_process = data.get("auto_process", False)
 
         if not body:
-            return {"success": False, "error": "body is required"}, 400
+            return JSONResponse({"success": False, "error": "body is required"}, status_code=400)
 
         parsed = _parse_discharge_email(subject, body)
 
@@ -354,11 +354,11 @@ async def discharge_manual():
         return result
     except Exception as e:
         logger.exception("[discharge-manual] Error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @discharge_monitor_bp.get("/discharge-monitor/queue")
-async def discharge_queue_view():
+async def discharge_queue_view(request: Request):
     """View the discharge_queue collection."""
     _qp = dict(request.query_params)
     try:
@@ -374,7 +374,7 @@ async def discharge_queue_view():
                     item[k] = v.isoformat()
         return {"success": True, "items": items, "total": len(items)}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @discharge_monitor_bp.post("/discharge-monitor/process")
@@ -420,11 +420,11 @@ async def discharge_process():
         return {"success": True, "processed": len(results), "results": results}
     except Exception as e:
         logger.exception("[discharge-process] Error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @discharge_monitor_bp.post("/discharge-monitor/test-parse")
-async def discharge_test_parse():
+async def discharge_test_parse(request: Request):
     """Dry-run parse — no database writes. For testing regex patterns."""
     try:
         data = await request.json() or {}
@@ -433,7 +433,7 @@ async def discharge_test_parse():
         parsed = _parse_discharge_email(subject, body)
         return {"success": True, "parsed": parsed, "dry_run": True}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 async def _auto_exonerate(booking_number: str, source: str) -> dict:

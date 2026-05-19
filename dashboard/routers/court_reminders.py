@@ -11,7 +11,7 @@ from dashboard.extensions import get_db, get_collection
 
 court_reminders_bp = APIRouter(prefix="/api", tags=["court_reminders"])
 @court_reminders_bp.post("/court-reminders/schedule")
-async def schedule_reminders():
+async def schedule_reminders(request: Request):
     """Schedule 4-touch iMessage/SMS court reminders for defendant + indemnitors."""
     try:
         data = await request.json()
@@ -24,7 +24,7 @@ async def schedule_reminders():
         indemnitor_phones = data.get("indemnitor_phones", [])
 
         if not all([booking_number, defendant_name, phone, court_date, court_location, case_number]):
-            return {"error": "Missing required fields"}, 400
+            return JSONResponse({"error": "Missing required fields"}, status_code=400)
 
         service = CourtReminderService()
         result = await service.schedule_reminders(
@@ -38,11 +38,11 @@ async def schedule_reminders():
         )
         return result
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_reminders_bp.post("/payment-reminders/schedule")
-async def schedule_payment_reminders():
+async def schedule_payment_reminders(request: Request):
     """Schedule 3-touch iMessage/SMS payment delinquency reminders."""
     try:
         data = await request.json()
@@ -54,7 +54,7 @@ async def schedule_payment_reminders():
         defendant_phone = data.get("defendant_phone", "")
 
         if not all([booking_number, defendant_name, amount_due, due_date]):
-            return {"error": "Missing required fields"}, 400
+            return JSONResponse({"error": "Missing required fields"}, status_code=400)
 
         service = CourtReminderService()
         result = await service.schedule_payment_reminders(
@@ -67,7 +67,7 @@ async def schedule_payment_reminders():
         )
         return result
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_reminders_bp.post("/court-reminders/process")
@@ -78,7 +78,7 @@ async def process_reminders():
         result = await service.process_due_reminders()
         return result
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_reminders_bp.post("/court-reminders/auto-scan")
@@ -96,7 +96,7 @@ async def court_reminders_auto_scan():
             "send": send_result,
         }
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_reminders_bp.get("/court-reminders/status")
@@ -129,7 +129,7 @@ async def court_reminders_status():
             "cron_interval_hours": 1,
         }
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_reminders_bp.get("/court-reminders/<booking_number>")
@@ -143,4 +143,4 @@ async def get_reminders(booking_number):
         reminders = await cursor.to_list(length=100)
         return {"reminders": reminders}
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)

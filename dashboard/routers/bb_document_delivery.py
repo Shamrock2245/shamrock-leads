@@ -108,7 +108,7 @@ async def _send_document_via_bb(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_docs_bp.post("/bb-docs/send-pdf")
-async def api_send_pdf():
+async def api_send_pdf(request: Request):
     """Send any PDF document via iMessage.
 
     Body:
@@ -127,18 +127,18 @@ async def api_send_pdf():
         caption = data.get("caption", "")
 
         if not phone or not document_url:
-            return {"success": False, "error": "phone and document_url required"}, 400
+            return JSONResponse({"success": False, "error": "phone and document_url required"}, status_code=400)
 
         result = await _send_document_via_bb(phone, document_url, filename, caption or None)
         return result
 
     except Exception as e:
         logger.error("Send PDF error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_docs_bp.post("/bb-docs/send-signing-link")
-async def api_send_signing_link():
+async def api_send_signing_link(request: Request):
     """Send a SignNow document signing link via iMessage.
 
     Body:
@@ -159,7 +159,7 @@ async def api_send_signing_link():
         doc_type = data.get("document_type", "Bond Documents")
 
         if not phone or not signing_url or not defendant_name:
-            return {"success": False, "error": "phone, signing_url, defendant_name required"}, 400
+            return JSONResponse({"success": False, "error": "phone, signing_url, defendant_name required"}, status_code=400)
 
         first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
         message = (
@@ -171,7 +171,7 @@ async def api_send_signing_link():
 
         bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
         if not bb_server:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
         chat_guid = f"any;-;{phone}"
@@ -195,11 +195,11 @@ async def api_send_signing_link():
 
     except Exception as e:
         logger.error("Send signing link error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_docs_bp.post("/bb-docs/send-receipt")
-async def api_send_receipt():
+async def api_send_receipt(request: Request):
     """Send a payment receipt via iMessage.
 
     Body:
@@ -222,7 +222,7 @@ async def api_send_receipt():
         receipt_url = data.get("receipt_url", "")
 
         if not phone or not defendant_name or not amount:
-            return {"success": False, "error": "phone, defendant_name, amount required"}, 400
+            return JSONResponse({"success": False, "error": "phone, defendant_name, amount required"}, status_code=400)
 
         first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
         message = (
@@ -233,7 +233,7 @@ async def api_send_receipt():
 
         bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
         if not bb_server:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
         chat_guid = f"any;-;{phone}"
@@ -248,4 +248,4 @@ async def api_send_receipt():
 
     except Exception as e:
         logger.error("Send receipt error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

@@ -133,7 +133,7 @@ async def sync_bond_contacts(bond_doc: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_contacts_bp.post("/bb-contacts/sync-bond")
-async def api_sync_bond_contacts():
+async def api_sync_bond_contacts(request: Request):
     """Sync contacts for a single bond to the Mac's Contacts.app.
 
     Body:
@@ -143,7 +143,7 @@ async def api_sync_bond_contacts():
         data = await request.json() or {}
         booking_number = (data.get("booking_number") or "").strip()
         if not booking_number:
-            return {"success": False, "error": "booking_number required"}, 400
+            return JSONResponse({"success": False, "error": "booking_number required"}, status_code=400)
 
         bonds_coll = get_collection("bonds")
         bond = await bonds_coll.find_one({"booking_number": booking_number}, {"_id": 0})
@@ -153,14 +153,14 @@ async def api_sync_bond_contacts():
             bond = await prospective_coll.find_one({"booking_number": booking_number}, {"_id": 0})
 
         if not bond:
-            return {"success": False, "error": f"Bond {booking_number} not found"}, 404
+            return JSONResponse({"success": False, "error": f"Bond {booking_number} not found"}, status_code=404)
 
         result = await sync_bond_contacts(bond)
         return {"success": True, "booking_number": booking_number, **result}
 
     except Exception as e:
         logger.error("Sync bond contacts error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_contacts_bp.post("/bb-contacts/sync-all")
@@ -197,11 +197,11 @@ async def api_sync_all_contacts():
 
     except Exception as e:
         logger.error("Sync all contacts error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_contacts_bp.post("/bb-contacts/check")
-async def api_check_imessage():
+async def api_check_imessage(request: Request):
     """Check if one or more phone numbers are on iMessage.
 
     Body:
@@ -214,11 +214,11 @@ async def api_check_imessage():
         data = await request.json() or {}
         phones = data.get("phones", [])
         if not phones:
-            return {"success": False, "error": "phones array required"}, 400
+            return JSONResponse({"success": False, "error": "phones array required"}, status_code=400)
 
         bb_client = await _get_bb_client()
         if not bb_client:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         results = {}
         for phone in phones:
@@ -236,7 +236,7 @@ async def api_check_imessage():
 
     except Exception as e:
         logger.error("Check iMessage error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_contacts_bp.get("/bb-contacts/list")
@@ -245,11 +245,11 @@ async def api_list_contacts():
     try:
         bb_client = await _get_bb_client()
         if not bb_client:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         result = await bb_client.get_contacts()
         contacts = result.get("data", [])
         return {"success": True, "count": len(contacts), "contacts": contacts}
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

@@ -29,7 +29,7 @@ match_manager_bp = APIRouter(prefix="/api", tags=["match_manager"])
 #  POST /api/bonds/match — Full manual match: POA + defendant + indemnitor
 # ─────────────────────────────────────────────────────────────────────────────
 @match_manager_bp.post("/bonds/match")
-async def api_bonds_match():
+async def api_bonds_match(request: Request):
     """
     Create or update a bond with full manual matching.
     Associates a POA number with a defendant, case number, and indemnitor.
@@ -57,9 +57,9 @@ async def api_bonds_match():
     defendant_name = (data.get("defendant_name") or "").strip()
     
     if not booking_number:
-        return {"success": False, "error": "booking_number is required"}, 400
+        return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
     if not poa_number:
-        return {"success": False, "error": "poa_number is required"}, 400
+        return JSONResponse({"success": False, "error": "poa_number is required"}, status_code=400)
     
     try:
         now = datetime.now(timezone.utc)
@@ -215,7 +215,7 @@ async def api_bonds_match():
     
     except Exception as exc:
         logger.exception("api_bonds_match error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,14 +259,14 @@ async def api_bonds_unmatched():
     
     except Exception as exc:
         logger.exception("api_bonds_unmatched error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/bonds/<booking>/assign-poa — Quick POA assignment
 # ─────────────────────────────────────────────────────────────────────────────
 @match_manager_bp.patch("/bonds/<booking_number>/assign-poa")
-async def api_assign_poa(booking_number: str):
+async def api_assign_poa(request: Request, booking_number: str):
     """Quick-assign a POA number to an existing bond."""
     data = await request.json() or {}
     poa_number = (data.get("poa_number") or "").strip()
@@ -274,7 +274,7 @@ async def api_assign_poa(booking_number: str):
     agent = data.get("agent", "Dashboard")
     
     if not poa_number:
-        return {"success": False, "error": "poa_number required"}, 400
+        return JSONResponse({"success": False, "error": "poa_number required"}, status_code=400)
     
     try:
         bonds_col = get_collection("active_bonds")
@@ -299,7 +299,7 @@ async def api_assign_poa(booking_number: str):
         )
         
         if result.matched_count == 0:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
         
         # Mark POA as assigned
         bond = await bonds_col.find_one({"booking_number": booking_number})
@@ -318,21 +318,21 @@ async def api_assign_poa(booking_number: str):
     
     except Exception as exc:
         logger.exception("api_assign_poa error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/bonds/<booking>/assign-indemnitor — Quick indemnitor assignment
 # ─────────────────────────────────────────────────────────────────────────────
 @match_manager_bp.patch("/bonds/<booking_number>/assign-indemnitor")
-async def api_assign_indemnitor(booking_number: str):
+async def api_assign_indemnitor(request: Request, booking_number: str):
     """Quick-assign indemnitor info to an existing bond."""
     data = await request.json() or {}
     name = (data.get("name") or "").strip()
     agent = data.get("agent", "Dashboard")
     
     if not name:
-        return {"success": False, "error": "name required"}, 400
+        return JSONResponse({"success": False, "error": "name required"}, status_code=400)
     
     try:
         bonds_col = get_collection("active_bonds")
@@ -364,20 +364,20 @@ async def api_assign_indemnitor(booking_number: str):
         )
         
         if result.matched_count == 0:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
         
         return {"success": True, "indemnitor": indemnitor}
     
     except Exception as exc:
         logger.exception("api_assign_indemnitor error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/match-manager/search — Unified search across entities
 # ─────────────────────────────────────────────────────────────────────────────
 @match_manager_bp.get("/match-manager/search")
-async def api_match_search():
+async def api_match_search(request: Request):
     """Search defendants, bonds, and arrest records for matching."""
     _qp = dict(request.query_params)
     q = _qp.get("q", "").strip()
@@ -435,4 +435,4 @@ async def api_match_search():
     
     except Exception as exc:
         logger.exception("api_match_search error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

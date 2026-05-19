@@ -255,7 +255,7 @@ async def _handle_updated_message(event_data: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_webhook_bp.post("/webhooks/bluebubbles")
-async def receive_bb_event():
+async def receive_bb_event(request: Request):
     """Receive a real-time event from the BlueBubbles server.
 
     BlueBubbles POSTs a JSON payload with:
@@ -266,15 +266,15 @@ async def receive_bb_event():
     signature = request.headers.get("x-bb-signature", "")
     if not _verify_signature(raw_body, signature):
         logger.warning("BB webhook: invalid signature — rejecting")
-        return {"error": "Invalid signature"}, 401
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
 
     try:
         payload = await request.json()
     except Exception:
-        return {"error": "Invalid JSON"}, 400
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
     if not payload:
-        return {"error": "Empty payload"}, 400
+        return JSONResponse({"error": "Empty payload"}, status_code=400)
 
     event_type = payload.get("type", "")
     event_data = payload.get("data", payload)
@@ -303,7 +303,7 @@ async def receive_bb_event():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_webhook_bp.post("/webhooks/bluebubbles/register")
-async def register_bb_webhook():
+async def register_bb_webhook(request: Request):
     """Register our VPS webhook URL with the BlueBubbles server.
 
     Call this endpoint once after startup (or when the BB ngrok tunnel URL changes).

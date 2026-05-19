@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """
 Wix CMS API Blueprint — Dashboard Integration
 ===============================================
@@ -38,55 +39,55 @@ def _get_client() -> WixClient:
 
 # ── Sync Status ─────────────────────────────────────────────────────────────────
 
-@wix_cms_bp.route("/wix/status", methods=["GET"])
+@wix_cms_bp.get("/wix/status")
 async def wix_status():
     """Get Wix sync engine status and statistics."""
     try:
         engine = _get_sync_engine()
         status = await engine.get_sync_status()
-        return jsonify(status)
+        return status
     except Exception as e:
         logger.error(f"Status check failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
 # ── Sync Operations ─────────────────────────────────────────────────────────────
 
-@wix_cms_bp.route("/wix/sync/intakes", methods=["POST"])
-async def sync_intakes():
+@wix_cms_bp.post("/wix/sync/intakes")
+async def sync_intakes(request: Request):
     """Sync MongoDB intakes → Wix CMS IntakeQueue."""
     try:
-        data = await request.get_json(silent=True) or {}
+        data = await request.json() or {}
         limit = data.get("limit", 50)
 
         engine = _get_sync_engine()
         result = await engine.sync_intakes(limit=limit)
-        return jsonify(result)
+        return result
     except Exception as e:
         logger.error(f"Intake sync failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/sync/cases", methods=["POST"])
-async def sync_cases():
+@wix_cms_bp.post("/wix/sync/cases")
+async def sync_cases(request: Request):
     """Sync MongoDB bond_cases → Wix CMS Cases."""
     try:
-        data = await request.get_json(silent=True) or {}
+        data = await request.json() or {}
         limit = data.get("limit", 50)
 
         engine = _get_sync_engine()
         result = await engine.sync_cases(limit=limit)
-        return jsonify(result)
+        return result
     except Exception as e:
         logger.error(f"Case sync failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/sync/leads-to-crm", methods=["POST"])
-async def sync_leads_to_crm():
+@wix_cms_bp.post("/wix/sync/leads-to-crm")
+async def sync_leads_to_crm(request: Request):
     """Push hot leads from MongoDB → Wix CRM Contacts."""
     try:
-        data = await request.get_json(silent=True) or {}
+        data = await request.json() or {}
         min_score = data.get("min_score", 70)
         limit = data.get("limit", 25)
 
@@ -95,44 +96,44 @@ async def sync_leads_to_crm():
             min_score=min_score,
             limit=limit,
         )
-        return jsonify(result)
+        return result
     except Exception as e:
         logger.error(f"Lead-to-CRM sync failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/sync/full", methods=["POST"])
+@wix_cms_bp.post("/wix/sync/full")
 async def sync_full():
     """Run all sync operations (intakes + cases + leads→CRM)."""
     try:
         engine = _get_sync_engine()
         result = await engine.run_full_sync()
-        return jsonify(result)
+        return result
     except Exception as e:
         logger.error(f"Full sync failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
 # ── CMS Direct Operations ───────────────────────────────────────────────────────
 
-@wix_cms_bp.route("/wix/collections", methods=["GET"])
+@wix_cms_bp.get("/wix/collections")
 async def list_collections():
     """List all Wix CMS collections on the site."""
     try:
         engine = _get_sync_engine()
         collections = await engine.discover_collections()
-        return jsonify({
+        return {
             "status": "ok",
             "collections": collections,
             "count": len(collections),
-        })
+        }
     except Exception as e:
         logger.error(f"Collection listing failed: {e}")
-        return jsonify({"status": "error", "reason": str(e)}), 500
+        return JSONResponse({"status": "error", "reason": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/cms/query", methods=["POST"])
-async def cms_query():
+@wix_cms_bp.post("/wix/cms/query")
+async def cms_query(request: Request):
     """
     Query a Wix CMS collection directly.
 
@@ -145,9 +146,9 @@ async def cms_query():
         }
     """
     try:
-        data = await request.get_json()
+        data = await request.json()
         if not data or "collection" not in data:
-            return jsonify({"error": "collection is required"}), 400
+            return JSONResponse({"error": "collection is required"}, status_code=400)
 
         import asyncio
         cms = WixDataClient()
@@ -159,15 +160,15 @@ async def cms_query():
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
         )
-        return jsonify({"status": "ok", **result})
+        return {"status": "ok", **result}
     except WixAPIError as e:
-        return jsonify({"error": e.message, "status_code": e.status_code}), e.status_code
+        return {"error": e.message, "status_code": e.status_code}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/cms/insert", methods=["POST"])
-async def cms_insert():
+@wix_cms_bp.post("/wix/cms/insert")
+async def cms_insert(request: Request):
     """
     Insert an item into a Wix CMS collection.
 
@@ -178,9 +179,9 @@ async def cms_insert():
         }
     """
     try:
-        data = await request.get_json()
+        data = await request.json()
         if not data or "collection" not in data or "data" not in data:
-            return jsonify({"error": "collection and data are required"}), 400
+            return JSONResponse({"error": "collection and data are required"}, status_code=400)
 
         import asyncio
         cms = WixDataClient()
@@ -189,15 +190,15 @@ async def cms_insert():
             collection=data["collection"],
             data=data["data"],
         )
-        return jsonify({"status": "ok", "item": result})
+        return {"status": "ok", "item": result}
     except WixAPIError as e:
-        return jsonify({"error": e.message, "status_code": e.status_code}), e.status_code
+        return {"error": e.message, "status_code": e.status_code}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/cms/update", methods=["POST"])
-async def cms_update():
+@wix_cms_bp.post("/wix/cms/update")
+async def cms_update(request: Request):
     """
     Patch (partial update) an item in a Wix CMS collection.
 
@@ -209,9 +210,9 @@ async def cms_update():
         }
     """
     try:
-        data = await request.get_json()
+        data = await request.json()
         if not data or not all(k in data for k in ["collection", "item_id", "data"]):
-            return jsonify({"error": "collection, item_id, and data are required"}), 400
+            return JSONResponse({"error": "collection, item_id, and data are required"}, status_code=400)
 
         import asyncio
         cms = WixDataClient()
@@ -221,17 +222,17 @@ async def cms_update():
             item_id=data["item_id"],
             data=data["data"],
         )
-        return jsonify({"status": "ok", "item": result})
+        return {"status": "ok", "item": result}
     except WixAPIError as e:
-        return jsonify({"error": e.message, "status_code": e.status_code}), e.status_code
+        return {"error": e.message, "status_code": e.status_code}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── CRM Contact Operations ──────────────────────────────────────────────────────
 
-@wix_cms_bp.route("/wix/crm/query", methods=["POST"])
-async def crm_query():
+@wix_cms_bp.post("/wix/crm/query")
+async def crm_query(request: Request):
     """
     Query Wix CRM contacts.
 
@@ -243,7 +244,7 @@ async def crm_query():
         }
     """
     try:
-        data = await request.get_json(silent=True) or {}
+        data = await request.json() or {}
 
         import asyncio
         crm = WixContactsClient()
@@ -255,15 +256,15 @@ async def crm_query():
             limit=data.get("limit", 50),
             offset=data.get("offset", 0),
         )
-        return jsonify({"status": "ok", **result})
+        return {"status": "ok", **result}
     except WixAPIError as e:
-        return jsonify({"error": e.message, "status_code": e.status_code}), e.status_code
+        return {"error": e.message, "status_code": e.status_code}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/crm/upsert", methods=["POST"])
-async def crm_upsert():
+@wix_cms_bp.post("/wix/crm/upsert")
+async def crm_upsert(request: Request):
     """
     Create or update a CRM contact (dedup by email/phone).
 
@@ -277,9 +278,9 @@ async def crm_upsert():
         }
     """
     try:
-        data = await request.get_json()
+        data = await request.json()
         if not data or not data.get("first_name"):
-            return jsonify({"error": "first_name is required"}), 400
+            return JSONResponse({"error": "first_name is required"}, status_code=400)
 
         import asyncio
         crm = WixContactsClient()
@@ -291,22 +292,22 @@ async def crm_upsert():
             last_name=data.get("last_name", ""),
             labels=data.get("labels"),
         )
-        return jsonify({"status": "ok", "contact": contact})
+        return {"status": "ok", "contact": contact}
     except WixAPIError as e:
-        return jsonify({"error": e.message, "status_code": e.status_code}), e.status_code
+        return {"error": e.message, "status_code": e.status_code}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@wix_cms_bp.route("/wix/crm/labels", methods=["GET"])
+@wix_cms_bp.get("/wix/crm/labels")
 async def crm_list_labels():
     """List all CRM labels on the site."""
     try:
         import asyncio
         crm = WixContactsClient()
         labels = await asyncio.to_thread(crm.list_labels)
-        return jsonify({"status": "ok", "labels": labels})
+        return {"status": "ok", "labels": labels}
     except WixAPIError as e:
-        return jsonify({"error": e.message}), e.status_code
+        return {"error": e.message}, e.status_code
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)

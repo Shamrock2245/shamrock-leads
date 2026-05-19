@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """Tracking API Blueprint — Location Sync, Map Data, History, Geofence, Exoneration
    Phase 3 Enhancement:
    - map-data now includes full location_history + geo_pings merged and sorted
@@ -98,7 +99,7 @@ async def _merge_location_history(booking_number: str) -> list:
     return merged[:200]
 
 
-@tracking_bp.route('/tracking/map-data')
+@tracking_bp.get("/tracking/map-data")
 async def tracking_map_data():
     """Return all active bonds with latest location + full merged location history."""
     active_bonds = get_collection("active_bonds")
@@ -175,7 +176,7 @@ async def tracking_map_data():
                 "check_in_frequency_days": bond.get("check_in_frequency_days", 30),
             })
 
-        return jsonify({
+        return {
             "defendants": defendants,
             "summary": {
                 "total_active": total_active,
@@ -183,18 +184,18 @@ async def tracking_map_data():
                 "high_risk": high_risk,
                 "out_of_area": out_of_area,
             }
-        })
+        }
     except Exception as e:
         logger.error("[tracking/map-data] %s", e)
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/search')
-async def tracking_search():
+@tracking_bp.get("/tracking/search")
+async def tracking_search(request: Request):
     """Search active bonds by defendant name, booking number, or case number."""
     q = request.args.get("q", "").strip()
     if not q:
-        return jsonify({"results": []})
+        return {"results": []}
     active_bonds = get_collection("active_bonds")
     try:
         pattern = re.compile(re.escape(q), re.IGNORECASE)
@@ -214,26 +215,26 @@ async def tracking_search():
                 if isinstance(v, datetime):
                     bond[k] = v.isoformat()
             results.append(bond)
-        return jsonify({"results": results, "count": len(results)})
+        return {"results": results, "count": len(results)}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/<booking_number>/location-history')
+@tracking_bp.get("/tracking/<booking_number>/location-history")
 async def tracking_location_history(booking_number):
     """Return merged location history from all 3 sources."""
     try:
         history = await _merge_location_history(booking_number)
-        return jsonify({
+        return {
             "booking_number": booking_number,
             "location_history": history,
             "count": len(history),
-        })
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/<booking_number>/history')
+@tracking_bp.get("/tracking/<booking_number>/history")
 async def tracking_history(booking_number):
     """Full location history + alerts + court dates for a specific defendant."""
     active_bonds = get_collection("active_bonds")
@@ -242,7 +243,7 @@ async def tracking_history(booking_number):
             {"booking_number": booking_number}, {"_id": 0}
         )
         if not bond:
-            return jsonify({"error": "Bond not found"}), 404
+            return JSONResponse({"error": "Bond not found"}, status_code=404)
         for k, v in list(bond.items()):
             if isinstance(v, datetime):
                 bond[k] = v.isoformat()
@@ -259,7 +260,7 @@ async def tracking_history(booking_number):
                     rem[k] = v.isoformat()
             court_dates.append(rem)
 
-        return jsonify({
+        return {
             "booking_number": booking_number,
             "defendant_name": bond.get("defendant_name"),
             "status": bond.get("status"),
@@ -281,17 +282,17 @@ async def tracking_history(booking_number):
             "exonerated_at": bond.get("exonerated_at"),
             "exoneration_source": bond.get("exoneration_source"),
             "exoneration_case_number": bond.get("exoneration_case_number"),
-        })
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/<booking_number>/geofence', methods=['POST'])
-async def tracking_set_geofence(booking_number):
+@tracking_bp.post("/tracking/<booking_number>/geofence")
+async def tracking_set_geofence(request: Request, booking_number):
     """Set a geofence radius (miles) around home address."""
     active_bonds = get_collection("active_bonds")
     try:
-        data = await request.get_json()
+        data = await request.json()
         radius_miles = float(data.get("radius_miles", 50))
         center_lat = data.get("center_lat")
         center_lng = data.get("center_lng")
@@ -308,14 +309,14 @@ async def tracking_set_geofence(booking_number):
             }}
         )
         if result.matched_count == 0:
-            return jsonify({"error": "Bond not found"}), 404
-        return jsonify({"success": True, "booking_number": booking_number, "radius_miles": radius_miles})
+            return JSONResponse({"error": "Bond not found"}, status_code=404)
+        return {"success": True, "booking_number": booking_number, "radius_miles": radius_miles}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/<booking_number>/exonerate', methods=['POST'])
-async def tracking_exonerate(booking_number):
+@tracking_bp.post("/tracking/<booking_number>/exonerate")
+async def tracking_exonerate(request: Request, booking_number):
     """
     Exonerate a bond — stops all location tracking, cancels pending geo tokens
     and court reminders, writes audit log, fires SSE bond_exonerated event.
@@ -336,7 +337,7 @@ async def tracking_exonerate(booking_number):
     now = datetime.now(timezone.utc)
 
     try:
-        data = await request.get_json(force=True) or {}
+        data = await request.json() or {}
         source = data.get("source", "manual")
         note = data.get("note", "")
         case_number = data.get("case_number", "")
@@ -344,18 +345,18 @@ async def tracking_exonerate(booking_number):
 
         bond = await active_bonds.find_one({"booking_number": booking_number}, {"_id": 0})
         if not bond:
-            return jsonify({"success": False, "error": "Bond not found"}), 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         defendant_name = bond.get("defendant_name", "")
         current_status = bond.get("status", "")
 
         if current_status == "exonerated":
-            return jsonify({
+            return {
                 "success": True,
                 "already_exonerated": True,
                 "exonerated_at": bond.get("exonerated_at"),
                 "message": f"{defendant_name} was already exonerated."
-            })
+            }
 
         await active_bonds.update_one(
             {"booking_number": booking_number},
@@ -437,7 +438,7 @@ async def tracking_exonerate(booking_number):
             booking_number, defendant_name, source
         )
 
-        return jsonify({
+        return {
             "success": True,
             "booking_number": booking_number,
             "defendant_name": defendant_name,
@@ -446,14 +447,14 @@ async def tracking_exonerate(booking_number):
             "tracking_stopped": True,
             "reminders_cancelled": True,
             "notify_result": notify_result,
-        })
+        }
     except Exception as e:
         logger.error("[exonerate] Error for %s: %s", booking_number, e)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/exonerations')
-async def tracking_exonerations():
+@tracking_bp.get("/tracking/exonerations")
+async def tracking_exonerations(request: Request):
     """Return recent bond exonerations for the dashboard exoneration log panel."""
     audit_col = get_collection("audit_events")
     try:
@@ -468,25 +469,25 @@ async def tracking_exonerations():
                 if isinstance(v, datetime):
                     doc[k] = v.isoformat()
             records.append(doc)
-        return jsonify({"exonerations": records, "count": len(records)})
+        return {"exonerations": records, "count": len(records)}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.route('/tracking/<booking_number>/send-geo-link', methods=['POST'])
-async def tracking_send_geo_link(booking_number):
+@tracking_bp.post("/tracking/<booking_number>/send-geo-link")
+async def tracking_send_geo_link(request: Request, booking_number):
     """Send a fresh GPS capture link to defendant or indemnitor via iMessage/SMS."""
     active_bonds = get_collection("active_bonds")
     try:
-        data = await request.get_json(force=True) or {}
+        data = await request.json() or {}
         bond = await active_bonds.find_one({"booking_number": booking_number}, {"_id": 0})
         if not bond:
-            return jsonify({"success": False, "error": "Bond not found"}), 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         phone = data.get("phone") or bond.get("indemnitor_phone", "")
         recipient = data.get("recipient", "indemnitor")
         if not phone:
-            return jsonify({"success": False, "error": "No phone number available"}), 400
+            return JSONResponse({"success": False, "error": "No phone number available"}, status_code=400)
 
         defendant_name = bond.get("defendant_name", "defendant")
         geo_pings = get_collection("geo_pings")
@@ -513,12 +514,12 @@ async def tracking_send_geo_link(booking_number):
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
         result = await send_message_universal(phone, msg)
-        return jsonify({
+        return {
             "success": result.get("success", False),
             "token": token,
             "geo_url": geo_url,
             "phone": phone,
             "channel": result.get("channel"),
-        })
+        }
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

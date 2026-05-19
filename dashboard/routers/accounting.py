@@ -83,7 +83,7 @@ async def api_accounting_dashboard():
 #  GET /api/accounting/transactions — Paginated ledger
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/transactions")
-async def api_accounting_transactions():
+async def api_accounting_transactions(request: Request):
     """Paginated transaction ledger with filters."""
     _qp = dict(request.query_params)
     txns = get_collection("transactions")
@@ -131,12 +131,12 @@ async def api_accounting_transactions():
 #  POST /api/accounting/transactions — Record a transaction (cash, check, etc.)
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.post("/accounting/transactions")
-async def api_record_transaction():
+async def api_record_transaction(request: Request):
     """Record a manual transaction (cash, check, wire, etc.)."""
     data = await request.json() or {}
     amount = float(data.get("amount", 0))
     if amount <= 0:
-        return {"error": "Amount must be > 0"}, 400
+        return JSONResponse({"error": "Amount must be > 0"}, status_code=400)
 
     now = datetime.now(timezone.utc)
     txn = {
@@ -170,7 +170,7 @@ async def api_record_transaction():
 #  PATCH /api/accounting/transactions/<txn_id>/attribute — Link txn to case
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.patch("/accounting/transactions/<txn_id>/attribute")
-async def api_attribute_transaction(txn_id: str):
+async def api_attribute_transaction(request: Request, txn_id: str):
     """Attribute a transaction to a specific case/defendant."""
     data = await request.json() or {}
     txns = get_collection("transactions")
@@ -182,7 +182,7 @@ async def api_attribute_transaction(txn_id: str):
 
     result = await txns.update_one({"transaction_id": txn_id}, update)
     if result.matched_count == 0:
-        return {"error": "Transaction not found"}, 404
+        return JSONResponse({"error": "Transaction not found"}, status_code=404)
     return {"success": True}
 
 
@@ -190,7 +190,7 @@ async def api_attribute_transaction(txn_id: str):
 #  POST /api/accounting/import/swipesimple — Import SwipeSimple CSV
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.post("/accounting/import/swipesimple")
-async def api_import_swipesimple():
+async def api_import_swipesimple(request: Request):
     """Parse and import a SwipeSimple CSV export into the transactions ledger."""
     files = await request.files
     csv_file = files.get("file")
@@ -198,7 +198,7 @@ async def api_import_swipesimple():
         # Try raw body as CSV text
         raw = (await request.get_data()).decode("utf-8", errors="replace")
         if not raw.strip():
-            return {"error": "No CSV file provided"}, 400
+            return JSONResponse({"error": "No CSV file provided"}, status_code=400)
     else:
         raw = csv_file.read().decode("utf-8", errors="replace")
 
@@ -309,12 +309,12 @@ async def api_import_history():
 #  GET /api/accounting/premium-split — Calculate splits for a bond
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/premium-split")
-async def api_premium_split():
+async def api_premium_split(request: Request):
     _qp = dict(request.query_params)
     bond_amount = float(_qp.get("bond_amount", 0))
     surety = _qp.get("surety", "osi").lower()
     if bond_amount <= 0:
-        return {"error": "bond_amount required"}, 400
+        return JSONResponse({"error": "bond_amount required"}, status_code=400)
 
     premium = bond_amount * 0.10
     buf_rate = 0.05
@@ -334,7 +334,7 @@ async def api_premium_split():
 #  GET /api/accounting/revenue/monthly — Monthly revenue for charts
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/revenue/monthly")
-async def api_revenue_monthly():
+async def api_revenue_monthly(request: Request):
     _qp = dict(request.query_params)
     txns = get_collection("transactions")
     months = int(_qp.get("months", 12))
@@ -355,7 +355,7 @@ async def api_revenue_monthly():
 #  GET /api/accounting/export/quickbooks — QuickBooks-compatible CSV export
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/export/quickbooks")
-async def api_export_quickbooks():
+async def api_export_quickbooks(request: Request):
     """Export transactions as QuickBooks-compatible CSV (General Journal format)."""
     _qp = dict(request.query_params)
     txns = get_collection("transactions")
@@ -425,7 +425,7 @@ async def api_export_quickbooks():
 #  GET /api/accounting/export/csv — Raw transaction export
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/export/csv")
-async def api_export_csv():
+async def api_export_csv(request: Request):
     """Export raw transaction data as CSV."""
     _qp = dict(request.query_params)
     txns = get_collection("transactions")
@@ -469,5 +469,5 @@ async def api_void_transaction(txn_id: str):
         {"$set": {"status": "voided", "voided_at": datetime.now(timezone.utc).isoformat()}},
     )
     if result.matched_count == 0:
-        return {"error": "Transaction not found"}, 404
+        return JSONResponse({"error": "Transaction not found"}, status_code=404)
     return {"success": True}

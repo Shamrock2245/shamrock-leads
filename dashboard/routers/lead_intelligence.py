@@ -131,7 +131,7 @@ async def lead_intelligence(booking_number: str):
 
         arrest = await arrests_col.find_one({"booking_number": booking_number})
         if not arrest:
-            return {"success": False, "error": "Lead not found"}, 404
+            return JSONResponse({"success": False, "error": "Lead not found"}, status_code=404)
 
         # Score explanation
         factors = build_score_explanation(arrest)
@@ -190,7 +190,7 @@ async def lead_intelligence(booking_number: str):
         }
     except Exception as exc:
         logger.exception("lead intelligence error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── KPI Trend Stats ───────────────────────────────────────────────────────────
@@ -259,7 +259,7 @@ async def trend_stats():
         }
     except Exception as exc:
         logger.exception("trend-stats error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Charge Severity for a Lead ────────────────────────────────────────────────
@@ -273,7 +273,7 @@ async def charge_severity(booking_number: str):
             {"charges": 1, "booking_number": 1}
         )
         if not arrest:
-            return {"success": False, "error": "Not found"}, 404
+            return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
 
         charges = arrest.get("charges") or ""
         charge_list = [c.strip() for c in re.split(r'[;,\n]', charges) if c.strip()]
@@ -294,4 +294,4 @@ async def charge_severity(booking_number: str):
         }
     except Exception as exc:
         logger.exception("charge-severity error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

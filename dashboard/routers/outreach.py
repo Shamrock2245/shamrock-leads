@@ -40,7 +40,7 @@ async def start_sequence(booking_number: str, county: str):
             {"_id": 0},
         )
         if not arrest:
-            return {"error": f"Arrest not found: {county}/{booking_number}"}, 404
+            return JSONResponse({"error": f"Arrest not found: {county}/{booking_number}"}, status_code=404)
 
         sequencer = _get_sequencer()
         result = await sequencer.start_sequence(arrest)
@@ -48,7 +48,7 @@ async def start_sequence(booking_number: str, county: str):
 
     except Exception as exc:
         logger.exception("start_sequence error for %s/%s", county, booking_number)
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ async def start_sequence(booking_number: str, county: str):
 # Body (optional): { "reason": "intake_submitted" }
 # ─────────────────────────────────────────────────────────────────────────────
 @outreach_bp.post("/outreach/stop/<booking_number>/<county>")
-async def stop_sequence(booking_number: str, county: str):
+async def stop_sequence(request: Request, booking_number: str, county: str):
     """Stop an active outreach sequence and cancel scheduled BB messages."""
     try:
         data = (await request.json()) or {}
@@ -72,7 +72,7 @@ async def stop_sequence(booking_number: str, county: str):
 
     except Exception as exc:
         logger.exception("stop_sequence error for %s/%s", county, booking_number)
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ async def get_sequence_status(booking_number: str, county: str):
         return {"found": True, **seq}
 
     except Exception as exc:
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ async def get_sequence_status(booking_number: str, county: str):
 # Body (optional): { "hours_back": 24, "limit": 100 }
 # ─────────────────────────────────────────────────────────────────────────────
 @outreach_bp.post("/outreach/batch/start")
-async def batch_start():
+async def batch_start(request: Request):
     """
     Start outreach sequences for all new arrests in the last N hours.
     Skips arrests that already have an active sequence.
@@ -131,7 +131,7 @@ async def batch_start():
 
     except Exception as exc:
         logger.exception("batch_start error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ async def batch_start():
 # Query params: status, county, limit, offset
 # ─────────────────────────────────────────────────────────────────────────────
 @outreach_bp.get("/outreach/sequences")
-async def list_sequences():
+async def list_sequences(request: Request):
     """Return paginated list of outreach sequences."""
     _qp = dict(request.query_params)
     try:
@@ -175,7 +175,7 @@ async def list_sequences():
         }
 
     except Exception as exc:
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ async def list_sequences():
 # Body: { "phone": "+12395551234", "message": "...", "chat_guid": "..." }
 # ─────────────────────────────────────────────────────────────────────────────
 @outreach_bp.post("/outreach/reply")
-async def handle_reply():
+async def handle_reply(request: Request):
     """
     Handle an inbound iMessage reply from a prospect.
     Stops any active outreach sequence for that phone number.
@@ -196,7 +196,7 @@ async def handle_reply():
         message_text = data.get("message", "").strip()
 
         if not phone:
-            return {"error": "phone is required"}, 400
+            return JSONResponse({"error": "phone is required"}, status_code=400)
 
         sequencer = _get_sequencer()
         result = await sequencer.handle_reply(phone=phone, message_text=message_text)
@@ -204,4 +204,4 @@ async def handle_reply():
 
     except Exception as exc:
         logger.exception("handle_reply error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

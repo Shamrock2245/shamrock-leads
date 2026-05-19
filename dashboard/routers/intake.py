@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """
 ShamrockLeads — Indemnitor Intake Queue API Blueprint
 Receives indemnitor information from ALL sources that previously fed
@@ -143,15 +144,15 @@ def _extract_defendant(data: dict) -> dict:
 #  POST /api/intake/submit
 #  Accept a new indemnitor intake from any source
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/submit", methods=["POST"])
-async def intake_submit():
+@intake_bp.post("/intake/submit")
+async def intake_submit(request: Request):
     """
     Accept indemnitor intake from any source (Wix, Telegram, manual, walk-in, phone).
     Stores in MongoDB `intake_queue` collection.
     Mirrors handleNewIntake() / storeIntakeInQueue() from GAS WixPortalIntegration.js.
     After storing, auto-triggers Phase 4 matching engine.
     """
-    data = await request.get_json(force=True) or {}
+    data = await request.json() or {}
 
     source_raw = (
         data.get("source")
@@ -263,7 +264,7 @@ async def intake_submit():
         except Exception as match_err:
             logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
 
-        return jsonify({
+        return {
             "success": True,
             "intake_id": intake_id,
             "source": source,
@@ -271,18 +272,18 @@ async def intake_submit():
             "indemnitor_name": ind_full_name,
             "message": f"Intake received from {SOURCE_LABELS.get(source, source)}",
             "match": match_result,
-        })
+        }
     except Exception as e:
         logger.error(f"[intake] Failed to store intake {intake_id}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GET /api/intake/queue
 #  Return pending intakes for the staff dashboard queue
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/queue", methods=["GET"])
-async def intake_queue_list():
+@intake_bp.get("/intake/queue")
+async def intake_queue_list(request: Request):
     """
     Return pending intakes for the staff dashboard queue.
     Mirrors getWixIntakeQueue() from GAS WixPortalIntegration.js.
@@ -369,44 +370,44 @@ async def intake_queue_list():
                 },
             })
 
-        return jsonify({
+        return {
             "success": True,
             "intakes": result,
             "count": len(result),
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
     except Exception as e:
         logger.error(f"[intake] queue list error: {e}")
-        return jsonify({"success": False, "error": str(e), "intakes": []}), 500
+        return JSONResponse({"success": False, "error": str(e), "intakes": []}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GET /api/intake/<intake_id>
 #  Get a single intake record by ID
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>", methods=["GET"])
+@intake_bp.get("/intake/<intake_id>")
 async def intake_get(intake_id: str):
     """Fetch a single intake record by ID."""
     intake_queue = get_collection("intake_queue")
     try:
         item = await intake_queue.find_one({"intake_id": intake_id}, {"_id": 0})
         if not item:
-            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
         # Serialize datetime
         if hasattr(item.get("created_at"), "isoformat"):
             item["created_at"] = item["created_at"].isoformat()
         if hasattr(item.get("updated_at"), "isoformat"):
             item["updated_at"] = item["updated_at"].isoformat()
-        return jsonify({"success": True, "intake": item})
+        return {"success": True, "intake": item}
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/<intake_id>/match
 #  Phase 4: Run the matching engine on a specific intake record
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>/match", methods=["POST"])
+@intake_bp.post("/intake/<intake_id>/match")
 async def intake_match(intake_id: str):
     """
     Run the Phase 4 matching engine on a specific intake record.
@@ -416,22 +417,22 @@ async def intake_match(intake_id: str):
     try:
         intake_doc = await intake_queue.find_one({"intake_id": intake_id}, {"_id": 0})
         if not intake_doc:
-            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
 
         from dashboard.services.matching_engine import MatchingEngine
         engine = MatchingEngine(get_db())
         result = await engine.match_intake(intake_doc)
-        return jsonify({"success": True, **result})
+        return {"success": True, **result}
     except Exception as e:
         logger.error(f"[intake] match error for {intake_id}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/<intake_id>/process
 #  Mark intake as in_progress and return full hydration payload
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>/process", methods=["POST"])
+@intake_bp.post("/intake/<intake_id>/process")
 async def intake_process(intake_id: str):
     """
     Mark intake as in_progress and return the full hydration payload.
@@ -447,13 +448,13 @@ async def intake_process(intake_id: str):
             return_document=True,
         )
         if not result:
-            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
 
         ind = result.get("indemnitor", {})
         def_ = result.get("defendant", {})
 
         # Return the hydration payload that the frontend uses to populate the bond form
-        return jsonify({
+        return {
             "success": True,
             "intake_id": intake_id,
             "status": "in_progress",
@@ -509,17 +510,17 @@ async def intake_process(intake_id: str):
                 "match_confidence": result.get("match_confidence"),
                 "match_strategy": result.get("match_strategy"),
             },
-        })
+        }
     except Exception as e:
         logger.error(f"[intake] process error for {intake_id}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/<intake_id>/archive
 #  Mark intake as done / archived (remove from queue)
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>/archive", methods=["POST"])
+@intake_bp.post("/intake/<intake_id>/archive")
 async def intake_archive(intake_id: str):
     """
     Mark intake as archived (done).
@@ -533,21 +534,21 @@ async def intake_archive(intake_id: str):
             {"$set": {"status": "archived", "updated_at": now, "archived_at": now}},
         )
         if result.matched_count == 0:
-            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
-        return jsonify({"success": True, "intake_id": intake_id, "status": "archived"})
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+        return {"success": True, "intake_id": intake_id, "status": "archived"}
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PATCH /api/intake/<intake_id>
 #  Update intake fields (e.g., AI risk score, GAS sync status)
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>", methods=["PATCH"])
-async def intake_update(intake_id: str):
+@intake_bp.patch("/intake/<intake_id>")
+async def intake_update(request: Request, intake_id: str):
     """Update intake fields. Used by AI risk engine and GAS sync callbacks."""
     intake_queue = get_collection("intake_queue")
-    data = await request.get_json(force=True) or {}
+    data = await request.json() or {}
     allowed_fields = {
         "status", "ai_risk", "ai_score", "ai_rationale",
         "gas_sync_status", "gas_sync_timestamp",
@@ -557,7 +558,7 @@ async def intake_update(intake_id: str):
     }
     updates = {k: v for k, v in data.items() if k in allowed_fields}
     if not updates:
-        return jsonify({"success": False, "error": "No valid fields to update"}), 400
+        return JSONResponse({"success": False, "error": "No valid fields to update"}, status_code=400)
     updates["updated_at"] = datetime.now(timezone.utc)
     try:
         result = await intake_queue.update_one(
@@ -565,17 +566,17 @@ async def intake_update(intake_id: str):
             {"$set": updates},
         )
         if result.matched_count == 0:
-            return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
-        return jsonify({"success": True, "intake_id": intake_id, "updated": list(updates.keys())})
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+        return {"success": True, "intake_id": intake_id, "updated": list(updates.keys())}
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GET /api/intake/stats
 #  Queue statistics by source and status
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/stats", methods=["GET"])
+@intake_bp.get("/intake/stats")
 async def intake_stats():
     """Return queue statistics — count by source and status."""
     intake_queue = get_collection("intake_queue")
@@ -607,16 +608,16 @@ async def intake_stats():
             by_status.setdefault(sts, 0)
             by_status[sts] += cnt
 
-        return jsonify({
+        return {
             "success": True,
             "total": total_all,
             "pending": total_pending,
             "matched": total_matched,
             "by_source": by_source,
             "by_status": by_status,
-        })
+        }
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -625,8 +626,8 @@ async def intake_stats():
 #  assigns POA from inventory, archives intake, and creates audit trail.
 #  Enforces The Chain: Match → BondCase → Packet → Signature → Payment
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.route("/intake/<intake_id>/promote", methods=["POST"])
-async def intake_promote(intake_id: str):
+@intake_bp.post("/intake/<intake_id>/promote")
+async def intake_promote(request: Request, intake_id: str):
     """
     Atomically promote a matched intake to an active bond case.
 
@@ -656,22 +657,22 @@ async def intake_promote(intake_id: str):
     """
     from dashboard.api.events import publish_event
 
-    data = (await request.get_json(force=True)) or {}
+    data = (await request.json()) or {}
     now = datetime.now(timezone.utc)
 
     # ── 1. Load and validate intake ──────────────────────────────────────────
     intake_queue = get_collection("intake_queue")
     intake_doc = await intake_queue.find_one({"intake_id": intake_id})
     if not intake_doc:
-        return jsonify({"success": False, "error": f"Intake {intake_id} not found"}), 404
+        return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
 
     current_status = intake_doc.get("status", "")
     if current_status not in ("pending", "in_progress"):
-        return jsonify({
+        return {
             "success": False,
             "error": f"Intake {intake_id} cannot be promoted — current status is '{current_status}'. "
                      f"Only 'pending' or 'in_progress' intakes can be promoted."
-        }), 409
+        }, 409
 
     # ── 2. Validate match exists ─────────────────────────────────────────────
     matched_booking = intake_doc.get("matched_booking_number")
@@ -679,30 +680,30 @@ async def intake_promote(intake_id: str):
     match_confidence = intake_doc.get("match_confidence")
 
     if not matched_booking:
-        return jsonify({
+        return {
             "success": False,
             "error": "Cannot promote: intake has no validated match. "
                      "Run /api/intake/<id>/match first to link a defendant."
-        }), 422
+        }, 422
 
     # ── 3. Validate surety ───────────────────────────────────────────────────
     surety = (data.get("surety") or "").lower().strip()
     if surety not in ("osi", "palmetto"):
-        return jsonify({
+        return {
             "success": False,
             "error": "surety is required and must be 'osi' or 'palmetto'."
-        }), 400
+        }, 400
 
     # ── 4. Check for duplicate bond (idempotent) ─────────────────────────────
     active_bonds = get_collection("active_bonds")
     existing_bond = await active_bonds.find_one({"booking_number": matched_booking})
     if existing_bond:
-        return jsonify({
+        return {
             "success": False,
             "error": f"Bond already exists for booking {matched_booking}. "
                      f"Use /api/bonds/record to update existing bonds.",
             "existing_bond_status": existing_bond.get("status"),
-        }), 409
+        }, 409
 
     # ── 5. Extract defendant and indemnitor data ─────────────────────────────
     ind = intake_doc.get("indemnitor", {})
@@ -740,11 +741,11 @@ async def intake_promote(intake_id: str):
         )
 
     if not poa_doc:
-        return jsonify({
+        return {
             "success": False,
             "error": f"No available POA in {surety.upper()} inventory for bond amount ${bond_amount:,.2f}. "
                      f"Assign a POA manually via /api/bonds/record."
-        }), 422
+        }, 422
 
     poa_number = poa_doc["poa_number"]
     poa_full = poa_doc.get("poa_full", poa_number)
@@ -909,7 +910,7 @@ async def intake_promote(intake_id: str):
         intake_id, matched_booking, defendant_name, bond_amount, surety.upper(), poa_number,
     )
 
-    return jsonify({
+    return {
         "success": True,
         "message": f"Intake {intake_id} promoted to active bond",
         "intake_id": intake_id,
@@ -922,4 +923,4 @@ async def intake_promote(intake_id: str):
         "poa_number": poa_number,
         "poa_full": poa_full,
         "status": "active",
-    })
+    }

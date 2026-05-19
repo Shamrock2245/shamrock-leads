@@ -271,7 +271,7 @@ async def check_and_notify_rearrest(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @rearrest_bp.post("/rearrest/check")
-async def api_rearrest_check():
+async def api_rearrest_check(request: Request):
     """Check a new arrest against historical bonds and send notifications.
 
     Body:
@@ -309,11 +309,11 @@ async def api_rearrest_check():
 
     except Exception as e:
         logger.error("Re-arrest check error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @rearrest_bp.post("/rearrest/notify")
-async def api_rearrest_notify():
+async def api_rearrest_notify(request: Request):
     """Manually send a re-arrest notification to a specific phone number.
 
     Body:
@@ -334,11 +334,11 @@ async def api_rearrest_notify():
         custom_message = data.get("message", "")
 
         if not phone or not defendant_name:
-            return {"success": False, "error": "phone and defendant_name required"}, 400
+            return JSONResponse({"success": False, "error": "phone and defendant_name required"}, status_code=400)
 
         bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
         if not bb_server:
-            return {"success": False, "error": "No BlueBubbles server configured"}, 503
+            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
 
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
         chat_guid = f"any;-;{phone}"
@@ -367,11 +367,11 @@ async def api_rearrest_notify():
 
     except Exception as e:
         logger.error("Manual re-arrest notify error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @rearrest_bp.get("/rearrest/history")
-async def api_rearrest_history():
+async def api_rearrest_history(request: Request):
     """Get re-arrest notification history with optional filters.
 
     _qp = dict(request.query_params)
@@ -399,7 +399,7 @@ async def api_rearrest_history():
         return {"success": True, "count": len(notifications), "notifications": notifications}
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @rearrest_bp.get("/rearrest/stats")
@@ -424,7 +424,7 @@ async def api_rearrest_stats():
         }
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -432,7 +432,7 @@ async def api_rearrest_stats():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @rearrest_bp.get("/rearrest/pending")
-async def api_rearrest_pending():
+async def api_rearrest_pending(request: Request):
     """Get unreviewed re-arrest alerts for the dashboard Command Center.
 
     _qp = dict(request.query_params)
@@ -464,11 +464,11 @@ async def api_rearrest_pending():
 
     except Exception as e:
         logger.error("Rearrest pending fetch error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @rearrest_bp.patch("/rearrest/<notification_id>/dismiss")
-async def api_rearrest_dismiss(notification_id):
+async def api_rearrest_dismiss(request: Request, notification_id):
     """Mark a re-arrest alert as reviewed/dismissed.
 
     Body (optional):
@@ -492,18 +492,18 @@ async def api_rearrest_dismiss(notification_id):
         )
 
         if result.modified_count == 0:
-            return {"success": False, "error": "Notification not found"}, 404
+            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
 
         logger.info("✅ Rearrest alert %s dismissed by %s", notification_id, reviewed_by)
         return {"success": True, "status": "reviewed"}
 
     except Exception as e:
         logger.error("Rearrest dismiss error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @rearrest_bp.patch("/rearrest/<notification_id>/contacted")
-async def api_rearrest_contacted(notification_id):
+async def api_rearrest_contacted(request: Request, notification_id):
     """Mark a re-arrest alert as 'contacted' — indemnitor was reached.
 
     Body (optional):
@@ -529,12 +529,12 @@ async def api_rearrest_contacted(notification_id):
         )
 
         if result.modified_count == 0:
-            return {"success": False, "error": "Notification not found"}, 404
+            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
 
         logger.info("📞 Rearrest alert %s marked contacted by %s", notification_id, contacted_by)
         return {"success": True, "status": "contacted"}
 
     except Exception as e:
         logger.error("Rearrest contacted error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 

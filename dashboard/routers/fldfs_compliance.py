@@ -116,7 +116,7 @@ def _serialize(doc: dict) -> dict:
 # MONTHLY SUMMARY — Core FLDFS filing data
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/monthly-summary")
-async def monthly_summary():
+async def monthly_summary(request: Request):
     """Monthly premium volume, liability, BUF obligations by surety."""
     _qp = dict(request.query_params)
     try:
@@ -223,14 +223,14 @@ async def monthly_summary():
         }
     except Exception as exc:
         logger.exception("compliance/monthly-summary error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT 1099 — Commission breakdown per writing agent
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/agent-1099")
-async def agent_1099():
+async def agent_1099(request: Request):
     """Per-agent commission data for 1099 reporting."""
     _qp = dict(request.query_params)
     try:
@@ -292,14 +292,14 @@ async def agent_1099():
         }
     except Exception as exc:
         logger.exception("compliance/agent-1099 error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POA UTILIZATION — Usage rates, velocity, depletion forecast
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/poa-utilization")
-async def poa_utilization():
+async def poa_utilization(request: Request):
     """POA inventory utilization rates and depletion forecasting."""
     _qp = dict(request.query_params)
     try:
@@ -365,14 +365,14 @@ async def poa_utilization():
         }
     except Exception as exc:
         logger.exception("compliance/poa-utilization error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FORFEITURE LOG — Estreature compliance tracking
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/forfeiture-log")
-async def forfeiture_log():
+async def forfeiture_log(request: Request):
     """Forfeiture/estreature compliance log with timelines."""
     _qp = dict(request.query_params)
     try:
@@ -432,7 +432,7 @@ async def forfeiture_log():
         }
     except Exception as exc:
         logger.exception("compliance/forfeiture-log error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,4 +460,4 @@ async def full_filing(request: Request):
         }
     except Exception as exc:
         logger.exception("compliance/full-filing error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bonds_bp.post("/bonds/record")
-async def api_record_bond():
+async def api_record_bond(request: Request):
     """
     Record a bond retrospectively. This is for bonds that were written
     manually (in-person, phone, etc.) and need to be logged into the system
@@ -87,7 +87,7 @@ async def api_record_bond():
     if surety not in ("osi", "palmetto"):
         errors.append("surety must be 'osi' or 'palmetto'")
     if errors:
-        return {"success": False, "errors": errors}, 400
+        return JSONResponse({"success": False, "errors": errors}, status_code=400)
 
     try:
         bond_amount = float(data.get("bond_amount") or 0)
@@ -310,7 +310,7 @@ async def api_record_bond():
     }
 
 @bonds_bp.post("/write-bond")
-async def api_write_bond():
+async def api_write_bond(request: Request):
     """
     Accept defendant + indemnitor data + insurance company selection,
     format a GAS-compatible SignNow payload, and forward it.
@@ -321,7 +321,7 @@ async def api_write_bond():
     """
     data = await request.json()
     if not data:
-        return {"success": False, "error": "No payload received"}, 400
+        return JSONResponse({"success": False, "error": "No payload received"}, status_code=400)
 
     insurer = data.get("insurance_company", "osi")
     defendant = data.get("defendant", {})
@@ -378,9 +378,9 @@ async def api_write_bond():
 
     # Validate required fields
     if not defendant.get("full_name"):
-        return {"success": False, "error": "Defendant name required"}, 400
+        return JSONResponse({"success": False, "error": "Defendant name required"}, status_code=400)
     if not booking.get("booking_number"):
-        return {"success": False, "error": "Booking number required"}, 400
+        return JSONResponse({"success": False, "error": "Booking number required"}, status_code=400)
 
     # ── Format GAS-compatible payload ──
     gas_payload = {
@@ -520,17 +520,17 @@ async def api_active_bonds_list():
 
         return {"success": True, "bonds": bonds, "count": len(bonds)}
     except Exception as e:
-        return {"success": False, "error": str(e), "bonds": []}, 500
+        return JSONResponse({"success": False, "error": str(e), "bonds": []}, status_code=500)
 
 
 @bonds_bp.post("/active-bonds")
-async def api_active_bonds_create():
+async def api_active_bonds_create(request: Request):
     """Create a new active bond record."""
     data = await request.json() or {}
     active_bonds = get_collection("active_bonds")
     booking_number = data.get("booking_number", "")
     if not booking_number:
-        return {"success": False, "error": "booking_number required"}, 400
+        return JSONResponse({"success": False, "error": "booking_number required"}, status_code=400)
     now = datetime.now(timezone.utc)
     doc = {
         "booking_number": booking_number,
@@ -565,11 +565,11 @@ async def api_active_bonds_create():
         )
         return {"success": True, "booking_number": booking_number}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.post("/active-bonds/<booking_number>/check-in")
-async def api_active_bond_check_in(booking_number):
+async def api_active_bond_check_in(request: Request, booking_number):
     """Record a defendant check-in."""
     active_bonds = get_collection("active_bonds")
     data = await request.json() or {}
@@ -577,7 +577,7 @@ async def api_active_bond_check_in(booking_number):
     try:
         bond = await active_bonds.find_one({"booking_number": booking_number})
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
         freq_days = bond.get("check_in_frequency_days", 30)
         next_due = now + timedelta(days=freq_days)
         checkin_doc = {
@@ -602,11 +602,11 @@ async def api_active_bond_check_in(booking_number):
             "next_due": next_due.isoformat(),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.post("/active-bonds/<booking_number>/alert")
-async def api_active_bond_alert(booking_number):
+async def api_active_bond_alert(request: Request, booking_number):
     """Create a risk alert for an active bond."""
     active_bonds = get_collection("active_bonds")
     data = await request.json() or {}
@@ -627,11 +627,11 @@ async def api_active_bond_alert(booking_number):
         )
         return {"success": True, "booking_number": booking_number, "alert_type": alert["alert_type"]}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.patch("/active-bonds/<booking_number>/status")
-async def api_active_bond_status(booking_number):
+async def api_active_bond_status(request: Request, booking_number):
     """Update bond status with full audit trail, status_history tracking, and POA lifecycle.
 
     Valid statuses: active | monitoring | alert | exonerated | forfeited | surrendered | reinstated
@@ -649,7 +649,7 @@ async def api_active_bond_status(booking_number):
     note = data.get("note", "")
     valid_statuses = {"active", "monitoring", "alert", "exonerated", "forfeited", "surrendered", "reinstated"}
     if new_status not in valid_statuses:
-        return {"success": False, "error": f"Invalid status. Must be one of: {sorted(valid_statuses)}"}, 400
+        return JSONResponse({"success": False, "error": f"Invalid status. Must be one of: {sorted(valid_statuses)}"}, status_code=400)
     try:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
@@ -657,7 +657,7 @@ async def api_active_bond_status(booking_number):
         # Fetch current bond for old status + POA info
         bond = await active_bonds.find_one({"booking_number": booking_number})
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         old_status = bond.get("status", "active")
         if old_status == new_status:
@@ -730,7 +730,7 @@ async def api_active_bond_status(booking_number):
             "history_entry": history_entry,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.get("/active-bonds/<booking_number>/status-history")
@@ -743,7 +743,7 @@ async def api_active_bond_status_history(booking_number):
             {"_id": 0, "status_history": 1, "status": 1, "defendant_name": 1},
         )
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
         history = list(reversed(bond.get("status_history", [])))
         return {
             "success": True,
@@ -754,7 +754,7 @@ async def api_active_bond_status_history(booking_number):
             "total": len(history),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.post("/active-bonds/missed-checkins")
@@ -787,7 +787,7 @@ async def api_active_bonds_process_missed():
             "alerts_created": len(alert_docs),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -795,7 +795,7 @@ async def api_active_bonds_process_missed():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bonds_bp.api_route("/appearance-bond-pdf", methods=["GET", "POST"])
-async def api_appearance_bond_pdf():
+async def api_appearance_bond_pdf(request: Request):
     """
     _qp = dict(request.query_params)
     Generate a pre-populated Appearance Bond PDF using the official
@@ -850,10 +850,10 @@ async def api_appearance_bond_pdf():
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except FileNotFoundError as e:
-        return {"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}, 404
+        return JSONResponse({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}, status_code=404)
     except Exception as e:
         traceback.print_exc()
-        return {"error": f"PDF generation failed: {str(e)}"}, 500
+        return JSONResponse({"error": f"PDF generation failed: {str(e)}"}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -862,7 +862,7 @@ async def api_appearance_bond_pdf():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bonds_bp.patch("/active-bonds/<booking_number>/edit")
-async def api_active_bond_edit(booking_number: str):
+async def api_active_bond_edit(request: Request, booking_number: str):
     """
     Full-field edit of an active bond record.
     Accepts any subset of editable fields and updates only those provided.
@@ -878,7 +878,7 @@ async def api_active_bond_edit(booking_number: str):
     ]
     updates = {k: data[k] for k in EDITABLE if k in data}
     if not updates:
-        return {"success": False, "error": "No editable fields provided"}, 400
+        return JSONResponse({"success": False, "error": "No editable fields provided"}, status_code=400)
     updates["updated_at"] = datetime.now(timezone.utc)
     try:
         result = await active_bonds.update_one(
@@ -886,7 +886,7 @@ async def api_active_bond_edit(booking_number: str):
             {"$set": updates},
         )
         if result.matched_count == 0:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
         try:
             audit = get_collection("audit_events")
             await audit.insert_one({
@@ -900,10 +900,10 @@ async def api_active_bond_edit(booking_number: str):
             logger.warning("[bonds] audit write failed for %s: %s", booking_number, _audit_err)
         return {"success": True, "booking_number": booking_number, "updated": list(updates.keys())}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 @bonds_bp.post("/active-bonds/<booking_number>/release")
-async def api_active_bond_release(booking_number: str):
+async def api_active_bond_release(request: Request, booking_number: str):
     """
     Mark a defendant as released from custody and trigger the post-release
     Phase 2 signing flow via BlueBubbles.
@@ -933,7 +933,7 @@ async def api_active_bond_release(booking_number: str):
 
     bond = await active_bonds.find_one({"booking_number": booking_number})
     if not bond:
-        return {"success": False, "error": f"Bond case {booking_number} not found"}, 404
+        return JSONResponse({"success": False, "error": f"Bond case {booking_number} not found"}, status_code=404)
 
     now = datetime.now(timezone.utc)
     released_at = data.get("released_at", now.isoformat())
@@ -1080,7 +1080,7 @@ async def api_active_bond_release(booking_number: str):
 
 
 @bonds_bp.post("/active-bonds/bulk-exonerate")
-async def api_bulk_exonerate():
+async def api_bulk_exonerate(request: Request):
     """
     Batch exonerate multiple bonds in one request.
 
@@ -1104,7 +1104,7 @@ async def api_bulk_exonerate():
     if _pin:
         token = request.headers.get("X-Admin-Token", "").strip()
         if token != _pin:
-            return {"success": False, "error": "Unauthorized — X-Admin-Token required"}, 401
+            return JSONResponse({"success": False, "error": "Unauthorized — X-Admin-Token required"}, status_code=401)
     # ────────────────────────────────────────────────────────────────────────
     active_bonds = get_collection("active_bonds")
     poa_inventory = get_collection("poa_inventory")
@@ -1120,9 +1120,9 @@ async def api_bulk_exonerate():
         notify = data.get("notify_indemnitors", False)
 
         if not booking_numbers or not isinstance(booking_numbers, list):
-            return {"success": False, "error": "booking_numbers list required"}, 400
+            return JSONResponse({"success": False, "error": "booking_numbers list required"}, status_code=400)
         if len(booking_numbers) > 50:
-            return {"success": False, "error": "Maximum 50 bonds per bulk request"}, 400
+            return JSONResponse({"success": False, "error": "Maximum 50 bonds per bulk request"}, status_code=400)
 
         results = []
         exonerated_count = 0
@@ -1259,7 +1259,7 @@ async def api_bulk_exonerate():
 
     except Exception as e:
         logger.error("[bulk-exonerate] Fatal error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1285,7 +1285,7 @@ async def api_bond_compliance(booking_number):
 
         bond = await db_active.find_one({"booking_number": booking_number})
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
@@ -1459,7 +1459,7 @@ async def api_bond_compliance(booking_number):
         }
     except Exception as exc:
         logger.exception("active-bonds/%s/compliance error: %s", booking_number, exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1467,7 +1467,7 @@ async def api_bond_compliance(booking_number):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @bonds_bp.post("/active-bonds/<booking_number>/renew")
-async def api_renew_bond(booking_number: str):
+async def api_renew_bond(request: Request, booking_number: str):
     """
     Re-write / renew an active bond.
 
@@ -1493,13 +1493,13 @@ async def api_renew_bond(booking_number: str):
         renewal_reason = data.get("renewal_reason", "continuance")
 
         if not new_court_date:
-            return {"success": False, "error": "new_court_date is required"}, 400
+            return JSONResponse({"success": False, "error": "new_court_date is required"}, status_code=400)
 
         db = get_db()
         col = db["active_bonds"]
         bond = await col.find_one({"booking_number": booking_number})
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -1629,7 +1629,7 @@ async def api_renew_bond(booking_number: str):
         }
     except Exception as exc:
         logger.exception("active-bonds/%s/renew error: %s", booking_number, exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1645,7 +1645,7 @@ async def api_bond_renewal_history(booking_number: str):
             {"_id": 0, "renewal_history": 1, "renewal_count": 1},
         )
         if not bond:
-            return {"success": False, "error": "Bond not found"}, 404
+            return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
 
         history = bond.get("renewal_history", [])
         # Sort newest first
@@ -1659,4 +1659,4 @@ async def api_bond_renewal_history(booking_number: str):
         }
     except Exception as exc:
         logger.exception("renewal-history error for %s: %s", booking_number, exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

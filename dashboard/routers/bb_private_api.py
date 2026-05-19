@@ -1,3 +1,4 @@
+from fastapi import APIRouter
 """
 ShamrockLeads — BlueBubbles Private API Client
 Unified async client for BlueBubbles REST + Private API.

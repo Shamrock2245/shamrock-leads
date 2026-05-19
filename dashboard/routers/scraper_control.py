@@ -30,7 +30,7 @@ scraper_control_bp = APIRouter(prefix="/api", tags=["scraper_control"])
 #  POST /api/scraper/run-now
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.post("/scraper/run-now")
-async def api_run_now():
+async def api_run_now(request: Request):
     """
     Trigger an immediate scraper run for a specific county.
     POST body: {"county": "Lee"}
@@ -39,13 +39,13 @@ async def api_run_now():
     data = await request.json() or {}
     county = (data.get("county") or "").strip()
     if not county:
-        return {"error": "county is required"}, 400
+        return JSONResponse({"error": "county is required"}, status_code=400)
 
     matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
     if not matched:
         matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
     if not matched:
-        return {"error": f"County '{county}' not found in registered scrapers"}, 404
+        return JSONResponse({"error": f"County '{county}' not found in registered scrapers"}, status_code=404)
 
     triggers = get_collection("scraper_triggers")
     now = datetime.now(timezone.utc)
@@ -161,17 +161,17 @@ async def api_scraper_disable():
     return await _set_scraper_enabled(False)
 
 
-async def _set_scraper_enabled(enabled: bool):
+async def _set_scraper_enabled(request: Request, enabled: bool):
     data = await request.json() or {}
     county = (data.get("county") or "").strip()
     if not county:
-        return {"error": "county is required"}, 400
+        return JSONResponse({"error": "county is required"}, status_code=400)
 
     matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
     if not matched:
         matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
     if not matched:
-        return {"error": f"County '{county}' not found"}, 404
+        return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
 
     scraper_config_col = get_collection("scraper_config")
     now = datetime.now(timezone.utc)
@@ -200,7 +200,7 @@ async def _set_scraper_enabled(enabled: bool):
 #  GET /api/scraper/logs/<county>
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.get("/scraper/logs/<county>")
-async def api_scraper_logs(county: str):
+async def api_scraper_logs(request: Request, county: str):
     """
     _qp = dict(request.query_params)
     Return recent run log entries for a specific county.
@@ -211,7 +211,7 @@ async def api_scraper_logs(county: str):
     if not matched:
         matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
     if not matched:
-        return {"error": f"County '{county}' not found"}, 404
+        return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
 
     limit = int(_qp.get("limit", 20))
     scraper_run_log = get_collection("scraper_run_log")
@@ -247,7 +247,7 @@ async def api_scraper_logs(county: str):
 #  POST /api/scraper/health-check
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.post("/scraper/health-check")
-async def api_scraper_health_check():
+async def api_scraper_health_check(request: Request):
     """
     Trigger a URL pre-flight health check for a specific county.
     Writes a 'health_check' trigger; the scraper engine performs a HEAD request
@@ -256,13 +256,13 @@ async def api_scraper_health_check():
     data = await request.json() or {}
     county = (data.get("county") or "").strip()
     if not county:
-        return {"error": "county is required"}, 400
+        return JSONResponse({"error": "county is required"}, status_code=400)
 
     matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
     if not matched:
         matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
     if not matched:
-        return {"error": f"County '{county}' not found"}, 404
+        return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
 
     triggers = get_collection("scraper_triggers")
     now = datetime.now(timezone.utc)
@@ -326,7 +326,7 @@ async def api_scraper_config():
 #  POST /api/scraper/custody-recheck
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.post("/scraper/custody-recheck")
-async def api_custody_recheck():
+async def api_custody_recheck(request: Request):
     """
     Trigger an on-demand custody verification for a county or single booking.
     The scraper engine re-checks each in-custody defendant against the live
@@ -341,7 +341,7 @@ async def api_custody_recheck():
     booking_number = (data.get("booking_number") or "").strip()
 
     if not county and not booking_number:
-        return {"error": "county or booking_number is required"}, 400
+        return JSONResponse({"error": "county or booking_number is required"}, status_code=400)
 
     # Resolve county name
     if county:
@@ -349,7 +349,7 @@ async def api_custody_recheck():
         if not matched:
             matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
         if not matched:
-            return {"error": f"County '{county}' not found"}, 404
+            return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
         county = matched
 
     # If only booking_number provided, look up its county
@@ -362,7 +362,7 @@ async def api_custody_recheck():
         if doc:
             county = doc.get("county", "")
         if not county:
-            return {"error": f"No record found for booking {booking_number}"}, 404
+            return JSONResponse({"error": f"No record found for booking {booking_number}"}, status_code=404)
 
     triggers = get_collection("scraper_triggers")
     now = datetime.now(timezone.utc)
@@ -397,7 +397,7 @@ async def api_custody_recheck():
 #  GET /api/scraper/custody-recheck/results
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.get("/scraper/custody-recheck/results")
-async def api_custody_recheck_results():
+async def api_custody_recheck_results(request: Request):
     """
     _qp = dict(request.query_params)
     Poll for custody recheck results.
@@ -410,7 +410,7 @@ async def api_custody_recheck_results():
     county = _qp.get("county", "").strip()
 
     if not trigger_id and not county:
-        return {"error": "trigger_id or county is required"}, 400
+        return JSONResponse({"error": "trigger_id or county is required"}, status_code=400)
 
     triggers = get_collection("scraper_triggers")
     rechecks = get_collection("custody_rechecks")

@@ -149,7 +149,7 @@ async def get_auto_reply_config():
 
 
 @imessage_auto_bp.post("/imessage/auto-reply/config")
-async def update_auto_reply_config():
+async def update_auto_reply_config(request: Request):
     """Update auto-reply settings."""
     body = await request.json()
     cfg = await _update_config(body)
@@ -163,7 +163,7 @@ async def update_auto_reply_config():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @imessage_auto_bp.get("/imessage/inbox")
-async def get_inbox():
+async def get_inbox(request: Request):
     """Fetch recent messages from MongoDB outreach log.
 
     _qp = dict(request.query_params)
@@ -210,7 +210,7 @@ async def manual_poll():
 
 
 @imessage_auto_bp.get("/imessage/thread/<phone>")
-async def get_thread(phone):
+async def get_thread(request: Request, phone):
     """Fetch full conversation history for a specific phone number.
 
     _qp = dict(request.query_params)
@@ -220,7 +220,7 @@ async def get_thread(phone):
     limit = int(_qp.get("limit", "100"))
     clean_phone = format_phone(phone)
     if not clean_phone:
-        return {"error": "Invalid phone number"}, 400
+        return JSONResponse({"error": "Invalid phone number"}, status_code=400)
 
     outreach = get_collection("imessage_outreach")
 
@@ -252,7 +252,7 @@ async def get_thread(phone):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @imessage_auto_bp.post("/imessage/dedup-check")
-async def dedup_check():
+async def dedup_check(request: Request):
     """Check if a phone+booking combo was already messaged within cooldown."""
     body = await request.json()
     phone_raw = body.get("phone", "")
@@ -261,7 +261,7 @@ async def dedup_check():
 
     phone = format_phone(phone_raw)
     if not phone:
-        return {"error": "Invalid phone number"}, 400
+        return JSONResponse({"error": "Invalid phone number"}, status_code=400)
 
     outreach = get_collection("imessage_outreach")
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)).isoformat()
@@ -287,16 +287,16 @@ async def dedup_check():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @imessage_auto_bp.post("/imessage/unsend")
-async def unsend_message():
+async def unsend_message(request: Request):
     """Unsend a previously sent message."""
     body = await request.json()
     message_guid = body.get("message_guid", "")
     if not message_guid:
-        return {"error": "message_guid is required"}, 400
+        return JSONResponse({"error": "message_guid is required"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.unsend_message(message_guid)
 
@@ -312,17 +312,17 @@ async def unsend_message():
 
 
 @imessage_auto_bp.post("/imessage/edit")
-async def edit_message():
+async def edit_message(request: Request):
     """Edit a previously sent message."""
     body = await request.json()
     message_guid = body.get("message_guid", "")
     new_text = body.get("new_text", "").strip()
     if not message_guid or not new_text:
-        return {"error": "message_guid and new_text are required"}, 400
+        return JSONResponse({"error": "message_guid and new_text are required"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.edit_message(message_guid, new_text)
 
@@ -347,7 +347,7 @@ async def edit_message():
 
 
 @imessage_auto_bp.post("/imessage/react")
-async def react_to_message():
+async def react_to_message(request: Request):
     """Send a tapback reaction on a message."""
     body = await request.json()
     chat_guid = body.get("chat_guid", "")
@@ -355,45 +355,45 @@ async def react_to_message():
     reaction = body.get("reaction", "love")
 
     if not chat_guid or not message_guid:
-        return {"error": "chat_guid and message_guid are required"}, 400
+        return JSONResponse({"error": "chat_guid and message_guid are required"}, status_code=400)
     if reaction not in REACTIONS:
-        return {"error": f"Invalid reaction. Valid: {list(REACTIONS.keys())}"}, 400
+        return JSONResponse({"error": f"Invalid reaction. Valid: {list(REACTIONS.keys())}"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.react(chat_guid, message_guid, reaction)
     return result, 200 if result.get("success") else 502
 
 
 @imessage_auto_bp.post("/imessage/mark-read")
-async def mark_chat_read():
+async def mark_chat_read(request: Request):
     """Mark a chat as read."""
     body = await request.json()
     chat_guid = body.get("chat_guid", "")
     if not chat_guid:
-        return {"error": "chat_guid is required"}, 400
+        return JSONResponse({"error": "chat_guid is required"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.mark_read(chat_guid)
     return result, 200 if result.get("success") else 502
 
 
 @imessage_auto_bp.post("/imessage/typing")
-async def typing_indicator():
+async def typing_indicator(request: Request):
     """Start typing indicator on a chat."""
     body = await request.json()
     chat_guid = body.get("chat_guid", "")
     if not chat_guid:
-        return {"error": "chat_guid is required"}, 400
+        return JSONResponse({"error": "chat_guid is required"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.start_typing(chat_guid)
     return result, 200 if result.get("success") else 502
@@ -404,19 +404,19 @@ async def message_status(message_guid):
     """Check delivery/read status of a sent message."""
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     result = await client.get_message_status(message_guid)
     return result, 200 if result.get("success") else 502
 
 
 @imessage_auto_bp.get("/imessage/findmy")
-async def findmy_locations():
+async def findmy_locations(request: Request):
     """Fetch FindMy device and friend locations."""
     _qp = dict(request.query_params)
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     target = _qp.get("type", "friends")  # "friends" or "devices"
     refresh = _qp.get("refresh", "false").lower() == "true"
@@ -434,7 +434,7 @@ async def findmy_locations():
 
 
 @imessage_auto_bp.post("/imessage/send-effect")
-async def send_with_effect():
+async def send_with_effect(request: Request):
     """Send a message with an iMessage bubble/screen effect."""
     body = await request.json()
     phone_raw = body.get("phone", "")
@@ -442,18 +442,18 @@ async def send_with_effect():
     effect = body.get("effect", "")
 
     if not phone_raw or not message or not effect:
-        return {"error": "phone, message, and effect are required"}, 400
+        return JSONResponse({"error": "phone, message, and effect are required"}, status_code=400)
 
     phone = format_phone(phone_raw)
     if not phone:
-        return {"error": f"Invalid phone: {phone_raw}"}, 400
+        return JSONResponse({"error": f"Invalid phone: {phone_raw}"}, status_code=400)
 
     if effect not in EFFECTS and not effect.startswith("com.apple"):
-        return {"error": f"Invalid effect. Valid: {list(EFFECTS.keys())}"}, 400
+        return JSONResponse({"error": f"Invalid effect. Valid: {list(EFFECTS.keys())}"}, status_code=400)
 
     client = _get_bb_client()
     if not client:
-        return {"error": "BlueBubbles not configured"}, 503
+        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
 
     chat_guid = f"any;-;{phone}"
     temp_guid = f"shamrock-fx-{uuid.uuid4().hex[:12]}"

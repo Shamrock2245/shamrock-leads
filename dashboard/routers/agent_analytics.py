@@ -113,7 +113,7 @@ AGENT_PROFILES = {
 
 
 @agent_analytics_bp.get("/analytics/agent-performance")
-async def agent_performance():
+async def agent_performance(request: Request):
     """Full digital workforce scorecard."""
     _qp = dict(request.query_params)
     try:
@@ -351,11 +351,11 @@ async def agent_performance():
         }
     except Exception as exc:
         logger.exception("analytics/agent-performance error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @agent_analytics_bp.get("/analytics/scraper-accuracy")
-async def scraper_accuracy():
+async def scraper_accuracy(request: Request):
     """Per-county scraper accuracy and performance metrics."""
     _qp = dict(request.query_params)
     try:
@@ -402,4 +402,4 @@ async def scraper_accuracy():
         }
     except Exception as exc:
         logger.exception("analytics/scraper-accuracy error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

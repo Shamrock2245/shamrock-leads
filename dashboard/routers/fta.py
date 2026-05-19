@@ -29,7 +29,7 @@ fta_bp = APIRouter(prefix="/api", tags=["fta"])
 # GET /api/fta/open
 # ─────────────────────────────────────────────────────────────────────────────
 @fta_bp.get("/fta/open")
-async def api_fta_open():
+async def api_fta_open(request: Request):
     """Return all open FTA alerts with KPI stats."""
     _qp = dict(request.query_params)
     try:
@@ -72,7 +72,7 @@ async def api_fta_open():
         }
     except Exception as e:
         log.error("[FTA API] open error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -92,14 +92,14 @@ async def api_fta_scan():
         return {"success": True, **result}
     except Exception as e:
         log.error("[FTA API] scan error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/fta/<booking_number>/resolve
 # ─────────────────────────────────────────────────────────────────────────────
 @fta_bp.post("/fta/<booking_number>/resolve")
-async def api_fta_resolve(booking_number: str):
+async def api_fta_resolve(request: Request, booking_number: str):
     """Resolve an FTA alert."""
     try:
         data = await request.json() or {}
@@ -111,7 +111,7 @@ async def api_fta_resolve(booking_number: str):
             "bond_reinstated", "other",
         }
         if resolution not in valid_resolutions:
-            return {"success": False, "error": "Invalid resolution value"}, 400
+            return JSONResponse({"success": False, "error": "Invalid resolution value"}, status_code=400)
 
         from dashboard.extensions import get_db
         from dashboard.services.fta_alert_service import FTAAlertService
@@ -123,14 +123,14 @@ async def api_fta_resolve(booking_number: str):
         return result
     except Exception as e:
         log.error("[FTA API] resolve error for %s: %s", booking_number, e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
 # POST /api/fta/<booking_number>/surrender
 # ───────────────────────────────────────────────────────────────────────────────
 @fta_bp.post("/fta/<booking_number>/surrender")
-async def api_fta_initiate_surrender(booking_number: str):
+async def api_fta_initiate_surrender(request: Request, booking_number: str):
     """Initiate the Level 3 FTA surrender workflow."""
     try:
         data = await request.json() or {}
@@ -151,7 +151,7 @@ async def api_fta_initiate_surrender(booking_number: str):
         return result, status
     except Exception as e:
         log.error("[FTA API] surrender error for %s: %s", booking_number, e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -197,4 +197,4 @@ async def api_fta_stats():
         }
     except Exception as e:
         log.error("[FTA API] stats error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

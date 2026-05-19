@@ -171,7 +171,7 @@ async def retention_status():
 
 
 @retention_bp.post("/retention/purge")
-async def execute_purge():
+async def execute_purge(request: Request):
     """Execute the purge. Pass dry_run=true to preview."""
     data = await request.json() or {}
     dry_run = data.get("dry_run", True)

@@ -39,7 +39,7 @@ async def match_intake(intake_id: str):
             {"intake_id": intake_id}, {"_id": 0}
         )
         if not intake_doc:
-            return {"error": f"Intake {intake_id} not found"}, 404
+            return JSONResponse({"error": f"Intake {intake_id} not found"}, status_code=404)
 
         engine = _get_engine()
         result = await engine.match_intake(intake_doc)
@@ -47,7 +47,7 @@ async def match_intake(intake_id: str):
 
     except Exception as exc:
         logger.exception("match_intake error for %s", intake_id)
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ async def match_intake(intake_id: str):
 # Body: { "booking_number": "...", "county": "...", "agent": "..." }
 # ─────────────────────────────────────────────────────────────────────────────
 @matching_bp.post("/match/intake/<intake_id>/confirm")
-async def confirm_match(intake_id: str):
+async def confirm_match(request: Request, intake_id: str):
     """
     Manually confirm a match between an intake record and an arrest record.
     Used when staff reviews candidates and selects the correct one.
@@ -68,7 +68,7 @@ async def confirm_match(intake_id: str):
         agent = data.get("agent", "staff")
 
         if not booking_number or not county:
-            return {"error": "booking_number and county are required"}, 400
+            return JSONResponse({"error": "booking_number and county are required"}, status_code=400)
 
         engine = _get_engine()
         result = await engine.confirm_match(
@@ -81,7 +81,7 @@ async def confirm_match(intake_id: str):
 
     except Exception as exc:
         logger.exception("confirm_match error for %s", intake_id)
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ async def confirm_match(intake_id: str):
 # Body (optional): { "limit": 200 }
 # ─────────────────────────────────────────────────────────────────────────────
 @matching_bp.post("/match/batch")
-async def batch_match():
+async def batch_match(request: Request):
     """
     Run matching on all pending/unmatched intake records.
     Returns summary: total_processed, auto_linked, candidates_found, no_match.
@@ -105,7 +105,7 @@ async def batch_match():
 
     except Exception as exc:
         logger.exception("batch_match error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ async def get_match_status(intake_id: str):
             },
         )
         if not doc:
-            return {"error": f"Intake {intake_id} not found"}, 404
+            return JSONResponse({"error": f"Intake {intake_id} not found"}, status_code=404)
 
         # Serialize datetimes
         for field in ("match_timestamp", "confirmed_at"):
@@ -145,4 +145,4 @@ async def get_match_status(intake_id: str):
 
     except Exception as exc:
         logger.exception("get_match_status error for %s", intake_id)
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)

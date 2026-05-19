@@ -53,7 +53,7 @@ def _urgency(court_date: datetime | str | None) -> str:
 
 
 @calendar_bp.get("/calendar/events")
-async def calendar_events():
+async def calendar_events(request: Request):
     """
     _qp = dict(request.query_params)
     Returns court dates from active_bonds as calendar event objects.
@@ -147,7 +147,7 @@ async def calendar_events():
         return {"success": True, "events": events, "summary": summary}
     except Exception as exc:
         logger.exception("calendar/events error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @calendar_bp.get("/calendar/reminders")
@@ -180,11 +180,11 @@ async def calendar_reminders():
         return {"success": True, "reminders": result, "total": len(result)}
     except Exception as exc:
         logger.exception("calendar/reminders error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @calendar_bp.get("/calendar/upcoming")
-async def upcoming_events():
+async def upcoming_events(request: Request):
     """Returns the next N court dates (default 14 days)."""
     _qp = dict(request.query_params)
     try:
@@ -216,13 +216,13 @@ async def upcoming_events():
         return {"success": True, "events": events, "days": days}
     except Exception as exc:
         logger.exception("calendar/upcoming error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Google Calendar Sync (Feature K) ─────────────────────────────────────────
 
 @calendar_bp.post("/calendar/sync-gcal")
-async def calendar_sync_gcal():
+async def calendar_sync_gcal(request: Request):
     """
     Sync upcoming court dates to Google Calendar (admin@shamrockbailbonds.biz).
 
@@ -360,4 +360,4 @@ async def calendar_sync_gcal():
         }, 501
     except Exception as e:
         logger.exception("[sync-gcal] Error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

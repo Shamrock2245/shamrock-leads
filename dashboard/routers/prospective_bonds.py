@@ -57,13 +57,13 @@ def _serialize(doc: dict) -> dict:
 #  POST /api/prospective-bonds  — Create / track a new prospective bond
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds")
-async def api_prospective_create():
+async def api_prospective_create(request: Request):
     """Create a prospective bond from an arrest record or manual entry."""
     try:
         data = await request.json() or {}
         booking_number = (data.get("booking_number") or "").strip()
         if not booking_number:
-            return {"success": False, "error": "booking_number is required"}, 400
+            return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
 
         col = get_collection("prospective_bonds")
         arrests = get_collection("arrests")
@@ -134,14 +134,14 @@ async def api_prospective_create():
 
     except Exception as exc:
         logger.exception("api_prospective_create error")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/prospective-bonds  — List with filters
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.get("/prospective-bonds")
-async def api_prospective_list():
+async def api_prospective_list(request: Request):
     """List prospective bonds with optional stage/status/search filters."""
     _qp = dict(request.query_params)
     try:
@@ -208,14 +208,14 @@ async def api_prospective_list():
 
     except Exception as exc:
         logger.exception("api_prospective_list error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/stage
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/stage")
-async def api_prospective_update_stage(booking_number: str):
+async def api_prospective_update_stage(request: Request, booking_number: str):
     """Move a prospective bond to a new pipeline stage."""
     try:
         data = await request.json() or {}
@@ -224,14 +224,14 @@ async def api_prospective_update_stage(booking_number: str):
         agent = data.get("agent", "Dashboard")
 
         if new_stage not in VALID_STAGES:
-            return {"error": f"Invalid stage. Must be one of: {VALID_STAGES}"}, 400
+            return JSONResponse({"error": f"Invalid stage. Must be one of: {VALID_STAGES}"}, status_code=400)
 
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
         if existing.get("status") in ("closed", "promoted"):
-            return {"error": f"Cannot update stage — bond is {existing['status']}"}, 409
+            return JSONResponse({"error": f"Cannot update stage — bond is {existing['status']}"}, status_code=409)
 
         now = datetime.now(timezone.utc)
         old_stage = existing.get("stage", "")
@@ -253,14 +253,14 @@ async def api_prospective_update_stage(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_update_stage error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/<booking_number>/note
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds/<booking_number>/note")
-async def api_prospective_add_note(booking_number: str):
+async def api_prospective_add_note(request: Request, booking_number: str):
     """Add a note or communication log entry."""
     try:
         data = await request.json() or {}
@@ -269,12 +269,12 @@ async def api_prospective_add_note(booking_number: str):
         agent = data.get("agent", "Dashboard")
 
         if not note_text:
-            return {"error": "note text is required"}, 400
+            return JSONResponse({"error": "note text is required"}, status_code=400)
 
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
 
         now = datetime.now(timezone.utc)
         log_entry = {
@@ -301,21 +301,21 @@ async def api_prospective_add_note(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_add_note error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/indemnitor
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/indemnitor")
-async def api_prospective_update_indemnitor(booking_number: str):
+async def api_prospective_update_indemnitor(request: Request, booking_number: str):
     """Update the indemnitor/cosigner info on a prospective bond."""
     try:
         data = await request.json() or {}
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
 
         now = datetime.now(timezone.utc)
         indemnitor = existing.get("indemnitor", {})
@@ -339,14 +339,14 @@ async def api_prospective_update_indemnitor(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_update_indemnitor error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/<booking_number>/close
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds/<booking_number>/close")
-async def api_prospective_close(booking_number: str):
+async def api_prospective_close(request: Request, booking_number: str):
     """Close a prospective bond with an outcome reason."""
     try:
         data = await request.json() or {}
@@ -356,14 +356,14 @@ async def api_prospective_close(booking_number: str):
         agent = data.get("agent", "Dashboard")
 
         if outcome and outcome not in VALID_OUTCOMES:
-            return {"error": f"Invalid outcome. Must be one of: {VALID_OUTCOMES}"}, 400
+            return JSONResponse({"error": f"Invalid outcome. Must be one of: {VALID_OUTCOMES}"}, status_code=400)
         if not outcome:
             outcome = "other"
 
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
 
         now = datetime.now(timezone.utc)
         await col.update_one(
@@ -388,7 +388,7 @@ async def api_prospective_close(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_close error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -405,9 +405,9 @@ async def api_prospective_officialize(booking_number: str):
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
         if existing.get("status") == "promoted":
-            return {"error": "Already promoted to active bond"}, 409
+            return JSONResponse({"error": "Already promoted to active bond"}, status_code=409)
 
         now = datetime.now(timezone.utc)
         await col.update_one(
@@ -443,7 +443,7 @@ async def api_prospective_officialize(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_officialize error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -451,7 +451,7 @@ async def api_prospective_officialize(booking_number: str):
 #  Promote an intake queue entry directly to In Progress pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds/from-intake")
-async def api_prospective_from_intake():
+async def api_prospective_from_intake(request: Request):
     """
     Promote an intake queue entry to the In Progress pipeline.
 
@@ -465,7 +465,7 @@ async def api_prospective_from_intake():
         agent = data.get("agent", "Dashboard")
 
         if not intake_id and not booking_number:
-            return {"error": "intake_id or booking_number is required"}, 400
+            return JSONResponse({"error": "intake_id or booking_number is required"}, status_code=400)
 
         intake_col = get_collection("intake_queue")
         prospective_col = get_collection("prospective_bonds")
@@ -486,12 +486,12 @@ async def api_prospective_from_intake():
         if not intake_doc:
             # Allow creating a prospective bond without an intake record if booking_number given
             if not booking_number:
-                return {"error": "Intake record not found"}, 404
+                return JSONResponse({"error": "Intake record not found"}, status_code=404)
             intake_doc = {}
 
         bk = booking_number or intake_doc.get("booking_number", "")
         if not bk:
-            return {"error": "Could not determine booking_number"}, 400
+            return JSONResponse({"error": "Could not determine booking_number"}, status_code=400)
 
         # Check for duplicate
         existing_pb = await prospective_col.find_one({"booking_number": bk})
@@ -580,14 +580,14 @@ async def api_prospective_from_intake():
 
     except Exception as exc:
         logger.exception("api_prospective_from_intake error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/archive — Hide from board
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/archive")
-async def api_prospective_archive(booking_number: str):
+async def api_prospective_archive(request: Request, booking_number: str):
     """Archive (hide) a prospective bond from the Kanban board without deleting data."""
     try:
         data = await request.json() or {}
@@ -596,7 +596,7 @@ async def api_prospective_archive(booking_number: str):
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
 
         now = datetime.now(timezone.utc)
         # Store previous status so we can restore later
@@ -623,14 +623,14 @@ async def api_prospective_archive(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_archive error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/restore — Restore from archive
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/restore")
-async def api_prospective_restore(booking_number: str):
+async def api_prospective_restore(request: Request, booking_number: str):
     """Restore an archived prospective bond back to the Kanban board."""
     try:
         data = await request.json() or {}
@@ -639,9 +639,9 @@ async def api_prospective_restore(booking_number: str):
         col = get_collection("prospective_bonds")
         existing = await col.find_one({"booking_number": booking_number})
         if not existing:
-            return {"error": "Prospective bond not found"}, 404
+            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
         if existing.get("status") != "archived":
-            return {"error": "Bond is not archived"}, 400
+            return JSONResponse({"error": "Bond is not archived"}, status_code=400)
 
         now = datetime.now(timezone.utc)
         restore_to = existing.get("pre_archive_status", "active")
@@ -666,14 +666,14 @@ async def api_prospective_restore(booking_number: str):
 
     except Exception as exc:
         logger.exception("api_prospective_restore error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/bulk-archive — Bulk archive multiple leads
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds/bulk-archive")
-async def api_prospective_bulk_archive():
+async def api_prospective_bulk_archive(request: Request):
     """Archive multiple prospective bonds at once."""
     try:
         data = await request.json() or {}
@@ -681,7 +681,7 @@ async def api_prospective_bulk_archive():
         agent = data.get("agent", "Dashboard")
 
         if not booking_numbers or not isinstance(booking_numbers, list):
-            return {"error": "booking_numbers list required"}, 400
+            return JSONResponse({"error": "booking_numbers list required"}, status_code=400)
 
         col = get_collection("prospective_bonds")
         now = datetime.now(timezone.utc)
@@ -712,4 +712,4 @@ async def api_prospective_bulk_archive():
 
     except Exception as exc:
         logger.exception("api_prospective_bulk_archive error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)

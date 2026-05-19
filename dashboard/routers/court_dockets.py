@@ -17,9 +17,6 @@ from fastapi.responses import JSONResponse
 
 log = logging.getLogger("shamrock.api.court_intel")
 court_intel_bp = APIRouter(prefix="/api", tags=["court_intel"])
-def _get_db():
-    """Get database from app context."""
-    return # current_app_removed.config.get("db") or # current_app_removed.db
 
 
 # ── Coverage & Status ────────────────────────────────────────────────────────
@@ -34,7 +31,7 @@ async def api_court_intel_coverage():
         return JSONResponse(summary, status_code=200)
     except Exception as e:
         log.exception("Coverage error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @court_intel_bp.get("/api/court-intel/stats")
@@ -47,13 +44,13 @@ async def api_court_intel_stats():
         return JSONResponse(stats, status_code=200)
     except Exception as e:
         log.exception("Stats error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Ingestion Trigger ────────────────────────────────────────────────────────
 
 @court_intel_bp.post("/api/court-intel/ingest")
-async def api_court_intel_ingest():
+async def api_court_intel_ingest(request: Request):
     """Trigger a court opinion ingestion cycle.
 
     Body (JSON):
@@ -72,13 +69,13 @@ async def api_court_intel_ingest():
         return result, status
     except Exception as e:
         log.exception("Ingestion error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Disposition Rates ────────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/disposition-rates")
-async def api_disposition_rates():
+async def api_disposition_rates(request: Request):
     """Get empirical disposition rates, optionally by state.
 
     _qp = dict(request.query_params)
@@ -93,13 +90,13 @@ async def api_disposition_rates():
         return JSONResponse(rates, status_code=200)
     except Exception as e:
         log.exception("Disposition rates error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Search Court Outcomes ────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/search")
-async def api_court_intel_search():
+async def api_court_intel_search(request: Request):
     """Search court outcomes by case name, state, or disposition.
 
     _qp = dict(request.query_params)
@@ -141,7 +138,7 @@ async def api_court_intel_search():
         }, 200
     except Exception as e:
         log.exception("Search error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── Defendant Court History ──────────────────────────────────────────────────
@@ -167,7 +164,7 @@ async def api_defendant_court_history(defendant_id: str):
         }, 200
     except Exception as e:
         log.exception("Defendant history error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── API Health ───────────────────────────────────────────────────────────────
@@ -185,13 +182,13 @@ async def api_court_intel_health():
         return {"success": True, **health}, 200
     except Exception as e:
         log.exception("API health error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── High-Impact Opinions ─────────────────────────────────────────────────────
 
 @court_intel_bp.get("/api/court-intel/high-impact")
-async def api_high_impact_opinions():
+async def api_high_impact_opinions(request: Request):
     """Return the highest bail-impact opinions for dashboard surfacing.
 
     _qp = dict(request.query_params)
@@ -221,4 +218,4 @@ async def api_high_impact_opinions():
         }, 200
     except Exception as e:
         log.exception("High-impact query error: %s", e)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)

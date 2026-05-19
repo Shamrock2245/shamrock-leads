@@ -279,7 +279,7 @@ async def api_health_status():
             latest.setdefault("connected", first.get("reachable", False))
         return {"success": True, **latest}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_health_bp.post("/bb-health/check")
@@ -290,11 +290,11 @@ async def api_run_health_check():
         return {"success": True, **result}
     except Exception as e:
         logger.error("Health check error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_health_bp.post("/bb-health/restart-messages")
-async def api_restart_messages():
+async def api_restart_messages(request: Request):
     """Restart Messages.app on a BlueBubbles server.
 
     Body:
@@ -317,11 +317,11 @@ async def api_restart_messages():
 
     except Exception as e:
         logger.error("Restart Messages.app error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_health_bp.patch("/bb-health/update-url")
-async def api_update_bb_url():
+async def api_update_bb_url(request: Request):
     """Hot-swap a BlueBubbles server URL at runtime — no container restart needed.
 
     The permanent ngrok static domain (pseudospherical-etta-untactually.ngrok-free.dev)
@@ -342,14 +342,14 @@ async def api_update_bb_url():
         # Auth check
         provided_key = data.get("api_key") or request.headers.get("X-BB-Config-Key", "")
         if provided_key != BB_CONFIG_API_KEY:
-            return {"success": False, "error": "Unauthorized"}, 401
+            return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
 
         suffix = data.get("suffix", "0178")
         new_url = (data.get("url") or "").strip().rstrip("/")
         if not new_url:
-            return {"success": False, "error": "url is required"}, 400
+            return JSONResponse({"success": False, "error": "url is required"}, status_code=400)
         if not new_url.startswith("https://"):
-            return {"success": False, "error": "url must start with https://"}, 400
+            return JSONResponse({"success": False, "error": "url must start with https://"}, status_code=400)
 
         # Hot-swap the URL in memory
         updated_servers = update_bb_url(suffix, new_url)
@@ -384,11 +384,11 @@ async def api_update_bb_url():
 
     except Exception as e:
         logger.error("BB URL update error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_health_bp.get("/bb-health/history")
-async def api_health_history():
+async def api_health_history(request: Request):
     """Get health check history."""
     _qp = dict(request.query_params)
     try:
@@ -399,4 +399,4 @@ async def api_health_history():
         ).sort("checked_at", -1).limit(limit).to_list(length=limit)
         return {"success": True, "count": len(history), "history": history}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

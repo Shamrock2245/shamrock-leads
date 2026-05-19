@@ -56,13 +56,13 @@ async def portal_page(token: str):
     # Quick token validation — just check if it exists
     token_data = await validate_token(token)
     if not token_data:
-        return await _error_page("This link has expired or is no longer valid."), 404
+        return JSONResponse(await _error_page("This link has expired or is no longer valid."), status_code=404)
 
     # Serve the portal HTML — all data loading happens via JS fetch
     portal_path = os.path.join(DASHBOARD_DIR, "portal.html")
     if not os.path.isfile(portal_path):
         logger.error("portal.html not found at %s", portal_path)
-        return await _error_page("Portal temporarily unavailable."), 500
+        return JSONResponse(await _error_page("Portal temporarily unavailable."), status_code=500)
 
     with open(portal_path, "r") as f:
         html = f.read()
@@ -79,7 +79,7 @@ async def portal_status(token: str):
     """Return case status data scoped to the token's role."""
     token_data = await validate_token(token)
     if not token_data:
-        return {"error": "Invalid or expired token"}, 401
+        return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
     status = await get_portal_case_status(
         token_data["booking_number"],
@@ -93,14 +93,14 @@ async def portal_status(token: str):
 
 
 @portal_bp.post("/api/portal/<token>/checkin")
-async def portal_checkin(token: str):
+async def portal_checkin(request: Request, token: str):
     """Submit a defendant check-in (GPS + optional selfie)."""
     token_data = await validate_token(token)
     if not token_data:
-        return {"error": "Invalid or expired token"}, 401
+        return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
     if token_data["role"] != "defendant":
-        return {"error": "Check-in is only available for defendants"}, 403
+        return JSONResponse({"error": "Check-in is only available for defendants"}, status_code=403)
 
     data = await request.json() or {}
 
@@ -121,7 +121,7 @@ async def portal_payment_link(token: str):
     """Return the SwipeSimple payment link for this bond."""
     token_data = await validate_token(token)
     if not token_data:
-        return {"error": "Invalid or expired token"}, 401
+        return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
     swipesimple_link = os.getenv(
         "SWIPESIMPLE_PAYMENT_LINK",
@@ -140,7 +140,7 @@ async def portal_payment_link(token: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @portal_bp.post("/api/portal/generate")
-async def generate_token_endpoint():
+async def generate_token_endpoint(request: Request):
     """Generate a new portal magic link for a bond case."""
     data = await request.json() or {}
     booking_number = data.get("booking_number", "").strip()
@@ -148,9 +148,9 @@ async def generate_token_endpoint():
     created_by = data.get("created_by", "staff")
 
     if not booking_number:
-        return {"error": "booking_number is required"}, 400
+        return JSONResponse({"error": "booking_number is required"}, status_code=400)
     if role not in ("defendant", "indemnitor"):
-        return {"error": "role must be 'defendant' or 'indemnitor'"}, 400
+        return JSONResponse({"error": "role must be 'defendant' or 'indemnitor'"}, status_code=400)
 
     result = await generate_portal_token(
         booking_number=booking_number,
@@ -169,19 +169,19 @@ async def list_tokens(booking_number: str):
 
 
 @portal_bp.post("/api/portal/revoke")
-async def revoke_token_endpoint():
+async def revoke_token_endpoint(request: Request):
     """Revoke a portal token."""
     data = await request.json() or {}
     token = data.get("token", "").strip()
     if not token:
-        return {"error": "token is required"}, 400
+        return JSONResponse({"error": "token is required"}, status_code=400)
 
     result = await revoke_portal_token(token)
     return result, 200 if result.get("success") else 404
 
 
 @portal_bp.post("/api/portal/send-link")
-async def send_portal_link():
+async def send_portal_link(request: Request):
     """Generate a portal link and send it via iMessage/SMS."""
     data = await request.json() or {}
     booking_number = data.get("booking_number", "").strip()
@@ -190,7 +190,7 @@ async def send_portal_link():
     channel = data.get("channel", "imessage")  # imessage, sms, or both
 
     if not booking_number or not phone:
-        return {"error": "booking_number and phone are required"}, 400
+        return JSONResponse({"error": "booking_number and phone are required"}, status_code=400)
 
     # Generate token
     token_result = await generate_portal_token(

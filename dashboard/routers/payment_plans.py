@@ -67,20 +67,20 @@ def calculate_premium(bond_amount: float, surety_id: str = "osi") -> dict:
 
 
 @payment_plans_bp.get("/payments/premium-calc")
-async def premium_calculator():
+async def premium_calculator(request: Request):
     """Quick premium calculator — GET with query params."""
     _qp = dict(request.query_params)
     bond_amount = float(_qp.get('bond_amount', 0))
     surety_id = _qp.get('surety_id', 'osi').lower()
     if bond_amount <= 0:
-        return {"error": "bond_amount must be positive"}, 400
+        return JSONResponse({"error": "bond_amount must be positive"}, status_code=400)
     return calculate_premium(bond_amount, surety_id)
 
 
 # ── Payment Plans CRUD ──────────────────────────────────────────────────────────
 
 @payment_plans_bp.get("/payments/plans")
-async def list_plans():
+async def list_plans(request: Request):
     """List all payment plans with optional status filter."""
     _qp = dict(request.query_params)
     plans_col = get_collection("payment_plans")
@@ -104,7 +104,7 @@ async def get_plan(booking_number):
     plans_col = get_collection("payment_plans")
     doc = await plans_col.find_one({"booking_number": booking_number})
     if not doc:
-        return {"error": "No payment plan found"}, 404
+        return JSONResponse({"error": "No payment plan found"}, status_code=404)
     doc["_id"] = str(doc["_id"])
 
     # Get payment history
@@ -119,21 +119,21 @@ async def get_plan(booking_number):
 
 
 @payment_plans_bp.post("/payments/plans")
-async def create_plan():
+async def create_plan(request: Request):
     """Create a new payment plan."""
     from dashboard.api.events import publish_event
     data = await request.json()
     required = ['booking_number', 'total_premium', 'down_payment']
     for field in required:
         if field not in data:
-            return {"error": f"Missing required field: {field}"}, 400
+            return JSONResponse({"error": f"Missing required field: {field}"}, status_code=400)
 
     plans_col = get_collection("payment_plans")
 
     # Check for existing plan
     existing = await plans_col.find_one({"booking_number": data["booking_number"], "status": "active"})
     if existing:
-        return {"error": "Active payment plan already exists for this booking"}, 409
+        return JSONResponse({"error": "Active payment plan already exists for this booking"}, status_code=409)
 
     total_premium = float(data["total_premium"])
     down_payment = float(data["down_payment"])
@@ -202,19 +202,19 @@ async def create_plan():
 
 
 @payment_plans_bp.post("/payments/plans/<plan_id>/pay")
-async def record_payment(plan_id):
+async def record_payment(request: Request, plan_id):
     """Record a payment against an existing plan."""
     from dashboard.api.events import publish_event
     data = await request.json()
     if not data or 'amount' not in data:
-        return {"error": "Missing amount"}, 400
+        return JSONResponse({"error": "Missing amount"}, status_code=400)
 
     plans_col = get_collection("payment_plans")
     payments_col = get_collection("payments")
 
     plan = await plans_col.find_one({"plan_id": plan_id})
     if not plan:
-        return {"error": "Plan not found"}, 404
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
 
     amount = float(data["amount"])
     now = datetime.now(timezone.utc)
@@ -281,7 +281,7 @@ async def record_payment(plan_id):
 # ── Delinquency Detection ──────────────────────────────────────────────────────
 
 @payment_plans_bp.get("/payments/delinquent")
-async def get_delinquent():
+async def get_delinquent(request: Request):
     """Get all payment plans that are past due (>30 days since last payment or due date)."""
     _qp = dict(request.query_params)
     plans_col = get_collection("payment_plans")

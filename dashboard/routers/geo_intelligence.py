@@ -51,7 +51,7 @@ async def traccar_health():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/devices")
-async def list_devices():
+async def list_devices(request: Request):
     """List all registered tracking devices, optionally by booking number."""
     _qp = dict(request.query_params)
     booking = _qp.get("booking_number")
@@ -61,7 +61,7 @@ async def list_devices():
 
 
 @geo_intel_bp.post("/devices")
-async def register_device():
+async def register_device(request: Request):
     """Register a new tracking device and bind to a defendant.
 
     Body: {booking_number, county, device_type, unique_id, label?, phone?, vehicle_info?}
@@ -78,7 +78,7 @@ async def register_device():
     vehicle_info = data.get("vehicle_info")
 
     if not booking or not unique_id:
-        return {"error": "booking_number and unique_id are required"}, 400
+        return JSONResponse({"error": "booking_number and unique_id are required"}, status_code=400)
 
     # Category mapping for Traccar
     category_map = {
@@ -106,7 +106,7 @@ async def register_device():
         traccar_id = tc_device.get("id")
     except Exception as e:
         logger.error("Traccar device creation failed: %s", e)
-        return {"error": f"Traccar error: {str(e)}"}, 502
+        return JSONResponse({"error": f"Traccar error: {str(e)}"}, status_code=502)
 
     # Bind in MongoDB
     svc = _get_service()
@@ -125,14 +125,14 @@ async def register_device():
 
 
 @geo_intel_bp.post("/devices/<device_id>/deactivate")
-async def deactivate_device(device_id: str):
+async def deactivate_device(request: Request, device_id: str):
     """Deactivate a tracking device."""
     data = await request.json() or {}
     reason = data.get("reason", "")
     svc = _get_service()
     ok = await svc.deactivate_device(device_id, reason)
     if not ok:
-        return {"error": "Device not found"}, 404
+        return JSONResponse({"error": "Device not found"}, status_code=404)
     return {"success": True, "device_id": device_id}
 
 
@@ -148,11 +148,11 @@ async def latest_positions():
         positions = await traccar.get_latest_positions()
         return {"positions": positions, "count": len(positions)}
     except Exception as e:
-        return {"error": str(e)}, 502
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 @geo_intel_bp.get("/positions/route")
-async def device_route():
+async def device_route(request: Request):
     """Get full position trail for a device.
 
     _qp = dict(request.query_params)
@@ -162,14 +162,14 @@ async def device_route():
     from_dt = _qp.get("from", "")
     to_dt = _qp.get("to", "")
     if not device_id or not from_dt or not to_dt:
-        return {"error": "traccar_device_id, from, and to are required"}, 400
+        return JSONResponse({"error": "traccar_device_id, from, and to are required"}, status_code=400)
 
     traccar = _get_traccar()
     try:
         route = await traccar.get_route(device_id, from_dt, to_dt)
         return {"route": route, "count": len(route)}
     except Exception as e:
-        return {"error": str(e)}, 502
+        return JSONResponse({"error": str(e)}, status_code=502)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -177,7 +177,7 @@ async def device_route():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/zones")
-async def list_zones():
+async def list_zones(request: Request):
     """List geofence zones, optionally by booking number."""
     _qp = dict(request.query_params)
     booking = _qp.get("booking_number")
@@ -187,7 +187,7 @@ async def list_zones():
 
 
 @geo_intel_bp.post("/zones")
-async def create_zone():
+async def create_zone(request: Request):
     """Create an inclusion or exclusion geofence zone.
 
     Body: {booking_number, zone_type, name, center_lat, center_lng, radius_miles,
@@ -199,10 +199,10 @@ async def create_zone():
     required = ["booking_number", "zone_type", "name", "center_lat", "center_lng", "radius_miles"]
     missing = [f for f in required if not data.get(f)]
     if missing:
-        return {"error": f"Missing fields: {missing}"}, 400
+        return JSONResponse({"error": f"Missing fields: {missing}"}, status_code=400)
 
     if data["zone_type"] not in ("inclusion", "exclusion"):
-        return {"error": "zone_type must be 'inclusion' or 'exclusion'"}, 400
+        return JSONResponse({"error": "zone_type must be 'inclusion' or 'exclusion'"}, status_code=400)
 
     # Create in Traccar
     traccar = _get_traccar()
@@ -254,7 +254,7 @@ async def delete_zone(zone_id: str):
     svc = _get_service()
     ok = await svc.delete_zone(zone_id)
     if not ok:
-        return {"error": "Zone not found"}, 404
+        return JSONResponse({"error": "Zone not found"}, status_code=404)
     return {"success": True, "zone_id": zone_id}
 
 
@@ -271,14 +271,14 @@ async def list_vehicle_watches():
 
 
 @geo_intel_bp.post("/vehicle-watch")
-async def add_vehicle_watch():
+async def add_vehicle_watch(request: Request):
     """Add a vehicle to the watch list.
 
     Body: {booking_number, vehicle_info: {make, model, year, color, plate, vin}, reason?}
     """
     data = await request.json()
     if not data.get("booking_number") or not data.get("vehicle_info"):
-        return {"error": "booking_number and vehicle_info required"}, 400
+        return JSONResponse({"error": "booking_number and vehicle_info required"}, status_code=400)
 
     svc = _get_service()
     watch = await svc.add_vehicle_watch(
@@ -290,7 +290,7 @@ async def add_vehicle_watch():
 
 
 @geo_intel_bp.post("/vehicle-watch/<watch_id>/sighting")
-async def record_vehicle_sighting(watch_id: str):
+async def record_vehicle_sighting(request: Request, watch_id: str):
     """Record a vehicle sighting.
 
     Body: {lat, lng, address?}
@@ -304,7 +304,7 @@ async def record_vehicle_sighting(watch_id: str):
         data.get("address", ""),
     )
     if not ok:
-        return {"error": "Vehicle watch not found"}, 404
+        return JSONResponse({"error": "Vehicle watch not found"}, status_code=404)
     return {"success": True}
 
 
@@ -313,7 +313,7 @@ async def record_vehicle_sighting(watch_id: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.get("/violations")
-async def violation_feed():
+async def violation_feed(request: Request):
     """Get recent geofence violations."""
     _qp = dict(request.query_params)
     limit = _qp.get("limit", 50, type=int)
@@ -324,13 +324,13 @@ async def violation_feed():
 
 
 @geo_intel_bp.post("/violations/<event_id>/acknowledge")
-async def acknowledge_violation(event_id: str):
+async def acknowledge_violation(request: Request, event_id: str):
     """Acknowledge a geofence violation alert."""
     data = await request.json() or {}
     svc = _get_service()
     ok = await svc.acknowledge_violation(event_id, data.get("agent", ""))
     if not ok:
-        return {"error": "Violation not found"}, 404
+        return JSONResponse({"error": "Violation not found"}, status_code=404)
     return {"success": True}
 
 
@@ -351,14 +351,14 @@ async def tracking_overview():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @geo_intel_bp.post("/photo-checkin")
-async def photo_checkin():
+async def photo_checkin(request: Request):
     """Record a GPS + photo verified check-in.
 
     Body: {booking_number, lat, lng, photo_url, accuracy?, source?}
     """
     data = await request.json()
     if not data.get("booking_number") or not data.get("photo_url"):
-        return {"error": "booking_number and photo_url required"}, 400
+        return JSONResponse({"error": "booking_number and photo_url required"}, status_code=400)
 
     svc = _get_service()
     checkin = await svc.record_photo_checkin(
@@ -377,7 +377,7 @@ async def photo_checkin():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @traccar_webhook_bp.post("/webhook")
-async def traccar_webhook():
+async def traccar_webhook(request: Request):
     """Receive forwarded position/event data from Traccar.
 
     Traccar sends JSON with device + position on every update.
@@ -385,7 +385,7 @@ async def traccar_webhook():
     """
     data = await request.json()
     if not data:
-        return {"error": "No data"}, 400
+        return JSONResponse({"error": "No data"}, status_code=400)
 
     device = data.get("device", {})
     position = data.get("position", {})
@@ -397,7 +397,7 @@ async def traccar_webhook():
 
     traccar_device_id = device.get("id")
     if not traccar_device_id:
-        return {"error": "Missing device.id"}, 400
+        return JSONResponse({"error": "Missing device.id"}, status_code=400)
 
     svc = _get_service()
     result = await svc.sync_position(

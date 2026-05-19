@@ -363,4 +363,4 @@ async def get_lifecycle(booking_number: str):
 
     except Exception as e:
         logger.exception(f"Lifecycle timeline error for {booking_number}: {e}")
-        return {"ok": False, "error": str(e)}, 500
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

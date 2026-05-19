@@ -34,7 +34,7 @@ ml_bp = APIRouter(prefix="/api", tags=["ml_intelligence"])
 #  POST /api/ml/train — Trigger model training
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.post("/ml/train")
-async def api_train_model():
+async def api_train_model(request: Request):
     """Train an ML model on historical data.
 
     Body (optional):
@@ -53,9 +53,9 @@ async def api_train_model():
         limit = int(data.get("limit", 50000))
 
         if target not in ("lead_quality", "fta_risk"):
-            return {"success": False, "error": "target must be 'lead_quality' or 'fta_risk'"}, 400
+            return JSONResponse({"success": False, "error": "target must be 'lead_quality' or 'fta_risk'"}, status_code=400)
         if algorithm not in ("random_forest", "xgboost", "gradient_boosting", "ensemble"):
-            return {"success": False, "error": "algorithm must be 'random_forest', 'xgboost', 'gradient_boosting', or 'ensemble'"}, 400
+            return JSONResponse({"success": False, "error": "algorithm must be 'random_forest', 'xgboost', 'gradient_boosting', or 'ensemble'"}, status_code=400)
 
         db = get_db()
         result = await train_model(db, target=target, algorithm=algorithm, limit=limit)
@@ -70,14 +70,14 @@ async def api_train_model():
 
     except Exception as e:
         logger.exception("ML training error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/ml/bootstrap-fta — COMPAS Bootstrap FTA Risk Training
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.post("/ml/bootstrap-fta")
-async def api_bootstrap_fta():
+async def api_bootstrap_fta(request: Request):
     """Bootstrap an FTA risk model using ProPublica's COMPAS dataset.
 
     This solves the cold-start problem when we have insufficient bonded case
@@ -133,7 +133,7 @@ async def api_bootstrap_fta():
                 f1_score, roc_auc_score, confusion_matrix, roc_curve,
             )
         except ImportError as e:
-            return {"success": False, "error": f"Missing dependency: {e}"}, 500
+            return JSONResponse({"success": False, "error": f"Missing dependency: {e}"}, status_code=500)
 
         # Train/test split
         X_train, X_test, y_train, y_test = train_test_split(
@@ -248,14 +248,14 @@ async def api_bootstrap_fta():
 
     except Exception as e:
         logger.exception("COMPAS bootstrap error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/ml/predict/<booking_number> — ML prediction for a lead
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/predict/<booking_number>")
-async def api_predict(booking_number: str):
+async def api_predict(request: Request, booking_number: str):
     """Get ML prediction for a specific arrest record.
 
     _qp = dict(request.query_params)
@@ -272,7 +272,7 @@ async def api_predict(booking_number: str):
         db = get_db()
         arrest = await db["arrests"].find_one({"booking_number": booking_number})
         if not arrest:
-            return {"success": False, "error": "Arrest not found"}, 404
+            return JSONResponse({"success": False, "error": "Arrest not found"}, status_code=404)
 
         # Build enrichment from DB
         enrichment = await _build_enrichment(db, arrest)
@@ -298,14 +298,14 @@ async def api_predict(booking_number: str):
 
     except Exception as e:
         logger.exception("ML predict error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/ml/batch-predict — Batch predictions
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.post("/ml/batch-predict")
-async def api_batch_predict():
+async def api_batch_predict(request: Request):
     """Batch ML predictions for multiple arrest records.
 
     Body:
@@ -324,7 +324,7 @@ async def api_batch_predict():
         algorithm = data.get("algorithm", "random_forest")
 
         if not booking_numbers:
-            return {"success": False, "error": "booking_numbers required"}, 400
+            return JSONResponse({"success": False, "error": "booking_numbers required"}, status_code=400)
 
         db = get_db()
         results = []
@@ -360,7 +360,7 @@ async def api_batch_predict():
 
     except Exception as e:
         logger.exception("Batch predict error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -374,14 +374,14 @@ async def api_model_status():
         status = get_all_model_status()
         return {"success": True, **status}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/ml/feature-importance — Feature importance analysis
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/feature-importance")
-async def api_feature_importance():
+async def api_feature_importance(request: Request):
     """Get feature importance rankings for a trained model.
 
     _qp = dict(request.query_params)
@@ -416,7 +416,7 @@ async def api_feature_importance():
         }
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,7 +436,7 @@ async def api_compare_predictions(booking_number: str):
         db = get_db()
         arrest = await db["arrests"].find_one({"booking_number": booking_number})
         if not arrest:
-            return {"success": False, "error": "Not found"}, 404
+            return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
 
         enrichment = await _build_enrichment(db, arrest)
 
@@ -474,7 +474,7 @@ async def api_compare_predictions(booking_number: str):
 
     except Exception as e:
         logger.exception("Compare predictions error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

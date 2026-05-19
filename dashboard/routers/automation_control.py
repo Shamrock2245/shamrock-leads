@@ -1,3 +1,4 @@
+from fastapi import APIRouter, Request
 """
 ShamrockLeads — Automation & Service Control API
 ==================================================
@@ -75,20 +76,20 @@ SERVICE_META = {
 
 
 # ── GET /api/automation/config — Read current config ───────────────────────
-@automation_control_bp.route("/automation/config", methods=["GET"])
+@automation_control_bp.get("/automation/config")
 async def get_config():
     """Return the full automation configuration."""
     try:
         cfg = await get_automation_config(current_app.db)
-        return jsonify({"success": True, "config": cfg})
+        return {"success": True, "config": cfg}
     except Exception as exc:
         logger.error("[automation-api] get_config error: %s", exc)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── POST /api/automation/config — Update config (partial) ──────────────────
-@automation_control_bp.route("/automation/config", methods=["POST"])
-async def set_config():
+@automation_control_bp.post("/automation/config")
+async def set_config(request: Request):
     """Update automation configuration. Accepts partial updates.
 
     Example body:
@@ -99,21 +100,21 @@ async def set_config():
     }
     """
     try:
-        body = await request.get_json()
+        body = await request.json()
         if not body:
-            return jsonify({"success": False, "error": "Missing JSON body"}), 400
+            return JSONResponse({"success": False, "error": "Missing JSON body"}, status_code=400)
 
         actor = body.pop("actor", "dashboard")
         cfg = await update_automation_config(current_app.db, body, actor=actor)
-        return jsonify({"success": True, "config": cfg})
+        return {"success": True, "config": cfg}
     except Exception as exc:
         logger.error("[automation-api] set_config error: %s", exc)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── POST /api/automation/toggle/<key> — Quick on/off ──────────────────────
-@automation_control_bp.route("/automation/toggle/<key>", methods=["POST"])
-async def toggle_automation(key: str):
+@automation_control_bp.post("/automation/toggle/<key>")
+async def toggle_automation(request: Request, key: str):
     """Toggle a specific service on or off.
 
     Valid keys: all entries in ALL_SERVICE_KEYS
@@ -124,13 +125,13 @@ async def toggle_automation(key: str):
     If no body provided, toggles current state.
     """
     if key not in ALL_SERVICE_KEYS:
-        return jsonify({
+        return {
             "success": False,
             "error": f"Invalid key: {key}. Valid: {', '.join(sorted(ALL_SERVICE_KEYS))}"
-        }), 400
+        }, 400
 
     try:
-        body = await request.get_json(silent=True) or {}
+        body = await request.json() or {}
 
         if "enabled" in body:
             new_state = bool(body["enabled"])
@@ -148,19 +149,19 @@ async def toggle_automation(key: str):
         state_label = "🟢 ENABLED" if new_state else "🔴 DISABLED"
         logger.info("☘️  Service [%s] → %s", key, state_label)
 
-        return jsonify({
+        return {
             "success": True,
             "key": key,
             "enabled": new_state,
             "config": cfg,
-        })
+        }
     except Exception as exc:
         logger.error("[automation-api] toggle error: %s", exc)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── POST /api/automation/trigger/<key> — Manual one-shot run ──────────────
-@automation_control_bp.route("/automation/trigger/<key>", methods=["POST"])
+@automation_control_bp.post("/automation/trigger/<key>")
 async def trigger_automation(key: str):
     """Manually trigger one immediate cycle of a background service.
 
@@ -175,10 +176,10 @@ async def trigger_automation(key: str):
     Valid keys: all entries in ALL_SERVICE_KEYS
     """
     if key not in ALL_SERVICE_KEYS:
-        return jsonify({
+        return {
             "success": False,
             "error": f"Invalid key: {key}. Valid: {', '.join(sorted(ALL_SERVICE_KEYS))}"
-        }), 400
+        }, 400
 
     event = TRIGGER_EVENTS.get(key)
     if event is not None:
@@ -205,7 +206,7 @@ async def trigger_automation(key: str):
         pass  # Non-fatal — don't fail the response if logging fails
 
     meta = SERVICE_META.get(key, {})
-    return jsonify({
+    return {
         "success": True,
         "key": key,
         "name": meta.get("name", key),
@@ -215,11 +216,11 @@ async def trigger_automation(key: str):
             if triggered
             else f"⚠ {meta.get('name', key)} has no active loop (service may be disabled)"
         ),
-    })
+    }
 
 
 # ── GET /api/automation/status — Full runtime status ─────────────────────
-@automation_control_bp.route("/automation/status", methods=["GET"])
+@automation_control_bp.get("/automation/status")
 async def get_status():
     """Return the current runtime status of ALL services.
 
@@ -264,12 +265,12 @@ async def get_status():
                 "description": meta.get("desc", ""),
             }
 
-        return jsonify({
+        return {
             "success": True,
             "status": status,
             "config": cfg,
             "service_count": len(ALL_SERVICE_KEYS),
-        })
+        }
     except Exception as exc:
         logger.error("[automation-api] get_status error: %s", exc)
-        return jsonify({"success": False, "error": str(exc)}), 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

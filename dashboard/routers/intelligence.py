@@ -36,7 +36,7 @@ intelligence_bp = APIRouter(prefix="/api", tags=["intelligence"])
 #  GET /api/intelligence/forecast — Revenue Forecast
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/forecast")
-async def api_forecast():
+async def api_forecast(request: Request):
     """Revenue forecast using exponential smoothing + Monte Carlo.
 
     _qp = dict(request.query_params)
@@ -57,14 +57,14 @@ async def api_forecast():
 
     except Exception as e:
         logger.exception("Forecast error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/heatmap/counties — County Risk Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/counties")
-async def api_county_heatmap():
+async def api_county_heatmap(request: Request):
     """County-level risk heatmap with composite scoring.
 
     _qp = dict(request.query_params)
@@ -82,14 +82,14 @@ async def api_county_heatmap():
 
     except Exception as e:
         logger.exception("County heatmap error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/heatmap/temporal — Temporal Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/temporal")
-async def api_temporal_heatmap():
+async def api_temporal_heatmap(request: Request):
     """Hour × Day-of-week arrest pattern heatmap.
 
     _qp = dict(request.query_params)
@@ -110,14 +110,14 @@ async def api_temporal_heatmap():
 
     except Exception as e:
         logger.exception("Temporal heatmap error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/heatmap/charges — Charge Category Heatmap
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/charges")
-async def api_charge_heatmap():
+async def api_charge_heatmap(request: Request):
     """County × Charge-category heatmap matrix.
 
     _qp = dict(request.query_params)
@@ -135,14 +135,14 @@ async def api_charge_heatmap():
 
     except Exception as e:
         logger.exception("Charge heatmap error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/risk-trend — Risk Trend Over Time
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/risk-trend")
-async def api_risk_trend():
+async def api_risk_trend(request: Request):
     """Daily risk trend with 7-day moving averages.
 
     _qp = dict(request.query_params)
@@ -163,7 +163,7 @@ async def api_risk_trend():
 
     except Exception as e:
         logger.exception("Risk trend error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ async def api_intelligence_dashboard():
 
     except Exception as e:
         logger.exception("Intelligence dashboard error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,7 +230,7 @@ async def api_court_predictor(booking_number: str):
         db = get_db()
         arrest = await db["arrests"].find_one({"booking_number": booking_number})
         if not arrest:
-            return {"success": False, "error": "Arrest not found"}, 404
+            return JSONResponse({"success": False, "error": "Arrest not found"}, status_code=404)
 
         # Extract features for analysis
         features = extract_features(arrest)
@@ -265,7 +265,7 @@ async def api_court_predictor(booking_number: str):
 
     except Exception as e:
         logger.exception("Court predictor error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 def _assess_charge_risk(charges: str, features: dict) -> Dict:
@@ -314,7 +314,7 @@ def _assess_charge_risk(charges: str, features: dict) -> Dict:
 #  GET /api/intelligence/court-prediction — Batch Court Outcome Prediction
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/court-prediction")
-async def api_court_prediction_batch():
+async def api_court_prediction_batch(request: Request):
     """Predict court outcomes for recent high-value arrests.
 
     _qp = dict(request.query_params)
@@ -357,14 +357,14 @@ async def api_court_prediction_batch():
 
     except Exception as e:
         logger.exception("Court prediction batch error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/forfeiture-risk — Portfolio Forfeiture Risk
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/forfeiture-risk")
-async def api_forfeiture_risk():
+async def api_forfeiture_risk(request: Request):
     """Score all active bonds for forfeiture probability.
 
     _qp = dict(request.query_params)
@@ -382,4 +382,4 @@ async def api_forfeiture_risk():
 
     except Exception as e:
         logger.exception("Forfeiture risk error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

@@ -42,11 +42,11 @@ async def monitoring_status():
         return stats
     except Exception as e:
         log.error("Status error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.get("/events")
-async def recent_events():
+async def recent_events(request: Request):
     """Recent docket events. Query params: limit, severity, acknowledged."""
     _qp = dict(request.query_params)
     try:
@@ -63,7 +63,7 @@ async def recent_events():
         return {"success": True, "events": events, "count": len(events)}
     except Exception as e:
         log.error("Events error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.get("/events/<event_id>")
@@ -74,11 +74,11 @@ async def event_detail(event_id):
         db = get_db()
         event = await db.docket_events.find_one({"_id": ObjectId(event_id)})
         if not event:
-            return {"success": False, "error": "Event not found"}, 404
+            return JSONResponse({"success": False, "error": "Event not found"}, status_code=404)
         event["_id"] = str(event["_id"])
         return {"success": True, "event": event}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.get("/bond/<bond_case_id>")
@@ -94,7 +94,7 @@ async def bond_events(bond_case_id):
             "cumulative_risk_adjustment": round(total_risk_adj, 3),
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.get("/alerts")
@@ -105,11 +105,11 @@ async def alert_summary():
         summary = await monitor.get_alert_summary()
         return {"success": True, **summary}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.post("/scan")
-async def trigger_scan():
+async def trigger_scan(request: Request):
     """Manually trigger a docket scan of active bonds."""
     try:
         body = await request.json() or {}
@@ -120,27 +120,27 @@ async def trigger_scan():
         return result
     except Exception as e:
         log.error("Scan error: %s", e)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.post("/acknowledge")
-async def acknowledge_event():
+async def acknowledge_event(request: Request):
     """Acknowledge a single docket event by _id."""
     try:
         body = await request.json() or {}
         event_id = body.get("event_id")
         actor = body.get("actor", "dashboard_user")
         if not event_id:
-            return {"success": False, "error": "event_id required"}, 400
+            return JSONResponse({"success": False, "error": "event_id required"}, status_code=400)
         monitor = _get_monitor()
         ok = await monitor.acknowledge_event(event_id, actor=actor)
         return {"success": ok}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.post("/acknowledge-all")
-async def acknowledge_all():
+async def acknowledge_all(request: Request):
     """Bulk acknowledge all unacknowledged events (optionally filtered by severity)."""
     try:
         body = await request.json() or {}
@@ -157,7 +157,7 @@ async def acknowledge_all():
         }})
         return {"success": True, "acknowledged_count": result.modified_count}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @docket_monitor_bp.get("/risk-timeline/<bond_case_id>")
@@ -186,4 +186,4 @@ async def risk_timeline(bond_case_id):
         return {"success": True, "bond_case_id": bond_case_id,
                         "timeline": timeline, "total_risk_shift": round(cumulative, 3)}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

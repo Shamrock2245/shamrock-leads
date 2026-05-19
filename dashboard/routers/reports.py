@@ -134,14 +134,14 @@ async def discharged_bonds():
         }
     except Exception as exc:
         logger.exception("reports/discharged error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SURETY LIABILITY STATEMENT
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/surety-liability")
-async def surety_liability():
+async def surety_liability(request: Request):
     """Per-surety financial breakdown: bond amounts, premium, surety owed, BUF, agent retains."""
     _qp = dict(request.query_params)
     try:
@@ -229,14 +229,14 @@ async def surety_liability():
         }
     except Exception as exc:
         logger.exception("reports/surety-liability error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VOIDED POWERS
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/voided-powers")
-async def voided_powers():
+async def voided_powers(request: Request):
     """POAs that were manually voided."""
     _qp = dict(request.query_params)
     try:
@@ -259,14 +259,14 @@ async def voided_powers():
         }
     except Exception as exc:
         logger.exception("reports/voided-powers error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EXPIRED POWERS (semi-annual expiration)
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/expired-powers")
-async def expired_powers():
+async def expired_powers(request: Request):
     """POAs past their expiration date (semi-annual cycle)."""
     _qp = dict(request.query_params)
     try:
@@ -308,7 +308,7 @@ async def expired_powers():
         }
     except Exception as exc:
         logger.exception("reports/expired-powers error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -343,7 +343,7 @@ async def forfeitures():
         }
     except Exception as exc:
         logger.exception("reports/forfeitures error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -454,7 +454,7 @@ async def agent_production():
         }
     except Exception as exc:
         logger.exception("reports/agent-production error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -507,7 +507,7 @@ async def check_in_compliance():
         }
     except Exception as exc:
         logger.exception("reports/check-in-compliance error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -580,11 +580,11 @@ async def poa_inventory_summary():
         }
     except Exception as exc:
         logger.exception("reports/poa-inventory error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 @reports_bp.get("/reports/kpi-trends")
-async def kpi_trends():
+async def kpi_trends(request: Request):
     """Return period-over-period KPI comparison for the Reports tab trend indicators."""
     _qp = dict(request.query_params)
     try:
@@ -634,4 +634,4 @@ async def kpi_trends():
         }
     except Exception as exc:
         logger.exception("reports/kpi-trends error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

@@ -82,7 +82,7 @@ def verify_signnow_signature(payload: bytes, signature: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/signnow")
-async def signnow_webhook():
+async def signnow_webhook(request: Request):
     """
     Handle document.complete (and other) events from SignNow.
 
@@ -113,7 +113,7 @@ async def signnow_webhook():
             "[signnow_webhook] Rejected — invalid or missing HMAC signature. "
             "Headers: %s", dict(request.headers)
         )
-        return {"error": "Invalid signature"}, 401
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
 
     data = await request.json() or {}
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -397,7 +397,7 @@ async def _send_escalation_slack(message: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/twilio")
-async def twilio_webhook():
+async def twilio_webhook(request: Request):
     """Handle inbound SMS from Twilio."""
     from dashboard.api.events import publish_event
 
@@ -428,7 +428,7 @@ async def twilio_webhook():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/payment")
-async def payment_webhook():
+async def payment_webhook(request: Request):
     """
     _qp = dict(request.query_params)
     Handle SwipeSimple payment confirmation webhook.
@@ -473,7 +473,7 @@ async def payment_webhook():
         ).hexdigest()
         if not hmac.compare_digest(expected_sig, sig_header):
             logger.warning("[payment_webhook] Invalid SwipeSimple signature — rejecting")
-            return {"error": "Invalid signature"}, 401
+            return JSONResponse({"error": "Invalid signature"}, status_code=401)
 
     data = await request.json() or {}
 
@@ -583,7 +583,7 @@ async def payment_webhook():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @webhooks_bp.post("/webhooks/wix-intake")
-async def wix_intake_webhook():
+async def wix_intake_webhook(request: Request):
     """
     _qp = dict(request.query_params)
     Handle intake submissions from the Wix indemnitor portal.
@@ -602,7 +602,7 @@ async def wix_intake_webhook():
     )
     if wix_secret and provided != wix_secret:
         logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
-        return {"error": "Unauthorized"}, 401
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
     data = await request.json() or {}
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -621,4 +621,4 @@ async def wix_intake_webhook():
         return {"success": True, "intake_id": intake_id}, 201
     except Exception as exc:
         logger.exception("[wix_intake_webhook] Intake normalization failed")
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

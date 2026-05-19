@@ -140,6 +140,7 @@ from dashboard.routers.bb_health_monitor import bb_health_bp as bb_health_monito
 from dashboard.routers.bb_prospecting import bb_prospecting_bp as bb_prospecting_router
 from dashboard.routers.bb_scheduled_messages import bb_schedule_bp as bb_scheduled_messages_router
 from dashboard.routers.bb_webhook_receiver import bb_webhook_bp as bb_webhook_receiver_router
+from dashboard.routers.bond_lifecycle import bond_lifecycle_bp as bond_lifecycle_router
 from dashboard.routers.bonds import bonds_bp as bonds_router
 from dashboard.routers.calendar import calendar_bp as calendar_router
 from dashboard.routers.client_portal import portal_bp as client_portal_router
@@ -186,7 +187,7 @@ for _r in [
     accounting_router, agent_analytics_router, agent_brain_api_router, analytics_router, automation_control_router,
     bb_contact_sync_router, bb_document_delivery_router,
     bb_health_monitor_router, bb_prospecting_router, bb_scheduled_messages_router,
-    bb_webhook_receiver_router, bonds_router, calendar_router, client_portal_router,
+    bb_webhook_receiver_router, bond_lifecycle_router, bonds_router, calendar_router, client_portal_router,
     contacts_router, court_dockets_router, court_reminders_router,
     data_retention_router, defendant_lifecycle_router, discharge_monitor_router,
     docket_monitor_api_router, events_router, fldfs_compliance_router, fta_router,

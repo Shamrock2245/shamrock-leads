@@ -37,7 +37,7 @@ def _tracker():
 
 # ── Leaderboard ──────────────────────────────────────────────────────────
 @source_performance_bp.get("/alpha/leaderboard")
-async def leaderboard():
+async def leaderboard(request: Request):
     """Full county source performance leaderboard."""
     _qp = dict(request.query_params)
     try:
@@ -53,7 +53,7 @@ async def leaderboard():
         }
     except Exception as exc:
         logger.exception("alpha/leaderboard error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── County Deep-Dive ─────────────────────────────────────────────────────
@@ -64,11 +64,11 @@ async def county_detail(county: str):
         tracker = _tracker()
         data = await tracker.get_county_detail(county)
         if not data:
-            return {"success": False, "error": f"No data for county: {county}"}, 404
+            return JSONResponse({"success": False, "error": f"No data for county: {county}"}, status_code=404)
         return {"success": True, "county": data}
     except Exception as exc:
         logger.exception("alpha/county/%s error: %s", county, exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Tier Summary ─────────────────────────────────────────────────────────
@@ -81,12 +81,12 @@ async def tiers():
         return {"success": True, "tiers": data}
     except Exception as exc:
         logger.exception("alpha/tiers error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Recommendations ──────────────────────────────────────────────────────
 @source_performance_bp.get("/alpha/recommendations")
-async def recommendations():
+async def recommendations(request: Request):
     """
     _qp = dict(request.query_params)
     Top actionable recommendations across all counties.
@@ -122,7 +122,7 @@ async def recommendations():
         }
     except Exception as exc:
         logger.exception("alpha/recommendations error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── System Stats ─────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ async def stats():
         return {"success": True, **data}
     except Exception as exc:
         logger.exception("alpha/stats error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Recalculate ──────────────────────────────────────────────────────────
@@ -152,12 +152,12 @@ async def recalculate():
         return result
     except Exception as exc:
         logger.exception("alpha/recalculate error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Record Conversion ────────────────────────────────────────────────────
 @source_performance_bp.post("/alpha/record-conversion")
-async def record_conversion():
+async def record_conversion(request: Request):
     """
     Record a bond conversion feedback signal.
     Called when a bond is written and moves to 'active' status.
@@ -194,7 +194,7 @@ async def record_conversion():
         return {"success": True, "message": "Conversion recorded"}
     except Exception as exc:
         logger.exception("alpha/record-conversion error: %s", exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 # ── Score Trend History ──────────────────────────────────────────────────
@@ -227,4 +227,4 @@ async def trend(county: str):
         }
     except Exception as exc:
         logger.exception("alpha/trend/%s error: %s", county, exc)
-        return {"success": False, "error": str(exc)}, 500
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

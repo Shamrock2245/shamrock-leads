@@ -42,18 +42,18 @@ legacy_bp = APIRouter(prefix="/api", tags=["legacy"])
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @legacy_bp.post("/config/bluebubbles-url")
-async def update_bluebubbles_url():
+async def update_bluebubbles_url(request: Request):
     """Accept a new ngrok tunnel URL from the iMac sync script."""
     auth = request.headers.get("X-API-Key", "")
     if auth != BB_CONFIG_API_KEY:
-        return {"error": "unauthorized"}, 401
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     body = await request.json()
     suffix = body.get("suffix", "0178")
     url = body.get("url", "").strip()
 
     if not url:
-        return {"error": "url is required"}, 400
+        return JSONResponse({"error": "url is required"}, status_code=400)
 
     servers = update_bb_url(suffix, url)
     phone_key = f"239955{suffix}"
@@ -113,7 +113,7 @@ async def api_cleanup():
         result = run_cleanup()
         return {"success": True, **result}
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @legacy_bp.get("/db-health")
@@ -160,7 +160,7 @@ async def api_db_health():
             "collections": collections_info,
         }
     except Exception as e:
-        return {"status": "error", "error": str(e)}, 500
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -168,7 +168,7 @@ async def api_db_health():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @legacy_bp.post("/leads/update-custody")
-async def update_custody():
+async def update_custody(request: Request):
     """Manually override custody status for a defendant."""
     arrests = get_collection("arrests")
     body = await request.json()
@@ -176,11 +176,11 @@ async def update_custody():
     new_status = body.get("custody_status", "").strip()
 
     if not booking_number:
-        return {"error": "booking_number is required"}, 400
+        return JSONResponse({"error": "booking_number is required"}, status_code=400)
 
     valid_statuses = ["In Custody", "Not In Custody", "Released", "Bonded Out"]
     if new_status not in valid_statuses:
-        return {"error": f"Invalid status. Must be one of: {valid_statuses}"}, 400
+        return JSONResponse({"error": f"Invalid status. Must be one of: {valid_statuses}"}, status_code=400)
 
     try:
         existing = await arrests.find_one(
@@ -188,7 +188,7 @@ async def update_custody():
             {"status": 1, "custody_overrides": 1}
         )
         if not existing:
-            return {"error": f"No record found for booking {booking_number}"}, 404
+            return JSONResponse({"error": f"No record found for booking {booking_number}"}, status_code=404)
 
         old_status = existing.get("status", "Unknown")
 
@@ -214,7 +214,7 @@ async def update_custody():
         )
 
         if result.modified_count == 0:
-            return {"error": "Record found but not modified"}, 500
+            return JSONResponse({"error": "Record found but not modified"}, status_code=500)
 
         return {
             "success": True,
@@ -223,7 +223,7 @@ async def update_custody():
             "new_status": new_status,
         }
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -279,7 +279,7 @@ async def imessage_status():
 
 
 @legacy_bp.post("/imessage/send")
-async def imessage_send():
+async def imessage_send(request: Request):
     """Send an iMessage via BlueBubbles server."""
     import httpx
 
@@ -287,7 +287,7 @@ async def imessage_send():
         init_bluebubbles()
 
     if not BB_SERVERS:
-        return {"error": "No BlueBubbles servers configured. Set BLUEBUBBLES_URL_0178 and BLUEBUBBLES_PASSWORD_0178 in .env"}, 503
+        return JSONResponse({"error": "No BlueBubbles servers configured. Set BLUEBUBBLES_URL_0178 and BLUEBUBBLES_PASSWORD_0178 in .env"}, status_code=503)
 
     body = await request.json()
     phone_raw = body.get("phone", "")
@@ -300,15 +300,15 @@ async def imessage_send():
     from_number = body.get("from_number", "2399550178")
 
     if not phone_raw or not message:
-        return {"error": "phone and message are required"}, 400
+        return JSONResponse({"error": "phone and message are required"}, status_code=400)
 
     phone = format_phone(phone_raw)
     if not phone:
-        return {"error": f"Invalid phone number: {phone_raw}"}, 400
+        return JSONResponse({"error": f"Invalid phone number: {phone_raw}"}, status_code=400)
 
     srv = get_bb_server(from_number)
     if not srv:
-        return {"error": f"No BlueBubbles server configured for {from_number}"}, 503
+        return JSONResponse({"error": f"No BlueBubbles server configured for {from_number}"}, status_code=503)
 
     # NOTE: Geo-tracking links are NOT auto-appended to outbound messages.
     # Use /api/tracking/<booking>/send-geo-link for explicit geo-link delivery.
@@ -387,12 +387,12 @@ async def imessage_send():
         if success:
             return {"success": True, "record": doc}
         else:
-            return {"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}, 502
+            return JSONResponse({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}, status_code=502)
 
     except httpx.ConnectError:
-        return {"error": "Cannot reach BlueBubbles server. Is it running?"}, 502
+        return JSONResponse({"error": "Cannot reach BlueBubbles server. Is it running?"}, status_code=502)
     except Exception as e:
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @legacy_bp.get("/imessage/history/<booking_number>")

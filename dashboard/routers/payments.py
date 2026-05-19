@@ -17,13 +17,13 @@ from dashboard.extensions import get_collection
 
 payments_bp = APIRouter(prefix="/api", tags=["payments"])
 @payments_bp.post("/payments/log")
-async def log_payment():
+async def log_payment(request: Request):
     """Record a payment to MongoDB 'payments' collection."""
     from dashboard.api.events import publish_event
 
     data = await request.json()
     if not data or 'booking_number' not in data or 'amount' not in data:
-        return {"error": "Missing required fields"}, 400
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
 
     payments = get_collection("payments")
 
@@ -59,11 +59,11 @@ async def get_payments(booking_number):
     return {"payments": payment_list}, 200
 
 @payments_bp.post("/payments/plan/<booking_number>")
-async def create_payment_plan(booking_number):
+async def create_payment_plan(request: Request, booking_number):
     """Create a payment plan for a bond."""
     data = await request.json()
     if not data or 'total_amount' not in data or 'down_payment' not in data:
-        return {"error": "Missing required fields"}, 400
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
         
     plans = get_collection("payment_plans")
     plan_doc = {
@@ -84,11 +84,11 @@ async def create_payment_plan(booking_number):
     return {"success": True, "plan_id": plan_doc['_id']}, 201
 
 @payments_bp.post("/payments/premium-split")
-async def calculate_premium_split():
+async def calculate_premium_split(request: Request):
     """Calculate the premium split between agent, surety, and BUF."""
     data = await request.json()
     if not data or 'bond_amount' not in data:
-        return {"error": "Missing bond_amount"}, 400
+        return JSONResponse({"error": "Missing bond_amount"}, status_code=400)
         
     bond_amount = float(data['bond_amount'])
     surety_id = data.get('surety_id', 'osi').lower()

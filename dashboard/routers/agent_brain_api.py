@@ -135,17 +135,17 @@ RULES:
 - Use proper grammar but casual tone"""
 
 @agent_brain_api_bp.post("/agent-brain/opener")
-async def api_agent_brain_opener():
+async def api_agent_brain_opener(request: Request):
     """Generate a personalized AI opening message for a lead."""
     try:
         data = await request.json() or {}
         bk = (data.get("booking_number") or "").strip()
         if not bk:
-            return {"error": "booking_number is required"}, 400
+            return JSONResponse({"error": "booking_number is required"}, status_code=400)
 
         doc = await _get_lead_context(bk)
         if not doc:
-            return {"error": "Lead not found"}, 404
+            return JSONResponse({"error": "Lead not found"}, status_code=404)
 
         context_text = _build_lead_summary_text(doc)
         user_prompt = (
@@ -172,7 +172,7 @@ async def api_agent_brain_opener():
 
     except Exception as exc:
         logger.exception("agent_brain_opener error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -200,18 +200,18 @@ RULES:
 Return each message on a separate line, numbered (1., 2., 3.)."""
 
 @agent_brain_api_bp.post("/agent-brain/suggest")
-async def api_agent_brain_suggest():
+async def api_agent_brain_suggest(request: Request):
     """Generate AI message suggestions based on type and context."""
     try:
         data = await request.json() or {}
         bk = (data.get("booking_number") or "").strip()
         suggest_type = data.get("type", "followup")
         if not bk:
-            return {"error": "booking_number is required"}, 400
+            return JSONResponse({"error": "booking_number is required"}, status_code=400)
 
         doc = await _get_lead_context(bk)
         if not doc:
-            return {"error": "Lead not found"}, 404
+            return JSONResponse({"error": "Lead not found"}, status_code=404)
 
         context_text = _build_lead_summary_text(doc)
         user_prompt = (
@@ -263,7 +263,7 @@ async def api_agent_brain_suggest():
 
     except Exception as exc:
         logger.exception("agent_brain_suggest error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -283,17 +283,17 @@ Keep it professional and actionable. Use bullet points.
 Total length: 5-8 bullet points."""
 
 @agent_brain_api_bp.post("/agent-brain/summary")
-async def api_agent_brain_summary():
+async def api_agent_brain_summary(request: Request):
     """Generate an AI lead intelligence summary."""
     try:
         data = await request.json() or {}
         bk = (data.get("booking_number") or "").strip()
         if not bk:
-            return {"error": "booking_number is required"}, 400
+            return JSONResponse({"error": "booking_number is required"}, status_code=400)
 
         doc = await _get_lead_context(bk)
         if not doc:
-            return {"error": "Lead not found"}, 404
+            return JSONResponse({"error": "Lead not found"}, status_code=404)
 
         context_text = _build_lead_summary_text(doc)
         user_prompt = (
@@ -324,7 +324,7 @@ async def api_agent_brain_summary():
 
     except Exception as exc:
         logger.exception("agent_brain_summary error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -371,7 +371,7 @@ async def api_agent_brain_rescore_all():
 
     except Exception as exc:
         logger.exception("agent_brain_rescore_all error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -390,13 +390,13 @@ Keep messages SHORT (iMessage style, 2-3 sentences each).
 Format as a structured plan with clear labels."""
 
 @agent_brain_api_bp.post("/agent-brain/draft-sequence")
-async def api_agent_brain_draft_sequence():
+async def api_agent_brain_draft_sequence(request: Request):
     """Draft a multi-lead outreach sequence."""
     try:
         data = await request.json() or {}
         booking_numbers = data.get("booking_numbers", [])
         if not booking_numbers:
-            return {"error": "booking_numbers list is required"}, 400
+            return JSONResponse({"error": "booking_numbers list is required"}, status_code=400)
 
         # Gather context for all leads
         lead_summaries = []
@@ -410,7 +410,7 @@ async def api_agent_brain_draft_sequence():
                 )
 
         if not lead_summaries:
-            return {"error": "No leads found for the given booking numbers"}, 404
+            return JSONResponse({"error": "No leads found for the given booking numbers"}, status_code=404)
 
         user_prompt = (
             f"Draft a 3-day outreach sequence for these {len(lead_summaries)} leads:\n\n"
@@ -440,4 +440,4 @@ async def api_agent_brain_draft_sequence():
 
     except Exception as exc:
         logger.exception("agent_brain_draft_sequence error")
-        return {"error": str(exc)}, 500
+        return JSONResponse({"error": str(exc)}, status_code=500)

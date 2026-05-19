@@ -364,7 +364,7 @@ async def send_group_chat_outreach(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @bb_prospecting_bp.post("/prospecting/outreach")
-async def api_prospecting_outreach():
+async def api_prospecting_outreach(request: Request):
     """Send iMessage-first prospecting outreach to a list of phone numbers.
 
     Body:
@@ -409,11 +409,11 @@ async def api_prospecting_outreach():
 
     except Exception as e:
         logger.error("Prospecting outreach error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_prospecting_bp.post("/prospecting/group-chat")
-async def api_create_group_chat():
+async def api_create_group_chat(request: Request):
     """Create a multi-indemnitor group iMessage chat for a bond case.
 
     Body:
@@ -452,7 +452,7 @@ async def api_create_group_chat():
 
     except Exception as e:
         logger.error("Group chat creation error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_prospecting_bp.get("/prospecting/stats")
@@ -477,7 +477,7 @@ async def api_prospecting_stats():
         }
 
     except Exception as e:
-        return {"success": False, "error": str(e)}, 500
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bb_prospecting_bp.get("/prospecting/templates")
