@@ -1,0 +1,773 @@
+diff --git a/scrapers/counties/dixie.py b/scrapers/counties/dixie.py
+index 6cc35e4..e79875d 100644
+--- a/scrapers/counties/dixie.py
++++ b/scrapers/counties/dixie.py
+@@ -6,6 +6,7 @@ Method: requests + BeautifulSoup — ASP.NET ViewState form
+ """
+ import logging
+ import re
++import time
+ from typing import List
+ from scrapers.base_scraper import BaseScraper
+ from core.models import ArrestRecord
+diff --git a/scrapers/counties/glades.py b/scrapers/counties/glades.py
+index 019596c..c7c6859 100644
+--- a/scrapers/counties/glades.py
++++ b/scrapers/counties/glades.py
+@@ -86,7 +86,7 @@ class GladesCountyScraper(BaseScraper):
+             if not html_rows or len(html_rows) < 10:
+                 break
+ 
+-            batch = self._parse_rows(html_rows, seen)
++            batch = self._parse_html(html_rows, seen)
+             if not batch:
+                 break
+ 
+@@ -99,86 +99,99 @@ class GladesCountyScraper(BaseScraper):
+         logger.info(f"Glades: {len(records)} records")
+         return records
+ 
+-    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
++    def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
+         from bs4 import BeautifulSoup
++        from datetime import datetime, timezone
+         soup = BeautifulSoup(html, "html.parser")
+         records = []
+ 
+-        for row in soup.find_all("tr"):
+-            cells = row.find_all("td")
+-            if len(cells) < 10:
++        for img in soup.find_all("img", src=re.compile(r"bookno=")):
++            src = img.get("src", "")
++            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
++            if not bk_m:
+                 continue
+-            texts = [td.get_text(separator=" ", strip=True) for td in cells]
+-
+-            if "Booking No:" not in texts[1]:
++            booking_num = bk_m.group(1)
++            if booking_num in seen:
+                 continue
++            seen.add(booking_num)
+ 
+-            full_name = texts[2] if len(texts) > 2 else texts[1]
+-            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+-            if not full_name or len(full_name) < 3:
+-                continue
++            # Collect text from this row and next 15 siblings
++            block_text = ""
++            try:
++                row = img.find_parent("tr")
++                current = row
++                for _ in range(15):
++                    if current:
++                        block_text += " " + current.get_text(" ", strip=True)
++                        current = current.find_next_sibling("tr")
++            except Exception:
++                pass
++
++            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
++            name_m = re.search(
++                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
++                block_text,
++                re.IGNORECASE
++            )
++            full_name = name_m.group(1).strip() if name_m else ""
++            race = name_m.group(2) if name_m else ""
++            sex = name_m.group(3) if name_m else ""
++
++            # Try relaxed name regex if strict one failed
++            if not full_name:
++                name_m = re.search(
++                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
++                    block_text
++                )
++                if name_m:
++                    full_name = name_m.group(1).strip()
++                    race = name_m.group(2)
++                    sex = name_m.group(3)
++
++            last, first, middle = "", "", ""
++            if "," in full_name:
++                parts = full_name.split(",", 1)
++                last = parts[0].strip()
++                fm = parts[1].strip().split()
++                first = fm[0] if fm else ""
++                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
++
++            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
++            dob = dob_m.group(1) if dob_m else ""
+ 
+-            booking_num = texts[6] if len(texts) > 6 else ""
+-            booking_date = texts[10].split()[0] if len(texts) > 10 and texts[10] else ""
+-            status = texts[4] if len(texts) > 4 else "In Custody"
+-            bond_raw = texts[17] if len(texts) > 17 else "0"
+-            address = texts[20] if len(texts) > 20 else ""
++            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
++            booking_date = bd_m.group(1) if bd_m else ""
+ 
+-            race, sex = "", ""
+-            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+-            if rs_match:
+-                race, sex = rs_match.group(1), rs_match.group(2)
++            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
+ 
+-            key = booking_num or full_name
+-            if key in seen:
++            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
++            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
++
++            # Parse status from block text
++            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
++            status = status_m.group(1).strip() if status_m else "In Custody"
++            if "jail" in status.lower() or "custody" in status.lower():
++                status = "In Custody"
++
++            # Parse address from block text
++            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
++            address = addr_m.group(1).strip() if addr_m else ""
++
++            if not full_name:
+                 continue
+-            seen.add(key)
+ 
+-            f, m, l = self._parse_name(full_name)
+             records.append(ArrestRecord(
+-                County=self.county,
+-                Booking_Number=booking_num,
+-                Full_Name=full_name,
+-                First_Name=f, Middle_Name=m, Last_Name=l,
+-                DOB="",
+-                Booking_Date=booking_date,
+-                Status="In Custody" if "jail" in status.lower() or "custody" in status.lower() else status,
+-                Release_Date="",
+-                Facility=FACILITY,
+-                Race=race, Sex=sex,
+-                Address=address,
+-                Bond_Amount=str(self._parse_bond(bond_raw)),
++                County=self.county, State="FL", Facility=FACILITY,
++                Full_Name=full_name.upper(),
++                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
++                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
++                Booking_Number=booking_num, Booking_Date=booking_date,
++                Charges=charges, Bond_Amount=bond,
++                Address=address, Status=status,
+                 Detail_URL=f"{BASE_URL}/Jail.aspx",
++                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
++                LastChecked=datetime.now(timezone.utc).isoformat(),
+                 LastCheckedMode="INITIAL",
+             ))
+ 
+         return records
+-
+-    @staticmethod
+-    def _parse_name(name: str):
+-        if not name:
+-            return "", "", ""
+-        name = " ".join(name.strip().split())
+-        if "," in name:
+-            parts = name.split(",", 1)
+-            last = parts[0].strip()
+-            fm = parts[1].strip().split()
+-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), last
+-        parts = name.split()
+-        if len(parts) == 1:
+-            return parts[0], "", ""
+-        if len(parts) == 2:
+-            return parts[0], "", parts[1]
+-        return parts[0], " ".join(parts[1:-1]), parts[-1]
+-
+-    @staticmethod
+-    def _parse_bond(bond_str):
+-        if not bond_str:
+-            return 0.0
+-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+-            return 0.0
+-        try:
+-            return float(cleaned)
+-        except (ValueError, TypeError):
+-            return 0.0
+diff --git a/scrapers/counties/putnam.py b/scrapers/counties/putnam.py
+index ad4ad6e..e7a89f3 100644
+--- a/scrapers/counties/putnam.py
++++ b/scrapers/counties/putnam.py
+@@ -151,6 +151,16 @@ class PutnamCountyScraper(BaseScraper):
+             bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
+             bond = bond_m.group(1).replace(",", "") if bond_m else "0"
+ 
++            # Parse status from block text
++            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
++            status = status_m.group(1).strip() if status_m else "In Custody"
++            if "jail" in status.lower() or "custody" in status.lower():
++                status = "In Custody"
++
++            # Parse address from block text
++            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
++            address = addr_m.group(1).strip() if addr_m else ""
++
+             if not full_name:
+                 continue
+ 
+@@ -161,6 +171,8 @@ class PutnamCountyScraper(BaseScraper):
+                 DOB=dob, Race=race, Sex=sex,
+                 Booking_Number=booking_num, Booking_Date=booking_date,
+                 Charges=charges, Bond_Amount=bond,
++                Address=address, Status=status,
++                Detail_URL=BASE_URL,
+                 Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+                 LastChecked=datetime.now(timezone.utc).isoformat(),
+                 LastCheckedMode="INITIAL",
+diff --git a/scrapers/counties/santa_rosa.py b/scrapers/counties/santa_rosa.py
+index 9e93cdc..034db84 100644
+--- a/scrapers/counties/santa_rosa.py
++++ b/scrapers/counties/santa_rosa.py
+@@ -88,7 +88,7 @@ class SantaRosaCountyScraper(BaseScraper):
+             if not html_rows or len(html_rows) < 10:
+                 break
+ 
+-            batch = self._parse_rows(html_rows, seen)
++            batch = self._parse_html(html_rows, seen)
+             if not batch:
+                 break
+ 
+@@ -101,86 +101,99 @@ class SantaRosaCountyScraper(BaseScraper):
+         logger.info(f"Santa Rosa: {len(records)} records")
+         return records
+ 
+-    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
++    def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
+         from bs4 import BeautifulSoup
++        from datetime import datetime, timezone
+         soup = BeautifulSoup(html, "html.parser")
+         records = []
+ 
+-        for row in soup.find_all("tr"):
+-            cells = row.find_all("td")
+-            if len(cells) < 10:
++        for img in soup.find_all("img", src=re.compile(r"bookno=")):
++            src = img.get("src", "")
++            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
++            if not bk_m:
+                 continue
+-            texts = [td.get_text(separator=" ", strip=True) for td in cells]
+-
+-            if "Booking No:" not in texts[1]:
++            booking_num = bk_m.group(1)
++            if booking_num in seen:
+                 continue
++            seen.add(booking_num)
+ 
+-            full_name = texts[2] if len(texts) > 2 else texts[1]
+-            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+-            if not full_name or len(full_name) < 3:
+-                continue
++            # Collect text from this row and next 15 siblings
++            block_text = ""
++            try:
++                row = img.find_parent("tr")
++                current = row
++                for _ in range(15):
++                    if current:
++                        block_text += " " + current.get_text(" ", strip=True)
++                        current = current.find_next_sibling("tr")
++            except Exception:
++                pass
++
++            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
++            name_m = re.search(
++                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
++                block_text,
++                re.IGNORECASE
++            )
++            full_name = name_m.group(1).strip() if name_m else ""
++            race = name_m.group(2) if name_m else ""
++            sex = name_m.group(3) if name_m else ""
++
++            # Try relaxed name regex if strict one failed
++            if not full_name:
++                name_m = re.search(
++                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
++                    block_text
++                )
++                if name_m:
++                    full_name = name_m.group(1).strip()
++                    race = name_m.group(2)
++                    sex = name_m.group(3)
++
++            last, first, middle = "", "", ""
++            if "," in full_name:
++                parts = full_name.split(",", 1)
++                last = parts[0].strip()
++                fm = parts[1].strip().split()
++                first = fm[0] if fm else ""
++                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
++
++            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
++            dob = dob_m.group(1) if dob_m else ""
+ 
+-            booking_num = texts[6] if len(texts) > 6 else ""
+-            booking_date = texts[10].split()[0] if len(texts) > 10 and texts[10] else ""
+-            status = texts[4] if len(texts) > 4 else "In Custody"
+-            bond_raw = texts[17] if len(texts) > 17 else "0"
+-            address = texts[20] if len(texts) > 20 else ""
++            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
++            booking_date = bd_m.group(1) if bd_m else ""
+ 
+-            race, sex = "", ""
+-            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+-            if rs_match:
+-                race, sex = rs_match.group(1), rs_match.group(2)
++            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
+ 
+-            key = booking_num or full_name
+-            if key in seen:
++            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
++            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
++
++            # Parse status from block text
++            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
++            status = status_m.group(1).strip() if status_m else "In Custody"
++            if "jail" in status.lower() or "custody" in status.lower():
++                status = "In Custody"
++
++            # Parse address from block text
++            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
++            address = addr_m.group(1).strip() if addr_m else ""
++
++            if not full_name:
+                 continue
+-            seen.add(key)
+ 
+-            f, m, l = self._parse_name(full_name)
+             records.append(ArrestRecord(
+-                County=self.county,
+-                Booking_Number=booking_num,
+-                Full_Name=full_name,
+-                First_Name=f, Middle_Name=m, Last_Name=l,
+-                DOB="",
+-                Booking_Date=booking_date,
+-                Status="In Custody" if "jail" in status.lower() or "custody" in status.lower() else status,
+-                Release_Date="",
+-                Facility=FACILITY,
+-                Race=race, Sex=sex,
+-                Address=address,
+-                Bond_Amount=str(self._parse_bond(bond_raw)),
++                County=self.county, State="FL", Facility=FACILITY,
++                Full_Name=full_name.upper(),
++                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
++                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
++                Booking_Number=booking_num, Booking_Date=booking_date,
++                Charges=charges, Bond_Amount=bond,
++                Address=address, Status=status,
+                 Detail_URL=f"{BASE_URL}/jail.aspx",
++                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
++                LastChecked=datetime.now(timezone.utc).isoformat(),
+                 LastCheckedMode="INITIAL",
+             ))
+ 
+         return records
+-
+-    @staticmethod
+-    def _parse_name(name: str):
+-        if not name:
+-            return "", "", ""
+-        name = " ".join(name.strip().split())
+-        if "," in name:
+-            parts = name.split(",", 1)
+-            last = parts[0].strip()
+-            fm = parts[1].strip().split()
+-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), last
+-        parts = name.split()
+-        if len(parts) == 1:
+-            return parts[0], "", ""
+-        if len(parts) == 2:
+-            return parts[0], "", parts[1]
+-        return parts[0], " ".join(parts[1:-1]), parts[-1]
+-
+-    @staticmethod
+-    def _parse_bond(bond_str: str) -> float:
+-        if not bond_str:
+-            return 0.0
+-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+-            return 0.0
+-        try:
+-            return float(cleaned)
+-        except (ValueError, TypeError):
+-            return 0.0
+diff --git a/scrapers/counties/sumter.py b/scrapers/counties/sumter.py
+index 59710e5..04b700c 100644
+--- a/scrapers/counties/sumter.py
++++ b/scrapers/counties/sumter.py
+@@ -86,7 +86,7 @@ class SumterCountyScraper(BaseScraper):
+             if not html_rows or len(html_rows) < 10:
+                 break
+ 
+-            batch = self._parse_rows(html_rows, seen)
++            batch = self._parse_html(html_rows, seen)
+             if not batch:
+                 break
+ 
+@@ -99,86 +99,99 @@ class SumterCountyScraper(BaseScraper):
+         logger.info(f"Sumter: {len(records)} records")
+         return records
+ 
+-    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
++    def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
+         from bs4 import BeautifulSoup
++        from datetime import datetime, timezone
+         soup = BeautifulSoup(html, "html.parser")
+         records = []
+ 
+-        for row in soup.find_all("tr"):
+-            cells = row.find_all("td")
+-            if len(cells) < 10:
++        for img in soup.find_all("img", src=re.compile(r"bookno=")):
++            src = img.get("src", "")
++            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
++            if not bk_m:
+                 continue
+-            texts = [td.get_text(separator=" ", strip=True) for td in cells]
+-
+-            if "Booking No:" not in texts[1]:
++            booking_num = bk_m.group(1)
++            if booking_num in seen:
+                 continue
++            seen.add(booking_num)
+ 
+-            full_name = texts[2] if len(texts) > 2 else texts[1]
+-            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+-            if not full_name or len(full_name) < 3:
+-                continue
++            # Collect text from this row and next 15 siblings
++            block_text = ""
++            try:
++                row = img.find_parent("tr")
++                current = row
++                for _ in range(15):
++                    if current:
++                        block_text += " " + current.get_text(" ", strip=True)
++                        current = current.find_next_sibling("tr")
++            except Exception:
++                pass
++
++            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
++            name_m = re.search(
++                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
++                block_text,
++                re.IGNORECASE
++            )
++            full_name = name_m.group(1).strip() if name_m else ""
++            race = name_m.group(2) if name_m else ""
++            sex = name_m.group(3) if name_m else ""
++
++            # Try relaxed name regex if strict one failed
++            if not full_name:
++                name_m = re.search(
++                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
++                    block_text
++                )
++                if name_m:
++                    full_name = name_m.group(1).strip()
++                    race = name_m.group(2)
++                    sex = name_m.group(3)
++
++            last, first, middle = "", "", ""
++            if "," in full_name:
++                parts = full_name.split(",", 1)
++                last = parts[0].strip()
++                fm = parts[1].strip().split()
++                first = fm[0] if fm else ""
++                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
++
++            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
++            dob = dob_m.group(1) if dob_m else ""
+ 
+-            booking_num = texts[6] if len(texts) > 6 else ""
+-            booking_date = texts[10].split()[0] if len(texts) > 10 and texts[10] else ""
+-            status = texts[4] if len(texts) > 4 else "In Custody"
+-            bond_raw = texts[17] if len(texts) > 17 else "0"
+-            address = texts[20] if len(texts) > 20 else ""
++            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
++            booking_date = bd_m.group(1) if bd_m else ""
+ 
+-            race, sex = "", ""
+-            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+-            if rs_match:
+-                race, sex = rs_match.group(1), rs_match.group(2)
++            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
+ 
+-            key = booking_num or full_name
+-            if key in seen:
++            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
++            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
++
++            # Parse status from block text
++            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
++            status = status_m.group(1).strip() if status_m else "In Custody"
++            if "jail" in status.lower() or "custody" in status.lower():
++                status = "In Custody"
++
++            # Parse address from block text
++            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
++            address = addr_m.group(1).strip() if addr_m else ""
++
++            if not full_name:
+                 continue
+-            seen.add(key)
+ 
+-            f, m, l = self._parse_name(full_name)
+             records.append(ArrestRecord(
+-                County=self.county,
+-                Booking_Number=booking_num,
+-                Full_Name=full_name,
+-                First_Name=f, Middle_Name=m, Last_Name=l,
+-                DOB="",
+-                Booking_Date=booking_date,
+-                Status="In Custody" if "jail" in status.lower() or "custody" in status.lower() else status,
+-                Release_Date="",
+-                Facility=FACILITY,
+-                Race=race, Sex=sex,
+-                Address=address,
+-                Bond_Amount=str(self._parse_bond(bond_raw)),
++                County=self.county, State="FL", Facility=FACILITY,
++                Full_Name=full_name.upper(),
++                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
++                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
++                Booking_Number=booking_num, Booking_Date=booking_date,
++                Charges=charges, Bond_Amount=bond,
++                Address=address, Status=status,
+                 Detail_URL=f"{BASE_URL}/Jail.aspx",
++                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
++                LastChecked=datetime.now(timezone.utc).isoformat(),
+                 LastCheckedMode="INITIAL",
+             ))
+ 
+         return records
+-
+-    @staticmethod
+-    def _parse_name(name: str):
+-        if not name:
+-            return "", "", ""
+-        name = " ".join(name.strip().split())
+-        if "," in name:
+-            parts = name.split(",", 1)
+-            last = parts[0].strip()
+-            fm = parts[1].strip().split()
+-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), last
+-        parts = name.split()
+-        if len(parts) == 1:
+-            return parts[0], "", ""
+-        if len(parts) == 2:
+-            return parts[0], "", parts[1]
+-        return parts[0], " ".join(parts[1:-1]), parts[-1]
+-
+-    @staticmethod
+-    def _parse_bond(bond_str: str) -> float:
+-        if not bond_str:
+-            return 0.0
+-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+-            return 0.0
+-        try:
+-            return float(cleaned)
+-        except (ValueError, TypeError):
+-            return 0.0
+diff --git a/scrapers/counties/suwannee.py b/scrapers/counties/suwannee.py
+index a195a08..20d7a52 100644
+--- a/scrapers/counties/suwannee.py
++++ b/scrapers/counties/suwannee.py
+@@ -96,7 +96,7 @@ class SuwanneeCountyScraper(BaseScraper):
+             if not html_rows or len(html_rows) < 10:
+                 break
+ 
+-            batch = self._parse_rows(html_rows, seen)
++            batch = self._parse_html(html_rows, seen)
+             if not batch:
+                 break
+ 
+@@ -110,110 +110,99 @@ class SuwanneeCountyScraper(BaseScraper):
+         logger.info(f"Suwannee: {len(records)} records")
+         return records
+ 
+-    def _parse_rows(self, html: str, seen: set) -> List[ArrestRecord]:
++    def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
+         from bs4 import BeautifulSoup
++        from datetime import datetime, timezone
+         soup = BeautifulSoup(html, "html.parser")
+         records = []
+ 
+-        rows = soup.find_all("tr")
+-        for row in rows:
+-            cells = row.find_all("td")
+-            if len(cells) < 10:
++        for img in soup.find_all("img", src=re.compile(r"bookno=")):
++            src = img.get("src", "")
++            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
++            if not bk_m:
+                 continue
++            booking_num = bk_m.group(1)
++            if booking_num in seen:
++                continue
++            seen.add(booking_num)
+ 
+-            texts = [td.get_text(separator=" ", strip=True) for td in cells]
++            # Collect text from this row and next 15 siblings
++            block_text = ""
++            try:
++                row = img.find_parent("tr")
++                current = row
++                for _ in range(15):
++                    if current:
++                        block_text += " " + current.get_text(" ", strip=True)
++                        current = current.find_next_sibling("tr")
++            except Exception:
++                pass
++
++            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
++            name_m = re.search(
++                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
++                block_text,
++                re.IGNORECASE
++            )
++            full_name = name_m.group(1).strip() if name_m else ""
++            race = name_m.group(2) if name_m else ""
++            sex = name_m.group(3) if name_m else ""
++
++            # Try relaxed name regex if strict one failed
++            if not full_name:
++                name_m = re.search(
++                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
++                    block_text
++                )
++                if name_m:
++                    full_name = name_m.group(1).strip()
++                    race = name_m.group(2)
++                    sex = name_m.group(3)
+ 
+-            # Cell layout (confirmed from live data):
+-            # 0=photo, 1=full name+status block, 2=name, 3="Status:", 4=status_val,
+-            # 5="Booking No:", 6=booking_no, 7="MniNo:", 8=mni_no,
+-            # 9="Booking Date:", 10=booking_date, 11=blank, 12="Age On Booking Date:",
+-            # 13=age, 14=blank, 15=blank, 16="Bond Amount:", 17=bond,
+-            # 18=blank, 19="Address Given:", 20=address
++            last, first, middle = "", "", ""
++            if "," in full_name:
++                parts = full_name.split(",", 1)
++                last = parts[0].strip()
++                fm = parts[1].strip().split()
++                first = fm[0] if fm else ""
++                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
+ 
+-            # Skip rows that don't have "Booking No:" pattern
+-            if "Booking No:" not in texts[1]:
+-                continue
++            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
++            dob = dob_m.group(1) if dob_m else ""
+ 
+-            full_name = texts[2] if len(texts) > 2 else texts[1]
+-            # Name is "LAST, FIRST MIDDLE (RACE/SEX)" — strip the (B/MALE) part
+-            full_name = re.sub(r'\s*\([^)]*\)\s*$', '', full_name).strip()
+-            if not full_name or len(full_name) < 3:
+-                continue
++            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
++            booking_date = bd_m.group(1) if bd_m else ""
+ 
+-            booking_num = texts[6] if len(texts) > 6 else ""
+-            booking_date = texts[10] if len(texts) > 10 else ""
+-            # Normalize date: "05/17/2026 12:45 PM" -> "05/17/2026"
+-            if booking_date:
+-                booking_date = booking_date.split()[0]
++            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
+ 
+-            status = texts[4] if len(texts) > 4 else "In Custody"
++            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
++            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
++
++            # Parse status from block text
++            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
++            status = status_m.group(1).strip() if status_m else "In Custody"
+             if "jail" in status.lower() or "custody" in status.lower():
+                 status = "In Custody"
+ 
+-            bond_raw = texts[17] if len(texts) > 17 else "0"
+-            address = texts[20] if len(texts) > 20 else ""
+-
+-            # Race/sex from the "(B/MALE)" pattern in cell 1
+-            race, sex = "", ""
+-            rs_match = re.search(r'\(([A-Z]+)/\s*([A-Z]+)\)', texts[1])
+-            if rs_match:
+-                race = rs_match.group(1)
+-                sex = rs_match.group(2)
++            # Parse address from block text
++            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
++            address = addr_m.group(1).strip() if addr_m else ""
+ 
+-            key = booking_num or full_name
+-            if key in seen:
++            if not full_name:
+                 continue
+-            seen.add(key)
+-
+-            f, m, l = self._parse_name(full_name)
+ 
+             records.append(ArrestRecord(
+-                County=self.county,
+-                Booking_Number=booking_num,
+-                Full_Name=full_name,
+-                First_Name=f, Middle_Name=m, Last_Name=l,
+-                DOB="",
+-                Booking_Date=booking_date,
+-                Status=status,
+-                Release_Date="",
+-                Facility=FACILITY,
+-                Race=race,
+-                Sex=sex,
+-                Address=address,
+-                Bond_Amount=str(self._parse_bond(bond_raw)),
++                County=self.county, State="FL", Facility=FACILITY,
++                Full_Name=full_name.upper(),
++                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
++                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
++                Booking_Number=booking_num, Booking_Date=booking_date,
++                Charges=charges, Bond_Amount=bond,
++                Address=address, Status=status,
+                 Detail_URL=DETAIL_URL,
++                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
++                LastChecked=datetime.now(timezone.utc).isoformat(),
+                 LastCheckedMode="INITIAL",
+             ))
+ 
+         return records
+-
+-    @staticmethod
+-    def _parse_name(name: str):
+-        if not name:
+-            return "", "", ""
+-        name = " ".join(name.strip().split())
+-        if "," in name:
+-            parts = name.split(",", 1)
+-            last = parts[0].strip()
+-            fm = parts[1].strip().split()
+-            first = fm[0] if fm else ""
+-            middle = " ".join(fm[1:]) if len(fm) > 1 else ""
+-            return first, middle, last
+-        parts = name.split()
+-        if len(parts) == 1:
+-            return parts[0], "", ""
+-        if len(parts) == 2:
+-            return parts[0], "", parts[1]
+-        return parts[0], " ".join(parts[1:-1]), parts[-1]
+-
+-    @staticmethod
+-    def _parse_bond(bond_str: str) -> float:
+-        if not bond_str:
+-            return 0.0
+-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+-            return 0.0
+-        try:
+-            return float(cleaned)
+-        except (ValueError, TypeError):
+-            return 0.0

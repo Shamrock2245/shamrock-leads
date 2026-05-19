@@ -151,6 +151,16 @@ class PutnamCountyScraper(BaseScraper):
             bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
             bond = bond_m.group(1).replace(",", "") if bond_m else "0"
 
+            # Parse status from block text
+            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
+            status = status_m.group(1).strip() if status_m else "In Custody"
+            if "jail" in status.lower() or "custody" in status.lower():
+                status = "In Custody"
+
+            # Parse address from block text
+            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
+            address = addr_m.group(1).strip() if addr_m else ""
+
             if not full_name:
                 continue
 
@@ -161,6 +171,8 @@ class PutnamCountyScraper(BaseScraper):
                 DOB=dob, Race=race, Sex=sex,
                 Booking_Number=booking_num, Booking_Date=booking_date,
                 Charges=charges, Bond_Amount=bond,
+                Address=address, Status=status,
+                Detail_URL=BASE_URL,
                 Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
                 LastChecked=datetime.now(timezone.utc).isoformat(),
                 LastCheckedMode="INITIAL",

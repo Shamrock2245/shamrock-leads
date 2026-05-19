@@ -6,6 +6,7 @@ Method: requests + BeautifulSoup — ASP.NET ViewState form
 """
 import logging
 import re
+import time
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
