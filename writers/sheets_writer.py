@@ -126,73 +126,105 @@ class SheetsWriter:
                 'sheet_name': county
             }
 
-        # Auto-score records if needed
-        if auto_score:
-            records = [score_and_update(r) if r.Lead_Score == 0 else r for r in records]
+        try:
+            # Auto-score records if needed
+            if auto_score:
+                records = [score_and_update(r) if r.Lead_Score == 0 else r for r in records]
 
-        # Get or create the county sheet
-        sheet = self._get_or_create_sheet(county)
+            # Get or create the county sheet
+            sheet = self._get_or_create_sheet(county)
 
-        # Ensure header row exists
-        self._ensure_header_row(sheet)
+            # Ensure header row exists
+            self._ensure_header_row(sheet)
 
-        # Get existing records for deduplication
-        existing_keys = set()
-        if deduplicate:
-            existing_keys = self._get_existing_dedup_keys(sheet)
-
-        # Filter out duplicates
-        new_records = []
-        duplicates_skipped = 0
-
-        for record in records:
+            # Get existing records for deduplication
+            existing_keys = set()
             if deduplicate:
-                dedup_key = record.get_dedup_key()
-                if dedup_key in existing_keys:
-                    duplicates_skipped += 1
-                    continue
-            new_records.append(record)
+                existing_keys = self._get_existing_dedup_keys(sheet)
 
-        # Write new records
-        if new_records:
-            rows = [record.to_sheet_row() for record in new_records]
-            sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
+            # Filter out duplicates
+            new_records = []
+            duplicates_skipped = 0
 
-        # Count qualified records
-        qualified_count = sum(1 for r in new_records if r.is_qualified(self.qualified_min_score))
+            for record in records:
+                if deduplicate:
+                    dedup_key = record.get_dedup_key()
+                    if dedup_key in existing_keys:
+                        duplicates_skipped += 1
+                        continue
+                new_records.append(record)
 
-        # Also write qualified records to Qualified_Arrests sheet
-        if qualified_count > 0:
-            qualified_records = [r for r in new_records if r.is_qualified(self.qualified_min_score)]
-            self._write_qualified_records(qualified_records)
+            # Write new records
+            if new_records:
+                rows = [record.to_sheet_row() for record in new_records]
+                sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
+                # Dynamically prune county sheets beyond 1500 rows
+                self._prune_sheet_if_needed(sheet, max_rows=1500)
 
-        return {
-            'total_records': len(records),
-            'new_records': len(new_records),
-            'duplicates_skipped': duplicates_skipped,
-            'qualified_records': qualified_count,
-            'sheet_name': county
-        }
+            # Count qualified records
+            qualified_count = sum(1 for r in new_records if r.is_qualified(self.qualified_min_score))
+
+            # Also write qualified records to Qualified_Arrests sheet
+            if qualified_count > 0:
+                qualified_records = [r for r in new_records if r.is_qualified(self.qualified_min_score)]
+                self._write_qualified_records(qualified_records)
+
+            return {
+                'total_records': len(records),
+                'new_records': len(new_records),
+                'duplicates_skipped': duplicates_skipped,
+                'qualified_records': qualified_count,
+                'sheet_name': county
+            }
+        except Exception as e:
+            err_msg = f"Google Sheets write error in write_records for county {county}: {e}"
+            print(f"⚠️ SheetsWriter Error: {err_msg}")
+            try:
+                from writers.slack_notifier import SlackNotifier
+                notifier = SlackNotifier()
+                notifier.notify_scraper_error(county, err_msg)
+            except Exception as slack_err:
+                print(f"⚠️ Failed to send Slack alert for SheetsWriter error: {slack_err}")
+            
+            return {
+                'total_records': len(records),
+                'new_records': 0,
+                'duplicates_skipped': 0,
+                'qualified_records': 0,
+                'sheet_name': county
+            }
 
     def _write_qualified_records(self, records: List[ArrestRecord]) -> None:
         """Write qualified records to the Qualified_Arrests sheet."""
         if not records:
             return
 
-        sheet = self._get_or_create_sheet(self.QUALIFIED_SHEET_NAME)
-        self._ensure_header_row(sheet)
+        try:
+            sheet = self._get_or_create_sheet(self.QUALIFIED_SHEET_NAME)
+            self._ensure_header_row(sheet)
 
-        existing_keys = self._get_existing_dedup_keys(sheet)
+            existing_keys = self._get_existing_dedup_keys(sheet)
 
-        new_records = []
-        for record in records:
-            dedup_key = record.get_dedup_key()
-            if dedup_key not in existing_keys:
-                new_records.append(record)
+            new_records = []
+            for record in records:
+                dedup_key = record.get_dedup_key()
+                if dedup_key not in existing_keys:
+                    new_records.append(record)
 
-        if new_records:
-            rows = [record.to_sheet_row() for record in new_records]
-            sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
+            if new_records:
+                rows = [record.to_sheet_row() for record in new_records]
+                sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
+                # Dynamically prune Qualified_Arrests sheet beyond 3000 rows
+                self._prune_sheet_if_needed(sheet, max_rows=3000)
+        except Exception as e:
+            err_msg = f"Google Sheets write error in _write_qualified_records: {e}"
+            print(f"⚠️ SheetsWriter Error: {err_msg}")
+            try:
+                from writers.slack_notifier import SlackNotifier
+                notifier = SlackNotifier()
+                notifier.notify_scraper_error("Qualified_Arrests", err_msg)
+            except Exception as slack_err:
+                print(f"⚠️ Failed to send Slack alert for SheetsWriter error: {slack_err}")
 
     def _get_or_create_sheet(self, sheet_name: str) -> gspread.Worksheet:
         """Get an existing sheet or create it if it doesn't exist."""
@@ -228,6 +260,23 @@ class SheetsWriter:
             'backgroundColor': {'red': 0.0, 'green': 0.66, 'blue': 0.42}
         })
         sheet.freeze(rows=1)
+
+    def _prune_sheet_if_needed(self, sheet: gspread.Worksheet, max_rows: int) -> None:
+        """
+        Prune excess rows beyond the limit (keeping recent rows at the top).
+
+        Args:
+            sheet: gspread Worksheet
+            max_rows: maximum data rows allowed (excluding header)
+        """
+        try:
+            current_rows = sheet.row_count
+            if current_rows > max_rows + 1:
+                # Delete rows starting at index max_rows + 2 to the end of the sheet
+                sheet.delete_rows(max_rows + 2, current_rows)
+                print(f"♻️ SheetsWriter: Pruned sheet '{sheet.title}' from {current_rows} to {max_rows + 1} total rows")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to prune sheet {sheet.title}: {e}")
 
     def _get_existing_dedup_keys(self, sheet: gspread.Worksheet) -> set:
         """Get all existing dedup keys (County:Booking_Number) from sheet."""
@@ -288,6 +337,9 @@ class SheetsWriter:
             ]
 
             logs_sheet.append_row(log_row, value_input_option='USER_ENTERED')
+            
+            # Dynamically prune Logs sheet beyond 5000 rows
+            self._prune_sheet_if_needed(logs_sheet, max_rows=5000)
 
         except Exception as e:
             print(f"Warning: Could not log ingestion: {e}")

@@ -1,5 +1,5 @@
 """
-Sarasota County Arrest Scraper — Revize CMS 3-Level Navigation via curl_cffi
+Sarasota County Arrest Scraper — Revize CMS 3-Level Navigation via DrissionPage
 =============================================================================
 Source:  Sarasota County Sheriff's Office
 Portal:  https://sarasotasheriff.org/arrest-reports/index.php
@@ -20,15 +20,17 @@ NAVIGATION FLOW (3 levels):
            → Sections: Personal Info, Arrest Info, Confinement, Charges
 
 APPROACH:
-  Uses curl_cffi with Chrome TLS fingerprint to bypass Cloudflare WAF on
-  cms.revize.com datacenter IPs. Three HTTP requests per person (search →
-  history → detail) to reach the actual booking data.
+  Uses DrissionPage browser automation (Chromium headless) to bypass
+  Cloudflare challenges on cms.revize.com datacenter IPs. Three steps per person:
+  1. Date search pagination -> collect pinSearch URLs.
+  2. Load history (pinSearch.php) -> find most recent booking URL.
+  3. Load details (booking.php) -> parse full demographics, charges, bonds.
 """
 import logging
 import re
 import time
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -42,31 +44,8 @@ BASE_URL   = "https://cms.revize.com/revize/apps/sarasota/"
 # ── Tuning ────────────────────────────────────────────────────────────────────
 DAYS_BACK          = 14    # Search last 14 days of bookings
 MAX_PAGES_PER_DATE = 10    # Pagination cap per date search
-DETAIL_DELAY_S     = 0.8   # Polite delay between page requests
-PAGE_DELAY_S       = 0.5   # Delay between paginated search pages
-RETRY_LIMIT        = 3
-BACKOFF_BASE_S     = 2.0
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-}
+DETAIL_DELAY_S     = 1.5   # Polite delay between page requests
+PAGE_DELAY_S       = 1.0   # Delay between paginated search pages
 
 
 class SarasotaCountyScraper(BaseScraper):
@@ -75,58 +54,92 @@ class SarasotaCountyScraper(BaseScraper):
     def county(self) -> str:
         return "Sarasota"
 
+    # ── Setup Browser ──────────────────────────────────────────────────────────
+    def _setup_browser(self):
+        from DrissionPage import ChromiumPage
+        co = self._get_browser_options()
+        return ChromiumPage(addr_or_opts=co)
+
+    # ── Evasion & Navigation ──────────────────────────────────────────────────
+    def _navigate_and_wait(self, page, url) -> bool:
+        """Navigate to URL and wait for Cloudflare Challenge bypass."""
+        try:
+            page.get(url)
+            # Wait up to 20 seconds for the WAF 'just a moment' challenge to bypass
+            max_wait = 20
+            waited = 0
+            while waited < max_wait:
+                title = page.title.lower() if page.title else ""
+                if "just a moment" not in title:
+                    return True
+                time.sleep(1)
+                waited += 1
+            return False
+        except Exception as e:
+            logger.warning(f"[Sarasota] Navigation error for {url}: {e}")
+            return False
+
     # ── Main entry point ──────────────────────────────────────────────────────
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
+            from DrissionPage import ChromiumPage
         except ImportError as e:
-            logger.error(f"[Sarasota] Missing dependency: {e}. pip install curl-cffi beautifulsoup4")
+            logger.error(f"[Sarasota] Missing dependency: {e}. pip install beautifulsoup4 drissionpage")
             return []
 
-        session = cffi_requests.Session()
+        page = self._setup_browser()
 
-        # Phase 0: Establish browser context via parent page
-        logger.info(f"[Sarasota] Phase 0: Loading parent page for cookie/referer context")
-        parent_resp = self._fetch(session, "GET", PARENT_URL)
-        if parent_resp and parent_resp.status_code == 200:
-            logger.info("[Sarasota] Parent page loaded — cookies/referer established")
-        else:
-            logger.warning("[Sarasota] Parent page failed — trying Revize directly")
+        try:
+            # Phase 0: Establish browser context via parent page
+            logger.info(f"[Sarasota] Phase 0: Loading parent page for cookie/referer context")
+            if self._navigate_and_wait(page, PARENT_URL):
+                logger.info("[Sarasota] Parent page loaded — cookies/referer established")
+            else:
+                logger.warning("[Sarasota] Parent page failed — trying Revize directly")
 
-        # Phase 1: Date search → collect person links (PIN + preview data)
-        person_entries = self._collect_person_links(session)
-        if not person_entries:
-            logger.warning("[Sarasota] No person entries found across all dates")
+            # Phase 1: Date search → collect person links (PIN + preview data)
+            person_entries = self._collect_person_links(page)
+            if not person_entries:
+                logger.warning("[Sarasota] No person entries found across all dates")
+                return []
+
+            logger.info(f"[Sarasota] Phase 1 complete: {len(person_entries)} unique persons collected")
+
+            # Phase 2+3: For each person → get most recent booking → extract detail
+            records = []
+            for idx, entry in enumerate(person_entries, 1):
+                if idx % 10 == 0:
+                    logger.info(
+                        f"[Sarasota] Progress: {idx}/{len(person_entries)} "
+                        f"({len(records)} records extracted)"
+                    )
+
+                try:
+                    record = self._process_person(page, entry)
+                    if record and record.Full_Name:
+                        records.append(record)
+                except Exception as e:
+                    logger.warning(
+                        f"[Sarasota] Error processing person {entry.get('name', '?')}: {e}"
+                    )
+
+                time.sleep(DETAIL_DELAY_S)
+
+            logger.info(f"[Sarasota] Scrape complete: {len(records)} valid records from {len(person_entries)} persons")
+            return records
+
+        except Exception as e:
+            logger.error(f"[Sarasota] Fatal scrape error: {e}")
             return []
-
-        logger.info(f"[Sarasota] Phase 1 complete: {len(person_entries)} unique persons collected")
-
-        # Phase 2+3: For each person → get most recent booking → extract detail
-        records = []
-        for idx, entry in enumerate(person_entries, 1):
-            if idx % 10 == 0:
-                logger.info(
-                    f"[Sarasota] Progress: {idx}/{len(person_entries)} "
-                    f"({len(records)} records extracted)"
-                )
-
+        finally:
             try:
-                record = self._process_person(session, entry)
-                if record and record.Full_Name:
-                    records.append(record)
-            except Exception as e:
-                logger.warning(
-                    f"[Sarasota] Error processing person {entry.get('name', '?')}: {e}"
-                )
-
-            time.sleep(DETAIL_DELAY_S)
-
-        logger.info(f"[Sarasota] Scrape complete: {len(records)} valid records from {len(person_entries)} persons")
-        return records
+                page.quit()
+            except Exception:
+                pass
 
     # ── Phase 1: Date search → collect person PIN links ───────────────────────
-    def _collect_person_links(self, session) -> List[Dict]:
+    def _collect_person_links(self, page) -> List[Dict]:
         """
         Search each of the last N days and collect person links (pinSearch URLs)
         along with preview data from the search results table.
@@ -150,23 +163,16 @@ class SarasotaCountyScraper(BaseScraper):
             while page_num <= MAX_PAGES_PER_DATE:
                 url = search_url if page_num == 1 else f"{search_url}&page={page_num}"
 
-                resp = self._fetch(session, "GET", url, extra_headers={
-                    "Referer": PARENT_URL if page_num == 1 and day_offset == 0 else search_url,
-                })
-
-                if not resp or resp.status_code != 200:
-                    logger.debug(
-                        f"[Sarasota] Search page HTTP "
-                        f"{resp.status_code if resp else 'None'} for {date_str} p{page_num}"
-                    )
+                if not self._navigate_and_wait(page, url):
+                    logger.debug(f"[Sarasota] Search page navigation failed for {date_str} p{page_num}")
                     break
 
                 # Check for Cloudflare challenge
-                if self._is_cloudflare(resp.text):
+                if "just a moment" in (page.title.lower() if page.title else ""):
                     logger.warning(f"[Sarasota] Cloudflare challenge on search for {date_str}")
                     break
 
-                soup = BeautifulSoup(resp.text, "html.parser")
+                soup = BeautifulSoup(page.html, "html.parser")
 
                 # Find the results table — it has columns: Name, City, State, Charges, Agency
                 results_table = None
@@ -279,7 +285,7 @@ class SarasotaCountyScraper(BaseScraper):
         return all_persons
 
     # ── Phase 2+3: Person → most recent booking → detail extraction ───────────
-    def _process_person(self, session, entry: Dict) -> Optional[ArrestRecord]:
+    def _process_person(self, page, entry: Dict) -> Optional[ArrestRecord]:
         """
         For a given person entry from search results:
         1. Visit their person history page (pinSearch) → find most recent booking link
@@ -291,19 +297,15 @@ class SarasotaCountyScraper(BaseScraper):
         pin_url = entry["pin_url"]
 
         # ── Level 2: Person History → get most recent booking URL ──
-        resp = self._fetch(session, "GET", pin_url, extra_headers={
-            "Referer": f"{BASE_URL}personSearch.php",
-        })
-
-        if not resp or resp.status_code != 200:
-            logger.debug(f"[Sarasota] Person history HTTP {resp.status_code if resp else 'None'} for PIN {pin}")
+        if not self._navigate_and_wait(page, pin_url):
+            logger.debug(f"[Sarasota] Person history navigation failed for PIN {pin}")
             return None
 
-        if self._is_cloudflare(resp.text):
+        if "just a moment" in (page.title.lower() if page.title else ""):
             logger.warning(f"[Sarasota] Cloudflare on person history PIN {pin}")
             return None
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(page.html, "html.parser")
 
         # Find the booking links in the history table
         # Table columns: [Arrest Date, Arrest Agency Incident Number, Booking Number]
@@ -336,40 +338,27 @@ class SarasotaCountyScraper(BaseScraper):
 
         # ── Level 3: Booking Detail → full record extraction ──
         return self._extract_booking_detail(
-            session, booking_number, booking_url, entry
+            page, booking_number, booking_url, entry
         )
 
     # ── Phase 3: Extract booking detail page ──────────────────────────────────
     def _extract_booking_detail(
-        self, session, booking_number: str, booking_url: str, preview: Dict
+        self, page, booking_number: str, booking_url: str, preview: Dict
     ) -> Optional[ArrestRecord]:
         """
         Visit the booking detail page and extract all structured data.
-
-        The detail page has sections:
-        - Personal Information: Name, DOB, Age, Race, Sex, Height, Weight, etc.
-        - Arrest Information: Agency, Date, City
-        - Confinement Information: Status, Release Date, Reason
-        - Criminal Charges Information: charge table with bond amounts
         """
         from bs4 import BeautifulSoup
 
-        resp = self._fetch(session, "GET", booking_url, extra_headers={
-            "Referer": preview.get("pin_url", f"{BASE_URL}pinSearch.php"),
-        })
-
-        if not resp or resp.status_code != 200:
-            logger.warning(
-                f"[Sarasota] Booking detail HTTP "
-                f"{resp.status_code if resp else 'None'} for {booking_number}"
-            )
+        if not self._navigate_and_wait(page, booking_url):
+            logger.warning(f"[Sarasota] Booking detail navigation failed for {booking_number}")
             return None
 
-        if self._is_cloudflare(resp.text):
+        if "just a moment" in (page.title.lower() if page.title else ""):
             logger.warning(f"[Sarasota] Cloudflare on booking detail {booking_number}")
             return None
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(page.html, "html.parser")
 
         # ── Extract name from page header ──
         full_name = ""
@@ -484,7 +473,6 @@ class SarasotaCountyScraper(BaseScraper):
         for pattern_key, mapped_key in field_map.items():
             if mapped_key in fields:
                 continue
-            # Look for "Label: Value" or "Label Value" patterns
             pattern = re.compile(
                 rf"{re.escape(pattern_key)}\s*[:\s]\s*(.+?)(?:\n|$)",
                 re.IGNORECASE
@@ -499,7 +487,6 @@ class SarasotaCountyScraper(BaseScraper):
         charges_list = []
         total_bond = 0.0
 
-        # Find the charges table — look for tables with charge/bond/offense headers
         charge_table = soup.find(id="data-table")
         if not charge_table:
             for table in soup.find_all("table"):
@@ -519,7 +506,6 @@ class SarasotaCountyScraper(BaseScraper):
 
                 cell_texts = [c.get_text(strip=True) for c in cells]
 
-                # Map charge description and bond amount by header
                 desc = ""
                 bond_str = "0"
                 case_num = ""
@@ -544,7 +530,6 @@ class SarasotaCountyScraper(BaseScraper):
                 if desc:
                     charges_list.append(desc)
 
-                # Parse bond amount
                 bond_clean = re.sub(r"[$,\s]", "", bond_str)
                 try:
                     bond_val = float(bond_clean) if bond_clean else 0.0
@@ -581,7 +566,6 @@ class SarasotaCountyScraper(BaseScraper):
         # ── Build ArrestRecord ──
         charges_str = " | ".join(charges_list) if charges_list else ""
 
-        # Use city/state from fields or fallback to Level 1 preview
         city = fields.get("city") or preview.get("city", "")
         state = fields.get("state") or preview.get("state", "FL")
         agency = fields.get("agency") or preview.get("agency", "")
@@ -618,62 +602,13 @@ class SarasotaCountyScraper(BaseScraper):
             logger.warning(f"[Sarasota] Record build error for {booking_number}: {e}")
             return None
 
-    # ── HTTP helper with curl_cffi TLS impersonation ──────────────────────────
-    def _fetch(self, session, method: str, url: str, extra_headers: dict = None, **kwargs):
-        """HTTP request with Chrome TLS impersonation + retry logic."""
-        headers = {**HEADERS}
-        if extra_headers:
-            headers.update(extra_headers)
-
-        for attempt in range(RETRY_LIMIT):
-            try:
-                if method.upper() == "GET":
-                    resp = session.get(
-                        url, headers=headers, impersonate="chrome124",
-                        timeout=30, allow_redirects=True, **kwargs
-                    )
-                else:
-                    resp = session.post(
-                        url, headers=headers, impersonate="chrome124",
-                        timeout=30, allow_redirects=True, **kwargs
-                    )
-
-                if resp.status_code == 200:
-                    return resp
-
-                if resp.status_code in (429, 500, 502, 503):
-                    sleep_s = BACKOFF_BASE_S * (2 ** attempt)
-                    logger.warning(f"[Sarasota] HTTP {resp.status_code}, retry in {sleep_s:.1f}s")
-                    time.sleep(sleep_s)
-                    continue
-
-                return resp
-
-            except Exception as e:
-                sleep_s = BACKOFF_BASE_S * (2 ** attempt)
-                if attempt < RETRY_LIMIT - 1:
-                    logger.warning(f"[Sarasota] HTTP error, retrying in {sleep_s:.1f}s: {e}")
-                    time.sleep(sleep_s)
-                else:
-                    logger.error(f"[Sarasota] HTTP failed after {RETRY_LIMIT} retries: {e}")
-                    return None
-
-        return None
-
     # ── Helpers ───────────────────────────────────────────────────────────────
-    @staticmethod
-    def _is_cloudflare(html: str) -> bool:
-        """Check if response is a Cloudflare challenge page."""
-        lower = html[:500].lower() if html else ""
-        return "just a moment" in lower or "cloudflare" in lower
-
     @staticmethod
     def _clean_charge_text(raw_charge: str) -> str:
         """Clean Revize charge description text."""
         if not raw_charge:
             return ""
         text = re.sub(r"^(New Charge:|Weekender:)\s*", "", raw_charge, flags=re.IGNORECASE)
-        # Try to extract meaningful part from statute references
         match = re.search(r"[\d.]+[a-z]*\s*-\s*([^(]+)", text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
@@ -693,22 +628,22 @@ class SarasotaCountyScraper(BaseScraper):
         if not detail_url:
             detail_url = f"{BASE_URL}booking.php?bkg={booking_id}"
 
+        page = None
         try:
-            from curl_cffi import requests as cffi_requests
-        except ImportError:
-            logger.error("[Sarasota] curl_cffi not installed")
-            return None
-
-        session = cffi_requests.Session()
-
-        try:
+            page = self._setup_browser()
             # Establish parent context
-            self._fetch(session, "GET", PARENT_URL)
+            self._navigate_and_wait(page, PARENT_URL)
             preview = {"pin": "", "pin_url": "", "name": "", "city": "", "state": "FL", "agency": ""}
-            record = self._extract_booking_detail(session, booking_id, detail_url, preview)
+            record = self._extract_booking_detail(page, booking_id, detail_url, preview)
             if record:
                 record.LastCheckedMode = "UPDATE"
             return record
         except Exception as e:
             logger.warning(f"[Sarasota] _fetch_single_booking error ({booking_id}): {e}")
             return None
+        finally:
+            if page:
+                try:
+                    page.quit()
+                except Exception:
+                    pass

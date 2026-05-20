@@ -98,6 +98,7 @@ class BaseScraper(ABC):
         co = ChromiumOptions()
         co.auto_port()
         co.headless(True)
+        co.set_argument("--headless=new")
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-gpu")
@@ -107,6 +108,18 @@ class BaseScraper(ABC):
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
+        # Chrome memory optimization and crash mitigation arguments for Docker
+        co.set_argument("--disable-background-networking")
+        co.set_argument("--disable-background-timer-throttling")
+        co.set_argument("--disable-backgrounding-occluded-windows")
+        co.set_argument("--disable-breakpad")
+        co.set_argument("--disable-component-update")
+        co.set_argument("--disable-domain-reliability")
+        co.set_argument("--disable-hang-monitor")
+        co.set_argument("--disable-ipc-flooding-protection")
+        co.set_argument("--disable-renderer-backgrounding")
+        co.set_argument("--disable-sync")
+
         # Critical: set browser path for Docker where chromium lives at /usr/bin/chromium
         chrome_path = os.getenv("CHROME_PATH")
         if chrome_path:
