@@ -147,15 +147,15 @@ async def api_scheduler_status():
 #  POST /api/scraper/disable
 # ─────────────────────────────────────────────────────────────────────────────
 @scraper_control_bp.post("/scraper/enable")
-async def api_scraper_enable():
+async def api_scraper_enable(request: Request):
     """Enable a previously disabled county scraper."""
-    return await _set_scraper_enabled(True)
+    return await _set_scraper_enabled(request, True)
 
 
 @scraper_control_bp.post("/scraper/disable")
-async def api_scraper_disable():
+async def api_scraper_disable(request: Request):
     """Disable (pause) a county scraper so it won't be auto-scheduled."""
-    return await _set_scraper_enabled(False)
+    return await _set_scraper_enabled(request, False)
 
 
 async def _set_scraper_enabled(request: Request, enabled: bool):
