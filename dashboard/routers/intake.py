@@ -1,6 +1,6 @@
 from __future__ import annotations
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Query
 """
 ShamrockLeads — Indemnitor Intake Queue API Blueprint
 Receives indemnitor information from ALL sources that previously fed
@@ -284,16 +284,20 @@ async def intake_submit(request: Request):
 #  Return pending intakes for the staff dashboard queue
 # ═══════════════════════════════════════════════════════════════════════════════
 @intake_bp.get("/intake/queue")
-async def intake_queue_list(request: Request):
+async def intake_queue_list(
+    status: str = Query(default="pending"),
+    limit: int = Query(default=50),
+    source: str = Query(default=""),
+):
     """
     Return pending intakes for the staff dashboard queue.
     Mirrors getWixIntakeQueue() from GAS WixPortalIntegration.js.
     Returns the same schema expected by Queue.render() in Dashboard.html.
     """
     intake_queue = get_collection("intake_queue")
-    status_filter = request.args.get("status", "pending")
-    limit = min(int(request.args.get("limit", 50)), 200)
-    source_filter = request.args.get("source", "")
+    status_filter = status
+    limit = min(limit, 200)
+    source_filter = source
 
     query: dict = {}
     if status_filter and status_filter != "all":

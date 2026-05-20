@@ -159,7 +159,11 @@ async def process_gmail_now():
 
 
 @bond_lifecycle_bp.get("/errors")
-async def get_error_log(request: Request):
+async def get_error_log(
+    source: str = Query(default=None),
+    level: str = Query(default=None),
+    limit: int = Query(default=50),
+):
     """
     Query the self-hosted error log (MongoDB error_log collection).
     Params: ?source=scraper.lee&limit=50&level=error
@@ -167,10 +171,6 @@ async def get_error_log(request: Request):
     try:
         from dashboard.services.error_tracker import ErrorTracker
         tracker = ErrorTracker()
-
-        source = request.args.get('source')
-        level = request.args.get('level')
-        limit = int(request.args.get('limit', '50'))
 
         errors = tracker.get_recent_errors(
             source=source,

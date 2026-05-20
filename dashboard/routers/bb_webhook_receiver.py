@@ -259,7 +259,7 @@ async def receive_bb_event(request: Request):
         { "type": "new-message", "data": { ... } }
     """
     # Signature verification
-    raw_body = await request.get_data()
+    raw_body = await request.body()
     signature = request.headers.get("x-bb-signature", "")
     if not _verify_signature(raw_body, signature):
         logger.warning("BB webhook: invalid signature — rejecting")

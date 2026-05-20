@@ -188,15 +188,20 @@ async def api_attribute_transaction(request: Request, txn_id: str):
 @accounting_bp.post("/accounting/import/swipesimple")
 async def api_import_swipesimple(request: Request):
     """Parse and import a SwipeSimple CSV export into the transactions ledger."""
-    files = await request.files
-    csv_file = files.get("file")
+    form_data = await request.form()
+    csv_file = form_data.get("file")
     if not csv_file:
         # Try raw body as CSV text
-        raw = (await request.get_data()).decode("utf-8", errors="replace")
+        body_bytes = await request.body()
+        raw = body_bytes.decode("utf-8", errors="replace")
         if not raw.strip():
             return JSONResponse({"error": "No CSV file provided"}, status_code=400)
     else:
-        raw = csv_file.read().decode("utf-8", errors="replace")
+        if hasattr(csv_file, "read"):
+            file_bytes = await csv_file.read()
+            raw = file_bytes.decode("utf-8", errors="replace")
+        else:
+            raw = str(csv_file)
 
     txns = get_collection("transactions")
     imports = get_collection("accounting_imports")

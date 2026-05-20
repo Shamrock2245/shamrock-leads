@@ -103,7 +103,7 @@ async def signnow_webhook(request: Request):
 
     # ── Step 1: Verify HMAC signature ────────────────────────────────────────
     signature = request.headers.get('x-signnow-signature', '')
-    payload = await request.get_data()
+    payload = await request.body()
 
     if not verify_signnow_signature(payload, signature):
         logger.warning(
@@ -399,7 +399,7 @@ async def twilio_webhook(request: Request):
     from dashboard.routers.events import publish_event
 
     # Twilio sends form data
-    form_data = await request.form
+    form_data = await request.form()
     audit_events = get_collection("audit_events")
 
     # Log to audit_events
@@ -465,7 +465,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     # -- 1. HMAC signature validation (optional -- skip if secret not set) -----
     webhook_secret = os.getenv("SWIPESIMPLE_WEBHOOK_SECRET", "")
     if webhook_secret:
-        raw_body = await request.get_data()
+        raw_body = await request.body()
         sig_header = request.headers.get("X-SwipeSimple-Signature", "")
         expected_sig = hmac.new(
             webhook_secret.encode(),

@@ -1,5 +1,8 @@
 from __future__ import annotations
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Query
+import os
+import re
+import secrets
 """Tracking API Blueprint — Location Sync, Map Data, History, Geofence, Exoneration
    Phase 3 Enhancement:
    - map-data now includes full location_history + geo_pings merged and sorted
@@ -191,9 +194,9 @@ async def tracking_map_data():
 
 
 @tracking_bp.get("/tracking/search")
-async def tracking_search(request: Request):
+async def tracking_search(q: str = Query(default="")):
     """Search active bonds by defendant name, booking number, or case number."""
-    q = request.args.get("q", "").strip()
+    q = q.strip()
     if not q:
         return {"results": []}
     active_bonds = get_collection("active_bonds")
@@ -451,11 +454,10 @@ async def tracking_exonerate(request: Request, booking_number):
 
 
 @tracking_bp.get("/tracking/exonerations")
-async def tracking_exonerations(request: Request):
+async def tracking_exonerations(limit: int = Query(default=50)):
     """Return recent bond exonerations for the dashboard exoneration log panel."""
     audit_col = get_collection("audit_events")
     try:
-        limit = int(request.args.get("limit", 50))
         cursor = audit_col.find(
             {"event_type": "bond_exonerated"},
             {"_id": 0}
