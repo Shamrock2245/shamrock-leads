@@ -271,7 +271,8 @@ async def calendar_sync_gcal(request: Request):
 
         cursor = active_bonds.find(query, {
             "_id": 0, "booking_number": 1, "defendant_name": 1,
-            "court_date": 1, "court_location": 1, "case_number": 1, "county": 1
+            "court_date": 1, "court_location": 1, "court_time": 1,
+            "case_number": 1, "county": 1
         })
         all_bonds = await cursor.to_list(500)
 
@@ -306,19 +307,67 @@ async def calendar_sync_gcal(request: Request):
         service = build("calendar", "v3", credentials=credentials)
 
         synced = 0
+        skipped_dupes = 0
         errors = []
         for bond in bonds:
             try:
                 court_dt = bond["_court_dt"]
+                defendant_name = bond.get("defendant_name", "Unknown")
+                bond_county = bond.get("county", "")
+                court_loc = bond.get("court_location", "")
+                court_time = bond.get("court_time", "")
+                booking_num = bond.get("booking_number", "")
+                case_num = bond.get("case_number", "N/A")
+
+                # Build title: ⚖️ Name | County Co. | Time | Courtroom
+                title_parts = [f"⚖️ {defendant_name}"]
+                if bond_county:
+                    title_parts.append(f"{bond_county} Co.")
+                if court_time:
+                    title_parts.append(court_time)
+                if court_loc:
+                    title_parts.append(court_loc)
+                title = " | ".join(title_parts)
+
+                # Dedup key: booking_number + court_date
+                dedup_key = f"{booking_num}|{court_dt.strftime('%Y-%m-%d')}"
+
+                # Check for existing event with this dedup key
+                try:
+                    existing = service.events().list(
+                        calendarId=calendar_id,
+                        privateExtendedProperty=f"shamrock_dedup_key={dedup_key}",
+                        maxResults=1,
+                    ).execute()
+                    if existing.get("items"):
+                        skipped_dupes += 1
+                        continue
+                except Exception:
+                    pass  # If dedup check fails, allow creation
+
+                location_str = court_loc or f"{bond_county} County Justice Center" if bond_county else ""
+
                 event = {
-                    "summary": f"Court: {bond.get('defendant_name', 'Unknown')} ({bond.get('booking_number', '')})",
-                    "location": bond.get("court_location", f"{bond.get('county', 'Lee')} County Justice Center"),
+                    "summary": title,
+                    "location": location_str,
                     "description": (
-                        f"Case: {bond.get('case_number', 'N/A')}\n"
-                        f"Booking: {bond.get('booking_number', '')}\n"
-                        f"County: {bond.get('county', '')}\n"
-                        f"Synced by Shamrock Leads Dashboard"
-                    ),
+                        f"📋 Case: {case_num}\n"
+                        f"👤 Defendant: {defendant_name}\n"
+                        f"📍 County: {bond_county}\n"
+                        f"🏛️  Location: {court_loc}\n" if court_loc else
+                        f"📋 Case: {case_num}\n"
+                        f"👤 Defendant: {defendant_name}\n"
+                        f"📍 County: {bond_county}\n"
+                    ) + f"\n— Synced by Shamrock Leads Dashboard",
+                    "colorId": "9",  # Blueberry (Blue) for court dates
+                    "extendedProperties": {
+                        "private": {
+                            "shamrock_dedup_key": dedup_key,
+                            "booking_number": booking_num,
+                            "case_number": case_num,
+                            "county": bond_county,
+                        }
+                    },
                     "start": {
                         "dateTime": court_dt.isoformat(),
                         "timeZone": "America/New_York",
@@ -343,6 +392,7 @@ async def calendar_sync_gcal(request: Request):
         return {
             "success": True,
             "synced": synced,
+            "skipped_duplicates": skipped_dupes,
             "total": len(bonds),
             "errors": errors,
             "calendar_id": calendar_id,

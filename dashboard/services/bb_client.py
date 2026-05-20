@@ -19,6 +19,8 @@ Usage:
 """
 import logging
 from typing import Optional
+from datetime import datetime, timezone
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,32 @@ async def check_imessage(phone: str) -> bool:
         return False
 
 
+async def _send_message_direct(phone: str, message: str) -> dict:
+    """Send text directly via BlueBubbles without writing to queue first."""
+    bb = get_bb_client(phone)
+    if not bb:
+        return {"success": False, "error": "no_bb_server"}
+    chat_guid = f"any;-;{phone}"
+    try:
+        return await bb.send_text(chat_guid, message)
+    except Exception as exc:
+        logger.error("[bb_client] _send_message_direct error to %s: %s", phone, exc)
+        return {"success": False, "error": str(exc)}
+
+
+async def _send_attachment_direct(phone: str, message: str, file_path: str) -> dict:
+    """Send attachment directly via BlueBubbles without writing to queue first."""
+    bb = get_bb_client(phone)
+    if not bb:
+        return {"success": False, "error": "no_bb_server"}
+    chat_guid = f"any;-;{phone}"
+    try:
+        return await bb.send_attachment_url(chat_guid, file_path, message=message)
+    except Exception as exc:
+        logger.error("[bb_client] _send_attachment_direct error to %s: %s", phone, exc)
+        return {"success": False, "error": str(exc)}
+
+
 async def send_imessage(
     phone: str,
     message: str,
@@ -107,16 +135,7 @@ async def send_imessage(
     Returns:
         BlueBubbles API response dict
     """
-    bb = get_bb_client(phone)
-    if not bb:
-        return {"success": False, "error": "no_bb_server"}
-
-    chat_guid = f"any;-;{phone}"
-    try:
-        return await bb.send_text(chat_guid, message)
-    except Exception as exc:
-        logger.error("[bb_client] send_imessage error to %s: %s", phone, exc)
-        return {"success": False, "error": str(exc)}
+    return await _send_message_direct(phone, message)
 
 
 async def send_message_universal(
@@ -132,10 +151,9 @@ async def send_message_universal(
       - SMS for non-iPhones (green bubble via Mac Messages relay)
       - RCS where supported
 
-    Also checks iMessage availability for **channel reporting only** —
-    the actual routing is handled by BB's `any;-;` prefix.
-
-    This is the standard entry point for ALL outreach messaging.
+    This standard entry point writes to the outreach_queue collection first,
+    then attempts direct dispatch. If direct dispatch fails, the message remains
+    pending in the queue for background retries and returns a queued status.
 
     Args:
         phone:    Recipient phone number (E.164 or 10-digit)
@@ -143,35 +161,46 @@ async def send_message_universal(
         method:   BlueBubbles send method ("private-api" or "apple-script")
 
     Returns:
-        { success: bool, channel: "imessage"|"sms"|"failed", ... }
+        { success: bool, channel: "imessage"|"sms"|"queued"|"failed", ... }
     """
+    from dashboard.services.outreach_queue import enqueue_message
+    from dashboard.extensions import get_collection
+    
+    # 1. Write to outreach queue first
+    queue_id = await enqueue_message(phone, message, context="universal")
+    
     bb = get_bb_client(phone)
     if not bb:
         logger.error("[bb_client] No BB server configured for %s", phone)
-        return {"success": False, "channel": "failed", "error": "no_bb_server"}
+        # Leave it in the queue to retry in case server gets configured/restored later
+        return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": "no_bb_server"}
 
-    # Check iMessage availability for channel reporting (not routing)
+    # 2. Check iMessage availability for channel reporting (not routing)
     channel = "sms"  # default assumption
     try:
         avail = await bb.check_imessage_availability(phone)
-        if avail.get("available", False):
+        if avail.get("available", False) or avail.get("data", {}).get("available", False):
             channel = "imessage"
     except Exception:
         pass  # availability check failed — still send via any;-;
 
-    # Send via BB with any;-; (auto-routes to iMessage or SMS)
-    chat_guid = f"any;-;{phone}"
+    # 3. Attempt immediate direct send
     try:
-        result = await bb.send_text(chat_guid, message)
+        result = await _send_message_direct(phone, message)
         if result.get("success"):
-            logger.info("[bb_client] ✅ Message sent to ...%s via %s", phone[-4:], channel)
+            logger.info("[bb_client] ✅ Message sent to ...%s via %s (Queue ID: %s)", phone[-4:], channel, queue_id)
+            # Update queue record to sent
+            await get_collection("outreach_queue").update_one(
+                {"_id": ObjectId(queue_id)},
+                {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
+            )
             return {"success": True, "channel": channel, "data": result.get("data")}
         else:
-            logger.warning("[bb_client] BB send failed for %s: %s", phone, result.get("error"))
-            return {"success": False, "channel": "failed", "error": result.get("error", "bb_send_failed")}
+            logger.warning("[bb_client] Direct BB send failed for %s, remains queued (Queue ID: %s): %s", phone, queue_id, result.get("error"))
+            return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": result.get("error")}
     except Exception as exc:
-        logger.error("[bb_client] BB send exception for %s: %s", phone, exc)
-        return {"success": False, "channel": "failed", "error": str(exc)}
+        logger.error("[bb_client] Direct BB send exception for %s, remains queued (Queue ID: %s): %s", phone, queue_id, exc)
+        return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": str(exc)}
 
 
 async def send_imessage_with_attachment(
@@ -181,6 +210,7 @@ async def send_imessage_with_attachment(
 ) -> dict:
     """
     Send an iMessage with a file attachment via BlueBubbles.
+    Writes to outreach_queue first, then attempts direct dispatch.
 
     Args:
         phone:      Recipient phone number
@@ -188,15 +218,28 @@ async def send_imessage_with_attachment(
         file_path:  Absolute path to the file to attach
 
     Returns:
-        BlueBubbles API response dict
+        BlueBubbles API response dict or queued status
     """
-    bb = get_bb_client(phone)
-    if not bb:
-        return {"success": False, "error": "no_bb_server"}
-
-    chat_guid = f"any;-;{phone}"
+    from dashboard.services.outreach_queue import enqueue_message
+    from dashboard.extensions import get_collection
+    
+    # 1. Write to outreach queue first
+    queue_id = await enqueue_message(phone, message, file_path=file_path, context="attachment")
+    
+    # 2. Attempt immediate direct send
     try:
-        return await bb.send_attachment_url(chat_guid, file_path, message=message)
+        result = await _send_attachment_direct(phone, message, file_path)
+        if result.get("success"):
+            logger.info("[bb_client] ✅ Attachment sent to ...%s (Queue ID: %s)", phone[-4:], queue_id)
+            # Update queue record to sent
+            await get_collection("outreach_queue").update_one(
+                {"_id": ObjectId(queue_id)},
+                {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
+            )
+            return {"success": True, "channel": "imessage", "data": result.get("data")}
+        else:
+            logger.warning("[bb_client] Direct attachment send failed for %s, remains queued (Queue ID: %s): %s", phone, queue_id, result.get("error"))
+            return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": result.get("error")}
     except Exception as exc:
-        logger.error("[bb_client] send_imessage_with_attachment error to %s: %s", phone, exc)
-        return {"success": False, "error": str(exc)}
+        logger.error("[bb_client] Direct attachment send exception for %s, remains queued (Queue ID: %s): %s", phone, queue_id, exc)
+        return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": str(exc)}

@@ -196,16 +196,22 @@ class GoogleCalendarService:
         location = email_data.get('location', '')
         time_str = datetime_info.get('time_str', '')
         
-        # Build event title
-        event_type_label = {
-            'courtDate': 'COURT DATE',
-            'forfeiture': 'FORFEITURE',
-            'discharge': 'DISCHARGE',
-        }.get(event_type, event_type.upper())
+        # Build event title — surfaces all 4 key fields visible in calendar views
+        # Format: ⚖️ Name | County Co. | 9:00 AM | Courtroom 4A
+        event_type_emoji = {
+            'courtDate': '⚖️',
+            'forfeiture': '🔴',
+            'discharge': '🟢',
+        }.get(event_type, '📧')
 
-        title = f"[{event_type_label}] {defendant_name} — {case_number}"
+        title_parts = [f"{event_type_emoji} {defendant_name}"]
         if county:
-            title += f" ({county} Co.)"
+            title_parts.append(f"{county} Co.")
+        if time_str:
+            title_parts.append(time_str)
+        if location:
+            title_parts.append(location)
+        title = " | ".join(title_parts)
         
         # Build rich description
         desc_lines = [

@@ -326,11 +326,23 @@ async def _run_intake_recovery():
     await db["automation_run_log"].insert_one({"automation": "intake_recovery", "run_at": datetime.now(timezone.utc), "result": result})
 
 
+async def _run_outreach_queue():
+    from dashboard.services.outreach_queue import process_outreach_queue
+    from dashboard.extensions import get_db
+    result = await process_outreach_queue(get_db())
+    if result.get("processed", 0) > 0:
+        logger.info(
+            "[OutreachQueue] processed=%d sent=%d retried=%d failed=%d",
+            result["processed"], result["sent"], result["retried"], result["failed"]
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
 # ═══════════════════════════════════════════════════════════════════════════════
 
 CRON_REGISTRY: List[CronDef] = [
+    CronDef("outreach_queue",     "OutreachQueue",       30,  10, _run_outreach_queue),
     CronDef("alpha_engine",       "AlphaEngine",       14400, 180, _run_alpha_engine),
     CronDef("docket_monitor",     "DocketMonitor",     14400, 120, _run_docket_monitor),
     CronDef("court_intel",        "CourtIntel",        21600,  60, _run_court_intel),
@@ -385,6 +397,9 @@ async def _ensure_all_indexes():
         await db["outreach_sequences"].create_index([("status", 1)], name="idx_seq_status", background=True)
         await db["outreach_sequences"].create_index([("phone", 1), ("status", 1)], name="idx_phone_status", background=True)
         await db["outreach_messages"].create_index([("sequence_id", 1)], name="idx_msg_sequence_id", background=True)
+        # Outreach Queue
+        await db["outreach_queue"].create_index([("status", 1), ("next_attempt", 1)], name="idx_outreach_status_attempt", background=True)
+        await db["outreach_queue"].create_index([("created_at", 1)], name="idx_outreach_ttl_30d", background=True, expireAfterSeconds=2592000)
         await db["paperwork_packets"].create_index([("intake_id", 1)], name="idx_pkt_intake_id", background=True)
         await db["paperwork_packets"].create_index([("packet_id", 1)], unique=True, name="idx_pkt_packet_id", background=True)
         await db["paperwork_packets"].create_index([("signnow_document_id", 1)], name="idx_pkt_signnow_doc_id", background=True, sparse=True)

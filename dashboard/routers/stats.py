@@ -4,44 +4,34 @@ import csv
 import io
 import re as re_mod
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 from dashboard.deps import get_collection
 from dashboard.extensions import REGISTERED_COUNTIES
 from dashboard.routers.helpers import serialize_doc, async_csv_streamer
+from dashboard.models.leads import LeadsQueryModel
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
 
-def _build_leads_query(
-    status: str = "", county: str = "", custody: str = "",
-    days: str = "", min_bond: str = "", search: str = "",
-):
+def _build_leads_query(query: LeadsQueryModel):
     q: dict = {}
-    if status:
-        q["lead_status"] = status
-    if county:
-        cs = [c.strip() for c in county.split(",") if c.strip()]
+    if query.status:
+        q["lead_status"] = query.status
+    if query.county:
+        cs = [c.strip() for c in query.county.split(",") if c.strip()]
         q["county"] = cs[0] if len(cs) == 1 else {"$in": cs}
-    if custody == "true":
+    if query.custody == "true":
         q["status"] = {"$regex": "custody|confined|held", "$options": "i"}
-    elif custody == "released":
+    elif query.custody == "released":
         q["status"] = {"$regex": "released|bonded|rts", "$options": "i"}
-    if days:
-        try:
-            d = int(days)
-            if 1 <= d <= 30:
-                cut = datetime.now(timezone.utc) - timedelta(days=d)
-                q["scraped_at"] = {"$gte": cut.strftime("%Y-%m-%dT%H:%M:%S")}
-        except (ValueError, TypeError):
-            pass
-    if min_bond:
-        try:
-            q["bond_amount"] = {"$gte": float(min_bond)}
-        except ValueError:
-            pass
-    if search:
-        pat = re_mod.compile(re_mod.escape(search), re_mod.IGNORECASE)
+    if query.days:
+        cut = datetime.now(timezone.utc) - timedelta(days=query.days)
+        q["scraped_at"] = {"$gte": cut.strftime("%Y-%m-%dT%H:%M:%S")}
+    if query.min_bond is not None:
+        q["bond_amount"] = {"$gte": query.min_bond}
+    if query.search:
+        pat = re_mod.compile(re_mod.escape(query.search), re_mod.IGNORECASE)
         sor = [
             {"full_name": {"$regex": pat}}, {"charges": {"$regex": pat}},
             {"booking_number": {"$regex": pat}}, {"case_number": {"$regex": pat}},
@@ -169,8 +159,8 @@ async def api_command_center():
         recent = []
         async for doc in arrests.find(
             {}, {"_id": 0, "full_name": 1, "county": 1, "bond_amount": 1,
-                 "lead_score": 1, "lead_status": 1, "scraped_at": 1,
-                 "status": 1, "charges": 1},
+                  "lead_score": 1, "lead_status": 1, "scraped_at": 1,
+                  "status": 1, "charges": 1},
         ).sort("scraped_at", -1).limit(10):
             recent.append(serialize_doc(doc))
         custody_by_county = []
@@ -195,22 +185,19 @@ async def api_command_center():
 
 @router.get("/leads")
 async def api_leads(
-    status: str = "", county: str = "", custody: str = "",
-    days: str = "", min_bond: str = "", search: str = "",
-    sort: str = "lead_score", order: str = "desc",
-    page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=200),
+    query: LeadsQueryModel = Depends(),
 ):
     arrests = get_collection("arrests")
     try:
-        query = _build_leads_query(status, county, custody, days, min_bond, search)
+        mongo_query = _build_leads_query(query)
         sort_map = {
             "lead_score": "lead_score", "bond_amount": "bond_amount",
             "booking_date": "booking_date", "full_name": "full_name",
             "county": "county", "arrest_date": "arrest_date", "created_at": "created_at",
         }
-        mongo_sort = sort_map.get(sort, "lead_score")
-        sort_order = -1 if order == "desc" else 1
-        skip = (page - 1) * limit
+        mongo_sort = sort_map.get(query.sort, "lead_score")
+        sort_order = -1 if query.order == "desc" else 1
+        skip = (query.page - 1) * query.limit
         projection = {
             "_id": 0, "full_name": 1, "first_name": 1, "last_name": 1,
             "booking_number": 1, "county": 1, "charges": 1, "bond_amount": 1,
@@ -220,18 +207,18 @@ async def api_leads(
             "race": 1, "address": 1, "detail_url": 1, "facility": 1,
             "mugshot_url": 1, "scraped_at": 1, "created_at": 1,
         }
-        total = await arrests.count_documents(query)
+        total = await arrests.count_documents(mongo_query)
         leads_list = []
-        async for doc in arrests.find(query, projection).sort(mongo_sort, sort_order).skip(skip).limit(limit):
+        async for doc in arrests.find(mongo_query, projection).sort(mongo_sort, sort_order).skip(skip).limit(query.limit):
             leads_list.append(serialize_doc(doc))
         db_counties = await arrests.distinct("county")
         counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
         return {
-            "leads": leads_list, "total": total, "page": page, "limit": limit,
-            "pages": max(1, (total + limit - 1) // limit),
+            "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,
+            "pages": max(1, (total + query.limit - 1) // query.limit),
             "counties": counties_list,
-            "query": {"status": status, "county": county, "search": search,
-                      "sort": sort, "order": order},
+            "query": {"status": query.status, "county": query.county, "search": query.search,
+                      "sort": query.sort, "order": query.order},
         }
     except Exception as e:
         return {"error": str(e)}
@@ -239,20 +226,18 @@ async def api_leads(
 
 @router.get("/leads/export")
 async def api_leads_export(
-    status: str = "", county: str = "", custody: str = "",
-    days: str = "", min_bond: str = "", search: str = "",
-    sort: str = "lead_score", order: str = "desc",
+    query: LeadsQueryModel = Depends(),
 ):
     arrests = get_collection("arrests")
     try:
-        query = _build_leads_query(status, county, custody, days, min_bond, search)
+        mongo_query = _build_leads_query(query)
         sort_map = {
             "lead_score": "lead_score", "bond_amount": "bond_amount",
             "booking_date": "booking_date", "full_name": "full_name",
             "county": "county", "arrest_date": "arrest_date",
         }
-        mongo_sort = sort_map.get(sort, "lead_score")
-        sort_order = -1 if order == "desc" else 1
+        mongo_sort = sort_map.get(query.sort, "lead_score")
+        sort_order = -1 if query.order == "desc" else 1
         columns = [
             "full_name", "county", "charges", "bond_amount", "bond_type",
             "lead_score", "lead_status", "status", "booking_number",
@@ -260,7 +245,7 @@ async def api_leads_export(
             "case_number", "dob", "sex", "race", "address", "facility", "detail_url",
         ]
         
-        cursor = arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)
+        cursor = arrests.find(mongo_query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)
         ts = datetime.now().strftime("%Y%m%d_%H%M")
         
         return StreamingResponse(
