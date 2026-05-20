@@ -1,11 +1,12 @@
 from __future__ import annotations
 """Leads Router — FastAPI port of api/leads.py (legacy leads endpoints)"""
-import csv, io
+import csv
+import io
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query
-from fastapi.responses import Response as RawResponse
+from fastapi.responses import StreamingResponse
 from dashboard.deps import get_collection
-from dashboard.routers.helpers import serialize_doc
+from dashboard.routers.helpers import serialize_doc, async_csv_streamer
 
 router = APIRouter(prefix="/api", tags=["leads"])
 
@@ -80,19 +81,18 @@ async def api_leads_legacy_export(
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         query["scraped_at"] = {"$gte": cutoff}
 
-    output = io.StringIO()
-    writer = None
-    async for doc in arrests.find(query, {"_id": 0}).sort("scraped_at", -1).limit(5000):
-        for k, v in doc.items():
-            if isinstance(v, (list, dict)):
-                doc[k] = str(v)
-            elif isinstance(v, datetime):
-                doc[k] = v.isoformat()
-        if writer is None:
-            writer = csv.DictWriter(output, fieldnames=list(doc.keys()))
-            writer.writeheader()
-        writer.writerow(doc)
-    return RawResponse(
-        content=output.getvalue(), media_type="text/csv",
+    columns = [
+        "full_name", "county", "charges", "bond_amount", "bond_type",
+        "lead_score", "lead_status", "status", "booking_number",
+        "arrest_date", "booking_date", "court_date", "court_location",
+        "case_number", "dob", "sex", "race", "address", "facility", "detail_url",
+        "scraped_at", "updated_at"
+    ]
+
+    cursor = arrests.find(query, {"_id": 0}).sort("scraped_at", -1).limit(5000)
+    
+    return StreamingResponse(
+        async_csv_streamer(cursor, fieldnames=columns),
+        media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=shamrock_leads_export.csv"},
     )

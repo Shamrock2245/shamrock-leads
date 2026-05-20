@@ -1,4 +1,3 @@
-
 """
 ShamrockLeads — Accounting & Revenue Intelligence API
 Full-cycle financial tracking: SwipeSimple CSV import, cash ledger,
@@ -16,8 +15,7 @@ import uuid
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query, Request
-from starlette.responses import Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
@@ -357,64 +355,71 @@ async def api_revenue_monthly(months: int = Query(default=12)):
 async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export transactions as QuickBooks-compatible CSV (General Journal format)."""
     txns = get_collection("transactions")
-    date_from = date_from
-    date_to = date_to
-
     query = {"status": {"$in": ["completed", "settled"]}}
     if date_from:
         query.setdefault("timestamp", {})["$gte"] = date_from
     if date_to:
         query.setdefault("timestamp", {})["$lte"] = date_to + "T23:59:59"
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    # QuickBooks General Journal Import format
-    writer.writerow([
-        "Date", "Transaction Type", "Num", "Name", "Memo",
-        "Account", "Debit", "Credit", "Class"
-    ])
+    async def _quickbooks_streamer(cursor):
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        
+        # QuickBooks General Journal Import format
+        writer.writerow([
+            "Date", "Transaction Type", "Num", "Name", "Memo",
+            "Account", "Debit", "Credit", "Class"
+        ])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
 
-    async for doc in txns.find(query).sort("timestamp", 1):
-        date_str = doc.get("timestamp", "")[:10]
-        try:
-            dt = datetime.fromisoformat(date_str)
-            date_str = dt.strftime("%m/%d/%Y")
-        except (ValueError, TypeError):
-            pass
+        async for doc in cursor:
+            date_str = doc.get("timestamp", "")[:10]
+            try:
+                dt = datetime.fromisoformat(date_str)
+                date_str = dt.strftime("%m/%d/%Y")
+            except (ValueError, TypeError):
+                pass
 
-        amount = doc.get("amount", 0)
-        method = doc.get("method", "cash")
-        surety = doc.get("surety", "")
-        txn_type = doc.get("type", "premium")
-        defendant = doc.get("defendant_name", "")
-        poa = doc.get("poa_number", "")
-        memo = f"{defendant} | POA: {poa}" if defendant else doc.get("description", "")
+            amount = doc.get("amount", 0)
+            method = doc.get("method", "cash")
+            surety = doc.get("surety", "")
+            txn_type = doc.get("type", "premium")
+            defendant = doc.get("defendant_name", "")
+            poa = doc.get("poa_number", "")
+            memo = f"{defendant} | POA: {poa}" if defendant else doc.get("description", "")
 
-        # Income account based on type
-        income_acct = "Bond Premium Income"
-        if txn_type == "payment_plan":
-            income_acct = "Payment Plan Income"
-        elif txn_type == "fee":
-            income_acct = "Fee Income"
+            # Income account based on type
+            income_acct = "Bond Premium Income"
+            if txn_type == "payment_plan":
+                income_acct = "Payment Plan Income"
+            elif txn_type == "fee":
+                income_acct = "Fee Income"
 
-        # Deposit account based on method
-        deposit_acct = "Cash on Hand" if method == "cash" else "Merchant Account (SwipeSimple)"
-        if method == "check":
-            deposit_acct = "Undeposited Funds"
-        elif method == "wire":
-            deposit_acct = "Operating Account"
+            # Deposit account based on method
+            deposit_acct = "Cash on Hand" if method == "cash" else "Merchant Account (SwipeSimple)"
+            if method == "check":
+                deposit_acct = "Undeposited Funds"
+            elif method == "wire":
+                deposit_acct = "Operating Account"
 
-        class_name = surety or "General"
+            class_name = surety or "General"
 
-        # Debit deposit account
-        writer.writerow([date_str, "General Journal", doc.get("transaction_id", ""), defendant, memo, deposit_acct, f"{amount:.2f}", "", class_name])
-        # Credit income account
-        writer.writerow([date_str, "General Journal", doc.get("transaction_id", ""), defendant, memo, income_acct, "", f"{amount:.2f}", class_name])
+            # Debit deposit account
+            writer.writerow([date_str, "General Journal", doc.get("transaction_id", ""), defendant, memo, deposit_acct, f"{amount:.2f}", "", class_name])
+            # Credit income account
+            writer.writerow([date_str, "General Journal", doc.get("transaction_id", ""), defendant, memo, income_acct, "", f"{amount:.2f}", class_name])
+            
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
 
-    csv_content = output.getvalue()
-    return Response(
-        csv_content,
-        mimetype="text/csv",
+    cursor = txns.find(query).sort("timestamp", 1)
+    
+    return StreamingResponse(
+        _quickbooks_streamer(cursor),
+        media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=shamrock_quickbooks_{datetime.now().strftime('%Y%m%d')}.csv"},
     )
 
@@ -426,30 +431,42 @@ async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str
 async def api_export_csv(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export raw transaction data as CSV."""
     txns = get_collection("transactions")
-    date_from = date_from
-    date_to = date_to
     query = {}
     if date_from:
         query.setdefault("timestamp", {})["$gte"] = date_from
     if date_to:
         query.setdefault("timestamp", {})["$lte"] = date_to + "T23:59:59"
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Date", "Transaction ID", "Amount", "Method", "Type", "Status", "Defendant", "Booking #", "POA #", "Case #", "Surety", "County", "Indemnitor", "Agent", "Description", "Source"])
-
-    async for doc in txns.find(query).sort("timestamp", 1):
+    async def _raw_csv_streamer(cursor):
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
         writer.writerow([
-            doc.get("timestamp", "")[:10], doc.get("transaction_id", ""), doc.get("amount", 0),
-            doc.get("method", ""), doc.get("type", ""), doc.get("status", ""),
-            doc.get("defendant_name", ""), doc.get("booking_number", ""), doc.get("poa_number", ""),
-            doc.get("case_number", ""), doc.get("surety", ""), doc.get("county", ""),
-            doc.get("indemnitor_name", ""), doc.get("agent_name", ""), doc.get("description", ""),
-            doc.get("source", ""),
+            "Date", "Transaction ID", "Amount", "Method", "Type", "Status", 
+            "Defendant", "Booking #", "POA #", "Case #", "Surety", "County", 
+            "Indemnitor", "Agent", "Description", "Source"
         ])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
 
-    return Response(
-        output.getvalue(), mimetype="text/csv",
+        async for doc in cursor:
+            writer.writerow([
+                doc.get("timestamp", "")[:10], doc.get("transaction_id", ""), doc.get("amount", 0),
+                doc.get("method", ""), doc.get("type", ""), doc.get("status", ""),
+                doc.get("defendant_name", ""), doc.get("booking_number", ""), doc.get("poa_number", ""),
+                doc.get("case_number", ""), doc.get("surety", ""), doc.get("county", ""),
+                doc.get("indemnitor_name", ""), doc.get("agent_name", ""), doc.get("description", ""),
+                doc.get("source", ""),
+            ])
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    cursor = txns.find(query).sort("timestamp", 1)
+    
+    return StreamingResponse(
+        _raw_csv_streamer(cursor),
+        media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=shamrock_transactions_{datetime.now().strftime('%Y%m%d')}.csv"},
     )
 

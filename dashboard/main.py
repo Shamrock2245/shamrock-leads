@@ -128,93 +128,10 @@ async def no_cache_static(request: Request, call_next):
 # ═══════════════════════════════════════════════════════════════════════════════
 # Register Routers
 # ═══════════════════════════════════════════════════════════════════════════════
-# ── Phase 1 Routers (hand-ported) ──
-from dashboard.routers.arrests import router as arrests_router
-from dashboard.routers.stats import router as stats_router
-from dashboard.routers.leads import router as leads_router
-from dashboard.routers.defendants import router as defendants_router
-from dashboard.routers.indemnitors import router as indemnitors_router
+from dashboard.routers import init_routers
 
-app.include_router(arrests_router)
-app.include_router(stats_router)
-app.include_router(leads_router)
-app.include_router(defendants_router)
-app.include_router(indemnitors_router)
+init_routers(app)
 
-# ── Phase 2 Routers (auto-migrated from Quart blueprints) ──
-from dashboard.routers.accounting import accounting_bp as accounting_router
-from dashboard.routers.agent_analytics import agent_analytics_bp as agent_analytics_router
-from dashboard.routers.agent_brain_api import agent_brain_api_bp as agent_brain_api_router
-from dashboard.routers.analytics import analytics_bp as analytics_router
-from dashboard.routers.automation_control import automation_control_bp as automation_control_router
-from dashboard.routers.bb_contact_sync import bb_contacts_bp as bb_contact_sync_router
-from dashboard.routers.bb_document_delivery import bb_docs_bp as bb_document_delivery_router
-from dashboard.routers.bb_health_monitor import bb_health_bp as bb_health_monitor_router
-from dashboard.routers.bb_prospecting import bb_prospecting_bp as bb_prospecting_router
-from dashboard.routers.bb_scheduled_messages import bb_schedule_bp as bb_scheduled_messages_router
-from dashboard.routers.bb_webhook_receiver import bb_webhook_bp as bb_webhook_receiver_router
-from dashboard.routers.bond_lifecycle import bond_lifecycle_bp as bond_lifecycle_router
-from dashboard.routers.bonds import bonds_bp as bonds_router
-from dashboard.routers.calendar import calendar_bp as calendar_router
-from dashboard.routers.client_portal import portal_bp as client_portal_router
-from dashboard.routers.contacts import contacts_bp as contacts_router
-from dashboard.routers.court_dockets import court_intel_bp as court_dockets_router
-from dashboard.routers.court_reminders import court_reminders_bp as court_reminders_router
-from dashboard.routers.data_retention import retention_bp as data_retention_router
-from dashboard.routers.defendant_lifecycle import lifecycle_bp as defendant_lifecycle_router
-from dashboard.routers.discharge_monitor import discharge_monitor_bp as discharge_monitor_router
-from dashboard.routers.docket_monitor_api import docket_monitor_bp as docket_monitor_api_router
-from dashboard.routers.events import events_bp as events_router
-from dashboard.routers.fldfs_compliance import fldfs_bp as fldfs_compliance_router
-from dashboard.routers.fta import fta_bp as fta_router
-from dashboard.routers.geo import geo_bp as geo_router
-from dashboard.routers.geo_intelligence import geo_intel_bp as geo_intelligence_router
-from dashboard.routers.imessage_automation import imessage_auto_bp as imessage_automation_router
-from dashboard.routers.intelligence import intelligence_bp as intelligence_router
-from dashboard.routers.intake import intake_bp as intake_router
-from dashboard.routers.lead_intelligence import lead_intel_bp as lead_intelligence_router
-from dashboard.routers.legacy import legacy_bp as legacy_router
-from dashboard.routers.legal_nlp import legal_nlp_bp as legal_nlp_router
-from dashboard.routers.lifecycle_timeline import lifecycle_timeline_bp as lifecycle_timeline_router
-from dashboard.routers.match_manager import match_manager_bp as match_manager_router
-from dashboard.routers.matching import matching_bp as matching_router
-from dashboard.routers.ml_intelligence import ml_bp as ml_intelligence_router
-from dashboard.routers.notifications import notifications_bp as notifications_router
-from dashboard.routers.ops_summary import ops_summary_bp as ops_summary_router
-from dashboard.routers.outreach import outreach_bp as outreach_router
-from dashboard.routers.paperwork import paperwork_bp as paperwork_router
-from dashboard.routers.payment_plans import payment_plans_bp as payment_plans_router
-from dashboard.routers.payments import payments_bp as payments_router
-from dashboard.routers.poa import poa_bp as poa_router
-from dashboard.routers.prospective_bonds import prospective_bonds_bp as prospective_bonds_router
-from dashboard.routers.rearrest_detector import rearrest_bp as rearrest_detector_router
-from dashboard.routers.rearrest_notifier import rearrest_bp as rearrest_notifier_router
-from dashboard.routers.reports import reports_bp as reports_router
-from dashboard.routers.scraper_control import scraper_control_bp as scraper_control_router
-from dashboard.routers.source_performance import source_performance_bp as source_performance_router
-from dashboard.routers.tracking import tracking_bp as tracking_router
-from dashboard.routers.webhooks import webhooks_bp as webhooks_router
-from dashboard.routers.wix_cms import wix_cms_bp as wix_cms_router
-
-for _r in [
-    accounting_router, agent_analytics_router, agent_brain_api_router, analytics_router, automation_control_router,
-    bb_contact_sync_router, bb_document_delivery_router,
-    bb_health_monitor_router, bb_prospecting_router, bb_scheduled_messages_router,
-    bb_webhook_receiver_router, bond_lifecycle_router, bonds_router, calendar_router, client_portal_router,
-    contacts_router, court_dockets_router, court_reminders_router,
-    data_retention_router, defendant_lifecycle_router, discharge_monitor_router,
-    docket_monitor_api_router, events_router, fldfs_compliance_router, fta_router,
-    geo_router, geo_intelligence_router, imessage_automation_router,
-    intelligence_router, intake_router, lead_intelligence_router, legacy_router,
-    legal_nlp_router, lifecycle_timeline_router, match_manager_router,
-    matching_router, ml_intelligence_router, notifications_router,
-    ops_summary_router, outreach_router, paperwork_router, payment_plans_router,
-    payments_router, poa_router, prospective_bonds_router,
-    rearrest_detector_router, rearrest_notifier_router, reports_router,
-    scraper_control_router, source_performance_router, tracking_router,
-    webhooks_router, wix_cms_router,
-]:
-    app.include_router(_r)
 
 
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 """Stats Router — FastAPI port of api/stats.py (13 endpoints)"""
-import csv, io, re as re_mod
+import csv
+import io
+import re as re_mod
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query
-from fastapi.responses import Response as RawResponse
+from fastapi.responses import StreamingResponse
 from dashboard.deps import get_collection
 from dashboard.extensions import REGISTERED_COUNTIES
-from dashboard.routers.helpers import serialize_doc
+from dashboard.routers.helpers import serialize_doc, async_csv_streamer
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -257,17 +259,13 @@ async def api_leads_export(
             "arrest_date", "booking_date", "court_date", "court_location",
             "case_number", "dob", "sex", "race", "address", "facility", "detail_url",
         ]
-        output = io.StringIO()
-        writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        async for doc in arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000):
-            for k, v in doc.items():
-                if isinstance(v, datetime):
-                    doc[k] = v.isoformat()
-            writer.writerow(doc)
+        
+        cursor = arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)
         ts = datetime.now().strftime("%Y%m%d_%H%M")
-        return RawResponse(
-            content=output.getvalue(), media_type="text/csv",
+        
+        return StreamingResponse(
+            async_csv_streamer(cursor, fieldnames=columns),
+            media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename=shamrock_leads_{ts}.csv"},
         )
     except Exception as e:
