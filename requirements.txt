@@ -45,6 +45,7 @@ motor>=3.3.0                  # Async MongoDB driver
 httpx>=0.27.0                 # Async HTTP client (replaces requests in async handlers)
 aiohttp>=3.9.0                # Async HTTP client for contact discovery OSINT pipeline
 python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
+itsdangerous>=2.1.2           # Signed-cookie state for dashboard PIN auth
 PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 
 # Active Bonds PDF generation & date parsing

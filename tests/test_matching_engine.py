@@ -26,7 +26,7 @@ def _make_db(arrests=None, intake=None, defendants=None):
 
     arrests_col.find_one = AsyncMock(return_value=arrests)
     intake_col.find_one = AsyncMock(return_value=intake)
-    intake_col.update_one = AsyncMock(return_value=MagicMock(matched_count=1))
+    intake_col.update_one = AsyncMock(return_value=MagicMock(matched_count=1, modified_count=1))
     defendants_col.find_one = AsyncMock(return_value=defendants)
 
     # Support both db["collection"] and db.collection access
