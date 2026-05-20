@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Re-Arrest Notification Engine
@@ -30,7 +31,6 @@ Endpoints
   PATCH  /api/rearrest/<id>/dismiss — Dashboard: mark alert as reviewed
   PATCH  /api/rearrest/<id>/contacted — Dashboard: mark indemnitor as contacted
 """
-from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timezone
@@ -288,10 +288,10 @@ async def api_rearrest_check(request: Request):
         booking_number = (data.get("booking_number") or "").strip()
 
         if not defendant_name or not county or not booking_number:
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "error": "defendant_name, county, and booking_number are required"
-            }, 400
+            })
 
         result = await check_and_notify_rearrest(
             defendant_name=defendant_name,
@@ -399,7 +399,6 @@ async def api_rearrest_history(defendant_name: str = Query(default=""), county: 
 
 @rearrest_bp.get("/rearrest/stats")
 
-@rearrest_bp.get("/rearrest/stats")
 async def api_rearrest_stats():
     """Get aggregate statistics for re-arrest notifications."""
     try:
@@ -462,9 +461,8 @@ async def api_rearrest_pending(limit: int = Query(default=25)):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@rearrest_bp.patch("/rearrest/<notification_id>/dismiss")
+@rearrest_bp.patch("/rearrest/{notification_id}/dismiss")
 
-@rearrest_bp.patch("/rearrest/<notification_id>/dismiss")
 async def api_rearrest_dismiss(request: Request, notification_id):
     """Mark a re-arrest alert as reviewed/dismissed.
 
@@ -499,7 +497,7 @@ async def api_rearrest_dismiss(request: Request, notification_id):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@rearrest_bp.patch("/rearrest/<notification_id>/contacted")
+@rearrest_bp.patch("/rearrest/{notification_id}/contacted")
 async def api_rearrest_contacted(request: Request, notification_id):
     """Mark a re-arrest alert as 'contacted' — indemnitor was reached.
 
@@ -534,4 +532,3 @@ async def api_rearrest_contacted(request: Request, notification_id):
     except Exception as e:
         logger.error("Rearrest contacted error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-

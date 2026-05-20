@@ -36,7 +36,7 @@ from dashboard.extensions import (
     BB_SERVERS, get_bb_server, init_bluebubbles,
 )
 from dashboard.routers.bb_private_api import BlueBubblesClient, EFFECTS, REACTIONS
-from dashboard.routers.agent_brain_api import process_inbound
+from dashboard.routers.agent_brain import process_inbound
 
 logger = logging.getLogger(__name__)
 
@@ -199,14 +199,13 @@ async def get_inbox(limit: str = Query(default="50")):
 
 @imessage_auto_bp.post("/imessage/inbox/poll")
 
-@imessage_auto_bp.post("/imessage/inbox/poll")
 async def manual_poll():
     """Manually trigger one inbox poll cycle."""
     result = await _poll_inbox_once()
     return result
 
 
-@imessage_auto_bp.get("/imessage/thread/<phone>")
+@imessage_auto_bp.get("/imessage/thread/{phone}")
 async def get_thread(phone, limit: str = Query(default="100")):
     """Fetch full conversation history for a specific phone number.
     Returns all inbound + outbound messages sorted chronologically (oldest first)
@@ -248,7 +247,6 @@ async def get_thread(phone, limit: str = Query(default="100")):
 
 @imessage_auto_bp.post("/imessage/dedup-check")
 
-@imessage_auto_bp.post("/imessage/dedup-check")
 async def dedup_check(request: Request):
     """Check if a phone+booking combo was already messaged within cooldown."""
     body = await request.json()
@@ -396,7 +394,7 @@ async def typing_indicator(request: Request):
     return result, 200 if result.get("success") else 502
 
 
-@imessage_auto_bp.get("/imessage/message-status/<message_guid>")
+@imessage_auto_bp.get("/imessage/message-status/{message_guid}")
 async def message_status(message_guid):
     """Check delivery/read status of a sent message."""
     client = _get_bb_client()
@@ -429,7 +427,6 @@ async def findmy_locations(type_: str = Query(default="friends"), refresh: str =
     return result, 200 if result.get("success") else 502
 
 
-@imessage_auto_bp.post("/imessage/send-effect")
 @imessage_auto_bp.post("/imessage/send-effect")
 async def send_with_effect(request: Request):
     """Send a message with an iMessage bubble/screen effect."""

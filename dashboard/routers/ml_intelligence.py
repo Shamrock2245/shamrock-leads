@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — ML Intelligence API Blueprint
@@ -14,7 +15,6 @@ Endpoints:
 
 All routes are async (Quart) with Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -251,7 +251,7 @@ async def api_bootstrap_fta(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/ml/predict/<booking_number> — ML prediction for a lead
 # ─────────────────────────────────────────────────────────────────────────────
-@ml_bp.get("/ml/predict/<booking_number>")
+@ml_bp.get("/ml/predict/{booking_number}")
 async def api_predict(booking_number: str, target: str = Query(default="lead_quality"), algorithm: str = Query(default="random_forest")):
     """Get ML prediction for a specific arrest record.
     Query params:
@@ -274,10 +274,10 @@ async def api_predict(booking_number: str, target: str = Query(default="lead_qua
 
         result = predict(arrest, target=target, algorithm=algorithm, enrichment=enrichment)
         if result is None:
-            return {
+            return JSONResponse(status_code=404, content={
                 "success": False,
                 "error": f"No trained model found for {target}/{algorithm}. POST /api/ml/train first."
-            }, 404
+            })
 
         return {
             "success": True,
@@ -392,10 +392,10 @@ async def api_feature_importance(target: str = Query(default="lead_quality"), al
 
         _, metadata = load_model(target, algorithm)
         if not metadata:
-            return {
+            return JSONResponse(status_code=404, content={
                 "success": False,
                 "error": f"No model found for {target}/{algorithm}"
-            }, 404
+            })
 
         importance = metadata.get("feature_importance", [])
         return {
@@ -417,9 +417,9 @@ async def api_feature_importance(target: str = Query(default="lead_quality"), al
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/ml/predictions/compare/<bn> — Rule-based vs ML comparison
 # ─────────────────────────────────────────────────────────────────────────────
-@ml_bp.get("/ml/predictions/compare/<booking_number>")
+@ml_bp.get("/ml/predictions/compare/{booking_number}")
 # ─────────────────────────────────────────────────────────────────────────────
-@ml_bp.get("/ml/predictions/compare/<booking_number>")
+@ml_bp.get("/ml/predictions/compare/{booking_number}")
 async def api_compare_predictions(booking_number: str):
     """Compare rule-based and ML predictions side-by-side.
 

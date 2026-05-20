@@ -3,7 +3,7 @@
 > **Last Updated:** 2026-05-15
 > **Base URL:** `https://leads.shamrockbailbonds.biz` (production) / `http://localhost:5050` (dev)
 > **Auth:** Dashboard PIN via session cookie
-> **Framework:** Quart (async Flask) with Blueprint modules
+> **Framework:** FastAPI with APIRouter modules
 
 ---
 

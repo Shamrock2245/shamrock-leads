@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — Agency Reports API Blueprint
 
@@ -13,7 +14,6 @@ Endpoints:
 
 All routes use Quart (async) + Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -239,7 +239,6 @@ async def surety_liability(
 # VOIDED POWERS
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/voided-powers")
-@reports_bp.get("/reports/voided-powers")
 async def voided_powers(surety: str = Query(default="")):
     """POAs that were manually voided."""
     try:
@@ -268,7 +267,6 @@ async def voided_powers(surety: str = Query(default="")):
 # ─────────────────────────────────────────────────────────────────────────────
 # EXPIRED POWERS (semi-annual expiration)
 # ─────────────────────────────────────────────────────────────────────────────
-@reports_bp.get("/reports/expired-powers")
 @reports_bp.get("/reports/expired-powers")
 async def expired_powers(surety: str = Query(default="")):
     """POAs past their expiration date (semi-annual cycle)."""

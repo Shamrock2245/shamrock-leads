@@ -118,8 +118,8 @@ localhost:8088
     ▼  Docker port mapping
 shamrock-dashboard container :5050
     │
-    ▼  Quart/Hypercorn
-/g/<token>  →  geo_capture_page()
+    ▼  FastAPI/Uvicorn
+/g/{token}  →  geo_capture_page()
 /api/webhooks/bluebubbles  →  bb_webhook_receiver
 /api/*  →  all dashboard API endpoints
 ```

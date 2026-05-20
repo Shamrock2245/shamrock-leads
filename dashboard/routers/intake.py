@@ -1,3 +1,5 @@
+from __future__ import annotations
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Request
 """
 ShamrockLeads — Indemnitor Intake Queue API Blueprint
@@ -32,7 +34,6 @@ Dashboard.html in the GAS project:
     Meta:       source, platform, timestamp, consentGiven, consentTimestamp,
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
-from __future__ import annotations
 import os
 import uuid
 import logging
@@ -385,7 +386,7 @@ async def intake_queue_list(request: Request):
 #  GET /api/intake/<intake_id>
 #  Get a single intake record by ID
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.get("/intake/<intake_id>")
+@intake_bp.get("/intake/{intake_id}")
 async def intake_get(intake_id: str):
     """Fetch a single intake record by ID."""
     intake_queue = get_collection("intake_queue")
@@ -407,7 +408,7 @@ async def intake_get(intake_id: str):
 #  POST /api/intake/<intake_id>/match
 #  Phase 4: Run the matching engine on a specific intake record
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.post("/intake/<intake_id>/match")
+@intake_bp.post("/intake/{intake_id}/match")
 async def intake_match(intake_id: str):
     """
     Run the Phase 4 matching engine on a specific intake record.
@@ -432,7 +433,7 @@ async def intake_match(intake_id: str):
 #  POST /api/intake/<intake_id>/process
 #  Mark intake as in_progress and return full hydration payload
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.post("/intake/<intake_id>/process")
+@intake_bp.post("/intake/{intake_id}/process")
 async def intake_process(intake_id: str):
     """
     Mark intake as in_progress and return the full hydration payload.
@@ -520,7 +521,7 @@ async def intake_process(intake_id: str):
 #  POST /api/intake/<intake_id>/archive
 #  Mark intake as done / archived (remove from queue)
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.post("/intake/<intake_id>/archive")
+@intake_bp.post("/intake/{intake_id}/archive")
 async def intake_archive(intake_id: str):
     """
     Mark intake as archived (done).
@@ -544,7 +545,7 @@ async def intake_archive(intake_id: str):
 #  PATCH /api/intake/<intake_id>
 #  Update intake fields (e.g., AI risk score, GAS sync status)
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.patch("/intake/<intake_id>")
+@intake_bp.patch("/intake/{intake_id}")
 async def intake_update(request: Request, intake_id: str):
     """Update intake fields. Used by AI risk engine and GAS sync callbacks."""
     intake_queue = get_collection("intake_queue")
@@ -626,7 +627,7 @@ async def intake_stats():
 #  assigns POA from inventory, archives intake, and creates audit trail.
 #  Enforces The Chain: Match → BondCase → Packet → Signature → Payment
 # ═══════════════════════════════════════════════════════════════════════════════
-@intake_bp.post("/intake/<intake_id>/promote")
+@intake_bp.post("/intake/{intake_id}/promote")
 async def intake_promote(request: Request, intake_id: str):
     """
     Atomically promote a matched intake to an active bond case.
@@ -668,11 +669,11 @@ async def intake_promote(request: Request, intake_id: str):
 
     current_status = intake_doc.get("status", "")
     if current_status not in ("pending", "in_progress"):
-        return {
+        return JSONResponse(status_code=409, content={
             "success": False,
             "error": f"Intake {intake_id} cannot be promoted — current status is '{current_status}'. "
                      f"Only 'pending' or 'in_progress' intakes can be promoted."
-        }, 409
+        })
 
     # ── 2. Validate match exists ─────────────────────────────────────────────
     matched_booking = intake_doc.get("matched_booking_number")
@@ -680,30 +681,30 @@ async def intake_promote(request: Request, intake_id: str):
     match_confidence = intake_doc.get("match_confidence")
 
     if not matched_booking:
-        return {
+        return JSONResponse(status_code=422, content={
             "success": False,
             "error": "Cannot promote: intake has no validated match. "
                      "Run /api/intake/<id>/match first to link a defendant."
-        }, 422
+        })
 
     # ── 3. Validate surety ───────────────────────────────────────────────────
     surety = (data.get("surety") or "").lower().strip()
     if surety not in ("osi", "palmetto"):
-        return {
+        return JSONResponse(status_code=400, content={
             "success": False,
             "error": "surety is required and must be 'osi' or 'palmetto'."
-        }, 400
+        })
 
     # ── 4. Check for duplicate bond (idempotent) ─────────────────────────────
     active_bonds = get_collection("active_bonds")
     existing_bond = await active_bonds.find_one({"booking_number": matched_booking})
     if existing_bond:
-        return {
+        return JSONResponse(status_code=409, content={
             "success": False,
             "error": f"Bond already exists for booking {matched_booking}. "
                      f"Use /api/bonds/record to update existing bonds.",
             "existing_bond_status": existing_bond.get("status"),
-        }, 409
+        })
 
     # ── 5. Extract defendant and indemnitor data ─────────────────────────────
     ind = intake_doc.get("indemnitor", {})
@@ -741,11 +742,11 @@ async def intake_promote(request: Request, intake_id: str):
         )
 
     if not poa_doc:
-        return {
+        return JSONResponse(status_code=422, content={
             "success": False,
             "error": f"No available POA in {surety.upper()} inventory for bond amount ${bond_amount:,.2f}. "
                      f"Assign a POA manually via /api/bonds/record."
-        }, 422
+        })
 
     poa_number = poa_doc["poa_number"]
     poa_full = poa_doc.get("poa_full", poa_number)

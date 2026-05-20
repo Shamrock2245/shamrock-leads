@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — BlueBubbles Webhook Receiver
@@ -32,7 +33,6 @@ Endpoints
   GET    /api/webhooks/bluebubbles/status   — List registered webhooks
   DELETE /api/webhooks/bluebubbles/<id>     — Remove a webhook registration
 """
-from __future__ import annotations
 import hashlib
 import hmac
 import logging
@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from dashboard.routers.agent_brain_api import process_inbound
+from dashboard.routers.agent_brain import process_inbound
 from dashboard.routers.bb_private_api import BlueBubblesClient
 from dashboard.routers.imessage_automation import _content_hash
 from dashboard.extensions import BB_SERVERS, get_bb_server, get_collection, format_phone
@@ -312,10 +312,10 @@ async def register_bb_webhook(request: Request):
     data = await request.json() or {}
     vps_url = data.get("vps_url", _VPS_PUBLIC_URL).rstrip("/")
     if not vps_url:
-        return {
+        return JSONResponse(status_code=400, content={
             "success": False,
             "error": "BB_WEBHOOK_PUBLIC_URL not set — provide vps_url in body or set env var"
-        }, 400
+        })
 
     webhook_url = f"{vps_url}{_WEBHOOK_PATH}"
     results = []
@@ -353,7 +353,7 @@ async def bb_webhook_status():
     return {"success": True, "servers": results}
 
 
-@bb_webhook_bp.delete("/webhooks/bluebubbles/<int:webhook_id>")
+@bb_webhook_bp.delete("/webhooks/bluebubbles/{webhook_id}")
 async def delete_bb_webhook(webhook_id: int):
     """Remove a webhook registration from all BB servers."""
     results = {}

@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Prospective Bonds (In Progress Pipeline) API Blueprint
@@ -13,7 +14,6 @@ Endpoints:
   POST   /api/prospective-bonds/<bk>/officialize — Promote to active bond
   POST   /api/prospective-bonds/from-intake  — Promote an intake queue entry to In Progress
 """
-from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -68,11 +68,11 @@ async def api_prospective_create(request: Request):
         # Duplicate check
         existing = await col.find_one({"booking_number": booking_number})
         if existing:
-            return {
+            return JSONResponse(status_code=409, content={
                 "success": False,
                 "error": "Already tracked as prospective bond",
                 "stage": existing.get("stage", "contacted"),
-            }, 409
+            })
 
         # Snapshot defendant data from arrests collection
         arrest_doc = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
@@ -210,8 +210,7 @@ async def api_prospective_list(stage: str = Query(default=""), status: str = Que
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/stage
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/stage")
-@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/stage")
+@prospective_bonds_bp.patch("/prospective-bonds/{booking_number}/stage")
 async def api_prospective_update_stage(request: Request, booking_number: str):
     """Move a prospective bond to a new pipeline stage."""
     try:
@@ -256,7 +255,7 @@ async def api_prospective_update_stage(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/<booking_number>/note
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.post("/prospective-bonds/<booking_number>/note")
+@prospective_bonds_bp.post("/prospective-bonds/{booking_number}/note")
 async def api_prospective_add_note(request: Request, booking_number: str):
     """Add a note or communication log entry."""
     try:
@@ -304,7 +303,7 @@ async def api_prospective_add_note(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/indemnitor
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/indemnitor")
+@prospective_bonds_bp.patch("/prospective-bonds/{booking_number}/indemnitor")
 async def api_prospective_update_indemnitor(request: Request, booking_number: str):
     """Update the indemnitor/cosigner info on a prospective bond."""
     try:
@@ -342,7 +341,7 @@ async def api_prospective_update_indemnitor(request: Request, booking_number: st
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/<booking_number>/close
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.post("/prospective-bonds/<booking_number>/close")
+@prospective_bonds_bp.post("/prospective-bonds/{booking_number}/close")
 async def api_prospective_close(request: Request, booking_number: str):
     """Close a prospective bond with an outcome reason."""
     try:
@@ -391,7 +390,7 @@ async def api_prospective_close(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/prospective-bonds/<booking_number>/officialize
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.post("/prospective-bonds/<booking_number>/officialize")
+@prospective_bonds_bp.post("/prospective-bonds/{booking_number}/officialize")
 async def api_prospective_officialize(booking_number: str):
     """Promote a prospective bond to an active bond.
 
@@ -493,11 +492,11 @@ async def api_prospective_from_intake(request: Request):
         # Check for duplicate
         existing_pb = await prospective_col.find_one({"booking_number": bk})
         if existing_pb:
-            return {
+            return JSONResponse(status_code=409, content={
                 "success": False,
                 "error": "Already in In Progress pipeline",
                 "stage": existing_pb.get("stage", "contacted"),
-            }, 409
+            })
 
         # Snapshot from arrests
         arrest_doc = await arrests_col.find_one({"booking_number": bk}, {"_id": 0}) or {}
@@ -583,7 +582,7 @@ async def api_prospective_from_intake(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/archive — Hide from board
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/archive")
+@prospective_bonds_bp.patch("/prospective-bonds/{booking_number}/archive")
 async def api_prospective_archive(request: Request, booking_number: str):
     """Archive (hide) a prospective bond from the Kanban board without deleting data."""
     try:
@@ -626,7 +625,7 @@ async def api_prospective_archive(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/prospective-bonds/<booking_number>/restore — Restore from archive
 # ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.patch("/prospective-bonds/<booking_number>/restore")
+@prospective_bonds_bp.patch("/prospective-bonds/{booking_number}/restore")
 async def api_prospective_restore(request: Request, booking_number: str):
     """Restore an archived prospective bond back to the Kanban board."""
     try:

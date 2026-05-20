@@ -129,7 +129,7 @@ async def court_reminders_status():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@court_reminders_bp.get("/court-reminders/<booking_number>")
+@court_reminders_bp.get("/court-reminders/{booking_number}")
 async def get_reminders(booking_number):
     """View scheduled/sent reminders for a case (both court + payment)."""
     try:

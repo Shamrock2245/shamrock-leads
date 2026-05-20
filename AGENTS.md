@@ -118,7 +118,7 @@ Move records safely through this lifecycle:
 │  │  Writers             │            │                   │
 │  │   ├── MongoDB        │            ▼                   │
 │  │   ├── Google Sheets  │  ┌──────────────────────────┐ │
-│  │   └── Slack          │  │  Dashboard (Quart :5050   │ │
+│  │   └── Slack          │  │  Dashboard (FastAPI :5050 │ │
 │  └──────────────────────┘  │   → Nginx :443            │ │
 │                            │   → external :8088)       │ │
 │  ┌──────────────────────┐  │                            │ │
@@ -352,7 +352,7 @@ docker logs shamrock-leads --tail 50
 
 # Dashboard URL: http://178.156.179.237:8088/
 # Public URL: https://leads.shamrockbailbonds.biz
-# (Quart listens internally on 5050, Docker maps external 8088 → internal 5050)
+# (FastAPI listens internally on 5050, Docker maps external 8088 → internal 5050)
 
 # Run one-shot for a specific county
 docker exec shamrock-leads python main.py lee

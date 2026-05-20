@@ -20,6 +20,12 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+# Load .env file from the project root
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_project_root, ".env"))
+
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles

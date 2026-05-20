@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter
 """
 ShamrockLeads — BlueBubbles Firebase URL Sync
@@ -25,7 +26,6 @@ Environment Variables
   FIREBASE_POLL_INTERVAL  — Seconds between polls (default: 300)
   FIREBASE_ENABLED        — Set to "false" to disable (default: "true")
 """
-from __future__ import annotations
 
 import asyncio
 import logging

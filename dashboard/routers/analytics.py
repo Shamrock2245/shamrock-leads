@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — Revenue Analytics API Blueprint
 
@@ -11,7 +12,6 @@ Endpoints:
 
 All routes use Quart (async) + Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -178,7 +178,6 @@ async def revenue_metrics(days: int = Query(default=30)):
 # CONVERSION FUNNEL
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/funnel")
-@analytics_bp.get("/analytics/funnel")
 async def funnel_data():
     """Returns stage counts for the full lead → bonded → paid funnel."""
     try:
@@ -269,7 +268,6 @@ async def county_performance(days: int = Query(default=90)):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
-@analytics_bp.get("/analytics/county")
 @analytics_bp.get("/analytics/county")
 async def county_performance_alias():
     """Alias for /analytics/county-performance — used by sl-analytics-apex.js."""
@@ -372,7 +370,6 @@ async def arrest_heatmap(days: int = Query(default=30)):
 # ─────────────────────────────────────────────────────────────────────────────
 # BOND AMOUNT DISTRIBUTION (histogram)
 # ─────────────────────────────────────────────────────────────────────────────
-@analytics_bp.get("/analytics/bond-distribution")
 @analytics_bp.get("/analytics/bond-distribution")
 async def bond_distribution():
     """Returns bond amount histogram buckets."""

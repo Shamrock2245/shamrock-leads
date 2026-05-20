@@ -74,7 +74,7 @@ def _determine_current_stage(arrest, notes, pb, ab):
     return "arrested"
 
 
-@lifecycle_timeline_bp.get("/lifecycle/<booking_number>")
+@lifecycle_timeline_bp.get("/lifecycle/{booking_number}")
 async def get_lifecycle(booking_number: str):
     """Return the complete bond lifecycle timeline for a booking number."""
     try:

@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — BlueBubbles iMessage-First Prospecting
@@ -37,7 +38,6 @@ Endpoints
   POST   /api/prospecting/retry-failed     — Retry failed iMessage sends
   GET    /api/prospecting/stats            — Outreach stats by channel
 """
-from __future__ import annotations
 import logging
 import os
 import uuid
@@ -385,10 +385,10 @@ async def api_prospecting_outreach(request: Request):
         booking_number = (data.get("booking_number") or "").strip()
 
         if not phones or not defendant_name or not county or not booking_number:
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "error": "phones, defendant_name, county, and booking_number are required"
-            }, 400
+            })
 
         result = await send_prospecting_outreach(
             phones=phones,
@@ -431,10 +431,10 @@ async def api_create_group_chat(request: Request):
         booking_number = (data.get("booking_number") or "").strip()
 
         if len(phones) < 2 or not defendant_name:
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "error": "At least 2 phones and defendant_name are required"
-            }, 400
+            })
 
         result = await send_group_chat_outreach(
             phones=phones,

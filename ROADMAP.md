@@ -69,7 +69,7 @@ Expanded from 20 to **51 county scraper files** across Florida. All scrapers are
 
 ## Phase 3: Intake Ingestion ✅ COMPLETE
 
-All intake sources handled natively in the Quart dashboard.
+All intake sources handled natively in the FastAPI dashboard.
 
 - `dashboard/api/intake.py` — 7 endpoints (submit, queue, hydrate, archive, process, manual, stats)
 - `dashboard/api/webhooks.py` — Wix intake webhook

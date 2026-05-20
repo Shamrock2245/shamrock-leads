@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter, Request
 """
 Geo-Link Blueprint — Silent Location Capture
@@ -5,7 +6,7 @@ Generates one-time tracking tokens embedded in outbound texts.
 When recipient taps the link, browser submits GPS coordinates silently
 and redirects to a neutral page. Authorized by signed bond paperwork.
 """
-from __future__ import annotations
+
 import os
 import uuid
 import secrets
@@ -64,7 +65,7 @@ async def geo_create_link(request: Request):
     short_url = f"{public_url}/g/{token}" if public_url else f"/g/{token}"
     return {"token": token, "url": short_url}
 
-@geo_bp.get("/g/<token>")
+@geo_bp.get("/g/{token}")
 async def geo_capture_page(token: str):
     """
     Serve the silent GPS capture page.
@@ -147,7 +148,7 @@ async def geo_capture_page(token: str):
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
-@geo_bp.post("/g/<token>/ping")
+@geo_bp.post("/g/{token}/ping")
 async def geo_receive_ping(request: Request, token: str):
     geo_pings = get_collection("geo_pings")
     active_bonds = get_collection("active_bonds")
@@ -260,7 +261,7 @@ async def geo_receive_ping(request: Request, token: str):
 
     return {"ok": True}
 
-@geo_bp.get("/api/geo/pings/<booking_number>")
+@geo_bp.get("/api/geo/pings/{booking_number}")
 async def geo_get_pings(booking_number: str):
     geo_pings = get_collection("geo_pings")
     cursor = geo_pings.find(

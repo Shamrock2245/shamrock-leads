@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — AI Lead Intelligence API Blueprint
 
@@ -8,7 +9,6 @@ Endpoints:
 
 All routes use Quart (async) + Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 import re
@@ -119,7 +119,7 @@ def build_score_explanation(arrest: dict) -> list[dict]:
 
 
 # ── Lead Intelligence Endpoint ────────────────────────────────────────────────
-@lead_intel_bp.get("/leads/<booking_number>/intelligence")
+@lead_intel_bp.get("/leads/{booking_number}/intelligence")
 async def lead_intelligence(booking_number: str):
     """Returns AI-style intelligence breakdown for a specific lead."""
     try:
@@ -260,7 +260,7 @@ async def trend_stats():
 
 
 # ── Charge Severity for a Lead ────────────────────────────────────────────────
-@lead_intel_bp.get("/leads/<booking_number>/charge-severity")
+@lead_intel_bp.get("/leads/{booking_number}/charge-severity")
 async def charge_severity(booking_number: str):
     """Returns charge severity classification for a specific lead."""
     try:

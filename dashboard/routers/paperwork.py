@@ -1,3 +1,5 @@
+from __future__ import annotations
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Request
 from dashboard.deps import get_settings
 """
@@ -26,7 +28,6 @@ Policy Compliance (docs/policies/signature-policy.md):
   Rule 4: Recipient verification before sending signing link.
   Rule 5: Completion tracking via webhook with Drive filing.
 """
-from __future__ import annotations
 import io
 import logging
 import uuid
@@ -113,7 +114,7 @@ def _build_bond_data(intake: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/generate/<intake_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/generate/<intake_id>")
+@paperwork_bp.post("/paperwork/generate/{intake_id}")
 async def generate_packet(request: Request, intake_id: str):
     """
     Generate the full paperwork packet (appearance bonds + indemnity + SSA + POA).
@@ -268,7 +269,7 @@ async def generate_packet(request: Request, intake_id: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/<packet_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.get("/paperwork/<packet_id>")
+@paperwork_bp.get("/paperwork/{packet_id}")
 async def get_packet(packet_id: str):
     """Return packet metadata and document list."""
     try:
@@ -289,7 +290,7 @@ async def get_packet(packet_id: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/deliver
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/<packet_id>/deliver")
+@paperwork_bp.post("/paperwork/{packet_id}/deliver")
 async def deliver_packet(request: Request, packet_id: str):
     """
     Deliver the paperwork packet via BlueBubbles iMessage.
@@ -400,7 +401,7 @@ async def deliver_packet(request: Request, packet_id: str):
 # POST /api/paperwork/<packet_id>/signnow
 # Push the packet to SignNow for e-signature.
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/<packet_id>/signnow")
+@paperwork_bp.post("/paperwork/{packet_id}/signnow")
 async def push_to_signnow(request: Request, packet_id: str):
     """
     Push the paperwork packet to SignNow for e-signature.
@@ -427,18 +428,18 @@ async def push_to_signnow(request: Request, packet_id: str):
 
         # Policy Rule 3: reject if already signed
         if packet.get("status") == "signed":
-            return {
+            return JSONResponse(status_code=409, content={
                 "error": "Packet is already signed. Create a new packet version (Rule 3).",
                 "packet_id": packet_id,
                 "status": "signed",
-            }, 409
+            })
 
         # Policy Rule 3: reject if voided
         if packet.get("voided"):
-            return {
+            return JSONResponse(status_code=409, content={
                 "error": "Packet has been voided. Create a new packet.",
                 "packet_id": packet_id,
-            }, 409
+            })
 
         # Policy Rule 1: warn if bond_case_id not set
         bond_case_id = packet.get("bond_case_id")
@@ -471,10 +472,10 @@ async def push_to_signnow(request: Request, packet_id: str):
         telegram_chat_id = data.get("telegram_chat_id") or intake.get("telegram_chat_id")
 
         if phase == 2 and not poa_number:
-            return {
+            return JSONResponse(status_code=400, content={
                 "error": "Phase 2 requires a poa_number. "
                          "Provide it in the request body or set it on the intake record.",
-            }, 400
+            })
 
         from dashboard.services.signnow_packet_service import SignNowPacketService
         svc = SignNowPacketService()
@@ -562,7 +563,7 @@ async def push_to_signnow(request: Request, packet_id: str):
 # POST /api/paperwork/<packet_id>/void
 # Void a packet (policy Rule 3 — no in-place mutation after send/sign).
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/<packet_id>/void")
+@paperwork_bp.post("/paperwork/{packet_id}/void")
 async def void_packet(request: Request, packet_id: str):
     """
     Void a paperwork packet.
@@ -632,7 +633,7 @@ async def void_packet(request: Request, packet_id: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/list/<intake_id>
 # ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.get("/paperwork/list/<intake_id>")
+@paperwork_bp.get("/paperwork/list/{intake_id}")
 async def list_packets(intake_id: str):
     """Return all paperwork packets for an intake record."""
     try:
@@ -689,10 +690,10 @@ async def validate_signnow_templates():
         try:
             await svc._get_token()
         except Exception as exc:
-            return {
+            return JSONResponse(status_code=500, content={
                 "success": False,
                 "error": f"SignNow auth failed: {exc}",
-            }, 500
+            })
 
     results = []
     valid = 0

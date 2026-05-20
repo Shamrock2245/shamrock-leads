@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Geo Intelligence API Blueprint
@@ -9,7 +10,6 @@ compliance metrics, and Traccar webhook ingestion.
 All endpoints prefixed with /api/geo-intel/
 Traccar webhook at /api/traccar/webhook (no auth — Docker-internal only)
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -56,7 +56,6 @@ async def list_devices(booking_number: str | None = Query(default=None)):
     return {"devices": devices, "count": len(devices)}
 
 
-@geo_intel_bp.post("/devices")
 @geo_intel_bp.post("/devices")
 async def register_device(request: Request):
     """Register a new tracking device and bind to a defendant.
@@ -118,10 +117,10 @@ async def register_device(request: Request):
         vehicle_info=vehicle_info,
     )
 
-    return {"device": device, "traccar_id": traccar_id}, 201
+    return JSONResponse(status_code=201, content={"device": device, "traccar_id": traccar_id})
 
 
-@geo_intel_bp.post("/devices/<device_id>/deactivate")
+@geo_intel_bp.post("/devices/{device_id}/deactivate")
 async def deactivate_device(request: Request, device_id: str):
     """Deactivate a tracking device."""
     data = await request.json() or {}
@@ -173,7 +172,6 @@ async def device_route(traccar_device_id: int = Query(default=0), from_: str = Q
 
 @geo_intel_bp.get("/zones")
 
-@geo_intel_bp.get("/zones")
 async def list_zones(booking_number: str | None = Query(default=None)):
     """List geofence zones, optionally by booking number."""
     booking = booking_number
@@ -182,7 +180,6 @@ async def list_zones(booking_number: str | None = Query(default=None)):
     return {"zones": zones, "count": len(zones)}
 
 
-@geo_intel_bp.post("/zones")
 @geo_intel_bp.post("/zones")
 async def create_zone(request: Request):
     """Create an inclusion or exclusion geofence zone.
@@ -242,10 +239,10 @@ async def create_zone(request: Request):
         schedule=data.get("schedule"),
     )
 
-    return {"zone": zone, "traccar_geofence_id": traccar_fence_id}, 201
+    return JSONResponse(status_code=201, content={"zone": zone, "traccar_geofence_id": traccar_fence_id})
 
 
-@geo_intel_bp.delete("/zones/<zone_id>")
+@geo_intel_bp.delete("/zones/{zone_id}")
 async def delete_zone(zone_id: str):
     """Delete a geofence zone."""
     svc = _get_service()
@@ -283,10 +280,10 @@ async def add_vehicle_watch(request: Request):
         vehicle_info=data["vehicle_info"],
         reason=data.get("reason", ""),
     )
-    return {"vehicle_watch": watch}, 201
+    return JSONResponse(status_code=201, content={"vehicle_watch": watch})
 
 
-@geo_intel_bp.post("/vehicle-watch/<watch_id>/sighting")
+@geo_intel_bp.post("/vehicle-watch/{watch_id}/sighting")
 async def record_vehicle_sighting(request: Request, watch_id: str):
     """Record a vehicle sighting.
 
@@ -319,8 +316,7 @@ async def violation_feed(limit: int = Query(default=50), booking_number: str | N
     return {"violations": events, "count": len(events)}
 
 
-@geo_intel_bp.post("/violations/<event_id>/acknowledge")
-@geo_intel_bp.post("/violations/<event_id>/acknowledge")
+@geo_intel_bp.post("/violations/{event_id}/acknowledge")
 async def acknowledge_violation(request: Request, event_id: str):
     """Acknowledge a geofence violation alert."""
     data = await request.json() or {}
@@ -366,7 +362,7 @@ async def photo_checkin(request: Request):
         accuracy=float(data.get("accuracy", 0)),
         source=data.get("source", "manual"),
     )
-    return {"checkin": checkin}, 201
+    return JSONResponse(status_code=201, content={"checkin": checkin})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

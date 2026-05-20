@@ -1,9 +1,9 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Bonds API Blueprint
 Endpoints: /api/write-bond, /api/active-bonds (CRUD), /api/appearance-bond-pdf
 """
-from __future__ import annotations
 
 import json as json_lib
 import os
@@ -454,15 +454,15 @@ async def api_write_bond(request: Request):
                         "gas_response": gas_resp,
                     }
                 else:
-                    return {
+                    return JSONResponse(status_code=502, content={
                         "success": False,
                         "error": f"GAS returned {resp.status_code}: {resp.text[:200]}",
-                    }, 502
+                    })
         except Exception as e:
-            return {
+            return JSONResponse(status_code=502, content={
                 "success": False,
                 "error": f"GAS connection failed: {str(e)}",
-            }, 502
+            })
 
     # No GAS URL configured — return success with payload for review
     return {
@@ -565,7 +565,7 @@ async def api_active_bonds_create(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@bonds_bp.post("/active-bonds/<booking_number>/check-in")
+@bonds_bp.post("/active-bonds/{booking_number}/check-in")
 async def api_active_bond_check_in(request: Request, booking_number):
     """Record a defendant check-in."""
     active_bonds = get_collection("active_bonds")
@@ -602,7 +602,7 @@ async def api_active_bond_check_in(request: Request, booking_number):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@bonds_bp.post("/active-bonds/<booking_number>/alert")
+@bonds_bp.post("/active-bonds/{booking_number}/alert")
 async def api_active_bond_alert(request: Request, booking_number):
     """Create a risk alert for an active bond."""
     active_bonds = get_collection("active_bonds")
@@ -627,7 +627,7 @@ async def api_active_bond_alert(request: Request, booking_number):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@bonds_bp.patch("/active-bonds/<booking_number>/status")
+@bonds_bp.patch("/active-bonds/{booking_number}/status")
 async def api_active_bond_status(request: Request, booking_number):
     """Update bond status with full audit trail, status_history tracking, and POA lifecycle.
 
@@ -730,7 +730,7 @@ async def api_active_bond_status(request: Request, booking_number):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@bonds_bp.get("/active-bonds/<booking_number>/status-history")
+@bonds_bp.get("/active-bonds/{booking_number}/status-history")
 async def api_active_bond_status_history(booking_number):
     """Return the full status_history array for a bond, newest first."""
     active_bonds = get_collection("active_bonds")
@@ -859,7 +859,7 @@ async def api_appearance_bond_pdf(request: Request):
 # Mark defendant as released and trigger Phase 2 signing flow via BlueBubbles
 # ─────────────────────────────────────────────────────────────────────────────
 
-@bonds_bp.patch("/active-bonds/<booking_number>/edit")
+@bonds_bp.patch("/active-bonds/{booking_number}/edit")
 async def api_active_bond_edit(request: Request, booking_number: str):
     """
     Full-field edit of an active bond record.
@@ -900,7 +900,7 @@ async def api_active_bond_edit(request: Request, booking_number: str):
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-@bonds_bp.post("/active-bonds/<booking_number>/release")
+@bonds_bp.post("/active-bonds/{booking_number}/release")
 async def api_active_bond_release(request: Request, booking_number: str):
     """
     Mark a defendant as released from custody and trigger the post-release
@@ -1272,7 +1272,7 @@ async def api_bulk_exonerate(request: Request):
 # GET /api/active-bonds/<booking_number>/compliance
 # Returns check-in compliance, court appearance, and payment status
 # ═══════════════════════════════════════════════════════════════════════════════
-@bonds_bp.get("/active-bonds/<booking_number>/compliance")
+@bonds_bp.get("/active-bonds/{booking_number}/compliance")
 async def api_bond_compliance(booking_number):
     """
     Captira-style per-defendant compliance summary.
@@ -1471,7 +1471,7 @@ async def api_bond_compliance(booking_number):
 #  Bond Renewal / Re-Write
 # ══════════════════════════════════════════════════════════════════════════════
 
-@bonds_bp.post("/active-bonds/<booking_number>/renew")
+@bonds_bp.post("/active-bonds/{booking_number}/renew")
 async def api_renew_bond(request: Request, booking_number: str):
     """
     Re-write / renew an active bond.
@@ -1640,7 +1640,7 @@ async def api_renew_bond(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/active-bonds/<booking_number>/renewal-history
 # ─────────────────────────────────────────────────────────────────────────────
-@bonds_bp.get("/active-bonds/<booking_number>/renewal-history")
+@bonds_bp.get("/active-bonds/{booking_number}/renewal-history")
 async def api_bond_renewal_history(booking_number: str):
     """Return the renewal_history array for a bond."""
     try:

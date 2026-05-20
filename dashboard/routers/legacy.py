@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Legacy API Blueprint
@@ -14,7 +15,6 @@ Endpoints:
   /api/imessage/templates — Outreach templates
   /api/config/bluebubbles-url — Dynamic URL sync from iMac
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -327,13 +327,13 @@ async def imessage_send(request: Request):
             "sent_at": {"$gte": cutoff},
         }, {"_id": 0, "sent_at": 1, "message": 1})
         if recent:
-            return {
+            return JSONResponse(status_code=409, content={
                 "success": False,
                 "error": "duplicate",
                 "detail": f"Already messaged this number for booking {booking_number} within {cooldown_hours}h",
                 "last_sent": recent.get("sent_at"),
                 "message_preview": (recent.get("message", ""))[:80],
-            }, 409
+            })
 
     try:
         async with httpx.AsyncClient() as client:
@@ -392,7 +392,7 @@ async def imessage_send(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@legacy_bp.get("/imessage/history/<booking_number>")
+@legacy_bp.get("/imessage/history/{booking_number}")
 async def imessage_history(booking_number):
     """Get outreach message history for a defendant."""
     imessage_outreach = get_collection("imessage_outreach")

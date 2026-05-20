@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter, Request
 """Tracking API Blueprint — Location Sync, Map Data, History, Geofence, Exoneration
    Phase 3 Enhancement:
@@ -8,7 +9,6 @@ from fastapi import APIRouter, Request
    - /tracking/<booking>/send-geo-link — send fresh GPS capture link
    - /tracking/exonerations — recent exoneration log
 """
-from __future__ import annotations
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection
 from dashboard.services.risk_engine import compute_risk_score
@@ -220,7 +220,7 @@ async def tracking_search(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.get("/tracking/<booking_number>/location-history")
+@tracking_bp.get("/tracking/{booking_number}/location-history")
 async def tracking_location_history(booking_number):
     """Return merged location history from all 3 sources."""
     try:
@@ -234,7 +234,7 @@ async def tracking_location_history(booking_number):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.get("/tracking/<booking_number>/history")
+@tracking_bp.get("/tracking/{booking_number}/history")
 async def tracking_history(booking_number):
     """Full location history + alerts + court dates for a specific defendant."""
     active_bonds = get_collection("active_bonds")
@@ -287,7 +287,7 @@ async def tracking_history(booking_number):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.post("/tracking/<booking_number>/geofence")
+@tracking_bp.post("/tracking/{booking_number}/geofence")
 async def tracking_set_geofence(request: Request, booking_number):
     """Set a geofence radius (miles) around home address."""
     active_bonds = get_collection("active_bonds")
@@ -315,7 +315,7 @@ async def tracking_set_geofence(request: Request, booking_number):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.post("/tracking/<booking_number>/exonerate")
+@tracking_bp.post("/tracking/{booking_number}/exonerate")
 async def tracking_exonerate(request: Request, booking_number):
     """
     Exonerate a bond — stops all location tracking, cancels pending geo tokens
@@ -471,7 +471,7 @@ async def tracking_exonerations(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@tracking_bp.post("/tracking/<booking_number>/send-geo-link")
+@tracking_bp.post("/tracking/{booking_number}/send-geo-link")
 async def tracking_send_geo_link(request: Request, booking_number):
     """Send a fresh GPS capture link to defendant or indemnitor via iMessage/SMS."""
     active_bonds = get_collection("active_bonds")

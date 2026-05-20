@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Client Portal API Blueprint
@@ -15,7 +16,6 @@ Staff-only (session-authed):
   GET  /api/portal/tokens/<booking>  — List active tokens for a bond
   POST /api/portal/revoke            — Revoke a token
 """
-from __future__ import annotations
 
 import os
 import secrets
@@ -47,7 +47,7 @@ DASHBOARD_DIR = os.path.dirname(os.path.dirname(__file__))
 # PUBLIC ROUTES — No auth required (token-gated)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@portal_bp.get("/c/<token>")
+@portal_bp.get("/c/{token}")
 async def portal_page(token: str):
     """Serve the client portal HTML page."""
     # Quick token validation — just check if it exists
@@ -71,7 +71,7 @@ async def portal_page(token: str):
     return resp
 
 
-@portal_bp.get("/api/portal/<token>/status")
+@portal_bp.get("/api/portal/{token}/status")
 async def portal_status(token: str):
     """Return case status data scoped to the token's role."""
     token_data = await validate_token(token)
@@ -89,7 +89,7 @@ async def portal_status(token: str):
     return status
 
 
-@portal_bp.post("/api/portal/<token>/checkin")
+@portal_bp.post("/api/portal/{token}/checkin")
 async def portal_checkin(request: Request, token: str):
     """Submit a defendant check-in (GPS + optional selfie)."""
     token_data = await validate_token(token)
@@ -113,7 +113,7 @@ async def portal_checkin(request: Request, token: str):
     return result, 201 if result.get("success") else 400
 
 
-@portal_bp.get("/api/portal/<token>/payment-link")
+@portal_bp.get("/api/portal/{token}/payment-link")
 async def portal_payment_link(token: str):
     """Return the SwipeSimple payment link for this bond."""
     token_data = await validate_token(token)
@@ -158,7 +158,7 @@ async def generate_token_endpoint(request: Request):
     if result.get("success"):
         return JSONResponse(result, status_code=201)
     return JSONResponse(result, status_code=404)
-@portal_bp.get("/api/portal/tokens/<booking_number>")
+@portal_bp.get("/api/portal/tokens/{booking_number}")
 async def list_tokens(booking_number: str):
     """List all active portal tokens for a bond (staff view)."""
     tokens = await get_portal_tokens_for_bond(booking_number)

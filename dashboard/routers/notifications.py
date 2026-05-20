@@ -103,7 +103,6 @@ async def get_notifications(limit: int = Query(default=50), unread: str = Query(
 
 
 @notifications_bp.post("/notifications")
-@notifications_bp.post("/notifications")
 async def post_notification(request: Request):
     """Manually create a notification."""
     data = await request.json()
@@ -118,10 +117,10 @@ async def post_notification(request: Request):
         entity_type=data.get("entity_type", ""),
         metadata=data.get("metadata"),
     )
-    return {"success": True, "notification": doc}, 201
+    return JSONResponse(status_code=201, content={"success": True, "notification": doc})
 
 
-@notifications_bp.post("/notifications/<notification_id>/read")
+@notifications_bp.post("/notifications/{notification_id}/read")
 async def mark_read(notification_id):
     """Mark a single notification as read."""
     notif_col = get_collection("notifications")
@@ -151,7 +150,7 @@ async def unread_count():
     return {"unread": count}
 
 
-@notifications_bp.delete("/notifications/<notification_id>")
+@notifications_bp.delete("/notifications/{notification_id}")
 async def dismiss_notification(notification_id):
     """Dismiss (soft-delete) a notification."""
     notif_col = get_collection("notifications")

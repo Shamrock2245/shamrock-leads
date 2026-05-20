@@ -60,7 +60,6 @@ async def api_poa_next(surety: str | None = Query(default=None), bond_amount: in
 
 
 @poa_bp.post("/poa/assign")
-@poa_bp.post("/poa/assign")
 async def api_poa_assign(request: Request):
     """Mark a POA as assigned to a bond case."""
     poa_inventory = get_collection("poa_inventory")
@@ -142,7 +141,6 @@ async def api_poa_inventory(surety: str | None = Query(default=None)):
 
 
 @poa_bp.get("/poa/inventory-summary")
-@poa_bp.get("/poa/inventory-summary")
 async def api_poa_inventory_summary():
     """Lightweight summary for the dashboard low-stock alert banner.
     Returns tiers with available count, prefix, and surety label."""
@@ -211,7 +209,6 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
     return {"powers": powers, "total": total, "page": page, "pages": pages}
 
 
-@poa_bp.post("/poa/add")
 @poa_bp.post("/poa/add")
 async def api_poa_add(request: Request):
     """Add one or more POA numbers to inventory (manual replenishment)."""

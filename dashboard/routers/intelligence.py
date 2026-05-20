@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Intelligence API Blueprint
@@ -15,7 +16,6 @@ Endpoints:
 
 All routes are async (Quart) with Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -213,7 +213,7 @@ async def api_intelligence_dashboard():
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/intelligence/court-predictor — Court Outcome Prediction
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/court-predictor/<booking_number>")
+@intelligence_bp.get("/intelligence/court-predictor/{booking_number}")
 async def api_court_predictor(booking_number: str):
     """Predict court outcome (conviction/FTA odds) for a defendant.
 

@@ -55,7 +55,7 @@ async def api_analyze_charges(request: Request):
 
         from dashboard.services.legal_nlp_service import analyze_charges
         result = analyze_charges(charges)
-        return {"success": True, **result}, 200
+        return JSONResponse(status_code=200, content={"success": True, **result})
     except Exception as e:
         log.exception("Charge analysis error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -77,7 +77,7 @@ async def api_extract_citations(request: Request):
 
         from dashboard.services.legal_nlp_service import extract_citations
         citations = extract_citations(text)
-        return {"success": True, "citations": citations, "count": len(citations)}, 200
+        return JSONResponse(status_code=200, content={"success": True, "citations": citations, "count": len(citations)})
     except Exception as e:
         log.exception("Citation extraction error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -99,7 +99,7 @@ async def api_extract_entities(request: Request):
 
         from dashboard.services.legal_nlp_service import extract_legal_entities
         entities = extract_legal_entities(text)
-        return {"success": True, **entities}, 200
+        return JSONResponse(status_code=200, content={"success": True, **entities})
     except Exception as e:
         log.exception("Entity extraction error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -107,7 +107,7 @@ async def api_extract_entities(request: Request):
 
 # ── Recidivism / FTA Risk Scoring ────────────────────────────────────────────
 
-@legal_nlp_bp.get("/legal-nlp/risk-score/<booking_number>")
+@legal_nlp_bp.get("/legal-nlp/risk-score/{booking_number}")
 async def api_risk_score(booking_number: str):
     """Compute recidivism + FTA risk for a defendant based on arrest history.
 
@@ -144,7 +144,7 @@ async def api_risk_score(booking_number: str):
         result["booking_number"] = booking_number
         result["county"] = current.get("county", "")
 
-        return {"success": True, **result}, 200
+        return JSONResponse(status_code=200, content={"success": True, **result})
     except Exception as e:
         log.exception("Risk score error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -188,7 +188,7 @@ async def api_batch_risk(request: Request):
             score["defendant_name"] = name
             results.append(score)
 
-        return {"success": True, "scored": len(results), "results": results}, 200
+        return JSONResponse(status_code=200, content={"success": True, "scored": len(results), "results": results})
     except Exception as e:
         log.exception("Batch risk error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -196,7 +196,7 @@ async def api_batch_risk(request: Request):
 
 # ── Charge Enrichment (enrich an arrest record inline) ────────────────────────
 
-@legal_nlp_bp.post("/legal-nlp/enrich/<booking_number>")
+@legal_nlp_bp.post("/legal-nlp/enrich/{booking_number}")
 async def api_enrich_arrest(booking_number: str):
     """Enrich an arrest record with NLP-derived fields and persist."""
     try:
@@ -225,7 +225,7 @@ async def api_enrich_arrest(booking_number: str):
             {"$set": enrichment}
         )
 
-        return {"success": True, "enrichment": enrichment}, 200
+        return JSONResponse(status_code=200, content={"success": True, "enrichment": enrichment})
     except Exception as e:
         log.exception("Enrich error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -339,7 +339,7 @@ async def api_nlp_stats():
                 "coverage_pct": round(doc["enriched"] / doc["total"] * 100, 1) if doc["total"] > 0 else 0,
             })
 
-        return {
+        return JSONResponse(status_code=200, content={
             "success": True,
             "total_arrests": total_arrests,
             "enriched_count": enriched_count,
@@ -353,7 +353,7 @@ async def api_nlp_stats():
             "avg_severity_level": avg_severity,
             "max_severity_level": max_sev_level,
             "county_coverage": county_coverage,
-        }, 200
+        })
     except Exception as e:
         log.exception("NLP stats error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)

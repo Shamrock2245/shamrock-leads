@@ -21,7 +21,7 @@ automating the full bond lifecycle from arrest scrape to signed paperwork to pay
 - **Email:** `admin@shamrockbailbonds.biz` for all integrations.
 - **Sureties:** OSI (`osi`) and Palmetto (`palmetto`). Every bond specifies which.
 - **Production VPS:** `178.156.179.237` (Hetzner, root access)
-- **Dashboard URL:** `http://178.156.179.237:8088/` (internal: Quart on `:5050`)
+- **Dashboard URL:** `http://178.156.179.237:8088/` (internal: FastAPI on `:5050`)
 - **Public Domain:** `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy → `:8088`)
 - **iMessage Bridge:** ngrok permanent tunnel → office iMac BlueBubbles (port 1234)
 
@@ -32,7 +32,7 @@ automating the full bond lifecycle from arrest scrape to signed paperwork to pay
 ```
 Hetzner VPS (Docker Compose)
   shamrock-leads     → Python 3.12 scraper engine + APScheduler (50 counties)
-  shamrock-dashboard → Quart async API (port 5050 → Nginx :443 → external :8088)
+  shamrock-dashboard → FastAPI async API (port 5050 → Nginx :443 → external :8088)
   node-red           → Ops dashboard (port 1880)
 
 MongoDB Atlas        → Primary database: ShamrockBailDB (all entities)
@@ -49,7 +49,7 @@ Twilio               → SMS court reminders, 10DLC compliant
 | Service | Container | Internal | External | Purpose |
 |---------|-----------|----------|----------|---------|
 | `shamrock-leads` | `shamrock-leads` | — | — | Scraper engine + APScheduler |
-| `dashboard` | `shamrock-dashboard` | 5050 | 8088 | Quart dashboard (61 API modules, 36 services) |
+| `dashboard` | `shamrock-dashboard` | 5050 | 8088 | FastAPI dashboard (61 API modules, 36 services) |
 | `traccar` | `shamrock-traccar` | 8082 | 8082 | GPS tracking (OsmAnd, vehicle trackers) |
 | `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs (profile: ops) |
 
@@ -178,7 +178,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 | Language | Python 3.12 |
 | Scheduling | APScheduler |
 | Database | MongoDB Atlas (motor, async) — DB: `ShamrockBailDB` |
-| Dashboard API | Quart (async Flask) — 49 API modules, 21 services |
+| Dashboard API | FastAPI — 61 API modules, 36 services |
 | Frontend | Vanilla JS + CSS — 32 modules, ~25,700 LOC |
 | iMessage | BlueBubbles API via ngrok permanent tunnel |
 | AI | OpenAI GPT-4o (auto-reply, lead enrichment) |

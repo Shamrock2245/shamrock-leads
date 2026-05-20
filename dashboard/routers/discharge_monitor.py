@@ -215,7 +215,7 @@ async def discharge_status():
 async def discharge_scan():
     """Trigger a Gmail scan for discharge emails. Returns 501 if not configured."""
     if not _gmail_available():
-        return {
+        return JSONResponse(status_code=501, content={
             "success": False,
             "error": "Gmail not configured",
             "code": "GMAIL_NOT_CONFIGURED",
@@ -227,7 +227,7 @@ async def discharge_scan():
                 "5. Set GMAIL_CREDENTIALS_JSON env var to the credentials JSON path",
             ],
             "docs": "docs/GMAIL_DISCHARGE_SETUP.md",
-        }, 501
+        })
 
     # Gmail scan implementation (requires google-auth + googleapiclient)
     try:
@@ -289,10 +289,10 @@ async def discharge_scan():
 
         return {"success": True, "messages_checked": len(messages), "queued": queued}
     except ImportError:
-        return {
+        return JSONResponse(status_code=501, content={
             "success": False,
             "error": "google-auth package not installed. Run: pip install google-auth google-auth-oauthlib google-api-python-client",
-        }, 501
+        })
     except Exception as e:
         logger.exception("[discharge-scan] Error: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -373,7 +373,6 @@ async def discharge_queue_view(status: str = Query(default="")):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@discharge_monitor_bp.post("/discharge-monitor/process")
 @discharge_monitor_bp.post("/discharge-monitor/process")
 async def discharge_process():
     """

@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Agent Brain API Blueprint
@@ -14,7 +15,6 @@ Endpoints:
   POST   /api/agent-brain/rescore-all     — Rescore all active prospective bond leads
   POST   /api/agent-brain/draft-sequence  — Draft a multi-lead outreach sequence
 """
-from __future__ import annotations
 
 import logging
 import os

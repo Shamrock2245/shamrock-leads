@@ -49,7 +49,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Intelligence Dashboard (Quart + Hypercorn) ──
+  # ── Intelligence Dashboard (FastAPI + Uvicorn) ──
   dashboard:
     build:
       context: .
@@ -60,7 +60,7 @@ services:
     dns:
       - 8.8.8.8                         # Force Google DNS — resolves Wix CNAME for bb.shamrockbailbonds.biz
       - 1.1.1.1                         # Cloudflare DNS fallback
-    command: hypercorn "dashboard:create_app()" --bind 0.0.0.0:5050 --access-logfile -
+    command: uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --access-log --log-level info
     env_file:
       - .env
     ports:
@@ -84,7 +84,7 @@ services:
       - no-new-privileges:true          # Prevent privilege escalation
     read_only: true                     # Root filesystem read-only
     tmpfs:
-      - /tmp:size=128m                  # Writable temp for Hypercorn
+      - /tmp:size=128m                  # Writable temp for Uvicorn
     mem_limit: 2g                       # Cap memory (dashboard API)
     cpus: 1.5                           # Cap CPU
     logging:

@@ -39,10 +39,10 @@ async def log_payment(request: Request):
 
     await publish_event('payment_received', payment_doc)
 
-    return {"success": True, "payment_id": payment_doc['_id']}, 201
+    return JSONResponse(status_code=201, content={"success": True, "payment_id": payment_doc['_id']})
 
 
-@payments_bp.get("/payments/<booking_number>")
+@payments_bp.get("/payments/{booking_number}")
 async def get_payments(booking_number):
     """Get payment history for a case."""
     payments = get_collection("payments")
@@ -53,9 +53,9 @@ async def get_payments(booking_number):
         doc['_id'] = str(doc['_id'])
         payment_list.append(doc)
 
-    return {"payments": payment_list}, 200
+    return JSONResponse(status_code=200, content={"payments": payment_list})
 
-@payments_bp.post("/payments/plan/<booking_number>")
+@payments_bp.post("/payments/plan/{booking_number}")
 async def create_payment_plan(request: Request, booking_number):
     """Create a payment plan for a bond."""
     data = await request.json()
@@ -78,7 +78,7 @@ async def create_payment_plan(request: Request, booking_number):
     result = await plans.insert_one(plan_doc)
     plan_doc['_id'] = str(result.inserted_id)
     
-    return {"success": True, "plan_id": plan_doc['_id']}, 201
+    return JSONResponse(status_code=201, content={"success": True, "plan_id": plan_doc['_id']})
 
 @payments_bp.post("/payments/premium-split")
 async def calculate_premium_split(request: Request):
@@ -100,10 +100,10 @@ async def calculate_premium_split(request: Request):
         
     agent_retains = premium - surety_owed - buf_owed
     
-    return {
+    return JSONResponse(status_code=200, content={
         "bond_amount": bond_amount,
         "premium": premium,
         "surety_owed": surety_owed,
         "buf_owed": buf_owed,
         "agent_retains": agent_retains
-    }, 200
+    })

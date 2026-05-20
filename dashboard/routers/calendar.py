@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — Court Calendar API Blueprint
 
@@ -9,7 +10,6 @@ Endpoints:
 
 All routes use Quart (async) + Motor (async MongoDB).
 """
-from __future__ import annotations
 
 import logging
 import os
@@ -147,7 +147,6 @@ async def calendar_events(start: str | None = Query(default=None), end: str | No
 
 
 @calendar_bp.get("/calendar/reminders")
-@calendar_bp.get("/calendar/reminders")
 async def calendar_reminders():
     """Returns scheduled reminder status for all active bonds with court dates."""
     try:
@@ -218,7 +217,6 @@ async def upcoming_events(days: int = Query(default=14)):
 # ── Google Calendar Sync (Feature K) ─────────────────────────────────────────
 
 @calendar_bp.post("/calendar/sync-gcal")
-@calendar_bp.post("/calendar/sync-gcal")
 async def calendar_sync_gcal(request: Request):
     """
     Sync upcoming court dates to Google Calendar (admin@shamrockbailbonds.biz).
@@ -237,7 +235,7 @@ async def calendar_sync_gcal(request: Request):
     calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "admin@shamrockbailbonds.biz")
 
     if not creds_path or not os.path.exists(creds_path):
-        return {
+        return JSONResponse(status_code=501, content={
             "success": False,
             "error": "Google Calendar not configured",
             "code": "GCAL_NOT_CONFIGURED",
@@ -250,7 +248,7 @@ async def calendar_sync_gcal(request: Request):
                 "6. Set GOOGLE_CALENDAR_ID=admin@shamrockbailbonds.biz in .env",
             ],
             "docs": "docs/GCAL_SYNC_SETUP.md",
-        }, 501
+        })
 
     try:
         from google.oauth2 import service_account
@@ -351,10 +349,10 @@ async def calendar_sync_gcal(request: Request):
         }
 
     except ImportError:
-        return {
+        return JSONResponse(status_code=501, content={
             "success": False,
             "error": "google-auth package not installed. Run: pip install google-auth google-api-python-client",
-        }, 501
+        })
     except Exception as e:
         logger.exception("[sync-gcal] Error: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

@@ -1,5 +1,5 @@
-"""Stats Router — FastAPI port of api/stats.py (13 endpoints)"""
 from __future__ import annotations
+"""Stats Router — FastAPI port of api/stats.py (13 endpoints)"""
 import csv, io, re as re_mod
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query

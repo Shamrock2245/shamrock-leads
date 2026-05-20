@@ -1,3 +1,4 @@
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Query, Request
 """
 ShamrockLeads — Bond Lifecycle API Blueprint
@@ -43,7 +44,7 @@ async def trigger_phase_1(request: Request):
     try:
         signnow_service = _get_signnow_service()
         result = signnow_service.handle_send_phase_1(form_data, signer_email, signer_name)
-        return result, 200
+        return JSONResponse(status_code=200, content=result)
     except Exception as e:
         logger.error(f"Error in Phase 1 trigger: {str(e)}")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -76,7 +77,7 @@ async def trigger_phase_2(request: Request):
             form_data, signer_email, signer_name,
             poa_number, agent_name, agent_license, surety_id
         )
-        return result, 200
+        return JSONResponse(status_code=200, content=result)
     except ValueError as ve:
         return JSONResponse({'error': str(ve)}, status_code=400)
     except Exception as e:
@@ -97,7 +98,7 @@ async def signnow_completion_webhook(request: Request):
     # 4. Update case status in DB
     # 5. Send Slack alert
 
-    return {'status': 'received'}, 200
+    return JSONResponse(status_code=200, content={'status': 'received'})
 
 
 @bond_lifecycle_bp.post("/court-email/process")
@@ -118,11 +119,11 @@ async def process_court_email(request: Request):
         calendar_service = _get_calendar_service()
         event = calendar_service.create_event(processed_data)
 
-        return {
+        return JSONResponse(status_code=200, content={
             'status': 'success',
             'processed_data': processed_data,
             'event_created': event is not None
-        }, 200
+        })
     except Exception as e:
         logger.error(f"Error processing court email: {str(e)}")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -145,13 +146,13 @@ async def process_gmail_now():
         db = sync_client[db_name] if sync_client else None
         scheduler = CourtEmailScheduler(db=db)
         result = scheduler.process_all()
-        return {
+        return JSONResponse(status_code=200, content={
             'status': 'success',
             'emails_processed': result.get('processed', 0),
             'events_created': result.get('calendar_events_created', 0),
             'messages_sent': result.get('messages_sent', 0),
             'errors': result.get('errors', []),
-        }, 200
+        })
     except Exception as e:
         logger.error(f"Gmail processing failed: {e}")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -176,11 +177,11 @@ async def get_error_log(request: Request):
             level=level,
             limit=min(limit, 200),
         )
-        return {
+        return JSONResponse(status_code=200, content={
             'status': 'success',
             'count': len(errors),
             'errors': errors,
-        }, 200
+        })
     except Exception as e:
         logger.error(f"Error log query failed: {e}")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -193,7 +194,7 @@ async def get_error_stats():
         from dashboard.services.error_tracker import ErrorTracker
         tracker = ErrorTracker()
         stats = tracker.get_error_stats()
-        return {'status': 'success', 'stats': stats}, 200
+        return JSONResponse(status_code=200, content={'status': 'success', 'stats': stats})
     except Exception as e:
         logger.error(f"Error stats query failed: {e}")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -202,7 +203,7 @@ async def get_error_stats():
 
 # ── Lifecycle Notes ───────────────────────────────────────────────────────────
 
-@bond_lifecycle_bp.post("/lifecycle/notes/<booking_number>")
+@bond_lifecycle_bp.post("/lifecycle/notes/{booking_number}")
 async def add_lifecycle_note(request: Request, booking_number: str):
     """
     POST /api/bond-lifecycle/lifecycle/notes/<booking_number>

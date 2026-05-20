@@ -75,7 +75,6 @@ async def api_fta_open(level: str = Query(default=""), limit: int = Query(defaul
 # POST /api/fta/scan
 # ─────────────────────────────────────────────────────────────────────────────
 @fta_bp.post("/fta/scan")
-@fta_bp.post("/fta/scan")
 async def api_fta_scan():
     """Trigger an immediate FTA scan."""
     try:
@@ -95,7 +94,7 @@ async def api_fta_scan():
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/fta/<booking_number>/resolve
 # ─────────────────────────────────────────────────────────────────────────────
-@fta_bp.post("/fta/<booking_number>/resolve")
+@fta_bp.post("/fta/{booking_number}/resolve")
 async def api_fta_resolve(request: Request, booking_number: str):
     """Resolve an FTA alert."""
     try:
@@ -126,7 +125,7 @@ async def api_fta_resolve(request: Request, booking_number: str):
 # ───────────────────────────────────────────────────────────────────────────────
 # POST /api/fta/<booking_number>/surrender
 # ───────────────────────────────────────────────────────────────────────────────
-@fta_bp.post("/fta/<booking_number>/surrender")
+@fta_bp.post("/fta/{booking_number}/surrender")
 async def api_fta_initiate_surrender(request: Request, booking_number: str):
     """Initiate the Level 3 FTA surrender workflow."""
     try:

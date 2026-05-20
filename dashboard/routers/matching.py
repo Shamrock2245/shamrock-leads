@@ -24,7 +24,7 @@ def _get_engine() -> MatchingEngine:
 # POST /api/match/intake/<intake_id>
 # Run the matching engine on a single intake record.
 # ─────────────────────────────────────────────────────────────────────────────
-@matching_bp.post("/match/intake/<intake_id>")
+@matching_bp.post("/match/intake/{intake_id}")
 async def match_intake(intake_id: str):
     """
     Run the matching engine on a single intake record.
@@ -52,7 +52,7 @@ async def match_intake(intake_id: str):
 # Manually confirm a match between an intake and an arrest record.
 # Body: { "booking_number": "...", "county": "...", "agent": "..." }
 # ─────────────────────────────────────────────────────────────────────────────
-@matching_bp.post("/match/intake/<intake_id>/confirm")
+@matching_bp.post("/match/intake/{intake_id}/confirm")
 async def confirm_match(request: Request, intake_id: str):
     """
     Manually confirm a match between an intake record and an arrest record.
@@ -109,7 +109,7 @@ async def batch_match(request: Request):
 # GET /api/match/intake/<intake_id>
 # Get the current match status for an intake record.
 # ─────────────────────────────────────────────────────────────────────────────
-@matching_bp.get("/match/intake/<intake_id>")
+@matching_bp.get("/match/intake/{intake_id}")
 async def get_match_status(intake_id: str):
     """Return the current match status for an intake record."""
     try:

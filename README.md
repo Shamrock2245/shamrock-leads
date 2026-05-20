@@ -77,7 +77,7 @@ ShamrockLeads is the **core intelligence engine** for [Shamrock Bail Bonds](http
          │
          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│               INTELLIGENCE DASHBOARD (Quart, port 5050)              │
+│              INTELLIGENCE DASHBOARD (FastAPI, port 5050)             │
 │                                                                      │
 │  15 Tabs:                                                            │
 │  📊 Command Center    │ 🔍 Lead Explorer     │ 👤 Defendants         │
@@ -217,7 +217,7 @@ shamrock-leads/
 │   ├── sheets_writer.py       # Google Sheets writer (legacy)
 │   └── slack_notifier.py      # Real-time Slack alerts
 ├── dashboard/
-│   ├── app.py                 # Quart async server (port 5050)
+│   ├── main.py                # FastAPI async server (port 5050)
 │   ├── extensions.py          # MongoDB connection pool (motor)
 │   ├── index.html             # 15-tab dashboard UI
 │   ├── styles.css             # Core CSS (~2,700 lines)
@@ -260,7 +260,7 @@ shamrock-leads/
 | **Database** | MongoDB Atlas (motor) | Primary async storage — `ShamrockBailDB` |
 | **Legacy DB** | Google Sheets (gspread) | Optional fallback writer |
 | **Alerts** | Slack SDK | Webhook-based real-time notifications (12+ channels) |
-| **Dashboard** | Quart (async Flask) | 15-tab intelligence dashboard |
+| **Dashboard** | FastAPI + Uvicorn | 15-tab intelligence dashboard |
 | **Frontend** | Vanilla JS + CSS | ~30,800 lines, 42 modules, premium dark-theme design |
 | **iMessage** | BlueBubbles API | Office iMac via ngrok permanent tunnel |
 | **AI** | OpenAI GPT-4o | Lead enrichment, auto-reply agent (Shannon) |

@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — BlueBubbles Scheduled Message Engine
@@ -44,7 +45,6 @@ Endpoints
   DELETE /api/bb-schedule/<id>               — Cancel a scheduled message
   POST   /api/bb-schedule/send-now           — Send a scheduled message immediately
 """
-from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -379,7 +379,7 @@ async def api_schedule_payment_reminders(request: Request):
             indemnitor_name=indemnitor_name,
             overdue=overdue,
         )
-        return {"success": True, **result}, 201
+        return JSONResponse(status_code=201, content={"success": True, **result})
     except Exception as e:
         logger.error("Payment reminder scheduling error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -552,7 +552,6 @@ async def api_pending_scheduled(limit: int = Query(default=50), booking_number: 
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@bb_schedule_bp.post("/bb-schedule/process")
 @bb_schedule_bp.post("/bb-schedule/process")
 async def api_process_scheduled():
     """Process VPS-side scheduled messages that are due. Called by cron."""

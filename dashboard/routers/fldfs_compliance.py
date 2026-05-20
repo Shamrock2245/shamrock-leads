@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — FLDFS / DOI Compliance Reports API
 =====================================================
@@ -13,7 +14,6 @@ Endpoints:
 Query params: ?month=YYYY-MM  (defaults to current month)
               ?surety=osi|palmetto  (optional filter)
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -226,7 +226,6 @@ async def monthly_summary(month: str | None = Query(default=None), surety: str =
 # AGENT 1099 — Commission breakdown per writing agent
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/agent-1099")
-@fldfs_bp.get("/compliance/agent-1099")
 async def agent_1099(month: str | None = Query(default=None), yearly: str = Query(default="")):
     """Per-agent commission data for 1099 reporting."""
     try:
@@ -294,7 +293,6 @@ async def agent_1099(month: str | None = Query(default=None), yearly: str = Quer
 # ─────────────────────────────────────────────────────────────────────────────
 # POA UTILIZATION — Usage rates, velocity, depletion forecast
 # ─────────────────────────────────────────────────────────────────────────────
-@fldfs_bp.get("/compliance/poa-utilization")
 @fldfs_bp.get("/compliance/poa-utilization")
 async def poa_utilization(month: str | None = Query(default=None)):
     """POA inventory utilization rates and depletion forecasting."""
@@ -368,7 +366,6 @@ async def poa_utilization(month: str | None = Query(default=None)):
 # FORFEITURE LOG — Estreature compliance tracking
 # ─────────────────────────────────────────────────────────────────────────────
 @fldfs_bp.get("/compliance/forfeiture-log")
-@fldfs_bp.get("/compliance/forfeiture-log")
 async def forfeiture_log(month: str | None = Query(default=None)):
     """Forfeiture/estreature compliance log with timelines."""
     try:
@@ -434,7 +431,6 @@ async def forfeiture_log(month: str | None = Query(default=None)):
 # ─────────────────────────────────────────────────────────────────────────────
 # FULL FILING — Combined package for DOI submission
 # ─────────────────────────────────────────────────────────────────────────────
-@fldfs_bp.get("/compliance/full-filing")
 @fldfs_bp.get("/compliance/full-filing")
 async def full_filing(request: Request):
     """Combined compliance package — all reports in one response."""

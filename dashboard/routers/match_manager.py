@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Match Manager API Blueprint
@@ -10,7 +11,6 @@ Endpoints:
   PATCH  /api/bonds/<booking>/assign-indemnitor — Assign indemnitor to existing bond
   GET    /api/match-manager/search  — Search defendants, bonds, indemnitors
 """
-from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -262,7 +262,7 @@ async def api_bonds_unmatched():
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/bonds/<booking>/assign-poa — Quick POA assignment
 # ─────────────────────────────────────────────────────────────────────────────
-@match_manager_bp.patch("/bonds/<booking_number>/assign-poa")
+@match_manager_bp.patch("/bonds/{booking_number}/assign-poa")
 async def api_assign_poa(request: Request, booking_number: str):
     """Quick-assign a POA number to an existing bond."""
     data = await request.json() or {}
@@ -321,7 +321,7 @@ async def api_assign_poa(request: Request, booking_number: str):
 # ─────────────────────────────────────────────────────────────────────────────
 #  PATCH /api/bonds/<booking>/assign-indemnitor — Quick indemnitor assignment
 # ─────────────────────────────────────────────────────────────────────────────
-@match_manager_bp.patch("/bonds/<booking_number>/assign-indemnitor")
+@match_manager_bp.patch("/bonds/{booking_number}/assign-indemnitor")
 async def api_assign_indemnitor(request: Request, booking_number: str):
     """Quick-assign indemnitor info to an existing bond."""
     data = await request.json() or {}
@@ -378,7 +378,7 @@ async def api_match_search(q: str = Query(default="")):
     """Search defendants, bonds, and arrest records for matching."""
     q = q.strip()
     if not q or len(q) < 2:
-        return {"results": []}, 200
+        return JSONResponse(status_code=200, content={"results": []})
     
     try:
         results = []
@@ -432,4 +432,3 @@ async def api_match_search(q: str = Query(default="")):
     except Exception as exc:
         logger.exception("api_match_search error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-

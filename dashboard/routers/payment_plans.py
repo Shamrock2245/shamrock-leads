@@ -76,7 +76,6 @@ async def premium_calculator(bond_amount: int = Query(default=0), surety_id: str
 # ── Payment Plans CRUD ──────────────────────────────────────────────────────────
 
 @payment_plans_bp.get("/payments/plans")
-@payment_plans_bp.get("/payments/plans")
 async def list_plans(status: str = Query(default='')):
     """List all payment plans with optional status filter."""
     plans_col = get_collection("payment_plans")
@@ -94,8 +93,7 @@ async def list_plans(status: str = Query(default='')):
     return {"plans": results, "total": len(results)}
 
 
-@payment_plans_bp.get("/payments/plans/<booking_number>")
-@payment_plans_bp.get("/payments/plans/<booking_number>")
+@payment_plans_bp.get("/payments/plans/{booking_number}")
 async def get_plan(booking_number):
     """Get payment plan for a specific booking."""
     plans_col = get_collection("payment_plans")
@@ -195,10 +193,10 @@ async def create_plan(request: Request):
         "down_payment": down_payment,
     })
 
-    return {"success": True, "plan": plan_doc}, 201
+    return JSONResponse(status_code=201, content={"success": True, "plan": plan_doc})
 
 
-@payment_plans_bp.post("/payments/plans/<plan_id>/pay")
+@payment_plans_bp.post("/payments/plans/{plan_id}/pay")
 async def record_payment(request: Request, plan_id):
     """Record a payment against an existing plan."""
     from dashboard.routers.events import publish_event
@@ -312,7 +310,6 @@ async def get_delinquent(days: str = Query(default='30')):
 
 # ── Revenue Summary ─────────────────────────────────────────────────────────────
 
-@payment_plans_bp.get("/payments/summary")
 @payment_plans_bp.get("/payments/summary")
 async def revenue_summary():
     """Revenue summary: total collected, outstanding, by period."""

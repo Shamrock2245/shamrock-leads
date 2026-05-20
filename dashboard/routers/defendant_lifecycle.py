@@ -198,7 +198,7 @@ async def _sync_to_pipeline(booking_number: str, trigger: str = "auto",
 # ─────────────────────────────────────────────────────────────────────────────
 # GET  /api/defendant-notes/<booking_number>
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.get("/defendant-notes/<booking_number>")
+@lifecycle_bp.get("/defendant-notes/{booking_number}")
 async def get_defendant_notes(booking_number: str):
     doc = await _get_notes_doc(booking_number)
     return doc
@@ -218,7 +218,7 @@ async def get_defendant_notes(booking_number: str):
 #   dnc_reason        — string
 #   agent             — agent name who made the update
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.patch("/defendant-notes/<booking_number>")
+@lifecycle_bp.patch("/defendant-notes/{booking_number}")
 async def patch_defendant_notes(request: Request, booking_number: str):
     col = get_collection("defendant_notes")
     body = await request.json() or {}
@@ -249,7 +249,7 @@ async def patch_defendant_notes(request: Request, booking_number: str):
 #   agent     — agent name
 #   contact   — who was contacted (defendant | cosigner name)
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.post("/defendant-contact-log/<booking_number>")
+@lifecycle_bp.post("/defendant-contact-log/{booking_number}")
 async def log_contact(request: Request, booking_number: str):
     col = get_collection("defendant_notes")
     body = await request.json() or {}
@@ -314,8 +314,7 @@ async def bulk_get_notes(booking_numbers: str = Query(default="")):
 # POST  /api/finalize-bond/step1/<booking_number>
 # Step 1: Review — returns a summary for the agent to confirm
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.post("/finalize-bond/step1/<booking_number>")
-@lifecycle_bp.post("/finalize-bond/step1/<booking_number>")
+@lifecycle_bp.post("/finalize-bond/step1/{booking_number}")
 async def finalize_bond_step1(request: Request, booking_number: str):
     arrests = get_collection("arrests")
     notes_col = get_collection("defendant_notes")
@@ -369,7 +368,7 @@ async def finalize_bond_step1(request: Request, booking_number: str):
 #   poa_number     — final POA number
 #   notes          — any final notes
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.post("/finalize-bond/step2/<booking_number>")
+@lifecycle_bp.post("/finalize-bond/step2/{booking_number}")
 async def finalize_bond_step2(request: Request, booking_number: str):
     arrests = get_collection("arrests")
     notes_col = get_collection("defendant_notes")
@@ -473,7 +472,7 @@ async def get_dnb_list():
 #   note    — optional note to attach to the timeline
 #   agent   — agent name
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.post("/defendant-notes/<booking_number>/promote-to-pipeline")
+@lifecycle_bp.post("/defendant-notes/{booking_number}/promote-to-pipeline")
 async def promote_to_pipeline(request: Request, booking_number: str):
     """Explicitly promote a defendant to the outreach (prospective bonds) pipeline."""
     try:
@@ -498,11 +497,11 @@ async def promote_to_pipeline(request: Request, booking_number: str):
         pb_col = get_collection("prospective_bonds")
         existing = await pb_col.find_one({"booking_number": booking_number})
         if existing and existing.get("status") == "active":
-            return {
+            return JSONResponse(status_code=409, content={
                 "success": False,
                 "error": "Already in outreach pipeline",
                 "stage": existing.get("stage", "contacted"),
-            }, 409
+            })
 
         # Determine stage
         if not stage:
@@ -545,10 +544,10 @@ async def promote_to_pipeline(request: Request, booking_number: str):
                 "stage": stage,
             }
         else:
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "error": "Could not promote — check defendant exists in arrests collection",
-            }, 400
+            })
 
     except Exception as exc:
         logger.exception(f"promote_to_pipeline error for {booking_number}")
@@ -559,7 +558,7 @@ async def promote_to_pipeline(request: Request, booking_number: str):
 # GET  /api/defendant-notes/<booking_number>/pipeline-status
 # Quick check: is this defendant tracked in the outreach pipeline?
 # ─────────────────────────────────────────────────────────────────────────────
-@lifecycle_bp.get("/defendant-notes/<booking_number>/pipeline-status")
+@lifecycle_bp.get("/defendant-notes/{booking_number}/pipeline-status")
 async def pipeline_status(booking_number: str):
     """Check if a defendant is in the outreach pipeline."""
     pb_col = get_collection("prospective_bonds")

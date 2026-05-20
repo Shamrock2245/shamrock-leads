@@ -62,8 +62,7 @@ async def recent_events(limit: int = Query(default=50), severity: str | None = Q
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@docket_monitor_bp.get("/events/<event_id>")
-@docket_monitor_bp.get("/events/<event_id>")
+@docket_monitor_bp.get("/events/{event_id}")
 async def event_detail(event_id):
     """Single event detail."""
     try:
@@ -78,7 +77,7 @@ async def event_detail(event_id):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@docket_monitor_bp.get("/bond/<bond_case_id>")
+@docket_monitor_bp.get("/bond/{bond_case_id}")
 async def bond_events(bond_case_id):
     """All docket events for a specific bond."""
     try:
@@ -157,7 +156,7 @@ async def acknowledge_all(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
-@docket_monitor_bp.get("/risk-timeline/<bond_case_id>")
+@docket_monitor_bp.get("/risk-timeline/{bond_case_id}")
 async def risk_timeline(bond_case_id):
     """Get risk adjustment timeline for a bond — shows how docket events shift risk over time."""
     try:

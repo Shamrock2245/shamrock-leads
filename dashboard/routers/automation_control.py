@@ -1,3 +1,4 @@
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Query, Request
 """
 ShamrockLeads — Automation & Service Control API
@@ -116,7 +117,7 @@ async def set_config(request: Request):
 
 
 # ── POST /api/automation/toggle/<key> — Quick on/off ──────────────────────
-@automation_control_bp.post("/automation/toggle/<key>")
+@automation_control_bp.post("/automation/toggle/{key}")
 async def toggle_automation(request: Request, key: str):
     """Toggle a specific service on or off.
 
@@ -128,10 +129,10 @@ async def toggle_automation(request: Request, key: str):
     If no body provided, toggles current state.
     """
     if key not in ALL_SERVICE_KEYS:
-        return {
+        return JSONResponse(status_code=400, content={
             "success": False,
             "error": f"Invalid key: {key}. Valid: {', '.join(sorted(ALL_SERVICE_KEYS))}"
-        }, 400
+        })
 
     try:
         body = await request.json() or {}
@@ -166,7 +167,7 @@ async def toggle_automation(request: Request, key: str):
 
 
 # ── POST /api/automation/trigger/<key> — Manual one-shot run ──────────────
-@automation_control_bp.post("/automation/trigger/<key>")
+@automation_control_bp.post("/automation/trigger/{key}")
 async def trigger_automation(key: str):
     """Manually trigger one immediate cycle of a background service.
 
@@ -181,10 +182,10 @@ async def trigger_automation(key: str):
     Valid keys: all entries in ALL_SERVICE_KEYS
     """
     if key not in ALL_SERVICE_KEYS:
-        return {
+        return JSONResponse(status_code=400, content={
             "success": False,
             "error": f"Invalid key: {key}. Valid: {', '.join(sorted(ALL_SERVICE_KEYS))}"
-        }, 400
+        })
 
     event = TRIGGER_EVENTS.get(key)
     if event is not None:

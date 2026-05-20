@@ -92,7 +92,6 @@ async def api_disposition_rates(state: str | None = Query(default=None)):
 
 @court_intel_bp.get("/api/court-intel/search")
 
-@court_intel_bp.get("/api/court-intel/search")
 async def api_court_intel_search(q: str = Query(default=""), state: str = Query(default=""), disposition: str = Query(default=""), limit: int = Query(default=25)):
     """Search court outcomes by case name, state, or disposition.
     Query params:
@@ -126,11 +125,11 @@ async def api_court_intel_search(q: str = Query(default=""), state: str = Query(
         for r in results:
             r["_id"] = str(r["_id"])
 
-        return {
+        return JSONResponse(status_code=200, content={
             "success": True,
             "count": len(results),
             "results": results,
-        }, 200
+        })
     except Exception as e:
         log.exception("Search error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -138,9 +137,8 @@ async def api_court_intel_search(q: str = Query(default=""), state: str = Query(
 
 # ── Defendant Court History ──────────────────────────────────────────────────
 
-@court_intel_bp.get("/api/court-intel/defendant/<defendant_id>")
+@court_intel_bp.get("/api/court-intel/defendant/{defendant_id}")
 
-@court_intel_bp.get("/api/court-intel/defendant/<defendant_id>")
 async def api_defendant_court_history(defendant_id: str):
     """Get court outcomes linked to a specific defendant."""
     try:
@@ -153,12 +151,12 @@ async def api_defendant_court_history(defendant_id: str):
         for r in results:
             r["_id"] = str(r["_id"])
 
-        return {
+        return JSONResponse(status_code=200, content={
             "success": True,
             "defendant_id": defendant_id,
             "count": len(results),
             "outcomes": results,
-        }, 200
+        })
     except Exception as e:
         log.exception("Defendant history error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -176,7 +174,7 @@ async def api_court_intel_health():
         client = CourtListenerClient(api_token=token if token else None)
         health = client.get_api_health()
         health["token_configured"] = bool(token)
-        return {"success": True, **health}, 200
+        return JSONResponse(status_code=200, content={"success": True, **health})
     except Exception as e:
         log.exception("API health error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -205,12 +203,12 @@ async def api_high_impact_opinions(min_score: int = Query(default=50), limit: in
         for r in results:
             r["_id"] = str(r["_id"])
 
-        return {
+        return JSONResponse(status_code=200, content={
             "success": True,
             "count": len(results),
             "min_score": min_score,
             "results": results,
-        }, 200
+        })
     except Exception as e:
         log.exception("High-impact query error: %s", e)
         return JSONResponse({"error": str(e)}, status_code=500)

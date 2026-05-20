@@ -127,7 +127,6 @@ async def api_accounting_transactions(page: int = Query(default=0), limit: int =
 #  POST /api/accounting/transactions — Record a transaction (cash, check, etc.)
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.post("/accounting/transactions")
-@accounting_bp.post("/accounting/transactions")
 async def api_record_transaction(request: Request):
     """Record a manual transaction (cash, check, wire, etc.)."""
     data = await request.json() or {}
@@ -160,13 +159,13 @@ async def api_record_transaction(request: Request):
     result = await get_collection("transactions").insert_one(txn)
     txn["_id"] = str(result.inserted_id)
     logger.info("[accounting] Transaction recorded: %s — $%.2f (%s)", txn["transaction_id"], amount, txn["method"])
-    return {"success": True, "transaction": txn}, 201
+    return JSONResponse(status_code=201, content={"success": True, "transaction": txn})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PATCH /api/accounting/transactions/<txn_id>/attribute — Link txn to case
 # ═══════════════════════════════════════════════════════════════════════════════
-@accounting_bp.patch("/accounting/transactions/<txn_id>/attribute")
+@accounting_bp.patch("/accounting/transactions/{txn_id}/attribute")
 async def api_attribute_transaction(request: Request, txn_id: str):
     """Attribute a transaction to a specific case/defendant."""
     data = await request.json() or {}
@@ -330,7 +329,6 @@ async def api_premium_split(bond_amount: int = Query(default=0), surety: str = Q
 #  GET /api/accounting/revenue/monthly — Monthly revenue for charts
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/revenue/monthly")
-@accounting_bp.get("/accounting/revenue/monthly")
 async def api_revenue_monthly(months: int = Query(default=12)):
     txns = get_collection("transactions")
     months = int(months)
@@ -350,7 +348,6 @@ async def api_revenue_monthly(months: int = Query(default=12)):
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GET /api/accounting/export/quickbooks — QuickBooks-compatible CSV export
 # ═══════════════════════════════════════════════════════════════════════════════
-@accounting_bp.get("/accounting/export/quickbooks")
 @accounting_bp.get("/accounting/export/quickbooks")
 async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export transactions as QuickBooks-compatible CSV (General Journal format)."""
@@ -421,7 +418,6 @@ async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str
 #  GET /api/accounting/export/csv — Raw transaction export
 # ═══════════════════════════════════════════════════════════════════════════════
 @accounting_bp.get("/accounting/export/csv")
-@accounting_bp.get("/accounting/export/csv")
 async def api_export_csv(date_from: str = Query(default=""), date_to: str = Query(default="")):
     """Export raw transaction data as CSV."""
     txns = get_collection("transactions")
@@ -456,8 +452,7 @@ async def api_export_csv(date_from: str = Query(default=""), date_to: str = Quer
 # ═══════════════════════════════════════════════════════════════════════════════
 #  DELETE /api/accounting/transactions/<txn_id> — Void a transaction
 # ═══════════════════════════════════════════════════════════════════════════════
-@accounting_bp.delete("/accounting/transactions/<txn_id>")
-@accounting_bp.delete("/accounting/transactions/<txn_id>")
+@accounting_bp.delete("/accounting/transactions/{txn_id}")
 async def api_void_transaction(txn_id: str):
     """Void a transaction (soft-delete — marks as voided, doesn't remove)."""
     txns = get_collection("transactions")

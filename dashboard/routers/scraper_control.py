@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Scraper Control API Blueprint
@@ -16,7 +17,6 @@ dashboard container and the scraper engine container (they share MongoDB but
 not in-process state). The scraper engine polls this collection and executes
 the requested runs.
 """
-from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -196,7 +196,7 @@ async def _set_scraper_enabled(request: Request, enabled: bool):
 # ─────────────────────────────────────────────────────────────────────────────
 #  GET /api/scraper/logs/<county>
 # ─────────────────────────────────────────────────────────────────────────────
-@scraper_control_bp.get("/scraper/logs/<county>")
+@scraper_control_bp.get("/scraper/logs/{county}")
 async def api_scraper_logs(county: str, limit: int = Query(default=20)):
     """
     Return recent run log entries for a specific county.
@@ -242,7 +242,6 @@ async def api_scraper_logs(county: str, limit: int = Query(default=20)):
 # ─────────────────────────────────────────────────────────────────────────────
 #  POST /api/scraper/health-check
 # ─────────────────────────────────────────────────────────────────────────────
-@scraper_control_bp.post("/scraper/health-check")
 @scraper_control_bp.post("/scraper/health-check")
 async def api_scraper_health_check(request: Request):
     """

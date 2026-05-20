@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Phase 10: Outreach Sequencing API Blueprint
@@ -10,7 +11,6 @@ Endpoints:
   GET  /api/outreach/sequences                        — List all sequences (paginated)
   POST /api/outreach/reply                            — Handle inbound reply (stop sequence)
 """
-from __future__ import annotations
 import logging
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -26,7 +26,7 @@ def _get_sequencer() -> OutreachSequencer:
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/outreach/start/<booking_number>/<county>
 # ─────────────────────────────────────────────────────────────────────────────
-@outreach_bp.post("/outreach/start/<booking_number>/<county>")
+@outreach_bp.post("/outreach/start/{booking_number}/{county}")
 async def start_sequence(booking_number: str, county: str):
     """Start an outreach sequence for a specific arrest record."""
     try:
@@ -52,7 +52,7 @@ async def start_sequence(booking_number: str, county: str):
 # POST /api/outreach/stop/<booking_number>/<county>
 # Body (optional): { "reason": "intake_submitted" }
 # ─────────────────────────────────────────────────────────────────────────────
-@outreach_bp.post("/outreach/stop/<booking_number>/<county>")
+@outreach_bp.post("/outreach/stop/{booking_number}/{county}")
 async def stop_sequence(request: Request, booking_number: str, county: str):
     """Stop an active outreach sequence and cancel scheduled BB messages."""
     try:
@@ -75,7 +75,7 @@ async def stop_sequence(request: Request, booking_number: str, county: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/outreach/status/<booking_number>/<county>
 # ─────────────────────────────────────────────────────────────────────────────
-@outreach_bp.get("/outreach/status/<booking_number>/<county>")
+@outreach_bp.get("/outreach/status/{booking_number}/{county}")
 async def get_sequence_status(booking_number: str, county: str):
     """Return the current outreach sequence status for an arrest record."""
     try:
@@ -179,7 +179,6 @@ async def list_sequences(status: str = Query(default=""), county: str = Query(de
 # Called by the BB webhook receiver when an inbound iMessage arrives.
 # Body: { "phone": "+12395551234", "message": "...", "chat_guid": "..." }
 # ─────────────────────────────────────────────────────────────────────────────
-@outreach_bp.post("/outreach/reply")
 @outreach_bp.post("/outreach/reply")
 async def handle_reply(request: Request):
     """

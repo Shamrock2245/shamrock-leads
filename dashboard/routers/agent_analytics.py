@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """ShamrockLeads — Agent Performance Analytics API
 ==================================================
@@ -8,7 +9,6 @@ Endpoints:
   GET /api/analytics/agent/:agent_id     — Individual agent deep-dive
   GET /api/analytics/scraper-accuracy    — Scraper fleet accuracy metrics
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
@@ -350,7 +350,6 @@ async def agent_performance(days: str = Query(default="30")):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
-@agent_analytics_bp.get("/analytics/scraper-accuracy")
 @agent_analytics_bp.get("/analytics/scraper-accuracy")
 async def scraper_accuracy(days: str = Query(default="7")):
     """Per-county scraper accuracy and performance metrics."""

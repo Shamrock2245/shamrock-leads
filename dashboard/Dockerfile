@@ -1,11 +1,11 @@
 # ============================================
-# ShamrockLeads — Dashboard (Quart + Hypercorn)
+# ShamrockLeads — Dashboard (FastAPI + Uvicorn)
 # Lightweight image — no Chromium/xvfb needed
 # ============================================
 FROM python:3.12-slim
 
 LABEL maintainer="Shamrock Active Software"
-LABEL description="ShamrockLeads Dashboard API (Quart/Hypercorn)"
+LABEL description="ShamrockLeads Dashboard API (FastAPI/Uvicorn)"
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,5 +29,5 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:5050/health || exit 1
 
-# Launch Quart app factory via Hypercorn ASGI server
-CMD ["hypercorn", "dashboard:create_app()", "--bind", "0.0.0.0:5050", "--access-logfile", "-"]
+# Launch FastAPI app via Uvicorn ASGI server (workers=1 is required for in-process asyncio.Event triggers)
+CMD ["uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "5050", "--access-log", "--log-level", "info", "--workers", "1"]

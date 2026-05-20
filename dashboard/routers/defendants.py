@@ -1,5 +1,5 @@
-"""Defendants Router — FastAPI port of api/defendants.py (9 endpoints)"""
 from __future__ import annotations
+"""Defendants Router — FastAPI port of api/defendants.py (9 endpoints)"""
 import logging
 from datetime import datetime
 from fastapi import APIRouter, Query, Request

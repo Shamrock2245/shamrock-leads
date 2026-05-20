@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter
 """
 ShamrockLeads — Agent Brain (iMessage Conversation Engine)
@@ -16,7 +17,7 @@ Borrows conversational patterns from:
   - Shannon (ElevenLabs_AfterHoursAgent.js) — empathetic intake, data extraction
   - Manus Brain (Manus_Brain.js) — system prompt, OpenAI routing, intent classification
 """
-from __future__ import annotations
+
 
 import json
 import logging

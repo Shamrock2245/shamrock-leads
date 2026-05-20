@@ -1,3 +1,4 @@
+from __future__ import annotations
 from fastapi import APIRouter
 """
 ShamrockLeads — BlueBubbles Private API Client
@@ -13,7 +14,6 @@ Requires:
   - Private API helper bundle installed (SIP disabled)
   - macOS 13+ (Ventura) for unsend/edit features
 """
-from __future__ import annotations
 
 import asyncio
 import logging

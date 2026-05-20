@@ -1,5 +1,5 @@
-"""Leads Router — FastAPI port of api/leads.py (legacy leads endpoints)"""
 from __future__ import annotations
+"""Leads Router — FastAPI port of api/leads.py (legacy leads endpoints)"""
 import csv, io
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query

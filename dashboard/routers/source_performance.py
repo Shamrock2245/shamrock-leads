@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Source Performance API (Alpha Engine)
@@ -14,7 +15,6 @@ Endpoints:
   POST /api/alpha/record-conversion     — Record a bond conversion feedback signal
   GET  /api/alpha/trend/<county>        — Score history for trend charting
 """
-from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -53,8 +53,7 @@ async def leaderboard(limit: str = Query(default="50")):
 
 
 # ── County Deep-Dive ─────────────────────────────────────────────────────
-@source_performance_bp.get("/alpha/county/<county>")
-@source_performance_bp.get("/alpha/county/<county>")
+@source_performance_bp.get("/alpha/county/{county}")
 async def county_detail(county: str):
     """Detailed score breakdown for a single county."""
     try:
@@ -123,7 +122,6 @@ async def recommendations(limit: str = Query(default="20")):
 
 # ── System Stats ─────────────────────────────────────────────────────────
 @source_performance_bp.get("/alpha/stats")
-@source_performance_bp.get("/alpha/stats")
 async def stats():
     """High-level Alpha Engine KPIs for the dashboard header."""
     try:
@@ -175,10 +173,10 @@ async def record_conversion(request: Request):
         channel = body.get("channel", "scraper")
 
         if not county or not booking_number:
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "error": "county and booking_number are required",
-            }, 400
+            })
 
         tracker = _tracker()
         await tracker.record_conversion(
@@ -195,7 +193,7 @@ async def record_conversion(request: Request):
 
 
 # ── Score Trend History ──────────────────────────────────────────────────
-@source_performance_bp.get("/alpha/trend/<county>")
+@source_performance_bp.get("/alpha/trend/{county}")
 async def trend(county: str):
     """
     Score history for a county (from conversion_events + source_performance

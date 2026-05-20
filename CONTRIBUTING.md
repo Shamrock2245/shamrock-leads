@@ -33,8 +33,9 @@ python main.py lee          # Single county
 python main.py --dry-run    # Parse without writing
 
 # Run dashboard locally
-cd dashboard
-hypercorn "dashboard:create_app()" --bind 0.0.0.0:5050 --access-logfile -
+python3 dashboard/run.py
+# OR
+uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --access-log --workers 1
 # → http://localhost:5050
 ```
 
@@ -106,19 +107,20 @@ Quick steps:
 
 ## Adding a Dashboard API Endpoint
 
-1. Create or edit `dashboard/api/{module}.py`
-2. Use Quart Blueprint pattern:
+1. Create or edit `dashboard/routers/{module}.py`
+2. Use FastAPI APIRouter pattern:
    ```python
-   from quart import Blueprint, jsonify
-   bp = Blueprint('module_name', __name__)
+   from fastapi import APIRouter, Depends
+   from dashboard.deps import get_db
    
-   @bp.route('/api/module/endpoint', methods=['GET'])
-   async def get_something():
-       db = current_app.config['db']
+   router = APIRouter(prefix="/api/module", tags=["module"])
+   
+   @router.get("/endpoint")
+   async def get_something(db = Depends(get_db)):
        # ... async MongoDB query via motor
-       return jsonify(result)
+       return result
    ```
-3. Register blueprint in `dashboard/__init__.py`
+3. Register router in `dashboard/main.py`
 4. Add frontend JS in corresponding `sl-*.js` module
 
 ---

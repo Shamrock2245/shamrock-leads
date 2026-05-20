@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Indemnitors Router — FastAPI port of the indemnitor management routes in app.py.
 Provides all endpoints needed by sl-indemnitor.js:
@@ -16,7 +17,6 @@ Provides all endpoints needed by sl-indemnitor.js:
   POST /api/indemnitors/{booking_number}/remove       — remove a cosigner
   PATCH /api/prospective-bonds/{booking_number}/indemnitor — update single indemnitor
 """
-from __future__ import annotations
 
 import os
 import uuid

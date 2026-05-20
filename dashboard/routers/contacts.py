@@ -29,7 +29,7 @@ async def discover_contacts(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@contacts_bp.get("/contacts/<booking_number>")
+@contacts_bp.get("/contacts/{booking_number}")
 async def get_contacts(booking_number):
     """Get discovered contacts for a defendant."""
     try:

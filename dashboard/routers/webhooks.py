@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 """
 ShamrockLeads — Webhooks API Blueprint
@@ -26,7 +27,6 @@ Data Flow (SignNow document.complete):
   11. Fire Telegram staff alert.
   12. Escalate if packet references unknown bond case (policy Rule 5 / Escalation).
 """
-from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -129,7 +129,7 @@ async def signnow_webhook(request: Request):
 
     if event_type != 'document.complete':
         # Log non-complete events (e.g. document.update, invite.complete) but take no action
-        return {"success": True, "action": "logged_only"}, 200
+        return JSONResponse(status_code=200, content={"success": True, "action": "logged_only"})
 
     # ── Extract document ID ───────────────────────────────────────────────────
     doc_id = (
@@ -169,7 +169,7 @@ async def signnow_webhook(request: Request):
             f"This may indicate a forged webhook or a packet sent outside the dashboard."
         )
         # Still return 200 so SignNow doesn't retry indefinitely
-        return {"success": True, "warning": "packet_not_found"}, 200
+        return JSONResponse(status_code=200, content={"success": True, "warning": "packet_not_found"})
 
     packet_id = packet.get("packet_id", "")
     intake_id = packet.get("intake_id", "")
@@ -368,7 +368,7 @@ async def signnow_webhook(request: Request):
     except Exception as tg_exc:
         logger.warning("[signnow_webhook] Telegram alert failed: %s", tg_exc)
 
-    return {"success": True}, 200
+    return JSONResponse(status_code=200, content={"success": True})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -576,14 +576,13 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         "timestamp": now.isoformat(),
     })
 
-    return {"success": True}, 200
+    return JSONResponse(status_code=200, content={"success": True})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /webhooks/wix-intake
 # ─────────────────────────────────────────────────────────────────────────────
 
-@webhooks_bp.post("/webhooks/wix-intake")
 @webhooks_bp.post("/webhooks/wix-intake")
 async def wix_intake_webhook(request: Request, api_key: str = Query(default="")):
     """
@@ -619,8 +618,7 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     try:
         intake_id, intake_doc = await _normalize_intake(data, source="wix_webhook")
         logger.info("[wix_intake_webhook] Intake %s created from Wix webhook", intake_id)
-        return {"success": True, "intake_id": intake_id}, 201
+        return JSONResponse(status_code=201, content={"success": True, "intake_id": intake_id})
     except Exception as exc:
         logger.exception("[wix_intake_webhook] Intake normalization failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-

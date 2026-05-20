@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 ShamrockLeads — Server-Sent Events (SSE) Router
 =================================================
@@ -12,7 +13,6 @@ Published by other routers via:
 
 Uses sse-starlette for proper ASGI-native SSE (no Quart streaming Response).
 """
-from __future__ import annotations
 
 import asyncio
 import json

@@ -10,7 +10,7 @@
 
 - **49 county jail scrapers** — Python scrapers covering 49 of 67 Florida counties, running every 10–120 minutes on a Hetzner VPS
 - **Lead scoring engine** — 0–100 scoring on every arrest record before a human sees it
-- **15-tab intelligence dashboard** — Quart/async Python API + ~21,000-line Vanilla JS frontend
+- **15-tab intelligence dashboard** — FastAPI/async Python API + ~21,000-line Vanilla JS frontend
 - **Full bond lifecycle** — From arrest scrape to signed paperwork to payment collection
 - **iMessage automation** — BlueBubbles bridge for human-feel outreach via the office iMac
 
@@ -69,7 +69,7 @@ The dashboard is a **premium, Fortune 50-level intelligence platform**. All UI w
 | Language | Python 3.12 |
 | Scheduling | APScheduler |
 | Database | MongoDB Atlas (motor, async) |
-| Dashboard API | Quart (async Flask) |
+| Dashboard API | FastAPI |
 | Frontend | Vanilla JS + CSS |
 | iMessage | BlueBubbles API |
 | AI | OpenAI GPT-4o |

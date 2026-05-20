@@ -68,7 +68,7 @@ We are building a platform that will surpass **Captira** and **Bail Books** — 
 | **Scraping** | Python 3.12, DrissionPage, Patchright, curl_cffi | County jail roster ingestion |
 | **Scheduling** | APScheduler | Per-county cron with staggered intervals |
 | **Database** | MongoDB Atlas (motor, async) | Primary data store for all entities |
-| **Dashboard** | Quart (async Flask) on port 5050 | 15-tab intelligence dashboard |
+| **Dashboard** | FastAPI + Uvicorn on port 5050 | 15-tab intelligence dashboard |
 | **Frontend** | Vanilla JS + CSS (~25,700 lines, 32 modules) | Premium dark-theme UI |
 | **iMessage** | BlueBubbles API (office iMac bridge) | Human-feel outreach automation |
 | **AI** | OpenAI GPT-4o | Auto-reply agent, lead enrichment |
