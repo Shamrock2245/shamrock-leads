@@ -193,7 +193,7 @@ class CourtEmailScheduler:
 
     def _is_duplicate(self, message_id: str) -> bool:
         """Check if a Gmail message ID has already been processed."""
-        if not self._log_collection:
+        if self._log_collection is None:
             return False
         return self._log_collection.find_one({"message_id": message_id}) is not None
 
@@ -201,7 +201,7 @@ class CourtEmailScheduler:
         self, message_id: str, raw_email: Dict, parsed: Dict
     ):
         """Write processed email to court_email_log collection."""
-        if not self._log_collection:
+        if self._log_collection is None:
             return
 
         try:
@@ -224,7 +224,7 @@ class CourtEmailScheduler:
         Look up phone numbers for BOTH the defendant and indemnitor.
         Returns deduplicated list of phone numbers to notify.
         """
-        if not self._db:
+        if self._db is None:
             return []
 
         phones = set()
@@ -384,7 +384,7 @@ class CourtEmailScheduler:
         Returns:
             Number of bonds exonerated (0 if none found).
         """
-        if not self._db:
+        if self._db is None:
             logger.warning("[_auto_exonerate_bond] No DB — cannot exonerate")
             return 0
 

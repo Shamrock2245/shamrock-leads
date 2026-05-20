@@ -151,7 +151,7 @@ class ErrorTracker:
 
     def get_recent_errors(self, hours: int = 24, limit: int = 100, source: Optional[str] = None, level: Optional[str] = None) -> List[Dict]:
         """Get recent errors from MongoDB."""
-        if not self._collection:
+        if self._collection is None:
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -182,7 +182,7 @@ class ErrorTracker:
         Aggregate error counts by source, level, and time window.
         Returns stats for the last 24h and 7d.
         """
-        if not self._collection:
+        if self._collection is None:
             return {"24h": {}, "7d": {}, "total": 0}
 
         now = datetime.now(timezone.utc)
@@ -208,7 +208,7 @@ class ErrorTracker:
 
     def get_error_detail(self, error_id: str) -> Optional[Dict]:
         """Get full error details including traceback."""
-        if not self._collection:
+        if self._collection is None:
             return None
         from bson import ObjectId
         try:
@@ -223,7 +223,7 @@ class ErrorTracker:
 
     def _write_to_mongo(self, record: Dict) -> Optional[str]:
         """Write an error record to MongoDB."""
-        if not self._collection:
+        if self._collection is None:
             return None
         try:
             result = self._collection.insert_one(record)
