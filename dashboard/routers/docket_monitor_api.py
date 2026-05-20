@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from dashboard.extensions import get_db
 
 log = logging.getLogger("shamrock.api.docket_monitor")
-docket_monitor_bp = APIRouter(prefix="/api", tags=["docket_monitor"])
+docket_monitor_bp = APIRouter(prefix="/api/docket-monitor", tags=["docket_monitor"])
 def _get_monitor():
     """Lazy-init the DocketMonitor service."""
     import os
