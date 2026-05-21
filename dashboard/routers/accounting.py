@@ -156,6 +156,24 @@ async def api_record_transaction(request: Request):
 
     result = await get_collection("transactions").insert_one(txn)
     txn["_id"] = str(result.inserted_id)
+    
+    # Mirror to financial_ledger if a booking is attached
+    if txn.get("booking_number"):
+        try:
+            from dashboard.services.ledger_service import LedgerService
+            await LedgerService.add_entry({
+                "booking_number": txn["booking_number"],
+                "type": "payment" if txn["type"] == "premium" else "fee",
+                "amount": -amount if txn["type"] in ("premium", "payment_plan") else amount,
+                "category": "premium" if txn["type"] == "premium" else "other",
+                "timestamp": txn["timestamp"],
+                "actor": txn["agent_name"],
+                "stripe_swipe_ref": txn["transaction_id"],
+                "notes": txn["description"] or f"Manual {txn['method']} payment"
+            })
+        except Exception as e:
+            logger.warning(f"Failed to mirror manual txn to ledger: {e}")
+
     logger.info("[accounting] Transaction recorded: %s — $%.2f (%s)", txn["transaction_id"], amount, txn["method"])
     return JSONResponse(status_code=201, content={"success": True, "transaction": txn})
 
@@ -177,6 +195,21 @@ async def api_attribute_transaction(request: Request, txn_id: str):
     result = await txns.update_one({"transaction_id": txn_id}, update)
     if result.matched_count == 0:
         return JSONResponse({"error": "Transaction not found"}, status_code=404)
+        
+    # Mirror attribution to financial_ledger for the unified timeline modal
+    if "booking_number" in data:
+        try:
+            from dashboard.extensions import get_db
+            db = get_db()
+            txn = await txns.find_one({"transaction_id": txn_id})
+            if txn and txn.get("reference_id"):
+                await db.financial_ledger.update_one(
+                    {"stripe_swipe_ref": txn["reference_id"]},
+                    {"$set": {"booking_number": data["booking_number"]}}
+                )
+        except Exception as e:
+            logger.warning(f"Failed to mirror transaction attribution to ledger: {e}")
+
     return {"success": True}
 
 
@@ -191,13 +224,13 @@ async def api_import_swipesimple(request: Request):
     if not csv_file:
         # Try raw body as CSV text
         body_bytes = await request.body()
-        raw = body_bytes.decode("utf-8", errors="replace")
+        raw = body_bytes.decode("utf-8-sig", errors="replace")
         if not raw.strip():
             return JSONResponse({"error": "No CSV file provided"}, status_code=400)
     else:
         if hasattr(csv_file, "read"):
             file_bytes = await csv_file.read()
-            raw = file_bytes.decode("utf-8", errors="replace")
+            raw = file_bytes.decode("utf-8-sig", errors="replace")
         else:
             raw = str(csv_file)
 
@@ -213,9 +246,12 @@ async def api_import_swipesimple(request: Request):
 
     for i, row in enumerate(reader):
         try:
+            # clean keys
+            row = {k.strip() if isinstance(k, str) else k: v for k, v in row.items()}
             # SwipeSimple CSV columns (flexible matching)
             amount_str = row.get("Amount") or row.get("amount") or row.get("Total") or "0"
-            amount = abs(float(amount_str.replace("$", "").replace(",", "").strip()))
+            amount_str = amount_str.replace("$", "").replace(",", "").strip()
+            amount = abs(float(amount_str)) if amount_str else 0.0
             if amount <= 0:
                 skipped += 1
                 continue
@@ -272,6 +308,23 @@ async def api_import_swipesimple(request: Request):
                 "created_at": now.isoformat(),
             }
             await txns.insert_one(txn_doc)
+            
+            # Mirror to financial_ledger for the unified timeline modal
+            try:
+                from dashboard.services.ledger_service import LedgerService
+                await LedgerService.add_entry({
+                    "booking_number": booking_number if "booking_number" in locals() else "",
+                    "type": "payment",
+                    "amount": -amount,  # payments reduce balance
+                    "category": "premium",
+                    "timestamp": timestamp,
+                    "actor": "SwipeSimple Import",
+                    "stripe_swipe_ref": ss_txn_id,
+                    "notes": desc or f"SwipeSimple {card_type} {last4}"
+                })
+            except Exception as e:
+                logger.warning(f"Failed to mirror SS txn {ss_txn_id} to ledger: {e}")
+
             imported += 1
         except Exception as e:
             errors_list.append(f"Row {i+1}: {str(e)}")
