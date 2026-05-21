@@ -248,6 +248,9 @@ async def api_import_swipesimple(request: Request):
     header_idx = 0
     for idx, line in enumerate(lines):
         line_lower = line.lower()
+        if "total net card" in line_lower or "total net cash" in line_lower:
+            return JSONResponse({"error": "You uploaded a Sales Summary report. Please go to the SwipeSimple Dashboard, click 'Transactions' on the left menu, and download the Transactions export instead."}, status_code=400)
+            
         if "amount" in line_lower or "transaction id" in line_lower or "total" in line_lower or "status" in line_lower:
             header_idx = idx
             break
