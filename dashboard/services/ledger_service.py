@@ -27,7 +27,8 @@ class LedgerService:
         ]
         result = await db.financial_ledger.aggregate(pipeline).to_list(1)
         if result:
-            return result[0].get("total_balance", 0.0)
+            # Round to 2 decimal places to avoid floating point inaccuracies
+            return round(result[0].get("total_balance", 0.0), 2)
         return 0.0
 
     @staticmethod
@@ -42,7 +43,6 @@ class LedgerService:
         """Imports payment records from a SwipeSimple CSV string."""
         import csv
         import io
-        from datetime import datetime
         
         db = get_db()
         reader = csv.DictReader(io.StringIO(csv_content))

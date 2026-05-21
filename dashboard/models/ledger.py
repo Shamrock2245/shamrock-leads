@@ -7,7 +7,7 @@ class LedgerEntry(BaseModel):
     transaction_id: str = Field(default_factory=lambda: str(uuid4()))
     booking_number: str
     indemnitor_id: Optional[str] = None
-    type: Literal["charge", "payment", "refund", "fee", "forfeiture_penalty"]
+    type: Literal["charge", "payment", "refund", "fee", "forfeiture_penalty", "credit", "debit"]
     amount: float  # Positive for charges/fees, negative for payments/refunds
     category: Literal["premium", "recovery_fee", "transfer_fee", "buf", "other"]
     timestamp: datetime = Field(default_factory=datetime.utcnow)

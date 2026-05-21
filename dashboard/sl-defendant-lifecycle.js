@@ -398,16 +398,22 @@ async function _loadLifecycleTimeline(bookingNumber) {
       if (!events.length) {
         if (tlEl) tlEl.innerHTML = '<div class="slc-log-empty">No lifecycle events recorded yet</div>';
       } else {
-        if (tlEl) tlEl.innerHTML = events.map(e => {
+        // Group events by year for sticky year headers
+        let tlHtml = '';
+        let lastYear = null;
+        events.forEach(e => {
           const d = e.timestamp ? new Date(e.timestamp) : null;
+          const year = d && !isNaN(d) ? d.getFullYear() : null;
+          if (year && year !== lastYear) {
+            tlHtml += `<div class="slc-timeline-year-group">${year}</div>`;
+            lastYear = year;
+          }
           const timeStr = d && !isNaN(d)
             ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
             : '—';
-          
-          const badge = e.badge ? `<span class="lcp-event-badge ${e.badge.class||''}">${_esc(e.badge.text||'')}</span>` : '';
+          const badge = e.badge ? `<span class="lcp-event-badge ${e.badge.class||\'\'}">${_esc(e.badge.text||\'\')}</span>` : '';
           const bookingTag = e.booking_number && e.booking_number !== bookingNumber ? `<span class="slc-timeline-booking">#${e.booking_number}</span>` : '';
-            
-          return `<div class="slc-timeline-entry">
+          tlHtml += `<div class="slc-timeline-entry">
             <div class="slc-timeline-icon">${e.icon || '📋'}</div>
             <div class="slc-timeline-body">
               <div class="slc-timeline-label">${bookingTag} ${_esc(e.title || e.label || '')} ${badge}</div>
@@ -415,7 +421,12 @@ async function _loadLifecycleTimeline(bookingNumber) {
               <div class="slc-timeline-time">${timeStr}</div>
             </div>
           </div>`;
-        }).join('');
+        });
+        // Show capped notice if the API returned a capped flag
+        if (data.capped) {
+          tlHtml += `<div class="slc-timeline-capped-notice">Showing most recent ${events.length} of ${data.total_events} events</div>`;
+        }
+        if (tlEl) tlEl.innerHTML = tlHtml;
       }
     } else {
       if (tlEl) tlEl.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Timeline unavailable</div>`;

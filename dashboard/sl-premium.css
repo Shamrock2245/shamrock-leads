@@ -468,3 +468,200 @@ td:has(.bond-low),
     padding: 12px 14px !important;
   }
 }
+
+/* ── 20. Compliance Tasks Panel (Phase 4 Polish) ────────────────────────── */
+
+/* Loading state */
+.sl-tasks-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 16px;
+  color: var(--muted, #64748b);
+  font-size: 13px;
+}
+
+.sl-tasks-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(245, 158, 11, 0.3);
+  border-top-color: #f59e0b;
+  border-radius: 50%;
+  animation: spin-slow 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Empty state */
+.sl-tasks-empty-state {
+  padding: 24px 16px;
+}
+
+.sl-tasks-empty-icon {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+/* Task item */
+.sl-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  background: rgba(255, 255, 255, 0.02);
+  margin-bottom: 8px;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.35s ease, transform 0.35s ease, max-height 0.35s ease;
+  overflow: hidden;
+  max-height: 200px;
+}
+
+.sl-task-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.sl-task-item.sl-task-overdue {
+  border-left: 3px solid #ef4444;
+  background: rgba(239, 68, 68, 0.04);
+}
+
+/* Completion micro-animation */
+.sl-task-item.sl-task-completing {
+  background: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+}
+
+.sl-task-item.sl-task-done-exit {
+  opacity: 0;
+  transform: translateX(20px);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-width: 0;
+}
+
+/* Task icon */
+.sl-task-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Task content */
+.sl-task-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.sl-task-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 3px;
+}
+
+.sl-task-title {
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--text, #e2e8f0);
+  line-height: 1.3;
+}
+
+.sl-task-booking {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted, #64748b);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  letter-spacing: 0.3px;
+}
+
+.sl-task-desc {
+  font-size: 12.5px;
+  color: var(--text-secondary, #94a3b8);
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.sl-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Due date badges */
+.sl-task-due {
+  font-size: 11.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sl-task-due-ok {
+  color: #10b981;
+}
+
+.sl-task-due-overdue {
+  color: #ef4444;
+}
+
+.sl-task-overdue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.sl-task-abs-time {
+  font-size: 11px;
+  color: var(--muted, #64748b);
+}
+
+/* Done button */
+.sl-task-done-btn {
+  flex-shrink: 0;
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px !important;
+  transition: background 0.15s ease, transform 0.1s ease, color 0.15s ease !important;
+}
+
+.sl-task-done-btn:hover {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  color: #10b981 !important;
+}
+
+.sl-task-done-btn:active {
+  transform: scale(0.9) !important;
+}
+
+.sl-task-done-icon {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  .sl-task-item,
+  .sl-task-item.sl-task-done-exit,
+  .sl-task-overdue-dot,
+  .sl-tasks-spinner {
+    animation: none !important;
+    transition: none !important;
+  }
+}

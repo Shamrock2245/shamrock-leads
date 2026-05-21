@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Callable, Awaitable, Optional, List
+from dataclasses import dataclass
+from typing import Callable, Awaitable, List
 
 logger = logging.getLogger(__name__)
 
@@ -342,15 +342,12 @@ async def _run_overdue_tasks():
     from datetime import datetime, timezone
     db = get_db()
     now = datetime.now(timezone.utc).isoformat()
-    # Find pending tasks where due_date is in the past
-    cursor = db["tasks"].find({"status": "pending", "due_date": {"$lt": now}})
-    flagged = 0
-    async for task in cursor:
-        await db["tasks"].update_one(
-            {"_id": task["_id"]},
-            {"$set": {"status": "overdue", "overdue_at": now}}
-        )
-        flagged += 1
+    # Find pending tasks where due_date is in the past and update them all at once
+    result = await db["tasks"].update_many(
+        {"status": "pending", "due_date": {"$lt": now}},
+        {"$set": {"status": "overdue", "overdue_at": now}}
+    )
+    flagged = result.modified_count
     if flagged > 0:
         logger.warning(f"[Tasks] Flagged {flagged} tasks as overdue")
 
@@ -402,6 +399,12 @@ async def _ensure_all_indexes():
         await db["defendants"].create_index([("active", 1)], name="idx_active", background=True)
         await db["arrests"].create_index([("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
         # Audit
+                # Tasks & Ledger
+        await db["tasks"].create_index([("status", 1), ("due_date", 1)], name="idx_tasks_status_due", background=True)
+        await db["tasks"].create_index([("booking_number", 1), ("status", 1)], name="idx_tasks_booking_status", background=True)
+        await db["financial_ledger"].create_index([("booking_number", 1), ("timestamp", -1)], name="idx_ledger_booking_ts", background=True)
+        await db["financial_ledger"].create_index([("stripe_swipe_ref", 1)], sparse=True, name="idx_ledger_swipe_ref", background=True)
+        
         await db["audit_events"].create_index([("entity_id", 1), ("timestamp", -1)], name="idx_entity_id_timestamp", background=True)
         await db["audit_events"].create_index([("event_type", 1)], name="idx_event_type", background=True)
         await db["audit_events"].create_index([("timestamp", 1)], name="idx_audit_ttl_90d", background=True, expireAfterSeconds=7776000)

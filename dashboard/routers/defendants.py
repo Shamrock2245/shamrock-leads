@@ -181,10 +181,17 @@ async def get_defendant_timeline(defendant_id: str):
 
     all_events.sort(key=sort_key)
     
+    # Cap events to prevent memory/UI overload for defendants with dozens of arrests
+    MAX_EVENTS = 500
+    total_events = len(all_events)
+    if total_events > MAX_EVENTS:
+        all_events = all_events[-MAX_EVENTS:]
+        
     return {
         "defendant_id": defendant_id,
         "events": all_events,
-        "total_events": len(all_events)
+        "total_events": total_events,
+        "capped": total_events > MAX_EVENTS
     }
 
 @router.get("/defendants/by_booking/{booking_number}/timeline")

@@ -1380,3 +1380,111 @@
 .slc-timeline-agent { font-weight: 400; color: var(--muted, #64748b); font-size: 11px; }
 .slc-timeline-detail { font-size: 12px; color: var(--text-secondary, #94a3b8); margin-top: 2px; line-height: 1.4; }
 .slc-timeline-time { font-size: 11px; color: var(--muted, #64748b); margin-top: 4px; }
+
+/* ── Unified Timeline Enhancements (Phase 2 Polish) ─────────────────────── */
+
+/* Taller scroll area for defendants with long histories */
+.slc-timeline {
+  max-height: 380px !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(52, 211, 153, 0.3) transparent;
+}
+
+.slc-timeline::-webkit-scrollbar {
+  width: 4px;
+}
+
+.slc-timeline::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.slc-timeline::-webkit-scrollbar-thumb {
+  background: rgba(52, 211, 153, 0.3);
+  border-radius: 4px;
+}
+
+.slc-timeline::-webkit-scrollbar-thumb:hover {
+  background: rgba(52, 211, 153, 0.5);
+}
+
+/* Year group sticky header */
+.slc-timeline-year-group {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-card, #1a1f2e);
+  padding: 6px 12px 4px 12px;
+  margin-left: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent, #34d399);
+  border-bottom: 1px solid rgba(52, 211, 153, 0.15);
+}
+
+/* Capped notice */
+.slc-timeline-capped-notice {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted, #64748b);
+  padding: 8px 12px;
+  border-top: 1px solid var(--border, #2a2f3e);
+  font-style: italic;
+}
+
+/* Booking tag for cross-arrest events */
+.slc-timeline-booking {
+  display: inline-block;
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  margin-right: 4px;
+  letter-spacing: 0.3px;
+}
+
+/* Ledger table polish */
+.slc-ledger {
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(52, 211, 153, 0.3) transparent;
+}
+
+.slc-ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.slc-ledger-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #1a1f2e);
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--muted, #64748b);
+  border-bottom: 1px solid var(--border, #2a2f3e);
+  z-index: 1;
+}
+
+.slc-ledger-table tbody td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  vertical-align: middle;
+}
+
+.slc-ledger-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.slc-ledger-table tbody tr:hover td {
+  background: rgba(255,255,255,0.02);
+}

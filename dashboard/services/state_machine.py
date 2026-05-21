@@ -1,8 +1,6 @@
 from datetime import datetime
-from bson import ObjectId
 from dashboard.extensions import get_db
 from dashboard.services.audit_service import AuditService
-from dashboard.services.poa_service import poa_auto_release  # Need to implement or update this
 
 class BondStateMachine:
     """Enforces valid state transitions for active bonds."""
@@ -50,8 +48,7 @@ class BondStateMachine:
             {"booking_number": booking_number},
             {
                 "$set": {"status": new_status, "updated_at": now},
-                "$push": {"status_history": {"from": current_status, "to": new_status, "timestamp": now, "actor": actor, "reason": reason}},
-                "$push": {"timeline": timeline_event}
+                "$push": {"status_history": {"from": current_status, "to": new_status, "timestamp": now, "actor": actor, "reason": reason}, "timeline": timeline_event}
             }
         )
         
