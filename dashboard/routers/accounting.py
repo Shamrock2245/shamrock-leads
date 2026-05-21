@@ -239,15 +239,27 @@ async def api_import_swipesimple(request: Request):
     now = datetime.now(timezone.utc)
     batch_id = f"SS-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
 
-    reader = csv.DictReader(io.StringIO(raw))
     imported = 0
     skipped = 0
     errors_list = []
+    
+    # Strip preamble (find true header row)
+    lines = raw.splitlines()
+    header_idx = 0
+    for idx, line in enumerate(lines):
+        line_lower = line.lower()
+        if "amount" in line_lower or "transaction id" in line_lower or "total" in line_lower or "status" in line_lower:
+            header_idx = idx
+            break
+            
+    csv_data = "\n".join(lines[header_idx:])
+    reader = csv.DictReader(io.StringIO(csv_data))
 
     for i, row in enumerate(reader):
         try:
             # clean keys
             row = {k.strip() if isinstance(k, str) else k: v for k, v in row.items()}
+            
             # SwipeSimple CSV columns (flexible matching)
             amount_str = row.get("Amount") or row.get("amount") or row.get("Total") or "0"
             amount_str = amount_str.replace("$", "").replace(",", "").strip()
@@ -341,7 +353,14 @@ async def api_import_swipesimple(request: Request):
     })
 
     logger.info("[accounting] SwipeSimple import: %d imported, %d skipped, %d errors (batch: %s)", imported, skipped, len(errors_list), batch_id)
-    return {"success": True, "batch_id": batch_id, "imported": imported, "skipped": skipped, "errors": len(errors_list)}
+    return {
+        "success": True, 
+        "batch_id": batch_id, 
+        "imported": imported, 
+        "skipped": skipped, 
+        "errors": len(errors_list),
+        "error_details": errors_list[:5]
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
