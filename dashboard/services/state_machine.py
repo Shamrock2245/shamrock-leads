@@ -16,7 +16,7 @@ class BondStateMachine:
     }
 
     @staticmethod
-    async def transition_bond(booking_number: str, new_status: str, actor: str, reason: str = "") -> bool:
+    async def transition_bond(booking_number: str, new_status: str, actor: str, reason: str = "") -> dict:
         db = get_db()
         
         # 1. Fetch current bond
@@ -27,7 +27,14 @@ class BondStateMachine:
         current_status = current_bond.get("status", "active")
         
         if current_status == new_status:
-            return True # No-op
+            return {
+                "success": True, 
+                "status": new_status, 
+                "from_status": current_status, 
+                "poa_released": False, 
+                "poa_number": None, 
+                "note": "No change"
+            }
             
         # 2. Validate transition
         allowed = BondStateMachine.VALID_TRANSITIONS.get(current_status, [])
@@ -44,11 +51,12 @@ class BondStateMachine:
             "source": "state_machine"
         }
         
+        history_entry = {"from": current_status, "to": new_status, "timestamp": now, "actor": actor, "reason": reason}
         await db.active_bonds.update_one(
             {"booking_number": booking_number},
             {
                 "$set": {"status": new_status, "updated_at": now},
-                "$push": {"status_history": {"from": current_status, "to": new_status, "timestamp": now, "actor": actor, "reason": reason}, "timeline": timeline_event}
+                "$push": {"status_history": history_entry, "timeline": timeline_event}
             }
         )
         
@@ -61,6 +69,8 @@ class BondStateMachine:
             actor=actor
         )
         
+        poa_released = False
+        poa_number_returned = None
         # 5. Fire Side Effects
         if new_status in ["exonerated", "forfeited", "surrendered"]:
             poa_number = current_bond.get("poa_number")
@@ -68,6 +78,8 @@ class BondStateMachine:
                 # Need to implement auto-release logic
                 from dashboard.services.poa_service import auto_release_poa
                 await auto_release_poa(poa_number, reason=new_status, actor=actor)
+                poa_released = True
+                poa_number_returned = poa_number
             
             # Cancel pending compliance tasks
             from dashboard.services.task_engine import TaskEngine
@@ -78,4 +90,11 @@ class BondStateMachine:
             from dashboard.services.task_engine import TaskEngine
             await TaskEngine.schedule_compliance_tasks(booking_number)
                 
-        return True
+        return {
+            "success": True,
+            "status": new_status,
+            "from_status": current_status,
+            "poa_released": poa_released,
+            "poa_number": poa_number_returned,
+            "history_entry": history_entry
+        }
