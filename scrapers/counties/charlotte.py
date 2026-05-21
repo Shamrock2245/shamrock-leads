@@ -85,7 +85,7 @@ class CharlotteCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError as e:
             logger.error(f"[Charlotte] Missing dependency: {e}. pip install curl-cffi beautifulsoup4")
-            return []
+            raise
 
         session = cffi_requests.Session()
 

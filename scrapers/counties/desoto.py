@@ -55,7 +55,7 @@ class DeSotoCountyScraper(BaseScraper):
                 "❌ DrissionPage not installed. "
                 "Install with: pip install DrissionPage"
             )
-            return []
+            raise
 
         page = self._setup_browser()
         cutoff_date = datetime.now() - timedelta(days=DAYS_BACK)
@@ -116,7 +116,7 @@ class DeSotoCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"❌ DeSoto scraper fatal error: {e}")
-            return []
+            raise
 
         finally:
             try:

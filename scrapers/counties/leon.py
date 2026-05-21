@@ -40,7 +40,7 @@ class LeonCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         session = requests.Session()
         session.headers.update(HEADERS)
@@ -51,7 +51,7 @@ class LeonCountyScraper(BaseScraper):
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Leon: GET failed: {e}")
-            return []
+            raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 

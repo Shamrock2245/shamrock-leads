@@ -82,7 +82,7 @@ class MartinCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage  # noqa
         except ImportError:
             logger.error("Martin: DrissionPage not installed")
-            return []
+            raise
 
         page = _setup_browser()
         records = []
@@ -113,7 +113,7 @@ class MartinCountyScraper(BaseScraper):
 
             if not loaded:
                 logger.error("Martin: all URLs failed")
-                return []
+                raise RuntimeError("Martin: all URLs failed to load")
 
             # Accept disclaimer or click search
             for btn_text in ["Search", "View Inmates", "Continue", "Accept", "I Agree"]:
@@ -191,6 +191,7 @@ class MartinCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"Martin: scraper error — {e}")
+            raise
         finally:
             try:
                 page.quit()

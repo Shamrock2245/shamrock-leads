@@ -23,7 +23,7 @@ class DuvalCountyScraper(BaseScraper):
         try:
             from DrissionPage import ChromiumPage, ChromiumOptions
         except ImportError:
-            logger.error("DrissionPage not installed"); return []
+            logger.error("DrissionPage not installed"); raise
 
         page = self._setup_browser()
         all_records = []
@@ -66,7 +66,7 @@ class DuvalCountyScraper(BaseScraper):
             logger.info(f"Duval: {len(all_records)} records")
             return all_records
         except Exception as e:
-            logger.error(f"Duval fatal: {e}"); return []
+            logger.error(f"Duval fatal: {e}"); raise
         finally:
             try: page.listen.stop(); page.quit()
             except: pass

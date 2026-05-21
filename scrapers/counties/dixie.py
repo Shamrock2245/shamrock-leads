@@ -34,7 +34,7 @@ class DixieCountyScraper(BaseScraper):
             import requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("requests/bs4 not installed"); raise
 
         session = requests.Session()
         session.headers.update(HEADERS)
@@ -44,7 +44,7 @@ class DixieCountyScraper(BaseScraper):
             time.sleep(1)  # Rate limit
             resp.raise_for_status()
         except Exception as e:
-            logger.error(f"Dixie: failed to load page: {e}"); return []
+            logger.error(f"Dixie: failed to load page: {e}"); raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -72,8 +72,8 @@ class DixieCountyScraper(BaseScraper):
             resp2.raise_for_status()
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
-            logger.warning(f"Dixie: POST failed ({e}), using initial page")
-            soup2 = soup
+            logger.error(f"Dixie: POST failed ({e})")
+            raise
 
         records = self._parse_table(soup2)
         logger.info(f"Dixie: {len(records)} records")

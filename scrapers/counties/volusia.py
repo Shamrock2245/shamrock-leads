@@ -24,7 +24,7 @@ class VolusiaCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("DrissionPage/bs4 not installed"); return []
+            logger.error("DrissionPage/bs4 not installed"); raise
         co = self._get_browser_options()
         page = ChromiumPage(addr_or_opts=co)
         records = []
@@ -68,7 +68,7 @@ class VolusiaCountyScraper(BaseScraper):
             logger.info(f"Volusia: {len(records)} records")
             return records
         except Exception as e:
-            logger.error(f"Volusia error: {e}"); return []
+            logger.error(f"Volusia error: {e}"); raise
         finally:
             try: page.listen.stop(); page.quit()
             except: pass

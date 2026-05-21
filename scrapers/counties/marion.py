@@ -42,7 +42,7 @@ class MarionCountyScraper(BaseScraper):
             from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("curl_cffi/bs4 not installed"); return []
+            logger.error("curl_cffi/bs4 not installed"); raise
 
         session = cffi_requests.Session()
 
@@ -53,7 +53,7 @@ class MarionCountyScraper(BaseScraper):
             if resp.status_code != 200:
                 raise Exception(f"{resp.status_code} Client Error")
         except Exception as e:
-            logger.error(f"Marion: failed to load page: {e}"); return []
+            logger.error(f"Marion: failed to load page: {e}"); raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -79,7 +79,7 @@ class MarionCountyScraper(BaseScraper):
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} Server Error")
         except Exception as e:
-            logger.error(f"Marion: POST failed: {e}"); return []
+            logger.error(f"Marion: POST failed: {e}"); raise
 
         soup2 = BeautifulSoup(resp2.text, "html.parser")
         records = []

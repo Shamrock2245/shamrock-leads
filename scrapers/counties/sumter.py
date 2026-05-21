@@ -40,7 +40,7 @@ class SumterCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
-            return []
+            raise
 
         session = cf.Session()
         records = []

@@ -39,18 +39,30 @@ class OkeechobeeCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         try:
             resp = requests.get(ROSTER_URL, headers=HEADERS, timeout=30)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Okeechobee: fetch failed: {e}")
-            return []
+            raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Try JSON embedded in page
+        records = self._try_parse_json_in_page(soup)
+        if records:
+            return records
+
+        records = self._parse_html(soup)
+        if not records:
+            raise RuntimeError("Okeechobee: No records parsed from JSON or HTML")
+
+        logger.info(f"Okeechobee HTML: {len(records)} records")
+        return records
+
+    def _try_parse_json_in_page(self, soup) -> List[ArrestRecord]:
         try:
             import json
             scripts = soup.find_all("script")
@@ -71,10 +83,7 @@ class OkeechobeeCountyScraper(BaseScraper):
                             pass
         except Exception:
             pass
-
-        records = self._parse_html(soup)
-        logger.info(f"Okeechobee HTML: {len(records)} records")
-        return records
+        return []
 
     def _parse_json(self, inmates: list) -> List[ArrestRecord]:
         records = []

@@ -43,7 +43,7 @@ class GadsdenCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         # Attempt HTTP GET
         try:
@@ -54,7 +54,7 @@ class GadsdenCountyScraper(BaseScraper):
                 if records:
                     logger.info(f"Gadsden HTML: {len(records)} records")
                     return records
-        except Exception as e:
+        except requests.RequestException as e:
             logger.debug(f"Gadsden HTTP failed: {e}")
 
         # Browser fallback for JS-rendered content
@@ -82,9 +82,9 @@ class GadsdenCountyScraper(BaseScraper):
                     pass
         except Exception as e:
             logger.warning(f"Gadsden browser fallback failed: {e}")
+            raise
 
-        logger.warning("Gadsden: 0 records — needs recon (roster may be blank or JS-gated)")
-        return []
+        raise RuntimeError("Gadsden: 0 records — needs recon (roster may be blank or JS-gated)")
 
     def _parse_html(self, soup) -> List[ArrestRecord]:
         records = []

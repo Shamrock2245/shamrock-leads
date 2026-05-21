@@ -55,7 +55,7 @@ class PutnamCountyScraper(BaseScraper):
             from curl_cffi import requests as cf
         except ImportError:
             logger.error("Putnam: curl_cffi not installed")
-            return []
+            raise
 
         session = cf.Session()
         records: List[ArrestRecord] = []

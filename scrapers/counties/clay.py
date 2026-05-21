@@ -41,7 +41,7 @@ class ClayCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
-            return []
+            raise
 
         try:
             session = cf.Session()
@@ -49,7 +49,7 @@ class ClayCountyScraper(BaseScraper):
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Clay: fetch failed: {e}")
-            return []
+            raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
         records = self._parse(soup)

@@ -86,7 +86,7 @@ class SarasotaCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage
         except ImportError as e:
             logger.error(f"[Sarasota] Missing dependency: {e}. pip install beautifulsoup4 drissionpage")
-            return []
+            raise
 
         page = self._setup_browser()
 
@@ -131,7 +131,7 @@ class SarasotaCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"[Sarasota] Fatal scrape error: {e}")
-            return []
+            raise
         finally:
             try:
                 page.quit()

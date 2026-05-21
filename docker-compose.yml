@@ -157,6 +157,53 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Social Engine: Content Repurposer + Publisher ──
+  # Starts with: docker compose --profile social up -d
+  # Or include in full stack: docker compose --profile social --profile ops up -d
+  social:
+    build:
+      context: .
+      dockerfile: social/Dockerfile
+    container_name: shamrock-social
+    hostname: shamrock-social
+    restart: unless-stopped
+    profiles:
+      - social                            # Won't start by default
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    command: uvicorn social.main:app --host 0.0.0.0 --port 5060 --access-log --log-level info --workers 1
+    env_file:
+      - .env
+    environment:
+      - SOCIAL_GROK_ENABLED=true
+      - SOCIAL_HUMANIZER_ENABLED=true
+    ports:
+      - "8089:5060"                       # Social Engine API (external 8089)
+    depends_on:
+      - dashboard
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5060/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - shamrock-net
+    # ── Security Hardening ──
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   node-red-data:
     driver: local

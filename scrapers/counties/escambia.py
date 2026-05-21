@@ -31,7 +31,7 @@ class EscambiaCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage
         except ImportError:
             logger.error("DrissionPage not installed")
-            return []
+            raise
 
         opts = self._get_browser_options()
 
@@ -77,6 +77,7 @@ class EscambiaCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"Escambia: DrissionPage error: {e}")
+            raise
         finally:
             if page:
                 try:

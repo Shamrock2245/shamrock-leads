@@ -35,7 +35,7 @@ class StJohnsCountyScraper(BaseScraper):
             import requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed"); return []
+            logger.error("requests/bs4 not installed"); raise
 
         session = requests.Session()
         session.headers.update(HEADERS)

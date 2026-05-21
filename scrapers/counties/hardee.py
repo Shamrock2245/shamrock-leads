@@ -37,7 +37,7 @@ class HardeeCountyScraper(BaseScraper):
             import requests
         except ImportError:
             logger.error("requests not installed")
-            return []
+            raise
 
         records = self._phase1_bulk_json(requests)
         if not records:

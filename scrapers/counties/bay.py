@@ -41,7 +41,7 @@ class BayCountyScraper(BaseScraper):
             return self._scrape_unigui()
         except Exception as e:
             logger.error(f"[BAY] Scrape failed: {e}")
-            return []
+            raise
 
     def _scrape_unigui(self) -> List[ArrestRecord]:
         """Scrape Bay County using UniGUI/hyb.dll session-based API."""
@@ -95,6 +95,9 @@ class BayCountyScraper(BaseScraper):
             logger.info("[BAY] Trying initial page parse...")
             records = self._parse_html(resp.text)
 
+        if not records:
+            raise RuntimeError("[BAY] Failed to find any records. Roster might be empty, session invalid, or layout changed.")
+
         logger.info(f"[BAY] Found {len(records)} records")
         return records
 
@@ -140,12 +143,12 @@ class BayCountyScraper(BaseScraper):
                 booking_num = booking_match.group(1) if booking_match else ""
 
                 dob = ""
-                dob_m = re.search(r'(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', detail_text)
+                dob_m = re.search(r'(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', booking_text)
                 if dob_m:
                     dob = dob_m.group(1)
                 
                 release_date = ""
-                rel_m = re.search(r'(?:Release Date|Released)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', detail_text)
+                rel_m = re.search(r'(?:Release Date|Released)\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})', booking_text)
                 if rel_m:
                     release_date = rel_m.group(1)
                 
@@ -153,7 +156,7 @@ class BayCountyScraper(BaseScraper):
                 
                 charges_text = cell_texts[-1] if len(cell_texts) > 2 else ""
 
-                bd = re.search(r'\$([\d,]+)', detail_text)
+                bd = re.search(r'\$([\d,]+)', booking_text)
                 bond_amount = bd.group(1).replace(',','') if bd else '0'
 
                 key = (last_name, booking_num)

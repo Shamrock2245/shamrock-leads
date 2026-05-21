@@ -1,0 +1,36 @@
+# Shamrock Social Engine — Dependencies
+# Keep lean — this service does content gen + posting, not scraping.
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# MongoDB (async)
+motor>=3.3.0
+pymongo[srv]>=4.6.0
+
+# OpenAI SDK (used for both GPT-4o and xAI Grok via base_url override)
+openai>=1.12.0
+
+# HTTP client (Slack webhooks, platform API calls)
+httpx>=0.27.0
+
+# Image generation (social cards via Pillow)
+Pillow>=10.2.0
+
+# Gmail scanning (Grok email harvesting)
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+google-auth-oauthlib>=0.8.0
+
+# Env loading
+python-dotenv>=1.0.0
+
+# Data models
+pydantic>=2.5.0
+
+# Twitter/X posting
+tweepy>=4.14.0
+
+# Fonts for image gen
+# (system fonts available in container, Pillow handles the rest)

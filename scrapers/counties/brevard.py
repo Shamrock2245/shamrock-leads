@@ -40,7 +40,7 @@ class BrevardCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         session = requests.Session()
         session.headers.update(HEADERS)
@@ -48,7 +48,7 @@ class BrevardCountyScraper(BaseScraper):
         # Load home page first (sets session cookies / anti-bot tokens)
         try:
             session.get(BASE_URL, timeout=20)
-        except Exception:
+        except requests.RequestException:
             pass
 
         to_date = datetime.now()
@@ -151,6 +151,7 @@ class BrevardCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.warning(f"Brevard DrissionPage: {e}")
+            raise
         finally:
             try:
                 page.quit()

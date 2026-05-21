@@ -39,7 +39,7 @@ class LakeCountyScraper(BaseScraper):
             from curl_cffi import requests as cf
         except ImportError:
             logger.error("curl_cffi not installed")
-            return []
+            raise
 
         session = cf.Session()
         records: List[ArrestRecord] = []
@@ -68,7 +68,7 @@ class LakeCountyScraper(BaseScraper):
             data = r.json()
         except Exception as e:
             logger.error(f"Lake API error: {e}")
-            return records
+            raise
 
         inmates = data if isinstance(data, list) else data.get("records", data.get("inmates", data.get("data", [])))
         if not inmates:

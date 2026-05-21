@@ -37,7 +37,7 @@ class ManateeCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage, ChromiumOptions
         except ImportError:
             logger.error("DrissionPage not installed.")
-            return []
+            raise
 
         page = self._setup_browser()
         cutoff_date = datetime.now() - timedelta(days=DAYS_BACK)
@@ -86,7 +86,7 @@ class ManateeCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"Manatee scraper fatal error: {e}")
-            return []
+            raise
         finally:
             try:
                 page.quit()

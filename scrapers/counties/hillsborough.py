@@ -31,7 +31,7 @@ class HillsboroughCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage, ChromiumOptions
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("DrissionPage or bs4 not installed"); return []
+            logger.error("DrissionPage or bs4 not installed"); raise
         page = self._setup_browser()
         all_records = []
         try:
@@ -55,7 +55,7 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.info(f"Hillsborough: {len(all_records)} records")
             return all_records
         except Exception as e:
-            logger.error(f"Hillsborough fatal: {e}"); return []
+            logger.error(f"Hillsborough fatal: {e}"); raise
         finally:
             try: page.quit()
             except: pass

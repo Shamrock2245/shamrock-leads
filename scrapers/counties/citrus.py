@@ -30,7 +30,7 @@ class CitrusCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage
         except ImportError:
             logger.error("DrissionPage not installed")
-            return []
+            raise
 
         try:
             import pdfplumber
@@ -89,6 +89,7 @@ class CitrusCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"Citrus: DrissionPage error: {e}")
+            raise
         finally:
             if page:
                 try:
@@ -117,7 +118,7 @@ class CitrusCountyScraper(BaseScraper):
             pdf_bytes = resp.content
         except Exception as e:
             logger.error(f"Citrus: failed to download PDF: {e}")
-            return []
+            raise
 
         return self._parse_pdf(pdf_bytes)
 

@@ -49,7 +49,7 @@ class OsceolaCountyScraper(BaseScraper):
             import pandas as pd
         except ImportError as e:
             logger.error(f"Osceola: missing dependency: {e}")
-            return []
+            raise
 
         session = cf.Session()
         all_records: dict = {}  # keyed by ARREST_NUMBER to merge charges

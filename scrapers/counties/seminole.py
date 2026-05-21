@@ -58,7 +58,7 @@ class SeminoleCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup  # noqa — imported in sub-methods
         except ImportError as e:
             logger.error(f"Seminole: missing dependency: {e}")
-            return []
+            raise
 
         # Step 1: Load roster via nodriver (JS-rendered page)
         roster_html = asyncio.run(self._load_roster(uc))

@@ -50,7 +50,7 @@ class HernandoCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
-            return []
+            raise
 
         session = cf.Session()
 
@@ -60,7 +60,7 @@ class HernandoCountyScraper(BaseScraper):
             r.raise_for_status()
         except Exception as e:
             logger.error(f"Hernando GET failed: {e}")
-            return []
+            raise
 
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -93,7 +93,7 @@ class HernandoCountyScraper(BaseScraper):
             r2.raise_for_status()
         except Exception as e:
             logger.error(f"Hernando POST failed: {e}")
-            return []
+            raise
 
         records = self._parse(r2.text)
         logger.info(f"Hernando: {len(records)} records")

@@ -44,7 +44,7 @@ class IndianRiverCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         session = requests.Session()
         session.headers.update(HEADERS)

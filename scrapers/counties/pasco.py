@@ -22,7 +22,7 @@ class PascoCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("DrissionPage/bs4 not installed"); return []
+            logger.error("DrissionPage/bs4 not installed"); raise
         co = self._get_browser_options()
         page = ChromiumPage(addr_or_opts=co)
         records = []
@@ -64,7 +64,7 @@ class PascoCountyScraper(BaseScraper):
             logger.info(f"Pasco: {len(records)} records")
             return records
         except Exception as e:
-            logger.error(f"Pasco error: {e}"); return []
+            logger.error(f"Pasco error: {e}"); raise
         finally:
             try: page.listen.stop(); page.quit()
             except: pass

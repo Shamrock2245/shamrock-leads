@@ -44,7 +44,7 @@ class MonroeCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("curl_cffi/bs4 not installed")
-            return []
+            raise
 
         session = cffi_requests.Session()
 
@@ -55,7 +55,7 @@ class MonroeCountyScraper(BaseScraper):
                 raise Exception(f"GET intro {resp.status_code}")
         except Exception as e:
             logger.error(f"Monroe intro GET failed: {e}")
-            return []
+            raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
         viewstate = soup.find("input", {"name": "__VIEWSTATE"})
@@ -76,7 +76,7 @@ class MonroeCountyScraper(BaseScraper):
                 raise Exception(f"Disclaimer POST {resp.status_code}")
         except Exception as e:
             logger.error(f"Monroe disclaimer POST failed: {e}")
-            return []
+            raise
 
         # Step 3: Search with blank last name (all current inmates)
         soup2 = BeautifulSoup(resp.text, "html.parser")
@@ -105,7 +105,7 @@ class MonroeCountyScraper(BaseScraper):
                 raise Exception(f"Search POST {resp.status_code}")
         except Exception as e:
             logger.error(f"Monroe search POST failed: {e}")
-            return []
+            raise
 
         records = self._parse(resp.text)
         logger.info(f"Monroe: {len(records)} records")

@@ -41,7 +41,7 @@ class AlachuaCountyScraper(BaseScraper):
             from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("curl_cffi/bs4 not installed"); return []
+            logger.error("curl_cffi/bs4 not installed"); raise
 
         session = cffi_requests.Session()
 
@@ -51,7 +51,7 @@ class AlachuaCountyScraper(BaseScraper):
             if resp.status_code != 200:
                 raise Exception(f"{resp.status_code} error")
         except Exception as e:
-            logger.error(f"Alachua: failed to load page: {e}"); return []
+            logger.error(f"Alachua: failed to load page: {e}"); raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -87,7 +87,7 @@ class AlachuaCountyScraper(BaseScraper):
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} error")
         except Exception as e:
-            logger.error(f"Alachua: POST failed: {e}"); return []
+            logger.error(f"Alachua: POST failed: {e}"); raise
 
         soup2 = BeautifulSoup(resp2.text, "html.parser")
         records = []

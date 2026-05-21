@@ -42,7 +42,7 @@ class ColumbiaCountyScraper(BaseScraper):
             from bs4 import BeautifulSoup
         except ImportError:
             logger.error("requests/bs4 not installed")
-            return []
+            raise
 
         # Try P2C JSON API
         for endpoint in [API_URL, BASE_URL + "/GetInmates", BASE_URL]:
@@ -80,7 +80,7 @@ class ColumbiaCountyScraper(BaseScraper):
             return records
         except Exception as e:
             logger.error(f"Columbia HTML failed: {e}")
-            return []
+            raise
 
     def _parse_json(self, inmates: list) -> List[ArrestRecord]:
         records = []

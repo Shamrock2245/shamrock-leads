@@ -60,7 +60,7 @@ class CollierCountyScraper(BaseScraper):
                 f"❌ Missing dependency for Collier scraper: {e}. "
                 f"Install with: pip install curl-cffi beautifulsoup4"
             )
-            return []
+            raise
 
         session = cffi_requests.Session()
 

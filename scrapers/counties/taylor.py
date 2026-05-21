@@ -38,7 +38,7 @@ class TaylorCountyScraper(BaseScraper):
             from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("curl_cffi/bs4 not installed"); return []
+            logger.error("curl_cffi/bs4 not installed"); raise
 
         session = cffi_requests.Session()
 
@@ -47,7 +47,7 @@ class TaylorCountyScraper(BaseScraper):
             if resp.status_code != 200:
                 raise Exception(f"{resp.status_code} error")
         except Exception as e:
-            logger.error(f"Taylor: failed to load page: {e}"); return []
+            logger.error(f"Taylor: failed to load page: {e}"); raise
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -76,8 +76,8 @@ class TaylorCountyScraper(BaseScraper):
                 raise Exception(f"{resp2.status_code} error")
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
-            logger.warning(f"Taylor: POST failed ({e}), using initial page")
-            soup2 = soup
+            logger.error(f"Taylor: POST failed ({e})")
+            raise
 
         records = self._parse_table(soup2)
         logger.info(f"Taylor: {len(records)} records")

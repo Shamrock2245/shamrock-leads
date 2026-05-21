@@ -47,7 +47,7 @@ class PalmBeachCountyScraper(BaseScraper):
             from DrissionPage import ChromiumPage  # noqa
         except ImportError:
             logger.error("Palm Beach: DrissionPage not installed")
-            return []
+            raise
 
         co = self._get_browser_options()
         page = ChromiumPage(addr_or_opts=co)
@@ -90,6 +90,7 @@ class PalmBeachCountyScraper(BaseScraper):
 
         except Exception as e:
             logger.error(f"Palm Beach: scraper error — {e}")
+            raise
         finally:
             try:
                 page.quit()
