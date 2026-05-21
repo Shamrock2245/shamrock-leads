@@ -271,8 +271,8 @@ async def api_import_swipesimple(request: Request):
                 skipped += 1
                 continue
 
-            ss_txn_id = row.get("Transaction ID") or row.get("transaction_id") or row.get("ID") or ""
-            ss_status = (row.get("Status") or row.get("status") or "completed").strip().lower()
+            ss_txn_id = row.get("Transaction ID") or row.get("transaction_id") or row.get("ID") or row.get("Transaction #") or ""
+            ss_status = (row.get("Status") or row.get("status") or row.get("Result") or "completed").strip().lower()
             if ss_status in ("void", "voided", "declined", "failed"):
                 skipped += 1
                 continue
@@ -299,10 +299,10 @@ async def api_import_swipesimple(request: Request):
                     except ValueError:
                         pass
 
-            card_type = row.get("Card Type") or row.get("card_type") or ""
+            card_type = row.get("Card Type") or row.get("card_type") or row.get("Brand") or ""
             last4 = row.get("Last 4") or row.get("last_four") or ""
-            customer = row.get("Customer Name") or row.get("customer_name") or row.get("Name") or ""
-            desc = row.get("Description") or row.get("description") or row.get("Memo") or ""
+            customer = row.get("Customer Name") or row.get("customer_name") or row.get("Name") or row.get("Cardholder Name") or ""
+            desc = row.get("Description") or row.get("description") or row.get("Memo") or row.get("Reference Number") or ""
 
             txn_doc = {
                 "transaction_id": f"SS-{ss_txn_id}" if ss_txn_id else f"SS-{uuid.uuid4().hex[:10].upper()}",
