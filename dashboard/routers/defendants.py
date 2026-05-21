@@ -145,6 +145,72 @@ async def get_defendant_arrests(defendant_id: str):
     arrests = await svc.get_defendant_arrests(defendant_id)
     return {"defendant_id": defendant_id, "arrests": arrests, "total": len(arrests)}
 
+@router.get("/defendants/{defendant_id}/timeline")
+async def get_defendant_timeline(defendant_id: str):
+    """Unified timeline aggregating events across all of a defendant's arrests."""
+    from dashboard.routers.lifecycle_timeline import get_lifecycle
+    
+    svc = _get_svc()
+    arrests = await svc.get_defendant_arrests(defendant_id)
+    
+    all_events = []
+    
+    for arrest in arrests:
+        booking_num = arrest.get("booking_number")
+        if not booking_num:
+            continue
+            
+        lifecycle_data = await get_lifecycle(booking_num)
+        if isinstance(lifecycle_data, dict) and lifecycle_data.get("ok"):
+            events = lifecycle_data.get("events", [])
+            # Tag events with booking number to differentiate cases in UI
+            for event in events:
+                event["booking_number"] = booking_num
+            all_events.extend(events)
+            
+    # Sort all aggregated events
+    from datetime import timezone
+    def sort_key(e):
+        ts = e.get("timestamp")
+        if not ts:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    all_events.sort(key=sort_key)
+    
+    return {
+        "defendant_id": defendant_id,
+        "events": all_events,
+        "total_events": len(all_events)
+    }
+
+@router.get("/defendants/by_booking/{booking_number}/timeline")
+async def get_defendant_timeline_by_booking(booking_number: str):
+    """Resolve booking_number to a defendant_id and return the unified timeline."""
+    from dashboard.routers.lifecycle_timeline import get_lifecycle
+    arrests_col = get_collection("arrests")
+    arrest = await arrests_col.find_one({"booking_number": booking_number})
+    
+    if arrest and "defendant_id" in arrest:
+        # Get unified timeline
+        return await get_defendant_timeline(arrest["defendant_id"])
+    
+    # Fallback to single booking timeline if not linked to a defendant
+    lifecycle_data = await get_lifecycle(booking_number)
+    if isinstance(lifecycle_data, dict) and lifecycle_data.get("ok"):
+        events = lifecycle_data.get("events", [])
+        for event in events:
+            event["booking_number"] = booking_number
+        return {
+            "defendant_id": None,
+            "events": events,
+            "total_events": len(events)
+        }
+    return {"defendant_id": None, "events": [], "total_events": 0}
+
 
 @router.post("/defendants/normalize")
 async def normalize_single(request: Request):

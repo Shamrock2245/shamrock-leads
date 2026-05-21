@@ -60,3 +60,41 @@ async def seed_poa_inventory(poa_inventory):
         await poa_inventory.create_index([("surety_id", 1), ("poa_prefix", 1), ("status", 1)])
     except Exception as e:
         print(f"   ⚠️  POA seed skipped: {e}")
+
+async def auto_release_poa(poa_number: str, reason: str, actor: str) -> bool:
+    """
+    Releases a POA back into the inventory if it was associated with an exonerated, 
+    surrendered, or forfeited bond, creating an audit log.
+    """
+    from dashboard.extensions import get_db
+    from dashboard.services.audit_service import AuditService
+    from datetime import datetime
+
+    db = get_db()
+    poa_doc = await db.poa_inventory.find_one({"poa_number": poa_number})
+    if not poa_doc:
+        return False
+        
+    if poa_doc.get("status") == "available":
+        return True # Already released
+
+    await db.poa_inventory.update_one(
+        {"poa_number": poa_number},
+        {"$set": {
+            "status": "available", 
+            "bond_case_id": None,
+            "released_at": datetime.utcnow(),
+            "release_reason": reason
+        }}
+    )
+    
+    await AuditService.log_event(
+        entity_type="poa",
+        entity_id=poa_number,
+        action="auto_released",
+        details={"reason": reason},
+        actor=actor
+    )
+    
+    return True
+

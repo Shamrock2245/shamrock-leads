@@ -337,6 +337,23 @@ async def _run_outreach_queue():
         )
 
 
+async def _run_overdue_tasks():
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    # Find pending tasks where due_date is in the past
+    cursor = db["tasks"].find({"status": "pending", "due_date": {"$lt": now}})
+    flagged = 0
+    async for task in cursor:
+        await db["tasks"].update_one(
+            {"_id": task["_id"]},
+            {"$set": {"status": "overdue", "overdue_at": now}}
+        )
+        flagged += 1
+    if flagged > 0:
+        logger.warning(f"[Tasks] Flagged {flagged} tasks as overdue")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -363,6 +380,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=False),
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=False),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
+    CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
 ]
 
 

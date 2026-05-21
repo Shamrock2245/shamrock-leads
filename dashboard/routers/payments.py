@@ -107,3 +107,67 @@ async def calculate_premium_split(request: Request):
         "buf_owed": buf_owed,
         "agent_retains": agent_retains
     })
+
+@payments_bp.post("/ledger/entry")
+async def add_ledger_entry(request: Request):
+    """Add a manual entry to the financial ledger (e.g., cash payment, fee)."""
+    from dashboard.services.ledger_service import LedgerService
+    data = await request.json()
+    if not data or 'booking_number' not in data or 'amount' not in data or 'type' not in data or 'category' not in data:
+        return JSONResponse({"error": "Missing required fields"}, status_code=400)
+    
+    # ensure actor is present
+    if 'actor' not in data:
+        data['actor'] = "Dashboard Agent"
+        
+    try:
+        transaction_id = await LedgerService.add_entry(data)
+        return JSONResponse(status_code=201, content={"success": True, "transaction_id": transaction_id})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@payments_bp.get("/ledger/{booking_number}")
+async def get_ledger(booking_number: str):
+    """Retrieve full ledger history and balance for a booking."""
+    from dashboard.services.ledger_service import LedgerService
+    try:
+        history = await LedgerService.get_ledger_history(booking_number)
+        balance = await LedgerService.get_balance(booking_number)
+        # convert datetimes to isoformat for json serialization
+        for entry in history:
+            if hasattr(entry.get('timestamp'), 'isoformat'):
+                entry['timestamp'] = entry['timestamp'].isoformat()
+        return JSONResponse(status_code=200, content={
+            "success": True,
+            "balance": balance,
+            "history": history
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@payments_bp.post("/ledger/swipesimple/import")
+async def import_swipesimple(request: Request):
+    """Endpoint to upload a SwipeSimple CSV file and parse entries into the ledger."""
+    from dashboard.services.ledger_service import LedgerService
+    
+    # We expect a multipart/form-data with a 'file' field
+    form = await request.form()
+    file_item = form.get("file")
+    
+    if not file_item or not hasattr(file_item, "filename"):
+        return JSONResponse({"error": "No CSV file provided."}, status_code=400)
+        
+    try:
+        content_bytes = await file_item.read()
+        csv_content = content_bytes.decode('utf-8')
+        
+        # Optionally, get actor from form or use default
+        actor = form.get("agent", "Dashboard Agent")
+        if isinstance(actor, bytes):
+            actor = actor.decode('utf-8')
+            
+        result = await LedgerService.import_swipesimple_csv(csv_content, actor)
+        return JSONResponse(status_code=200, content=result)
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)

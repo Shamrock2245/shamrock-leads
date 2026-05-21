@@ -311,9 +311,16 @@ async function openShamrockNotes(bookingNumber, defendantData) {
 
         <!-- ── Lifecycle Timeline ── -->
         <div class="slc-form-section">
-          <div class="slc-form-section-title">📅 Lifecycle Timeline <span class="slc-count" id="slcTimelineCount">—</span></div>
+          <div class="slc-form-section-title">📅 Unified Lifecycle Timeline <span class="slc-count" id="slcTimelineCount">—</span></div>
           <div class="slc-timeline" id="slcTimelineDisplay">
             <div class="slc-log-empty">Loading timeline…</div>
+          </div>
+        </div>
+        <!-- ── Financial Ledger ── -->
+        <div class="slc-form-section">
+          <div class="slc-form-section-title">💰 Financial Ledger <span class="slc-count" id="slcLedgerBalance">—</span></div>
+          <div class="slc-ledger" id="slcLedgerDisplay">
+            <div class="slc-log-empty">Loading ledger…</div>
           </div>
         </div>
         <!-- ── Contact History ── -->
@@ -373,80 +380,84 @@ function closeShamrockNotes() {
   document.body.style.overflow = '';
 }
 
-/* ── Lifecycle Timeline Loader ──────────────────────────────────────── */
+/* ── Lifecycle Timeline & Ledger Loader ──────────────────────────────────────── */
 async function _loadLifecycleTimeline(bookingNumber) {
-  const el = document.getElementById('slcTimelineDisplay');
+  const tlEl = document.getElementById('slcTimelineDisplay');
   const countEl = document.getElementById('slcTimelineCount');
-  if (!el) return;
+  const ledgerEl = document.getElementById('slcLedgerDisplay');
+  const balanceEl = document.getElementById('slcLedgerBalance');
 
   try {
-    // Fetch from defendant_notes which contains the timeline array
-    const r = await fetch(`/api/defendant-notes/${encodeURIComponent(bookingNumber)}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const notes = await r.json();
-
-    // Build timeline from multiple sources
-    const events = [];
-
-    // 1. Explicit timeline entries (from prospective_bonds sync)
-    (notes.timeline || []).forEach(e => events.push({
-      ts: e.timestamp || e.ts || '',
-      icon: '🔄',
-      label: e.event || 'Stage Change',
-      detail: e.detail || '',
-      agent: e.agent || '',
-    }));
-
-    // 2. Contact log entries
-    (notes.contact_log || []).forEach(e => {
-      const icons = { call: '📞', text: '💬', email: '📧', in_person: '🤝' };
-      events.push({
-        ts: e.ts || e.timestamp || '',
-        icon: icons[e.method] || '📋',
-        label: `${(e.direction === 'inbound' ? '← Inbound' : '→ Outbound')} ${e.method || 'Contact'}`,
-        detail: e.summary || '',
-        agent: e.agent || '',
-      });
-    });
-
-    // 3. Status change (from notes doc itself)
-    if (notes.updated_at && notes.shamrock_status) {
-      events.push({
-        ts: notes.updated_at,
-        icon: '📝',
-        label: 'Status Updated',
-        detail: `Status set to: ${notes.shamrock_status}`,
-        agent: notes.agent || '',
-      });
+    // 1. Fetch unified timeline
+    const tlRes = await fetch(`/api/defendants/by_booking/${encodeURIComponent(bookingNumber)}/timeline`);
+    if (tlRes.ok) {
+      const data = await tlRes.json();
+      const events = data.events || [];
+      if (countEl) countEl.textContent = events.length;
+      
+      if (!events.length) {
+        if (tlEl) tlEl.innerHTML = '<div class="slc-log-empty">No lifecycle events recorded yet</div>';
+      } else {
+        if (tlEl) tlEl.innerHTML = events.map(e => {
+          const d = e.timestamp ? new Date(e.timestamp) : null;
+          const timeStr = d && !isNaN(d)
+            ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+            : '—';
+          
+          const badge = e.badge ? `<span class="lcp-event-badge ${e.badge.class||''}">${_esc(e.badge.text||'')}</span>` : '';
+          const bookingTag = e.booking_number && e.booking_number !== bookingNumber ? `<span class="slc-timeline-booking">#${e.booking_number}</span>` : '';
+            
+          return `<div class="slc-timeline-entry">
+            <div class="slc-timeline-icon">${e.icon || '📋'}</div>
+            <div class="slc-timeline-body">
+              <div class="slc-timeline-label">${bookingTag} ${_esc(e.title || e.label || '')} ${badge}</div>
+              ${e.detail ? `<div class="slc-timeline-detail">${_esc(e.detail)}</div>` : ''}
+              <div class="slc-timeline-time">${timeStr}</div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    } else {
+      if (tlEl) tlEl.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Timeline unavailable</div>`;
     }
-
-    // Sort descending by timestamp
-    events.sort((a, b) => new Date(b.ts) - new Date(a.ts));
-
-    if (countEl) countEl.textContent = events.length;
-
-    if (!events.length) {
-      el.innerHTML = '<div class="slc-log-empty">No lifecycle events recorded yet</div>';
-      return;
+    
+    // 2. Fetch financial ledger
+    const ledRes = await fetch(`/api/ledger/${encodeURIComponent(bookingNumber)}`);
+    if (ledRes.ok) {
+      const ledData = await ledRes.json();
+      if (ledData.success) {
+        if (balanceEl) balanceEl.textContent = money(ledData.balance || 0);
+        
+        const history = ledData.history || [];
+        if (!history.length) {
+          if (ledgerEl) ledgerEl.innerHTML = '<div class="slc-log-empty">No ledger entries yet</div>';
+        } else {
+          if (ledgerEl) ledgerEl.innerHTML = `
+            <table class="slc-ledger-table">
+              <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Category</th></tr></thead>
+              <tbody>
+                ${history.map(h => {
+                  const amtColor = h.type === 'credit' ? '#10b981' : (h.type === 'debit' ? '#ef4444' : 'inherit');
+                  const amtPrefix = h.type === 'credit' ? '-' : (h.type === 'debit' ? '+' : '');
+                  const d = new Date(h.timestamp);
+                  return `<tr>
+                    <td>${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</td>
+                    <td style="text-transform:capitalize">${_esc(h.type)}</td>
+                    <td style="color:${amtColor};font-weight:600">${amtPrefix}${money(h.amount)}</td>
+                    <td>${_esc(h.category)}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          `;
+        }
+      } else {
+        if (ledgerEl) ledgerEl.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Ledger error: ${ledData.error}</div>`;
+      }
     }
-
-    el.innerHTML = events.map(e => {
-      const d = e.ts ? new Date(e.ts) : null;
-      const timeStr = d && !isNaN(d)
-        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-        : '—';
-      return `<div class="slc-timeline-entry">
-        <div class="slc-timeline-icon">${e.icon}</div>
-        <div class="slc-timeline-body">
-          <div class="slc-timeline-label">${e.label}${e.agent ? ` <span class="slc-timeline-agent">· ${e.agent}</span>` : ''}</div>
-          ${e.detail ? `<div class="slc-timeline-detail">${e.detail}</div>` : ''}
-          <div class="slc-timeline-time">${timeStr}</div>
-        </div>
-      </div>`;
-    }).join('');
-
   } catch (err) {
-    if (el) el.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Timeline unavailable: ${err.message}</div>`;
+    if (tlEl) tlEl.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Error loading data: ${err.message}</div>`;
+    if (ledgerEl) ledgerEl.innerHTML = '';
   }
 }
 
