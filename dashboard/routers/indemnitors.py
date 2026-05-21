@@ -471,8 +471,39 @@ async def api_indemnitor_create(request: Request):
             doc = await active_bonds.find_one({"booking_number": booking_number})
             collection = active_bonds
             bond_type = "active"
+            
         if not doc:
-            return JSONResponse({"error": f"Bond {booking_number} not found"}, status_code=404)
+            from dashboard.extensions import get_db
+            db = get_db()
+            arrest = await db.arrests.find_one({"booking_number": booking_number})
+            if arrest:
+                # Create a new prospective bond from the arrest lead
+                doc = {
+                    "booking_number": booking_number,
+                    "county": arrest.get("county", ""),
+                    "defendant_name": arrest.get("full_name", ""),
+                    "bond_amount": arrest.get("total_bond_amount", 0),
+                    "charges": arrest.get("charges", []),
+                    "status": "intake_pending",
+                    "stage": "prospective",
+                    "source": "dashboard_manual",
+                    "created_at": now.isoformat(),
+                    "updated_at": now.isoformat(),
+                    "timeline": [{
+                        "timestamp": now.isoformat(),
+                        "event": "bond_started",
+                        "detail": "Started prospective bond from arrest lead via indemnitor creation",
+                        "agent": "System"
+                    }],
+                    "indemnitors": [],
+                    "documents": {},
+                    "kyc_uploads": []
+                }
+                await prospective_bonds.insert_one(doc)
+                collection = prospective_bonds
+                bond_type = "prospective"
+            else:
+                return JSONResponse({"error": f"Bond or Arrest {booking_number} not found"}, status_code=404)
 
         # Multi-cosigner: migrate from single indemnitor to indemnitors array
         existing_indemnitors = doc.get("indemnitors", [])
