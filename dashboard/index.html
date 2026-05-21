@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/sl-intelligence.css?v=2">
   <link rel="stylesheet" href="/sl-alpha-intel.css?v=2">
   <link rel="stylesheet" href="/sl-premium.css?v=1">
+  <link rel="stylesheet" href="/sl-enrichment.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -112,6 +113,7 @@
   <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
   <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">Accounting</button>
   <button class="tab-btn" data-tab="tabSocial" onclick="SL.switchTab(this);SLSocial.load()">Social <span class="badge" id="socialBadge" style="background:#8b5cf6"></span></button>
+  <button class="tab-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()">Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">POA Inventory</button>
 </div>
 
@@ -4254,12 +4256,148 @@
 
 </div><!-- end tabSocial -->
 
+<!-- ═══════════════════════════════════════════════════════
+     TAB: ENRICHMENT COMMAND CENTER
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabEnrichment">
+
+  <div id="enrichFlash" class="enrich-flash"></div>
+
+  <!-- Provider Status Strip -->
+  <div class="enrich-card" style="margin-bottom:20px">
+    <h3><span class="card-icon">🔌</span> API Providers
+      <button class="enrich-btn secondary" id="enrichRefreshStatusBtn" style="margin-left:auto;font-size:12px">↻ Refresh</button>
+    </h3>
+    <div id="enrichProviderStatus">Loading providers...</div>
+  </div>
+
+  <div class="enrich-grid">
+    <!-- ── Email Domain Search ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">🔍</span> Domain Email Search</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Find all emails at a law firm domain (Tomba → Hunter fallback)</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Domain</label>
+          <input type="text" id="enrichDomainInput" placeholder="e.g. smithlawfirm.com">
+        </div>
+        <button class="enrich-btn primary" id="enrichDomainSearchBtn">🔎 Search</button>
+      </div>
+      <div id="enrichDomainResults"></div>
+    </div>
+
+    <!-- ── Email Finder (specific person) ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📧</span> Find Person's Email</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Find a specific attorney's email at their firm</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Domain</label>
+          <input type="text" id="enrichFindDomain" placeholder="smithlawfirm.com">
+        </div>
+        <div class="form-group">
+          <label>First Name</label>
+          <input type="text" id="enrichFindFirst" placeholder="John">
+        </div>
+        <div class="form-group">
+          <label>Last Name</label>
+          <input type="text" id="enrichFindLast" placeholder="Smith">
+        </div>
+        <button class="enrich-btn primary" id="enrichEmailFindBtn">🎯 Find</button>
+      </div>
+      <div id="enrichFindResult"></div>
+    </div>
+  </div>
+
+  <div class="enrich-grid">
+    <!-- ── Email Verifier ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">✅</span> Email Verifier</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Verify email deliverability (5-provider waterfall: Tomba → Hunter → EVA → Kickbox → Disify)</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Email Address</label>
+          <input type="email" id="enrichVerifyEmail" placeholder="john@smithlawfirm.com">
+        </div>
+        <button class="enrich-btn primary" id="enrichEmailVerifyBtn">✓ Verify</button>
+      </div>
+      <div id="enrichVerifyResult"></div>
+    </div>
+
+    <!-- ── Phone Validator ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📱</span> Phone Validator</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Validate phone numbers — detect line type, carrier, VOIP/burner (Veriphone → Numverify)</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Phone Number</label>
+          <input type="tel" id="enrichPhoneInput" placeholder="(239) 555-0178">
+        </div>
+        <button class="enrich-btn primary" id="enrichPhoneValidateBtn">📱 Validate</button>
+      </div>
+      <div id="enrichPhoneResult"></div>
+    </div>
+  </div>
+
+  <div class="enrich-grid">
+    <!-- ── Attorney Email Harvester ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">👔</span> Attorney Email Harvester</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Harvest criminal defense attorney emails from law firm domains (max 10 per batch)</p>
+      <div class="enrich-form-row">
+        <div class="form-group" style="flex:2">
+          <label>Law Firm Domains (one per line)</label>
+          <textarea id="enrichHarvestDomains" rows="4" placeholder="smithlawfirm.com&#10;jonesdefense.com&#10;swflcriminallaw.com"></textarea>
+          <span class="hint">Free tier: 25 Tomba + 25 Hunter searches per month</span>
+        </div>
+        <button class="enrich-btn primary" id="enrichHarvestBtn" style="align-self:flex-start;margin-top:18px">🌾 Harvest</button>
+      </div>
+    </div>
+
+    <!-- ── Phone Batch Validator ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📋</span> Batch Phone Validation</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Validate multiple phone numbers at once (max 25)</p>
+      <div class="enrich-form-row">
+        <div class="form-group" style="flex:2">
+          <label>Phone Numbers (one per line or comma-separated)</label>
+          <textarea id="enrichPhoneBatchInput" rows="4" placeholder="(239) 555-0178&#10;(239) 555-0179&#10;2395550180"></textarea>
+        </div>
+        <button class="enrich-btn primary" id="enrichPhoneBatchBtn" style="align-self:flex-start;margin-top:18px">📋 Validate All</button>
+      </div>
+      <div id="enrichPhoneBatchResults"></div>
+    </div>
+  </div>
+
+  <div class="enrich-grid">
+    <!-- ── Usage Stats ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📊</span> API Usage (Free Tier Tracking)</h3>
+      <div id="enrichUsageStats">Loading usage data...</div>
+    </div>
+
+    <!-- ── Phone Stats ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📈</span> Phone Validation Stats</h3>
+      <div id="enrichPhoneStats">Loading phone stats...</div>
+    </div>
+  </div>
+
+  <!-- ── Attorney Contact Database ── -->
+  <div class="enrich-card" style="margin-top:0">
+    <h3><span class="card-icon">📇</span> Attorney Contact Database</h3>
+    <div id="enrichAttorneyTable">Loading attorneys...</div>
+  </div>
+
+</div><!-- end tabEnrichment -->
+
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-imessage.js?v=4"></script>
 <script src="/sl-accounting.js?v=1"></script>
 <script src="/sl-alpha-intel.js?v=1"></script>
 <script src="/sl-fta.js?v=1"></script>
 <script src="/sl-social.js?v=1"></script>
+<script src="/sl-enrichment.js?v=1"></script>
 <script src="/sl-tasks.js?v=1"></script>
 
 </body>
