@@ -4369,6 +4369,106 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════
+       TIER 2: ADDRESS INTELLIGENCE
+       ═══════════════════════════════════════════════════════ -->
+
+  <div style="margin:24px 0 12px;font-size:13px;color:#10b981;text-transform:uppercase;letter-spacing:1px;font-weight:600">📍 Address Intelligence (Tier 2)</div>
+
+  <div class="enrich-grid">
+    <!-- ── Zip → County Lookup ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">🗺️</span> Zip → County Lookup</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Instantly resolve any FL zip to county, city, FIPS, and coordinates (Zippopotam + Nominatim)</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Zip Code</label>
+          <input type="text" id="enrichZipInput" placeholder="33901" maxlength="5" pattern="\d{5}">
+        </div>
+        <button class="enrich-btn primary" id="enrichZipLookupBtn">🗺️ Lookup</button>
+      </div>
+      <div id="enrichZipResult"></div>
+    </div>
+
+    <!-- ── Address Validator ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📍</span> Address Validator</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Validate &amp; standardize addresses — detects vacant, PO Box, out-of-area (Smarty → Nominatim)</p>
+      <div class="enrich-form-row">
+        <div class="form-group" style="flex:2">
+          <label>Street Address</label>
+          <input type="text" id="enrichAddressInput" placeholder="1528 Broadway">
+        </div>
+        <div class="form-group">
+          <label>City</label>
+          <input type="text" id="enrichAddressCity" placeholder="Fort Myers">
+        </div>
+      </div>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>State</label>
+          <input type="text" id="enrichAddressState" placeholder="FL" value="FL" maxlength="2">
+        </div>
+        <div class="form-group">
+          <label>Zip</label>
+          <input type="text" id="enrichAddressZip" placeholder="33901" maxlength="5">
+        </div>
+        <button class="enrich-btn primary" id="enrichAddressValidateBtn">📍 Validate</button>
+      </div>
+      <div id="enrichAddressResult"></div>
+    </div>
+  </div>
+
+  <div class="enrich-grid">
+    <!-- ── Distance Calculator ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📏</span> Distance from Office</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Calculate miles from Shamrock office (1528 Broadway, Ft Myers) — bail condition checks</p>
+      <div class="enrich-form-row">
+        <div class="form-group">
+          <label>Defendant's Zip Code</label>
+          <input type="text" id="enrichDistanceZip" placeholder="34102" maxlength="5">
+        </div>
+        <button class="enrich-btn primary" id="enrichDistanceBtn">📏 Calculate</button>
+      </div>
+      <div id="enrichDistanceResult"></div>
+    </div>
+
+    <!-- ── Address Extractor ── -->
+    <div class="enrich-card">
+      <h3><span class="card-icon">📄</span> Address Extractor</h3>
+      <p style="font-size:12px;color:#888;margin:0 0 10px">Extract postal addresses from court docs, SMS messages, or emails</p>
+      <div class="enrich-form-row">
+        <div class="form-group" style="flex:2">
+          <label>Paste Text</label>
+          <textarea id="enrichExtractText" rows="3" placeholder="Paste court document, SMS, or email text here..."></textarea>
+        </div>
+        <button class="enrich-btn primary" id="enrichExtractBtn" style="align-self:flex-start;margin-top:18px">📄 Extract</button>
+      </div>
+      <div id="enrichExtractResult"></div>
+    </div>
+  </div>
+
+  <!-- ── Batch Zip Resolution ── -->
+  <div class="enrich-card">
+    <h3><span class="card-icon">📋</span> Batch Zip → County</h3>
+    <p style="font-size:12px;color:#888;margin:0 0 10px">Resolve multiple zip codes at once — county distribution analysis (max 50)</p>
+    <div class="enrich-form-row">
+      <div class="form-group" style="flex:2">
+        <label>Zip Codes (one per line, comma-separated, or space-separated)</label>
+        <textarea id="enrichBatchZipInput" rows="3" placeholder="33901&#10;34102&#10;33947&#10;34205"></textarea>
+      </div>
+      <button class="enrich-btn primary" id="enrichBatchZipBtn" style="align-self:flex-start;margin-top:18px">📋 Resolve All</button>
+    </div>
+    <div id="enrichBatchZipResults"></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════
+       STATS & DATABASE
+       ═══════════════════════════════════════════════════════ -->
+
+  <div style="margin:24px 0 12px;font-size:13px;color:#888;text-transform:uppercase;letter-spacing:1px;font-weight:600">📊 Stats & Database</div>
+
   <div class="enrich-grid">
     <!-- ── Usage Stats ── -->
     <div class="enrich-card">

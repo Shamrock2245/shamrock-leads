@@ -1,10 +1,13 @@
 /**
  * sl-enrichment.js — Enrichment Command Center
  *
- * Dashboard frontend for the Tier 1 API stack:
+ * Dashboard frontend for the Tier 1+2 API stack:
  *   - Attorney Email Harvester (Tomba + Hunter.io)
  *   - Phone Validator (Veriphone + Numverify)
  *   - Email Verifier (EVA + Kickbox + Disify)
+ *   - Address Validator (Smarty + Nominatim/OSM)
+ *   - Zip → County Resolver (Zippopotam + Nominatim)
+ *   - Distance Calculator (Haversine from office)
  *   - API Usage Dashboard & Provider Status
  */
 
@@ -30,6 +33,11 @@
     validatePhone,
     validatePhoneBatch,
     loadAttorneys,
+    zipToCounty,
+    validateAddress,
+    distanceFromOffice,
+    extractAddresses,
+    batchZipToCounty,
   };
 
   // ══════════════════════════════════════════════════════════════════
@@ -70,6 +78,26 @@
     // Refresh status
     const statusBtn = document.getElementById('enrichRefreshStatusBtn');
     if (statusBtn) statusBtn.addEventListener('click', refreshStatus);
+
+    // Address: Zip to County
+    const zipBtn = document.getElementById('enrichZipLookupBtn');
+    if (zipBtn) zipBtn.addEventListener('click', _onZipLookup);
+
+    // Address: Validate
+    const addrBtn = document.getElementById('enrichAddressValidateBtn');
+    if (addrBtn) addrBtn.addEventListener('click', _onAddressValidate);
+
+    // Address: Distance
+    const distBtn = document.getElementById('enrichDistanceBtn');
+    if (distBtn) distBtn.addEventListener('click', _onDistance);
+
+    // Address: Extract
+    const extractBtn = document.getElementById('enrichExtractBtn');
+    if (extractBtn) extractBtn.addEventListener('click', _onExtractAddresses);
+
+    // Address: Batch Zip
+    const batchZipBtn = document.getElementById('enrichBatchZipBtn');
+    if (batchZipBtn) batchZipBtn.addEventListener('click', _onBatchZip);
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -138,6 +166,28 @@
       _renderAttorneyTable(_attorneys, result.total);
     }
     return result;
+  }
+
+  async function zipToCounty(zipCode) {
+    return await _api('POST', '/address/zip-to-county', { zip_code: zipCode });
+  }
+
+  async function validateAddress(address, city, state, zipCode) {
+    return await _api('POST', '/address/validate', {
+      address, city, state: state || 'FL', zip_code: zipCode || '',
+    });
+  }
+
+  async function distanceFromOffice(zipCode) {
+    return await _api('POST', '/address/distance', { zip_code: zipCode });
+  }
+
+  async function extractAddresses(text) {
+    return await _api('POST', '/address/extract', { text });
+  }
+
+  async function batchZipToCounty(zipCodes) {
+    return await _api('POST', '/address/batch-zip', { zip_codes: zipCodes });
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -230,6 +280,56 @@
     _renderPhoneBatchResults(result);
   }
 
+  async function _onZipLookup() {
+    const zip = (document.getElementById('enrichZipInput')?.value || '').trim();
+    if (!zip || zip.length < 5) return _flash('Enter a 5-digit zip code', 'warn');
+    _setLoading('enrichZipLookupBtn', true);
+    const result = await zipToCounty(zip);
+    _setLoading('enrichZipLookupBtn', false);
+    _renderZipResult(result);
+  }
+
+  async function _onAddressValidate() {
+    const address = (document.getElementById('enrichAddressInput')?.value || '').trim();
+    const city = (document.getElementById('enrichAddressCity')?.value || '').trim();
+    const state = (document.getElementById('enrichAddressState')?.value || '').trim();
+    const zip = (document.getElementById('enrichAddressZip')?.value || '').trim();
+    if (!address) return _flash('Enter a street address', 'warn');
+    _setLoading('enrichAddressValidateBtn', true);
+    const result = await validateAddress(address, city, state, zip);
+    _setLoading('enrichAddressValidateBtn', false);
+    _renderAddressResult(result);
+  }
+
+  async function _onDistance() {
+    const zip = (document.getElementById('enrichDistanceZip')?.value || '').trim();
+    if (!zip || zip.length < 5) return _flash('Enter a 5-digit zip code', 'warn');
+    _setLoading('enrichDistanceBtn', true);
+    const result = await distanceFromOffice(zip);
+    _setLoading('enrichDistanceBtn', false);
+    _renderDistanceResult(result);
+  }
+
+  async function _onExtractAddresses() {
+    const text = (document.getElementById('enrichExtractText')?.value || '').trim();
+    if (!text || text.length < 10) return _flash('Enter text to extract addresses from', 'warn');
+    _setLoading('enrichExtractBtn', true);
+    const result = await extractAddresses(text);
+    _setLoading('enrichExtractBtn', false);
+    _renderExtractResult(result);
+  }
+
+  async function _onBatchZip() {
+    const raw = (document.getElementById('enrichBatchZipInput')?.value || '').trim();
+    if (!raw) return _flash('Enter zip codes', 'warn');
+    const zips = raw.split(/[\n,\s]+/).map(z => z.trim()).filter(z => /^\d{5}$/.test(z));
+    if (!zips.length) return _flash('No valid 5-digit zip codes found', 'warn');
+    _setLoading('enrichBatchZipBtn', true);
+    const result = await batchZipToCounty(zips);
+    _setLoading('enrichBatchZipBtn', false);
+    _renderBatchZipResults(result);
+  }
+
   // ══════════════════════════════════════════════════════════════════
   //  RENDERERS
   // ══════════════════════════════════════════════════════════════════
@@ -255,6 +355,8 @@
         <span>📧 ${cache.email_verifications_cached || 0} cached</span>
         <span>📱 ${cache.phone_validations_cached || 0} cached</span>
         <span>👔 ${cache.attorney_contacts || 0} attorneys</span>
+        <span>📍 ${cache.address_validations_cached || 0} addresses</span>
+        <span>🗺️ ${cache.zip_lookups_cached || 0} zip lookups</span>
       </div>
     `;
   }
@@ -492,6 +594,7 @@
     const labels = {
       tomba: 'Tomba.io', hunter: 'Hunter.io', veriphone: 'Veriphone',
       numverify: 'Numverify', eva: 'EVA', kickbox: 'Kickbox', disify: 'Disify',
+      zippopotam: 'Zippopotam.us', nominatim: 'Nominatim/OSM', smarty: 'Smarty Streets',
     };
     return labels[name] || name;
   }
@@ -509,10 +612,10 @@
   function _riskClass(signal) {
     if (!signal) return '';
     if (['voip_phone', 'known_voip_carrier', 'toll_free_phone', 'non_us_phone'].includes(signal)) return 'risk-high';
-    if (['invalid_phone', 'invalid_length', 'unknown_line_type'].includes(signal)) return 'risk-critical';
-    if (['landline_phone'].includes(signal)) return 'risk-medium';
-    if (['mobile_phone'].includes(signal)) return 'risk-low';
-    return '';
+    if (['invalid_phone', 'invalid_length', 'unknown_line_type', 'invalid_address', 'vacant_address'].includes(signal)) return 'risk-critical';
+    if (['landline_phone', 'po_box_address', 'commercial_address', 'outside_service_area'].includes(signal)) return 'risk-medium';
+    if (['mobile_phone', 'out_of_state', 'no_mail_delivery', 'low_geocode_confidence'].includes(signal)) return 'risk-high';
+    return 'risk-low';
   }
 
   function _setLoading(btnId, loading) {
@@ -535,6 +638,156 @@
     el.className = `enrich-flash ${type}`;
     el.style.display = 'block';
     setTimeout(() => { el.style.display = 'none'; }, 4000);
+  }
+  // ══════════════════════════════════════════════════════════════════
+  //  ADDRESS RENDERERS
+  // ══════════════════════════════════════════════════════════════════
+
+  function _renderZipResult(result) {
+    const el = document.getElementById('enrichZipResult');
+    if (!el) return;
+    if (!result.success) {
+      el.innerHTML = `<div class="phone-result fail">${result.error || 'Lookup failed'}</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="phone-result valid">
+        <div class="phone-header">
+          <span class="phone-number">${result.zip}</span>
+          <span class="phone-valid-badge good">${result.county || 'Unknown'} County</span>
+        </div>
+        <div class="phone-details">
+          <div class="phone-detail"><label>City</label><span>${result.city || '—'}</span></div>
+          <div class="phone-detail"><label>State</label><span>${result.state || '—'} (${result.state_abbr || '—'})</span></div>
+          <div class="phone-detail"><label>County</label><span>${result.county || '—'}</span></div>
+          <div class="phone-detail"><label>FIPS</label><span>${result.fips || '—'}</span></div>
+          <div class="phone-detail"><label>Coordinates</label><span>${result.latitude?.toFixed(4) || '—'}, ${result.longitude?.toFixed(4) || '—'}</span></div>
+          <div class="phone-detail"><label>Source</label><span>${result.source || '—'}${result.cached ? ' (cached)' : ''}</span></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function _renderAddressResult(result) {
+    const el = document.getElementById('enrichAddressResult');
+    if (!el) return;
+    if (!result.success) {
+      el.innerHTML = `<div class="phone-result fail">${result.error || 'Validation failed'}</div>`;
+      return;
+    }
+    const signals = result.risk_signals || [];
+    el.innerHTML = `
+      <div class="phone-result ${result.valid ? 'valid' : 'invalid'}">
+        <div class="phone-header">
+          <span style="font-size:15px;font-weight:600">${result.delivery_line || result.street || result.input}</span>
+          <span class="phone-valid-badge ${result.valid ? 'good' : 'bad'}">${result.valid ? '✓ Valid' : '✗ Invalid'}</span>
+        </div>
+        <div style="font-size:13px;color:#888;margin-bottom:10px">${result.last_line || ''}</div>
+        <div class="phone-details">
+          <div class="phone-detail"><label>Street</label><span>${result.street || '—'}</span></div>
+          <div class="phone-detail"><label>City</label><span>${result.city || '—'}</span></div>
+          <div class="phone-detail"><label>State</label><span>${result.state || '—'}</span></div>
+          <div class="phone-detail"><label>Zip</label><span>${result.zip || '—'}${result.zip4 ? '-' + result.zip4 : ''}</span></div>
+          <div class="phone-detail"><label>County</label><span>${result.county || '—'}</span></div>
+          <div class="phone-detail"><label>FIPS</label><span>${result.fips || '—'}</span></div>
+          <div class="phone-detail"><label>Coordinates</label><span>${result.latitude?.toFixed(4) || '—'}, ${result.longitude?.toFixed(4) || '—'}</span></div>
+          <div class="phone-detail"><label>Provider</label><span>${result.provider || '—'}${result.cached ? ' (cached)' : ''}</span></div>
+          ${result.rdi ? `<div class="phone-detail"><label>Delivery Type</label><span>${result.rdi}</span></div>` : ''}
+          ${result.vacant !== undefined ? `<div class="phone-detail"><label>Vacant</label><span>${result.vacant ? '⚠ Yes' : '✓ No'}</span></div>` : ''}
+        </div>
+        ${signals.length ? `
+        <div class="phone-signals" style="margin-top:10px">
+          ${signals.map(s => `<span class="risk-badge ${_riskClass(s)}">${s.replace(/_/g, ' ')}</span>`).join('')}
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  function _renderDistanceResult(result) {
+    const el = document.getElementById('enrichDistanceResult');
+    if (!el) return;
+    if (!result.success) {
+      el.innerHTML = `<div class="phone-result fail">${result.error || 'Calculation failed'}</div>`;
+      return;
+    }
+    const dist = result.distance_miles;
+    const color = dist <= 50 ? '#66bb6a' : dist <= 100 ? '#ffa726' : '#ef5350';
+    el.innerHTML = `
+      <div class="phone-result valid" style="border-color:${color}33">
+        <div style="display:flex;align-items:center;gap:16px">
+          <div style="font-size:32px;font-weight:700;color:${color}">${dist} mi</div>
+          <div>
+            <div style="font-size:14px;font-weight:600">${result.to_city || ''}, ${result.to_county || ''} County</div>
+            <div style="font-size:12px;color:#888">From Shamrock office (1528 Broadway, Ft Myers)</div>
+            <div style="margin-top:6px">
+              ${result.within_50_miles ? '<span class="vbadge good">Within 50 mi ✓</span>' : '<span class="vbadge warn">Over 50 mi</span>'}
+              ${result.within_100_miles ? '<span class="vbadge good" style="margin-left:4px">Within 100 mi ✓</span>' : '<span class="vbadge bad" style="margin-left:4px">Over 100 mi ✗</span>'}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function _renderExtractResult(result) {
+    const el = document.getElementById('enrichExtractResult');
+    if (!el) return;
+    if (!result.success) {
+      el.innerHTML = `<div class="phone-result fail">${result.error || 'Extraction failed'}</div>`;
+      return;
+    }
+    if (!result.addresses_found) {
+      el.innerHTML = '<div class="phone-result" style="text-align:center;color:#888">No addresses found in text</div>';
+      return;
+    }
+    el.innerHTML = `
+      <div style="margin-bottom:8px"><strong>${result.addresses_found}</strong> address(es) extracted</div>
+      <table class="enrich-table">
+        <thead><tr><th>Address</th><th>Source</th><th>Confidence</th></tr></thead>
+        <tbody>
+          ${result.addresses.map(a => `
+            <tr>
+              <td>${a.raw}</td>
+              <td><span class="vbadge muted">${a.source}</span></td>
+              <td>${Math.round((a.confidence || 0) * 100)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function _renderBatchZipResults(result) {
+    const el = document.getElementById('enrichBatchZipResults');
+    if (!el) return;
+    if (!result.success) {
+      el.innerHTML = `<div class="enrich-error">${result.error || 'Batch lookup failed'}</div>`;
+      return;
+    }
+    const dist = result.county_distribution || {};
+    el.innerHTML = `
+      <div class="batch-summary">
+        <span class="batch-stat">${result.total} looked up</span>
+        ${Object.entries(dist).map(([county, count]) =>
+          `<span class="batch-stat good">${county}: ${count}</span>`
+        ).join('')}
+      </div>
+      <table class="enrich-table">
+        <thead><tr><th>Zip</th><th>City</th><th>County</th><th>State</th><th>FIPS</th><th>Source</th></tr></thead>
+        <tbody>
+          ${(result.results || []).map(r => `
+            <tr class="${r.success ? '' : 'row-invalid'}">
+              <td>${r.zip || '—'}</td>
+              <td>${r.city || '—'}</td>
+              <td><strong>${r.county || '—'}</strong></td>
+              <td>${r.state_abbr || r.state || '—'}</td>
+              <td>${r.fips || '—'}</td>
+              <td><span class="vbadge muted">${r.source || '—'}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
   }
 
 })();

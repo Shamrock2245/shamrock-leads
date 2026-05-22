@@ -15,6 +15,12 @@ Endpoints:
   POST /api/enrichment/phone/validate           → Validate a phone number
   POST /api/enrichment/phone/validate-batch     → Validate multiple phones
   GET  /api/enrichment/phone/stats              → Validation stats
+  POST /api/enrichment/address/validate         → Validate & standardize address
+  POST /api/enrichment/address/zip-to-county    → Zip code → county + geo
+  POST /api/enrichment/address/batch-zip        → Batch zip → county
+  GET  /api/enrichment/address/autocomplete     → Address autocomplete (Smarty)
+  POST /api/enrichment/address/extract          → Extract addresses from text
+  POST /api/enrichment/address/distance         → Distance from Shamrock office
   GET  /api/enrichment/status                   → All provider health status
 """
 
@@ -55,11 +61,30 @@ class PhoneBatchRequest(BaseModel):
     phones: List[str] = Field(..., description="List of phone numbers (max 25)")
     skip_cache: bool = Field(False, description="Force fresh lookups")
 
+class AddressValidateRequest(BaseModel):
+    address: str = Field(..., description="Street address (e.g. 1528 Broadway)")
+    city: str = Field("", description="City")
+    state: str = Field("FL", description="State (default: FL)")
+    zip_code: str = Field("", description="Zip code")
+
+class ZipLookupRequest(BaseModel):
+    zip_code: str = Field(..., description="5-digit US zip code")
+
+class BatchZipRequest(BaseModel):
+    zip_codes: List[str] = Field(..., description="List of zip codes (max 50)")
+
+class AddressExtractRequest(BaseModel):
+    text: str = Field(..., description="Text containing addresses to extract")
+
+class DistanceRequest(BaseModel):
+    zip_code: str = Field(..., description="Zip code to measure distance from office")
+
 
 # ── Lazy Service Init ──
 
 _email_finder = None
 _phone_validator = None
+_address_validator = None
 
 
 def _get_email_finder():
@@ -76,6 +101,14 @@ def _get_phone_validator():
         from dashboard.services.phone_validator import PhoneValidatorService
         _phone_validator = PhoneValidatorService(get_db())
     return _phone_validator
+
+
+def _get_address_validator():
+    global _address_validator
+    if _address_validator is None:
+        from dashboard.services.address_validator import AddressValidatorService
+        _address_validator = AddressValidatorService(get_db())
+    return _address_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -265,6 +298,63 @@ async def phone_stats():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  ADDRESS VALIDATION ENDPOINTS (Tier 2)
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.post("/address/zip-to-county")
+async def zip_to_county(body: ZipLookupRequest):
+    """Resolve a zip code to county, city, state, and coordinates."""
+    svc = _get_address_validator()
+    result = await svc.zip_to_county(body.zip_code)
+    return result
+
+
+@router.post("/address/batch-zip")
+async def batch_zip(body: BatchZipRequest):
+    """Batch-resolve zip codes to counties (max 50)."""
+    svc = _get_address_validator()
+    result = await svc.batch_zip_to_county(body.zip_codes)
+    return result
+
+
+@router.post("/address/validate")
+async def validate_address(body: AddressValidateRequest):
+    """Validate and standardize a US address with risk signal analysis."""
+    svc = _get_address_validator()
+    result = await svc.validate_address(
+        address=body.address,
+        city=body.city,
+        state=body.state,
+        zip_code=body.zip_code,
+    )
+    return result
+
+
+@router.get("/address/autocomplete")
+async def address_autocomplete(prefix: str, state: str = "FL"):
+    """Real-time address autocomplete suggestions (requires Smarty API key)."""
+    svc = _get_address_validator()
+    result = await svc.autocomplete(prefix, state)
+    return result
+
+
+@router.post("/address/extract")
+async def extract_addresses(body: AddressExtractRequest):
+    """Extract postal addresses from freeform text (court docs, SMS, emails)."""
+    svc = _get_address_validator()
+    result = await svc.extract_addresses(body.text)
+    return result
+
+
+@router.post("/address/distance")
+async def distance_from_office(body: DistanceRequest):
+    """Calculate distance from Shamrock office (1528 Broadway, Ft Myers)."""
+    svc = _get_address_validator()
+    result = await svc.distance_from_office(body.zip_code)
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  SYSTEM STATUS
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -273,6 +363,7 @@ async def enrichment_status():
     """Health check for all enrichment providers."""
     ef = _get_email_finder()
     pv = _get_phone_validator()
+    av = _get_address_validator()
 
     db = get_db()
     db_connected = db is not None
@@ -281,10 +372,14 @@ async def enrichment_status():
     email_cache_count = 0
     phone_cache_count = 0
     attorney_count = 0
+    address_cache_count = 0
+    zip_cache_count = 0
     if db:
         email_cache_count = await db["email_verifications"].count_documents({})
         phone_cache_count = await db["phone_validations"].count_documents({})
         attorney_count = await db["attorney_contacts"].count_documents({})
+        address_cache_count = await db["address_validations"].count_documents({})
+        zip_cache_count = await db["zip_lookups"].count_documents({})
 
     return {
         "success": True,
@@ -309,6 +404,21 @@ async def enrichment_status():
                 "type": "phone_validator",
                 "free_limits": "100 validations / month",
             },
+            "zippopotam": {
+                "configured": True,
+                "type": "geo_lookup",
+                "free_limits": "unlimited",
+            },
+            "nominatim": {
+                "configured": True,
+                "type": "geocoding",
+                "free_limits": "unlimited (1 req/sec)",
+            },
+            "smarty": {
+                "configured": av.smarty_available,
+                "type": "address_validator",
+                "free_limits": "250 lookups / month",
+            },
             "eva": {"configured": True, "type": "email_verifier", "free_limits": "unlimited"},
             "kickbox": {"configured": True, "type": "email_verifier", "free_limits": "unlimited"},
             "disify": {"configured": True, "type": "email_verifier", "free_limits": "unlimited"},
@@ -318,5 +428,7 @@ async def enrichment_status():
             "email_verifications_cached": email_cache_count,
             "phone_validations_cached": phone_cache_count,
             "attorney_contacts": attorney_count,
+            "address_validations_cached": address_cache_count,
+            "zip_lookups_cached": zip_cache_count,
         },
     }
