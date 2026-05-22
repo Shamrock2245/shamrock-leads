@@ -36,6 +36,12 @@ function toggleTheme() {
 
 // ── Tab Switching ─────────────────────────────────────────────────────────
 function switchTab(btn) {
+  // Accept either a DOM element or a string tab ID (e.g. 'tabImessage')
+  if (typeof btn === 'string') {
+    const tabId = btn;
+    btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if (!btn) { console.warn('[switchTab] No tab button found for:', tabId); return; }
+  }
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   btn.classList.add('active');

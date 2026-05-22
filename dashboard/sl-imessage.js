@@ -939,22 +939,60 @@ window.SLiMessage = (() => {
     if (typeof SL !== 'undefined' && typeof SL.switchTab === 'function') {
       SL.switchTab('tabImessage');
     }
-    // Pre-fill the compose area with correct element IDs
+    // Ensure the iMessage tab is initialized (loads inbox, health, etc.)
+    init();
+
+    // Determine if the first arg is a phone number or a booking number
+    const digits = (bookingOrPhone || '').replace(/\D/g, '');
+    const isPhone = digits.length >= 10;
+
+    // Pre-fill the compose area after a short delay for tab transition
     setTimeout(() => {
       const phoneEl  = $('bbNewRecipient');
       const targetEl = $('bbComposeTarget');
-      if (phoneEl)  phoneEl.value = bookingOrPhone || '';
-      if (targetEl) targetEl.value = bookingOrPhone || '';
-      const toLabel = $('bbComposeTo');
-      if (toLabel && name) toLabel.textContent = name;
+      const toLabel  = $('bbComposeTo');
+
+      if (isPhone) {
+        // It's a real phone number — pre-fill both fields
+        const formatted = digits.length === 10 ? '+1' + digits : '+' + digits;
+        if (phoneEl)  phoneEl.value = formatted;
+        if (targetEl) targetEl.value = formatted;
+        if (toLabel)  toLabel.textContent = name || formatted;
+      } else {
+        // It's a booking number — clear the phone field and prompt user
+        if (phoneEl)  { phoneEl.value = ''; phoneEl.placeholder = 'Enter phone number for ' + (name || bookingOrPhone); }
+        if (targetEl) targetEl.value = '';
+        if (toLabel)  toLabel.textContent = name ? `${name} (${bookingOrPhone})` : bookingOrPhone || '';
+      }
+
       // Show the To: row for new compose
       const toRow = document.querySelector('.im-to-row');
       if (toRow) toRow.style.display = 'flex';
+
+      // Show empty compose area (new message state)
+      const composeArea = $('bbComposeArea');
+      if (composeArea) {
+        composeArea.style.padding = '';
+        composeArea.style.overflow = '';
+        composeArea.innerHTML = `
+          <div class="im-empty-state" style="flex:1">
+            <div class="im-empty-icon">💬</div>
+            <div class="im-empty-title">${name ? 'Message ' + _esc(name) : 'New Message'}</div>
+            <div class="im-empty-sub">${isPhone ? 'Type your message below and hit send.' : 'Enter the phone number above, then type your message.'}</div>
+          </div>`;
+      }
+
       const sendBtn = $('bbSendBtn');
-      if (sendBtn) sendBtn.disabled = !(bookingOrPhone || '').trim();
-      const textEl = $('bbComposeText');
-      if (textEl) textEl.focus();
-    }, 150);
+      if (sendBtn) sendBtn.disabled = !isPhone;
+
+      // Focus the right field
+      if (isPhone) {
+        const textEl = $('bbComposeText');
+        if (textEl) textEl.focus();
+      } else {
+        if (phoneEl) phoneEl.focus();
+      }
+    }, 200);
   }
 
   return {
