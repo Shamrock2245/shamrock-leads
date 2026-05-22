@@ -233,6 +233,8 @@ services:
       # ── Database ──
       DATABASE_URL: "postgresql://postiz:${POSTIZ_DB_PASSWORD:-shamrock_postiz_2026}@postiz-postgres:5432/postiz"
       REDIS_URL: "redis://postiz-redis:6379"
+      # ── Temporal (required v2.12+) ──
+      TEMPORAL_ADDRESS: "temporal:7233"
       # ── Self-hosting config ──
       IS_GENERAL: "true"
       STORAGE_PROVIDER: "local"
@@ -250,6 +252,8 @@ services:
         condition: service_healthy
       postiz-redis:
         condition: service_healthy
+      temporal:
+        condition: service_started
     networks:
       - shamrock-net
     healthcheck:
@@ -265,6 +269,62 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── Temporal Workflow Engine (required by Postiz v2.12+) ──
+  # Handles background scheduling, retries, and workflow orchestration
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: shamrock-temporal
+    restart: unless-stopped
+    profiles:
+      - social
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal_shamrock_2026
+      - POSTGRES_SEEDS=temporal-postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks:
+      - shamrock-net
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── PostgreSQL for Temporal ──
+  temporal-postgres:
+    image: postgres:17-alpine
+    container_name: shamrock-temporal-postgres
+    restart: unless-stopped
+    profiles:
+      - social
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal_shamrock_2026
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - shamrock-net
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   # ── PostgreSQL for Postiz ──
   postiz-postgres:
@@ -330,4 +390,6 @@ volumes:
   postiz-uploads:
     driver: local
   postiz-postgres-data:
+    driver: local
+  temporal-postgres-data:
     driver: local
