@@ -71,6 +71,8 @@ const SLSocial = (() => {
       twitter: '𝕏', linkedin: 'in', facebook: 'f',
       instagram: '📷', threads: '🧵', tiktok: '♪',
       telegram: '✈️', gbp: '📍', youtube: '▶️',
+      reddit: '🤖', bluesky: '☁️', mastodon: '🐘',
+      pinterest: '📌',
     };
     return icons[p] || p;
   }
@@ -114,13 +116,13 @@ const SLSocial = (() => {
 
   async function loadStats() {
     const data = await _fetch('/queue/stats');
-    _stats = data || {};
+    _stats = data?.stats || data || {};
     renderKPIs();
   }
 
   async function loadPlatforms() {
     const data = await _fetch('/platforms');
-    _platforms = data || {};
+    _platforms = data?.platforms || data || {};
     renderPlatformStatus();
   }
 
@@ -143,14 +145,21 @@ const SLSocial = (() => {
     const container = document.getElementById('socPlatformGrid');
     if (!container) return;
 
-    const platforms = ['twitter', 'linkedin', 'facebook', 'instagram', 'threads', 'telegram', 'gbp', 'youtube'];
+    const platforms = [
+      'twitter', 'linkedin', 'facebook', 'instagram', 'threads',
+      'tiktok', 'youtube', 'reddit', 'telegram', 'bluesky',
+      'mastodon', 'pinterest', 'gbp',
+    ];
     container.innerHTML = platforms.map(p => {
-      const enabled = _platforms[p]?.enabled ?? false;
-      const lastPost = _platforms[p]?.last_post;
+      const pData = _platforms[p] || {};
+      const enabled = pData.enabled ?? false;
+      const lastPost = pData.last_post;
+      const picture = pData.picture ? `<img src="${pData.picture}" class="soc-platform-avatar" alt="">` : '';
       return `
         <div class="soc-platform-card ${enabled ? 'active' : 'disabled'}">
           <div class="soc-platform-icon">${_platformIcon(p)}</div>
           <div class="soc-platform-name">${_platformLabel(p)}</div>
+          ${picture}
           <div class="soc-platform-status">${enabled ? '🟢 Connected' : '⚪ Not configured'}</div>
           <div class="soc-platform-last">${lastPost ? _ago(lastPost) : '—'}</div>
         </div>`;
@@ -173,7 +182,7 @@ const SLSocial = (() => {
     }
 
     body.innerHTML = _posts.map(post => {
-      const id = post._id || post.id || '';
+      const id = post.post_id || post._id || post.id || '';
       const content = _escHtml(_truncate(post.content, 200));
       const platform = post.platform || 'twitter';
       const status = post.status || 'pending';
@@ -244,7 +253,7 @@ const SLSocial = (() => {
   }
 
   async function humanize(id) {
-    const post = _posts.find(p => (p._id || p.id) === id);
+    const post = _posts.find(p => (p.post_id || p._id || p.id) === id);
     if (!post) return;
 
     SL.toast('Humanizing…', 'info');
@@ -252,12 +261,14 @@ const SLSocial = (() => {
       method: 'POST',
       body: JSON.stringify({ text: post.content }),
     });
-    if (data.rewritten) {
-      SL.toast(`Humanized! Score: ${Math.round(data.score_before)} → ${Math.round(data.score_after)}`, 'success');
+    if (data.humanized) {
+      const before = data.score_before?.score ?? data.score_before ?? 0;
+      const after = data.score_after?.score ?? data.score_after ?? 0;
+      SL.toast(`Humanized! Score: ${Math.round(before)} → ${Math.round(after)}`, 'success');
       // Update post content via edit
       await _fetch(`/edit/${id}`, {
         method: 'POST',
-        body: JSON.stringify({ content: data.rewritten }),
+        body: JSON.stringify({ content: data.humanized }),
       });
       await loadQueue();
     } else {
@@ -446,13 +457,25 @@ const SLSocial = (() => {
 
   // ── Health Check ───────────────────────────────────────────────────────
   async function checkHealth() {
-    const data = await _fetch('/../health');
+    // Check social engine
+    const data = await _fetch('/health');
     const el = document.getElementById('socEngineStatus');
     if (el) {
       if (data.status === 'healthy' || data.status === 'ok') {
-        el.innerHTML = '<span class="soc-conn-dot green"></span> Connected';
+        el.innerHTML = '<span class="soc-conn-dot green"></span> Engine Online';
       } else {
-        el.innerHTML = '<span class="soc-conn-dot red"></span> Offline';
+        el.innerHTML = '<span class="soc-conn-dot red"></span> Engine Offline';
+      }
+    }
+
+    // Check Postiz
+    const postiz = await _fetch('/postiz/health');
+    const pel = document.getElementById('socPostizStatus');
+    if (pel) {
+      if (postiz.connected) {
+        pel.innerHTML = `<span class="soc-conn-dot green"></span> Postiz: ${postiz.user || 'Connected'}`;
+      } else {
+        pel.innerHTML = '<span class="soc-conn-dot amber"></span> Postiz: Not connected';
       }
     }
   }

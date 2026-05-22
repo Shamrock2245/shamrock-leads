@@ -3916,6 +3916,8 @@
 .soc-conn-dot.green{background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.5)}
 .soc-conn-dot.red{background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.5)}
 .soc-conn-dot.yellow{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,0.5)}
+.soc-conn-dot.amber{background:#f97316;box-shadow:0 0 8px rgba(249,115,22,0.5)}
+.soc-platform-avatar{width:24px;height:24px;border-radius:50%;margin-top:4px}
 
 /* KPI Strip */
 .soc-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:24px}
@@ -4043,11 +4045,14 @@
   <div class="soc-header">
     <div>
       <h2>📣 Social Command Center</h2>
-      <div class="soc-header-sub">AI-powered content engine · Grok integration · Humanizer · Multi-platform publishing</div>
+      <div class="soc-header-sub">Powered by Postiz · AI content via Grok · Humanizer · 30+ platform publishing</div>
     </div>
     <div class="soc-header-right">
       <div class="soc-conn-pill" id="socEngineStatus">
         <span class="soc-conn-dot yellow"></span> Checking…
+      </div>
+      <div class="soc-conn-pill" id="socPostizStatus">
+        <span class="soc-conn-dot yellow"></span> Postiz: Checking…
       </div>
       <button class="soc-btn-primary" onclick="SLSocial.openManualModal()">✏️ New Post</button>
     </div>

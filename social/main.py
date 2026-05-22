@@ -136,30 +136,43 @@ async def health():
 
 @app.get("/api/social/platforms", tags=["config"])
 async def list_platforms():
-    """List all platforms and their configuration status."""
-    from social.platforms.twitter import TwitterAdapter
-    from social.platforms.linkedin import LinkedInAdapter
-    from social.platforms.facebook import FacebookAdapter
-    from social.platforms.instagram import InstagramAdapter
+    """List all platforms and their connection status via Postiz."""
+    from social.platforms.postiz import get_postiz_client
 
-    adapters = {
-        "twitter": TwitterAdapter(),
-        "linkedin": LinkedInAdapter(),
-        "facebook": FacebookAdapter(),
-        "instagram": InstagramAdapter(),
-    }
+    client = get_postiz_client()
+    all_platforms = [
+        "twitter", "linkedin", "facebook", "instagram",
+        "threads", "tiktok", "youtube", "reddit",
+        "telegram", "bluesky", "mastodon", "pinterest", "gbp",
+    ]
 
-    return {
-        "platforms": {
-            name: {
-                "enabled": adapter.is_configured(),
-                "name": settings.__dict__.get(name, type("X", (), {"name": name})).name
-                    if hasattr(settings, name) else name,
-            }
-            for name, adapter in adapters.items()
-        },
-        "enabled": get_enabled_platforms(),
-    }
+    try:
+        connected = await client.get_all_connected_platforms()
+        platforms = {}
+        for p in all_platforms:
+            if p in connected:
+                platforms[p] = {
+                    "enabled": True,
+                    "name": connected[p].get("name", p),
+                    "picture": connected[p].get("picture", ""),
+                    "provider": connected[p].get("provider", p),
+                }
+            else:
+                platforms[p] = {"enabled": False, "name": p}
+
+        return {
+            "platforms": platforms,
+            "postiz_connected": client.api_key != "",
+            "enabled": list(connected.keys()),
+        }
+    except Exception as e:
+        # Fallback: Postiz not reachable
+        return {
+            "platforms": {p: {"enabled": False, "name": p} for p in all_platforms},
+            "postiz_connected": False,
+            "error": str(e),
+            "enabled": [],
+        }
 
 
 # ── Ingestion ──────────────────────────────────────────────────────────────────

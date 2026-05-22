@@ -92,7 +92,60 @@ async def social_health():
     return await _proxy("GET", "/../health")
 
 
-# ── Queue ──────────────────────────────────────────────────────────────────────
+# ── Postiz Integration ────────────────────────────────────────────────────────
+
+@router.get("/postiz/health")
+async def postiz_health():
+    """Check if Postiz is reachable and authenticated."""
+    try:
+        from social.platforms.postiz import get_postiz_client
+        client = get_postiz_client()
+        health = await client.health_check()
+        return JSONResponse(health)
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+@router.get("/postiz/integrations")
+async def postiz_integrations():
+    """List all connected Postiz social channels."""
+    try:
+        from social.platforms.postiz import get_postiz_client
+        client = get_postiz_client()
+        connected = await client.get_all_connected_platforms()
+        integrations = await client.list_integrations()
+        return JSONResponse({
+            "success": True,
+            "platforms": connected,
+            "integrations": integrations,
+            "count": len(integrations),
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@router.post("/postiz/post")
+async def postiz_direct_post(request: Request):
+    """Post directly via Postiz API (bypasses queue)."""
+    try:
+        from social.platforms.postiz import PostizAdapter
+        body = await request.json()
+        content = body.get("content", "")
+        platform = body.get("platform", "twitter")
+        if not content:
+            return JSONResponse({"success": False, "error": "No content provided"}, status_code=400)
+
+        adapter = PostizAdapter(target_platform=platform)
+        result = await adapter.post(content)
+        return JSONResponse({
+            "success": result.success,
+            "platform_post_id": result.platform_post_id,
+            "platform_url": result.platform_url,
+            "error": result.error,
+        })
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
 
 @router.get("/queue")
 async def list_queue(

@@ -106,28 +106,15 @@ class SocialScheduler:
             await asyncio.sleep(interval)
 
     async def _publish_post(self, post):
-        """Post a single approved item to its platform."""
-        from social.platforms.twitter import TwitterAdapter
-        from social.platforms.linkedin import LinkedInAdapter
-        from social.platforms.facebook import FacebookAdapter
-        from social.platforms.instagram import InstagramAdapter
+        """Post a single approved item to its platform via Postiz."""
+        from social.platforms.postiz import PostizAdapter
 
-        adapters = {
-            "twitter": TwitterAdapter(),
-            "linkedin": LinkedInAdapter(),
-            "facebook": FacebookAdapter(),
-            "instagram": InstagramAdapter(),
-        }
-
-        adapter = adapters.get(post.platform.value)
-        if not adapter:
-            await self.queue.mark_failed(post.post_id, f"Unknown platform: {post.platform.value}", retry=False)
-            return
+        adapter = PostizAdapter(target_platform=post.platform.value)
 
         if not adapter.is_configured():
             await self.queue.mark_failed(
                 post.post_id,
-                f"{post.platform.value} not configured — check env vars",
+                "Postiz API key not configured — set POSTIZ_API_KEY in .env",
                 retry=False,
             )
             return
@@ -158,19 +145,13 @@ class SocialScheduler:
     # ── Analytics Loop ────────────────────────────────────────────────────
 
     async def _analytics_loop(self):
-        """Pull engagement metrics for recently posted items."""
+        """Pull engagement metrics for recently posted items via Postiz."""
         await asyncio.sleep(300)  # Wait 5 min before first run
         interval = settings.analytics_pull_interval_hours * 3600
 
         while self._running:
             try:
-                from social.platforms.twitter import TwitterAdapter
-                from social.platforms.linkedin import LinkedInAdapter
-
-                adapters = {
-                    "twitter": TwitterAdapter(),
-                    "linkedin": LinkedInAdapter(),
-                }
+                from social.platforms.postiz import PostizAdapter
 
                 # Get posts from last 7 days
                 posted = await self.queue.list_posts(status=PostStatus.POSTED, limit=100)
@@ -179,8 +160,9 @@ class SocialScheduler:
                 for post in posted:
                     if not post.platform_post_id:
                         continue
-                    adapter = adapters.get(post.platform.value)
-                    if not adapter or not adapter.is_configured():
+
+                    adapter = PostizAdapter(target_platform=post.platform.value)
+                    if not adapter.is_configured():
                         continue
 
                     try:
