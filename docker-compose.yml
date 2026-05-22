@@ -272,22 +272,29 @@ services:
 
   # ── Temporal Workflow Engine (required by Postiz v2.12+) ──
   # Handles background scheduling, retries, and workflow orchestration
+  # Config mirrors official: github.com/gitroomhq/postiz-docker-compose
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.28.1
     container_name: shamrock-temporal
     restart: unless-stopped
     profiles:
       - social
     environment:
-      - DB=postgresql
+      - DB=postgres12
       - DB_PORT=5432
       - POSTGRES_USER=temporal
-      - POSTGRES_PWD=temporal_shamrock_2026
+      - POSTGRES_PWD=temporal
       - POSTGRES_SEEDS=temporal-postgres
       - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=temporal-elasticsearch
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
     depends_on:
-      temporal-postgres:
-        condition: service_healthy
+      - temporal-postgres
+      - temporal-elasticsearch
+    volumes:
+      - ./config/temporal-dynamicconfig:/etc/temporal/config/dynamicconfig
     networks:
       - shamrock-net
     mem_limit: 1g
@@ -298,21 +305,51 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── Elasticsearch for Temporal (visibility store) ──
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    container_name: shamrock-temporal-elasticsearch
+    restart: unless-stopped
+    profiles:
+      - social
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    expose:
+      - 9200
+    volumes:
+      - temporal-elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - shamrock-net
+    mem_limit: 1g
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
   # ── PostgreSQL for Temporal ──
   temporal-postgres:
-    image: postgres:17-alpine
+    image: postgres:16
     container_name: shamrock-temporal-postgres
     restart: unless-stopped
     profiles:
       - social
     environment:
       POSTGRES_USER: temporal
-      POSTGRES_PASSWORD: temporal_shamrock_2026
-      POSTGRES_DB: temporal
+      POSTGRES_PASSWORD: temporal
+    expose:
+      - 5432
     volumes:
       - temporal-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U temporal -d temporal"]
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -392,4 +429,6 @@ volumes:
   postiz-postgres-data:
     driver: local
   temporal-postgres-data:
+    driver: local
+  temporal-elasticsearch-data:
     driver: local
