@@ -63,6 +63,9 @@ services:
     command: uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --access-log --log-level info
     env_file:
       - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
     ports:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:
@@ -178,6 +181,10 @@ services:
     environment:
       - SOCIAL_GROK_ENABLED=true
       - SOCIAL_HUMANIZER_ENABLED=true
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./creds:/app/creds:ro             # GCP service account (Gmail scanner)
     ports:
       - "8089:5060"                       # Social Engine API (external 8089)
     depends_on:

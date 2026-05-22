@@ -7,7 +7,9 @@ FROM python:3.12-slim
 LABEL maintainer="Shamrock Active Software"
 LABEL description="ShamrockLeads Dashboard API (FastAPI/Uvicorn)"
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libxml2-dev libxslt-dev libyaml-dev \
     && rm -rf /var/lib/apt/lists/*
