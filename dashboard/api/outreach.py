@@ -201,3 +201,103 @@ async def handle_reply():
     except Exception as exc:
         logger.exception("handle_reply error")
         return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/outreach/review-queue
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.route("/outreach/review-queue", methods=["GET"])
+async def get_review_queue():
+    """Return pending review queue items, sorted by lead score desc."""
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        sequencer = _get_sequencer()
+        items = await sequencer.get_review_queue(limit=limit)
+
+        # Serialize datetimes
+        for item in items:
+            for field in ("created_at", "updated_at", "reviewed_at"):
+                if hasattr(item.get(field), "isoformat"):
+                    item[field] = item[field].isoformat()
+
+        # Get count for badge
+        queue_col = get_collection("outreach_review_queue")
+        pending_count = await queue_col.count_documents({"status": "pending"})
+
+        return jsonify({
+            "success": True,
+            "items": items,
+            "pending_count": pending_count,
+        })
+
+    except Exception as exc:
+        logger.exception("get_review_queue error")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/approve/<review_id>
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.route("/outreach/review-queue/approve/<review_id>", methods=["POST"])
+async def approve_review(review_id: str):
+    """Approve a queued outreach message and start the sequence."""
+    try:
+        sequencer = _get_sequencer()
+        result = await sequencer.approve_review(review_id)
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("approve_review error for %s", review_id)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/reject/<review_id>
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.route("/outreach/review-queue/reject/<review_id>", methods=["POST"])
+async def reject_review(review_id: str):
+    """Reject a queued outreach message."""
+    try:
+        sequencer = _get_sequencer()
+        result = await sequencer.reject_review(review_id)
+        return jsonify(result)
+    except Exception as exc:
+        logger.exception("reject_review error for %s", review_id)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/bulk-approve
+# Body (optional): { "limit": 50 }
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.route("/outreach/review-queue/bulk-approve", methods=["POST"])
+async def bulk_approve_review():
+    """Approve all pending review queue items at once."""
+    try:
+        data = (await request.get_json()) or {}
+        limit = min(int(data.get("limit", 50)), 200)
+
+        sequencer = _get_sequencer()
+        items = await sequencer.get_review_queue(limit=limit)
+
+        approved = 0
+        failed = 0
+        for item in items:
+            try:
+                result = await sequencer.approve_review(item["_id"])
+                if result.get("success"):
+                    approved += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+
+        return jsonify({
+            "success": True,
+            "approved": approved,
+            "failed": failed,
+        })
+
+    except Exception as exc:
+        logger.exception("bulk_approve error")
+        return jsonify({"success": False, "error": str(exc)}), 500
+

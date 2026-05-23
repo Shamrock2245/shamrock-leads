@@ -295,11 +295,20 @@ async def _run_speed_to_contact():
     db = get_db()
     cfg = await get_automation_config(db)
     stc = cfg.get("speed_to_contact", {})
+    mode = stc.get("mode", "review")
+    if mode == "off":
+        return  # Mode explicitly set to off
     seq = OutreachSequencer(db)
-    result = await seq.batch_start_new_arrests(hours_back=stc.get("hours_back", 1), limit=stc.get("max_per_cycle", 20))
+    result = await seq.batch_start_new_arrests(
+        hours_back=stc.get("hours_back", 1),
+        limit=stc.get("max_per_cycle", 20),
+        mode=mode,
+        min_lead_score=stc.get("min_lead_score", 70),
+    )
     await db["automation_run_log"].insert_one({"automation": "speed_to_contact", "run_at": datetime.now(timezone.utc), "result": result})
-    if result.get("started", 0):
-        logger.info("[SpeedToContact] started=%s", result["started"])
+    if result.get("started", 0) or result.get("queued", 0):
+        logger.info("[SpeedToContact] mode=%s started=%s queued=%s no_phone=%s",
+                    mode, result.get("started", 0), result.get("queued", 0), result.get("no_phone", 0))
 
 async def _run_paperwork_chase():
     from dashboard.services.paperwork_chase_service import PaperworkChaseService

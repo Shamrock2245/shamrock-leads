@@ -96,7 +96,7 @@
   <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">Command Center</button>
   <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">Defendants</button>
-  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load()">Outreach <span class="badge" id="prospectiveBadge">—</span></button>
+  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load();SLProspective.loadReviewQueue()">Outreach <span class="badge" id="prospectiveBadge">—</span><span class="badge" id="reviewQueueBadge" style="display:none;background:#f59e0b;color:#000;margin-left:2px"></span></button>
   <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()">Scraper Health</button>
   <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
   <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">Tracking <span class="badge" id="trackingBadge">—</span></button>
@@ -419,6 +419,9 @@
     <div id="autoReplyPanelWrap" style="display:none;margin-bottom:14px">
       <div id="autoReplyPanel" class="auto-reply-panel" style="margin:0"></div>
     </div>
+
+    <!-- ── Review Queue (The Closer — Review Mode) ── -->
+    <div id="reviewQueueContainer" style="display:none;margin-bottom:16px;padding:16px;background:var(--panel);border:1px solid rgba(245,158,11,.3);border-radius:12px"></div>
 
     <!-- ── KPI Row (7 metrics) ── -->
     <div class="outreach-kpi-row">

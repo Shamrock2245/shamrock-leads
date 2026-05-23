@@ -1265,6 +1265,161 @@ window.SLProspective = (function () {
   setTimeout(loadAutoReplyConfig, 800);
 
   // ── Public API ─────────────────────────────────────────────────────────────
+  // ── Review Queue (The Closer — Review Mode) ────────────────────────────────
+  let _reviewQueue = [];
+  let _reviewCount = 0;
+
+  async function loadReviewQueue() {
+    try {
+      const r = await fetch(API + '/api/outreach/review-queue?limit=50');
+      const d = await r.json();
+      if (d.success) {
+        _reviewQueue = d.items || [];
+        _reviewCount = d.pending_count || 0;
+        renderReviewQueue();
+        // Update badge on Outreach tab
+        var badge = $('reviewQueueBadge');
+        if (badge) {
+          badge.textContent = _reviewCount;
+          badge.style.display = _reviewCount > 0 ? 'inline-flex' : 'none';
+        }
+      }
+    } catch (e) {
+      console.error('loadReviewQueue:', e);
+    }
+  }
+
+  function renderReviewQueue() {
+    var container = $('reviewQueueContainer');
+    if (!container) return;
+
+    if (_reviewQueue.length === 0) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'block';
+    var header = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div>
+          <span style="font-size:1.1rem;font-weight:700">📬 Review Queue</span>
+          <span class="sl-badge" style="background:#f59e0b;color:#fff;margin-left:8px;font-size:11px">${_reviewCount} pending</span>
+        </div>
+        <button class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLProspective.bulkApproveReview()"
+                style="font-size:11px;padding:6px 14px">
+          ✅ Approve All (${_reviewCount})
+        </button>
+      </div>`;
+
+    var cards = _reviewQueue.map(function(item) {
+      var scoreColor = item.lead_score >= 80 ? '#10b981' : item.lead_score >= 50 ? '#f59e0b' : '#6b7280';
+      var tierLabel = { high: '🔥 Hot', medium: '🟡 Warm', low: '❄️ Cold' }[item.tier] || item.tier;
+      var phoneSource = {
+        arrest_record: '📋 Arrest',
+        prospective_bond: '🤝 Prospect',
+        contact_discovery: '🔍 Discovered',
+        defendant_record: '👤 Defendant'
+      }[item.phone_source] || item.phone_source;
+      var bondDisplay = item.bond_amount ? '$' + (parseFloat(item.bond_amount) || 0).toLocaleString() : '—';
+      var charges = item.charges || '';
+      if (charges.length > 60) charges = charges.substring(0, 57) + '…';
+
+      return `
+        <div class="review-queue-card" id="rq_${item._id}" style="
+          background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+          display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;transition:all .3s">
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-weight:700;font-size:.9rem">${_esc(item.defendant_name || 'Unknown')}</span>
+              <span class="sl-badge" style="background:${scoreColor};color:#fff;font-size:10px">${item.lead_score} ${tierLabel}</span>
+              <span style="font-size:11px;color:var(--text-muted)">${_esc(item.county || '')} County</span>
+              <span style="font-size:11px;color:var(--text-muted)">Bond: ${bondDisplay}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);display:flex;gap:12px;flex-wrap:wrap">
+              <span>📱 ${_esc(item.phone || '—')}</span>
+              <span>Source: ${phoneSource}</span>
+              <span>⏱ ${timeAgo(item.created_at)}</span>
+            </div>
+            ${charges ? '<div style="font-size:11px;color:var(--text-muted)">⚖️ ' + _esc(charges) + '</div>' : ''}
+            <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.5;
+                        color:var(--text);border-left:3px solid #3b82f6;margin-top:4px;white-space:pre-line">
+              ${_esc(item.message || '')}
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:80px">
+            <button class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLProspective.approveReview('${item._id}')"
+                    style="font-size:11px;padding:8px 12px;width:100%">✅ Send</button>
+            <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLProspective.rejectReview('${item._id}')"
+                    style="font-size:11px;padding:8px 12px;width:100%">❌ Skip</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = header + '<div style="display:flex;flex-direction:column;gap:8px">' + cards + '</div>';
+  }
+
+  function _esc(s) {
+    if (typeof s !== 'string') return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  async function approveReview(id) {
+    var card = $('rq_' + id);
+    if (card) { card.style.opacity = '0.5'; card.style.pointerEvents = 'none'; }
+    try {
+      var r = await fetch(API + '/api/outreach/review-queue/approve/' + id, { method: 'POST' });
+      var d = await r.json();
+      if (d.success) {
+        toast('✅ Outreach approved — message sent', 'success');
+        if (card) { card.style.transition = 'all .3s'; card.style.maxHeight = '0'; card.style.opacity = '0'; card.style.overflow = 'hidden'; card.style.padding = '0'; card.style.margin = '0'; }
+        setTimeout(loadReviewQueue, 500);
+      } else {
+        toast('Approve failed: ' + (d.error || 'unknown'), 'error');
+        if (card) { card.style.opacity = '1'; card.style.pointerEvents = ''; }
+      }
+    } catch (e) {
+      toast('Approve error: ' + e.message, 'error');
+      if (card) { card.style.opacity = '1'; card.style.pointerEvents = ''; }
+    }
+  }
+
+  async function rejectReview(id) {
+    var card = $('rq_' + id);
+    if (card) { card.style.opacity = '0.5'; }
+    try {
+      var r = await fetch(API + '/api/outreach/review-queue/reject/' + id, { method: 'POST' });
+      var d = await r.json();
+      if (d.success) {
+        toast('Skipped', 'info');
+        if (card) { card.style.transition = 'all .3s'; card.style.maxHeight = '0'; card.style.opacity = '0'; card.style.overflow = 'hidden'; card.style.padding = '0'; card.style.margin = '0'; }
+        setTimeout(loadReviewQueue, 500);
+      } else {
+        toast('Reject failed', 'error');
+        if (card) { card.style.opacity = '1'; }
+      }
+    } catch (e) {
+      toast('Reject error: ' + e.message, 'error');
+      if (card) { card.style.opacity = '1'; }
+    }
+  }
+
+  async function bulkApproveReview() {
+    if (!_reviewQueue.length) return;
+    if (!confirm('Approve and send all ' + _reviewQueue.length + ' queued messages?')) return;
+    try {
+      var r = await fetch(API + '/api/outreach/review-queue/bulk-approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      var d = await r.json();
+      if (d.success) {
+        toast('✅ ' + d.approved + ' messages approved and sent', 'success');
+        loadReviewQueue();
+      } else {
+        toast('Bulk approve failed', 'error');
+      }
+    } catch (e) {
+      toast('Bulk approve error: ' + e.message, 'error');
+    }
+  }
+
   return {
     load: load, setStage: setStage, debounceSearch: debounceSearch, clearSearch: clearSearch,
     openDetail: openDetail, closeDetail: closeDetail, navDetail: navDetail,
@@ -1285,6 +1440,8 @@ window.SLProspective = (function () {
     loadAutoReplyConfig: loadAutoReplyConfig, renderAutoReplyPanel: renderAutoReplyPanel, updateAutoReply: updateAutoReply, manualPoll: manualPoll,
     unsendMsg: unsendMsg, editMsg: editMsg, reactMsg: reactMsg,
     handleSSEEvent: handleSSEEvent,
+    // Review Queue (The Closer)
+    loadReviewQueue: loadReviewQueue, approveReview: approveReview, rejectReview: rejectReview, bulkApproveReview: bulkApproveReview,
     trackLead: function(bk) { openDetail(bk); },
     viewInDefendants: function(bk) {
       // Switch to Defendants tab and pre-filter to this booking number
@@ -1314,3 +1471,4 @@ window.SLProspective = (function () {
     },
   };
 })();
+

@@ -27,11 +27,13 @@ DEFAULT_CONFIG = {
     # ── Speed-to-Contact (The Closer) ──
     "speed_to_contact": {
         "enabled": False,
+        "mode": "review",               # "off" | "review" | "full_auto"
         "min_lead_score": 70,           # Only auto-outreach for hot leads
         "hours_back": 1,                # Look back window per cycle
         "max_per_cycle": 20,            # Rate-limit per 30min cycle
         "interval_seconds": 1800,       # 30 minutes
         "require_phone": True,          # Skip if no phone number
+        "auto_discover_contacts": True, # Run contact discovery for phoneless leads
     },
 
     # ── Unsigned Paperwork Chase ──

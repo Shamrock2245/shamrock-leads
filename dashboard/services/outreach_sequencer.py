@@ -460,49 +460,288 @@ class OutreachSequencer:
         }
 
     # ─────────────────────────────────────────────────────────────────────
-    #  Batch start sequences for new arrests
+    #  Resolve phone number from multiple sources
     # ─────────────────────────────────────────────────────────────────────
-    async def batch_start_new_arrests(self, hours_back: int = 24, limit: int = 100) -> dict:
+    async def _resolve_phone(self, arrest_doc: dict) -> tuple[str, str]:
         """
-        Start outreach sequences for all new arrests in the last N hours
-        that don't already have an active sequence.
+        Try to find a phone number for this arrest from 4 sources:
+          1. arrest record itself (phone / contact_phone)
+          2. prospective_bonds indemnitor record
+          3. contacts collection (contact discovery)
+          4. defendants collection
+
+        Returns:
+            (phone, source) tuple. Empty string if not found.
+        """
+        bk = arrest_doc.get("booking_number", "")
+        county = arrest_doc.get("county", "")
+
+        # 1. Direct on arrest record
+        phone = arrest_doc.get("phone", "") or arrest_doc.get("contact_phone", "")
+        if phone:
+            return phone, "arrest_record"
+
+        # 2. Prospective bond indemnitor
+        try:
+            prospect = await self.db["prospective_bonds"].find_one(
+                {"booking_number": bk, "status": {"$ne": "closed"}},
+                {"indemnitor.phone": 1, "indemnitor.callback_phone": 1},
+            )
+            if prospect:
+                ind = prospect.get("indemnitor", {})
+                phone = ind.get("phone", "") or ind.get("callback_phone", "")
+                if phone:
+                    return phone, "prospective_bond"
+        except Exception:
+            pass
+
+        # 3. Contact discovery cache
+        try:
+            contact_doc = await self.db["contacts"].find_one(
+                {"booking_number": bk},
+                {"discovered_contacts": 1},
+            )
+            if contact_doc:
+                for c in contact_doc.get("discovered_contacts", []):
+                    p = c.get("phone", "")
+                    if p and c.get("confidence", 0) >= 0.7:
+                        return p, "contact_discovery"
+        except Exception:
+            pass
+
+        # 4. Defendant record
+        try:
+            full_name = arrest_doc.get("full_name", "")
+            if full_name:
+                defendant = await self.db["defendants"].find_one(
+                    {"full_name": full_name},
+                    {"phone": 1, "contact_phone": 1},
+                )
+                if defendant:
+                    phone = defendant.get("phone", "") or defendant.get("contact_phone", "")
+                    if phone:
+                        return phone, "defendant_record"
+        except Exception:
+            pass
+
+        return "", "none"
+
+    # ─────────────────────────────────────────────────────────────────────
+    #  Batch start sequences for new arrests (multi-source + review mode)
+    # ─────────────────────────────────────────────────────────────────────
+    async def batch_start_new_arrests(
+        self,
+        hours_back: int = 24,
+        limit: int = 100,
+        mode: str = "full_auto",
+        min_lead_score: int = 70,
+    ) -> dict:
+        """
+        Start outreach sequences for new arrests in the last N hours.
+        Resolves phone numbers from 4 sources instead of requiring phone on arrest.
 
         Args:
             hours_back: Look back this many hours for new arrests
             limit: Max number of arrests to process
+            mode: "full_auto" → send immediately, "review" → queue for approval
+            min_lead_score: Minimum lead score to trigger outreach
 
         Returns:
-            Summary dict
+            Summary dict with started/queued/skipped/errors counts
         """
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours_back)
 
+        # Broader query — don't require phone on the arrest record
         cursor = self.arrests.find(
             {
                 "scraped_at": {"$gte": cutoff},
                 "shamrock_status": {"$in": ["new", None]},
-                "phone": {"$exists": True, "$ne": ""},
+                "lead_score": {"$gte": min_lead_score},
             }
         ).limit(limit)
 
         started = 0
+        queued = 0
         skipped = 0
+        no_phone = 0
         errors = 0
 
         async for arrest in cursor:
+            bk = arrest.get("booking_number", "")
+            county = arrest.get("county", "")
+
             try:
-                result = await self.start_sequence(arrest)
-                if result.get("success"):
-                    started += 1
-                else:
+                # Check if sequence already exists
+                existing = await self.outreach_sequences.find_one(
+                    {"booking_number": bk, "county": county, "status": "active"}
+                )
+                if existing:
                     skipped += 1
+                    continue
+
+                # Check if already in review queue
+                in_queue = await self.db["outreach_review_queue"].find_one(
+                    {"booking_number": bk, "status": "pending"}
+                )
+                if in_queue:
+                    skipped += 1
+                    continue
+
+                # Resolve phone from 4 sources
+                phone, source = await self._resolve_phone(arrest)
+                if not phone:
+                    no_phone += 1
+                    continue
+
+                # Inject resolved phone into arrest doc for start_sequence
+                arrest["phone"] = phone
+                arrest["phone_source"] = source
+
+                if mode == "review":
+                    # Queue for staff approval instead of auto-sending
+                    await self._enqueue_for_review(arrest, phone, source)
+                    queued += 1
+                else:
+                    # Full auto — send immediately
+                    result = await self.start_sequence(arrest)
+                    if result.get("success"):
+                        started += 1
+                    else:
+                        skipped += 1
+
             except Exception as exc:
-                logger.error("[outreach] batch_start error for %s: %s",
-                             arrest.get("booking_number"), exc)
+                logger.error("[outreach] batch_start error for %s: %s", bk, exc)
                 errors += 1
 
         return {
             "started": started,
+            "queued": queued,
             "skipped": skipped,
+            "no_phone": no_phone,
             "errors": errors,
             "hours_back": hours_back,
+            "mode": mode,
         }
+
+    # ─────────────────────────────────────────────────────────────────────
+    #  Review Queue — enqueue message for staff approval
+    # ─────────────────────────────────────────────────────────────────────
+    async def _enqueue_for_review(self, arrest_doc: dict, phone: str, phone_source: str):
+        """Queue a pre-rendered outreach message for staff to approve."""
+        import os
+
+        bk = arrest_doc.get("booking_number", "")
+        county = arrest_doc.get("county", "")
+        full_name = arrest_doc.get("full_name", "Unknown")
+        lead_score = arrest_doc.get("lead_score", 0) or 0
+
+        # Determine tier and template
+        tier = "low"
+        template_key = "initial_cold"
+        for tier_name, (min_score, max_score, steps) in SCORE_TIERS.items():
+            if min_score <= lead_score <= max_score:
+                tier = tier_name
+                template_key = steps[0][1]  # First step's template
+                break
+
+        portal_base = os.getenv("PORTAL_BASE_URL", "https://shamrockbailbonds.biz").rstrip("/")
+        portal_link = f"{portal_base}/intake?booking={bk}&county={county}"
+
+        template = TEMPLATES.get(template_key, TEMPLATES["initial_warm"])
+        message = template.format(
+            contact_name="there",
+            defendant_name=full_name,
+            county=county,
+            portal_link=portal_link,
+        )
+
+        now = datetime.now(timezone.utc)
+        await self.db["outreach_review_queue"].insert_one({
+            "booking_number": bk,
+            "county": county,
+            "defendant_name": full_name,
+            "phone": phone,
+            "phone_source": phone_source,
+            "lead_score": lead_score,
+            "tier": tier,
+            "template_key": template_key,
+            "message": message,
+            "portal_link": portal_link,
+            "bond_amount": arrest_doc.get("bond_amount", 0),
+            "charges": arrest_doc.get("charges", ""),
+            "status": "pending",        # pending | approved | rejected | expired
+            "created_at": now,
+            "updated_at": now,
+            "reviewed_by": None,
+            "reviewed_at": None,
+        })
+
+        logger.info("[outreach] Queued for review: %s (%s) → %s [%s]",
+                     full_name, bk, phone[-4:] if phone else "???", phone_source)
+
+    async def approve_review(self, review_id: str, reviewed_by: str = "staff") -> dict:
+        """Approve a review queue item and start the outreach sequence."""
+        from bson import ObjectId
+        queue_col = self.db["outreach_review_queue"]
+        now = datetime.now(timezone.utc)
+
+        item = await queue_col.find_one({"_id": ObjectId(review_id), "status": "pending"})
+        if not item:
+            return {"success": False, "error": "not_found_or_already_reviewed"}
+
+        # Build arrest-like doc for start_sequence
+        arrest_doc = {
+            "booking_number": item["booking_number"],
+            "county": item["county"],
+            "full_name": item["defendant_name"],
+            "phone": item["phone"],
+            "lead_score": item["lead_score"],
+            "shamrock_status": "new",
+        }
+
+        result = await self.start_sequence(arrest_doc)
+
+        await queue_col.update_one(
+            {"_id": ObjectId(review_id)},
+            {"$set": {
+                "status": "approved",
+                "reviewed_by": reviewed_by,
+                "reviewed_at": now,
+                "updated_at": now,
+                "sequence_id": result.get("sequence_id"),
+            }},
+        )
+
+        return {"success": True, **result}
+
+    async def reject_review(self, review_id: str, reviewed_by: str = "staff") -> dict:
+        """Reject a review queue item."""
+        from bson import ObjectId
+        queue_col = self.db["outreach_review_queue"]
+        now = datetime.now(timezone.utc)
+
+        res = await queue_col.update_one(
+            {"_id": ObjectId(review_id), "status": "pending"},
+            {"$set": {
+                "status": "rejected",
+                "reviewed_by": reviewed_by,
+                "reviewed_at": now,
+                "updated_at": now,
+            }},
+        )
+
+        return {"success": res.modified_count > 0}
+
+    async def get_review_queue(self, limit: int = 50) -> list:
+        """Get pending review queue items."""
+        queue_col = self.db["outreach_review_queue"]
+        cursor = queue_col.find(
+            {"status": "pending"}
+        ).sort("lead_score", -1).limit(limit)
+
+        items = []
+        async for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            items.append(doc)
+        return items
+

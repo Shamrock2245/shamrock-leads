@@ -857,7 +857,7 @@ window.SLiMessage = (() => {
     if (!panel) return;
 
     const toggles = [
-      { key: 'speed_to_contact', label: '⚡ Speed-to-Contact',  desc: 'iMessage within 60s of new arrest' },
+      { key: 'speed_to_contact', label: '⚡ Speed-to-Contact',  desc: 'Auto-outreach for hot leads via iMessage', isStc: true },
       { key: 'paperwork_chase',  label: '📄 Paperwork Chase',   desc: 'Reminders every 2h until signed' },
       { key: 'intake_recovery',  label: '♻️ Intake Recovery',   desc: 'Follow up on abandoned intakes' },
       { key: 'auto_reply',       label: '🤖 Auto-Reply AI',     desc: 'AI responds to inbound messages' },
@@ -867,6 +867,46 @@ window.SLiMessage = (() => {
     panel.innerHTML = toggles.map(t => {
       const section = cfg[t.key] || {};
       const on = section.enabled === true;
+
+      // Speed-to-Contact gets a 3-level mode selector instead of simple toggle
+      if (t.isStc) {
+        const mode = section.mode || 'off';
+        const isOff = !on || mode === 'off';
+        const isReview = on && mode === 'review';
+        const isAuto = on && mode === 'full_auto';
+
+        return `
+          <div class="bb-toggle-row" id="toggle_row_${t.key}" style="flex-direction:column;align-items:stretch;gap:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div class="bb-toggle-info">
+                <div class="bb-toggle-label">${t.label}</div>
+                <div class="bb-toggle-desc" data-toggle-desc="${t.key}">${t.desc}</div>
+              </div>
+            </div>
+            <div class="stc-mode-selector" style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid var(--border)">
+              <button class="stc-mode-btn ${isOff ? 'stc-mode-active stc-mode-off' : ''}"
+                      onclick="SLiMessage.setStcMode('off')" style="flex:1;padding:8px 4px;font-size:11px;font-weight:600;border:0;cursor:pointer;transition:all .2s;
+                      background:${isOff ? '#ef4444' : 'var(--surface)'};color:${isOff ? '#fff' : 'var(--text-muted)'}">
+                🔴 Off
+              </button>
+              <button class="stc-mode-btn ${isReview ? 'stc-mode-active stc-mode-review' : ''}"
+                      onclick="SLiMessage.setStcMode('review')" style="flex:1;padding:8px 4px;font-size:11px;font-weight:600;border:0;border-left:1px solid var(--border);border-right:1px solid var(--border);cursor:pointer;transition:all .2s;
+                      background:${isReview ? '#f59e0b' : 'var(--surface)'};color:${isReview ? '#fff' : 'var(--text-muted)'}">
+                🟡 Review
+              </button>
+              <button class="stc-mode-btn ${isAuto ? 'stc-mode-active stc-mode-auto' : ''}"
+                      onclick="SLiMessage.setStcMode('full_auto')" style="flex:1;padding:8px 4px;font-size:11px;font-weight:600;border:0;cursor:pointer;transition:all .2s;
+                      background:${isAuto ? '#10b981' : 'var(--surface)'};color:${isAuto ? '#fff' : 'var(--text-muted)'}">
+                🟢 Full Auto
+              </button>
+            </div>
+            <div style="font-size:10px;color:var(--text-muted);line-height:1.3;padding:0 2px">
+              ${isOff ? 'Disabled — no auto-outreach' : isReview ? 'Messages queued for your approval before sending' : 'Messages sent automatically to hot leads (score ≥ ' + (section.min_lead_score || 70) + ')'}
+            </div>
+          </div>`;
+      }
+
+      // Standard on/off toggle for other services
       return `
         <div class="bb-toggle-row" id="toggle_row_${t.key}">
           <div class="bb-toggle-info">
@@ -881,6 +921,26 @@ window.SLiMessage = (() => {
           </button>
         </div>`;
     }).join('');
+  }
+
+  async function setStcMode(mode) {
+    // mode: 'off' | 'review' | 'full_auto'
+    const enabled = mode !== 'off';
+    const { ok, data } = await safeFetch('/api/automation/config', {
+      method: 'POST',
+      body: JSON.stringify({
+        "speed_to_contact.enabled": enabled,
+        "speed_to_contact.mode": mode,
+      }),
+    });
+    if (ok) {
+      // Re-fetch full config to sync state
+      await loadAutomationConfig();
+      const labels = { off: 'Off', review: 'Review Queue', full_auto: 'Full Auto' };
+      showToast(`⚡ Speed-to-Contact → ${labels[mode] || mode}`, 'success');
+    } else {
+      showToast('Mode change failed — check logs', 'error');
+    }
   }
 
   async function toggle(key) {
@@ -1000,7 +1060,7 @@ window.SLiMessage = (() => {
     loadHealth, loadInbox, loadFindMy,
     loadAutomationConfig, loadAutoReplyConfig,
     sendMessage, newCompose, openThread, openCompose,
-    toggle, setFilter,
+    toggle, setStcMode, setFilter,
     saveAutoReplyConfig,
     updateTunnelUrl,
     _restartMessages,
