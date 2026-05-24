@@ -1,105 +1,147 @@
 """
-Pasco County Arrest Scraper — Cloudflare-Protected Inmate Search.
-Source: Pasco County Sheriff's Office
-URL: https://www.pascosheriff.com/inmate-search.html
-Method: DrissionPage browser (Cloudflare bypass + DOM parsing)
+Pasco County Arrest Scraper — Direct REST API Search.
+Source: Pasco County Sheriff's Office / Corrections
+URL: https://jailinfo.pascocorrections.net/jmc/#/inCustody
+Method: Direct REST API endpoints
 """
-import logging, json, re, time
+import logging
+import datetime
 from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-BASE_URL = "https://www.pascosheriff.com/inmate-search.html"
+BASE_URL = "https://jailinfo.pascocorrections.net/jmc/#/inCustody"
+CUSTODY_API = "https://jailinfo.pascocorrections.net/jmcapi/custody/GetInCustody"
+CHARGE_API = "https://jailinfo.pascocorrections.net/jmcapi/arrest/GetUserArrestCharge?nameId={name_id}"
 FACILITY = "Pasco County Jail - Land O' Lakes"
 
 class PascoCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
         return "Pasco"
+
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage
-            from bs4 import BeautifulSoup
+            from curl_cffi import requests as cffi_requests
         except ImportError:
-            logger.error("DrissionPage/bs4 not installed"); raise
-        co = self._get_browser_options()
-        page = ChromiumPage(addr_or_opts=co)
-        records = []
+            import requests as cffi_requests
+
+        logger.info(f"Pasco: Querying custody roster from {CUSTODY_API}")
         try:
-            page.listen.start("json")
-            page.get(BASE_URL)
-            for i in range(15):
-                if any(k in (page.title or "").lower() for k in ["just a moment", "security", "checking"]): time.sleep(3)
-                else: break
-            time.sleep(5)
-            try:
-                inp = page.ele("tag:input@@type=text", timeout=5)
-                if inp: inp.input("a"); time.sleep(1)
-                btn = page.ele("tag:button@@text():Search", timeout=3) or page.ele("tag:input@@type=submit", timeout=3)
-                if btn: btn.click(); time.sleep(5)
-            except: pass
-            for pkt in page.listen.steps(timeout=15):
-                try:
-                    body = pkt.response.body if hasattr(pkt, "response") and pkt.response else None
-                    if isinstance(body, str) and body.strip().startswith(("{","[")): body = json.loads(body)
-                    if isinstance(body, (dict, list)): records.extend(self._parse_api(body))
-                except: pass
-            if not records:
-                soup = BeautifulSoup(page.html, "html.parser")
-                for row in soup.select("table tr, .inmate-card, .result-row"):
-                    text = row.get_text(" ", strip=True)
-                    nm = re.search(r"([A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*[A-Z][a-z]+)", text)
-                    if nm:
-                        f, m, l = self._pn(nm.group(1))
-                        bk = re.search(r"\b(\d{4,})\b", text)
-                        bd = re.search(r"\$([\d,]+)", text)
-                        dob_m = re.search(r'(?:DOB|Date of Birth)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', text)
-                        records.append(ArrestRecord(County=self.county, Booking_Number=bk.group(1) if bk else "",
-                            Full_Name=nm.group(1), First_Name=f, Middle_Name=m, Last_Name=l,
-                            DOB=dob_m.group(1) if dob_m else "",
-                            Bond_Amount=bd.group(1).replace(",","") if bd else "0",
-                            Status="In Custody", Detail_URL=BASE_URL,
-                            Facility=FACILITY, LastCheckedMode="INITIAL"))
-            logger.info(f"Pasco: {len(records)} records")
-            return records
+            # We disable SSL verification because of the government's misconfigured intermediate certificates
+            resp = cffi_requests.get(CUSTODY_API, verify=False, timeout=30)
+            if resp.status_code != 200:
+                raise Exception(f"Failed to fetch custody roster: {resp.status_code}")
+            inmates = resp.json()
         except Exception as e:
-            logger.error(f"Pasco error: {e}"); raise
-        finally:
-            try: page.listen.stop(); page.quit()
-            except: pass
-    def _parse_api(self, data) -> List[ArrestRecord]:
-        entries = data if isinstance(data, list) else []
-        if isinstance(data, dict):
-            for k in ["data","results","inmates","entries","items"]:
-                if k in data and isinstance(data[k], list): entries = data[k]; break
-        out = []
-        for e in entries:
-            if not isinstance(e, dict): continue
-            name = e.get("name", e.get("full_name", e.get("fullName", "")))
-            if not name:
-                fn, ln = e.get("firstName",""), e.get("lastName","")
-                if fn and ln: name = f"{ln}, {fn}"
-            bk = str(e.get("bookingNumber", e.get("booking_number", e.get("id", ""))))
-            if not name and not bk: continue
-            f, m, l = self._pn(name)
-            ch = e.get("charges", e.get("charge", ""))
-            charges = " | ".join(str(c) for c in ch) if isinstance(ch, list) else str(ch) if ch else ""
-            release_date = ""
-            for rk in ["releaseDate", "release_date", "releasedDate"]:
-                if rk in e and e[rk]:
-                    release_date = str(e[rk]).strip(); break
-            status = "Released" if release_date else "In Custody"
-            out.append(ArrestRecord(County=self.county, Booking_Number=bk, Full_Name=name,
-                First_Name=f, Middle_Name=m, Last_Name=l, DOB=str(e.get("dob","")),
-                Charges=charges, Bond_Amount=str(e.get("bond", e.get("bondAmount","0"))),
-                Status=status, Release_Date=release_date, Detail_URL=BASE_URL,
-                Facility=FACILITY, LastCheckedMode="INITIAL"))
-        return out
+            logger.error(f"Pasco roster fetch error: {e}")
+            raise
+
+        logger.info(f"Pasco: Found {len(inmates)} total inmates in custody")
+        
+        # Sort by bookingDate descending so we process most recent first
+        parsed_inmates = []
+        for x in inmates:
+            bdate_str = x.get("bookingDate", "")
+            try:
+                dt = datetime.datetime.strptime(bdate_str, "%m/%d/%Y")
+            except Exception:
+                dt = datetime.datetime.min
+            parsed_inmates.append((dt, x))
+            
+        parsed_inmates.sort(key=lambda x: x[0], reverse=True)
+        
+        # We only query charge/bond details for the last 5 days of bookings to be fast and respectful.
+        # Today is 2026-05-24, but we compute dynamically relative to the latest booking date in the system
+        if parsed_inmates:
+            latest_date = parsed_inmates[0][0]
+        else:
+            latest_date = datetime.datetime.now()
+            
+        cutoff_date = latest_date - datetime.timedelta(days=5)
+        logger.info(f"Pasco: Cutoff date for detailed charge fetching is {cutoff_date.strftime('%m/%d/%Y')}")
+        
+        records = []
+        for dt, x in parsed_inmates:
+            # Check if booking is within cutoff
+            is_recent = dt >= cutoff_date
+            
+            first_name = x.get("firstName", "").strip()
+            middle_name = x.get("middleName", "").strip()
+            last_name = x.get("lastName", "").strip()
+            suffix = x.get("suffix", "").strip()
+            
+            full_name = f"{last_name}, {first_name}"
+            if middle_name:
+                full_name += f" {middle_name}"
+            if suffix:
+                full_name += f" {suffix}"
+                
+            booking_number = str(x.get("bookingNumber", ""))
+            name_id = x.get("nameId")
+            dob = x.get("dob", "")
+            booking_date = x.get("bookingDate", "")
+            booking_time = x.get("bookingTime", "")
+            
+            charges_str = ""
+            total_bond = 0.0
+            
+            # Fetch detailed charges/bonds only for recent bookings
+            if is_recent and name_id:
+                charge_url = CHARGE_API.format(name_id=name_id)
+                try:
+                    logger.debug(f"Pasco: Fetching charges for {full_name} ({name_id})")
+                    c_resp = cffi_requests.get(charge_url, verify=False, timeout=15)
+                    if c_resp.status_code == 200:
+                        charge_list = c_resp.json()
+                        charge_items = []
+                        for c in charge_list:
+                            c_code = c.get("arrestCharge", "").strip()
+                            c_desc = c.get("chargeDescription", "").strip()
+                            c_bond = c.get("bondAmount", "0").strip()
+                            
+                            item = f"{c_code} - {c_desc}" if c_code and c_desc else c_code or c_desc
+                            if item:
+                                charge_items.append(item)
+                                
+                            # Parse bond
+                            bond_val = self._parse_bond_val(c_bond)
+                            total_bond += bond_val
+                            
+                        charges_str = " | ".join(charge_items)
+                except Exception as ce:
+                    logger.warning(f"Pasco: Failed to fetch charges for nameId {name_id}: {ce}")
+                    
+            records.append(ArrestRecord(
+                County=self.county,
+                Booking_Number=booking_number,
+                Full_Name=full_name,
+                First_Name=first_name,
+                Middle_Name=middle_name,
+                Last_Name=last_name,
+                DOB=dob,
+                Booking_Date=booking_date,
+                Charges=charges_str,
+                Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+                Status="In Custody",
+                Detail_URL=BASE_URL,
+                Facility=FACILITY,
+                LastCheckedMode="INITIAL"
+            ))
+            
+        logger.info(f"Pasco: parsed {len(records)} records")
+        return records
+
     @staticmethod
-    def _pn(n):
-        if not n: return "","",""
-        if "," in n:
-            p = n.split(",",1); l = p[0].strip(); fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm)>1 else ""), l
-        p = n.split(); return p[0], "", p[-1] if len(p)>=2 else ""
+    def _parse_bond_val(bond_str: str) -> float:
+        if not bond_str:
+            return 0.0
+        import re
+        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
+        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+            return 0.0
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return 0.0

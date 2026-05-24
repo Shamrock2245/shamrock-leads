@@ -21,7 +21,7 @@ class DuvalCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
+            from DrissionPage import ChromiumPage
         except ImportError:
             logger.error("DrissionPage not installed"); raise
 
@@ -32,23 +32,35 @@ class DuvalCountyScraper(BaseScraper):
         try:
             page.listen.start("api")
             page.get(BASE_URL)
-            time.sleep(8)  # Angular SPA needs more time to bootstrap and fire API calls
-            for attempt in range(15):
-                title = page.title or ""
-                if any(kw in title.lower() for kw in ["just a moment", "security", "checking"]):
-                    time.sleep(3)
-                else:
-                    break
-            time.sleep(3)
+            time.sleep(8)  # Give Angular SPA time to bootstrap
+
+            # Handle ATIMS click-to-verify CAPTCHA gate if present
             try:
-                search_input = page.ele("tag:input@@type=text", timeout=5)
-                if search_input:
-                    search_input.input("a"); time.sleep(1)
-                search_btn = page.ele("tag:button@@text():Search", timeout=3)
+                captcha_btn = page.ele("tag:button@@text():I'm not a robot", timeout=5)
+                if captcha_btn:
+                    logger.info("Duval: Found click-to-verify CAPTCHA button. Clicking it...")
+                    captcha_btn.click()
+                    time.sleep(8)
+            except Exception:
+                pass
+
+            # Fill name inputs to avoid JS alerts
+            try:
+                last_name_input = page.ele("tag:input@@name=lastName", timeout=5)
+                if last_name_input:
+                    logger.info("Duval: Entering 'a' in lastName input...")
+                    last_name_input.input("a")
+                    time.sleep(1)
+                
+                search_btn = page.ele("tag:button@@text():search", timeout=5) or page.ele("tag:button@@text():Search", timeout=5)
                 if search_btn:
-                    search_btn.click(); time.sleep(5)
-            except Exception: pass
-            packets = page.listen.steps(timeout=20)
+                    logger.info("Duval: Clicking search button...")
+                    search_btn.click()
+                    time.sleep(8)
+            except Exception as fe:
+                logger.warning(f"Duval: Search form submission failed: {fe}")
+
+            packets = page.listen.steps(timeout=10)
             for packet in packets:
                 try:
                     if hasattr(packet, "response") and packet.response:
@@ -58,11 +70,14 @@ class DuvalCountyScraper(BaseScraper):
                         elif isinstance(body, str) and body.strip().startswith(("{","[")):
                             api_responses.append(json.loads(body))
                 except Exception: pass
+
             for data in api_responses:
                 records = self._extract_from_api(data)
                 all_records.extend(records)
+
             if not all_records:
                 all_records = self._parse_dom(page)
+
             logger.info(f"Duval: {len(all_records)} records")
             return all_records
         except Exception as e:

@@ -53,62 +53,98 @@ class OkaloosaCountyScraper(BaseScraper):
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Build POST data with all hidden fields
-        post_data = {}
+        base_post_data = {}
         for inp in soup.find_all("input", {"type": "hidden"}):
             name = inp.get("name", "")
             value = inp.get("value", "")
             if name:
-                post_data[name] = value
-
-        # Add search fields — empty search to get all inmates
-        post_data["LastName"] = ""
-        post_data["FirstName"] = ""
+                base_post_data[name] = value
 
         # Find the submit button
         submit_btn = soup.find("input", {"type": "submit"}) or soup.find("button", {"type": "submit"})
+        btn_name = ""
+        btn_value = "Search"
         if submit_btn:
             btn_name = submit_btn.get("name", "")
             btn_value = submit_btn.get("value", "Search")
+
+        all_records = []
+        seen = set()
+
+        import string
+        import time
+
+        for letter in string.ascii_uppercase:
+            post_data = dict(base_post_data)
+            post_data["LastName"] = letter
+            post_data["FirstName"] = ""
             if btn_name:
                 post_data[btn_name] = btn_value
 
-        try:
-            resp = session.post(SEARCH_URL, data=post_data, timeout=60)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Okaloosa: POST failed: {e}")
-            raise
+            try:
+                resp = session.post(SEARCH_URL, data=post_data, timeout=30)
+                if resp.status_code == 200:
+                    soup_post = BeautifulSoup(resp.text, "html.parser")
+                    
+                    # Dynamically update the base ViewState/EventValidation tokens from the response
+                    for inp in soup_post.find_all("input", {"type": "hidden"}):
+                        name = inp.get("name", "")
+                        value = inp.get("value", "")
+                        if name:
+                            base_post_data[name] = value
+                            
+                    records = self._parse_soup(soup_post)
+                    for r in records:
+                        k = r.Booking_Number or r.Full_Name
+                        if k not in seen:
+                            seen.add(k)
+                            all_records.append(r)
+            except Exception as e:
+                logger.warning(f"Okaloosa letter {letter} failed: {e}")
+            time.sleep(0.3)
 
-        return self._parse(resp.text)
+        logger.info(f"Okaloosa: {len(all_records)} total records from A-Z search")
+        return all_records
 
     def _parse(self, html: str) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
+        return self._parse_soup(soup)
+
+    def _parse_soup(self, soup) -> List[ArrestRecord]:
+        import re
         records = []
         seen = set()
 
-        # Find the inmate table — has columns: LastName, FirstName, MiddleName, Booking#, DOB, Sex, Race, etc.
-        target_table = None
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
+        tables = soup.find_all("table")
+        header_table = None
+        header_idx = -1
+        for idx, table in enumerate(tables):
+            h_row = table.find("tr")
+            if not h_row:
                 continue
-            header_text = rows[0].get_text(" ").lower()
-            if any(kw in header_text for kw in ["lastname", "last name", "booking", "name"]):
-                target_table = table
+            cells = [cell.get_text(strip=True).lower().replace(" ", "").replace("#", "") for cell in h_row.find_all(["th", "td"])]
+            if "lastname" in cells and "firstname" in cells and "booking" in cells:
+                # Filter out the layout table that has a huge concatenated header string
+                if any(len(c) > 50 for c in cells):
+                    continue
+                header_table = table
+                header_idx = idx
                 break
 
-        if not target_table:
-            logger.warning("Okaloosa: no inmate table found")
+        if not header_table or header_idx == -1 or header_idx + 1 >= len(tables):
+            logger.warning("Okaloosa: no inmate header or data table found")
             return []
 
+        data_table = tables[header_idx + 1]
+
         # Parse header to find column indices
-        header_row = target_table.find("tr")
-        headers = [th.get_text(strip=True).lower().replace(" ", "") for th in header_row.find_all(["th", "td"])]
+        header_row = header_table.find("tr")
+        headers = [th.get_text(strip=True).lower().replace(" ", "").replace("#", "") for th in header_row.find_all(["th", "td"])]
 
         def col(name):
             for i, h in enumerate(headers):
-                if name.lower() in h:
+                if h == name:
                     return i
             return -1
 
@@ -123,26 +159,41 @@ class OkaloosaCountyScraper(BaseScraper):
         weight_idx = col("weight")
         name_idx = col("name")  # Full name column
 
-        for row in target_table.find_all("tr")[1:]:
-            cells = row.find_all("td")
+        for row in data_table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
             if not cells:
                 continue
 
-            def get(idx):
-                if idx < 0 or idx >= len(cells):
-                    return ""
-                return cells[idx].get_text(strip=True)
+            cell_texts = [c.get_text(strip=True) for c in cells]
+            if len(cell_texts) < 10:
+                continue
 
-            last_name = get(last_idx)
-            first_name = get(first_idx)
-            middle_name = get(mid_idx)
-            booking_num = get(booking_idx)
-            dob = get(dob_idx)
-            sex = get(sex_idx)
-            race = get(race_idx)
-            height = get(height_idx)
-            weight = get(weight_idx)
-            full_name_cell = get(name_idx)
+            def get_val(idx):
+                if idx < 0 or idx >= len(cell_texts):
+                    return ""
+                return cell_texts[idx]
+
+            last_name = get_val(last_idx)
+            first_name = get_val(first_idx)
+            middle_name = get_val(mid_idx)
+            booking_num = get_val(booking_idx)
+            sex = get_val(sex_idx)
+            race = get_val(race_idx)
+            height = get_val(height_idx)
+            weight = get_val(weight_idx)
+            full_name_cell = get_val(name_idx)
+
+            # Reconstruct DOB from cell matching pattern MM/DD/YYYY
+            dob = ""
+            if len(cell_texts) > 8 and re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', cell_texts[8]):
+                dob = cell_texts[8]
+            else:
+                for val in cell_texts:
+                    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', val):
+                        dob = val
+                        break
+                if not dob:
+                    dob = get_val(dob_idx)
 
             # Build full name
             if last_name and first_name:
@@ -182,7 +233,7 @@ class OkaloosaCountyScraper(BaseScraper):
                 Height=height,
                 Weight=weight,
                 Status="In Custody",
-                        Release_Date="",
+                Release_Date="",
                 Facility=FACILITY,
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",
