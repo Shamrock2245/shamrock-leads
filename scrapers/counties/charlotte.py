@@ -254,30 +254,7 @@ class CharlotteCountyScraper(BaseScraper):
                 if key and val:
                     raw[key] = val
 
-        # ── Check for sub-arrest links (Revize sometimes nests arrest detail) ──
-        arrest_link = soup.find("a", href=re.compile(r"arrest|booking", re.I))
-        if arrest_link:
-            sub_href = arrest_link.get("href", "")
-            if sub_href and sub_href != detail_url and "#" not in sub_href:
-                if not sub_href.startswith("http"):
-                    sub_href = f"{BASE_URL}{sub_href}" if sub_href.startswith("/") else f"{BASE_URL}/{sub_href}"
-                sub_resp = self._fetch(session, "GET", sub_href, extra_headers={"Referer": detail_url})
-                if sub_resp and sub_resp.status_code == 200:
-                    sub_soup = BeautifulSoup(sub_resp.text, "html.parser")
-                    # Merge sub-page data (sub-page takes priority for charges/bonds)
-                    for dt in sub_soup.find_all("dt"):
-                        dd = dt.find_next_sibling("dd")
-                        if dd:
-                            raw[dt.get_text(strip=True).rstrip(":")] = dd.get_text(strip=True)
-                    for row in sub_soup.find_all("tr"):
-                        cells = row.find_all(["td", "th"])
-                        if len(cells) == 2:
-                            key = cells[0].get_text(strip=True).rstrip(":")
-                            val = cells[1].get_text(strip=True)
-                            if key and val:
-                                raw[key] = val
-                    # Parse charges from sub-page tables
-                    self._extract_charges_from_soup(sub_soup, raw)
+        # Charlotte detail pages list charges directly; no nested sub-pages are used.
 
         # ── Extract charges from main page ──
         if "__CHARGES" not in raw:
