@@ -45,6 +45,9 @@ class ColumbiaCountyScraper(BaseScraper):
             raise
 
         # Try P2C JSON API
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
         for endpoint in [API_URL, BASE_URL + "/GetInmates", BASE_URL]:
             try:
                 resp = requests.get(
@@ -52,6 +55,7 @@ class ColumbiaCountyScraper(BaseScraper):
                     headers=HEADERS,
                     params={"page": 1, "pageSize": 500, "inCustody": True},
                     timeout=30,
+                    verify=False,
                 )
                 if resp.status_code == 200:
                     try:
@@ -72,7 +76,7 @@ class ColumbiaCountyScraper(BaseScraper):
 
         # HTML fallback
         try:
-            resp = requests.get(BASE_URL, headers=HEADERS, timeout=30)
+            resp = requests.get(BASE_URL, headers=HEADERS, timeout=30, verify=False)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             records = self._parse_html(soup)

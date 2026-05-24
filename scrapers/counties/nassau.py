@@ -46,7 +46,10 @@ class NassauCountyScraper(BaseScraper):
             raise
 
         session = requests.Session()
+        session.verify = False
         session.headers.update(HEADERS)
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         # Phase 1: Collect inmate links from listing pages
         inmate_links = []

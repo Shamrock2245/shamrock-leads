@@ -122,28 +122,33 @@ class BrevardCountyScraper(BaseScraper):
         seen = set()
 
         try:
-            to_date = datetime.now()
-            from_date = to_date - timedelta(days=7)
-
-            page.get(SEARCH_URL)
-            time.sleep(3)
+            page.get(BASE_URL)
+            time.sleep(5)
 
             # Fill date fields
             try:
-                from_el = page.ele("@name=SearchForm.FromDate", timeout=5)
-                if from_el:
-                    from_el.clear()
-                    from_el.input(from_date.strftime("%Y-%m-%d"))
-                to_el = page.ele("@name=SearchForm.ToDate", timeout=5)
-                if to_el:
-                    to_el.clear()
-                    to_el.input(to_date.strftime("%Y-%m-%d"))
+                to_el = page.ele("#SearchForm_ToDate", timeout=5)
+                max_date_str = to_el.attr("max") if to_el else None
+                
+                if max_date_str:
+                    to_date = datetime.strptime(max_date_str, "%Y-%m-%d")
+                else:
+                    to_date = datetime.now() - timedelta(days=1)
+                    
+                from_date = to_date - timedelta(days=7)
+                from_date_str = from_date.strftime("%Y-%m-%d")
+                to_date_str = to_date.strftime("%Y-%m-%d")
+                
+                logger.info(f"Brevard: entering search dates From={from_date_str}, To={to_date_str}")
+                page.run_js(f"document.getElementById('SearchForm_FromDate').value = '{from_date_str}';")
+                page.run_js(f"document.getElementById('SearchForm_ToDate').value = '{to_date_str}';")
+                
                 submit = page.ele("tag:button@@text():Search", timeout=5)
                 if submit:
                     submit.click()
-                    time.sleep(3)
-            except Exception:
-                pass
+                    time.sleep(5)
+            except Exception as fe:
+                logger.warning(f"Brevard form entry failed: {fe}")
 
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(page.html, "html.parser")

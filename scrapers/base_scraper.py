@@ -103,6 +103,8 @@ class BaseScraper(ABC):
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-gpu")
         co.set_argument("--disable-blink-features=AutomationControlled")
+        co.set_argument("--ignore-certificate-errors")
+        co.set_argument("--ignore-ssl-errors")
         co.set_argument("--window-size=1920,1080")
         co.set_user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
