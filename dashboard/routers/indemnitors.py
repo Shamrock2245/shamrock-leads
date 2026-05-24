@@ -993,3 +993,30 @@ async def api_prospective_update_indemnitor(booking_number: str, request: Reques
         return {"success": True, "indemnitor": indemnitor}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ── Serve uploaded KYC files ──────────────────────────────────────────────────
+
+@router.get("/uploads/{booking_number}/{filename}")
+async def serve_upload(booking_number: str, filename: str):
+    """Serve uploaded KYC files for preview in dashboard.
+
+    Security: rejects path traversal attempts (.. or /) in filename.
+    """
+    from fastapi.responses import FileResponse
+
+    # Prevent path traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return JSONResponse({"error": "Invalid filename"}, status_code=400)
+
+    upload_path = UPLOAD_DIR / booking_number / filename
+    if not upload_path.exists() or not upload_path.is_file():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    # Resolve to ensure we're still inside UPLOAD_DIR
+    try:
+        upload_path.resolve().relative_to(UPLOAD_DIR.resolve())
+    except ValueError:
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+
+    return FileResponse(str(upload_path))
