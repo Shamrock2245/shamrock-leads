@@ -34,7 +34,7 @@ services:
     security_opt:
       - no-new-privileges:true          # Prevent privilege escalation
     tmpfs:
-      - /tmp:size=256m                  # Writable temp (browser profiles, xvfb)
+      - /tmp:size=1g                    # Writable temp (browser profiles, xvfb)
     mem_limit: 4g                       # Cap memory (scrapers + Chromium)
     cpus: 2.0                           # Cap CPU
     healthcheck:
