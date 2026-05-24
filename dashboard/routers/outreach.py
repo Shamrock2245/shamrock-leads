@@ -201,3 +201,88 @@ async def handle_reply(request: Request):
     except Exception as exc:
         logger.exception("handle_reply error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/outreach/review-queue
+# Returns pending review queue items (The Closer — Review Mode)
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.get("/outreach/review-queue")
+async def get_review_queue(limit: int = Query(default=50)):
+    """Return pending outreach items awaiting staff review."""
+    try:
+        sequencer = _get_sequencer()
+        items = await sequencer.get_review_queue(limit=min(int(limit), 200))
+        # Serialize ObjectId and datetime
+        for item in items:
+            for k, v in item.items():
+                if hasattr(v, "isoformat"):
+                    item[k] = v.isoformat()
+            if "_id" in item:
+                item["_id"] = str(item["_id"])
+        return {"success": True, "queue": items, "count": len(items)}
+    except Exception as exc:
+        logger.exception("get_review_queue error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/approve/<review_id>
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.post("/outreach/review-queue/approve/{review_id}")
+async def approve_review(review_id: str):
+    """Approve a queued outreach item — sends the message immediately."""
+    try:
+        sequencer = _get_sequencer()
+        result = await sequencer.approve_review(review_id)
+        return {"success": True, **result}
+    except Exception as exc:
+        logger.exception("approve_review error for %s", review_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/reject/<review_id>
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.post("/outreach/review-queue/reject/{review_id}")
+async def reject_review(review_id: str):
+    """Reject a queued outreach item — marks it skipped."""
+    try:
+        sequencer = _get_sequencer()
+        result = await sequencer.reject_review(review_id)
+        return {"success": True, **result}
+    except Exception as exc:
+        logger.exception("reject_review error for %s", review_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/outreach/review-queue/bulk-approve
+# ─────────────────────────────────────────────────────────────────────────────
+@outreach_bp.post("/outreach/review-queue/bulk-approve")
+async def bulk_approve_reviews():
+    """Approve ALL pending review items at once."""
+    try:
+        sequencer = _get_sequencer()
+        items = await sequencer.get_review_queue(limit=200)
+        approved = 0
+        errors = []
+        for item in items:
+            rid = str(item.get("_id", ""))
+            if not rid:
+                continue
+            try:
+                await sequencer.approve_review(rid)
+                approved += 1
+            except Exception as e:
+                errors.append({"review_id": rid, "error": str(e)})
+        return {
+            "success": True,
+            "approved": approved,
+            "errors": errors,
+            "total_pending": len(items),
+        }
+    except Exception as exc:
+        logger.exception("bulk_approve error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
