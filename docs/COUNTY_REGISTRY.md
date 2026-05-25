@@ -45,10 +45,10 @@
 ## Tier 3 — Central FL / Heartland (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 16 | **Polk** | DrissionPage — API interception | `polk.py` | ✅ Active | 120 min | 2026-04-27 |
+| 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
 | 17 | **Osceola** | DrissionPage — daily reports | `osceola.py` | ✅ Active | 120 min | 2026-04-27 |
 | 18 | **Sumter** | SmartWeb ASP.NET POST | `sumter.py` | ✅ Active | 180 min | 2026-04-27 |
-| 19 | **Highlands** | JailTracker | `highlands.py` | ✅ Active | 120 min | 2026-04-27 |
+| 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
 | 20 | **Glades** | JailTracker | `glades.py` | ✅ Active | 180 min | 2026-04-27 |
 | 21 | **Hardee** | OCV API | `hardee.py` | ✅ Active | 120 min | 2026-04-27 |
 
@@ -59,7 +59,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — date search blotter | `palm_beach.py` | ✅ Active | 120 min | 2026-04-27 |
 | 23 | **Broward** | HTTP GET — sequential ID probe | `broward.py` | ✅ Active | 60 min | 2026-04-27 |
-| 24 | **Martin** | DrissionPage — Cloudflare | `martin.py` | ✅ Active | 120 min | 2026-04-27 |
+| 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
 | 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
 | 27 | **Okeechobee** | requests GET — HTML table | `okeechobee.py` | ✅ Active | 120 min | 2026-04-27 |
@@ -69,7 +69,7 @@
 ## Tier 5 — East Coast / Space Coast (3 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 28 | **Volusia** | DrissionPage — Cloudflare (volusia.org) | `volusia.py` | ✅ Active | 90 min | 2026-04-27 |
+| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
 | 29 | **Brevard** | Odyssey REST API | `brevard.py` | ✅ Active | 120 min | 2026-04-27 |
 | 30 | **Flagler** | New World HTML | `flagler.py` | ✅ Active | 120 min | 2026-04-27 |
 
@@ -114,7 +114,7 @@
 ## Tier 9 — North FL / Rural (4 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 47 | **Leon** | requests POST — A-Z iteration | `leon.py` | ✅ Active | 90 min | 2026-04-27 |
+| 47 | **Leon** | requests POST — A-Z iteration | `leon.py` | 🔴 Broken Target (500 Error) | 90 min | 2026-05-24 |
 | 48 | **Taylor** | SmartWeb ASP.NET POST | `taylor.py` | ✅ Active | 240 min | 2026-04-27 |
 | 49 | **Dixie** | Custom HTML | `dixie.py` | ✅ Active | 240 min | 2026-04-27 |
 | 50 | **Monroe** | curl_cffi POST — disclaimer bypass | `monroe.py` | ✅ Active | 120 min | 2026-04-27 |

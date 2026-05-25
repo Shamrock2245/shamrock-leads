@@ -171,7 +171,9 @@ def register_scrapers(sched):
     sched.register_scraper(MiamiDadeCountyScraper(), interval_minutes=60)
     sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
     sched.register_scraper(BayCountyScraper(), interval_minutes=120)
-    sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
+    # LeonCountyScraper DISABLED — target server throws unhandled 500 Runtime Error when results exist
+    # Needs sheriff IT to fix their IIS search page to re-enable
+    # sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
 
     # ── NE FL / First Coast ────────────────────────────────────────────────────
     sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)

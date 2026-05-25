@@ -1,202 +1,192 @@
 """
-Martin County Arrest Scraper — martinso.us Inmate Search.
-Source: https://www.martinso.us/inmatesearch/
-Method: DrissionPage (Cloudflare-protected site)
-Stack: DrissionPage browser
-
-Ported from swfl-arrest-scrapers/counties/martin/solver.py (proven working).
-Old URL https://www.mcsofl.org/223/Jail-Inmate-Search returned 404.
+Martin County Arrest Scraper — Direct REST API.
+Source: https://correctionsrecordssearch.com/martincountyfl
+Method: Direct Tyler Technologies API queries
 """
 import logging
-import re
-import time
-import os
-from datetime import datetime, timezone
+import datetime
 from typing import List
+import requests
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-SEARCH_URLS = [
-    "https://www.martinso.us/inmatesearch/",
-    "https://www.mcsofl.org/224/Recent-Bookings",
-    "https://www.martinso.us/arrests/",
-]
 FACILITY = "Martin County Jail"
 COUNTY = "Martin"
-
-
-def _setup_browser():
-    from DrissionPage import ChromiumPage, ChromiumOptions
-    co = ChromiumOptions()
-    co.auto_port()
-    chrome_path = os.getenv("CHROME_PATH")
-    if chrome_path:
-        co.set_browser_path(chrome_path)
-    co.headless(True)
-    co.set_argument("--headless=new")
-    co.set_argument("--no-sandbox")
-    co.set_argument("--disable-dev-shm-usage")
-    co.set_argument("--disable-blink-features=AutomationControlled")
-    co.set_argument("--window-size=1920,1080")
-    co.set_user_agent(
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-    )
-    return ChromiumPage(co)
-
-
-def _parse_name(full_name: str):
-    first, middle, last = "", "", ""
-    if not full_name:
-        return first, middle, last
-    if "," in full_name:
-        parts = full_name.split(",", 1)
-        last = parts[0].strip()
-        remainder = parts[1].strip()
-        if " " in remainder:
-            r_parts = remainder.split(" ", 1)
-            first = r_parts[0].strip()
-            middle = r_parts[1].strip()
-        else:
-            first = remainder
-    else:
-        parts = full_name.split()
-        last = parts[-1] if parts else ""
-        first = parts[0] if len(parts) > 1 else ""
-        middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
-    return first, middle, last
-
+API_URL = "https://api.correctionsrecordssearch.com/instances/01K343RER5XCX3V9KQA5876BE8/inmates"
 
 class MartinCountyScraper(BaseScraper):
-    """Martin County — martinso.us Inmate Search (DrissionPage)"""
-
     @property
     def county(self) -> str:
         return "Martin"
 
     def scrape(self) -> List[ArrestRecord]:
+        logger.info("Martin: Querying inmate API...")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://correctionsrecordssearch.com",
+            "Referer": "https://correctionsrecordssearch.com/"
+        }
+        
+        # We fetch 100 recent arrests
+        params = {
+            "page-size": 100,
+            "page-number": 1,
+            "sort-by": "arrestDate",
+            "sort": "desc"
+        }
+        
         try:
-            from DrissionPage import ChromiumPage  # noqa
-        except ImportError:
-            logger.error("Martin: DrissionPage not installed")
-            raise
-
-        page = _setup_browser()
-        records = []
-
-        try:
-            loaded = False
-            for url in SEARCH_URLS:
-                try:
-                    logger.info(f"Martin: trying {url}")
-                    page.get(url)
-                    time.sleep(5)
-
-                    for attempt in range(10):
-                        title = page.title or ""
-                        if "just a moment" in title.lower():
-                            logger.info(f"Martin: waiting for Cloudflare ({attempt+1}/10)")
-                            time.sleep(3)
-                        else:
-                            break
-
-                    body_text = page.ele("tag:body").text if page.ele("tag:body") else ""
-                    if len(body_text) > 200 and "just a moment" not in body_text.lower():
-                        loaded = True
-                        logger.info(f"Martin: loaded {url}")
-                        break
-                except Exception as e:
-                    logger.warning(f"Martin {url}: {e}")
-
-            if not loaded:
-                logger.error("Martin: all URLs failed")
-                raise RuntimeError("Martin: all URLs failed to load")
-
-            # Accept disclaimer or click search
-            for btn_text in ["Search", "View Inmates", "Continue", "Accept", "I Agree"]:
-                try:
-                    btn = page.ele(f"tag:button@@text():{btn_text}", timeout=2)
-                    if btn:
-                        btn.click()
-                        time.sleep(3)
-                        break
-                except:
-                    pass
-
-            # Parse HTML
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(page.html, "html.parser")
-
-            # Try table first
-            table = soup.find("table")
-            if table:
-                rows = table.find_all("tr")
-                for row in rows[1:]:
-                    cells = row.find_all("td")
-                    if len(cells) < 2:
-                        continue
-                    texts = [c.get_text(strip=True) for c in cells]
-                    full_name = texts[0] if texts else ""
-                    if not full_name or full_name.lower() in ("name", "inmate"):
-                        continue
-                    booking_num = texts[1] if len(texts) > 1 else ""
-                    booking_date = texts[2] if len(texts) > 2 else ""
-                    charges = texts[3] if len(texts) > 3 else ""
-                    bond_raw = texts[4] if len(texts) > 4 else "0"
-                    bond_m = re.search(r"([\d,]+(?:\.\d{2})?)", bond_raw)
-                    bond = bond_m.group(1).replace(",", "") if bond_m else "0"
-                    link = row.find("a", href=True)
-                    detail_url = ""
-                    if link:
-                        href = link["href"]
-                        detail_url = href if href.startswith("http") else f"https://www.martinso.us{href}"
-                    first, middle, last = _parse_name(full_name)
-                    records.append(ArrestRecord(
-                        County=COUNTY, State="FL", Facility=FACILITY,
-                        Full_Name=full_name.upper(), First_Name=first.upper(),
-                        Middle_Name=middle.upper(), Last_Name=last.upper(),
-                        DOB="",
-                        Booking_Number=booking_num, Booking_Date=booking_date,
-                        Arrest_Date=booking_date, Charges=charges, Bond_Amount=bond,
-                        Detail_URL=detail_url, Status="In Custody",
-                        Release_Date="",
-                        Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                        LastChecked=datetime.now(timezone.utc).isoformat(),
-                        LastCheckedMode="scrape",
-                    ))
-
-            # Fallback: cards/links
-            if not records:
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    text = a.get_text(strip=True)
-                    if re.match(r"[A-Z][A-Z\s,]+", text) and len(text) > 5:
-                        full_name = text
-                        first, middle, last = _parse_name(full_name)
-                        detail_url = href if href.startswith("http") else f"https://www.martinso.us{href}"
-                        records.append(ArrestRecord(
-                            County=COUNTY, State="FL", Facility=FACILITY,
-                            Full_Name=full_name.upper(), First_Name=first.upper(),
-                            Middle_Name=middle.upper(), Last_Name=last.upper(),
-                        DOB="",
-                            Detail_URL=detail_url, Status="In Custody",
-                        Release_Date="",
-                            Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                            LastChecked=datetime.now(timezone.utc).isoformat(),
-                            LastCheckedMode="scrape",
-                        ))
-
+            # Enforce verify=False and suppress warnings
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            resp = requests.get(API_URL, headers=headers, params=params, verify=False, timeout=30)
+            if resp.status_code != 200:
+                raise Exception(f"Failed to fetch roster: HTTP {resp.status_code}")
+            
+            data = resp.json()
         except Exception as e:
-            logger.error(f"Martin: scraper error — {e}")
+            logger.error(f"Martin roster fetch failed: {e}")
             raise
-        finally:
-            try:
-                page.quit()
-            except:
-                pass
 
-        logger.info(f"Martin: total {len(records)} records")
+        inmates = data.get("inmates", []) if isinstance(data, dict) else data
+        logger.info(f"Martin: Found {len(inmates)} inmates in current API page")
+
+        records = []
+        for x in inmates:
+            try:
+                name_info = x.get("name", {})
+                first_name = name_info.get("firstName", "").strip()
+                middle_name = name_info.get("middleName", "").strip()
+                last_name = name_info.get("lastName", "").strip()
+                full_name = name_info.get("fullName", "").strip()
+                
+                if not full_name:
+                    full_name = f"{last_name}, {first_name}"
+                    if middle_name:
+                        full_name += f" {middle_name}"
+                
+                so_number = x.get("soNumber", "").strip()
+                if not so_number:
+                    so_number = x.get("id", "").strip()
+                    
+                dob = x.get("dateOfBirth", "").strip()
+                
+                # Status
+                is_released = x.get("IsReleased", False)
+                status = "Released" if is_released else "In Custody"
+                
+                # Physicals
+                height = x.get("height", "").strip()
+                weight = x.get("weight", "").strip()
+                race = x.get("race", "").strip()
+                sex = x.get("gender", "").strip()
+                
+                # Mugshot (if any image ID is present)
+                image_id = x.get("imageServiceClientId")
+                mugshot_url = ""
+                if image_id:
+                    mugshot_url = f"https://api.correctionsrecordssearch.com/instances/01K343RER5XCX3V9KQA5876BE8/images/{image_id}"
+                
+                # Find arrest details (booking date/time, charges)
+                arrests = x.get("arrests", [])
+                booking_date = ""
+                booking_time = ""
+                charges_list = []
+                agency = ""
+                age_at_arrest = ""
+                
+                if arrests:
+                    # Sort arrests by arrestDate desc just in case
+                    arrests_sorted = sorted(
+                        arrests, 
+                        key=lambda a: a.get("arrestDate", ""), 
+                        reverse=True
+                    )
+                    latest_arrest = arrests_sorted[0]
+                    dt_str = latest_arrest.get("arrestDate", "") # e.g. "2026-05-24T07:47:00"
+                    if "T" in dt_str:
+                        booking_date, booking_time = dt_str.split("T", 1)
+                    else:
+                        booking_date = dt_str
+                    
+                    agency = latest_arrest.get("arrestingAgency", "")
+                    age_at_arrest = str(latest_arrest.get("ageAtArrest", ""))
+                    
+                    # Accumulate charges from all arrests in this booking
+                    for arr in arrests:
+                        for chg in arr.get("charges", []):
+                            stat = chg.get("statute", {})
+                            desc = stat.get("description", "").strip()
+                            code = stat.get("statuteCode", "").strip() # check if code exists
+                            if not code:
+                                code = stat.get("code", "").strip()
+                            if desc:
+                                if code:
+                                    charges_list.append(f"{code} - {desc}")
+                                else:
+                                    charges_list.append(desc)
+                
+                charges_str = " | ".join(charges_list)
+                
+                # Accumulate bond amount
+                bond_val = 0.0
+                bond_types = []
+                for b in x.get("bonds", []):
+                    amt = b.get("amount", 0)
+                    if amt:
+                        try:
+                            bond_val += float(amt)
+                        except:
+                            pass
+                    btype = b.get("type", "").strip()
+                    if btype and btype not in bond_types:
+                        bond_types.append(btype)
+                        
+                bond_amount_str = str(int(bond_val)) if bond_val.is_integer() else f"{bond_val:.2f}"
+                bond_type_str = ", ".join(bond_types)
+                
+                # City, State
+                addr_info = x.get("address", {})
+                city = addr_info.get("city", "").strip()
+                state = addr_info.get("state", "FL").strip()
+                
+                records.append(ArrestRecord(
+                    Scrape_Timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    County=self.county,
+                    Booking_Number=so_number,
+                    Full_Name=full_name.upper(),
+                    First_Name=first_name.upper(),
+                    Middle_Name=middle_name.upper(),
+                    Last_Name=last_name.upper(),
+                    DOB=dob,
+                    Arrest_Date=booking_date,
+                    Arrest_Time=booking_time,
+                    Booking_Date=booking_date,
+                    Booking_Time=booking_time,
+                    Status=status,
+                    Facility=FACILITY,
+                    Agency=agency,
+                    Race=race,
+                    Sex=sex,
+                    Height=height,
+                    Weight=weight,
+                    Age_At_Arrest=age_at_arrest,
+                    City=city.upper(),
+                    State=state.upper(),
+                    Mugshot_URL=mugshot_url,
+                    Charges=charges_str,
+                    Bond_Amount=bond_amount_str,
+                    Bond_Type=bond_type_str,
+                    Detail_URL=f"https://correctionsrecordssearch.com/martincountyfl/inmates/{x.get('id')}",
+                    LastCheckedMode="INITIAL"
+                ))
+            except Exception as ex:
+                logger.warning(f"Martin: failed to parse inmate record: {ex}", exc_info=True)
+                
+        logger.info(f"Martin: parsed {len(records)} records")
         return records

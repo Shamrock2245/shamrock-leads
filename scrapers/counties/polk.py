@@ -1,53 +1,39 @@
 """
-Polk County Arrest Scraper — PCSO Jail Inquiry (Kendo UI Grid).
+Polk County Arrest Scraper — PCSO Jail Inquiry (Kendo UI JSON API).
 Source: Polk County Sheriff's Office
 URL: https://polksheriff.org/JailInquiry
-Method: requests GET with Kendo grid API parameters
-
-The site uses a Kendo DataSource that loads data from an API endpoint.
-Search by booking date returns a paginated JSON table with columns:
-  Booking # | Name | RS | DOB | Entry Date | Release Date | Location
-
-There are 3 search tabs: Name Search, Booking Date, AKA Search.
-We use the "Booking Date" tab to get all inmates for recent dates.
-
-Clicking a booking # reveals a detail page with charges, bond amounts, etc.
-We extract bond/charge data from the detail page for high-value records.
+Method: Direct HTTP requests POST to SearchJail and GetCharges API endpoints.
 """
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import List
+import requests
+from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://polksheriff.org"
-SEARCH_URL = f"{BASE_URL}/JailInquiry"
+BASE_URL = "https://www.polksheriff.org"
+SEARCH_URL = f"{BASE_URL}/detention/jail-inquiry/SearchJail/"
+CHARGES_URL = f"{BASE_URL}/inmate/GetCharges"
 FACILITY = "Polk County Jail"
-DAYS_BACK = 3  # 3 days of booking date coverage at 120-min intervals
+DAYS_BACK = 3  # 3 days of booking date coverage
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "DNT": "1",
-    "Connection": "keep-alive",
+    "Connection": "keep-alive"
 }
 
-# Race/Sex code expansion from "WM" / "BF" etc.
 RACE_MAP = {
     "W": "White", "B": "Black", "H": "Hispanic",
     "A": "Asian", "I": "American Indian", "U": "Unknown",
 }
-SEX_MAP = {"M": "Male", "F": "Female"}
-
 
 class PolkCountyScraper(BaseScraper):
     @property
@@ -55,276 +41,182 @@ class PolkCountyScraper(BaseScraper):
         return "Polk"
 
     def scrape(self) -> List[ArrestRecord]:
-        """Scrape using DrissionPage for the Kendo UI grid — server-rendered."""
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        
         all_records = []
+        seen_bookings = set()
+        
+        # Loop for target dates
         for days_ago in range(DAYS_BACK):
             target_date = datetime.now() - timedelta(days=days_ago)
-            date_str = target_date.strftime("%m/%d/%Y")
+            date_str = target_date.strftime("%Y-%m-%d")  # API expects YYYY-MM-DD
+            logger.info(f"Polk: Querying bookings for date {date_str}...")
+            
+            payload = {
+                "SelectedSearchType": "BookingDate",
+                "BookingDate": date_str
+            }
+            
             try:
-                daily = self._scrape_date(date_str)
-                all_records.extend(daily)
-                logger.info(f"Polk {date_str}: {len(daily)} records")
+                # We disable SSL verification because of government intermediate certificate chain issues
+                resp = session.post(SEARCH_URL, data=payload, timeout=30, verify=False)
+                if resp.status_code != 200:
+                    logger.warning(f"Polk: SearchJail for {date_str} returned {resp.status_code}")
+                    continue
+                
+                bookings = resp.json()
+                logger.info(f"Polk: Found {len(bookings)} bookings for {date_str}")
+                
+                for b in bookings:
+                    booking_num = b.get("BookingNum")
+                    if not booking_num or booking_num in seen_bookings:
+                        continue
+                    seen_bookings.add(booking_num)
+                    
+                    try:
+                        record = self._scrape_booking_details(session, b)
+                        if record:
+                            all_records.append(record)
+                    except Exception as be:
+                        logger.warning(f"Polk: Failed to fetch details for booking {booking_num}: {be}")
+                        
+                    # Polite rate-limiting between detail calls
+                    time.sleep(0.1)
+                    
             except Exception as e:
-                logger.warning(f"Polk {date_str} error: {e}")
-            time.sleep(2)
-
-        logger.info(f"Polk: {len(all_records)} total records")
+                logger.error(f"Polk: Search error for {date_str}: {e}")
+                
+        logger.info(f"Polk County Scrape Complete: {len(all_records)} total records")
         return all_records
 
-    def _scrape_date(self, date_str: str) -> List[ArrestRecord]:
-        """
-        Use DrissionPage to navigate to the Booking Date tab, enter date,
-        click SEARCH, and parse the Kendo grid HTML table.
-        """
+    def _scrape_booking_details(self, session, b) -> ArrestRecord:
+        booking_num = str(b.get("BookingNum", "")).strip()
+        full_name = str(b.get("FullName", "")).strip()
+        rs_code = str(b.get("RS", "")).strip()
+        dob = str(b.get("DOB", "")).strip()
+        entry_date = str(b.get("EntryDate", "")).strip()
+        release_date = str(b.get("ReleaseDate", "")).strip()
+        location = str(b.get("Location", "")).strip()
+        
+        # Parse Race and Sex from RS code (e.g. "WM", "BF")
+        race = ""
+        sex = ""
+        if rs_code and len(rs_code) >= 2:
+            race = RACE_MAP.get(rs_code[0].upper(), rs_code[0])
+            sex = rs_code[1].upper()
+            
+        first_name, middle_name, last_name = self._parse_name(full_name)
+        
+        # Determine status
+        status = "In Custody"
+        if release_date:
+            status = "Released"
+            
+        # Determine facility from location code
+        facility = FACILITY
+        loc_upper = location.upper().strip()
+        if loc_upper == "IN":
+            facility = "Polk County Jail - Main"
+        elif loc_upper == "CCJ":
+            facility = "Central County Jail"
+        elif loc_upper == "SCJ":
+            facility = "South County Jail"
+            
+        # Format booking date (EntryDate is typically MM/DD/YYYY)
+        booking_date = ""
+        if entry_date:
+            try:
+                dt = datetime.strptime(entry_date, "%m/%d/%Y")
+                booking_date = dt.strftime("%Y-%m-%d")
+            except ValueError:
+                booking_date = entry_date
+
+        release_formatted = ""
+        if release_date:
+            try:
+                dt = datetime.strptime(release_date, "%m/%d/%Y")
+                release_formatted = dt.strftime("%Y-%m-%d")
+            except ValueError:
+                release_formatted = release_date
+                
+        detail_url = f"{BASE_URL}/inmate-profile/{booking_num}"
+        
+        # Load profile page to extract CSRF token for charges API
+        token = ""
         try:
-            from DrissionPage import ChromiumPage
-        except ImportError:
-            logger.error("DrissionPage not installed")
-            return []
-
-        co = self._get_browser_options()
-        page = ChromiumPage(addr_or_opts=co)
-        records = []
-
-        try:
-            page.get(SEARCH_URL)
-            time.sleep(3)
-
-            # Click "Booking Date" tab
+            profile_resp = session.get(detail_url, timeout=20, verify=False)
+            if profile_resp.status_code == 200:
+                soup = BeautifulSoup(profile_resp.text, "html.parser")
+                token_el = soup.find("input", {"name": "__RequestVerificationToken"})
+                if token_el:
+                    token = token_el["value"]
+        except Exception as pe:
+            logger.warning(f"Polk: Profile page fetch failed for {booking_num}: {pe}")
+            
+        charges_list = []
+        total_bond = 0.0
+        
+        # Fetch detailed charges/bonds if token is available
+        if token:
+            post_headers = {
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept": "*/*",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": BASE_URL,
+                "Referer": detail_url
+            }
+            charges_payload = {
+                "bookingNum": booking_num,
+                "__RequestVerificationToken": token
+            }
             try:
-                booking_tab = page.ele("xpath://a[contains(text(),'Booking Date')]")
-                if booking_tab:
-                    booking_tab.click()
-                    time.sleep(1)
-            except Exception:
-                pass
-
-            # Find the date input and set it
-            try:
-                date_input = page.ele("css:input[aria-label*='Booking Date']") or \
-                             page.ele("xpath://input[contains(@placeholder,'date')]") or \
-                             page.ele("css:.k-datepicker input")
-                if date_input:
-                    date_input.clear()
-                    date_input.input(date_str)
-                    time.sleep(0.5)
-            except Exception as e:
-                logger.debug(f"Polk: date input issue: {e}")
-
-            # Click SEARCH button
-            try:
-                search_btn = page.ele("xpath://button[contains(text(),'SEARCH')]") or \
-                             page.ele("css:button.k-button") or \
-                             page.ele("xpath://button[contains(@class,'search')]")
-                if search_btn:
-                    search_btn.click()
-                    time.sleep(4)
-            except Exception as e:
-                logger.debug(f"Polk: search click issue: {e}")
-
-            # Parse all pages of results
-            page_num = 1
-            while page_num <= 10:
-                records.extend(self._parse_grid(page, date_str))
-
-                # Try to click next page
-                if not self._click_next(page):
-                    break
-                page_num += 1
-                time.sleep(2)
-
-        except Exception as e:
-            logger.error(f"Polk browser error: {e}")
-        finally:
-            try:
-                page.quit()
-            except:
-                pass
-
-        return records
-
-    def _parse_grid(self, page, date_str: str) -> List[ArrestRecord]:
-        """Parse the visible Kendo grid table rows.
-
-        Columns from recon:
-          Booking # | Name | RS | DOB | Entry Date | Release Date | Location
-        """
-        from bs4 import BeautifulSoup
-        records = []
-
-        soup = BeautifulSoup(page.html, "html.parser")
-
-        # Find the data grid table
-        grid_table = None
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
-                continue
-            header_text = rows[0].get_text(" ", strip=True).lower()
-            if "booking" in header_text and "name" in header_text:
-                grid_table = table
-                break
-
-        if not grid_table:
-            return records
-
-        rows = grid_table.find_all("tr")
-        if len(rows) < 2:
-            return records
-
-        # Map headers
-        header_cells = rows[0].find_all(["th", "td"])
-        headers = [h.get_text(strip=True).lower() for h in header_cells]
-        col_map = {}
-        for i, h in enumerate(headers):
-            if "booking" in h and "#" in h:
-                col_map["booking"] = i
-            elif h == "name" or "name" == h.strip():
-                col_map["name"] = i
-            elif h in ("rs", "race/sex", "r/s"):
-                col_map["rs"] = i
-            elif h in ("dob", "date of birth"):
-                col_map["dob"] = i
-            elif "entry" in h:
-                col_map["entry_date"] = i
-            elif "release" in h:
-                col_map["release_date"] = i
-            elif "location" in h:
-                col_map["location"] = i
-
-        for row in rows[1:]:
-            cells = row.find_all(["td", "th"])
-            if not cells or len(cells) < 3:
-                continue
-
-            def _get(key):
-                idx = col_map.get(key)
-                if idx is not None and idx < len(cells):
-                    return cells[idx].get_text(strip=True)
-                return ""
-
-            booking_num = _get("booking")
-            name = _get("name")
-            rs_code = _get("rs")
-            dob = _get("dob")
-            entry_date = _get("entry_date")
-            release_date = _get("release_date")
-            location = _get("location")
-
-            if not name and not booking_num:
-                continue
-
-            # Parse RS code (e.g., "WM" = White Male, "BF" = Black Female)
-            race = ""
-            sex = ""
-            if rs_code and len(rs_code) >= 2:
-                race = RACE_MAP.get(rs_code[0].upper(), rs_code[0])
-                sex = rs_code[1].upper()
-
-            # Determine status
-            status = "In Custody"
-            if release_date and release_date.strip():
-                status = "Released"
-
-            # Determine facility from location code
-            facility = FACILITY
-            loc_upper = location.upper().strip() if location else ""
-            if loc_upper == "IN":
-                facility = "Polk County Jail - Main"
-            elif loc_upper == "CCJ":
-                facility = "Central County Jail"
-            elif loc_upper == "SCJ":
-                facility = "South County Jail"
-
-            # Detail URL — booking # link
-            detail_url = SEARCH_URL
-            booking_idx = col_map.get("booking", 0)
-            if booking_idx < len(cells):
-                link = cells[booking_idx].find("a")
-                if link and link.get("href"):
-                    href = link["href"]
-                    if not href.startswith("http"):
-                        href = f"{BASE_URL}{href}"
-                    detail_url = href
-
-            # Parse name
-            first, middle, last = self._parse_name(name)
-
-            # Parse booking date
-            booking_date = ""
-            if entry_date:
-                try:
-                    dt = datetime.strptime(entry_date.strip(), "%m/%d/%Y")
-                    booking_date = dt.strftime("%Y-%m-%d")
-                except ValueError:
-                    booking_date = entry_date.strip()
-
-            # Parse release date
-            release_formatted = ""
-            if release_date and release_date.strip():
-                try:
-                    dt = datetime.strptime(release_date.strip(), "%m/%d/%Y")
-                    release_formatted = dt.strftime("%Y-%m-%d")
-                except ValueError:
-                    release_formatted = release_date.strip()
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=self._clean(booking_num),
-                Full_Name=self._clean(name),
-                First_Name=first,
-                Middle_Name=middle,
-                Last_Name=last,
-                DOB=dob,
-                Booking_Date=booking_date,
-                Status=status,
-                Release_Date=release_formatted,
-                Facility=facility,
-                Race=race,
-                Sex=sex,
-                Bond_Amount="0",  # Bond requires detail page click
-                Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
-            ))
-
-        return records
-
-    def _click_next(self, page) -> bool:
-        """Click the next page button in the Kendo pager."""
-        try:
-            # Look for Kendo pager next button
-            next_btn = page.ele("css:.k-pager-nav .k-i-arrow-60-right") or \
-                       page.ele("xpath://a[@title='Go to the next page']") or \
-                       page.ele("css:a.k-link[title*='next']")
-            if next_btn:
-                # Check if there's a "disabled" class
-                parent = next_btn.parent() if hasattr(next_btn, 'parent') else None
-                if parent:
-                    parent_class = parent.attr("class") or ""
-                    if "k-state-disabled" in parent_class or "disabled" in parent_class:
-                        return False
-                next_btn.click()
-                time.sleep(2)
-                return True
-
-            # Fallback: numbered page links
-            page_info = page.ele("xpath://*[contains(text(),'of')]")
-            if page_info:
-                m = re.search(r'(\d+)\s*-\s*\d+\s+of\s+(\d+)', page_info.text)
-                if not m:
-                    m = re.search(r'(\d+)\s+of\s+(\d+)', page_info.text)
-                # There are more items if displayed/total ratio indicates more pages
-        except Exception as e:
-            logger.debug(f"Polk pagination: {e}")
-        return False
-
-    # ── Helpers ─────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _clean(text):
-        if not text:
-            return ""
-        return " ".join(str(text).strip().split())
+                charges_resp = session.post(CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, verify=False)
+                if charges_resp.status_code == 200:
+                    content_type = charges_resp.headers.get("Content-Type", "")
+                    if "json" in content_type.lower():
+                        charges_data = charges_resp.json()
+                        for chg in charges_data:
+                            statute = chg.get("Statute", "").strip()
+                            desc = chg.get("ChargeDesc", "").strip()
+                            bond_str = chg.get("BondAmountDue", "0.00").strip()
+                            
+                            item = f"{statute} - {desc}" if statute and desc else statute or desc
+                            if item:
+                                charges_list.append(item)
+                                
+                            # Sum up bond
+                            try:
+                                bond_val = float(re.sub(r"[$,\s]", "", bond_str))
+                                total_bond += bond_val
+                            except Exception:
+                                pass
+                    else:
+                        logger.debug(f"Polk: GetCharges returned non-JSON/HTML for {booking_num} (likely no charges).")
+            except Exception as ce:
+                logger.warning(f"Polk: GetCharges call failed for {booking_num}: {ce}")
+                
+        charges_str = " | ".join(charges_list)
+        
+        return ArrestRecord(
+            County=self.county,
+            Booking_Number=booking_num,
+            Full_Name=full_name,
+            First_Name=first_name,
+            Middle_Name=middle_name,
+            Last_Name=last_name,
+            DOB=dob,
+            Booking_Date=booking_date,
+            Status=status,
+            Release_Date=release_formatted,
+            Facility=facility,
+            Race=race,
+            Sex=sex,
+            Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+            Charges=charges_str,
+            Detail_URL=detail_url,
+            LastCheckedMode="INITIAL"
+        )
 
     @staticmethod
     def _parse_name(name):

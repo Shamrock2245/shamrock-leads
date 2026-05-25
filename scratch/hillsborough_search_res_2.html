@@ -1,0 +1,246 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HCSO Arrest Inquiry</title>
+
+    <link href="/arrestinquiry/lib/jqueryui/themes/base/jquery-ui.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="/arrestinquiry/lib/bootstrap/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="/arrestinquiry/css/site.css?v=yDTswSuuWyFK6t1LzTTmwaTFCoidHHt8abF3FhKFWw4" />
+    <link rel="stylesheet" href="/arrestinquiry/PublicArrestInquiry.styles.css?v=9ks-sJFIrDef22r-Ch2REWJmAsWAlrEFXOnqoIjByKg" />
+</head>
+<body>
+    <script>
+        const htmlElement = document.documentElement;
+        const currentTheme = localStorage.getItem('bsTheme') || 'light';
+        htmlElement.setAttribute('data-bs-theme', currentTheme);
+    </script>
+
+        <header b-2wr1ubducw>
+            <nav b-2wr1ubducw class="navbar navbar-expand-lg bg-body-tertiary">
+                <div b-2wr1ubducw class="container-fluid">
+                    <a class="navbar-brand" href="/arrestinquiry">
+                        <img src="/arrestinquiry/images/logo_dark_bg.png" alt="HCSO Logo" height="44" class="d-inline-block align-text-center">
+                        <span b-2wr1ubducw class="ps-3 h4">HCSO Arrest Inquiry</span>
+                    </a>
+                </div>
+            </nav>
+        </header>
+    <div b-2wr1ubducw class="container body-content">
+        <div b-2wr1ubducw class="container">
+            <main b-2wr1ubducw role="main" class="pb-3 pt-3">
+                
+
+
+
+<form action="/arrestinquiry" id="SearchForm" method="post">    <div class="row">
+        <div class="col-sm-12">
+            <div class="alert alert-warning mt-20" role="alert">
+                <h1 class="h3"><img alt="Important Notice Icon" src="/arrestinquiry/images/ico_ImportantImage.gif" /> Important Notice </h1>
+            </div>
+            <p>
+                This database lists individuals currently in jail and includes information regarding their charges, bond amounts, and booking photos. Please note that an arrest does not imply that the individual has been convicted of a crime.
+            </p>
+            <p>
+                Online arrest inquiries are available for adult arrests occurring since January 1, 1995, for which the Hillsborough County Sheriff's Office has an electronic record. This information is updated every 30 minutes. Once a person’s information is entered into the HCSO Jail Management System, it will be reflected in this listing within 30 minutes.
+            </p>
+            <p>
+                <strong>
+                    Please be advised that new arrest records will not appear in general listings for the first 24 hours following the arrest. However, during this 24-hour window, individuals can still be located if a search is performed using the person's first and last name.
+                </strong>
+                Following this initial 24-hour period, all record information will be fully available. Individuals will remain in these listings for 90 days after their release date (unless you are an authorized member).
+            </p>
+            <p>
+                Arrest information is a Public Record under Florida State Law unless it has been ordered sealed or expunged. For information on how to have an arrest record sealed or expunged, please visit the Florida Department of Law Enforcement website at: <a href="https://www.fdle.state.fl.us/seal-and-expunge-process/seal-and-expunge-home.aspx" target="_blank">https://www.fdle.state.fl.us/seal-and-expunge-process/seal-and-expunge-home.aspx</a>.
+            </p>
+            <p>
+                For statewide criminal history information, please contact the Florida Department of Law Enforcement, Public Records, at (850) 410-8109 or visit their website at: <a href="https://web.fdle.state.fl.us/search/app/default" target="_blank">https://web.fdle.state.fl.us/search/app/default</a> .
+            </p>
+        </div>
+    </div>
+    <h2 class="text-center d-block p-2 text-bg-primary"><span class="glyphicon glyphicon-search"></span> Arrest Search</h2>
+    <div class="row mt-20 pt-20 pb-20 search-panel">
+        <div class="col-sm-12">
+<div class='alert alert-danger' role='alert'>   
+    <div class="validation-summary-errors" data-valmsg-summary="true"><ul><li>Captcha validation has failed.</li>
+</ul></div>
+</div>
+      
+            <div class="row p-2">
+                <div class="col-md-6 col-sm-12">
+                    <label class="form-label" for="SearchBookingNumber">Booking #</label>
+                    <input class="form-control" data-val="true" data-val-length="Booking # cannot be longer than 15 characters" data-val-length-max="15" hint="Enter a valid booking number" id="SearchBookingNumber" maxlength="15" name="SearchBookingNumber" type="text" value="" />
+                </div>
+                <div class="col-md-6 col-sm-12">
+                    <label class="form-label" for="SearchName">Name</label>
+                    <input Class="form-control initial-focus" data-val="true" data-val-length="Name cannot be longer than 30 characters" data-val-length-max="30" hint="Enter Last Name,First Name (ex: Smith,John)" id="SearchName" maxlength="30" name="SearchName" type="text" value="a" watermark="Last Name, First Name" />
+                </div>
+            </div>
+            <div class="row p-2">
+                <div class="col-12-sm col-md-6">
+                    <label class="form-label" for="SearchBookingDate">Booking Date</label>
+                    <input autocomplete="off" Class="form-control field-date" data-val="true" data-val-length="Booking Date cannot be longer than 10 characters" data-val-length-max="10" hint="Enter a Booking Date in the format MM/DD/YYYY" id="SearchBookingDate" maxlength="10" name="SearchBookingDate" type="text" value="" watermark="MM/DD/YYYY" />
+                </div>
+                <div class="col-12-sm col-md-6">
+                    <label class="form-label" for="SearchReleaseDate">Release Date</label>
+                    <input autocomplete="off" Class="form-control field-date" data-val="true" data-val-length="Release Date cannot be longer than 10 characters" data-val-length-max="10" hint="Enter a Release Date in the format MM/DD/YYYY" id="SearchReleaseDate" maxlength="10" name="SearchReleaseDate" type="text" value="" watermark="MM/DD/YYYY" />
+
+                </div>
+            </div>
+            <div class="row p-2">
+                <div class="col-12-sm col-lg-4">
+                    <label class="form-label" for="SearchRace">Race</label>
+                    <select class="form-select" id="SearchRace" name="SearchRace"><option value=""></option>
+<option value="A">Asian</option>
+<option value="B">Black</option>
+<option value="I">Indian</option>
+<option value="W">White</option>
+</select>
+                </div>
+                <div class="col-12-sm col-lg-4">
+                    <label class="form-label" for="SearchSex">Sex</label>
+                    <select class="form-select" id="SearchSex" name="SearchSex"><option value=""></option>
+<option value="M">Male</option>
+<option value="F">Female</option>
+</select>
+                </div>
+                <div class="col-12-sm col-lg-4">
+                    <label class="form-label" for="SearchDOB">Date of Birth</label>
+                    <input Class="form-control field-date" data-val="true" data-val-length="Date of Birth cannot be longer than 10 characters" data-val-length-max="10" hint="Enter a Date of Birth in the format MM/DD/YYYY" id="SearchDOB" maxlength="10" name="SearchDOB" type="text" value="" watermark="MM/DD/YYYY" />
+                </div>
+            </div>
+            <div class="row p-2">
+                <div class="col-lg-6 col-sm-12">
+                    <fieldset>
+                        <legend class="form-label">More Options:</legend>
+                        <div class="form-check form-check-inline">
+                            <input checked="checked" class="form-check-input" data-val="true" data-val-required="The Current Inmates Only field is required." id="SearchCurrentInmatesOnly" name="SearchCurrentInmatesOnly" type="checkbox" value="true" />
+                            <label class="form-check-label ps-2" for="SearchCurrentInmatesOnly">Current Inmates Only</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input checked="checked" class="form-check-input" data-val="true" data-val-required="The Include Arrest Details field is required." id="SearchIncludeDetails" name="SearchIncludeDetails" type="checkbox" value="true" />
+                            <label class="form-check-label ps-2" for="SearchIncludeDetails">Include Arrest Details</label>
+                        </div>
+                    </fieldset>
+                </div>
+                <div class="col-lg-6 col-sm-12">
+                    <fieldset>
+                        <legend class="form-label">Sorting:</legend>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" id="rbSortBookDate" name="SearchSortType" type="radio" value="BOOKDATE" />
+                            <label class="form-check-label ps-2" for="rbSortBookDate">
+                                by Booking Date
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" id="rbSortBookNo" name="SearchSortType" type="radio" value="BOOKNO" />
+                            <label class="form-check-label ps-2" for="rbSortBookNo">
+                                by Booking Number
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" id="rbSortName" name="SearchSortType" type="radio" value="NAME" />
+                            <label class="form-check-label ps-2" for="rbSortName">
+                                by Name
+                            </label>
+                        </div>
+                    </fieldset>
+                </div>
+            </div>
+            <div class="row p-2 mt-3">
+                <div class="col-12">
+                    <div title="reCAPTCHA" class="g-recaptcha-container">
+                        <div class="g-recaptcha" data-sitekey="6LcK1HopAAAAAEZgVeXqiN2_4zp6cQwRRXfc3uKJ"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    <div class="row p-2">
+        <div class="d-grid offset-md-8 col-md-4 gap-5 d-flex justify-content-md-endd">
+            <button id="button_clear" type="button" class="btn btn-secondary flex-fill" title="clear search form" onclick="javascript: $('#SearchForm').clearForm();">Clear </button>
+            <button id="button_submit" type="submit" class=" btn btn-primary flex-fill" title="search arrests"><span class="glyphicon glyphicon-search"></span> Search</button>
+        </div>
+    </div>
+    <div class="row pt-2">
+        <div class="col-sm-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="h5 card-title p-2 text-bg-primary text-center">Arrest Inquiry Full Access</div>
+                    <p>
+                        The <b>ONLY</b> individuals or entities that are allowed full access to the portal are Law Enforcement Agencies and select individuals associated with the bond industry, accredited media or any recognized State Bar association. Please do not request access to the system unless you meet the above criteria. Individuals who qualify should forward an email
+                        through their official email account requesting access to the system to <b><a href="mailto:publicaffairs@teamhcso.com">publicaffairs@teamhcso.com</a></b>. Final
+                        approval of all requests remains with HCSO.
+                    </p>
+                    <p>Upon receiving approval, applicants will receive an email letting them know they can begin the registration process.</p>
+
+<a class="btn btn-secondary" href="/arrestinquiry/Account/Login" id="loginLink" title="login for authorized memebers only">Authorized Member Log In</a>                </div>
+            </div>
+        </div>
+    </div>
+<input name="__RequestVerificationToken" type="hidden" value="CfDJ8LdjQTYsiEBDjeJPCzg8Rp1s9nzEjcKAcFgggwU6ktaYk0AFzeBCi05HfXnd17RerqAdvDk7Eqene5MW20SGfsmmo_N0zAyr5drcCkxCLEq2tduw6kgHAnRvNNmiBLRzOPY8C_UtEL2Y9mzbu-K5nGQ" /><input name="SearchCurrentInmatesOnly" type="hidden" value="false" /><input name="SearchIncludeDetails" type="hidden" value="false" /></form>
+
+
+
+            </main>
+        </div>        
+    </div>
+        <footer b-2wr1ubducw class="d-block p-3 text-center text-bg-primary mb-0">
+            <p b-2wr1ubducw>
+                Copyright &copy; 2026 Hillsborough County Sheriff's Office.
+                All Rights Reserved. Any unauthorized use of this information is forbidden and subject
+                to criminal prosecution.
+            </p>
+        </footer>
+    <script src="/arrestinquiry/lib/jquery/jquery.min.js"></script>
+    <script src="/arrestinquiry/lib/jqueryui/jquery-ui.min.js"></script>
+    <script src="/arrestinquiry/lib/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="/arrestinquiry/lib/jquery-easing/jquery.easing.min.js"></script>
+    <script src="/arrestinquiry/js/site.js?v=aN5Cou4szNyRO8FP8BIf7pl5njTc8sV1-iGgeNuuliU"></script>
+
+    
+    <script type="text/javascript" language="javascript">
+
+        $(function () {
+                       
+            $('#SearchDOB:input').datepicker({
+                dateFormat: 'mm/dd/yy',
+                changeMonth: true,
+                changeYear: true,
+                defaultDate: '-18y',
+                maxDate: '0d'
+            });
+
+            $('#SearchReleaseDate:input,#SearchBookingDate:input').datepicker({
+                dateFormat: 'mm/dd/yy',
+                changeMonth: true,
+                changeYear: true,
+                minDate: new Date(1995, 00, 01),
+                maxDate: '0d'
+            });
+        });
+
+        // Navigating between pages.
+        function page_grid(page) {
+            $('#SearchResults_CurrentPage').val(page);
+            $('#gridform').submit();
+        }
+
+        // Changing page size.
+        function page_size_OnChange(pageSize) {
+            $('#SearchResults_PageSize').val(pageSize);
+            $('#SearchResults_CurrentPage').val(1);
+            $('#gridform').submit();
+        }
+
+    </script>
+
+    <script src="/arrestinquiry/js/formeffects.js"></script>
+
+    <script src="https://www.google.com/recaptcha/api.js" async defer></script>
+
+</body>
+</html>
