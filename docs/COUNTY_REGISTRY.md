@@ -79,9 +79,9 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 31 | **Alachua** | Custom HTML | `alachua.py` | ✅ Active | 90 min | 2026-04-27 |
-| 32 | **Putnam** | SmartWeb ASP.NET POST | `putnam.py` | ✅ Active | 180 min | 2026-04-27 |
+| 32 | **Putnam** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `putnam.py` | ✅ Active | 180 min | 2026-05-25 |
 | 33 | **Columbia** | P2C HTML | `columbia.py` | ✅ Active | 120 min | 2026-04-27 |
-| 34 | **Suwannee** | SmartWeb ASP.NET POST | `suwannee.py` | ✅ Active | 180 min | 2026-04-27 |
+| 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | ✅ Active | 180 min | 2026-05-25 |
 | 35 | **Marion** | requests POST — jail.marionso.com | `marion.py` | 🔄 Building | — | 2026-04-27 |
 
 > **Note:** Marion is commented out in `main.py`. Scraper file exists and needs validation before re-enabling.
@@ -104,7 +104,7 @@
 | 40 | **Escambia** | Odyssey REST API | `escambia.py` | ✅ Active | 120 min | 2026-04-27 |
 | 41 | **Okaloosa** | requests POST — HTML table | `okaloosa.py` | ✅ Active | 120 min | 2026-04-27 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
-| 43 | **Santa Rosa** | SmartWeb ASP.NET POST | `santa_rosa.py` | ✅ Active | 120 min | 2026-04-27 |
+| 43 | **Santa Rosa** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `santa_rosa.py` | ✅ Active | 120 min | 2026-05-25 |
 | 44 | **Walton** | New World InmateInquiry GET | `walton.py` | ✅ Active | 120 min | 2026-04-27 |
 | 45 | **Jackson** | Stub — no public roster | `jackson.py` | ✅ Active | 360 min | 2026-04-27 |
 | 46 | **Gadsden** | Custom — needs recon | `gadsden.py` | ✅ Active | 180 min | 2026-04-27 |
