@@ -35,7 +35,7 @@ HEADERS = {
 }
 
 SEARCH_VALS_BASE = {
-    "FirstName": "", "MiddleName": "", "LastName": "",
+    "FirstName": "", "MiddleName": "", "LastName": "%",
     "BeginBookDate": "", "EndBookDate": "",
     "BeginReleaseDate": "", "EndReleaseDate": "",
     "TypeJailSearch": 0, "RecordsLoaded": 0,

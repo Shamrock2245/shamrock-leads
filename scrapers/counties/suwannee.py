@@ -61,7 +61,7 @@ class SuwanneeCountyScraper(BaseScraper):
             payload = {
                 "FirstName": "",
                 "MiddleName": "",
-                "LastName": "",
+                "LastName": "%",
                 "BeginBookDate": "",
                 "EndBookDate": "",
                 "BeginReleaseDate": "",

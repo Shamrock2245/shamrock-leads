@@ -1,0 +1,386 @@
+=== RUNNING  ===
+2026-05-24 12:58:44 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:58:44 | INFO    | shamrock-leads | ShamrockLeads - Florida Arrest Intelligence Platform
+2026-05-24 12:58:44 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:58:45 | INFO    | writers.mongo_writer | ✅ MongoDB indexes ensured
+2026-05-24 12:58:45 | INFO    | shamrock-leads | MongoDB writer initialized
+2026-05-24 12:58:46 | INFO    | shamrock-leads | Sheets writer initialized
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Lee scraper (every 10 min, first run in 10s, job_id=scraper_lee)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Collier scraper (every 15 min, first run in 25s, job_id=scraper_collier)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Charlotte scraper (every 10 min, first run in 40s, job_id=scraper_charlotte)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Manatee scraper (every 10 min, first run in 55s, job_id=scraper_manatee)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Sarasota scraper (every 10 min, first run in 70s, job_id=scraper_sarasota)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered DeSoto scraper (every 60 min, first run in 85s, job_id=scraper_desoto)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Hendry scraper (every 10 min, first run in 100s, job_id=scraper_hendry)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Hillsborough scraper (every 90 min, first run in 115s, job_id=scraper_hillsborough)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Pinellas scraper (every 90 min, first run in 130s, job_id=scraper_pinellas)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Seminole scraper (every 90 min, first run in 145s, job_id=scraper_seminole)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Orange scraper (every 90 min, first run in 160s, job_id=scraper_orange)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Pasco scraper (every 90 min, first run in 175s, job_id=scraper_pasco)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Lake scraper (every 90 min, first run in 190s, job_id=scraper_lake)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Hernando scraper (every 90 min, first run in 205s, job_id=scraper_hernando)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Polk scraper (every 120 min, first run in 220s, job_id=scraper_polk)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Osceola scraper (every 120 min, first run in 235s, job_id=scraper_osceola)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Citrus scraper (every 120 min, first run in 250s, job_id=scraper_citrus)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Sumter scraper (every 180 min, first run in 265s, job_id=scraper_sumter)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Broward scraper (every 60 min, first run in 280s, job_id=scraper_broward)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Palm Beach scraper (every 120 min, first run in 295s, job_id=scraper_palm_beach)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Martin scraper (every 120 min, first run in 310s, job_id=scraper_martin)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered St. Lucie scraper (every 90 min, first run in 325s, job_id=scraper_st._lucie)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Indian River scraper (every 120 min, first run in 340s, job_id=scraper_indian_river)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Highlands scraper (every 120 min, first run in 355s, job_id=scraper_highlands)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Glades scraper (every 180 min, first run in 370s, job_id=scraper_glades)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Volusia scraper (every 90 min, first run in 385s, job_id=scraper_volusia)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Brevard scraper (every 120 min, first run in 400s, job_id=scraper_brevard)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Alachua scraper (every 90 min, first run in 415s, job_id=scraper_alachua)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Putnam scraper (every 180 min, first run in 430s, job_id=scraper_putnam)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Escambia scraper (every 120 min, first run in 445s, job_id=scraper_escambia)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Miami-Dade scraper (every 60 min, first run in 460s, job_id=scraper_miami-dade)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Okaloosa scraper (every 120 min, first run in 475s, job_id=scraper_okaloosa)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Bay scraper (every 120 min, first run in 490s, job_id=scraper_bay)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Leon scraper (every 90 min, first run in 505s, job_id=scraper_leon)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Duval scraper (every 90 min, first run in 520s, job_id=scraper_duval)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered St. Johns scraper (every 120 min, first run in 535s, job_id=scraper_st._johns)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Taylor scraper (every 240 min, first run in 550s, job_id=scraper_taylor)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Dixie scraper (every 240 min, first run in 565s, job_id=scraper_dixie)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Flagler scraper (every 120 min, first run in 580s, job_id=scraper_flagler)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Nassau scraper (every 120 min, first run in 595s, job_id=scraper_nassau)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Clay scraper (every 120 min, first run in 610s, job_id=scraper_clay)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Columbia scraper (every 120 min, first run in 625s, job_id=scraper_columbia)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Suwannee scraper (every 180 min, first run in 640s, job_id=scraper_suwannee)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Santa Rosa scraper (every 120 min, first run in 655s, job_id=scraper_santa_rosa)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Walton scraper (every 120 min, first run in 670s, job_id=scraper_walton)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Jackson scraper (every 360 min, first run in 685s, job_id=scraper_jackson)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Gadsden scraper (every 180 min, first run in 700s, job_id=scraper_gadsden)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Monroe scraper (every 120 min, first run in 715s, job_id=scraper_monroe)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Okeechobee scraper (every 120 min, first run in 730s, job_id=scraper_okeechobee)
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | core.scheduler | 📋 Registered Hardee scraper (every 120 min, first run in 745s, job_id=scraper_hardee)
+2026-05-24 12:58:46 | INFO    | core.first_appearance_watcher | ✅ FirstAppearanceWatcher connected to MongoDB
+2026-05-24 12:58:46 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher initialized
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:46 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher scheduled (every 30 min, first run in 5 min)
+2026-05-24 12:58:46 | INFO    | shamrock-leads | One-shot mode: running brevard scraper
+2026-05-24 12:58:46 | INFO    | core.scheduler | ⚡ Manual trigger: brevard
+2026-05-24 12:58:46 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+2026-05-24 12:58:46 | INFO    | scrapers.base_scraper | 🚦 Starting Brevard County scraper (run #1)
+2026-05-24 12:58:46 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+2026-05-24 12:58:46 | WARNING | scrapers.counties.brevard | Brevard page 1: 400 Client Error: Bad Request for url: https://inmatesearch.brevardsheriff.org/Results
+2026-05-24 12:58:54 | INFO    | scrapers.counties.brevard | Brevard (DrissionPage): 0 records
+2026-05-24 12:58:54 | INFO    | scrapers.base_scraper | ✅ Brevard: scraped 0 records in 8.5s
+2026-05-24 12:58:54 | INFO    | scrapers.base_scraper | 📊 Brevard: Scored → 🔥 0 Hot | 🟡 0 Warm | ❌ 0 Disqualified
+2026-05-24 12:58:55 | INFO    | shamrock-leads | Result: {'county': 'Brevard', 'records_scraped': 0, 'hot_leads': 0, 'warm_leads': 0, 'disqualified': 0, 'elapsed_seconds': 8.5, 'writer_results': [], 'new_records': 0, 'duplicates_skipped': 0, 'qualified_records': 0, 'total_records': 0}
+=== RUNNING  ===
+2026-05-24 12:58:57 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:58:57 | INFO    | shamrock-leads | ShamrockLeads - Florida Arrest Intelligence Platform
+2026-05-24 12:58:57 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:58:58 | INFO    | writers.mongo_writer | ✅ MongoDB indexes ensured
+2026-05-24 12:58:58 | INFO    | shamrock-leads | MongoDB writer initialized
+2026-05-24 12:58:59 | INFO    | shamrock-leads | Sheets writer initialized
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Lee scraper (every 10 min, first run in 10s, job_id=scraper_lee)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Collier scraper (every 15 min, first run in 25s, job_id=scraper_collier)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Charlotte scraper (every 10 min, first run in 40s, job_id=scraper_charlotte)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Manatee scraper (every 10 min, first run in 55s, job_id=scraper_manatee)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Sarasota scraper (every 10 min, first run in 70s, job_id=scraper_sarasota)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered DeSoto scraper (every 60 min, first run in 85s, job_id=scraper_desoto)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Hendry scraper (every 10 min, first run in 100s, job_id=scraper_hendry)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Hillsborough scraper (every 90 min, first run in 115s, job_id=scraper_hillsborough)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Pinellas scraper (every 90 min, first run in 130s, job_id=scraper_pinellas)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Seminole scraper (every 90 min, first run in 145s, job_id=scraper_seminole)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Orange scraper (every 90 min, first run in 160s, job_id=scraper_orange)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Pasco scraper (every 90 min, first run in 175s, job_id=scraper_pasco)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Lake scraper (every 90 min, first run in 190s, job_id=scraper_lake)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Hernando scraper (every 90 min, first run in 205s, job_id=scraper_hernando)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Polk scraper (every 120 min, first run in 220s, job_id=scraper_polk)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Osceola scraper (every 120 min, first run in 235s, job_id=scraper_osceola)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Citrus scraper (every 120 min, first run in 250s, job_id=scraper_citrus)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Sumter scraper (every 180 min, first run in 265s, job_id=scraper_sumter)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Broward scraper (every 60 min, first run in 280s, job_id=scraper_broward)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Palm Beach scraper (every 120 min, first run in 295s, job_id=scraper_palm_beach)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Martin scraper (every 120 min, first run in 310s, job_id=scraper_martin)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered St. Lucie scraper (every 90 min, first run in 325s, job_id=scraper_st._lucie)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Indian River scraper (every 120 min, first run in 340s, job_id=scraper_indian_river)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Highlands scraper (every 120 min, first run in 355s, job_id=scraper_highlands)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Glades scraper (every 180 min, first run in 370s, job_id=scraper_glades)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Volusia scraper (every 90 min, first run in 385s, job_id=scraper_volusia)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Brevard scraper (every 120 min, first run in 400s, job_id=scraper_brevard)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Alachua scraper (every 90 min, first run in 415s, job_id=scraper_alachua)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Putnam scraper (every 180 min, first run in 430s, job_id=scraper_putnam)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Escambia scraper (every 120 min, first run in 445s, job_id=scraper_escambia)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Miami-Dade scraper (every 60 min, first run in 460s, job_id=scraper_miami-dade)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Okaloosa scraper (every 120 min, first run in 475s, job_id=scraper_okaloosa)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Bay scraper (every 120 min, first run in 490s, job_id=scraper_bay)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Leon scraper (every 90 min, first run in 505s, job_id=scraper_leon)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Duval scraper (every 90 min, first run in 520s, job_id=scraper_duval)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered St. Johns scraper (every 120 min, first run in 535s, job_id=scraper_st._johns)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Taylor scraper (every 240 min, first run in 550s, job_id=scraper_taylor)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Dixie scraper (every 240 min, first run in 565s, job_id=scraper_dixie)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Flagler scraper (every 120 min, first run in 580s, job_id=scraper_flagler)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Nassau scraper (every 120 min, first run in 595s, job_id=scraper_nassau)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Clay scraper (every 120 min, first run in 610s, job_id=scraper_clay)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Columbia scraper (every 120 min, first run in 625s, job_id=scraper_columbia)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Suwannee scraper (every 180 min, first run in 640s, job_id=scraper_suwannee)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Santa Rosa scraper (every 120 min, first run in 655s, job_id=scraper_santa_rosa)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Walton scraper (every 120 min, first run in 670s, job_id=scraper_walton)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Jackson scraper (every 360 min, first run in 685s, job_id=scraper_jackson)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Gadsden scraper (every 180 min, first run in 700s, job_id=scraper_gadsden)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Monroe scraper (every 120 min, first run in 715s, job_id=scraper_monroe)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Okeechobee scraper (every 120 min, first run in 730s, job_id=scraper_okeechobee)
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | core.scheduler | 📋 Registered Hardee scraper (every 120 min, first run in 745s, job_id=scraper_hardee)
+2026-05-24 12:58:59 | INFO    | core.first_appearance_watcher | ✅ FirstAppearanceWatcher connected to MongoDB
+2026-05-24 12:58:59 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher initialized
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:58:59 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher scheduled (every 30 min, first run in 5 min)
+2026-05-24 12:58:59 | INFO    | shamrock-leads | One-shot mode: running columbia scraper
+2026-05-24 12:58:59 | INFO    | core.scheduler | ⚡ Manual trigger: columbia
+2026-05-24 12:58:59 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+2026-05-24 12:58:59 | INFO    | scrapers.base_scraper | 🚦 Starting Columbia County scraper (run #1)
+2026-05-24 12:58:59 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+2026-05-24 12:59:02 | INFO    | scrapers.counties.columbia | Columbia HTML: 0 records
+2026-05-24 12:59:02 | INFO    | scrapers.base_scraper | ✅ Columbia: scraped 0 records in 2.9s
+2026-05-24 12:59:02 | INFO    | scrapers.base_scraper | 📊 Columbia: Scored → 🔥 0 Hot | 🟡 0 Warm | ❌ 0 Disqualified
+2026-05-24 12:59:02 | INFO    | shamrock-leads | Result: {'county': 'Columbia', 'records_scraped': 0, 'hot_leads': 0, 'warm_leads': 0, 'disqualified': 0, 'elapsed_seconds': 2.9, 'writer_results': [], 'new_records': 0, 'duplicates_skipped': 0, 'qualified_records': 0, 'total_records': 0}
+=== RUNNING  ===
+2026-05-24 12:59:04 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:59:04 | INFO    | shamrock-leads | ShamrockLeads - Florida Arrest Intelligence Platform
+2026-05-24 12:59:04 | INFO    | shamrock-leads | ============================================================
+2026-05-24 12:59:06 | INFO    | writers.mongo_writer | ✅ MongoDB indexes ensured
+2026-05-24 12:59:06 | INFO    | shamrock-leads | MongoDB writer initialized
+2026-05-24 12:59:07 | INFO    | shamrock-leads | Sheets writer initialized
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Lee scraper (every 10 min, first run in 10s, job_id=scraper_lee)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Collier scraper (every 15 min, first run in 25s, job_id=scraper_collier)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Charlotte scraper (every 10 min, first run in 40s, job_id=scraper_charlotte)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Manatee scraper (every 10 min, first run in 55s, job_id=scraper_manatee)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Sarasota scraper (every 10 min, first run in 70s, job_id=scraper_sarasota)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered DeSoto scraper (every 60 min, first run in 85s, job_id=scraper_desoto)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Hendry scraper (every 10 min, first run in 100s, job_id=scraper_hendry)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Hillsborough scraper (every 90 min, first run in 115s, job_id=scraper_hillsborough)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Pinellas scraper (every 90 min, first run in 130s, job_id=scraper_pinellas)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Seminole scraper (every 90 min, first run in 145s, job_id=scraper_seminole)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Orange scraper (every 90 min, first run in 160s, job_id=scraper_orange)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Pasco scraper (every 90 min, first run in 175s, job_id=scraper_pasco)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Lake scraper (every 90 min, first run in 190s, job_id=scraper_lake)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Hernando scraper (every 90 min, first run in 205s, job_id=scraper_hernando)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Polk scraper (every 120 min, first run in 220s, job_id=scraper_polk)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Osceola scraper (every 120 min, first run in 235s, job_id=scraper_osceola)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Citrus scraper (every 120 min, first run in 250s, job_id=scraper_citrus)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Sumter scraper (every 180 min, first run in 265s, job_id=scraper_sumter)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Broward scraper (every 60 min, first run in 280s, job_id=scraper_broward)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Palm Beach scraper (every 120 min, first run in 295s, job_id=scraper_palm_beach)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Martin scraper (every 120 min, first run in 310s, job_id=scraper_martin)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered St. Lucie scraper (every 90 min, first run in 325s, job_id=scraper_st._lucie)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Indian River scraper (every 120 min, first run in 340s, job_id=scraper_indian_river)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Highlands scraper (every 120 min, first run in 355s, job_id=scraper_highlands)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Glades scraper (every 180 min, first run in 370s, job_id=scraper_glades)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Volusia scraper (every 90 min, first run in 385s, job_id=scraper_volusia)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Brevard scraper (every 120 min, first run in 400s, job_id=scraper_brevard)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Alachua scraper (every 90 min, first run in 415s, job_id=scraper_alachua)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Putnam scraper (every 180 min, first run in 430s, job_id=scraper_putnam)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Escambia scraper (every 120 min, first run in 445s, job_id=scraper_escambia)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Miami-Dade scraper (every 60 min, first run in 460s, job_id=scraper_miami-dade)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Okaloosa scraper (every 120 min, first run in 475s, job_id=scraper_okaloosa)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Bay scraper (every 120 min, first run in 490s, job_id=scraper_bay)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Leon scraper (every 90 min, first run in 505s, job_id=scraper_leon)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Duval scraper (every 90 min, first run in 520s, job_id=scraper_duval)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered St. Johns scraper (every 120 min, first run in 535s, job_id=scraper_st._johns)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Taylor scraper (every 240 min, first run in 550s, job_id=scraper_taylor)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Dixie scraper (every 240 min, first run in 565s, job_id=scraper_dixie)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Flagler scraper (every 120 min, first run in 580s, job_id=scraper_flagler)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Nassau scraper (every 120 min, first run in 595s, job_id=scraper_nassau)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Clay scraper (every 120 min, first run in 610s, job_id=scraper_clay)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Columbia scraper (every 120 min, first run in 625s, job_id=scraper_columbia)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Suwannee scraper (every 180 min, first run in 640s, job_id=scraper_suwannee)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Santa Rosa scraper (every 120 min, first run in 655s, job_id=scraper_santa_rosa)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Walton scraper (every 120 min, first run in 670s, job_id=scraper_walton)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Jackson scraper (every 360 min, first run in 685s, job_id=scraper_jackson)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Gadsden scraper (every 180 min, first run in 700s, job_id=scraper_gadsden)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Monroe scraper (every 120 min, first run in 715s, job_id=scraper_monroe)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Okeechobee scraper (every 120 min, first run in 730s, job_id=scraper_okeechobee)
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | core.scheduler | 📋 Registered Hardee scraper (every 120 min, first run in 745s, job_id=scraper_hardee)
+2026-05-24 12:59:07 | INFO    | core.first_appearance_watcher | ✅ FirstAppearanceWatcher connected to MongoDB
+2026-05-24 12:59:07 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher initialized
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | apscheduler.scheduler | Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-24 12:59:07 | INFO    | shamrock-leads | 🔔 FirstAppearanceWatcher scheduled (every 30 min, first run in 5 min)
+2026-05-24 12:59:07 | INFO    | shamrock-leads | One-shot mode: running duval scraper
+2026-05-24 12:59:07 | INFO    | core.scheduler | ⚡ Manual trigger: duval
+2026-05-24 12:59:07 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+2026-05-24 12:59:07 | INFO    | scrapers.base_scraper | 🚦 Starting Duval County scraper (run #1)
+2026-05-24 12:59:07 | INFO    | scrapers.base_scraper | ══════════════════════════════════════════════════
+=== RUNNING  ===
+Error response from daemon: container 37414877853ea5b40f27381ed538fc50271a8da164fdfad01da1550dc02ae05c is not running
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
+=== RUNNING  ===
+Error response from daemon: No such container: shamrock-leads
