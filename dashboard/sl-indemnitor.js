@@ -29,6 +29,8 @@ const SLIndemnitor = (() => {
     {key:'telegram_mini_app', icon:'📲', label:'TG Mini App'},
     {key:'elevenlabs',    icon:'🎙️', label:'Shannon (ElevenLabs)'},
     {key:'texting_agent', icon:'💬', label:'Texting Agent'},
+    {key:'imessage',      icon:'💚', label:'iMessage'},
+    {key:'kiosk',         icon:'📋', label:'Kiosk (iPad)'},
     {key:'intake_queue',  icon:'📥', label:'Intake Queue'},
     {key:'manual_entry',  icon:'✏️', label:'Manual Entry'},
     {key:'walk_in',       icon:'🚶', label:'Walk-In'},
