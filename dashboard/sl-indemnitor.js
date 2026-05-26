@@ -649,17 +649,27 @@ const SLIndemnitor = (() => {
 
   function openAddModal() {
     const modal = $('addIndemnitorModal');
-    if (modal) modal.style.display = 'flex';
-    $('indAddStep1').style.display = '';
-    $('indAddStep2').style.display = 'none';
-    $('indSmartSearch').value = '';
-    $('indSearchResults').innerHTML = '';
+    if (modal) {
+      modal.classList.add('active');
+      modal.style.display = 'flex';
+    }
+    const step1 = $('indAddStep1');
+    const step2 = $('indAddStep2');
+    if (step1) step1.style.display = '';
+    if (step2) step2.style.display = 'none';
+    const search = $('indSmartSearch');
+    if (search) search.value = '';
+    const results = $('indSearchResults');
+    if (results) results.innerHTML = '';
     _selectedPrior = null;
   }
 
   function closeAddModal() {
     const modal = $('addIndemnitorModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) {
+      modal.classList.remove('active');
+      modal.style.display = 'none';
+    }
     _selectedPrior = null;
   }
 
