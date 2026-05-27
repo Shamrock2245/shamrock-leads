@@ -179,6 +179,7 @@ const SLIntake = (() => {
     if (!modal || !body) return;
 
     body.innerHTML = '<p style="text-align:center;padding:24px;color:var(--muted)">Loading…</p>';
+    modal.classList.add('active');
     modal.style.display = 'flex';
 
     try {
@@ -372,12 +373,12 @@ const SLIntake = (() => {
   // ── Manual Entry Modal ─────────────────────────────────────────────────────
   function openManualEntry() {
     const modal = document.getElementById('manualIntakeModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) { modal.classList.add('active'); modal.style.display = 'flex'; }
   }
 
   function closeManualModal() {
     const modal = document.getElementById('manualIntakeModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
   }
 
   async function submitManualEntry() {
@@ -570,7 +571,7 @@ const SLIntake = (() => {
   // ── Modal close ──────────────────────────────────────────────────────────────────────────────────
   function closeModal() {
     const modal = document.getElementById('intakeModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
     _currentIntakeId = null;
     _currentHydration = null;
   }

@@ -529,12 +529,13 @@ function openAddBondModal() {
   if (agentEl) agentEl.value = 'Brendan';
   const freqEl = document.getElementById('abAddCIFreq');
   if (freqEl) freqEl.value = '30';
+  modal.classList.add('active');
   modal.style.display = 'flex';
 }
 
 function closeAddBondModal() {
   const m = document.getElementById('abAddBondModal');
-  if (m) m.style.display = 'none';
+  if (m) { m.classList.remove('active'); m.style.display = 'none'; }
 }
 
 async function submitAddBond() {

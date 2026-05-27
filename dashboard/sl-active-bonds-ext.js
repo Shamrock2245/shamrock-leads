@@ -222,7 +222,7 @@
     var saEl = document.getElementById('abBulkExonSelectAll');
     if (saEl) saEl.addEventListener('change', function () { document.querySelectorAll('.bulk-exon-chk').forEach(function (c) { c.checked = saEl.checked; }); });
     var modal = document.getElementById('abBulkExonModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) { modal.classList.add('active'); modal.style.display = 'flex'; }
   }
 
   function submitBulkExonerate() {
@@ -240,7 +240,7 @@
       if (data.success) {
         toast('✅ Exonerated ' + (data.exonerated || checked.length) + ' bonds', 'success');
         var modal = document.getElementById('abBulkExonModal');
-        if (modal) modal.style.display = 'none';
+        if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
         loadActiveBonds();
         if (window.SLTracking) SLTracking.refresh();
       } else {
@@ -315,8 +315,8 @@
     toggleHasIndemFilter: toggleHasIndemFilter,
     detectDuplicatePhones: detectDuplicatePhones,
     openIndemInDefendants: openIndemInDefendants,
-    openAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) m.style.display = 'flex'; },
-    closeAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) m.style.display = 'none'; },
+    openAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) { m.classList.add('active'); m.style.display = 'flex'; } },
+    closeAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) { m.classList.remove('active'); m.style.display = 'none'; } },
     closeEditDrawer: function () { if (typeof closeEditDrawer === 'function') closeEditDrawer(); },
   });
 

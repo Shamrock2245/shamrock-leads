@@ -2456,7 +2456,7 @@ button,
 }
 
 .prosp-drawer-overlay:not(.open),
-.modal-overlay:not(.active),
+.modal-overlay:not(.active):not(.show),
 .slc-modal-overlay:not(.active),
 .inv-overlay:not(.show),
 .rb-overlay:not(.active) {

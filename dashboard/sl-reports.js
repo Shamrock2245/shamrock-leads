@@ -593,12 +593,12 @@ const SLReports = (() => {
   /* ── Schedule report modal ─────────────────────────────────────────── */
   function scheduleReport() {
     const modal = $('rptScheduleModal');
-    if (modal) modal.style.display = 'flex';
+    if (modal) { modal.classList.add('active'); modal.style.display = 'flex'; }
     if (_currentReport && $('schedRptType')) $('schedRptType').value = _currentReport;
   }
   function closeSchedule() {
     const modal = $('rptScheduleModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) { modal.classList.remove('active'); modal.style.display = 'none'; }
   }
   async function saveSchedule() {
     const type  = $('schedRptType')?.value;
