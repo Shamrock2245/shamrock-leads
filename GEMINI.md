@@ -2,7 +2,7 @@
 
 > This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
-> **Last Updated:** 2026-05-15
+> **Last Updated:** 2026-05-27
 
 ---
 
@@ -83,17 +83,17 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| County scraper files | 51 (in `scrapers/counties/`) |
-| API blueprint modules | 61 (in `dashboard/api/`) |
-| Service modules | 36 (in `dashboard/services/`) |
-| Frontend JS modules | 42 (`sl-*.js` + `defendants.js`) |
-| Frontend CSS files | 4 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`) |
-| Frontend JS LOC | ~22,400 |
-| Frontend CSS LOC | ~8,400 |
-| Backend API LOC | ~24,300 |
-| Backend services LOC | ~13,200 |
-| Agent skills | 34 (in `.agent/skills/`) |
-| Dashboard tabs | 15 (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, POA, iMessage, Analytics, Calendar, Reports, Notifications) |
+| County scraper files | 52 (in `scrapers/counties/`) |
+| API blueprint modules | 66 (in `dashboard/routers/`) |
+| Service modules | 45 (in `dashboard/services/`) |
+| Frontend JS modules | 45 (`sl-*.js` + `defendants.js`) |
+| Frontend CSS files | 9 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`, `sl-premium.css`, `sl-intelligence.css`, `sl-alpha-intel.css`, `sl-enrichment.css`, `responsive.css`) |
+| Frontend JS LOC | ~24,900 |
+| Frontend CSS LOC | ~9,600 |
+| Backend API LOC | ~26,300 |
+| Backend services LOC | ~15,700 |
+| Agent skills | 36 (in `.agent/skills/`) |
+| Dashboard tabs | 21 (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, Analytics, Intelligence, Legal NLP, Calendar, Reports, Portal, iMessage, Accounting, Alpha Intel, FTA, Social, Enrichment) |
 
 ---
 

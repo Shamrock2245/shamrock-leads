@@ -5,6 +5,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.6.0] — 2026-05-27 (Dashboard Nesting Fix + Surety Normalization + Doc Refresh)
+
+### Fixed — Dashboard
+
+- **Tab nesting bug (Command Center)** — Removed 4 orphan HTML lines (duplicate "No repeat offender alerts" block) that prematurely closed `#tabCommand`, causing the Bond-Ready Queue, In-Custody by County, and Activity Feed to render on every tab instead of just Command Center.
+- **Tab nesting bug (Analytics)** — Removed extra `</div>` in the Analytics tab's County Performance Table panel that prematurely closed `.container`, causing the ApexCharts row (Sparkline, Treemap, Risk Heatmap) to float outside the tab. This also threw off div depth for all 11 subsequent tabs (Intelligence through Enrichment), rendering them at depth 0 instead of 1.
+- **Surety normalization** — Fixed `$switch` + `$regexMatch` aggregation in `analytics.py` and `reports.py` to map all "OSI" and "Palmetto" variants (case-insensitive) to canonical surety names. Prevents "osi" and "OSI" from appearing as separate sureties in analytics.
+
+### Fixed — Scrapers
+
+- **Sarasota County scraper** — Fixed `scrape()` to properly navigate to the "Current Inmates" tab, handle AJAX-loaded table data, parse the detail-page link structure, and extract all 39 ArrestRecord fields.
+
+### Changed — Documentation
+
+- **`README.md`** — Complete rewrite with accurate metrics: 52 scrapers, 66 API modules, 45 services, 45 JS modules, 9 CSS files, 21 dashboard tabs, 36 agent skills. Updated architecture diagram, project structure, codebase metrics table, and all tab descriptions.
+- **`GEMINI.md`** — Updated all codebase metrics to current counts.
+- **`ROADMAP.md`** — Updated scraper count (51→52), corrected remaining counties (17→15).
+- **`CHANGELOG.md`** — Added v2.6.0 entry (this).
+
+### Verified
+
+- HTML nesting: all 21 `tab-content` divs open at depth 1, final depth 0, zero negative-depth lines.
+- Zero duplicate HTML IDs across 718 unique IDs.
+- All 42 local script references resolve to existing files.
+- All 66 router files + 45 service files compile cleanly (zero syntax errors).
+- All 9 CSS files have balanced braces.
+
+### Metrics Standardized
+
+All documentation now consistently references: 52 scrapers · 66 API modules · 45 services · 45 JS modules · 21 dashboard tabs · 36 agent skills · 16 MongoDB collections
+
+---
+
 ## [2.5.0] — 2026-05-15 (Documentation Suite Standardization)
 
 ### Added — Documentation

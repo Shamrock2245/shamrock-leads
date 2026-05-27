@@ -1,7 +1,7 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.
-> **Last Updated:** 2026-05-15
+> **Last Updated:** 2026-05-27
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
 
 ## Phase Overview
@@ -9,7 +9,7 @@
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
-| 1b | County Expansion (50 scraper files / 67 total) | ✅ Complete |
+| 1b | County Expansion (52 scraper files / 67 total) | ✅ Complete |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -35,9 +35,9 @@
 
 ## Phase 1b: County Expansion ✅ COMPLETE
 
-Expanded from 20 to **51 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
+Expanded from 20 to **52 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
 
-**Scraper file count:** 51 files in `scrapers/counties/` (excluding `__init__.py`).
+**Scraper file count:** 52 files in `scrapers/counties/` (excluding `__init__.py`).
 
 **Scraper strategies:**
 | Strategy | Library | Counties |
@@ -53,7 +53,7 @@ Expanded from 20 to **51 county scraper files** across Florida. All scrapers are
 | `P2CBaseScraper` | Police-to-Citizen (CentralSquare) | Clay, Marion, Alachua, Putnam |
 | `SmartCOPBaseScraper` | SmartCOP Solutions | Columbia, Dixie, Gadsden, Glades, Hardee, Jackson, Suwannee, Taylor + more |
 
-**Remaining 17 counties:** Miami-Dade (🔴 reCAPTCHA — ArcGIS alternative identified), plus 16 small rural counties (🟡 Needs URL recon). See `docs/COUNTY_REGISTRY.md`.
+**Remaining 15 counties:** Small rural counties (🟡 Needs URL recon). See `docs/COUNTY_REGISTRY.md`.
 
 ---
 
