@@ -44,6 +44,8 @@ async def api_defendants(
     if search:
         query["$or"] = [
             {"full_name": {"$regex": search, "$options": "i"}},
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
             {"charges": {"$regex": search, "$options": "i"}},
             {"booking_number": {"$regex": search, "$options": "i"}},
             {"address": {"$regex": search, "$options": "i"}},

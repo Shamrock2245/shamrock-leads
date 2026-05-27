@@ -31,10 +31,15 @@ def _build_leads_query(query: LeadsQueryModel):
     if query.min_bond is not None:
         q["bond_amount"] = {"$gte": query.min_bond}
     if query.search:
-        pat = re_mod.compile(re_mod.escape(query.search), re_mod.IGNORECASE)
+        escaped = re_mod.escape(query.search)
         sor = [
-            {"full_name": {"$regex": pat}}, {"charges": {"$regex": pat}},
-            {"booking_number": {"$regex": pat}}, {"case_number": {"$regex": pat}},
+            {"full_name": {"$regex": escaped, "$options": "i"}},
+            {"first_name": {"$regex": escaped, "$options": "i"}},
+            {"last_name": {"$regex": escaped, "$options": "i"}},
+            {"charges": {"$regex": escaped, "$options": "i"}},
+            {"booking_number": {"$regex": escaped, "$options": "i"}},
+            {"case_number": {"$regex": escaped, "$options": "i"}},
+            {"address": {"$regex": escaped, "$options": "i"}},
         ]
         if "$or" in q:
             existing = q.pop("$or")
@@ -312,8 +317,12 @@ async def api_arrests_list(
     if search:
         query["$or"] = [
             {"full_name": {"$regex": search, "$options": "i"}},
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
             {"charges": {"$regex": search, "$options": "i"}},
             {"booking_number": {"$regex": search, "$options": "i"}},
+            {"case_number": {"$regex": search, "$options": "i"}},
+            {"address": {"$regex": search, "$options": "i"}},
         ]
     if min_bond:
         query["bond_amount"] = {"$gte": float(min_bond)}

@@ -25,8 +25,12 @@ async def api_leads_legacy(
     if query.search:
         mongo_query["$or"] = [
             {"full_name": {"$regex": query.search, "$options": "i"}},
+            {"first_name": {"$regex": query.search, "$options": "i"}},
+            {"last_name": {"$regex": query.search, "$options": "i"}},
             {"charges": {"$regex": query.search, "$options": "i"}},
             {"booking_number": {"$regex": query.search, "$options": "i"}},
+            {"case_number": {"$regex": query.search, "$options": "i"}},
+            {"address": {"$regex": query.search, "$options": "i"}},
         ]
     if query.min_bond is not None:
         mongo_query["bond_amount"] = {"$gte": query.min_bond}
