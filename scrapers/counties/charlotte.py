@@ -54,11 +54,11 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/126.0.0.0 Safari/537.36"
     ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
-        "image/avif,image/webp,*/*;q=0.8"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
     ),
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
@@ -69,6 +69,10 @@ HEADERS = {
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
     "Sec-Fetch-User": "?1",
+    # Client hints — modern Chrome sends these, Cloudflare checks for their presence
+    "Sec-CH-UA": '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="8"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
 }
 
 
@@ -140,12 +144,22 @@ class CharlotteCountyScraper(BaseScraper):
             })
 
             if not resp or resp.status_code != 200:
-                logger.warning(f"[Charlotte] Roster page {current_page} returned {resp.status_code if resp else 'None'}")
+                status = resp.status_code if resp else 'None'
+                # Diagnostic: dump response info for Cloudflare debugging
+                if resp and resp.status_code in (403, 503):
+                    content_preview = resp.text[:300] if resp.text else 'empty'
+                    cf_ray = resp.headers.get('cf-ray', 'none')
+                    logger.warning(
+                        f"[Charlotte] Cloudflare block on roster p{current_page}: "
+                        f"HTTP {status}, cf-ray={cf_ray}, content: {content_preview}"
+                    )
+                else:
+                    logger.warning(f"[Charlotte] Roster page {current_page} returned {status}")
                 break
 
             # Check for Cloudflare block page
-            if "just a moment" in resp.text.lower()[:500] or resp.status_code == 403:
-                logger.warning(f"[Charlotte] Cloudflare challenge on page {current_page}")
+            if "just a moment" in resp.text.lower()[:500]:
+                logger.warning(f"[Charlotte] Cloudflare JS challenge on page {current_page}")
                 break
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -495,12 +509,12 @@ class CharlotteCountyScraper(BaseScraper):
             try:
                 if method.upper() == "GET":
                     resp = session.get(
-                        url, headers=headers, impersonate="chrome124",
+                        url, headers=headers, impersonate="chrome",
                         timeout=30, allow_redirects=True, **kwargs
                     )
                 else:
                     resp = session.post(
-                        url, headers=headers, impersonate="chrome124",
+                        url, headers=headers, impersonate="chrome",
                         timeout=30, allow_redirects=True, **kwargs
                     )
 

@@ -90,10 +90,18 @@ class BaseScraper(ABC):
         you MUST call set_browser_path() explicitly. Without this,
         every DrissionPage scraper silently fails inside Docker.
 
+        Stealth features (updated 2026-05-27):
+        - Chrome 126 user agent (current stable) — Chrome 120 was trivially
+          detectable by Cloudflare as bot traffic from datacenter IPs
+        - navigator.webdriver patched via --disable-blink-features
+        - Realistic language, platform, and WebGL preferences
+        - Randomized viewport to prevent fingerprint correlation
+
         Usage in any county scraper:
             co = self._get_browser_options()
             page = ChromiumPage(addr_or_opts=co)
         """
+        import random
         from DrissionPage import ChromiumOptions
         co = ChromiumOptions()
         co.auto_port()
@@ -102,15 +110,29 @@ class BaseScraper(ABC):
         co.set_argument("--no-sandbox")
         co.set_argument("--disable-dev-shm-usage")
         co.set_argument("--disable-gpu")
-        co.set_argument("--disable-blink-features=AutomationControlled")
         co.set_argument("--ignore-certificate-errors")
         co.set_argument("--ignore-ssl-errors")
-        co.set_argument("--window-size=1920,1080")
+
+        # ── Stealth: Anti-bot evasion ──
+        # Disable automation detection flags
+        co.set_argument("--disable-blink-features=AutomationControlled")
+        # Randomized viewport to avoid fingerprint correlation across runs
+        w = random.randint(1280, 1920)
+        h = random.randint(800, 1080)
+        co.set_argument(f"--window-size={w},{h}")
+        # Realistic language/locale preferences
+        co.set_argument("--lang=en-US")
+        co.set_argument("--accept-lang=en-US,en;q=0.9")
+
+        # Chrome 126 user agent (current stable as of 2026-05)
+        # CRITICAL: Chrome 120 was from Dec 2023 — Cloudflare auto-blocks
+        # ancient browser versions from datacenter IPs
         co.set_user_agent(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         )
-        # Chrome memory optimization and crash mitigation arguments for Docker
+
+        # Chrome memory optimization and crash mitigation for Docker
         co.set_argument("--disable-background-networking")
         co.set_argument("--disable-background-timer-throttling")
         co.set_argument("--disable-backgrounding-occluded-windows")
@@ -121,12 +143,55 @@ class BaseScraper(ABC):
         co.set_argument("--disable-ipc-flooding-protection")
         co.set_argument("--disable-renderer-backgrounding")
         co.set_argument("--disable-sync")
+        # Suppress "Chrome is being controlled by automated software" infobar
+        co.set_argument("--disable-infobars")
+        co.set_argument("--disable-extensions")
 
         # Critical: set browser path for Docker where chromium lives at /usr/bin/chromium
         chrome_path = os.getenv("CHROME_PATH")
         if chrome_path:
             co.set_browser_path(chrome_path)
         return co
+
+    @classmethod
+    def _inject_stealth_js(cls, page):
+        """
+        Inject stealth JavaScript patches AFTER page creation but BEFORE
+        navigating to target sites. Patches navigator.webdriver, plugins,
+        and other fingerprint vectors that Cloudflare checks.
+
+        Call this once after creating the ChromiumPage:
+            page = ChromiumPage(addr_or_opts=co)
+            cls._inject_stealth_js(page)
+        """
+        try:
+            page.run_js("""
+                // Patch navigator.webdriver (Cloudflare checks this)
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                // Patch navigator.plugins to look like a real browser
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                // Patch navigator.languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                // Patch chrome.runtime to exist (headless Chrome lacks this)
+                window.chrome = window.chrome || {};
+                window.chrome.runtime = window.chrome.runtime || {};
+                // Patch permissions API
+                if (navigator.permissions) {
+                    const originalQuery = navigator.permissions.query;
+                    navigator.permissions.query = (parameters) =>
+                        parameters.name === 'notifications'
+                            ? Promise.resolve({ state: Notification.permission })
+                            : originalQuery(parameters);
+                }
+            """)
+        except Exception:
+            pass  # Non-critical — some pages may not support JS injection
 
     @property
     @abstractmethod

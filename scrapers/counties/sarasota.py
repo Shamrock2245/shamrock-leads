@@ -58,22 +58,45 @@ class SarasotaCountyScraper(BaseScraper):
     def _setup_browser(self):
         from DrissionPage import ChromiumPage
         co = self._get_browser_options()
-        return ChromiumPage(addr_or_opts=co)
+        page = ChromiumPage(addr_or_opts=co)
+        # Inject stealth JS patches to evade Cloudflare bot detection
+        self._inject_stealth_js(page)
+        return page
+
+    # ── Dynamic URL Detection ─────────────────────────────────────────────────
+    def _detect_revize_base(self, page_html: str) -> str:
+        """Extract the current Revize CMS base URL from the parent page JS.
+        Falls back to hardcoded BASE_URL if detection fails."""
+        try:
+            # Look for: RZ.revizeserverurl = 'https://cms2.revize.com/revize/sarasotacounty';
+            match = re.search(r"RZ\.revizeserverurl\s*=\s*'([^']+)'", page_html)
+            if match:
+                detected = match.group(1).rstrip('/') + '/'
+                if detected != BASE_URL:
+                    logger.info(f"[Sarasota] Detected Revize base URL changed: {detected} (was {BASE_URL})")
+                return detected
+        except Exception as e:
+            logger.warning(f"[Sarasota] URL detection failed: {e}")
+        return BASE_URL
 
     # ── Evasion & Navigation ──────────────────────────────────────────────────
     def _navigate_and_wait(self, page, url) -> bool:
-        """Navigate to URL and wait for Cloudflare Challenge bypass."""
+        """Navigate to URL and wait for Cloudflare Challenge bypass.
+        Includes extended wait for JS-rendered content."""
         try:
             page.get(url)
-            # Wait up to 20 seconds for the WAF 'just a moment' challenge to bypass
-            max_wait = 20
+            # Wait up to 25 seconds for the WAF 'just a moment' challenge to bypass
+            max_wait = 25
             waited = 0
             while waited < max_wait:
                 title = page.title.lower() if page.title else ""
                 if "just a moment" not in title:
+                    # Extra wait for JS-rendered content to load
+                    time.sleep(2)
                     return True
                 time.sleep(1)
                 waited += 1
+            logger.warning(f"[Sarasota] Cloudflare challenge timeout after {max_wait}s for {url}")
             return False
         except Exception as e:
             logger.warning(f"[Sarasota] Navigation error for {url}: {e}")
@@ -89,12 +112,16 @@ class SarasotaCountyScraper(BaseScraper):
             raise
 
         page = self._setup_browser()
+        # Track the effective base URL (may be dynamically detected)
+        self._effective_base_url = BASE_URL
 
         try:
             # Phase 0: Establish browser context via parent page
             logger.info(f"[Sarasota] Phase 0: Loading parent page for cookie/referer context")
             if self._navigate_and_wait(page, PARENT_URL):
                 logger.info("[Sarasota] Parent page loaded — cookies/referer established")
+                # Detect the actual Revize CMS base URL from page source
+                self._effective_base_url = self._detect_revize_base(page.html)
             else:
                 logger.warning("[Sarasota] Parent page failed — trying Revize directly")
 
@@ -155,7 +182,7 @@ class SarasotaCountyScraper(BaseScraper):
         for day_offset in range(DAYS_BACK):
             target_date = today - timedelta(days=day_offset)
             date_str = target_date.strftime("%m/%d/%Y")
-            search_url = f"{BASE_URL}personSearch.php?type=date&date={date_str}"
+            search_url = f"{self._effective_base_url}personSearch.php?type=date&date={date_str}"
 
             logger.info(f"[Sarasota] Searching date: {date_str}")
 
@@ -183,7 +210,14 @@ class SarasotaCountyScraper(BaseScraper):
                         break
 
                 if not results_table:
-                    logger.debug(f"[Sarasota] No results table found for {date_str} p{page_num}")
+                    # Diagnostic: dump page content for debugging Cloudflare blocks
+                    page_text = soup.get_text(separator=' ', strip=True)[:500]
+                    all_tables = len(soup.find_all('table'))
+                    logger.warning(
+                        f"[Sarasota] No results table for {date_str} p{page_num} "
+                        f"(tables found: {all_tables}, title: {soup.title.string if soup.title else 'none'}) "
+                        f"— content preview: {page_text[:200]}"
+                    )
                     break
 
                 # Parse header positions
@@ -224,7 +258,7 @@ class SarasotaCountyScraper(BaseScraper):
 
                     # Build full URL
                     if not href.startswith("http"):
-                        pin_url = f"{BASE_URL}{href.lstrip('/')}"
+                        pin_url = f"{self._effective_base_url}{href.lstrip('/')}"
                     else:
                         pin_url = href
 
@@ -330,7 +364,7 @@ class SarasotaCountyScraper(BaseScraper):
 
         # Build full booking detail URL
         if not booking_href.startswith("http"):
-            booking_url = f"{BASE_URL}{booking_href.lstrip('/')}"
+            booking_url = f"{self._effective_base_url}{booking_href.lstrip('/')}"
         else:
             booking_url = booking_href
 
@@ -552,7 +586,7 @@ class SarasotaCountyScraper(BaseScraper):
                 "booking" in alt
             ):
                 if not src.startswith("http"):
-                    src = f"{BASE_URL}{src.lstrip('/')}"
+                    src = f"{self._effective_base_url}{src.lstrip('/')}"
                 mugshot_url = src
                 break
 
@@ -625,8 +659,10 @@ class SarasotaCountyScraper(BaseScraper):
         """Fetch a single Sarasota County booking by ID."""
         if not booking_id and not detail_url:
             return None
+        # Ensure _effective_base_url is set (may not be if called outside scrape())
+        base = getattr(self, '_effective_base_url', BASE_URL)
         if not detail_url:
-            detail_url = f"{BASE_URL}booking.php?bkg={booking_id}"
+            detail_url = f"{base}booking.php?bkg={booking_id}"
 
         page = None
         try:

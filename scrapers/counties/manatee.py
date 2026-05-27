@@ -96,17 +96,23 @@ class ManateeCountyScraper(BaseScraper):
     def _setup_browser(self):
         from DrissionPage import ChromiumPage
         co = self._get_browser_options()
-        return ChromiumPage(addr_or_opts=co)
+        page = ChromiumPage(addr_or_opts=co)
+        # Inject stealth JS patches to evade Cloudflare bot detection
+        self._inject_stealth_js(page)
+        return page
 
     @staticmethod
-    def _wait_for_cloudflare(page, max_wait=20):
+    def _wait_for_cloudflare(page, max_wait=25):
         waited = 0
         while waited < max_wait:
             title = page.title.lower() if page.title else ""
             if "just a moment" not in title:
+                # Extra wait for JS-rendered content to load
+                time.sleep(2)
                 return True
             time.sleep(1)
             waited += 1
+        logger.warning(f"[Manatee] Cloudflare challenge timeout after {max_wait}s")
         return False
 
     def _collect_booking_links(self, page):
@@ -138,6 +144,17 @@ class ManateeCountyScraper(BaseScraper):
             """)
 
             if not booking_urls:
+                # Diagnostic: dump page content for debugging
+                try:
+                    page_text = page.run_js('return document.body.innerText.substring(0, 500);') or ''
+                    all_links_count = page.run_js('return document.querySelectorAll("a").length;') or 0
+                    logger.warning(
+                        f"[Manatee] No booking links on p{current_page} "
+                        f"(total <a> tags: {all_links_count}, "
+                        f"title: {page.title}) — content: {page_text[:200]}"
+                    )
+                except Exception:
+                    logger.warning(f"[Manatee] No booking links on p{current_page} (diagnostic JS failed)")
                 break
 
             valid_links = []
