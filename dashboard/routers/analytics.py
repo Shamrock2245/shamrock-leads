@@ -279,14 +279,33 @@ async def county_performance_alias():
 # ─────────────────────────────────────────────────────────────────────────────
 @analytics_bp.get("/analytics/surety-breakdown")
 async def surety_breakdown():
-    """Returns OSI vs Palmetto bond counts, premium totals, avg bond amounts."""
+    """Returns OSI vs Palmetto bond counts, premium totals, avg bond amounts.
+    Normalizes all insurance_company variants to canonical 'OSI' or 'Palmetto'."""
     try:
         db = get_db()
         active_bonds_col = db["active_bonds"]
 
+        # Normalize insurance_company to canonical surety name in the pipeline
         pipe = await active_bonds_col.aggregate([
+            {"$addFields": {
+                "_surety_normalized": {
+                    "$switch": {
+                        "branches": [
+                            {
+                                "case": {"$regexMatch": {
+                                    "input": {"$ifNull": ["$insurance_company", ""]},
+                                    "regex": "palmetto|psc",
+                                    "options": "i"
+                                }},
+                                "then": "Palmetto"
+                            },
+                        ],
+                        "default": "OSI"
+                    }
+                }
+            }},
             {"$group": {
-                "_id": "$insurance_company",
+                "_id": "$_surety_normalized",
                 "count": {"$sum": 1},
                 "total_premium": {"$sum": "$premium"},
                 "total_bond": {"$sum": "$bond_amount"},
@@ -298,8 +317,6 @@ async def surety_breakdown():
         sureties = []
         for row in pipe:
             label = row["_id"] or "Unknown"
-            if not label:
-                continue
             sureties.append({
                 "surety": label,
                 "count": row["count"],

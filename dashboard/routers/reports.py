@@ -393,7 +393,21 @@ async def agent_production(
             {"$group": {
                 "_id": {
                     "agent": "$agent_name_norm",
-                    "surety": {"$toUpper": {"$ifNull": ["$insurance_company", "UNKNOWN"]}},
+                    "surety": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {"$regexMatch": {
+                                        "input": {"$ifNull": ["$insurance_company", ""]},
+                                        "regex": "palmetto|psc",
+                                        "options": "i"
+                                    }},
+                                    "then": "PALMETTO"
+                                },
+                            ],
+                            "default": "OSI"
+                        }
+                    },
                 },
                 "bond_count": {"$sum": 1},
                 "total_bond_amount": {"$sum": "$bond_amount"},
