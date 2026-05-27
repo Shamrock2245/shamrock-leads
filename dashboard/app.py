@@ -748,10 +748,7 @@ def api_timeline():
     return jsonify({
         "dates": dates,
         "series": {c: list(series[c].values()) for c in counties}
-    })
-
-
-# ── API: Scraper Health & Metrics ──
+    })# ── API: Scraper Health & Metrics ──
 @app.route("/api/scraper-health")
 def api_scraper_health():
     """Per-county scraper health metrics."""
@@ -786,27 +783,60 @@ def api_scraper_health():
     ]
     counts_24h = {r["_id"]: r["count_24h"] for r in arrests.aggregate(pipeline_24h)}
 
+    # Fetch live scraper status and config from MongoDB
+    scraper_status_col = db["scraper_status"]
+    scraper_config_col = db["scraper_config"]
+
+    live_status = {doc["county"]: doc for doc in scraper_status_col.find({}, {"_id": 0}) if doc.get("county")}
+    config_map = {doc["county"]: doc for doc in scraper_config_col.find({}, {"_id": 0}) if doc.get("county")}
+
     out = []
+    seen = set()
+
     for r in results:
         county = r["_id"]
+        if not county:
+            continue
+        seen.add(county)
+
         latest = r.get("latest_record") or r.get("latest_scrape")
+        if isinstance(latest, datetime) and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=timezone.utc)
 
-        # Calculate staleness — normalize naive datetimes from MongoDB to UTC-aware
-        if isinstance(latest, datetime):
-            if latest.tzinfo is None:
-                latest = latest.replace(tzinfo=timezone.utc)
-            hours_since = (now - latest).total_seconds() / 3600
-        else:
-            hours_since = 999
+        live = live_status.get(county, {})
+        cfg = config_map.get(county, {})
+        last_run = live.get("last_run")
+        if isinstance(last_run, datetime) and last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=timezone.utc)
 
-        if hours_since < 2:
-            status = "healthy"
-        elif hours_since < 6:
-            status = "stale"
-        elif hours_since < 24:
-            status = "warning"
+        # Determine hours since last run, fallback to latest record age if never run
+        if isinstance(last_run, datetime):
+            hours_since_run = (now - last_run).total_seconds() / 3600
         else:
-            status = "offline"
+            hours_since_run = 999
+
+        if cfg.get("enabled") is False:
+            base_status = "disabled"
+        elif live.get("status") == "error":
+            base_status = "error"
+        elif not last_run:
+            if isinstance(latest, datetime):
+                hours_since_latest = (now - latest).total_seconds() / 3600
+                base_status = "healthy" if hours_since_latest < 2 else "stale" if hours_since_latest < 6 else "warning" if hours_since_latest < 24 else "offline"
+            else:
+                base_status = "never_run"
+        else:
+            # Scraper ran successfully (status == "ok")
+            if hours_since_run < 3:
+                base_status = "healthy"
+            elif hours_since_run < 6:
+                base_status = "stale"
+            elif hours_since_run < 24:
+                base_status = "warning"
+            else:
+                base_status = "offline"
+
+        ui_hours = hours_since_run if last_run else ((now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999)
 
         out.append({
             "county": county,
@@ -814,15 +844,67 @@ def api_scraper_health():
             "in_custody": r["in_custody"],
             "records_24h": counts_24h.get(county, 0),
             "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
-            "hours_since_update": round(hours_since, 1),
-            "status": status,
+            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+            "hours_since_update": round(ui_hours, 1),
+            "status": base_status,
             "avg_bond": round(r["avg_bond"] or 0, 2),
             "max_bond": round(r["max_bond"] or 0, 2),
             "total_bond": round(r["total_bond"] or 0, 2),
+            "hot_leads": r.get("hot_leads", 0),
+            "warm_leads": r.get("warm_leads", 0),
+            "duration_seconds": live.get("duration_seconds", 0),
+            "run_count": live.get("run_count", 0),
+            "error": live.get("error"),
+            "enabled": cfg.get("enabled", True),
         })
 
-    return jsonify(out)
+    # Add registered counties with no arrest records yet
+    for county in sorted(REGISTERED_COUNTIES):
+        if county in seen:
+            continue
+        live = live_status.get(county, {})
+        cfg = config_map.get(county, {})
+        last_run = live.get("last_run")
+        if isinstance(last_run, datetime) and last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=timezone.utc)
+        
+        hours_since_run = (now - last_run).total_seconds() / 3600 if isinstance(last_run, datetime) else 999
 
+        if cfg.get("enabled") is False:
+            run_status = "disabled"
+        elif live.get("status") == "error":
+            run_status = "error"
+        elif not last_run:
+            run_status = "never_run"
+        else:
+            if hours_since_run < 3:
+                run_status = "healthy"
+            elif hours_since_run < 6:
+                run_status = "stale"
+            elif hours_since_run < 24:
+                run_status = "warning"
+            else:
+                run_status = "offline"
+
+        out.append({
+            "county": county,
+            "total_records": 0,
+            "in_custody": 0,
+            "records_24h": 0,
+            "latest_record": "",
+            "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+            "hours_since_update": round(hours_since_run, 1),
+            "status": run_status,
+            "avg_bond": 0,
+            "max_bond": 0,
+            "total_bond": 0,
+            "hot_leads": 0,
+            "warm_leads": 0,
+            "duration_seconds": live.get("duration_seconds", 0),
+            "run_count": live.get("run_count", 0),
+            "error": live.get("error"),
+            "enabled": cfg.get("enabled", True),
+        })
 
 # ── API: County-Specific Arrests (sorted by newest) ──
 @app.route("/api/county-arrests/<county_name>")

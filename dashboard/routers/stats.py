@@ -469,17 +469,42 @@ async def api_scraper_health():
             latest = r.get("latest_record") or r.get("latest_scrape")
             if isinstance(latest, datetime) and latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
-            hours_since = (now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999
-            base_status = "healthy" if hours_since < 2 else "stale" if hours_since < 6 else "warning" if hours_since < 24 else "offline"
+            
             live = live_status.get(county, {})
             cfg = config_map.get(county, {})
+            last_run = live.get("last_run")
+            if isinstance(last_run, datetime) and last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=timezone.utc)
+
+            # Determine hours since last run, fallback to latest record age if never run
+            if isinstance(last_run, datetime):
+                hours_since_run = (now - last_run).total_seconds() / 3600
+            else:
+                hours_since_run = 999
+
             if cfg.get("enabled") is False:
                 base_status = "disabled"
             elif live.get("status") == "error":
                 base_status = "error"
-            elif live.get("status") == "ok" and hours_since < 2:
-                base_status = "healthy"
-            last_run = live.get("last_run")
+            elif not last_run:
+                if isinstance(latest, datetime):
+                    hours_since_latest = (now - latest).total_seconds() / 3600
+                    base_status = "healthy" if hours_since_latest < 2 else "stale" if hours_since_latest < 6 else "warning" if hours_since_latest < 24 else "offline"
+                else:
+                    base_status = "never_run"
+            else:
+                # Scraper ran successfully (status == "ok")
+                if hours_since_run < 3:
+                    base_status = "healthy"
+                elif hours_since_run < 6:
+                    base_status = "stale"
+                elif hours_since_run < 24:
+                    base_status = "warning"
+                else:
+                    base_status = "offline"
+
+            ui_hours = hours_since_run if last_run else ((now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999)
+
             out.append({
                 "county": county,
                 "total_records": r["total_records"],
@@ -487,7 +512,7 @@ async def api_scraper_health():
                 "records_24h": counts_24h.get(county, 0),
                 "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
                 "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
-                "hours_since_update": round(hours_since, 1),
+                "hours_since_update": round(ui_hours, 1),
                 "status": base_status,
                 "avg_bond": round(r.get("avg_bond") or 0, 2),
                 "max_bond": round(r.get("max_bond") or 0, 2),
@@ -506,8 +531,28 @@ async def api_scraper_health():
                 continue
             live = live_status.get(county, {})
             cfg = config_map.get(county, {})
-            run_status = "disabled" if cfg.get("enabled") is False else live.get("status", "never_run")
             last_run = live.get("last_run")
+            if isinstance(last_run, datetime) and last_run.tzinfo is None:
+                last_run = last_run.replace(tzinfo=timezone.utc)
+            
+            hours_since_run = (now - last_run).total_seconds() / 3600 if isinstance(last_run, datetime) else 999
+
+            if cfg.get("enabled") is False:
+                run_status = "disabled"
+            elif live.get("status") == "error":
+                run_status = "error"
+            elif not last_run:
+                run_status = "never_run"
+            else:
+                if hours_since_run < 3:
+                    run_status = "healthy"
+                elif hours_since_run < 6:
+                    run_status = "stale"
+                elif hours_since_run < 24:
+                    run_status = "warning"
+                else:
+                    run_status = "offline"
+
             out.append({
                 "county": county,
                 "total_records": 0,
@@ -515,7 +560,7 @@ async def api_scraper_health():
                 "records_24h": 0,
                 "latest_record": "",
                 "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
-                "hours_since_update": 999,
+                "hours_since_update": round(hours_since_run, 1),
                 "status": run_status,
                 "avg_bond": 0,
                 "max_bond": 0,
