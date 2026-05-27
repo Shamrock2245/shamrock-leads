@@ -201,12 +201,14 @@ async def tracking_search(q: str = Query(default="")):
         return {"results": []}
     active_bonds = get_collection("active_bonds")
     try:
-        pattern = re.compile(re.escape(q), re.IGNORECASE)
+        escaped = re.escape(q)
         cursor = active_bonds.find(
             {"$or": [
-                {"defendant_name": {"$regex": pattern}},
-                {"booking_number": {"$regex": pattern}},
-                {"case_number": {"$regex": pattern}},
+                {"defendant_name": {"$regex": escaped, "$options": "i"}},
+                {"booking_number": {"$regex": escaped, "$options": "i"}},
+                {"case_number": {"$regex": escaped, "$options": "i"}},
+                {"indemnitor_name": {"$regex": escaped, "$options": "i"}},
+                {"county": {"$regex": escaped, "$options": "i"}},
             ]},
             {"_id": 0, "booking_number": 1, "defendant_name": 1, "county": 1,
              "bond_amount": 1, "status": 1, "risk_score": 1, "latest_location": 1,
