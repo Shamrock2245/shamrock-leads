@@ -437,6 +437,7 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 .def-bond-pill.high{background:rgba(239,68,68,.12);color:#f87171}
 .def-bond-pill.mid{background:rgba(245,158,11,.12);color:#fbbf24}
 .def-bond-pill.low{background:rgba(16,185,129,.12);color:#34d399}
+.def-bond-pill.no-bond{background:rgba(245,158,11,.12);color:#fbbf24;border:1px solid rgba(245,158,11,.2)}
 .def-body{padding:12px 16px}
 .def-section{margin-bottom:10px}
 .def-section-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:6px;font-weight:600}

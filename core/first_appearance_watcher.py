@@ -445,9 +445,9 @@ _BOND_PATTERNS = [
         r"bond\s*(?:amt|amount)[^$\d]{0,20}[\$]?\s*([\d,]+(?:\.\d{1,2})?)",
         re.IGNORECASE,
     ),
-    # "10000.00" after "Bond" in a table cell
+    # "10000.00" in table cell next to "Bond" / "Amt" / "Amount" label
     re.compile(
-        r"<td[^>]*>\s*[\$]?([\d]{3,}(?:,\d{3})*(?:\.\d{1,2})?)\s*</td>",
+        r"(?:bond|amt|amount)[^<]{0,50}<\/td>\s*<td[^>]*>\s*[\$]?\s*([\d,]+(?:\.\d{1,2})?)",
         re.IGNORECASE,
     ),
 ]

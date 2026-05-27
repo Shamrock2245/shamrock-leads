@@ -97,6 +97,10 @@ function renderDefCard(d){
   const hasMugshot=d.mugshot_url&&d.mugshot_url.startsWith('http');
   const fullAddr=[d.address,d.city,d.state,d.zip].filter(v=>v&&v!=='—').join(', ');
 
+  const isNoBond = d.bond_amount === 0 && (d.bond_type || '').toUpperCase() === 'NO BOND';
+  const bondText = isNoBond ? 'No Bond' : money(d.bond_amount);
+  const pillClass = isNoBond ? 'no-bond' : bondPill(d.bond_amount);
+
   return `
   <div class="def-card" data-booking="${d.booking_number||''}">
     <!-- Header -->
@@ -108,7 +112,7 @@ function renderDefCard(d){
           <div class="def-booking">#${val(d.booking_number)} · ${val(d.county)} County</div>
         </div>
       </div>
-      <div class="def-bond-pill ${bondPill(d.bond_amount)}">${money(d.bond_amount)}</div>
+      <div class="def-bond-pill ${pillClass}">${bondText}</div>
     </div>
 
     <div class="def-body">
@@ -136,6 +140,12 @@ function renderDefCard(d){
           <div class="def-field"><div class="def-label">Arresting Agency</div><div class="def-value">${val(d.agency)}</div></div>
           <div class="def-field"><div class="def-label">Status</div><div class="def-value">${statusBadge(d.status)}</div></div>
           <div class="def-field"><div class="def-label">Bond Paid</div><div class="def-value">${val(d.bond_paid)}</div></div>
+          ${isNoBond ? `
+          <div class="def-field" style="grid-column: 1 / -1; background: rgba(245, 158, 11, 0.08); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.15); display: flex; flex-direction: row; align-items: center; gap: 8px; margin-top: 6px;">
+            <span style="font-size: 14px; line-height: 1;">⏳</span>
+            <span style="color: #fbbf24; font-size: 11px; font-weight: 600; line-height: 1.3;">No bond until morning first appearance. Rescan scheduled then.</span>
+          </div>
+          ` : ''}
         </div>
       </div>
 
