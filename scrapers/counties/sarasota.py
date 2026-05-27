@@ -125,35 +125,61 @@ class SarasotaCountyScraper(BaseScraper):
             else:
                 logger.warning("[Sarasota] Parent page failed — trying Revize directly")
 
-            # Phase 1: Date search → collect person links (PIN + preview data)
+            # ── Strategy: dual-source scraping ──
+            # Source 1: Current Inmate Population (highest value — only in-custody)
+            # Source 2: Date search (broader coverage — includes released)
+            # Both merge via Booking_Number deduplication
+
+            # Phase 1A: Scrape Current Inmate Population dropdown
+            inmate_records = self._collect_current_inmates(page)
+            logger.info(f"[Sarasota] Phase 1A: {len(inmate_records)} records from Current Inmate Population")
+
+            # Phase 1B: Date search → collect person links (PIN + preview data)
             person_entries = self._collect_person_links(page)
-            if not person_entries:
+            date_records = []
+            if person_entries:
+                logger.info(f"[Sarasota] Phase 1B: {len(person_entries)} unique persons from date search")
+
+                # Phase 2+3: For each person → get most recent booking → extract detail
+                for idx, entry in enumerate(person_entries, 1):
+                    if idx % 10 == 0:
+                        logger.info(
+                            f"[Sarasota] Progress: {idx}/{len(person_entries)} "
+                            f"({len(date_records)} records extracted)"
+                        )
+
+                    try:
+                        record = self._process_person(page, entry)
+                        if record and record.Full_Name:
+                            date_records.append(record)
+                    except Exception as e:
+                        logger.warning(
+                            f"[Sarasota] Error processing person {entry.get('name', '?')}: {e}"
+                        )
+
+                    time.sleep(DETAIL_DELAY_S)
+            else:
                 logger.warning("[Sarasota] No person entries found across all dates")
-                return []
 
-            logger.info(f"[Sarasota] Phase 1 complete: {len(person_entries)} unique persons collected")
-
-            # Phase 2+3: For each person → get most recent booking → extract detail
+            # Merge both sources, dedup by Booking_Number
+            seen_bookings = set()
             records = []
-            for idx, entry in enumerate(person_entries, 1):
-                if idx % 10 == 0:
-                    logger.info(
-                        f"[Sarasota] Progress: {idx}/{len(person_entries)} "
-                        f"({len(records)} records extracted)"
-                    )
+            # Inmate records take priority (confirmed in-custody)
+            for r in inmate_records:
+                if r.Booking_Number and r.Booking_Number not in seen_bookings:
+                    seen_bookings.add(r.Booking_Number)
+                    records.append(r)
+            # Add date records that aren't duplicates
+            for r in date_records:
+                if r.Booking_Number and r.Booking_Number not in seen_bookings:
+                    seen_bookings.add(r.Booking_Number)
+                    records.append(r)
 
-                try:
-                    record = self._process_person(page, entry)
-                    if record and record.Full_Name:
-                        records.append(record)
-                except Exception as e:
-                    logger.warning(
-                        f"[Sarasota] Error processing person {entry.get('name', '?')}: {e}"
-                    )
-
-                time.sleep(DETAIL_DELAY_S)
-
-            logger.info(f"[Sarasota] Scrape complete: {len(records)} valid records from {len(person_entries)} persons")
+            logger.info(
+                f"[Sarasota] Scrape complete: {len(records)} total records "
+                f"(inmates: {len(inmate_records)}, date: {len(date_records)}, "
+                f"deduped: {len(inmate_records) + len(date_records) - len(records)})"
+            )
             return records
 
         except Exception as e:
@@ -164,6 +190,305 @@ class SarasotaCountyScraper(BaseScraper):
                 page.quit()
             except Exception:
                 pass
+
+    # ── Current Inmate Population scraping ─────────────────────────────────────
+    def _collect_current_inmates(self, page) -> List[ArrestRecord]:
+        """
+        Scrape the 'Current Inmate Population' dropdown on the Sarasota page.
+        Each entry links to viewInmate.php?id=XXXXX which shows:
+        - Personal Information: PIN, DOB, Race, Sex, Eyes
+        - Criminal Charges: Booking#, Offense, Counts, Bond Amount, Bond Type, etc.
+        - Mugshot image
+
+        This is the highest-value data source because it ONLY shows
+        currently incarcerated inmates (= active bondable leads).
+        """
+        from bs4 import BeautifulSoup
+
+        records = []
+
+        try:
+            # The Current Inmate Population is on the parent page — extract dropdown links
+            soup = BeautifulSoup(page.html, "html.parser")
+
+            # Find the inmate list — it's a list of <a> tags with viewInmate.php links
+            # or a <select> dropdown with inmate entries
+            inmate_links = soup.find_all("a", href=re.compile(r"viewInmate\.php\?id="))
+
+            if not inmate_links:
+                # Try the select dropdown approach
+                select = soup.find("select", id=re.compile(r"inmate", re.IGNORECASE))
+                if select:
+                    options = select.find_all("option", value=True)
+                    inmate_links = []
+                    for opt in options:
+                        val = opt.get("value", "")
+                        if val and "viewInmate" in val:
+                            # Create a mock tag-like object
+                            inmate_links.append({"href": val, "text": opt.get_text(strip=True)})
+
+            if not inmate_links:
+                # Try extracting via JavaScript (the dropdown may be JS-rendered)
+                try:
+                    js_links = page.run_js("""
+                        const links = [];
+                        // Check for <a> tags with viewInmate.php
+                        document.querySelectorAll('a[href*="viewInmate.php"]').forEach(a => {
+                            links.push({href: a.getAttribute('href'), text: a.textContent.trim()});
+                        });
+                        // Check for <select> options
+                        if (links.length === 0) {
+                            document.querySelectorAll('select option').forEach(opt => {
+                                const val = opt.value || '';
+                                if (val.includes('viewInmate') || val.includes('id=')) {
+                                    links.push({href: val, text: opt.textContent.trim()});
+                                }
+                            });
+                        }
+                        // Check for onclick handlers that navigate to viewInmate
+                        if (links.length === 0) {
+                            document.querySelectorAll('[onclick*="viewInmate"]').forEach(el => {
+                                const onclick = el.getAttribute('onclick');
+                                const match = onclick.match(/viewInmate\\.php\\?id=([^'"&]+)/);
+                                if (match) {
+                                    links.push({href: 'viewInmate.php?id=' + match[1], text: el.textContent.trim()});
+                                }
+                            });
+                        }
+                        return links;
+                    """)
+                    if js_links:
+                        inmate_links = js_links
+                        logger.info(f"[Sarasota] Found {len(inmate_links)} inmates via JS extraction")
+                except Exception as e:
+                    logger.warning(f"[Sarasota] JS inmate extraction failed: {e}")
+
+            if not inmate_links:
+                logger.warning("[Sarasota] No Current Inmate Population entries found")
+                return []
+
+            logger.info(f"[Sarasota] Found {len(inmate_links)} inmates in Current Inmate Population")
+
+            for idx, link_data in enumerate(inmate_links, 1):
+                if idx % 25 == 0:
+                    logger.info(f"[Sarasota] Inmates progress: {idx}/{len(inmate_links)} ({len(records)} records)")
+
+                try:
+                    # Get the href — handle both BeautifulSoup tags and dict results
+                    if hasattr(link_data, 'get'):
+                        href = link_data.get("href", "")
+                        name_text = link_data.get("text", "") if isinstance(link_data, dict) else link_data.get_text(strip=True)
+                    else:
+                        href = link_data.get("href", "") if isinstance(link_data, dict) else ""
+                        name_text = link_data.get("text", "") if isinstance(link_data, dict) else ""
+
+                    if not href:
+                        continue
+
+                    # Build full URL
+                    if not href.startswith("http"):
+                        inmate_url = f"{self._effective_base_url}{href.lstrip('/')}"
+                    else:
+                        inmate_url = href
+
+                    # Parse the dropdown text for name + DOB preview
+                    # Format: "LAST,FIRST MIDDLE - MM/DD/YYYY"
+                    preview_name = ""
+                    preview_dob = ""
+                    if name_text and " - " in name_text:
+                        parts = name_text.rsplit(" - ", 1)
+                        preview_name = parts[0].strip()
+                        preview_dob = parts[1].strip() if len(parts) > 1 else ""
+
+                    record = self._extract_inmate_detail(page, inmate_url, preview_name, preview_dob)
+                    if record and record.Full_Name:
+                        records.append(record)
+
+                except Exception as e:
+                    logger.warning(f"[Sarasota] Error on inmate {idx}: {e}")
+
+                time.sleep(DETAIL_DELAY_S)
+
+        except Exception as e:
+            logger.warning(f"[Sarasota] Current Inmate Population scraping failed: {e}")
+
+        return records
+
+    def _extract_inmate_detail(
+        self, page, inmate_url: str, preview_name: str = "", preview_dob: str = ""
+    ) -> Optional[ArrestRecord]:
+        """
+        Extract data from a viewInmate.php detail page.
+
+        Page structure (from screenshot analysis):
+        - "Personal Information" section: PIN, DOB, Race, Sex, Eyes + mugshot
+        - "Criminal Charges Information" table: Booking#, Offense, Counts,
+          Arraign Date, Bond Amount, Bond Type, Intake Date/Time,
+          Court Case Number, Release Date/Time, Hold
+        """
+        from bs4 import BeautifulSoup
+
+        if not self._navigate_and_wait(page, inmate_url):
+            return None
+
+        if "just a moment" in (page.title.lower() if page.title else ""):
+            return None
+
+        soup = BeautifulSoup(page.html, "html.parser")
+
+        # ── Personal Information ──
+        fields = {}
+        # Find label:value pairs in the Personal Information section
+        for td in soup.find_all("td"):
+            text = td.get_text(strip=True).rstrip(":")
+            next_td = td.find_next_sibling("td")
+            if next_td:
+                value = next_td.get_text(strip=True)
+                key = text.lower().replace(" ", "_")
+                if key and value:
+                    fields[key] = value
+
+        pin = fields.get("pin", "")
+        dob = fields.get("date_of_birth", fields.get("dob", preview_dob))
+        race = fields.get("race", "")
+        sex = fields.get("sex", "")
+
+        # ── Name extraction ──
+        full_name = preview_name
+        if not full_name:
+            # Try h2/h3 headers
+            for tag in ["h2", "h3"]:
+                header = soup.find(tag)
+                if header:
+                    text = header.get_text(strip=True)
+                    if text and text.upper() not in (
+                        "PERSONAL INFORMATION", "CRIMINAL CHARGES INFORMATION",
+                        "ARREST SEARCH DISCLAIMER", "CURRENT INMATE POPULATION",
+                    ):
+                        if re.match(r"^[A-Z\s,\-\']+$", text, re.IGNORECASE):
+                            full_name = text
+                            break
+
+        if not full_name:
+            return None
+
+        # Parse name parts
+        first_name = ""
+        last_name = ""
+        if "," in full_name:
+            parts = full_name.split(",", 1)
+            last_name = parts[0].strip()
+            first_name = parts[1].strip().split()[0] if parts[1].strip() else ""
+        else:
+            name_parts = full_name.strip().split()
+            if len(name_parts) >= 2:
+                first_name = name_parts[0]
+                last_name = name_parts[-1]
+
+        # ── Mugshot ──
+        mugshot_url = ""
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            alt = img.get("alt", "").lower()
+            if "mugshot" in alt or "mug" in src.lower() or "photo" in src.lower() or "inmate" in src.lower():
+                if not src.startswith("http"):
+                    src = f"{self._effective_base_url}{src.lstrip('/')}"
+                mugshot_url = src
+                break
+
+        # ── Criminal Charges Information table ──
+        charges_list = []
+        total_bond = 0
+        booking_number = ""
+        booking_date = ""
+        court_case = ""
+
+        # Find the charges table (has columns like Booking Number, Offense Description, etc.)
+        tables = soup.find_all("table")
+        for table in tables:
+            headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
+            if any(h in " ".join(headers) for h in ["booking", "offense", "bond"]):
+                rows = table.find_all("tr")[1:]  # Skip header row
+                for row in rows:
+                    cells = row.find_all("td")
+                    if len(cells) < 4:
+                        continue
+
+                    # Map by header position
+                    row_data = {}
+                    for i, cell in enumerate(cells):
+                        if i < len(headers):
+                            row_data[headers[i]] = cell.get_text(strip=True)
+
+                    # Extract booking number (first one wins)
+                    bkg = row_data.get("booking number", row_data.get("booking\nnumber", ""))
+                    if bkg and not booking_number:
+                        booking_number = bkg.strip()
+
+                    # Extract offense
+                    offense = row_data.get("offense description", row_data.get("offense\ndescription", ""))
+                    if offense:
+                        charges_list.append(self._clean_charge_text(offense))
+
+                    # Extract bond amount
+                    bond_str = row_data.get("bond amount", row_data.get("bond\namount", row_data.get("bond\namou\nnt", "")))
+                    if bond_str:
+                        try:
+                            bond_val = float(re.sub(r"[^\d.]", "", bond_str))
+                            if 0 < bond_val <= MAX_BOND_PER_CHARGE:
+                                total_bond += bond_val
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Extract arraignment/booking date
+                    arr_date = row_data.get("arraign date", row_data.get("arraig\nn date", row_data.get("arraign\ndate", "")))
+                    if arr_date and not booking_date:
+                        booking_date = arr_date
+
+                    # Extract court case number
+                    case = row_data.get("court case number", row_data.get("court\ncase\nnumber", row_data.get("court\ncase\nnumb\ner", "")))
+                    if case and not court_case:
+                        court_case = case
+
+                break  # Only process first matching table
+
+        if not booking_number:
+            # Use PIN as fallback booking identifier
+            booking_number = pin if pin else f"INMATE-{hash(full_name) % 100000}"
+
+        charges_str = " | ".join(charges_list) if charges_list else ""
+
+        try:
+            return ArrestRecord(
+                County=self.county,
+                Booking_Number=booking_number,
+                Full_Name=full_name,
+                First_Name=first_name,
+                Last_Name=last_name,
+                DOB=dob,
+                Booking_Date=booking_date,
+                Status="In Custody",  # All inmates from this list are currently in custody
+                Release_Date="",
+                Facility="Sarasota County Jail",
+                Agency="",
+                Race=race,
+                Sex=sex,
+                Height="",
+                Weight="",
+                Address="",
+                City="",
+                State="FL",
+                ZIP="",
+                Mugshot_URL=mugshot_url,
+                Charges=charges_str,
+                Bond_Amount=str(total_bond) if total_bond > 0 else "0",
+                Bond_Paid="NO",
+                Detail_URL=inmate_url,
+                LastCheckedMode="INITIAL",
+            )
+        except Exception as e:
+            logger.warning(f"[Sarasota] Inmate record build error: {e}")
+            return None
 
     # ── Phase 1: Date search → collect person PIN links ───────────────────────
     def _collect_person_links(self, page) -> List[Dict]:
