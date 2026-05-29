@@ -277,10 +277,10 @@ async def _run_findmy():
         return  # No BlueBubbles servers configured
     # Use the first available server (office iMac)
     server = next(iter(BB_SERVERS.values()))
-    from dashboard.routers.bb_private_api import BlueBubblesPrivateClient
+    from dashboard.routers.bb_private_api import BlueBubblesClient
     from dashboard.routers.geo import haversine_distance
     from datetime import datetime, timezone
-    client = BlueBubblesPrivateClient(base_url=server["url"], password=server["password"])
+    client = BlueBubblesClient(base_url=server["url"], password=server["password"])
     result = await client.findmy_devices()
     devices = result.get("data", {}).get("devices", [])
     center_lat, center_lng = fm.get("center_lat", 26.5629), fm.get("center_lng", -81.8723)
