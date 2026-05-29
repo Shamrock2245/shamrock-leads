@@ -7,6 +7,7 @@ Endpoints for charge analysis, citation extraction, risk scoring,
 and URL-based arrest data ingestion.
 """
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
@@ -217,7 +218,7 @@ async def api_enrich_arrest(booking_number: str):
             "nlp_statutes": analysis["statutes"],
             "nlp_citations": citations,
             "nlp_risk_factors": analysis["risk_factors"],
-            "nlp_enriched_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+            "nlp_enriched_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
 
         await arrests_col.update_one(

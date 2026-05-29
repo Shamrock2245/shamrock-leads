@@ -146,10 +146,10 @@ async def acknowledge_all(request: Request):
         query = {"acknowledged": False}
         if severity:
             query["event_severity"] = severity
-        from datetime import datetime
+        from datetime import datetime, timezone
         result = await db.docket_events.update_many(query, {"$set": {
             "acknowledged": True, "acknowledged_by": actor,
-            "acknowledged_at": datetime.utcnow().isoformat() + "Z",
+            "acknowledged_at": datetime.now(timezone.utc).isoformat() + "Z",
         }})
         return {"success": True, "acknowledged_count": result.modified_count}
     except Exception as e:
