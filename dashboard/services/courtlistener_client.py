@@ -15,7 +15,7 @@ See: https://www.courtlistener.com/api/rest/v4/
 import logging
 import asyncio
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
@@ -211,7 +211,7 @@ class CourtListenerClient:
 
     def _in_maintenance_window(self) -> bool:
         """Check if FLP is in scheduled maintenance (Thu 21:00-23:59 PT)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         return (now.weekday() == _MAINTENANCE_DOW
                 and _MAINTENANCE_START_HOUR_UTC <= now.hour < _MAINTENANCE_END_HOUR_UTC)
 
@@ -297,7 +297,7 @@ class CourtListenerClient:
 
     async def search_defendant(self, name: str, courts=None, days_back=365) -> dict:
         """Search for opinions mentioning a defendant name."""
-        date_after = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        date_after = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
         return await self.search_opinions(
             query=f'"{name}"', courts=courts, date_filed_after=date_after,
         )
@@ -314,7 +314,7 @@ class CourtListenerClient:
             log.info("Skipping ingestion — FLP maintenance window active")
             return []
 
-        date_after = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        date_after = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
         target_states = [s.upper() for s in states] if states else SE_US_STATES
 
         all_results = []
@@ -382,7 +382,7 @@ class CourtListenerClient:
                 "court_type": meta.get("type", "state"),
                 "court_tier": meta.get("tier", "unknown"),
                 "jurisdiction": meta.get("state", ""),
-                "ingested_at": datetime.utcnow().isoformat() + "Z",
+                "ingested_at": datetime.now(timezone.utc).isoformat() + "Z",
             }
         except Exception:
             return None

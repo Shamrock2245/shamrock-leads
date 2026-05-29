@@ -15,7 +15,7 @@ a forfeiture event, giving agents time to locate and surrender.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("shamrock.forfeiture_predictor")
 
@@ -47,7 +47,7 @@ def score_bond(bond: dict, defendant: dict = None, check_ins: list = None,
         dict with forfeiture_probability, risk_tier, days_at_risk,
              warning_signals, interventions, priority_score
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     signals = []
     risk_score = 0.0
 
@@ -314,5 +314,5 @@ async def score_portfolio(db, limit: int = 50) -> dict:
         "high_risk_count": high,
         "total_at_risk_exposure": total_exposure,
         "results": results,
-        "scored_at": datetime.utcnow().isoformat() + "Z",
+        "scored_at": datetime.now(timezone.utc).isoformat() + "Z",
     }

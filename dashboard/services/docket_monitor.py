@@ -12,7 +12,7 @@ High-severity events fire Slack alerts and update the forfeiture predictor.
 MongoDB Collection: docket_events
 """
 import logging, asyncio, re, os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import httpx
 
@@ -144,7 +144,7 @@ class DocketMonitor:
 
     async def scan_active_bonds(self, limit: int = 100) -> dict:
         """Main scan: iterate active bonds, search dockets, classify, store."""
-        start = datetime.utcnow()
+        start = datetime.now(timezone.utc)
         log.info("[DocketMonitor] Starting active bond docket scan...")
         try:
             cursor = self.db.active_bonds.find(
@@ -189,13 +189,13 @@ class DocketMonitor:
                 errors += 1
                 log.warning("[DocketMonitor] Bond scan error: %s", str(e)[:100])
 
-        dur = (datetime.utcnow() - start).total_seconds()
+        dur = (datetime.now(timezone.utc) - start).total_seconds()
         log.info("[DocketMonitor] Done — %d bonds, %d events, %d alerts, %.1fs", len(bonds), total_events, total_alerts, dur)
         return {
             "success": True, "bonds_scanned": len(bonds), "bonds_with_events": bonds_with,
             "events_found": total_events, "alerts_created": total_alerts,
             "errors": errors, "duration_seconds": round(dur, 1),
-            "scanned_at": datetime.utcnow().isoformat() + "Z",
+            "scanned_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
 
     async def _search_dockets(self, name: str, case_number: str = None, county: str = None) -> list:
@@ -220,7 +220,7 @@ class DocketMonitor:
         # Opinion search (90-day window)
         try:
             params = {"type": "o", "q": f'"{name}"',
-                      "filed_after": (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")}
+                      "filed_after": (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")}
             if county:
                 params["court"] = "fla fladistctapp_2 flsd flmd"
             data = await self._request_with_retry("/search/", params)
@@ -257,7 +257,7 @@ class DocketMonitor:
                 "event_date": dfiled, "description": desc, "raw_text": text[:500],
                 "risk_adjustment": radj, "acknowledged": False,
                 "acknowledged_by": None, "acknowledged_at": None,
-                "detected_at": datetime.utcnow().isoformat() + "Z",
+                "detected_at": datetime.now(timezone.utc).isoformat() + "Z",
             })
         return out
 
@@ -294,7 +294,7 @@ class DocketMonitor:
                 "title": f"Docket: {event.get('event_type','').replace('_',' ').title()}",
                 "message": f"{event.get('defendant_name','')} — {event.get('description','')}",
                 "bond_case_id": event.get("bond_case_id"), "read": False,
-                "created_at": datetime.utcnow().isoformat() + "Z",
+                "created_at": datetime.now(timezone.utc).isoformat() + "Z",
             })
         except Exception:
             pass
@@ -333,7 +333,7 @@ class DocketMonitor:
         try:
             r = await self.db.docket_events.update_one(
                 {"_id": ObjectId(event_id)},
-                {"$set": {"acknowledged": True, "acknowledged_by": actor, "acknowledged_at": datetime.utcnow().isoformat() + "Z"}},
+                {"$set": {"acknowledged": True, "acknowledged_by": actor, "acknowledged_at": datetime.now(timezone.utc).isoformat() + "Z"}},
             )
             return r.modified_count > 0
         except Exception:
@@ -348,7 +348,7 @@ class DocketMonitor:
         last = await self.db.docket_events.find_one({}, {"detected_at": 1}, sort=[("detected_at", -1)])
         tp = [{"$group": {"_id": "$event_type", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}, {"$limit": 10}]
         by_type = await self.db.docket_events.aggregate(tp).to_list(length=10)
-        week_ago = (datetime.utcnow() - timedelta(days=7)).isoformat() + "Z"
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat() + "Z"
         weekly = await self.db.docket_events.count_documents({"detected_at": {"$gte": week_ago}})
         return {
             "success": True, "total_events": total, "unacknowledged": unack,

@@ -70,7 +70,7 @@ services:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:
       - shamrock-leads
-      - traccar
+      # traccar removed — dashboard handles missing Traccar gracefully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
       interval: 30s

@@ -490,7 +490,7 @@ class BaseScraper(ABC):
             # Alert on scraper failure (Slack)
             try:
                 _slack.notify_scraper_error(self.county, str(e))
-            except:
+            except Exception:
                 pass
 
 

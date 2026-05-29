@@ -68,7 +68,7 @@ async def auto_release_poa(poa_number: str, reason: str, actor: str) -> bool:
     """
     from dashboard.extensions import get_db
     from dashboard.services.audit_service import AuditService
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     db = get_db()
     poa_doc = await db.poa_inventory.find_one({"poa_number": poa_number})
@@ -83,7 +83,7 @@ async def auto_release_poa(poa_number: str, reason: str, actor: str) -> bool:
         {"$set": {
             "status": "available", 
             "bond_case_id": None,
-            "released_at": datetime.utcnow(),
+            "released_at": datetime.now(timezone.utc),
             "release_reason": reason
         }}
     )

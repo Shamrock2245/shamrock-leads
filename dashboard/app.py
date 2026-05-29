@@ -51,7 +51,7 @@ print(f"✅ Connected to MongoDB: {MONGO_DB}")
 BB_SERVERS = {}
 for _phone_suffix, _label, _email in [
     ("0178", "(239) 955-0178", "shamrockbailoffice@gmail.com"),
-    ("0314", "(239) 955-0314", "brendanoneal99@gmail.com"),
+    ("0314", "(239) 955-0314", "admin@shamrockbailbonds.biz"),
 ]:
     _url = os.getenv(f"BLUEBUBBLES_URL_{_phone_suffix}", "").rstrip("/")
     _pw = os.getenv(f"BLUEBUBBLES_PASSWORD_{_phone_suffix}", "")
@@ -88,6 +88,7 @@ _POA_RECEIPT_DATA = [
     {"surety_id": "osi", "prefix": "OSI101", "max_bond": 101_000, "start": 20128283, "end": 20128284, "exp": "2026-12-31"},
     {"surety_id": "osi", "prefix": "OSI251", "max_bond": 251_000, "start": 20129019, "end": 20129020, "exp": "2026-12-30"},
     # Palmetto — Package #192184, dated 04/20/2026
+    {"surety_id": "palmetto", "prefix": "PSC2",   "max_bond": 2_000,   "start": 2644650, "end": 2644669, "exp": None},
     {"surety_id": "palmetto", "prefix": "PSC5",   "max_bond": 5_000,   "start": 2644670, "end": 2644777, "exp": None},
     {"surety_id": "palmetto", "prefix": "PSC15",  "max_bond": 15_000,  "start": 2644778, "end": 2644790, "exp": None},
     {"surety_id": "palmetto", "prefix": "PSC25",  "max_bond": 25_000,  "start": 2644791, "end": 2644809, "exp": None},
@@ -748,7 +749,9 @@ def api_timeline():
     return jsonify({
         "dates": dates,
         "series": {c: list(series[c].values()) for c in counties}
-    })# ── API: Scraper Health & Metrics ──
+    })
+
+# ── API: Scraper Health & Metrics ──
 @app.route("/api/scraper-health")
 def api_scraper_health():
     """Per-county scraper health metrics."""
@@ -2873,12 +2876,12 @@ def _get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
     Return the smallest POA prefix that covers the bond amount for the given surety.
     OSI tiers:     OSI3→$3k, OSI6→$6k, OSI16→$16k, OSI51→$51k, OSI101→$101k, OSI251→$251k
-    Palmetto tiers: PSC5→$5k, PSC15→$15k, PSC25→$25k, PSC50→$50k, PSC75→$75k, PSC105→$105k
+    Palmetto tiers: PSC2→$2k, PSC5→$5k, PSC15→$15k, PSC25→$25k, PSC50→$50k, PSC75→$75k, PSC105→$105k
     """
     tiers = {
         "osi":     [(3000, "OSI3"), (6000, "OSI6"), (16000, "OSI16"),
                     (51000, "OSI51"), (101000, "OSI101"), (251000, "OSI251")],
-        "palmetto": [(5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
+        "palmetto": [(2000, "PSC2"), (5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
                      (50000, "PSC50"), (75000, "PSC75"), (105000, "PSC105")],
     }
     for cap, prefix in tiers.get(surety_id.lower(), []):

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 from dashboard.extensions import get_db
 from dashboard.models.ledger import LedgerEntry
@@ -87,7 +87,7 @@ class LedgerService:
                 try:
                     timestamp = datetime.strptime(date_str, "%m/%d/%Y %H:%M")
                 except ValueError:
-                    timestamp = datetime.utcnow() # Fallback
+                    timestamp = datetime.now(timezone.utc) # Fallback
                 
                 # Construct Ledger Entry
                 entry_data = {

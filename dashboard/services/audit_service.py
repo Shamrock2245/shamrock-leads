@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from dashboard.extensions import get_db
 
@@ -14,5 +14,5 @@ class AuditService:
             "action": action,
             "details": details,
             "actor": actor,
-            "timestamp": datetime.utcnow()
+            "timestamp": datetime.now(timezone.utc)
         })

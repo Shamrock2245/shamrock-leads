@@ -13,7 +13,7 @@ Designed to run on M0-tier infrastructure within Docker.
 """
 import re, logging
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 log = logging.getLogger("shamrock.legal_nlp")
 
@@ -224,7 +224,7 @@ def compute_recidivism_risk(arrest_history: List[dict], current_charges: str = "
             "prior_count": 0,
         }
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     prior_count = len(arrest_history)
     factors = []
     recid_score = 0.0

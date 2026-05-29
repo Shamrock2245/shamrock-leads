@@ -50,8 +50,8 @@ async def _cron_runner(cron: CronDef):
                 except asyncio.TimeoutError:
                     pass
                 continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[%s] automation_config check failed: %s", cron.label, e)
         try:
             await cron.run()
         except Exception as e:
@@ -112,8 +112,8 @@ async def _run_nlp_enrichment():
                 "nlp_enriched_at": datetime.now(timezone.utc).isoformat() + "Z",
             }})
             enriched += 1
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[NLP-Enrich] Record %s failed: %s", doc.get("booking_number", "?"), e)
     if enriched:
         logger.info("[NLP-Enrich] ✅ %d enriched", enriched)
 
@@ -233,36 +233,44 @@ async def _run_wix_sync():
         logger.info("[WixSync] intakes=%s cases=%s", r.get("intakes", {}).get("synced", 0), r.get("cases", {}).get("synced", 0))
 
 async def _run_geo_intel():
+    """Geo intelligence cron — requires Traccar (skip if not configured)."""
+    if not os.getenv("TRACCAR_URL") and not os.getenv("TRACCAR_TOKEN"):
+        return  # Traccar not configured — skip silently
     from dashboard.services.geo_intelligence import GeoIntelligenceService
     from dashboard.services.traccar_client import TraccarClient
     from dashboard.extensions import get_db
     svc = GeoIntelligenceService(db=get_db())
     devices = await svc.list_devices()
     active = [d for d in devices if d.get("status") == "active"]
+    tc = TraccarClient()
     for dev in active:
         try:
             tid = dev.get("traccar_device_id")
             if not tid:
                 continue
-            pos = await TraccarClient().get_latest_position(tid)
-            if pos:
+            positions = await tc.get_positions(device_id=tid)
+            if positions:
+                pos = positions[0]
                 await svc.sync_position(device_id=str(dev["_id"]), lat=pos["latitude"],
                     lng=pos["longitude"], accuracy=pos.get("accuracy"), source="geo_cron")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[GeoIntel] Device %s sync failed: %s", dev.get("_id", "?"), e)
+    await tc.close()
 
 async def _run_findmy():
-    from dashboard.extensions import get_db
+    """FindMy geofence cron — uses BlueBubbles Private API."""
+    from dashboard.extensions import get_db, BB_SERVERS
     from dashboard.services.automation_config import get_automation_config
     cfg = await get_automation_config(get_db())
     fm = cfg.get("findmy_geofence", {})
-    bb_url = os.getenv("BB_SERVER_URL")
-    if not bb_url:
-        return
+    if not BB_SERVERS:
+        return  # No BlueBubbles servers configured
+    # Use the first available server (office iMac)
+    server = next(iter(BB_SERVERS.values()))
     from dashboard.routers.bb_private_api import BlueBubblesPrivateClient
     from dashboard.routers.geo import haversine_distance
     from datetime import datetime, timezone
-    client = BlueBubblesPrivateClient(base_url=bb_url, password=os.getenv("BB_SERVER_PASSWORD"))
+    client = BlueBubblesPrivateClient(base_url=server["url"], password=server["password"])
     result = await client.findmy_devices()
     devices = result.get("data", {}).get("devices", [])
     center_lat, center_lng = fm.get("center_lat", 26.5629), fm.get("center_lng", -81.8723)
@@ -285,7 +293,7 @@ async def _run_auto_reply_bridge():
     cfg = await get_automation_config(get_db())
     new_state = cfg.get("auto_reply", {}).get("enabled", False)
     await get_collection("outreach_config").update_one(
-        {"type": "auto_reply"}, {"$set": {"enabled": new_state}}, upsert=False)
+        {"type": "auto_reply"}, {"$set": {"enabled": new_state}}, upsert=True)
 
 async def _run_speed_to_contact():
     from dashboard.services.outreach_sequencer import OutreachSequencer
@@ -512,15 +520,15 @@ async def _startup_tasks():
     try:
         from dashboard.routers.bb_firebase_sync import poll_firebase_for_bb_url
         asyncio.ensure_future(poll_firebase_for_bb_url())
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Firebase BB URL sync skipped: %s", e)
 
     # Inbox poller
     try:
         from dashboard.routers.imessage_automation import start_inbox_poller
         asyncio.ensure_future(start_inbox_poller(None))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Inbox poller start skipped: %s", e)
 
 
 async def start_all_crons() -> List[asyncio.Task]:

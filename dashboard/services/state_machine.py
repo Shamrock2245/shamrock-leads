@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from dashboard.extensions import get_db
 from dashboard.services.audit_service import AuditService
 
@@ -42,7 +42,7 @@ class BondStateMachine:
             raise ValueError(f"Invalid transition from '{current_status}' to '{new_status}'")
             
         # 3. Update status and push to timeline
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         timeline_event = {
             "timestamp": now.isoformat(),
             "event": "status_changed",

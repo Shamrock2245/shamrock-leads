@@ -13,7 +13,7 @@ into the `court_outcomes` MongoDB collection. Handles:
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 log = logging.getLogger("shamrock.court_ingestor")
@@ -129,7 +129,7 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
             "total_fetched": len(opinions),
             "states_queried": states or "all_se_us",
             "days_back": days_back,
-            "completed_at": datetime.utcnow().isoformat() + "Z",
+            "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
             "api_health": client.get_api_health(),
         }
 

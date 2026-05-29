@@ -13,7 +13,7 @@ labelled outcome data accumulates in active_bonds.status_history.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("shamrock.court_outcome_predictor")
 
@@ -223,7 +223,7 @@ def predict_outcome(record: dict, defendant_history: list = None) -> dict:
             "ml_fta_level": ml_fta_level,
             "ml_calibrated": ml_fta_adj > 0,
         },
-        "computed_at": datetime.utcnow().isoformat() + "Z",
+        "computed_at": datetime.now(timezone.utc).isoformat() + "Z",
     }
 
 
