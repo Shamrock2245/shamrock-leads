@@ -286,3 +286,226 @@ async def bulk_approve_reviews():
         logger.exception("bulk_approve error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  The Closer — Drip Sequence Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@outreach_bp.get("/outreach/drip/sequences")
+async def list_drip_sequences(
+    status: str = Query(default=""),
+    sequence_type: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List active drip sequences with optional filters."""
+    try:
+        from dashboard.extensions import get_db
+        db = get_db()
+        query: dict = {}
+        if status:
+            query["status"] = status
+        if sequence_type:
+            query["sequence_type"] = sequence_type
+        cursor = db["outreach_sequences"].find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+        items = await cursor.to_list(length=limit)
+        return {"success": True, "sequences": items, "count": len(items)}
+    except Exception as exc:
+        logger.exception("list_drip_sequences error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@outreach_bp.get("/outreach/drip/pending")
+async def list_drip_pending(limit: int = Query(default=50, ge=1, le=200)):
+    """List all drip queue items pending human approval."""
+    try:
+        from dashboard.extensions import get_db
+        db = get_db()
+        cursor = db["outreach_queue"].find(
+            {"status": "pending_approval", "requires_approval": True},
+            {"_id": 0},
+        ).sort("created_at", -1).limit(limit)
+        items = await cursor.to_list(length=limit)
+        return {"success": True, "pending": items, "count": len(items)}
+    except Exception as exc:
+        logger.exception("list_drip_pending error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@outreach_bp.post("/outreach/drip/approve/{queue_id}")
+async def approve_drip_message(queue_id: str):
+    """Approve a pending drip message and send it via BlueBubbles.
+
+    Also advances the sequence to queue the next step.
+    """
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.drip_sequences import DripSequenceRunner
+        from dashboard.services.audit_service import AuditService
+        db = get_db()
+
+        item = await db["outreach_queue"].find_one({"queue_id": queue_id})
+        if not item:
+            return JSONResponse({"success": False, "error": "Queue item not found"}, status_code=404)
+        if item.get("status") != "pending_approval":
+            return JSONResponse({"success": False, "error": f"Item is not pending approval (status: {item.get('status')})"}, status_code=400)
+
+        # Send via BlueBubbles
+        from dashboard.extensions import BB_SERVERS, format_phone
+        from dashboard.routers.bb_private_api import BlueBubblesClient
+
+        phone = format_phone(item.get("phone", ""))
+        message_text = item.get("message_text", "")
+        send_result = {"success": False, "error": "No BB server configured"}
+
+        bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
+        if bb_server and phone and message_text:
+            bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
+            chat_guid = f"any;-;{phone}"
+            send_result = await bb_client.send_human_like(chat_guid, message_text, typing_delay=2.0)
+
+        now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        status = "sent" if send_result.get("success") else "send_failed"
+
+        await db["outreach_queue"].update_one(
+            {"queue_id": queue_id},
+            {"$set": {
+                "status": status,
+                "approved_at": now_iso,
+                "send_result": send_result,
+                "bb_message_guid": (send_result.get("data") or {}).get("guid", ""),
+            }},
+        )
+
+        # Advance sequence to next step
+        sequence_id = item.get("sequence_id", "")
+        if sequence_id and send_result.get("success"):
+            runner = DripSequenceRunner(db)
+            await runner.advance_sequence(sequence_id, approved_step=item.get("step", 1))
+
+        # Audit event
+        try:
+            audit = AuditService(db)
+            await audit.log(
+                event_type="drip_message_approved",
+                entity_type="outreach_queue",
+                entity_id=queue_id,
+                details={
+                    "sequence_id": sequence_id,
+                    "sequence_type": item.get("sequence_type"),
+                    "booking_number": item.get("booking_number"),
+                    "step": item.get("step"),
+                    "channel": item.get("channel"),
+                    "send_status": status,
+                },
+            )
+        except Exception as audit_exc:
+            logger.warning("[DripApprove] Audit log failed: %s", audit_exc)
+
+        logger.info(
+            "[DripApprove] queue_id=%s step=%d status=%s",
+            queue_id, item.get("step", 0), status,
+        )
+        return {"success": True, "queue_id": queue_id, "send_status": status, "send_result": send_result}
+
+    except Exception as exc:
+        logger.exception("approve_drip_message error for %s", queue_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@outreach_bp.post("/outreach/drip/reject/{queue_id}")
+async def reject_drip_message(queue_id: str, request: Request):
+    """Reject a pending drip message (skip this step, do not send)."""
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.audit_service import AuditService
+        db = get_db()
+
+        data = await request.json() or {}
+        reason = data.get("reason", "manual_reject")
+
+        item = await db["outreach_queue"].find_one({"queue_id": queue_id})
+        if not item:
+            return JSONResponse({"success": False, "error": "Queue item not found"}, status_code=404)
+
+        now_iso = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()
+        await db["outreach_queue"].update_one(
+            {"queue_id": queue_id},
+            {"$set": {"status": "rejected", "rejected_at": now_iso, "reject_reason": reason}},
+        )
+
+        # Audit
+        try:
+            audit = AuditService(db)
+            await audit.log(
+                event_type="drip_message_rejected",
+                entity_type="outreach_queue",
+                entity_id=queue_id,
+                details={
+                    "sequence_id": item.get("sequence_id"),
+                    "booking_number": item.get("booking_number"),
+                    "step": item.get("step"),
+                    "reason": reason,
+                },
+            )
+        except Exception as audit_exc:
+            logger.warning("[DripReject] Audit log failed: %s", audit_exc)
+
+        return {"success": True, "queue_id": queue_id, "status": "rejected"}
+
+    except Exception as exc:
+        logger.exception("reject_drip_message error for %s", queue_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@outreach_bp.post("/outreach/drip/stop/{sequence_id}")
+async def stop_drip_sequence(sequence_id: str):
+    """Manually stop a drip sequence."""
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.drip_sequences import DripSequenceRunner
+        db = get_db()
+        runner = DripSequenceRunner(db)
+        result = await runner.stop_sequence(sequence_id, reason="manual_stop")
+        return result
+    except Exception as exc:
+        logger.exception("stop_drip_sequence error for %s", sequence_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@outreach_bp.get("/outreach/drip/stats")
+async def drip_stats():
+    """Get drip sequence performance metrics."""
+    try:
+        from dashboard.extensions import get_db
+        db = get_db()
+        seqs = db["outreach_sequences"]
+        queue = db["outreach_queue"]
+
+        total = await seqs.count_documents({"sequence_type": {"$exists": True}})
+        active = await seqs.count_documents({"status": "active"})
+        pending = await seqs.count_documents({"status": "pending_approval"})
+        completed = await seqs.count_documents({"status": "completed"})
+        stopped = await seqs.count_documents({"status": "stopped"})
+
+        pending_approval = await queue.count_documents({"status": "pending_approval"})
+        sent = await queue.count_documents({"status": "sent"})
+        rejected = await queue.count_documents({"status": "rejected"})
+
+        return {
+            "success": True,
+            "sequences": {
+                "total": total,
+                "active": active,
+                "pending_approval": pending,
+                "completed": completed,
+                "stopped": stopped,
+            },
+            "messages": {
+                "pending_approval": pending_approval,
+                "sent": sent,
+                "rejected": rejected,
+            },
+        }
+    except Exception as exc:
+        logger.exception("drip_stats error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

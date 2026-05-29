@@ -148,30 +148,37 @@ async def get_defendant_arrests(defendant_id: str):
     return {"defendant_id": defendant_id, "arrests": arrests, "total": len(arrests)}
 
 @router.get("/defendants/{defendant_id}/timeline")
-async def get_defendant_timeline(defendant_id: str):
-    """Unified timeline aggregating events across all of a defendant's arrests."""
+async def get_defendant_timeline(
+    defendant_id: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Unified timeline aggregating events across all of a defendant's arrests.
+
+    Supports pagination via ?page=N&limit=N (default: page 1, 100 events/page).
+    Events are sorted newest-first and capped at 500 total to protect memory.
+    PII note: defendant_id is a UUID — safe to log.
+    """
     from dashboard.routers.lifecycle_timeline import get_lifecycle
-    
+    from datetime import timezone
+
     svc = _get_svc()
     arrests = await svc.get_defendant_arrests(defendant_id)
-    
-    all_events = []
-    
+
+    all_events: list = []
+
     for arrest in arrests:
         booking_num = arrest.get("booking_number")
         if not booking_num:
             continue
-            
         lifecycle_data = await get_lifecycle(booking_num)
         if isinstance(lifecycle_data, dict) and lifecycle_data.get("ok"):
             events = lifecycle_data.get("events", [])
-            # Tag events with booking number to differentiate cases in UI
             for event in events:
                 event["booking_number"] = booking_num
             all_events.extend(events)
-            
-    # Sort all aggregated events
-    from datetime import timezone
+
+    # Sort newest-first
     def sort_key(e):
         ts = e.get("timestamp")
         if not ts:
@@ -181,19 +188,27 @@ async def get_defendant_timeline(defendant_id: str):
         except Exception:
             return datetime.min.replace(tzinfo=timezone.utc)
 
-    all_events.sort(key=sort_key)
-    
-    # Cap events to prevent memory/UI overload for defendants with dozens of arrests
+    all_events.sort(key=sort_key, reverse=True)
+
+    # Hard cap to prevent memory overload
     MAX_EVENTS = 500
     total_events = len(all_events)
     if total_events > MAX_EVENTS:
-        all_events = all_events[-MAX_EVENTS:]
-        
+        all_events = all_events[:MAX_EVENTS]
+
+    # Paginate
+    start = (page - 1) * limit
+    end = start + limit
+    page_events = all_events[start:end]
+
     return {
         "defendant_id": defendant_id,
-        "events": all_events,
+        "events": page_events,
         "total_events": total_events,
-        "capped": total_events > MAX_EVENTS
+        "page": page,
+        "limit": limit,
+        "pages": max(1, (min(total_events, MAX_EVENTS) + limit - 1) // limit),
+        "capped": total_events > MAX_EVENTS,
     }
 
 @router.get("/defendants/by_booking/{booking_number}/timeline")

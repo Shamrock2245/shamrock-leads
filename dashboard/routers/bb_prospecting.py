@@ -166,6 +166,21 @@ async def send_prospecting_outreach(
         if not phone:
             continue
 
+        # ── Opt-out guard: skip phones that have sent STOP ────────────────────
+        phone_digits = phone.replace("+1", "").replace("+", "")
+        opted_out = await prospective_coll.find_one({
+            "$or": [
+                {"indemnitor.phone": phone},
+                {"indemnitor.phone": phone_digits},
+            ],
+            "opted_out": True,
+        })
+        if opted_out:
+            results.append({"phone": phone, "channel": "skipped", "status": "opted_out"})
+            logger.info("[Prospecting] Skipping opted-out phone ...%s", phone[-4:])
+            continue
+        # ─────────────────────────────────────────────────────────────────────
+
         name = contact_names.get(phone, "")
         context = {
             "name": name or "there",

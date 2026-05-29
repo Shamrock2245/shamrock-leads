@@ -393,7 +393,99 @@ const SLHealth = (() => {
     setTimeout(() => el.remove(), 4000);
   }
 
-  return { load, refresh, setFilter, search, sortBy, runNow, runAll, enableScraper, disableScraper, healthCheck, viewLogs, showError, showDrill };
+  // ── MongoDB Atlas DB Storage Widget ──────────────────────────────────────
+  async function refreshDbWidget() {
+    const bar = document.getElementById('dbStorageBar');
+    const label = document.getElementById('dbStorageLabel');
+    const usedEl = document.getElementById('dbStorageUsed');
+    const purgeBtn = document.getElementById('dbPurgeBtn');
+    if (!bar) return;
+    try {
+      const r = await fetch('/api/retention/widget');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      const pct = Math.min(data.usage_pct || 0, 100);
+      const totalMb = data.total_size_mb || 0;
+      const atRisk = data.at_risk || false;
+      bar.style.width = pct + '%';
+      bar.style.background = atRisk ? '#c0392b' : pct > 60 ? '#f39c12' : 'var(--accent,#00d4aa)';
+      if (label) {
+        label.textContent = pct + '% used' + (atRisk ? ' \u26a0\ufe0f Near limit!' : '');
+        label.style.color = atRisk ? '#ff6b6b' : 'var(--text-muted)';
+      }
+      if (usedEl) usedEl.textContent = totalMb + ' MB used';
+      if (purgeBtn) purgeBtn.style.display = atRisk ? 'inline-flex' : 'none';
+    } catch (err) {
+      if (label) label.textContent = 'DB stats unavailable';
+      console.warn('[SLHealth] DB widget error:', err);
+    }
+  }
+
+  async function runRetentionDryRun() {
+    _showToast('Running purge estimate...', 'info');
+    try {
+      const r = await fetch('/api/retention/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: true }),
+      });
+      const data = await r.json();
+      const est = data.results || {};
+      const total = est.total_purgeable || 0;
+      const prot = est.protected_booking_numbers || 0;
+      _showToast(
+        'Estimate: ' + total + ' records purgeable (' + prot + ' booking numbers protected)',
+        total > 0 ? 'warn' : 'success'
+      );
+    } catch (err) {
+      _showToast('Estimate failed: ' + err.message, 'error');
+    }
+  }
+
+  async function runRetentionPurge() {
+    if (!confirm('\u26a0\ufe0f This will permanently delete old records.\nActive bonds are always protected.\n\nContinue?')) return;
+    _showToast('Running purge...', 'warn');
+    try {
+      const r = await fetch('/api/retention/purge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false }),
+      });
+      const data = await r.json();
+      const res = data.results || {};
+      const total = res.total_purged || 0;
+      _showToast('Purge complete: ' + total + ' records deleted', 'success');
+      await refreshDbWidget();
+    } catch (err) {
+      _showToast('Purge failed: ' + err.message, 'error');
+    }
+  }
+
+  // Wrap original load to also refresh DB widget
+  const _origLoad = load;
+  async function loadWithWidget() {
+    await _origLoad();
+    refreshDbWidget();
+  }
+
+  return {
+    load: loadWithWidget,
+    refresh,
+    setFilter,
+    search,
+    sortBy,
+    runNow,
+    runAll,
+    enableScraper,
+    disableScraper,
+    healthCheck,
+    viewLogs,
+    showError,
+    showDrill,
+    refreshDbWidget,
+    runRetentionDryRun,
+    runRetentionPurge,
+  };
 })();
 
 window.renderHealth = function() { SLHealth.load(); };

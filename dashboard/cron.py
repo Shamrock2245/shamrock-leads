@@ -186,11 +186,21 @@ async def _run_missed_payment():
 
 
 async def _run_retention():
-    from dashboard.routers.data_retention import _execute_purge
+    from dashboard.routers.data_retention import _execute_purge, _get_db_stats, _maybe_alert_slack
     result = await _execute_purge(dry_run=False)
     total = result.get("total_purged", 0)
     if total:
-        logger.info("[DataRetention] purged %s records", total)
+        logger.info(
+            "[DataRetention] Purged %d records (protected=%d)",
+            total, result.get("protected_booking_numbers", 0),
+        )
+    # Check DB size and alert Slack if at risk
+    db_stats = await _get_db_stats()
+    await _maybe_alert_slack(db_stats)
+    logger.info(
+        "[DataRetention] DB usage: %.1f%% (%s MB / %s MB)",
+        db_stats["usage_pct"], db_stats["total_size_mb"], db_stats["limit_mb"],
+    )
 
 async def _run_court_email():
     def _sync():
@@ -354,19 +364,42 @@ async def _run_outreach_queue():
         )
 
 
+async def _run_drip_scanner():
+    """Scan for leads matching drip trigger conditions and queue messages for approval."""
+    from dashboard.services.drip_sequences import DripSequenceRunner
+    from dashboard.extensions import get_db
+    db = get_db()
+    runner = DripSequenceRunner(db)
+    result = await runner.scan_and_queue()
+    if result.get("queued", 0) > 0:
+        logger.info("[DripScanner] Queued %d messages for approval: %s", result["queued"], result["by_sequence"])
+
+
 async def _run_overdue_tasks():
+    """Flag pending tasks whose due_date has passed as overdue.
+
+    Uses update_many for efficiency.  Compares against both ISO-string
+    and native datetime due_date formats to handle legacy records.
+    """
     from dashboard.extensions import get_db
     from datetime import datetime, timezone
     db = get_db()
-    now = datetime.now(timezone.utc).isoformat()
-    # Find pending tasks where due_date is in the past and update them all at once
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    # Match both ISO-string due_dates (legacy) and native datetime due_dates
     result = await db["tasks"].update_many(
-        {"status": "pending", "due_date": {"$lt": now}},
-        {"$set": {"status": "overdue", "overdue_at": now}}
+        {
+            "status": "pending",
+            "$or": [
+                {"due_date": {"$lt": now_iso}},   # ISO string comparison
+                {"due_date": {"$lt": now}},        # native datetime comparison
+            ],
+        },
+        {"$set": {"status": "overdue", "overdue_at": now_iso}},
     )
     flagged = result.modified_count
     if flagged > 0:
-        logger.warning(f"[Tasks] Flagged {flagged} tasks as overdue")
+        logger.warning("[Tasks] Flagged %d tasks as overdue", flagged)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
@@ -384,7 +417,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("rearrest_detection", "ReArrest",           7200, 180, _run_rearrest),
     CronDef("fta_alert",          "FTAAlert",          14400, 120, _run_fta_alert),
     CronDef("missed_payment",     "MissedPayment",     43200, 240, _run_missed_payment),
-    CronDef("data_retention",     "DataRetention",    604800, 300, _run_retention),
+    CronDef("data_retention",     "DataRetention",     86400, 300, _run_retention),
     CronDef("court_email",        "CourtEmail",          900,  90, _run_court_email),
     CronDef("blog_publisher",     "Blog",              21600, 300, _run_blog),
     CronDef("wix_sync",           "WixSync",           14400, 600, _run_wix_sync),
@@ -395,6 +428,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=False),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
+    CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
 ]
 
 

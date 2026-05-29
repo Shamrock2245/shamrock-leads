@@ -708,21 +708,32 @@ async def start_inbox_poller(app):
     except Exception as e:
         logger.warning("📬 Index creation failed (non-critical): %s", e)
 
+    _backoff = 30  # seconds — reset on success, doubles on consecutive errors
+    _max_backoff = 300  # cap at 5 minutes
+    _consecutive_errors = 0
+
     while True:
         try:
             config = await _get_config()
             interval = config.get("poll_interval_seconds", 30)
 
             if config.get("enabled", False):
-                await _poll_inbox_once()
-            else:
-                # Even when disabled, check occasionally for config changes
-                pass
+                poll_result = await _poll_inbox_once()
+                # Reset backoff on successful poll
+                if poll_result.get("success", True):
+                    _consecutive_errors = 0
+                    _backoff = 30
+            # Even when disabled, sleep the normal interval
 
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
             logger.info("📬 Inbox poller stopped")
             break
         except Exception as e:
-            logger.error("📬 Inbox poller error: %s", e, exc_info=True)
-            await asyncio.sleep(30)  # Back off on error
+            _consecutive_errors += 1
+            _backoff = min(_backoff * 2, _max_backoff)
+            logger.error(
+                "📬 Inbox poller error (attempt %d, backoff %ds): %s",
+                _consecutive_errors, _backoff, e,
+            )
+            await asyncio.sleep(_backoff)  # Exponential back-off on error

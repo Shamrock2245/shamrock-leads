@@ -116,6 +116,51 @@ async def _handle_new_message(event_data: dict, db) -> dict:
     if not msg_text.strip():
         return {"processed": False, "reason": "empty_message"}
 
+    # ── STOP / Opt-Out Detection (must run before any other processing) ──────
+    # Honour STOP, UNSUBSCRIBE, QUIT, CANCEL, END, STOP ALL (case-insensitive)
+    _STOP_KEYWORDS = {"stop", "unsubscribe", "quit", "cancel", "end", "stop all", "optout", "opt out"}
+    msg_normalised = msg_text.strip().lower()
+    if msg_normalised in _STOP_KEYWORDS or any(
+        msg_normalised.startswith(kw) for kw in _STOP_KEYWORDS
+    ):
+        # Mark the phone as opted-out across all outreach collections
+        opted_out_at = datetime.now(timezone.utc).isoformat()
+        outreach_coll_stop = get_collection("imessage_outreach")
+        bonds_coll_stop = get_collection("prospective_bonds")
+        seqs_coll_stop = get_collection("outreach_sequences")
+        # 1. Flag all active sequences for this phone as stopped
+        await seqs_coll_stop.update_many(
+            {"phone": {"$in": [sender_phone, sender_phone.replace("+1", "")]}, "status": "active"},
+            {"$set": {"status": "stopped", "stopped_at": opted_out_at, "stop_reason": "STOP_keyword"}},
+        )
+        # 2. Flag the prospective bond as opted-out
+        await bonds_coll_stop.update_many(
+            {"$or": [
+                {"indemnitor.phone": sender_phone},
+                {"indemnitor.phone": sender_phone.replace("+1", "")},
+            ]},
+            {"$set": {"opted_out": True, "opted_out_at": opted_out_at}},
+        )
+        # 3. Log the opt-out event
+        await outreach_coll_stop.insert_one({
+            "recipient_phone": sender_phone,
+            "message": msg_text,
+            "chat_guid": chat_guid,
+            "bb_message_guid": msg_guid,
+            "content_hash": _content_hash(sender_phone, msg_text, message.get("dateCreated")),
+            "direction": "inbound",
+            "status": "opted_out",
+            "category": "opt_out",
+            "sent_at": opted_out_at,
+            "source": "webhook",
+        })
+        logger.warning(
+            "🛑 STOP received from ...%s — opted out and stopped all sequences",
+            sender_phone[-4:],
+        )
+        return {"processed": True, "opted_out": True}
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ── Layer 1: GUID dedup — avoid processing the same message twice ──
     outreach_coll = get_collection("imessage_outreach")
     existing = await outreach_coll.find_one({"bb_message_guid": msg_guid})
