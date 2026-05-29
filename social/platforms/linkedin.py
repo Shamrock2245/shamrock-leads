@@ -40,22 +40,47 @@ class LinkedInAdapter(PlatformAdapter):
 
     def __init__(self):
         self._headers = None
+        self._oauth_token = None  # cached OAuth token from MongoDB
+        self._oauth_loaded = False
 
-    def _get_headers(self) -> dict:
-        """Build auth headers."""
-        if self._headers is None:
-            cfg = settings.linkedin
-            self._headers = {
-                "Authorization": f"Bearer {cfg.access_token}",
-                "Content-Type": "application/json",
-                "X-Restli-Protocol-Version": "2.0.0",
-                "LinkedIn-Version": "202401",
-            }
-        return self._headers
+    async def _load_oauth_token(self):
+        """Try to load a live OAuth token from MongoDB."""
+        if self._oauth_loaded:
+            return
+        self._oauth_loaded = True
+        try:
+            from social.oauth_bridge import get_live_token
+            self._oauth_token = await get_live_token("linkedin")
+        except Exception:
+            self._oauth_token = None
+
+    def _get_headers(self, access_token: str = "") -> dict:
+        """Build auth headers. Uses OAuth token if available, else static config."""
+        token = access_token
+        if not token and self._oauth_token:
+            token = self._oauth_token.get("access_token", "")
+        if not token:
+            token = settings.linkedin.access_token
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0",
+            "LinkedIn-Version": "202401",
+        }
+
+    def _get_org_urn(self) -> str:
+        """Get organization URN — from OAuth metadata or static config."""
+        if self._oauth_token and self._oauth_token.get("metadata"):
+            urn = self._oauth_token["metadata"].get("organization_urn", "")
+            if urn:
+                return urn
+        return settings.linkedin.organization_urn
 
     def is_configured(self) -> bool:
         cfg = settings.linkedin
-        return cfg.enabled and bool(cfg.access_token) and bool(cfg.organization_urn)
+        has_static = cfg.enabled and bool(cfg.access_token) and bool(cfg.organization_urn)
+        has_oauth = bool(self._oauth_token and self._oauth_token.get("access_token"))
+        return has_static or has_oauth
 
     # ── Post ──────────────────────────────────────────────────────────────
 
@@ -66,6 +91,7 @@ class LinkedInAdapter(PlatformAdapter):
         link_url: str = "",
     ) -> PostResult:
         """Post to LinkedIn Company Page."""
+        await self._load_oauth_token()
         if not self.is_configured():
             return PostResult(platform=self.platform, error="LinkedIn not configured")
 
@@ -78,7 +104,7 @@ class LinkedInAdapter(PlatformAdapter):
         try:
             # Build UGC post payload (v2 API)
             payload = {
-                "author": cfg.organization_urn,
+                "author": self._get_org_urn(),
                 "lifecycleState": "PUBLISHED",
                 "specificContent": {
                     "com.linkedin.ugc.ShareContent": {
@@ -226,7 +252,7 @@ class LinkedInAdapter(PlatformAdapter):
                 register_payload = {
                     "registerUploadRequest": {
                         "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
-                        "owner": cfg.organization_urn,
+                        "owner": self._get_org_urn(),
                         "serviceRelationships": [{
                             "relationshipType": "OWNER",
                             "identifier": "urn:li:userGeneratedContent",

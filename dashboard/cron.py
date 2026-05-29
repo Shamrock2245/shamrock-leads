@@ -401,6 +401,51 @@ async def _run_overdue_tasks():
     if flagged > 0:
         logger.warning("[Tasks] Flagged %d tasks as overdue", flagged)
 
+async def _run_oauth_token_refresh():
+    """Refresh OAuth tokens that are about to expire (within 60 minutes)."""
+    from dashboard.services.social_accounts_service import (
+        get_expiring_tokens, update_tokens, mark_expired,
+    )
+    from dashboard.services.oauth_providers import get_provider
+    from datetime import datetime, timezone, timedelta
+
+    expiring = await get_expiring_tokens(within_minutes=60)
+    if not expiring:
+        return
+
+    refreshed, failed = 0, 0
+    for acct in expiring:
+        platform = acct.get("platform", "")
+        account_id = acct.get("account_id", "")
+        refresh_tok = acct.get("refresh_token", "")
+        if not refresh_tok:
+            continue
+        try:
+            provider = get_provider(platform)
+            result = await provider.refresh_access_token(refresh_tok)
+            if result.success:
+                expires_at = None
+                if result.expires_in:
+                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=result.expires_in)
+                await update_tokens(
+                    platform=platform,
+                    account_id=account_id,
+                    access_token=result.access_token,
+                    refresh_token=result.refresh_token or refresh_tok,
+                    token_expires_at=expires_at,
+                )
+                refreshed += 1
+            else:
+                logger.warning("[OAuthRefresh] Failed for %s/%s: %s", platform, account_id, result.error)
+                await mark_expired(platform, account_id)
+                failed += 1
+        except Exception as e:
+            logger.error("[OAuthRefresh] Error refreshing %s/%s: %s", platform, account_id, e)
+            failed += 1
+
+    if refreshed or failed:
+        logger.info("[OAuthRefresh] refreshed=%d failed=%d", refreshed, failed)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -429,6 +474,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
     CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
+    CronDef("oauth_token_refresh", "OAuthRefresh",       1800, 120, _run_oauth_token_refresh),
 ]
 
 
@@ -519,6 +565,9 @@ async def _ensure_all_indexes():
         # TTL
         await db["error_log"].create_index([("timestamp", 1)], name="idx_error_ttl_30d", background=True, expireAfterSeconds=2592000)
         await db["rearrest_alerts"].create_index([("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True, expireAfterSeconds=5184000)
+        # Social OAuth
+        await db["social_accounts"].create_index([("platform", 1), ("account_id", 1)], unique=True, name="idx_social_platform_account", background=True)
+        await db["social_accounts"].create_index([("status", 1), ("token_expires_at", 1)], name="idx_social_status_expiry", background=True)
         logger.info("☘️  All MongoDB indexes ensured")
     except Exception as e:
         logger.warning("Index setup warning: %s", e)

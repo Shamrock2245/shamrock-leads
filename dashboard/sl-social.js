@@ -3,13 +3,14 @@
  * ═══════════════════════════════════════════
  * Frontend module for the Social Engine microservice.
  * Communicates via /api/social/* proxy (dashboard auth).
- * 
+ *
  * Features:
+ *  - OAuth 2.0 "Connect with..." for Google/GBP/YouTube, X, LinkedIn, Meta
  *  - Content queue with approve/reject/edit flow
  *  - Grok-powered content generation (news-aware)
  *  - Gmail Grok post harvesting
  *  - Humanizer scoring + rewriting
- *  - Platform status indicators
+ *  - Platform status indicators with connect/disconnect buttons
  *  - Real-time queue stats
  */
 
@@ -20,11 +21,30 @@ const SLSocial = (() => {
   let _posts = [];
   let _stats = {};
   let _platforms = {};
+  let _oauthAccounts = [];
   let _filter = 'all';
   let _platformFilter = '';
   let _loaded = false;
 
   const API = '/api/social';
+
+  // Maps visual platform → OAuth provider name
+  const PLATFORM_OAUTH_MAP = {
+    twitter:   'twitter',
+    linkedin:  'linkedin',
+    facebook:  'meta',
+    instagram: 'meta',
+    gbp:       'google',
+    youtube:   'google',
+  };
+
+  // Branded button configs
+  const CONNECT_BRANDS = {
+    google:   { label: 'Sign in with Google',          bg: '#fff',    color: '#3c4043', border: '#dadce0', icon: '🔵' },
+    twitter:  { label: 'Connect X Account',            bg: '#000',    color: '#fff',    border: '#000',    icon: '𝕏' },
+    linkedin: { label: 'Connect with LinkedIn',        bg: '#0A66C2', color: '#fff',    border: '#0A66C2', icon: '💼' },
+    meta:     { label: 'Connect Facebook & Instagram', bg: '#1877F2', color: '#fff',    border: '#1877F2', icon: 'f' },
+  };
 
   // ── Helpers ────────────────────────────────────────────────────────────
   async function _fetch(path, opts = {}) {
@@ -55,12 +75,12 @@ const SLSocial = (() => {
 
   function _statusBadge(status) {
     const map = {
-      pending:  { cls: 'soc-badge-pending', icon: '⏳', label: 'Pending' },
+      pending:  { cls: 'soc-badge-pending',  icon: '⏳', label: 'Pending' },
       approved: { cls: 'soc-badge-approved', icon: '✅', label: 'Approved' },
       rejected: { cls: 'soc-badge-rejected', icon: '❌', label: 'Rejected' },
-      posted:   { cls: 'soc-badge-posted', icon: '🚀', label: 'Posted' },
-      failed:   { cls: 'soc-badge-failed', icon: '⚠️', label: 'Failed' },
-      expired:  { cls: 'soc-badge-expired', icon: '🕐', label: 'Expired' },
+      posted:   { cls: 'soc-badge-posted',   icon: '🚀', label: 'Posted' },
+      failed:   { cls: 'soc-badge-failed',   icon: '⚠️', label: 'Failed' },
+      expired:  { cls: 'soc-badge-expired',  icon: '🕐', label: 'Expired' },
     };
     const s = map[status] || { cls: '', icon: '❓', label: status };
     return `<span class="soc-badge ${s.cls}">${s.icon} ${s.label}</span>`;
@@ -78,7 +98,14 @@ const SLSocial = (() => {
   }
 
   function _platformLabel(p) {
-    return (p || '').charAt(0).toUpperCase() + (p || '').slice(1);
+    const labels = {
+      twitter: 'X / Twitter', linkedin: 'LinkedIn', facebook: 'Facebook',
+      instagram: 'Instagram', gbp: 'Google Business', youtube: 'YouTube',
+      threads: 'Threads', tiktok: 'TikTok', telegram: 'Telegram',
+      reddit: 'Reddit', bluesky: 'Bluesky', mastodon: 'Mastodon',
+      pinterest: 'Pinterest',
+    };
+    return labels[p] || (p || '').charAt(0).toUpperCase() + (p || '').slice(1);
   }
 
   function _truncate(text, max = 140) {
@@ -92,12 +119,32 @@ const SLSocial = (() => {
     return el.innerHTML;
   }
 
+  // ── OAuth Helpers ─────────────────────────────────────────────────────
+  function _getConnectedAccount(platformKey) {
+    return _oauthAccounts.find(acct => {
+      if (acct.status !== 'active') return false;
+      if (acct.platform === platformKey) return true;
+      if (acct.sub_platforms && acct.sub_platforms.includes(platformKey)) return true;
+      return false;
+    });
+  }
+
+  function _getAllConnectedAccounts(platformKey) {
+    return _oauthAccounts.filter(acct => {
+      if (acct.status !== 'active') return false;
+      if (acct.platform === platformKey) return true;
+      if (acct.sub_platforms && acct.sub_platforms.includes(platformKey)) return true;
+      return false;
+    });
+  }
+
   // ── Load ───────────────────────────────────────────────────────────────
   async function load() {
     if (!_loaded) {
       _loaded = true;
+      _listenForOAuthCallback();
     }
-    await Promise.all([loadQueue(), loadStats(), loadPlatforms()]);
+    await Promise.all([loadQueue(), loadStats(), loadPlatforms(), loadOAuthStatus()]);
   }
 
   async function loadQueue() {
@@ -123,7 +170,56 @@ const SLSocial = (() => {
   async function loadPlatforms() {
     const data = await _fetch('/platforms');
     _platforms = data?.platforms || data || {};
+  }
+
+  async function loadOAuthStatus() {
+    try {
+      const data = await _fetch('/oauth/status');
+      _oauthAccounts = data?.accounts || [];
+    } catch (e) {
+      console.warn('[SLSocial] OAuth status fetch failed:', e);
+      _oauthAccounts = [];
+    }
     renderPlatformStatus();
+  }
+
+  // ── OAuth: Connect / Disconnect ───────────────────────────────────────
+  function connectPlatform(provider) {
+    const url = `${API}/oauth/${provider}/login`;
+    const w = 600, h = 700;
+    const left = (screen.width - w) / 2;
+    const top = (screen.height - h) / 2;
+    window.open(url, `shamrock_oauth_${provider}`,
+      `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`
+    );
+  }
+
+  async function disconnectPlatform(provider, accountId) {
+    if (!confirm(`Disconnect this ${provider} account?`)) return;
+    const data = await _fetch(`/oauth/${provider}/disconnect`, {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId }),
+    });
+    if (data.success !== false) {
+      SL.toast(`${provider} disconnected`, 'info');
+      await loadOAuthStatus();
+    } else {
+      SL.toast(data.error || 'Disconnect failed', 'error');
+    }
+  }
+
+  function _listenForOAuthCallback() {
+    window.addEventListener('message', (event) => {
+      if (event.data?.type === 'shamrock_oauth_callback') {
+        const { success, provider, display_name, error } = event.data;
+        if (success) {
+          SL.toast(`Connected to ${_platformLabel(provider) || provider}! (${display_name})`, 'success');
+        } else {
+          SL.toast(`Connection failed: ${error || 'Unknown error'}`, 'error');
+        }
+        loadOAuthStatus();
+      }
+    });
   }
 
   // ── Render: KPI Strip ──────────────────────────────────────────────────
@@ -146,22 +242,67 @@ const SLSocial = (() => {
     if (!container) return;
 
     const platforms = [
-      'twitter', 'linkedin', 'facebook', 'instagram', 'threads',
-      'tiktok', 'youtube', 'reddit', 'telegram', 'bluesky',
-      'mastodon', 'pinterest', 'gbp',
+      'twitter', 'linkedin', 'facebook', 'instagram',
+      'gbp', 'youtube', 'threads', 'telegram',
     ];
+
     container.innerHTML = platforms.map(p => {
-      const pData = _platforms[p] || {};
-      const enabled = pData.enabled ?? false;
-      const lastPost = pData.last_post;
-      const picture = pData.picture ? `<img src="${pData.picture}" class="soc-platform-avatar" alt="">` : '';
+      const oauthProvider = PLATFORM_OAUTH_MAP[p];
+      const connectedAccounts = _getAllConnectedAccounts(p);
+      const isConnected = connectedAccounts.length > 0;
+      const firstAcct = connectedAccounts[0];
+
+      // Profile picture
+      let avatarHtml = '';
+      if (isConnected && firstAcct?.profile_picture) {
+        avatarHtml = `<img src="${firstAcct.profile_picture}" class="soc-platform-avatar" alt="">`;
+      }
+
+      // Connection status and account names
+      let statusHtml;
+      let accountsHtml = '';
+      if (isConnected) {
+        statusHtml = `<div class="soc-platform-status"><span class="soc-conn-dot green"></span> Connected</div>`;
+        accountsHtml = connectedAccounts.map(a =>
+          `<div class="soc-acct-row">
+            <span class="soc-acct-name">${_escHtml(a.display_name)}</span>
+            <button class="soc-disconnect-btn" title="Disconnect" onclick="event.stopPropagation();SLSocial.disconnectPlatform('${a.platform}','${a.account_id}')">✕</button>
+          </div>`
+        ).join('');
+      } else {
+        statusHtml = `<div class="soc-platform-status">⚪ Not connected</div>`;
+      }
+
+      // Connect button
+      let connectBtnHtml = '';
+      if (oauthProvider) {
+        const brand = CONNECT_BRANDS[oauthProvider];
+        if (!isConnected && brand) {
+          connectBtnHtml = `
+            <button class="soc-oauth-btn"
+                    style="background:${brand.bg};color:${brand.color};border-color:${brand.border}"
+                    onclick="event.stopPropagation();SLSocial.connectPlatform('${oauthProvider}')">
+              ${brand.icon} ${brand.label}
+            </button>`;
+        } else if (isConnected && (p === 'gbp' || p === 'youtube')) {
+          // GBP/YouTube allow adding additional accounts
+          connectBtnHtml = `
+            <button class="soc-oauth-add-btn"
+                    onclick="event.stopPropagation();SLSocial.connectPlatform('${oauthProvider}')"
+                    title="Add another account">
+              + Add Account
+            </button>`;
+        }
+      }
+
       return `
-        <div class="soc-platform-card ${enabled ? 'active' : 'disabled'}">
+        <div class="soc-platform-card ${isConnected ? 'active' : 'disabled'}">
           <div class="soc-platform-icon">${_platformIcon(p)}</div>
           <div class="soc-platform-name">${_platformLabel(p)}</div>
-          ${picture}
-          <div class="soc-platform-status">${enabled ? '🟢 Connected' : '⚪ Not configured'}</div>
-          <div class="soc-platform-last">${lastPost ? _ago(lastPost) : '—'}</div>
+          ${avatarHtml}
+          ${statusHtml}
+          ${accountsHtml}
+          ${connectBtnHtml}
         </div>`;
     }).join('');
   }
@@ -187,7 +328,9 @@ const SLSocial = (() => {
       const platform = post.platform || 'twitter';
       const status = post.status || 'pending';
       const source = post.source_type || 'manual';
-      const humanScore = post.humanizer_score != null ? `<span class="soc-h-score" title="AI likelihood (lower is better)">${Math.round(post.humanizer_score)}</span>` : '';
+      const humanScore = post.humanizer_score != null
+        ? `<span class="soc-h-score" title="AI likelihood (lower is better)">${Math.round(post.humanizer_score)}</span>`
+        : '';
       const created = _ago(post.created_at);
       const tone = post.tone || '';
 
@@ -255,7 +398,6 @@ const SLSocial = (() => {
   async function humanize(id) {
     const post = _posts.find(p => (p.post_id || p._id || p.id) === id);
     if (!post) return;
-
     SL.toast('Humanizing…', 'info');
     const data = await _fetch('/humanize', {
       method: 'POST',
@@ -265,7 +407,6 @@ const SLSocial = (() => {
       const before = data.score_before?.score ?? data.score_before ?? 0;
       const after = data.score_after?.score ?? data.score_after ?? 0;
       SL.toast(`Humanized! Score: ${Math.round(before)} → ${Math.round(after)}`, 'success');
-      // Update post content via edit
       await _fetch(`/edit/${id}`, {
         method: 'POST',
         body: JSON.stringify({ content: data.humanized }),
@@ -278,13 +419,11 @@ const SLSocial = (() => {
 
   // ── Edit Modal ─────────────────────────────────────────────────────────
   function openEdit(id) {
-    const post = _posts.find(p => (p._id || p.id) === id);
+    const post = _posts.find(p => (p._id || p.id || p.post_id) === id);
     if (!post) return;
-
     const modal = document.getElementById('socEditModal');
     const textarea = document.getElementById('socEditText');
     const idField = document.getElementById('socEditId');
-
     if (textarea) textarea.value = post.content || '';
     if (idField) idField.value = id;
     if (modal) modal.style.display = 'flex';
@@ -294,7 +433,6 @@ const SLSocial = (() => {
     const id = document.getElementById('socEditId')?.value;
     const content = document.getElementById('socEditText')?.value;
     if (!id || !content) return;
-
     const data = await _fetch(`/edit/${id}`, {
       method: 'POST',
       body: JSON.stringify({ content }),
@@ -318,7 +456,6 @@ const SLSocial = (() => {
     const topic = document.getElementById('socGrokTopic')?.value;
     const platform = document.getElementById('socGrokPlatform')?.value || 'twitter';
     if (!topic) { SL.toast('Enter a topic', 'error'); return; }
-
     SL.toast('Asking Grok…', 'info');
     const data = await _fetch('/grok/generate', {
       method: 'POST',
@@ -352,7 +489,6 @@ const SLSocial = (() => {
   async function grokImage() {
     const prompt = document.getElementById('socGrokImagePrompt')?.value;
     if (!prompt) { SL.toast('Enter an image prompt', 'error'); return; }
-
     SL.toast('Generating image…', 'info');
     const data = await _fetch('/grok/image', {
       method: 'POST',
@@ -439,7 +575,6 @@ const SLSocial = (() => {
     const content = document.getElementById('socManualContent')?.value;
     const platform = document.getElementById('socManualPlatform')?.value || 'twitter';
     if (!content) { SL.toast('Enter post content', 'error'); return; }
-
     const data = await _fetch('/manual', {
       method: 'POST',
       body: JSON.stringify({ content, platform }),
@@ -457,7 +592,6 @@ const SLSocial = (() => {
 
   // ── Health Check ───────────────────────────────────────────────────────
   async function checkHealth() {
-    // Check social engine
     const data = await _fetch('/health');
     const el = document.getElementById('socEngineStatus');
     if (el) {
@@ -467,8 +601,6 @@ const SLSocial = (() => {
         el.innerHTML = '<span class="soc-conn-dot red"></span> Engine Offline';
       }
     }
-
-    // Check Postiz
     const postiz = await _fetch('/postiz/health');
     const pel = document.getElementById('socPostizStatus');
     if (pel) {
@@ -482,7 +614,7 @@ const SLSocial = (() => {
 
   // ── Public ─────────────────────────────────────────────────────────────
   return {
-    load, loadQueue, loadStats,
+    load, loadQueue, loadStats, loadOAuthStatus,
     approve, reject, publish, humanize,
     openEdit, saveEdit, closeEdit,
     grokGenerate, grokNews, grokImage,
@@ -491,5 +623,6 @@ const SLSocial = (() => {
     setFilter, setPlatformFilter,
     openManualModal, closeManualModal, submitManual,
     checkHealth,
+    connectPlatform, disconnectPlatform,
   };
 })();

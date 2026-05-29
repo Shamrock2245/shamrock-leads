@@ -3968,6 +3968,22 @@
 .soc-platform-status{font-size:10px;color:var(--text-secondary)}
 .soc-platform-last{font-size:10px;color:var(--muted);margin-top:2px}
 
+/* OAuth connection buttons */
+.soc-oauth-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;border:1.5px solid;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s ease;margin-top:8px;width:100%;justify-content:center;letter-spacing:.02em}
+.soc-oauth-btn:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,0,0,.15);filter:brightness(1.05)}
+.soc-oauth-add-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;border:1px dashed var(--border);background:transparent;color:var(--text-secondary);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s;margin-top:6px;width:100%;justify-content:center}
+.soc-oauth-add-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(16,185,129,.05)}
+.soc-disconnect-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:4px;transition:all .15s;opacity:.5;line-height:1}
+.soc-disconnect-btn:hover{opacity:1;color:#ef4444;background:rgba(239,68,68,.1)}
+.soc-acct-row{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:3px 4px;margin-top:3px;border-radius:6px;transition:background .15s}
+.soc-acct-row:hover{background:rgba(255,255,255,.03)}
+.soc-acct-name{font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
+.soc-conn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
+.soc-conn-dot.green{background:#10b981;box-shadow:0 0 6px rgba(16,185,129,.5)}
+.soc-conn-dot.red{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.5)}
+.soc-conn-dot.amber{background:#f59e0b;box-shadow:0 0 6px rgba(245,158,11,.5)}
+.soc-platform-avatar{width:28px;height:28px;border-radius:50%;margin-top:6px;border:2px solid rgba(16,185,129,.3);object-fit:cover}
+
 /* 2-column body */
 .soc-body{display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
 

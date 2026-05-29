@@ -35,21 +35,40 @@ class TwitterAdapter(PlatformAdapter):
     def __init__(self):
         self._client = None
         self._api = None  # v1.1 API (needed for media upload)
+        self._oauth_token = None
+        self._oauth_loaded = False
+
+    async def _load_oauth_token(self):
+        """Try to load a live OAuth token from MongoDB."""
+        if self._oauth_loaded:
+            return
+        self._oauth_loaded = True
+        try:
+            from social.oauth_bridge import get_live_token
+            self._oauth_token = await get_live_token("twitter")
+        except Exception:
+            self._oauth_token = None
 
     def _get_client(self):
-        """Lazy-load tweepy Client (v2 API)."""
+        """Lazy-load tweepy Client (v2 API). Uses OAuth token if available."""
         if self._client is None:
             cfg = settings.twitter
-            if not cfg.enabled or not cfg.bearer_token:
+            # Prefer OAuth token from MongoDB, fall back to static config
+            bearer = cfg.bearer_token
+            if self._oauth_token and self._oauth_token.get("access_token"):
+                bearer = self._oauth_token["access_token"]
+            if not bearer:
+                return None
+            if not cfg.enabled and not self._oauth_token:
                 return None
             try:
                 import tweepy
                 self._client = tweepy.Client(
-                    bearer_token=cfg.bearer_token,
-                    consumer_key=cfg.api_key,
-                    consumer_secret=cfg.api_secret,
-                    access_token=cfg.access_token,
-                    access_token_secret=cfg.access_secret,
+                    bearer_token=bearer,
+                    consumer_key=cfg.api_key or None,
+                    consumer_secret=cfg.api_secret or None,
+                    access_token=cfg.access_token or None,
+                    access_token_secret=cfg.access_secret or None,
                     wait_on_rate_limit=True,
                 )
             except ImportError:
@@ -74,7 +93,9 @@ class TwitterAdapter(PlatformAdapter):
 
     def is_configured(self) -> bool:
         cfg = settings.twitter
-        return cfg.enabled and bool(cfg.bearer_token) and bool(cfg.api_key)
+        has_static = cfg.enabled and bool(cfg.bearer_token) and bool(cfg.api_key)
+        has_oauth = bool(self._oauth_token and self._oauth_token.get("access_token"))
+        return has_static or has_oauth
 
     # ── Post ──────────────────────────────────────────────────────────────
 
@@ -85,6 +106,7 @@ class TwitterAdapter(PlatformAdapter):
         link_url: str = "",
     ) -> PostResult:
         """Post a single tweet."""
+        await self._load_oauth_token()
         client = self._get_client()
         if not client:
             return PostResult(

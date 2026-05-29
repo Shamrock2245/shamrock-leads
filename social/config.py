@@ -194,7 +194,7 @@ settings = load_config()
 
 
 def get_enabled_platforms() -> list[str]:
-    """Return list of enabled platform names."""
+    """Return list of enabled platform names (static config only)."""
     platforms = []
     if settings.twitter.enabled:
         platforms.append("twitter")
@@ -205,3 +205,34 @@ def get_enabled_platforms() -> list[str]:
     if settings.instagram.enabled:
         platforms.append("instagram")
     return platforms
+
+
+async def get_all_enabled_platforms() -> list[str]:
+    """
+    Return list of enabled platform names — includes both static config
+    AND dynamically-connected OAuth platforms from MongoDB.
+    """
+    platforms = set(get_enabled_platforms())
+    try:
+        from social.oauth_bridge import get_live_token
+
+        # Check each platform for OAuth tokens
+        oauth_map = {
+            "twitter": "twitter",
+            "linkedin": "linkedin",
+            "meta": ["facebook", "instagram"],
+            "google": ["gbp", "youtube"],
+        }
+        for provider, platform_keys in oauth_map.items():
+            token = await get_live_token(provider)
+            if token and token.get("access_token"):
+                if isinstance(platform_keys, list):
+                    platforms.update(platform_keys)
+                else:
+                    platforms.add(platform_keys)
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    return sorted(platforms)
