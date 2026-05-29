@@ -75,6 +75,7 @@ class OsceolaCountyScraper(BaseScraper):
                 df = pd.read_csv(
                     io.StringIO(r.text),
                     dtype=str,
+                    index_col=False,
                     on_bad_lines="skip",
                 )
                 df.columns = [c.strip() for c in df.columns]
@@ -82,6 +83,14 @@ class OsceolaCountyScraper(BaseScraper):
                 for arrest_num, group in df.groupby("ARREST_NUMBER", sort=False):
                     if arrest_num in all_records:
                         continue  # already processed from a more recent day
+
+                    arrest_num_str = str(arrest_num).strip()
+                    if not arrest_num_str.isdigit():
+                        logger.warning(
+                            f"Osceola: skipping shifted/malformed row. "
+                            f"ARREST_NUMBER is not digits: '{arrest_num_str}'"
+                        )
+                        continue
 
                     row = group.iloc[0]  # first row has all personal info
                     charges = " | ".join(
@@ -93,6 +102,15 @@ class OsceolaCountyScraper(BaseScraper):
                     first = (row.get("FIRST_NAME") or "").strip()
                     last = (row.get("LAST_NAME") or "").strip()
                     middle = (row.get("MIDDLE_NAME") or "").strip()
+
+                    # Verify names do not contain digits or slashes (indicators of column shifting)
+                    if first.isdigit() or "/" in first or last.isdigit() or "/" in last:
+                        logger.warning(
+                            f"Osceola: skipping shifted/malformed row for booking {arrest_num_str}. "
+                            f"FIRST_NAME='{first}', LAST_NAME='{last}'"
+                        )
+                        continue
+
                     full_name = f"{last}, {first}" + (f" {middle}" if middle else "")
 
                     # Dates
@@ -108,7 +126,7 @@ class OsceolaCountyScraper(BaseScraper):
                         Middle_Name=middle.upper(),
                         Last_Name=last.upper(),
                         DOB=dob,
-                        Booking_Number=str(arrest_num).strip(),
+                        Booking_Number=arrest_num_str,
                         Booking_Date=arrest_date,
                         Arrest_Date=arrest_date,
                         City=(row.get("CITY") or "").strip(),
