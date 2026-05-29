@@ -42,6 +42,14 @@ OPEN_PREFIXES = (
     "/api/config/bluebubbles-url",
 )
 
+# OAuth popup paths — login redirects + provider callbacks (no cookie in popup)
+OAUTH_PREFIXES = (
+    "/api/social/oauth/google/",
+    "/api/social/oauth/twitter/",
+    "/api/social/oauth/linkedin/",
+    "/api/social/oauth/meta/",
+)
+
 
 def _get_serializer() -> URLSafeTimedSerializer:
     """Build the cookie signer from the same secret derivation used by extensions.py."""
@@ -81,6 +89,10 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
 
         # Whitelisted paths pass through
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
+            return await call_next(request)
+
+        # OAuth popup flow — login redirects + callbacks bypass auth
+        if any(path.startswith(p) for p in OAUTH_PREFIXES):
             return await call_next(request)
 
         # Check signed session cookie
