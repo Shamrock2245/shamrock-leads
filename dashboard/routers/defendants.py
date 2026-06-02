@@ -147,6 +147,7 @@ async def get_defendant_arrests(defendant_id: str):
     arrests = await svc.get_defendant_arrests(defendant_id)
     return {"defendant_id": defendant_id, "arrests": arrests, "total": len(arrests)}
 
+
 @router.get("/defendants/{defendant_id}/timeline")
 async def get_defendant_timeline(
     defendant_id: str,
@@ -211,17 +212,24 @@ async def get_defendant_timeline(
         "capped": total_events > MAX_EVENTS,
     }
 
+
 @router.get("/defendants/by_booking/{booking_number}/timeline")
-async def get_defendant_timeline_by_booking(booking_number: str):
-    """Resolve booking_number to a defendant_id and return the unified timeline."""
+async def get_defendant_timeline_by_booking(
+    booking_number: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Resolve booking_number to a defendant_id and return the unified timeline.
+
+    Pagination params (page, limit) are forwarded to the unified timeline endpoint.
+    """
     from dashboard.routers.lifecycle_timeline import get_lifecycle
     arrests_col = get_collection("arrests")
     arrest = await arrests_col.find_one({"booking_number": booking_number})
-    
     if arrest and "defendant_id" in arrest:
-        # Get unified timeline
-        return await get_defendant_timeline(arrest["defendant_id"])
-    
+        # Forward pagination params to the unified timeline
+        return await get_defendant_timeline(arrest["defendant_id"], page=page, limit=limit)
+
     # Fallback to single booking timeline if not linked to a defendant
     lifecycle_data = await get_lifecycle(booking_number)
     if isinstance(lifecycle_data, dict) and lifecycle_data.get("ok"):

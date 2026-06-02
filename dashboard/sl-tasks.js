@@ -6,23 +6,27 @@
  *  - Micro-animation on task completion (flash green → slide-out)
  *  - data-task-id event delegation instead of inline onclick (XSS-safe)
  *  - Overdue badge with pulsing red dot
- *  - Task type icon mapping
+ *  - Task type icon mapping (all engine-generated types covered)
  *  - Graceful empty-state with shamrock branding
  *  - Capped badge count (99+)
  *  - Loading skeleton state
+ *  - Agent identity resolved from slcAgent input, SL.currentAgent, or localStorage
+ *  - Auto-loads on DOMContentLoaded (not just on SL.refresh)
  */
 window.SLTasks = (() => {
   'use strict';
 
   const API = window.SL?.apiBase || '';
 
-  // ── Task type → icon mapping ──────────────────────────────────────────────
+  // ── Task type → icon mapping (covers all types emitted by task_engine.py) ──
   const TYPE_ICONS = {
-    check_in:       '📋',
-    court_reminder: '🏛️',
-    payment:        '💵',
-    paperwork:      '📄',
-    general:        '✅',
+    check_in:         '📋',
+    check_in_30d:     '📅',
+    court_reminder:   '🏛️',
+    payment:          '💵',
+    payment_reminder: '💵',
+    paperwork:        '📄',
+    general:          '✅',
   };
 
   // ── Render helpers ────────────────────────────────────────────────────────
@@ -53,6 +57,14 @@ window.SLTasks = (() => {
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       + ' · '
       + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** Resolve the current agent name from the DOM, SL global, or localStorage. */
+  function _currentAgent() {
+    return (document.getElementById('slcAgent') || {}).value
+      || window.SL?.currentAgent
+      || localStorage.getItem('sl_agent_name')
+      || 'Dashboard Agent';
   }
 
   // ── Main load ─────────────────────────────────────────────────────────────
@@ -145,7 +157,10 @@ window.SLTasks = (() => {
       var resp = await fetch(API + '/api/tasks/' + taskId + '/complete', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ notes: 'Completed from dashboard', agent: 'Dashboard Agent' }),
+        body:    JSON.stringify({
+          notes: 'Completed from dashboard',
+          agent: _currentAgent(),
+        }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
@@ -187,6 +202,9 @@ window.SLTasks = (() => {
 
   // ── Auto-load on DOMContentLoaded ─────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', function() {
+    // Load immediately on page ready (not just on SL.refresh)
+    load();
+    // Also hook into SL.refresh so tasks reload whenever the dashboard refreshes
     var origRefresh = window.SL && window.SL.refresh;
     if (window.SL) {
       window.SL.refresh = function() {
