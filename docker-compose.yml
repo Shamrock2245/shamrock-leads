@@ -80,6 +80,7 @@ services:
     volumes:
       - dashboard-uploads:/app/dashboard/uploads  # Persistent KYC uploads
       - ./config:/app/config:ro                   # Firebase admin SDK + secrets
+      - ./creds:/app/creds:ro                     # GCP service account key (Calendar API)
     networks:
       - shamrock-net
     # ── Security Hardening ──

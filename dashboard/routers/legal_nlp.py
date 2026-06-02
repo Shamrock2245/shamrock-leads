@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 
 log = logging.getLogger("shamrock.api.legal_nlp")
 legal_nlp_bp = APIRouter(prefix="/api", tags=["legal_nlp"])
@@ -34,7 +34,7 @@ async def api_ingest_url(request: Request):
         from dashboard.services.url_ingest_service import ingest_url
         result = await ingest_url(url)
         status = 200 if result.get("success") else 422
-        return result, status
+        return JSONResponse(content=result, status_code=status)
     except Exception as e:
         log.exception("URL ingest error: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -115,7 +115,7 @@ async def api_risk_score(booking_number: str):
     Looks up all arrests for the same defendant and scores risk.
     """
     try:
-        db = _get_db()
+        db = get_db()
         arrests_col = get_collection("arrests")
 
         # Find the current arrest
@@ -218,7 +218,7 @@ async def api_enrich_arrest(booking_number: str):
             "nlp_statutes": analysis["statutes"],
             "nlp_citations": citations,
             "nlp_risk_factors": analysis["risk_factors"],
-            "nlp_enriched_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "nlp_enriched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
 
         await arrests_col.update_one(

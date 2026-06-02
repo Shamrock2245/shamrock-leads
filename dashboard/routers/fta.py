@@ -144,7 +144,7 @@ async def api_fta_initiate_surrender(request: Request, booking_number: str):
             notes=notes,
         )
         status = 200 if result.get("success") else 400
-        return result, status
+        return JSONResponse(content=result, status_code=status)
     except Exception as e:
         log.error("[FTA API] surrender error for %s: %s", booking_number, e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

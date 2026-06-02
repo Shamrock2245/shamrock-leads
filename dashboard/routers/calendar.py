@@ -231,27 +231,37 @@ async def calendar_sync_gcal(request: Request):
             "dry_run": false            // if true, returns events without writing
         }
     """
-    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
     calendar_id = os.getenv("GOOGLE_CALENDAR_ID", "admin@shamrockbailbonds.biz")
 
-    if not creds_path or not os.path.exists(creds_path):
+    # Auth strategy: try service account first, then OAuth refresh token
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+    refresh_token = os.getenv("GOOGLE_GMAIL_REFRESH_TOKEN", "")
+
+    has_service_account = bool(creds_path and os.path.exists(creds_path))
+    has_oauth = bool(client_id and client_secret and refresh_token)
+
+    if not has_service_account and not has_oauth:
         return JSONResponse(status_code=501, content={
             "success": False,
             "error": "Google Calendar not configured",
             "code": "GCAL_NOT_CONFIGURED",
             "setup_steps": [
-                "1. Create a Google Cloud service account at console.cloud.google.com",
-                "2. Enable the Google Calendar API",
-                "3. Share your calendar with the service account email (Editor role)",
-                "4. Download the service account JSON key",
-                "5. Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json in .env",
-                "6. Set GOOGLE_CALENDAR_ID=admin@shamrockbailbonds.biz in .env",
+                "Option A (OAuth — recommended):",
+                "  1. Set GOOGLE_CLIENT_ID in .env",
+                "  2. Set GOOGLE_CLIENT_SECRET in .env",
+                "  3. Set GOOGLE_GMAIL_REFRESH_TOKEN in .env",
+                "  4. Set GOOGLE_CALENDAR_ID=admin@shamrockbailbonds.biz in .env",
+                "Option B (Service Account):",
+                "  1. Create a service account at console.cloud.google.com",
+                "  2. Enable the Google Calendar API",
+                "  3. Share your calendar with the service account email",
+                "  4. Set GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json in .env",
             ],
-            "docs": "docs/GCAL_SYNC_SETUP.md",
         })
 
     try:
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
 
         data = await request.json() or {}
@@ -300,10 +310,25 @@ async def calendar_sync_gcal(request: Request):
                 "bonds": [b.get("booking_number") for b in bonds],
             }
 
-        scopes = ["https://www.googleapis.com/auth/calendar"]
-        credentials = service_account.Credentials.from_service_account_file(
-            creds_path, scopes=scopes
-        )
+        # Build credentials — prefer service account, fall back to OAuth
+        if has_service_account:
+            from google.oauth2 import service_account
+            scopes = ["https://www.googleapis.com/auth/calendar"]
+            credentials = service_account.Credentials.from_service_account_file(
+                creds_path, scopes=scopes
+            )
+            logger.info("[sync-gcal] Using service account auth")
+        else:
+            from google.oauth2.credentials import Credentials
+            credentials = Credentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=["https://www.googleapis.com/auth/calendar"],
+            )
+            logger.info("[sync-gcal] Using OAuth refresh token auth")
         service = build("calendar", "v3", credentials=credentials)
 
         synced = 0
@@ -345,20 +370,22 @@ async def calendar_sync_gcal(request: Request):
                 except Exception:
                     pass  # If dedup check fails, allow creation
 
-                location_str = court_loc or f"{bond_county} County Justice Center" if bond_county else ""
+                location_str = court_loc or (f"{bond_county} County Justice Center" if bond_county else "")
+
+                # Build description with optional location line
+                desc_lines = [
+                    f"📋 Case: {case_num}",
+                    f"👤 Defendant: {defendant_name}",
+                    f"📍 County: {bond_county}",
+                ]
+                if court_loc:
+                    desc_lines.append(f"🏛️  Location: {court_loc}")
+                desc_lines.append("\n— Synced by Shamrock Leads Dashboard")
 
                 event = {
                     "summary": title,
                     "location": location_str,
-                    "description": (
-                        f"📋 Case: {case_num}\n"
-                        f"👤 Defendant: {defendant_name}\n"
-                        f"📍 County: {bond_county}\n"
-                        f"🏛️  Location: {court_loc}\n" if court_loc else
-                        f"📋 Case: {case_num}\n"
-                        f"👤 Defendant: {defendant_name}\n"
-                        f"📍 County: {bond_county}\n"
-                    ) + f"\n— Synced by Shamrock Leads Dashboard",
+                    "description": "\n".join(desc_lines),
                     "colorId": "9",  # Blueberry (Blue) for court dates
                     "extendedProperties": {
                         "private": {

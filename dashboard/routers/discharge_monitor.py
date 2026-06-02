@@ -93,7 +93,12 @@ def _utc_now() -> datetime:
 
 
 def _gmail_available() -> bool:
-    return bool(os.getenv("GMAIL_CREDENTIALS_JSON"))
+    """Check if Gmail OAuth credentials are present (shared pattern)."""
+    return bool(
+        os.getenv("GOOGLE_CLIENT_ID")
+        and os.getenv("GOOGLE_CLIENT_SECRET")
+        and os.getenv("GOOGLE_GMAIL_REFRESH_TOKEN")
+    )
 
 
 def _parse_discharge_email(subject: str, body: str) -> dict:
@@ -213,7 +218,9 @@ async def discharge_status():
 
 @discharge_monitor_bp.post("/discharge-monitor/scan")
 async def discharge_scan():
-    """Trigger a Gmail scan for discharge emails. Returns 501 if not configured."""
+    """Trigger a Gmail scan for discharge emails.
+    Uses GmailReaderService (shared OAuth pattern) — returns 501 if not configured.
+    """
     if not _gmail_available():
         return JSONResponse(status_code=501, content={
             "success": False,
@@ -229,15 +236,25 @@ async def discharge_scan():
             "docs": "docs/GMAIL_DISCHARGE_SETUP.md",
         })
 
-    # Gmail scan implementation (requires google-auth + googleapiclient)
+    # Gmail scan using GmailReaderService (shared OAuth pattern)
     try:
         import base64
-        from google.oauth2.credentials import Credentials
-        from googleapiclient.discovery import build
+        from dashboard.services.gmail_reader import GmailReaderService
 
-        creds_path = os.getenv("GMAIL_CREDENTIALS_JSON")
-        creds = Credentials.from_authorized_user_file(creds_path)
-        service = build("gmail", "v1", credentials=creds)
+        reader = GmailReaderService()
+        if not reader.is_configured:
+            return JSONResponse(status_code=501, content={
+                "success": False,
+                "error": "Gmail OAuth not configured — missing GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, or GOOGLE_GMAIL_REFRESH_TOKEN",
+            })
+
+        service = reader.authenticate()
+        if not service:
+            return JSONResponse(status_code=500, content={
+                "success": False,
+                "error": "Gmail authentication failed — check OAuth credentials",
+            })
+
         label = os.getenv("DISCHARGE_GMAIL_LABEL", "Court/Discharges")
 
         # Find label ID

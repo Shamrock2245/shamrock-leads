@@ -149,7 +149,7 @@ async def acknowledge_all(request: Request):
         from datetime import datetime, timezone
         result = await db.docket_events.update_many(query, {"$set": {
             "acknowledged": True, "acknowledged_by": actor,
-            "acknowledged_at": datetime.now(timezone.utc).isoformat() + "Z",
+            "acknowledged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }})
         return {"success": True, "acknowledged_count": result.modified_count}
     except Exception as e:
