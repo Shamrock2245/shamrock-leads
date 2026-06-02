@@ -18,8 +18,10 @@ SCOPES = [
 ]
 
 # From GCP Console: shamrock-bail-suite → Shamrock Bail Portal Web Client
+# NOTE: Must use "installed" type (not "web") so the refresh token works
+# from any IP — we generate locally but refresh on the Hetzner VPS.
 CLIENT_CONFIG = {
-    "web": {
+    "installed": {
         "client_id": "167447516147-is4h2qhcqa51qhlen97tpkcij33r5a1n.apps.googleusercontent.com",
         "client_secret": "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",
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
@@ -60,8 +62,8 @@ def main():
     print("=" * 60)
     print()
     print(f"GOOGLE_GMAIL_REFRESH_TOKEN={creds.refresh_token}")
-    print(f"GOOGLE_CLIENT_ID={CLIENT_CONFIG['web']['client_id']}")
-    print(f"GOOGLE_CLIENT_SECRET={CLIENT_CONFIG['web']['client_secret']}")
+    print(f"GOOGLE_CLIENT_ID={CLIENT_CONFIG['installed']['client_id']}")
+    print(f"GOOGLE_CLIENT_SECRET={CLIENT_CONFIG['installed']['client_secret']}")
     print()
     print("Add these 3 lines to /opt/shamrock-leads/.env on the VPS.")
     print()
