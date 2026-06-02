@@ -78,7 +78,7 @@ class GmailReaderService:
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=self._client_id,
                 client_secret=self._client_secret,
-                scopes=["https://www.googleapis.com/auth/gmail.modify"],
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
             )
 
             self._service = build("gmail", "v1", credentials=creds)
