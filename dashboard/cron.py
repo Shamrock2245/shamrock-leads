@@ -486,91 +486,109 @@ async def _ensure_all_indexes():
     """Create all MongoDB indexes on startup."""
     from dashboard.extensions import get_db
     db = get_db()
+    warnings = []
+
+    async def _idx(collection_name: str, keys, **kwargs):
+        """Create one index, swallowing 'already exists' conflicts."""
+        try:
+            await db[collection_name].create_index(keys, **kwargs)
+        except Exception as e:
+            err_str = str(e)
+            # IndexOptionsConflict (code 85) or "already exists" → harmless
+            if "already exists" in err_str or "IndexOptionsConflict" in err_str:
+                pass  # Index exists with same or compatible definition — fine
+            else:
+                idx_name = kwargs.get("name", str(keys))
+                warnings.append(f"{collection_name}.{idx_name}: {e}")
+
     try:
         # Defendants
-        await db["defendants"].create_index([("identity_key", 1)], unique=True, name="idx_identity_key_unique", background=True)
-        await db["defendants"].create_index([("defendant_id", 1)], unique=True, name="idx_defendant_id_unique", background=True)
-        await db["defendants"].create_index([("dob", 1)], name="idx_dob", background=True)
-        await db["defendants"].create_index([("counties", 1)], name="idx_counties", background=True)
-        await db["defendants"].create_index([("total_arrests", -1)], name="idx_total_arrests", background=True)
-        await db["defendants"].create_index([("active", 1)], name="idx_active", background=True)
-        await db["arrests"].create_index([("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
+        await _idx("defendants", [("identity_key", 1)], unique=True, name="idx_identity_key_unique", background=True)
+        await _idx("defendants", [("defendant_id", 1)], unique=True, name="idx_defendant_id_unique", background=True)
+        await _idx("defendants", [("dob", 1)], name="idx_dob", background=True)
+        await _idx("defendants", [("counties", 1)], name="idx_counties", background=True)
+        await _idx("defendants", [("total_arrests", -1)], name="idx_total_arrests", background=True)
+        await _idx("defendants", [("active", 1)], name="idx_active", background=True)
+        await _idx("arrests", [("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
+        # Tasks & Ledger
+        await _idx("tasks", [("status", 1), ("due_date", 1)], name="idx_tasks_status_due", background=True)
+        await _idx("tasks", [("booking_number", 1), ("status", 1)], name="idx_tasks_booking_status", background=True)
+        await _idx("financial_ledger", [("booking_number", 1), ("timestamp", -1)], name="idx_ledger_booking_ts", background=True)
+        await _idx("financial_ledger", [("stripe_swipe_ref", 1)], sparse=True, name="idx_ledger_swipe_ref", background=True)
         # Audit
-                # Tasks & Ledger
-        await db["tasks"].create_index([("status", 1), ("due_date", 1)], name="idx_tasks_status_due", background=True)
-        await db["tasks"].create_index([("booking_number", 1), ("status", 1)], name="idx_tasks_booking_status", background=True)
-        await db["financial_ledger"].create_index([("booking_number", 1), ("timestamp", -1)], name="idx_ledger_booking_ts", background=True)
-        await db["financial_ledger"].create_index([("stripe_swipe_ref", 1)], sparse=True, name="idx_ledger_swipe_ref", background=True)
-        
-        await db["audit_events"].create_index([("entity_id", 1), ("timestamp", -1)], name="idx_entity_id_timestamp", background=True)
-        await db["audit_events"].create_index([("event_type", 1)], name="idx_event_type", background=True)
-        await db["audit_events"].create_index([("timestamp", 1)], name="idx_audit_ttl_90d", background=True, expireAfterSeconds=7776000)
-        await db["audit_events"].create_index([("entity_type", 1), ("entity_id", 1), ("timestamp", -1)], name="idx_audit_entity_lookup", background=True)
+        await _idx("audit_events", [("entity_id", 1), ("timestamp", -1)], name="idx_entity_id_timestamp", background=True)
+        await _idx("audit_events", [("event_type", 1)], name="idx_event_type", background=True)
+        await _idx("audit_events", [("timestamp", 1)], name="idx_audit_ttl_90d", background=True, expireAfterSeconds=7776000)
+        await _idx("audit_events", [("entity_type", 1), ("entity_id", 1), ("timestamp", -1)], name="idx_audit_entity_lookup", background=True)
         # Matching
-        await db["intake_queue"].create_index([("matched_booking_number", 1)], name="idx_matched_booking", background=True, sparse=True)
-        await db["intake_queue"].create_index([("match_confidence", -1)], name="idx_match_confidence", background=True, sparse=True)
-        await db["intake_queue"].create_index([("status", 1), ("created_at", -1)], name="idx_status_created", background=True)
+        await _idx("intake_queue", [("matched_booking_number", 1)], name="idx_matched_booking", background=True, sparse=True)
+        await _idx("intake_queue", [("match_confidence", -1)], name="idx_match_confidence", background=True, sparse=True)
+        await _idx("intake_queue", [("status", 1), ("created_at", -1)], name="idx_status_created", background=True)
         # Outreach + Paperwork
-        await db["outreach_sequences"].create_index([("booking_number", 1), ("county", 1)], name="idx_booking_county", background=True)
-        await db["outreach_sequences"].create_index([("status", 1)], name="idx_seq_status", background=True)
-        await db["outreach_sequences"].create_index([("phone", 1), ("status", 1)], name="idx_phone_status", background=True)
-        await db["outreach_messages"].create_index([("sequence_id", 1)], name="idx_msg_sequence_id", background=True)
+        await _idx("outreach_sequences", [("booking_number", 1), ("county", 1)], name="idx_booking_county", background=True)
+        await _idx("outreach_sequences", [("status", 1)], name="idx_seq_status", background=True)
+        await _idx("outreach_sequences", [("phone", 1), ("status", 1)], name="idx_phone_status", background=True)
+        await _idx("outreach_messages", [("sequence_id", 1)], name="idx_msg_sequence_id", background=True)
         # Outreach Queue
-        await db["outreach_queue"].create_index([("status", 1), ("next_attempt", 1)], name="idx_outreach_status_attempt", background=True)
-        await db["outreach_queue"].create_index([("created_at", 1)], name="idx_outreach_ttl_30d", background=True, expireAfterSeconds=2592000)
-        await db["paperwork_packets"].create_index([("intake_id", 1)], name="idx_pkt_intake_id", background=True)
-        await db["paperwork_packets"].create_index([("packet_id", 1)], unique=True, name="idx_pkt_packet_id", background=True)
-        await db["paperwork_packets"].create_index([("signnow_document_id", 1)], name="idx_pkt_signnow_doc_id", background=True, sparse=True)
-        await db["paperwork_packets"].create_index([("signnow_invite_id", 1)], name="idx_pkt_signnow_invite_id", background=True, sparse=True)
-        await db["paperwork_packets"].create_index([("bond_case_id", 1)], name="idx_pkt_bond_case_id", background=True, sparse=True)
-        await db["paperwork_packets"].create_index([("voided", 1), ("status", 1)], name="idx_pkt_voided_status", background=True)
+        await _idx("outreach_queue", [("status", 1), ("next_attempt", 1)], name="idx_outreach_status_attempt", background=True)
+        await _idx("outreach_queue", [("created_at", 1)], name="idx_outreach_ttl_30d", background=True, expireAfterSeconds=2592000)
+        await _idx("paperwork_packets", [("intake_id", 1)], name="idx_pkt_intake_id", background=True)
+        await _idx("paperwork_packets", [("packet_id", 1)], unique=True, name="idx_pkt_packet_id", background=True)
+        await _idx("paperwork_packets", [("signnow_document_id", 1)], name="idx_pkt_signnow_doc_id", background=True, sparse=True)
+        await _idx("paperwork_packets", [("signnow_invite_id", 1)], name="idx_pkt_signnow_invite_id", background=True, sparse=True)
+        await _idx("paperwork_packets", [("bond_case_id", 1)], name="idx_pkt_bond_case_id", background=True, sparse=True)
+        await _idx("paperwork_packets", [("voided", 1), ("status", 1)], name="idx_pkt_voided_status", background=True)
         # Court / Discharge / Calendar
-        await db["court_reminders"].create_index([("booking_number", 1), ("reminder_type", 1), ("status", 1)], name="idx_cr_booking_type_status", background=True)
-        await db["court_reminders"].create_index([("status", 1), ("send_at", 1)], name="idx_cr_status_sendat", background=True)
-        await db["discharge_queue"].create_index([("status", 1)], name="idx_dq_status", background=True)
-        await db["gcal_sync"].create_index([("dedup_key", 1)], unique=True, name="idx_gcal_dedup", background=True)
-        await db["active_bonds"].create_index([("court_date", 1), ("status", 1)], name="idx_ab_court_status", background=True)
-        await db["active_bonds"].create_index([("bond_date", 1), ("surety", 1)], name="idx_bonds_date_surety", background=True)
-        await db["active_bonds"].create_index([("status", 1), ("updated_at", -1)], name="idx_bonds_status_updated", background=True)
-        await db["active_bonds"].create_index([("agent_name", 1), ("bond_date", 1)], name="idx_bonds_agent_date", background=True)
+        await _idx("court_reminders", [("booking_number", 1), ("reminder_type", 1), ("status", 1)], name="idx_cr_booking_type_status", background=True)
+        await _idx("court_reminders", [("status", 1), ("send_at", 1)], name="idx_cr_status_sendat", background=True)
+        await _idx("discharge_queue", [("status", 1)], name="idx_dq_status", background=True)
+        await _idx("gcal_sync", [("dedup_key", 1)], unique=True, name="idx_gcal_dedup", background=True)
+        await _idx("active_bonds", [("court_date", 1), ("status", 1)], name="idx_ab_court_status", background=True)
+        await _idx("active_bonds", [("bond_date", 1), ("surety", 1)], name="idx_bonds_date_surety", background=True)
+        await _idx("active_bonds", [("status", 1), ("updated_at", -1)], name="idx_bonds_status_updated", background=True)
+        await _idx("active_bonds", [("agent_name", 1), ("bond_date", 1)], name="idx_bonds_agent_date", background=True)
         # Payments + Notifications
-        await db["payment_plans"].create_index([("plan_id", 1)], unique=True, name="idx_plan_id", background=True)
-        await db["payment_plans"].create_index([("booking_number", 1)], name="idx_pp_booking", background=True)
-        await db["payment_plans"].create_index([("status", 1), ("next_due_date", 1)], name="idx_pp_status_due", background=True)
-        await db["payments"].create_index([("booking_number", 1), ("timestamp", -1)], name="idx_pay_booking_ts", background=True)
-        await db["payments"].create_index([("plan_id", 1)], name="idx_pay_plan", background=True)
-        await db["notifications"].create_index([("notification_id", 1)], unique=True, name="idx_notif_id", background=True)
-        await db["notifications"].create_index([("read", 1), ("dismissed", 1), ("created_at", -1)], name="idx_notif_unread", background=True)
-        await db["notifications"].create_index([("type", 1), ("created_at", -1)], name="idx_notif_type", background=True)
-        await db["notifications"].create_index([("created_at_dt", 1)], name="idx_notif_ttl_60d", background=True, expireAfterSeconds=5184000)
+        await _idx("payment_plans", [("plan_id", 1)], unique=True, name="idx_plan_id", background=True)
+        await _idx("payment_plans", [("booking_number", 1)], name="idx_pp_booking", background=True)
+        await _idx("payment_plans", [("status", 1), ("next_due_date", 1)], name="idx_pp_status_due", background=True)
+        await _idx("payments", [("booking_number", 1), ("timestamp", -1)], name="idx_pay_booking_ts", background=True)
+        await _idx("payments", [("plan_id", 1)], name="idx_pay_plan", background=True)
+        await _idx("notifications", [("notification_id", 1)], unique=True, name="idx_notif_id", background=True)
+        await _idx("notifications", [("read", 1), ("dismissed", 1), ("created_at", -1)], name="idx_notif_unread", background=True)
+        await _idx("notifications", [("type", 1), ("created_at", -1)], name="idx_notif_type", background=True)
+        await _idx("notifications", [("created_at_dt", 1)], name="idx_notif_ttl_60d", background=True, expireAfterSeconds=5184000)
         # Portal
-        await db["portal_tokens"].create_index([("token", 1)], unique=True, name="idx_token_unique", background=True)
-        await db["portal_tokens"].create_index([("booking_number", 1), ("active", 1)], name="idx_portal_booking_active", background=True)
-        await db["portal_tokens"].create_index([("expires_at", 1)], expireAfterSeconds=604800, name="idx_portal_ttl", background=True)
-        await db["bond_checkins"].create_index([("booking_number", 1), ("checkin_at", -1)], name="idx_checkin_booking", background=True)
+        await _idx("portal_tokens", [("token", 1)], unique=True, name="idx_token_unique", background=True)
+        await _idx("portal_tokens", [("booking_number", 1), ("active", 1)], name="idx_portal_booking_active", background=True)
+        await _idx("portal_tokens", [("expires_at", 1)], expireAfterSeconds=604800, name="idx_portal_ttl", background=True)
+        await _idx("bond_checkins", [("booking_number", 1), ("checkin_at", -1)], name="idx_checkin_booking", background=True)
         # Geo
-        await db["geo_devices"].create_index([("traccar_device_id", 1)], name="idx_geo_traccar_id", background=True)
-        await db["geo_devices"].create_index([("booking_number", 1), ("status", 1)], name="idx_geo_booking_status", background=True)
-        await db["geo_zones"].create_index([("booking_number", 1), ("active", 1)], name="idx_zone_booking_active", background=True)
-        await db["geo_events"].create_index([("event_type", 1), ("created_at", -1)], name="idx_geo_evt_type_created", background=True)
-        await db["geo_events"].create_index([("booking_number", 1), ("acknowledged", 1)], name="idx_geo_evt_booking_ack", background=True)
-        await db["geo_vehicle_watch"].create_index([("status", 1), ("created_at", -1)], name="idx_vwatch_status", background=True)
-        await db["geo_events"].create_index([("created_at", 1)], name="idx_geo_evt_ttl_90d", background=True, expireAfterSeconds=7776000)
+        await _idx("geo_devices", [("traccar_device_id", 1)], name="idx_geo_traccar_id", background=True)
+        await _idx("geo_devices", [("booking_number", 1), ("status", 1)], name="idx_geo_booking_status", background=True)
+        await _idx("geo_zones", [("booking_number", 1), ("active", 1)], name="idx_zone_booking_active", background=True)
+        await _idx("geo_events", [("event_type", 1), ("created_at", -1)], name="idx_geo_evt_type_created", background=True)
+        await _idx("geo_events", [("booking_number", 1), ("acknowledged", 1)], name="idx_geo_evt_booking_ack", background=True)
+        await _idx("geo_vehicle_watch", [("status", 1), ("created_at", -1)], name="idx_vwatch_status", background=True)
+        await _idx("geo_events", [("created_at", 1)], name="idx_geo_evt_ttl_90d", background=True, expireAfterSeconds=7776000)
         # Automation
-        await db["automation_config"].create_index([("type", 1)], unique=True, name="idx_config_type", background=True)
-        await db["automation_run_log"].create_index([("automation", 1), ("run_at", -1)], name="idx_auto_run", background=True)
-        await db["automation_run_log"].create_index([("run_at", 1)], name="idx_auto_run_ttl", background=True, expireAfterSeconds=2592000)
-        await db["paperwork_chase_log"].create_index([("packet_id", 1), ("chase_type", 1)], name="idx_chase_dedup", background=True)
-        await db["intake_recovery_log"].create_index([("intake_id", 1), ("created_at", -1)], name="idx_recovery_dedup", background=True)
+        await _idx("automation_config", [("type", 1)], unique=True, name="idx_config_type", background=True)
+        await _idx("automation_run_log", [("automation", 1), ("run_at", -1)], name="idx_auto_run", background=True)
+        await _idx("automation_run_log", [("run_at", 1)], name="idx_auto_run_ttl", background=True, expireAfterSeconds=2592000)
+        await _idx("paperwork_chase_log", [("packet_id", 1), ("chase_type", 1)], name="idx_chase_dedup", background=True)
+        await _idx("intake_recovery_log", [("intake_id", 1), ("created_at", -1)], name="idx_recovery_dedup", background=True)
         # TTL
-        await db["error_log"].create_index([("timestamp", 1)], name="idx_error_ttl_30d", background=True, expireAfterSeconds=2592000)
-        await db["rearrest_alerts"].create_index([("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True, expireAfterSeconds=5184000)
+        await _idx("error_log", [("timestamp", 1)], name="idx_ttl_30d", background=True, expireAfterSeconds=2592000)
+        await _idx("rearrest_alerts", [("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True, expireAfterSeconds=5184000)
         # Social OAuth
-        await db["social_accounts"].create_index([("platform", 1), ("account_id", 1)], unique=True, name="idx_social_platform_account", background=True)
-        await db["social_accounts"].create_index([("status", 1), ("token_expires_at", 1)], name="idx_social_status_expiry", background=True)
-        logger.info("☘️  All MongoDB indexes ensured")
+        await _idx("social_accounts", [("platform", 1), ("account_id", 1)], unique=True, name="idx_social_platform_account", background=True)
+        await _idx("social_accounts", [("status", 1), ("token_expires_at", 1)], name="idx_social_status_expiry", background=True)
+
+        if warnings:
+            logger.warning("Index setup had %d issue(s): %s", len(warnings), "; ".join(warnings))
+        else:
+            logger.info("☘️  All MongoDB indexes ensured")
     except Exception as e:
-        logger.warning("Index setup warning: %s", e)
+        logger.warning("Index setup fatal error: %s", e)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

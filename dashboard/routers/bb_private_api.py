@@ -102,7 +102,23 @@ class BlueBubblesClient:
                     json=json_body,
                     timeout=self.timeout,
                 )
-                data = r.json()
+                # Safely parse JSON — BB can return HTML (ngrok interstitial,
+                # tunnel 502, Cloudflare challenge) which isn't valid JSON.
+                content_type = r.headers.get("content-type", "")
+                try:
+                    data = r.json()
+                except Exception:
+                    body_snippet = r.text[:200] if r.text else "(empty)"
+                    logger.warning(
+                        "BB non-JSON response: %s %s → %d (ct=%s) body=%s",
+                        method, path, r.status_code, content_type, body_snippet,
+                    )
+                    return {
+                        "success": False,
+                        "error": "non_json_response",
+                        "status_code": r.status_code,
+                        "message": f"Non-JSON response ({r.status_code})",
+                    }
                 if r.status_code not in (200, 201):
                     logger.warning(
                         "BB API %s %s → %d: %s",
