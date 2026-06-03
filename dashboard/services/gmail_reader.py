@@ -223,7 +223,12 @@ class GmailReaderService:
         return ""
 
     def mark_as_read(self, message_id: str) -> bool:
-        """Mark a message as read (remove UNREAD label)."""
+        """Mark a message as read (remove UNREAD label).
+
+        NOTE: Requires gmail.modify scope. If the OAuth token was authorized
+        with gmail.readonly, this will silently return False instead of
+        throwing a 403 on every court-email scan cycle.
+        """
         service = self.authenticate()
         if not service:
             return False
@@ -236,7 +241,16 @@ class GmailReaderService:
             ).execute()
             return True
         except Exception as e:
-            logger.error("[GmailReader] Failed to mark %s as read: %s", message_id, e)
+            err_str = str(e)
+            if "insufficientPermissions" in err_str or "Insufficient Permission" in err_str:
+                # OAuth token only has gmail.readonly — can't modify.
+                # This is expected; don't spam the logs every cycle.
+                logger.debug(
+                    "[GmailReader] Cannot mark %s as read — gmail.readonly scope (need gmail.modify)",
+                    message_id,
+                )
+            else:
+                logger.error("[GmailReader] Failed to mark %s as read: %s", message_id, e)
             return False
 
     def get_labels(self) -> List[Dict]:

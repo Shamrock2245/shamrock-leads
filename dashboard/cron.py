@@ -224,9 +224,9 @@ async def _run_blog():
         from pymongo import MongoClient
         uri = os.getenv("MONGODB_URI", "")
         c = MongoClient(uri, serverSelectionTimeoutMS=10000) if uri else None
-        db = c[os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")] if c else None
+        db = c[os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")] if c is not None else None
         r = BlogScheduler(db=db).run()
-        if c:
+        if c is not None:
             c.close()
         return r
     result = await asyncio.to_thread(_sync)
