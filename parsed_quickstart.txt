@@ -1,0 +1,124 @@
+Title: Live Content
+
+Description: Fetched live
+
+Source: https://docs.postiz.com/quickstart
+
+---
+Quickstart - Postiz Documentation
+Skip to main content
+Postiz Documentation
+home page
+Search...
+⌘
+K
+GitHub
+Discord
+YouTube
+Getting Started
+Introduction
+How it works
+Quickstart
+Installation
+System Requirements
+Docker Compose
+Docker
+Helm
+Development Environment
+Dev Container
+Migration to Temporal
+Configuration
+Configuration Reference
+Docker Compose Configuration
+Email Notifications
+Uploads & Storage
+R2 Configuration
+Image & Video Editing (Polotno)
+OIDC Configuration
+Chrome Extension
+Reverse Proxies
+Caddy
+Nginx
+Traefik + Docker Compose
+WebSockets, HMR, and Dev Tunnels
+Troubleshooting
+Troubleshooting
+OAuth & Channel Connect Errors
+Uploads & Media
+Activation & Login
+Billing (Cloud)
+Channel Limits (Cloud)
+Known Issues
+Self-Host Gotchas
+Providers
+Providers Overview
+How to add a new provider
+Social Platforms
+Video Platforms
+Other Platforms
+Discord
+Register to the cloud
+Postiz Documentation
+home page
+Search...
+⌘
+K
+Discord
+Register to the cloud
+Register to the cloud
+Search...
+Navigation
+Getting Started
+Quickstart
+Documentation
+Public API
+CLI
+MCP
+Developer App (oAuth2)
+Contributing
+Documentation
+Public API
+CLI
+MCP
+Developer App (oAuth2)
+Contributing
+Getting Started
+Quickstart
+Copy page
+Get started with Postiz installation
+Copy page
+Documentation Index
+Fetch the complete documentation index at:
+https://docs.postiz.com/llms.txt
+Use this file to discover all available pages before exploring further.
+​
+Self Hosted installation options
+You can choose between the following installation options;
+Docker Compose
+Recommended option for
+users
+Development
+Recommended option for
+developers
+​
+Advanced installation options
+Docker (standalone)
+Run from the command line with Docker
+Helm
+Run with Kubernetes + Helm
+Was this page helpful?
+Yes
+No
+Previous
+System Requirements
+Hardware, services, ports, and network requirements for self-hosting Postiz
+Next
+⌘
+I
+github
+discord
+Powered by
+This documentation is built and hosted on Mintlify, a developer documentation platform
+On this page
+Self Hosted installation options
+Advanced installation options

@@ -1,0 +1,21 @@
+diff --git a/docker-compose.yml b/docker-compose.yml
+index e6278e8..1ef10de 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -247,6 +247,16 @@ services:
+       NEXT_PUBLIC_UPLOAD_DIRECTORY: "/uploads"
+       # ── Optional: AI content gen (uses our OpenAI key) ──
+       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
++      # ── Social Provider OAuth Keys ──
++      YOUTUBE_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
++      YOUTUBE_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
++      GOOGLE_GMB_CLIENT_ID: "${GOOGLE_OAUTH_CLIENT_ID:-}"
++      GOOGLE_GMB_CLIENT_SECRET: "${GOOGLE_OAUTH_CLIENT_SECRET:-}"
++      LINKEDIN_CLIENT_ID: "${LINKEDIN_OAUTH_CLIENT_ID:-}"
++      LINKEDIN_CLIENT_SECRET: "${LINKEDIN_OAUTH_CLIENT_SECRET:-}"
++      X_API_KEY: "${TWITTER_OAUTH_CLIENT_ID:-}"
++      X_API_SECRET: "${TWITTER_OAUTH_CLIENT_SECRET:-}"
++      X_URL: "https://x.com"
+     ports:
+       - "5200:5000"                       # Postiz UI + API (external 5200)
+     volumes:
