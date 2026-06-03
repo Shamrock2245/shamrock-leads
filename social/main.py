@@ -730,3 +730,17 @@ async def score_text(request: Request):
     score = humanizer.score_ai_likelihood(text)
 
     return {"success": True, **score}
+
+
+# ── Budget Tracking ────────────────────────────────────────────────────────────
+
+@app.get("/api/social/budget", tags=["budget"])
+async def budget_status():
+    """Get current month's Grok image generation budget status."""
+    from social.media_pipeline import MediaPipeline
+
+    db = get_db()
+    pipeline = MediaPipeline(db)
+    status = await pipeline.get_budget_status()
+
+    return {"success": True, **status}

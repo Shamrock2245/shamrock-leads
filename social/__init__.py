@@ -16,6 +16,7 @@ from social.scheduler import SocialScheduler
 from social.ingestion import ContentIngester
 from social.image_gen import ImageGenerator
 from social.gmail_scanner import GmailGrokScanner
+from social.media_pipeline import MediaPipeline
 
 # ── Convenience aliases (for discoverability) ──
 Humanizer = ContentHumanizer
@@ -38,4 +39,5 @@ __all__ = [
     "ContentIngestion",
     "ImageGenerator",
     "GmailGrokScanner",
+    "MediaPipeline",
 ]

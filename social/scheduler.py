@@ -17,9 +17,10 @@ from datetime import datetime, timezone
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from social.config import settings, get_enabled_platforms
-from social.models import PostStatus, ContentVariant
+from social.models import PostStatus, ContentVariant, Platform
 from social.queue_manager import QueueManager
 from social.ingestion import ContentIngester
+from social.media_pipeline import MediaPipeline
 
 logger = logging.getLogger("social.scheduler")
 
@@ -27,10 +28,14 @@ logger = logging.getLogger("social.scheduler")
 class SocialScheduler:
     """Manages all background scheduling for the social engine."""
 
+    # Target platforms for cross-posting (X, Instagram, Facebook)
+    TARGET_PLATFORMS = [Platform.TWITTER, Platform.INSTAGRAM, Platform.FACEBOOK]
+
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
         self.queue = QueueManager(db)
         self.ingester = ContentIngester(db)
+        self.media = MediaPipeline(db)
         self._running = False
 
     async def start(self):
@@ -118,6 +123,12 @@ class SocialScheduler:
                 retry=False,
             )
             return
+
+        # ── Auto-generate media if missing ──
+        try:
+            post = await self.media.generate_media_for_post(post)
+        except Exception as e:
+            logger.warning("⚠️  Media generation failed for %s (proceeding without): %s", post.post_id[:8], e)
 
         # Use thread posting for threads
         if post.variant == ContentVariant.THREAD and post.thread_parts:
@@ -247,6 +258,8 @@ class SocialScheduler:
         """
         Periodically scan admin@shamrockbailbonds.biz for Grok-authored
         social media posts and ingest them into the queue.
+
+        Multi-platform: each harvested post generates variants for X, IG, and FB.
         """
         await asyncio.sleep(120)  # Wait 2 min before first run
         interval = settings.gmail_scan_interval_hours * 3600
@@ -262,18 +275,26 @@ class SocialScheduler:
                     await asyncio.sleep(interval)
                     continue
 
-                result = await scanner.scan_and_ingest(
-                    max_results=20,
-                    humanize=settings.humanizer_enabled,
-                )
+                # Scan for all target platforms (X, Instagram, Facebook)
+                total_ingested = 0
+                all_details = []
 
-                ingested = result.get("ingested", 0)
-                if ingested > 0:
-                    logger.info(
-                        "📧 Gmail scan: %d Grok post(s) harvested from email",
-                        ingested,
+                for platform in self.TARGET_PLATFORMS:
+                    result = await scanner.scan_and_ingest(
+                        max_results=20,
+                        humanize=settings.humanizer_enabled,
+                        target_platform=platform,
                     )
-                    await self._notify_slack_grok_harvest(ingested, result.get("details", []))
+                    ingested = result.get("ingested", 0)
+                    total_ingested += ingested
+                    all_details.extend(result.get("details", []))
+
+                if total_ingested > 0:
+                    logger.info(
+                        "📧 Gmail scan: %d Grok post(s) harvested across %d platform(s)",
+                        total_ingested, len(self.TARGET_PLATFORMS),
+                    )
+                    await self._notify_slack_grok_harvest(total_ingested, all_details)
 
             except Exception as e:
                 logger.error("❌ Gmail scan loop error: %s", e)
@@ -286,6 +307,8 @@ class SocialScheduler:
         """
         Periodically ask Grok to generate a timely, news-aware social post.
         Grok has live web access, so posts reference current events.
+
+        Multi-platform: generates variants for X, Instagram, and Facebook.
         """
         await asyncio.sleep(300)  # Wait 5 min before first run
         interval = settings.grok_news_interval_hours * 3600
@@ -299,7 +322,6 @@ class SocialScheduler:
 
                 from social.grok_client import GrokClient
                 from social.humanizer import ContentHumanizer
-                from social.models import Platform
 
                 grok = GrokClient()
                 humanizer = ContentHumanizer()
@@ -309,25 +331,43 @@ class SocialScheduler:
                     await asyncio.sleep(interval)
                     continue
 
-                # Generate a news-hook post for Twitter
-                post = await grok.generate_news_hook_post(platform=Platform.TWITTER)
+                # Generate news-hook posts for ALL target platforms
+                generated_count = 0
+                first_content = ""
 
-                if post:
+                for platform in self.TARGET_PLATFORMS:
+                    max_len = 280 if platform == Platform.TWITTER else None
+
+                    post = await grok.generate_news_hook_post(platform=platform)
+                    if not post:
+                        continue
+
                     # Humanize before queuing
                     if settings.humanizer_enabled:
                         post.content = await humanizer.humanize(
                             post.content,
-                            platform="twitter",
-                            max_length=280,
+                            platform=platform.value,
+                            max_length=max_len,
                         )
+
+                    # Auto-attach media
+                    try:
+                        post = await self.media.generate_media_for_post(post)
+                    except Exception as e:
+                        logger.warning("⚠️  Media gen failed for Grok news %s: %s", platform.value, e)
 
                     result = await self.queue.enqueue(post)
                     if result:
-                        logger.info(
-                            "🤖 Grok news post generated: %s",
-                            post.content[:80],
-                        )
-                        await self._notify_slack_grok_news(post.content)
+                        generated_count += 1
+                        if not first_content:
+                            first_content = post.content
+
+                if generated_count > 0:
+                    logger.info(
+                        "🤖 Grok news: %d post(s) generated across platforms: %s",
+                        generated_count, first_content[:80],
+                    )
+                    await self._notify_slack_grok_news(first_content)
 
             except Exception as e:
                 logger.error("❌ Grok news loop error: %s", e)

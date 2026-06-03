@@ -29,6 +29,9 @@ python-dotenv>=1.0.0
 # Data models
 pydantic>=2.5.0
 
+# YAML frontmatter parsing (blog posts)
+PyYAML>=6.0
+
 # Twitter/X posting
 tweepy>=4.14.0
 

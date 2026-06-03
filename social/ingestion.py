@@ -36,6 +36,7 @@ from social.models import (
 )
 from social.queue_manager import QueueManager
 from social.repurposer import ContentRepurposer
+from social.media_pipeline import MediaPipeline
 
 logger = logging.getLogger("social.ingestion")
 
@@ -47,6 +48,7 @@ class ContentIngester:
         self.db = db
         self.queue = QueueManager(db)
         self.repurposer = ContentRepurposer()
+        self.media = MediaPipeline(db)
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -112,6 +114,11 @@ class ContentIngester:
                     for variant in variants:
                         variant.source_id = slug
                         variant.source_title = title
+                        # Auto-generate media for this variant
+                        try:
+                            variant = await self.media.generate_media_for_post(variant)
+                        except Exception as e:
+                            logger.warning("⚠️  Media gen failed for %s/%s: %s", slug, variant.platform.value, e)
                         enqueued = await self.queue.enqueue(variant)
                         if enqueued:
                             result.posts_generated += 1
@@ -192,6 +199,11 @@ class ContentIngester:
                     week_key = datetime.now(timezone.utc).strftime("%Y-W%W")
                     variant.source_id = f"arrest_intel_{week_key}"
                     variant.source_title = f"Weekly Arrest Intelligence ({week_key})"
+                    # Auto-generate stat card media
+                    try:
+                        variant = await self.media.generate_media_for_post(variant)
+                    except Exception as e:
+                        logger.warning("⚠️  Media gen failed for arrest intel/%s: %s", platform_name, e)
                     enqueued = await self.queue.enqueue(variant)
                     if enqueued:
                         result.posts_generated += 1
