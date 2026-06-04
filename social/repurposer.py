@@ -15,7 +15,6 @@ Compliance: Bail industry disclaimers auto-appended where required.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Optional
 
@@ -67,46 +66,59 @@ HASHTAG GUIDELINES:
 
 PLATFORM_INSTRUCTIONS = {
     Platform.TWITTER: """
+ROLE: Sharp, punchy Florida bail bonds expert
+TONE: Urgent, direct, scroll-stopping
 FORMAT: Twitter/X
-- Single tweet: max 280 characters (STRICT — count carefully)
-- Thread: max 5 tweets, each max 280 chars, numbered (1/5, 2/5, etc.)
-- Use a hook in the first tweet (question, stat, or bold statement)
+- Single tweet: max 280 characters (STRICT — count every character including spaces and hashtags)
+- Thread: max 5 tweets, each max 280 chars, numbered (1/5, 2/5, etc.) — separate with ---TWEET---
+- Lead with a hook emoji in the first tweet
 - Thread format for educational content, single for quick tips
 - Add 2-3 hashtags at the end (they count toward character limit!)
-- Include a CTA in the last tweet (phone number or website)
-- Use line breaks for readability
+- Include a CTA in the last tweet: phone number (239) 332-2245 or website
 - No links in the first tweet (hurts engagement)
+VOICE: "We're the agency that picks up at 2AM."
+AUDIENCE: Attorneys, families in crisis, true crime followers
 """,
     Platform.LINKEDIN: """
+ROLE: Licensed Florida bail bond industry authority
+TONE: Professional, educational, thought-leadership
 FORMAT: LinkedIn
-- Max 3000 characters, but 1200-1500 is optimal
-- Professional, thought-leadership tone
-- Open with a hook (stat, question, or bold statement)
-- Use short paragraphs (2-3 sentences max)
-- Add line breaks between paragraphs
+- 1500-3000 characters. Paragraph structure. Cite statutes (Ch. 648, 903) where relevant.
+- Open with a bold hook (stat, question, or industry insight)
+- Use short paragraphs (2-3 sentences max), line breaks between each
 - Include 3-5 hashtags at the bottom
 - End with a call-to-action
 - Use emojis sparingly (1-2 per post, professional ones only)
+VOICE: "Industry insight from a licensed Florida bail bond agency."
+AUDIENCE: Attorneys, insurance professionals, surety companies, lawmakers
 """,
     Platform.FACEBOOK: """
+ROLE: Local community business, trusted neighbor
+TONE: Conversational, informative, community-oriented
 FORMAT: Facebook Page Post
 - 300-500 characters is optimal for engagement
 - Open with a question or empathetic statement
 - Conversational, warm tone — like talking to a worried family member
-- Include a link to the full blog post
+- Include a link to the full blog post if available
 - 2-3 hashtags maximum
-- End with a CTA (call us, visit website)
+- End with a question to drive engagement or a CTA (call us, visit website)
 - Use emojis moderately
+VOICE: "Your Fort Myers bail bond neighbor since 2012."
+AUDIENCE: Local community, families, referral network
 """,
     Platform.INSTAGRAM: """
+ROLE: Community-facing, empathetic, visual-first
+TONE: Warm, supportive, informative but accessible
 FORMAT: Instagram Caption
 - Max 2200 characters for caption
-- Open with a strong hook (first line shows in preview)
+- Open with a strong hook (first line shows in preview — make it count)
 - Use line breaks for readability
-- Include 20-30 hashtags (mix of broad and niche)
-- Separate hashtags from main content with a line of dots (. . . . .)
+- Include 15-20 hashtags (mix of broad and niche) — separate from content with: . . . . .
 - For carousel posts: suggest 5 slide headlines
-- End with a CTA
+- End with a CTA: phone (239) 332-2245 or website
+- Emoji-rich but not excessive
+VOICE: "We help families navigate the hardest day of their lives."
+AUDIENCE: General public, families, community
 """,
 }
 
@@ -354,7 +366,7 @@ For Twitter threads, separate each tweet with "---TWEET---" markers."""
                 thread_parts=thread_parts,
                 hashtags=hashtags,
                 link_url=blog_url,
-                cta=f"📞 (239) 552-1349 | 🌐 shamrockbailbonds.biz",
+                cta="📞 (239) 552-1349 | 🌐 shamrockbailbonds.biz",
                 variant=variant,
                 tone=tone,
                 tone_confidence=0.9,

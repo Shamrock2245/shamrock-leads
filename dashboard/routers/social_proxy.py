@@ -98,8 +98,8 @@ async def social_health():
 async def postiz_health():
     """Check if Postiz is reachable and authenticated."""
     try:
-        from social.platforms.postiz import get_postiz_client
-        client = get_postiz_client()
+        from social.postiz_client import get_public_postiz_client
+        client = get_public_postiz_client()
         health = await client.health_check()
         return JSONResponse(health)
     except Exception as e:
@@ -110,8 +110,8 @@ async def postiz_health():
 async def postiz_integrations():
     """List all connected Postiz social channels."""
     try:
-        from social.platforms.postiz import get_postiz_client
-        client = get_postiz_client()
+        from social.postiz_client import get_public_postiz_client
+        client = get_public_postiz_client()
         connected = await client.get_all_connected_platforms()
         integrations = await client.list_integrations()
         return JSONResponse({
@@ -120,6 +120,24 @@ async def postiz_integrations():
             "integrations": integrations,
             "count": len(integrations),
         })
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@router.get("/postiz/posts")
+async def postiz_posts(
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+):
+    """Get posts history and status from Postiz."""
+    try:
+        from social.postiz_client import get_public_postiz_client
+        from datetime import datetime
+        client = get_public_postiz_client()
+        s_date = datetime.fromisoformat(start_date) if start_date else None
+        e_date = datetime.fromisoformat(end_date) if end_date else None
+        posts = await client.get_posts(start_date=s_date, end_date=e_date)
+        return JSONResponse({"success": True, "posts": posts})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 

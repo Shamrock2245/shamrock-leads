@@ -5,13 +5,14 @@
  * Communicates via /api/social/* proxy (dashboard auth).
  *
  * Features:
- *  - OAuth 2.0 "Connect with..." for Google/GBP/YouTube, X, LinkedIn, Meta
+ *  - Postiz-based platform status (no dashboard-level OAuth)
  *  - Content queue with approve/reject/edit flow
  *  - Grok-powered content generation (news-aware)
  *  - Gmail Grok post harvesting
  *  - Humanizer scoring + rewriting
- *  - Platform status indicators with connect/disconnect buttons
+ *  - Platform status indicators (from Postiz integrations)
  *  - Real-time queue stats
+ *  - Postiz Posts History panel
  */
 
 const SLSocial = (() => {
@@ -20,31 +21,13 @@ const SLSocial = (() => {
   // ── State ──────────────────────────────────────────────────────────────
   let _posts = [];
   let _stats = {};
-  let _platforms = {};
-  let _oauthAccounts = [];
+  let _postizPlatforms = {};   // from /api/social/postiz/integrations
+  let _postizHistory = [];     // from /api/social/postiz/posts
   let _filter = 'all';
   let _platformFilter = '';
   let _loaded = false;
 
   const API = '/api/social';
-
-  // Maps visual platform → OAuth provider name
-  const PLATFORM_OAUTH_MAP = {
-    twitter:   'twitter',
-    linkedin:  'linkedin',
-    facebook:  'meta',
-    instagram: 'meta',
-    gbp:       'google',
-    youtube:   'google',
-  };
-
-  // Branded button configs
-  const CONNECT_BRANDS = {
-    google:   { label: 'Sign in with Google',          bg: '#fff',    color: '#3c4043', border: '#dadce0', icon: '🔵' },
-    twitter:  { label: 'Connect X Account',            bg: '#000',    color: '#fff',    border: '#000',    icon: '𝕏' },
-    linkedin: { label: 'Connect with LinkedIn',        bg: '#0A66C2', color: '#fff',    border: '#0A66C2', icon: '💼' },
-    meta:     { label: 'Connect Facebook & Instagram', bg: '#1877F2', color: '#fff',    border: '#1877F2', icon: 'f' },
-  };
 
   // ── Helpers ────────────────────────────────────────────────────────────
   async function _fetch(path, opts = {}) {
@@ -119,32 +102,10 @@ const SLSocial = (() => {
     return el.innerHTML;
   }
 
-  // ── OAuth Helpers ─────────────────────────────────────────────────────
-  function _getConnectedAccount(platformKey) {
-    return _oauthAccounts.find(acct => {
-      if (acct.status !== 'active') return false;
-      if (acct.platform === platformKey) return true;
-      if (acct.sub_platforms && acct.sub_platforms.includes(platformKey)) return true;
-      return false;
-    });
-  }
-
-  function _getAllConnectedAccounts(platformKey) {
-    return _oauthAccounts.filter(acct => {
-      if (acct.status !== 'active') return false;
-      if (acct.platform === platformKey) return true;
-      if (acct.sub_platforms && acct.sub_platforms.includes(platformKey)) return true;
-      return false;
-    });
-  }
-
   // ── Load ───────────────────────────────────────────────────────────────
   async function load() {
-    if (!_loaded) {
-      _loaded = true;
-      _listenForOAuthCallback();
-    }
-    await Promise.all([loadQueue(), loadStats(), loadPlatforms(), loadOAuthStatus()]);
+    _loaded = true;
+    await Promise.all([loadQueue(), loadStats(), loadPostizStatus()]);
   }
 
   async function loadQueue() {
@@ -167,59 +128,27 @@ const SLSocial = (() => {
     renderKPIs();
   }
 
-  async function loadPlatforms() {
-    const data = await _fetch('/platforms');
-    _platforms = data?.platforms || data || {};
-  }
-
-  async function loadOAuthStatus() {
+  async function loadPostizStatus() {
     try {
-      const data = await _fetch('/oauth/status');
-      _oauthAccounts = data?.accounts || [];
+      const data = await _fetch('/postiz/integrations');
+      _postizPlatforms = data?.platforms || {};
     } catch (e) {
-      console.warn('[SLSocial] OAuth status fetch failed:', e);
-      _oauthAccounts = [];
+      console.warn('[SLSocial] Postiz integrations fetch failed:', e);
+      _postizPlatforms = {};
     }
     renderPlatformStatus();
   }
 
-  // ── OAuth: Connect / Disconnect ───────────────────────────────────────
-  function connectPlatform(provider) {
-    const url = `${API}/oauth/${provider}/login`;
-    const w = 600, h = 700;
-    const left = (screen.width - w) / 2;
-    const top = (screen.height - h) / 2;
-    window.open(url, `shamrock_oauth_${provider}`,
-      `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`
-    );
-  }
-
-  async function disconnectPlatform(provider, accountId) {
-    if (!confirm(`Disconnect this ${provider} account?`)) return;
-    const data = await _fetch(`/oauth/${provider}/disconnect`, {
-      method: 'POST',
-      body: JSON.stringify({ account_id: accountId }),
-    });
-    if (data.success !== false) {
-      SL.toast(`${provider} disconnected`, 'info');
-      await loadOAuthStatus();
-    } else {
-      SL.toast(data.error || 'Disconnect failed', 'error');
+  async function loadPostizHistory() {
+    const el = document.getElementById('socPostizHistoryBody');
+    if (el) el.innerHTML = '<div class="soc-empty"><div class="soc-empty-icon">⏳</div><div class="soc-empty-title">Loading…</div></div>';
+    try {
+      const data = await _fetch('/postiz/posts');
+      _postizHistory = data?.posts || [];
+    } catch (e) {
+      _postizHistory = [];
     }
-  }
-
-  function _listenForOAuthCallback() {
-    window.addEventListener('message', (event) => {
-      if (event.data?.type === 'shamrock_oauth_callback') {
-        const { success, provider, display_name, error } = event.data;
-        if (success) {
-          SL.toast(`Connected to ${_platformLabel(provider) || provider}! (${display_name})`, 'success');
-        } else {
-          SL.toast(`Connection failed: ${error || 'Unknown error'}`, 'error');
-        }
-        loadOAuthStatus();
-      }
-    });
+    renderPostizHistory();
   }
 
   // ── Render: KPI Strip ──────────────────────────────────────────────────
@@ -236,63 +165,34 @@ const SLSocial = (() => {
     el('socKpiHumanizerScore', _stats.avg_humanizer_score ? Math.round(_stats.avg_humanizer_score) : '—');
   }
 
-  // ── Render: Platform Status ────────────────────────────────────────────
+  // ── Render: Platform Status (Postiz-driven) ────────────────────────────
   function renderPlatformStatus() {
     const container = document.getElementById('socPlatformGrid');
     if (!container) return;
 
     const platforms = [
       'twitter', 'linkedin', 'facebook', 'instagram',
-      'gbp', 'youtube', 'threads', 'telegram',
+      'threads', 'tiktok', 'telegram', 'youtube',
     ];
 
     container.innerHTML = platforms.map(p => {
-      const oauthProvider = PLATFORM_OAUTH_MAP[p];
-      const connectedAccounts = _getAllConnectedAccounts(p);
-      const isConnected = connectedAccounts.length > 0;
-      const firstAcct = connectedAccounts[0];
+      const info = _postizPlatforms[p];
+      const isConnected = !!info;
 
-      // Profile picture
       let avatarHtml = '';
-      if (isConnected && firstAcct?.profile_picture) {
-        avatarHtml = `<img src="${firstAcct.profile_picture}" class="soc-platform-avatar" alt="">`;
+      if (isConnected && info.picture) {
+        avatarHtml = `<img src="${_escHtml(info.picture)}" class="soc-platform-avatar" alt="">`;
       }
 
-      // Connection status and account names
       let statusHtml;
-      let accountsHtml = '';
       if (isConnected) {
         statusHtml = `<div class="soc-platform-status"><span class="soc-conn-dot green"></span> Connected</div>`;
-        accountsHtml = connectedAccounts.map(a =>
-          `<div class="soc-acct-row">
-            <span class="soc-acct-name">${_escHtml(a.display_name)}</span>
-            <button class="soc-disconnect-btn" title="Disconnect" onclick="event.stopPropagation();SLSocial.disconnectPlatform('${a.platform}','${a.account_id}')">✕</button>
-          </div>`
-        ).join('');
-      } else {
-        statusHtml = `<div class="soc-platform-status">⚪ Not connected</div>`;
-      }
-
-      // Connect button
-      let connectBtnHtml = '';
-      if (oauthProvider) {
-        const brand = CONNECT_BRANDS[oauthProvider];
-        if (!isConnected && brand) {
-          connectBtnHtml = `
-            <button class="soc-oauth-btn"
-                    style="background:${brand.bg};color:${brand.color};border-color:${brand.border}"
-                    onclick="event.stopPropagation();SLSocial.connectPlatform('${oauthProvider}')">
-              ${brand.icon} ${brand.label}
-            </button>`;
-        } else if (isConnected && (p === 'gbp' || p === 'youtube')) {
-          // GBP/YouTube allow adding additional accounts
-          connectBtnHtml = `
-            <button class="soc-oauth-add-btn"
-                    onclick="event.stopPropagation();SLSocial.connectPlatform('${oauthProvider}')"
-                    title="Add another account">
-              + Add Account
-            </button>`;
+        if (info.name) {
+          statusHtml += `<div class="soc-acct-row"><span class="soc-acct-name">${_escHtml(info.name)}</span></div>`;
         }
+      } else {
+        statusHtml = `<div class="soc-platform-status">⚪ Not connected</div>
+          <div style="font-size:9px;color:var(--muted);margin-top:4px">Connect via Postiz</div>`;
       }
 
       return `
@@ -301,8 +201,6 @@ const SLSocial = (() => {
           <div class="soc-platform-name">${_platformLabel(p)}</div>
           ${avatarHtml}
           ${statusHtml}
-          ${accountsHtml}
-          ${connectBtnHtml}
         </div>`;
     }).join('');
   }
@@ -358,6 +256,47 @@ const SLSocial = (() => {
               <button class="soc-btn soc-btn-publish" onclick="SLSocial.publish('${id}')">🚀 Publish Now</button>
             ` : ''}
           </div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── Render: Postiz History ─────────────────────────────────────────────
+  function renderPostizHistory() {
+    const body = document.getElementById('socPostizHistoryBody');
+    if (!body) return;
+
+    if (!_postizHistory.length) {
+      body.innerHTML = `
+        <div class="soc-empty">
+          <div class="soc-empty-icon">📭</div>
+          <div class="soc-empty-title">No posts found</div>
+          <div class="soc-empty-sub">Posts published via Postiz will appear here.</div>
+        </div>`;
+      return;
+    }
+
+    body.innerHTML = _postizHistory.map(post => {
+      const id = post.id || '';
+      const content = _escHtml(_truncate(post.content || post.value?.[0]?.content || '', 160));
+      const provider = (post.integration?.providerIdentifier || post.provider || '').toLowerCase();
+      const status = (post.state || post.status || 'unknown').toLowerCase();
+      const created = _ago(post.createdAt || post.created_at);
+
+      const statusColor = {
+        published: '#10b981', scheduled: '#3b82f6', draft: '#f59e0b',
+        error: '#ef4444', failed: '#ef4444',
+      }[status] || '#94a3b8';
+
+      return `
+        <div class="soc-post-card" data-id="${id}">
+          <div class="soc-post-header">
+            <div class="soc-post-meta">
+              <span class="soc-platform-pill">${_platformIcon(provider)} ${_platformLabel(provider)}</span>
+              <span class="soc-badge" style="background:${statusColor}22;color:${statusColor}">${status}</span>
+            </div>
+            <span class="soc-post-time">${created}</span>
+          </div>
+          <div class="soc-post-content">${content}</div>
         </div>`;
     }).join('');
   }
@@ -604,17 +543,18 @@ const SLSocial = (() => {
     const postiz = await _fetch('/postiz/health');
     const pel = document.getElementById('socPostizStatus');
     if (pel) {
-      if (postiz.connected) {
-        pel.innerHTML = `<span class="soc-conn-dot green"></span> Postiz: ${postiz.user || 'Connected'}`;
+      if (postiz.connected || postiz.status === 'healthy') {
+        const count = postiz.integrations_count != null ? ` · ${postiz.integrations_count} channels` : '';
+        pel.innerHTML = `<span class="soc-conn-dot green"></span> Postiz Connected${count}`;
       } else {
-        pel.innerHTML = '<span class="soc-conn-dot amber"></span> Postiz: Not connected';
+        pel.innerHTML = `<span class="soc-conn-dot amber"></span> Postiz: ${postiz.error || 'Not connected'}`;
       }
     }
   }
 
   // ── Public ─────────────────────────────────────────────────────────────
   return {
-    load, loadQueue, loadStats, loadOAuthStatus,
+    load, loadQueue, loadStats, loadPostizStatus, loadPostizHistory,
     approve, reject, publish, humanize,
     openEdit, saveEdit, closeEdit,
     grokGenerate, grokNews, grokImage,
@@ -623,6 +563,5 @@ const SLSocial = (() => {
     setFilter, setPlatformFilter,
     openManualModal, closeManualModal, submitManual,
     checkHealth,
-    connectPlatform, disconnectPlatform,
   };
 })();

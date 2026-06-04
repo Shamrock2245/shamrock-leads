@@ -3968,11 +3968,7 @@
 .soc-platform-status{font-size:10px;color:var(--text-secondary)}
 .soc-platform-last{font-size:10px;color:var(--muted);margin-top:2px}
 
-/* OAuth connection buttons */
-.soc-oauth-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;border:1.5px solid;font-size:11px;font-weight:700;cursor:pointer;transition:all .2s ease;margin-top:8px;width:100%;justify-content:center;letter-spacing:.02em}
-.soc-oauth-btn:hover{transform:translateY(-1px);box-shadow:0 4px 16px rgba(0,0,0,.15);filter:brightness(1.05)}
-.soc-oauth-add-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;border:1px dashed var(--border);background:transparent;color:var(--text-secondary);font-size:10px;font-weight:600;cursor:pointer;transition:all .2s;margin-top:6px;width:100%;justify-content:center}
-.soc-oauth-add-btn:hover{border-color:var(--accent);color:var(--accent);background:rgba(16,185,129,.05)}
+/* Postiz connection info */
 .soc-disconnect-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:4px;transition:all .15s;opacity:.5;line-height:1}
 .soc-disconnect-btn:hover{opacity:1;color:#ef4444;background:rgba(239,68,68,.1)}
 .soc-acct-row{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:3px 4px;margin-top:3px;border-radius:6px;transition:background .15s}
@@ -4109,7 +4105,7 @@
 
   <!-- ═══ Platform Status ═══ -->
   <div class="soc-platforms-section">
-    <div class="soc-platforms-label">Platform Status</div>
+    <div class="soc-platforms-label">Platform Status — via Postiz</div>
     <div class="soc-platform-grid" id="socPlatformGrid">
       <div class="soc-platform-card disabled"><div class="soc-platform-icon">𝕏</div><div class="soc-platform-name">Twitter</div><div class="soc-platform-status">⚪ Loading…</div></div>
       <div class="soc-platform-card disabled"><div class="soc-platform-icon">in</div><div class="soc-platform-name">LinkedIn</div><div class="soc-platform-status">⚪ Loading…</div></div>
@@ -4227,6 +4223,20 @@
         </div>
       </div>
 
+      <!-- Postiz History -->
+      <div class="soc-panel">
+        <div class="soc-panel-head">
+          <span class="soc-panel-title">📡 Postiz Post History</span>
+          <button class="soc-btn" style="font-size:10px;padding:4px 10px" onclick="SLSocial.loadPostizHistory()">🔄 Load</button>
+        </div>
+        <div id="socPostizHistoryBody" style="max-height:320px;overflow-y:auto">
+          <div class="soc-empty" style="padding:30px 20px">
+            <div class="soc-empty-icon">📡</div>
+            <div class="soc-empty-title" style="font-size:12px">Click Load to fetch Postiz history</div>
+          </div>
+        </div>
+      </div>
+
       <!-- Quick Actions -->
       <div class="soc-panel">
         <div class="soc-panel-head">
@@ -4234,7 +4244,10 @@
         </div>
         <div class="soc-panel-body" style="display:flex;flex-direction:column;gap:8px">
           <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.checkHealth()">
-            🔌 Check Engine Health
+            🔌 Check Postiz Health
+          </button>
+          <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.loadPostizStatus()">
+            🔄 Refresh Platforms
           </button>
           <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.load()">
             🔄 Refresh Everything
