@@ -401,50 +401,6 @@ async def _run_overdue_tasks():
     if flagged > 0:
         logger.warning("[Tasks] Flagged %d tasks as overdue", flagged)
 
-async def _run_oauth_token_refresh():
-    """Refresh OAuth tokens that are about to expire (within 60 minutes)."""
-    from dashboard.services.social_accounts_service import (
-        get_expiring_tokens, update_tokens, mark_expired,
-    )
-    from dashboard.services.oauth_providers import get_provider
-    from datetime import datetime, timezone, timedelta
-
-    expiring = await get_expiring_tokens(within_minutes=60)
-    if not expiring:
-        return
-
-    refreshed, failed = 0, 0
-    for acct in expiring:
-        platform = acct.get("platform", "")
-        account_id = acct.get("account_id", "")
-        refresh_tok = acct.get("refresh_token", "")
-        if not refresh_tok:
-            continue
-        try:
-            provider = get_provider(platform)
-            result = await provider.refresh_access_token(refresh_tok)
-            if result.success:
-                expires_at = None
-                if result.expires_in:
-                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=result.expires_in)
-                await update_tokens(
-                    platform=platform,
-                    account_id=account_id,
-                    access_token=result.access_token,
-                    refresh_token=result.refresh_token or refresh_tok,
-                    token_expires_at=expires_at,
-                )
-                refreshed += 1
-            else:
-                logger.warning("[OAuthRefresh] Failed for %s/%s: %s", platform, account_id, result.error)
-                await mark_expired(platform, account_id)
-                failed += 1
-        except Exception as e:
-            logger.error("[OAuthRefresh] Error refreshing %s/%s: %s", platform, account_id, e)
-            failed += 1
-
-    if refreshed or failed:
-        logger.info("[OAuthRefresh] refreshed=%d failed=%d", refreshed, failed)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
@@ -474,7 +430,6 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
     CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
-    CronDef("oauth_token_refresh", "OAuthRefresh",       1800, 120, _run_oauth_token_refresh),
 ]
 
 
