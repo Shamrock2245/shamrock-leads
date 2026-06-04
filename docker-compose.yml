@@ -229,9 +229,9 @@ services:
       - social                            # Won't start by default
     environment:
       # ── Core URLs (behind Nginx reverse proxy) ──
-      MAIN_URL: "${POSTIZ_MAIN_URL:-http://178.156.179.237:5200}"
-      FRONTEND_URL: "${POSTIZ_MAIN_URL:-http://178.156.179.237:5200}"
-      NEXT_PUBLIC_BACKEND_URL: "${POSTIZ_MAIN_URL:-http://178.156.179.237:5200}/api"
+      MAIN_URL: "${POSTIZ_MAIN_URL:-https://social.shamrockbailbonds.biz}"
+      FRONTEND_URL: "${POSTIZ_MAIN_URL:-https://social.shamrockbailbonds.biz}"
+      NEXT_PUBLIC_BACKEND_URL: "${POSTIZ_MAIN_URL:-https://social.shamrockbailbonds.biz}/api"
       BACKEND_INTERNAL_URL: "http://localhost:3000"
       # ── Auth ──
       JWT_SECRET: "${POSTIZ_JWT_SECRET:-shamrock-postiz-jwt-secret-change-me}"
