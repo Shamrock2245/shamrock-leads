@@ -242,6 +242,7 @@ services:
       TEMPORAL_ADDRESS: "temporal:7233"
       # ── Self-hosting config ──
       IS_GENERAL: "true"
+      NOT_SECURED: "true"
       STORAGE_PROVIDER: "local"
       UPLOAD_DIRECTORY: "/uploads"
       NEXT_PUBLIC_UPLOAD_DIRECTORY: "/uploads"

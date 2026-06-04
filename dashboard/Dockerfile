@@ -32,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:5050/health || exit 1
 
 # Launch FastAPI app via Uvicorn ASGI server (workers=1 is required for in-process asyncio.Event triggers)
-CMD ["uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "5050", "--access-log", "--log-level", "info", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "dashboard.main:app", "--host", "0.0.0.0", "--port", "5050", "--access-log", "--log-level", "info", "--workers", "1"]
