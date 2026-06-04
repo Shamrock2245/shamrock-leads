@@ -263,6 +263,8 @@ services:
       FACEBOOK_APP_SECRET: "${META_APP_SECRET:-}"
       INSTAGRAM_APP_ID: "${META_APP_ID:-}"
       INSTAGRAM_APP_SECRET: "${META_APP_SECRET:-}"
+      TIKTOK_CLIENT_ID: "${TIKTOK_CLIENT_ID:-}"
+      TIKTOK_CLIENT_SECRET: "${TIKTOK_CLIENT_SECRET:-}"
     ports:
       - "5200:5000"                       # Postiz UI + API (external 5200)
     volumes:
