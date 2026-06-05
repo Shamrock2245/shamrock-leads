@@ -108,23 +108,30 @@ class PostizPublicClient:
         """
         Get status of all connected platforms mapped to internal names.
         Returns: {platform_name: {id, name, picture, connected: True, provider}}
+        
+        The Postiz Public API returns `identifier` (e.g. "x", "facebook", "instagram").
+        We map these to our internal names (e.g. "x" -> "twitter", "gmb" -> "gbp").
         """
         integrations = await self.list_integrations()
         result = {}
-        # Build reverse map
+        # Build reverse map: postiz identifier -> our internal name
         provider_to_platform = {v: k for k, v in PLATFORM_TO_POSTIZ_PROVIDER.items()}
+        # Also add direct mappings for identifiers that match (e.g. "facebook" -> "facebook")
+        provider_to_platform["gmb"] = "gbp"  # Postiz uses "gmb", we use "gbp"
         for integration in integrations:
-            provider = (
-                integration.get("providerIdentifier", "")
+            # Postiz Public API v1 returns "identifier" not "providerIdentifier"
+            identifier = (
+                integration.get("identifier", "")
+                or integration.get("providerIdentifier", "")
                 or integration.get("provider", "")
             ).lower()
-            platform_name = provider_to_platform.get(provider, provider)
+            platform_name = provider_to_platform.get(identifier, identifier)
             result[platform_name] = {
                 "id": integration.get("id", ""),
                 "name": integration.get("name", ""),
                 "picture": integration.get("picture", ""),
                 "connected": True,
-                "provider": provider,
+                "provider": identifier,
             }
         return result
 
