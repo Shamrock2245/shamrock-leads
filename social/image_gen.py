@@ -145,7 +145,7 @@ class ImageGenerator:
                 [(0, footer_y - 10), (width, height)],
                 fill=SHAMROCK_GREEN,
             )
-            brand_text = "☘️ SHAMROCK BAIL BONDS  •  (239) 552-1349  •  shamrockbailbonds.biz"
+            brand_text = "☘️ SHAMROCK BAIL BONDS  •  (239) 332-2245  •  shamrockbailbonds.biz"
             # Center the brand text
             bbox = draw.textbbox((0, 0), brand_text, font=brand_font)
             text_width = bbox[2] - bbox[0]
@@ -264,7 +264,7 @@ class ImageGenerator:
                 [(0, footer_y), (width, height)],
                 fill=SHAMROCK_GREEN,
             )
-            brand = "☘️ SHAMROCK BAIL BONDS  •  (239) 552-1349"
+            brand = "☘️ SHAMROCK BAIL BONDS  •  (239) 332-2245"
             try:
                 brand_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
             except OSError:

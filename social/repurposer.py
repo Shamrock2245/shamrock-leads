@@ -39,7 +39,7 @@ BRAND IDENTITY:
 - Company: Shamrock Bail Bonds
 - Tagline: "The Uber of Bail Bonds — Fast. Frictionless. Everywhere."
 - Location: 1528 Broadway, Ft. Myers, FL 33901
-- Phone: (239) 552-1349
+- Phone: (239) 332-2245
 - Website: shamrockbailbonds.biz
 - Tone: Professional yet empathetic. Modern, tech-savvy. Never sleazy or aggressive.
 - Counties served: Lee, Charlotte, Collier, DeSoto, Hendry, Manatee, Sarasota
@@ -366,7 +366,7 @@ For Twitter threads, separate each tweet with "---TWEET---" markers."""
                 thread_parts=thread_parts,
                 hashtags=hashtags,
                 link_url=blog_url,
-                cta="📞 (239) 552-1349 | 🌐 shamrockbailbonds.biz",
+                cta="📞 (239) 332-2245 | 🌐 shamrockbailbonds.biz",
                 variant=variant,
                 tone=tone,
                 tone_confidence=0.9,
@@ -396,12 +396,12 @@ For Twitter threads, separate each tweet with "---TWEET---" markers."""
             Platform.LINKEDIN: (
                 f"📰 {title}\n\n{excerpt}\n\n"
                 f"Read the full article: {blog_url}\n\n"
-                f"📞 Shamrock Bail Bonds | (239) 552-1349\n\n{hashtag_str}"
+                f"📞 Shamrock Bail Bonds | (239) 332-2245\n\n{hashtag_str}"
             ),
             Platform.FACEBOOK: f"📰 {title}\n\n{excerpt}\n\n🔗 Read more: {blog_url}\n\n{hashtag_str}",
             Platform.INSTAGRAM: (
                 f"📰 {title}\n\n{excerpt}\n\n"
-                f"📞 Call (239) 552-1349 or visit shamrockbailbonds.biz\n\n"
+                f"📞 Call (239) 332-2245 or visit shamrockbailbonds.biz\n\n"
                 f". . . . .\n{hashtag_str} #FloridaBailBonds #SWFLBailBonds #BailBonds"
             ),
         }
@@ -427,7 +427,7 @@ For Twitter threads, separate each tweet with "---TWEET---" markers."""
             f"📊 {top['total']} arrests in {top['county']} County this week.\n\n"
             f"If your loved one was arrested, know your rights. "
             f"Shamrock Bail Bonds is available 24/7.\n\n"
-            f"📞 (239) 552-1349\n🌐 shamrockbailbonds.biz\n\n"
+            f"📞 (239) 332-2245\n🌐 shamrockbailbonds.biz\n\n"
             f"#FloridaBailBonds #BailBonds #{top['county'].replace(' ', '')}County"
         )
         return SocialPost(

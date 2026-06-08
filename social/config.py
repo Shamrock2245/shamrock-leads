@@ -74,7 +74,7 @@ class SocialEngineConfig:
     posting_timezone: str = "America/New_York"
     compliance_disclaimer: str = (
         "Shamrock Bail Bonds | Licensed & Insured | "
-        "1528 Broadway, Ft. Myers, FL 33901 | (239) 552-1349"
+        "1528 Broadway, Ft. Myers, FL 33901 | (239) 332-2245"
     )
 
     # Slack
