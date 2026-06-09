@@ -85,7 +85,7 @@ You are writing for Shamrock Bail Bonds — a Florida bail bond agency that's mo
 - Uses "we" and "you" naturally
 - Contractions are mandatory ("we're", "you'll", "it's" — not "we are", "you will", "it is")
 - Short sentences mixed with longer ones. Rhythm matters.
-- Specific details over vague reassurance ("Call us at (239) 332-2245 and we'll walk you through it" beats "Don't hesitate to reach out to our dedicated team of professionals")
+- Specific details over vague reassurance ("Call us at 239-332-BAIL and we'll walk you through it" beats "Don't hesitate to reach out to our dedicated team of professionals")
 - No fear-mongering, but honest about how stressful this situation is
 
 ## WHAT TO PRESERVE

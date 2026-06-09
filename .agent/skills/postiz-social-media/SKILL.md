@@ -152,10 +152,25 @@ python social/shamrock_poster.py --caption "Test" --dry-run
 
 ## Shamrock Branding Rules (Non-Negotiable)
 
+### Logo (Auto-Attached)
+- **URL:** `https://social.shamrockbailbonds.biz/uploads/2026/06/09/3e34676c610c1a7b297b8ed399b86a474.png`
+- **Local:** `social/assets/shamrock_logo_transparent.png`
+- **Behavior:** Every post automatically includes the logo as media attachment
+- **Override:** Use `--no-logo` flag to skip
+
 ### Phone Number
-- **Correct:** `(239) 332-2245`
-- **WRONG:** `(239) 552-1349` (this was a bug in `social/config.py` — now fixed)
-- Every post MUST include the correct phone number
+- **Correct (vanity):** `239-332-BAIL`
+- **Numeric equivalent:** `(239) 332-2245`
+- **WRONG:** `(239) 552-1349` (was hardcoded in 14 places — now fixed)
+- Every post MUST include `239-332-BAIL`
+
+### Content Footer
+Every post auto-appends:
+```
+🍀 Shamrock Bail Bonds
+📍 1528 Broadway, Ft. Myers, FL 33901
+📞 239-332-BAIL
+```
 
 ### Hashtag Strategy
 
@@ -170,13 +185,6 @@ python social/shamrock_poster.py --caption "Test" --dry-run
 
 **Core tags (always include):** `#ShamrockBailBonds` `#BailBonds` `#FloridaBail` `#FortMyers` `#SWFL` `#BailBondAgent`
 
-### Content Footer
-Every post should end with:
-```
-🍀 Shamrock Bail Bonds
-📞 (239) 332-2245
-```
-
 ### Video Workflow (End-to-End)
 
 1. **Local → VPS:** `scp video.mp4 root@178.156.179.237:/tmp/`
@@ -184,7 +192,7 @@ Every post should end with:
 3. **Create post:** `postiz posts:create -c "Content" -m "$path" -s "date" -i "ids"`
 4. **Cleanup:** `rm /tmp/video.mp4`
 
-Or use `shamrock_poster.py` which does all 4 steps automatically.
+Or use `shamrock_poster.py` which does all 4 steps automatically (including logo).
 
 ## File Map
 
@@ -192,7 +200,8 @@ Or use `shamrock_poster.py` which does all 4 steps automatically.
 |------|---------|
 | `social/config.py` | Engine configuration, platform limits, compliance disclaimer |
 | `social/postiz_client.py` | Async Python HTTP client for Postiz Public API v1 |
-| `social/shamrock_poster.py` | CLI posting tool with auto-hashtags and phone injection |
+| `social/shamrock_poster.py` | CLI posting tool with auto-logo, auto-hashtags, 239-332-BAIL |
+| `social/assets/shamrock_logo_transparent.png` | Transparent logo (528×510) for post attachments |
 | `social/scheduler.py` | APScheduler-based post scheduling |
 | `social/ingestion.py` | Content ingestion pipeline |
 | `social/humanizer.py` | AI detection avoidance (29 patterns) |

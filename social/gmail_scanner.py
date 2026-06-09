@@ -188,7 +188,7 @@ class GmailGrokScanner:
                         variant=ContentVariant.SINGLE,
                         tone=ContentTone.CASUAL,
                         tone_confidence=0.9,
-                        cta="📞 (239) 332-2245 | 🌐 shamrockbailbonds.biz",
+                        cta="📞 239-332-BAIL | 🌐 shamrockbailbonds.biz",
                         compliance_disclaimer=settings.compliance_disclaimer,
                         status=PostStatus.PENDING,
                     )

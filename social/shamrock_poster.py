@@ -30,8 +30,15 @@ from pathlib import Path
 # CONFIG
 # ═══════════════════════════════════════════════════════
 VPS_HOST = "root@178.156.179.237"
-SHAMROCK_PHONE = "(239) 332-2245"
-SHAMROCK_PHONE_LINE = f"\n\n🍀 Shamrock Bail Bonds\n📞 {SHAMROCK_PHONE}"
+SHAMROCK_PHONE = "239-332-BAIL"
+SHAMROCK_FOOTER = (
+    "\n\n🍀 Shamrock Bail Bonds\n"
+    "📍 1528 Broadway, Ft. Myers, FL 33901\n"
+    "📞 239-332-BAIL"
+)
+
+# Permanent Postiz-hosted logo (transparent background)
+SHAMROCK_LOGO_URL = "https://social.shamrockbailbonds.biz/uploads/2026/06/09/3e34676c610c1a7b297b8ed399b86a474.png"
 
 # Integration IDs (from Postiz)
 INTEGRATIONS = {
@@ -121,7 +128,7 @@ def fix_phone_number(content: str) -> str:
 
 
 def has_phone(content: str) -> bool:
-    return SHAMROCK_PHONE in content or "239-332-2245" in content
+    return SHAMROCK_PHONE in content or "239-332-2245" in content or "332-BAIL" in content
 
 
 def auto_hashtags(content: str, platform: str = "x", extra_tags: list = None) -> str:
@@ -177,7 +184,7 @@ def auto_hashtags(content: str, platform: str = "x", extra_tags: list = None) ->
 def enhance_content(content: str, platform: str, add_phone: bool, add_hashtags: bool, extra_tags: list = None) -> str:
     content = fix_phone_number(content)
     if add_phone and not has_phone(content):
-        content = content.rstrip() + SHAMROCK_PHONE_LINE
+        content = content.rstrip() + SHAMROCK_FOOTER
     if add_hashtags:
         content = auto_hashtags(content, platform=platform, extra_tags=extra_tags)
     return content
@@ -232,14 +239,22 @@ def upload_media(local_path: str) -> str | None:
     return None
 
 
-def create_post_cli(content: str, integration_ids: str, schedule_iso: str, media_url: str = None) -> str:
+def create_post_cli(content: str, integration_ids: str, schedule_iso: str, media_url: str = None, include_logo: bool = True) -> str:
     """Create a post via Postiz CLI on the VPS."""
     # Escape content for shell
     escaped = content.replace("'", "'\\''")
 
     cmd = f"postiz posts:create -c '{escaped}' -s \"{schedule_iso}\" -i \"{integration_ids}\""
+
+    # Build media list: user media + logo
+    media_parts = []
     if media_url:
-        cmd += f' -m "{media_url}"'
+        media_parts.append(media_url)
+    if include_logo:
+        media_parts.append(SHAMROCK_LOGO_URL)
+
+    if media_parts:
+        cmd += f' -m "{";".join(media_parts)}"'
 
     return vps_cmd(cmd + " 2>&1")
 
@@ -254,6 +269,7 @@ def publish(
     add_hashtags: bool = True,
     extra_tags: list = None,
     dry_run: bool = False,
+    include_logo: bool = True,
 ):
     """Main publish function — handles everything."""
 
@@ -299,10 +315,12 @@ def publish(
         enhanced = enhance_content(caption, platform, add_phone, add_hashtags, extra_tags)
 
         if dry_run:
+            logo_note = "🖼️  Logo: ✅ attached" if include_logo else "🖼️  Logo: ❌ skipped"
             print(f"\n{'='*60}")
             print(f"[DRY RUN] Platform: {platform.upper()}")
             print(f"Integration: {integration_id}")
             print(f"Media: {media_file or 'None'}")
+            print(f"{logo_note}")
             print(f"Schedule: {schedule_str or '~5 min'}")
             print(f"Content:\n{enhanced}")
             print(f"{'='*60}")
@@ -310,7 +328,7 @@ def publish(
             continue
 
         log(f"📬 Posting to {platform.upper()}...")
-        result = create_post_cli(enhanced, integration_id, schedule_iso, media_url)
+        result = create_post_cli(enhanced, integration_id, schedule_iso, media_url, include_logo)
 
         if "error" in result.lower() or "failed" in result.lower():
             log(f"  → {platform}: {result[:150]}", "ERR")
@@ -350,6 +368,7 @@ Examples:
     parser.add_argument("--tags", "-t", nargs="+", help="Extra hashtags to include")
     parser.add_argument("--no-phone", action="store_true", help="Don't auto-add phone number")
     parser.add_argument("--no-hashtags", action="store_true", help="Don't auto-add hashtags")
+    parser.add_argument("--no-logo", action="store_true", help="Don't attach the Shamrock logo")
     parser.add_argument("--dry-run", "-d", action="store_true", help="Preview without posting")
 
     args = parser.parse_args()
@@ -367,6 +386,7 @@ Examples:
         add_hashtags=not args.no_hashtags,
         extra_tags=args.tags,
         dry_run=args.dry_run,
+        include_logo=not args.no_logo,
     )
 
 

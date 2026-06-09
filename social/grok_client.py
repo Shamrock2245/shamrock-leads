@@ -43,7 +43,7 @@ WHO YOU ARE:
 - You sound like a real person who works in bail bonds, not a marketing bot
 
 THE COMPANY:
-- Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901 | (239) 332-2245
+- Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901 | 239-332-BAIL
 - 24/7 availability, digital paperwork, AI-powered intake
 - Serves Lee, Charlotte, Collier, DeSoto, Hendry, Manatee, Sarasota counties
 - Website: shamrockbailbonds.biz
@@ -189,7 +189,7 @@ class GrokClient:
                 variant=variant,
                 tone=tone,
                 tone_confidence=0.95,
-                cta="📞 (239) 332-2245 | 🌐 shamrockbailbonds.biz",
+                cta="📞 239-332-BAIL | 🌐 shamrockbailbonds.biz",
                 compliance_disclaimer=settings.compliance_disclaimer,
                 status=PostStatus.PENDING,
             )
@@ -324,7 +324,7 @@ class GrokClient:
             f"'Shamrock Bail Bonds'. Shamrock green (#1B6B3A) and gold (#D4AF37) "
             f"color scheme on dark background. Headline text: '{headline}'. "
             f"Professional, premium feel. No clip art. Minimalist design with "
-            f"subtle shamrock/clover motif. Phone: (239) 332-2245."
+            f"subtle shamrock/clover motif. Phone: 239-332-BAIL."
         )
 
         size = "1200x675" if platform in (Platform.TWITTER, Platform.LINKEDIN) else "1080x1080"

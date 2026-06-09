@@ -247,7 +247,7 @@ class MediaPipeline:
         prompt += (
             f"The post is about: {content_snippet}... "
             f"Subtle shamrock/clover motif in corner. "
-            f"Phone: (239) 332-2245."
+            f"Phone: 239-332-BAIL."
         )
 
         return prompt
