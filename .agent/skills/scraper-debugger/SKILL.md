@@ -45,7 +45,7 @@ docker logs shamrock-leads --tail 200 | grep -E "❌|🚫|⚠️|AUTO-DISABLED"
 
 The BaseScraper now classifies every error:
 | Log Pattern | Error Type | Jump To |
-|------------|-----------|---------|
+|------------|-----------|---------| 
 | `AUTO-DISABLED` | 5+ consecutive failures | Phase 1A (Recovery) |
 | `[anti_bot]` | 403 / CAPTCHA | Phase 2B |
 | `[url_changed]` | 404 / redirect | Phase 2C |
@@ -54,6 +54,7 @@ The BaseScraper now classifies every error:
 | `[parse_error]` | HTML structure changed | Phase 2D |
 | `[response_format_changed]` | JSON/API schema changed | Phase 2F |
 | `[rate_limited]` | 429 Too Many Requests | Phase 2G |
+| `[Errno 28] No space left on device` | Disk full | Phase 2H |
 
 ### Step 0.3 — Check Failure History
 ```python
@@ -102,6 +103,7 @@ docker logs shamrock-leads --tail 100 | grep -A5 "❌"
 | `SSLError` | 🔒 Certificate | Phase 2E |
 | `JSONDecodeError` | 📄 Response Changed | Phase 2F |
 | `429 Too Many Requests` | ⏱️ Rate Limited | Phase 2G |
+| `[Errno 28]` / `No space left` | 💾 Disk Full | Phase 2H |
 
 ---
 
@@ -196,6 +198,30 @@ docker logs shamrock-leads --tail 100 | grep -A5 "❌"
 3. **Check `Retry-After` header** for server-suggested wait time
 4. **Consider off-peak scheduling** (scrape at 2-4 AM instead of peak hours)
 
+## Phase 2H: Disk Full (Errno 28)
+
+**Symptoms:** `[Errno 28] No space left on device`, multiple scrapers fail simultaneously
+
+**Root Cause:** Docker garbage accumulation — dangling images, build cache, browser profiles.
+
+1. **Check disk:** `df -h /`
+2. **Check Docker:** `docker system df`
+3. **Auto-fix (usually resolves it):**
+   ```bash
+   /usr/local/bin/shamrock-docker-prune.sh
+   ```
+4. **Manual escalation:**
+   ```bash
+   docker builder prune --all -f      # Build cache
+   docker image prune -a -f            # ALL unused images
+   docker volume prune -f              # Unused volumes
+   find /tmp/DrissionPage -mtime +0 -delete  # Browser profiles
+   journalctl --vacuum-size=100M       # Journal logs
+   ```
+5. **Self-heal note:** As of 2026-06-10, BaseScraper has a built-in disk guard (`_check_disk_space()`) that auto-prunes at 80% and blocks writes at 95%. A systemd timer (`shamrock-docker-prune.timer`) also runs daily at 4 AM UTC.
+
+**Key insight:** Every `docker compose build --no-cache` leaves ~3GB dangling images. With weekly deploys, disk fills in ~4 weeks without cleanup.
+
 ---
 
 ## Phase 3: Fix & Verify
@@ -241,6 +267,7 @@ After fixing, update:
 | Taylor | 2026-04 | Non-standard port :8443 | url_changed | Updated URL with port |
 | Dixie | 2026-04 | HTTP-only (HTTPS not supported) | ssl_error | Use HTTP |
 | Sumter | 2026-04 | Redirect to HTTPS required | url_changed | Follow redirect |
+| **9 counties** | **2026-06-10** | **Docker garbage filled 38GB disk to 80%** | **disk_full** | **Auto-prune system + BaseScraper disk guard + systemd timer** |
 
 *Add new entries as issues are resolved.*
 
@@ -250,6 +277,11 @@ After fixing, update:
 
 ```
 Scraper Error Detected
+    │
+    ├─ Is it a disk error? ([Errno 28] / "No space left")
+    │   └─ YES → BaseScraper auto-prunes at 80% → If still full, run:
+    │              /usr/local/bin/shamrock-docker-prune.sh
+    │              → If STILL full (>95%), escalate: manual cleanup needed
     │
     ├─ Is it auto-disabled? (5+ consecutive failures)
     │   ├─ YES → Check failure_history for pattern

@@ -14,6 +14,8 @@ The scheduler calls run() which handles:
 
 import logging
 import os
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -74,6 +76,11 @@ class BaseScraper(ABC):
     The run() method wraps scrape() with error handling, timing,
     lead scoring, writer integration, and Slack alerts.
     """
+
+    # Disk thresholds (percentage used)
+    DISK_WARN_THRESHOLD = 75
+    DISK_PRUNE_THRESHOLD = 80
+    DISK_BLOCK_THRESHOLD = 95
 
     def __init__(self):
         self.last_run: Optional[datetime] = None
@@ -193,6 +200,123 @@ class BaseScraper(ABC):
         except Exception:
             pass  # Non-critical — some pages may not support JS injection
 
+    @classmethod
+    def _check_disk_space(cls) -> dict:
+        """
+        Check disk space and auto-prune Docker if needed.
+
+        Returns:
+            dict with 'ok' (bool), 'percent_used', 'free_gb', 'action_taken'
+
+        Self-healing behavior:
+        - >75%: Log warning
+        - >80%: Auto-prune Docker (dangling images, build cache, old browser profiles)
+        - >95%: Block writes, raise error
+        """
+        try:
+            usage = shutil.disk_usage('/')
+            percent = (usage.used / usage.total) * 100
+            free_gb = usage.free / (1024 ** 3)
+            result = {
+                'ok': True,
+                'percent_used': round(percent, 1),
+                'free_gb': round(free_gb, 2),
+                'action_taken': None,
+            }
+
+            if percent >= cls.DISK_BLOCK_THRESHOLD:
+                # Critical — attempt emergency prune then check again
+                logger.critical(
+                    f"🚨 DISK CRITICAL: {percent:.0f}% used ({free_gb:.1f}GB free) — "
+                    f"attempting emergency prune"
+                )
+                cls._auto_prune_docker(aggressive=True)
+                # Re-check after prune
+                usage2 = shutil.disk_usage('/')
+                percent2 = (usage2.used / usage2.total) * 100
+                free_gb2 = usage2.free / (1024 ** 3)
+                if percent2 >= cls.DISK_BLOCK_THRESHOLD:
+                    result['ok'] = False
+                    result['percent_used'] = round(percent2, 1)
+                    result['free_gb'] = round(free_gb2, 2)
+                    result['action_taken'] = 'emergency_prune_failed'
+                    return result
+                result['percent_used'] = round(percent2, 1)
+                result['free_gb'] = round(free_gb2, 2)
+                result['action_taken'] = 'emergency_prune_success'
+
+            elif percent >= cls.DISK_PRUNE_THRESHOLD:
+                logger.warning(
+                    f"⚠️ DISK HIGH: {percent:.0f}% used ({free_gb:.1f}GB free) — "
+                    f"auto-pruning Docker"
+                )
+                cls._auto_prune_docker(aggressive=False)
+                # Re-check
+                usage2 = shutil.disk_usage('/')
+                result['percent_used'] = round((usage2.used / usage2.total) * 100, 1)
+                result['free_gb'] = round(usage2.free / (1024 ** 3), 2)
+                result['action_taken'] = 'auto_prune'
+
+            elif percent >= cls.DISK_WARN_THRESHOLD:
+                logger.info(
+                    f"📊 Disk: {percent:.0f}% used ({free_gb:.1f}GB free)"
+                )
+
+            return result
+        except Exception as e:
+            logger.debug(f"Disk check failed: {e}")
+            return {'ok': True, 'percent_used': 0, 'free_gb': 0, 'action_taken': None}
+
+    @classmethod
+    def _auto_prune_docker(cls, aggressive: bool = False):
+        """
+        Auto-prune Docker resources to free disk space.
+        Called automatically when disk usage exceeds thresholds.
+        """
+        try:
+            cmds = [
+                ['docker', 'image', 'prune', '-f'],  # Dangling images
+                ['docker', 'builder', 'prune', '-f', '--filter', 'until=72h'],  # Old build cache
+            ]
+            if aggressive:
+                cmds = [
+                    ['docker', 'builder', 'prune', '--all', '-f'],  # ALL build cache
+                    ['docker', 'image', 'prune', '-a', '-f', '--filter', 'until=24h'],  # All unused images
+                    ['docker', 'volume', 'prune', '-f'],  # Unused volumes
+                ]
+
+            for cmd in cmds:
+                try:
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, timeout=60
+                    )
+                    if 'reclaimed' in result.stdout.lower():
+                        logger.info(f"🧹 Prune: {result.stdout.strip().split(chr(10))[-1]}")
+                except subprocess.TimeoutExpired:
+                    pass
+                except FileNotFoundError:
+                    break  # Docker CLI not available (not running on Docker host)
+
+            # Clean stale browser profiles
+            drission_tmp = '/tmp/DrissionPage'
+            if os.path.isdir(drission_tmp):
+                import time
+                now = time.time()
+                cleaned = 0
+                for item in os.listdir(drission_tmp):
+                    item_path = os.path.join(drission_tmp, item)
+                    try:
+                        if os.stat(item_path).st_mtime < now - 3600:  # >1 hour old
+                            shutil.rmtree(item_path, ignore_errors=True)
+                            cleaned += 1
+                    except OSError:
+                        pass
+                if cleaned:
+                    logger.info(f"🧹 Cleaned {cleaned} stale DrissionPage profiles")
+
+        except Exception as e:
+            logger.debug(f"Auto-prune failed: {e}")
+
     @property
     @abstractmethod
     def county(self) -> str:
@@ -301,6 +425,25 @@ class BaseScraper(ABC):
         logger.info(f"{'═' * 50}")
         logger.info(f"🚦 Starting {self.county} County scraper (run #{self.total_runs})")
         logger.info(f"{'═' * 50}")
+
+        # ── Step 0: Disk space guard ──
+        disk = self._check_disk_space()
+        if not disk['ok']:
+            msg = (
+                f"Disk full: {disk['percent_used']}% used, {disk['free_gb']}GB free. "
+                f"Auto-prune failed. Skipping write to prevent data corruption."
+            )
+            logger.error(f"🚨 {self.county}: {msg}")
+            try:
+                _slack.notify_scraper_error(self.county, msg)
+            except Exception:
+                pass
+            return {
+                "county": self.county,
+                "records_scraped": 0,
+                "elapsed_seconds": 0,
+                "error": msg,
+            }
 
         try:
             # ── Step 1: Scrape ──
