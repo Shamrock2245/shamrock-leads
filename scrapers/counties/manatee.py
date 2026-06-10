@@ -129,13 +129,14 @@ class ManateeCountyScraper(BaseScraper):
                         Booking_Number=booking_num,
                         Full_Name=full_name,
                         First_Name=first_name,
+                        Middle_Name=middle,
                         Last_Name=last_name,
                         Arrest_Date=arrest_date,
                         Booking_Date=arrest_date,
                         Charges=charge,
                         Facility="Manatee County Jail",
-                        Custody_Status=custody,
-                        Source_URL=f"{BASE_URL}/bookings/{booking_num}",
+                        Status=custody,
+                        Detail_URL=f"{BASE_URL}/bookings/{booking_num}",
                     ))
 
                 logger.info(f"[Manatee] Page {pg}: +{new_count} records (total: {len(records)})")
