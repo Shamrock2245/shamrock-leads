@@ -24,11 +24,12 @@ xgboost>=2.0.0              # Optional — falls back to RandomForest if unavail
 # Slack notifications
 slack-sdk>=3.27.0
 
-# Scraper dependencies — Collier (curl_cffi), Charlotte (patchright+xvfb), Hendry (DrissionPage)
+# Scraper dependencies — DrissionPage (legacy), curl_cffi (TLS impersonation), Playwright (Obscura CDP)
 curl-cffi>=0.7.0
 beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
 patchright>=1.50.0  # Charlotte County — Cloudflare Turnstile bypass (also run: patchright install chromium)
+playwright>=1.48.0  # Obscura CDP connection for CF-protected counties (Charlotte, Manatee)
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.15.0

@@ -200,6 +200,75 @@ class BaseScraper(ABC):
         except Exception:
             pass  # Non-critical — some pages may not support JS injection
 
+    # ── Obscura CDP Connection ────────────────────────────────────────────
+    # Shared stealth browser for Cloudflare-protected counties.
+    # Connects to the Obscura container via Chrome DevTools Protocol.
+    # Usage:
+    #   pw, browser = await self._get_obscura_browser()
+    #   page = await browser.new_page()
+    #   await page.goto("https://target.com")
+    #   # ... scrape ...
+    #   await browser.close()
+    #   await pw.stop()
+
+    OBSCURA_CDP_URL = os.getenv("OBSCURA_CDP_URL", "ws://obscura:9222")
+
+    @classmethod
+    async def _get_obscura_browser(cls):
+        """
+        Connect to the Obscura CDP server via Playwright.
+
+        Returns:
+            tuple: (playwright_instance, browser) — caller must close both.
+
+        Raises:
+            ConnectionError: If Obscura container is unreachable.
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise ImportError(
+                "playwright not installed. Run: pip install playwright"
+            )
+
+        pw = await async_playwright().__aenter__()
+        try:
+            browser = await pw.chromium.connect_over_cdp(cls.OBSCURA_CDP_URL)
+            logger.info(f"✅ Connected to Obscura CDP at {cls.OBSCURA_CDP_URL}")
+            return pw, browser
+        except Exception as e:
+            await pw.__aexit__(None, None, None)
+            raise ConnectionError(
+                f"❌ Cannot connect to Obscura at {cls.OBSCURA_CDP_URL}: {e}"
+            ) from e
+
+    @classmethod
+    def _get_obscura_browser_sync(cls):
+        """
+        Synchronous wrapper for _get_obscura_browser().
+        For use in scrapers that don't use async/await.
+
+        Returns:
+            tuple: (playwright_instance, browser) — caller must close both.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            raise ImportError(
+                "playwright not installed. Run: pip install playwright"
+            )
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.connect_over_cdp(cls.OBSCURA_CDP_URL)
+            logger.info(f"✅ Connected to Obscura CDP at {cls.OBSCURA_CDP_URL}")
+            return pw, browser
+        except Exception as e:
+            pw.stop()
+            raise ConnectionError(
+                f"❌ Cannot connect to Obscura at {cls.OBSCURA_CDP_URL}: {e}"
+            ) from e
+
     @classmethod
     def _check_disk_space(cls) -> dict:
         """
