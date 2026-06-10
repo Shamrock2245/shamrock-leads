@@ -19,23 +19,22 @@ services:
   # Rust-based headless browser — 30MB RAM per page, built-in anti-detect
   # Drop-in replacement for headless Chrome via CDP (Playwright/Puppeteer)
   # Used by: Charlotte, Manatee, Sarasota (Cloudflare-protected counties)
-  # Start: docker compose up -d  (no profile — always on when scrapers need it)
+  #
+  # Proxy: To route through residential IPs for CF-protected sites, change command to:
+  #   command: ["serve", "--port", "9222", "--host", "0.0.0.0", "--stealth", "--proxy", "socks5://user:pass@host:port"]
   obscura:
     image: h4ckf0r0day/obscura:latest
     container_name: shamrock-obscura
     hostname: obscura
     restart: unless-stopped
-    command: serve --port 9222 --host 0.0.0.0 --stealth
+    command: ["serve", "--port", "9222", "--host", "0.0.0.0", "--stealth"]
     networks:
       - shamrock-net
     expose:
       - "9222"                            # CDP WebSocket (internal only, no external port)
+    # Note: distroless image has no shell/wget/curl — healthcheck via shamrock-leads container
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:9222/json/version", "||", "true"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
+      disable: true
     mem_limit: 512m                       # ~30MB per page × 10 concurrent + overhead
     cpus: 1.0
     security_opt:
@@ -56,6 +55,8 @@ services:
       - 1.1.1.1                         # Cloudflare DNS fallback
     env_file:
       - .env
+    depends_on:
+      - obscura                          # CDP browser must start before scrapers
     volumes:
       - ./creds:/app/creds:ro           # GCP service account key
       - ./logs:/app/logs                # Persistent logs
