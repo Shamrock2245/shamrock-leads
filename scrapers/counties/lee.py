@@ -37,18 +37,18 @@ BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
 
-DAYS_BACK = 90  # Extended: capture all in-custody inmates (some booked weeks/months ago)
+DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
-MAX_PAGES = 50
-MAX_ENRICH = 25                # Cap per run — spread across 30-min cycles
-DETAIL_DELAY_S = 3.0           # Base delay between charges API calls
-DETAIL_JITTER_S = 1.5          # Random jitter added to delay
-RETRY_LIMIT = 4                # Fewer retries, longer backoff
-BACKOFF_BASE_S = 2.0           # Much harder backoff on 429/503
+MAX_PAGES = 15                 # Reduced: 15 × 200 = 3000 records max (enough for 30 days)
+MAX_ENRICH = 10                # Reduced from 25 — fewer charges API calls per run
+DETAIL_DELAY_S = 4.0           # Increased from 3.0 — more breathing room
+DETAIL_JITTER_S = 2.0          # Increased jitter
+RETRY_LIMIT = 2                # Reduced from 4 — stop faster on 429 (save quota)
+BACKOFF_BASE_S = 5.0           # Increased from 2.0 — harder backoff on 429/503
 MAX_EXECUTION_S = 330
-CIRCUIT_BREAKER_THRESHOLD = 3  # Consecutive failures before cooldown
-CIRCUIT_BREAKER_COOLDOWN_S = 45  # Pause this long after breaker trips
-VARIANT_DELAY_S = 15           # Wait between API variant attempts
+CIRCUIT_BREAKER_THRESHOLD = 2  # Trip faster (was 3)
+CIRCUIT_BREAKER_COOLDOWN_S = 60  # Longer cooldown (was 45)
+VARIANT_DELAY_S = 30           # Increased from 15 — save API quota between variant attempts
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -128,16 +128,15 @@ class LeeCountyScraper(BaseScraper):
         s = start_date.strftime("%Y-%m-%d")
         e = end_date.strftime("%Y-%m-%d")
 
+        # Rate limit: 480,000 requests per 12-hour window
+        # Only try 3 most-likely variants (was 7) to conserve API quota
         variants = [
             # Variant 0: inCustody filter — most efficient, returns only current inmates
             {"inCustody": "true"},
-            {"inCustody": "1"},
-            {"status": "IN_CUSTODY"},
-            # Variant 3-6: date-range fallbacks (90-day window)
+            # Variant 1: date-range fallback
             {"startBooking": s, "endBooking": e},
+            # Variant 2: ISO date-range fallback
             {"startBooking": f"{s}T00:00:00", "endBooking": f"{e}T23:59:59"},
-            {"bookingStart": s, "bookingEnd": e},
-            {"start": s, "end": e},
         ]
 
         for i, params in enumerate(variants):
