@@ -27,7 +27,12 @@ services:
     container_name: shamrock-obscura
     hostname: obscura
     restart: unless-stopped
-    command: ["serve", "--port", "9222", "--host", "0.0.0.0", "--stealth"]
+    # Routes through iMac office residential IP via SSH SOCKS tunnel (port 1080)
+    # Tunnel: iMac LaunchAgent → ssh -R 1080 → VPS localhost:1080
+    # This bypasses Cloudflare's datacenter IP blocking for Revize counties
+    command: ["serve", "--port", "9222", "--host", "0.0.0.0", "--stealth", "--proxy", "socks5://host.docker.internal:1080"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - shamrock-net
     expose:
