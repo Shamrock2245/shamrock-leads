@@ -72,33 +72,42 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
-            # ── Clean up disk space (aggressive — prevents ENOSPC) ──
+            # ── Clean up disk space (safe — preserves pulled images) ──
             echo ""
             echo "🧹 Cleaning up disk space..."
-            docker system prune -af
+            docker image prune -af --filter "until=168h"  # Only prune images older than 7 days
+            docker container prune -f
+            docker volume prune -f
             docker builder prune -af
             apt-get clean 2>/dev/null || true
             echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
 
-            # ── Rebuild Docker images ─────────────────────────────
+            # ── Ensure Obscura image is present (pulled, not built) ──
+            echo ""
+            echo "🦀 Ensuring Obscura image..."
+            docker pull h4ckf0r0day/obscura:latest || echo "   ⚠️ Obscura pull failed (will use cached)"
+
+            # ── Rebuild Docker images (only locally-built services) ──
             echo ""
             echo "🐳 Rebuilding Docker images..."
             docker compose build shamrock-leads dashboard
 
-            # ── Stop old containers to prevent name conflicts ─────
+            # ── Rolling restart (avoids full downtime) ────────────
             echo ""
-            echo "🛑 Stopping old containers..."
-            docker compose down --remove-orphans
+            echo "🔄 Rolling restart..."
+            docker compose up -d --remove-orphans
 
-            # ── Start new services ────────────────────────────────
+            # ── Re-apply iptables rule for SOCKS proxy (iMac tunnel) ──
             echo ""
-            echo "🔄 Starting new services..."
-            docker compose up -d
+            echo "🔌 Re-applying SOCKS proxy firewall rule..."
+            iptables -C INPUT -p tcp --dport 1080 -s 172.18.0.0/16 -j ACCEPT 2>/dev/null || \
+              iptables -I INPUT -p tcp --dport 1080 -s 172.18.0.0/16 -j ACCEPT
+            echo "   ✅ Docker → host:1080 allowed"
 
             # ── Verify ────────────────────────────────────────────
             echo ""
             echo "⏳ Waiting for containers to stabilize..."
-            sleep 5
+            sleep 10
 
             echo ""
             echo "📊 Container Status:"
