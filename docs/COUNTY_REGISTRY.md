@@ -24,7 +24,7 @@
 | 4 | **Manatee** | DrissionPage — Revize CMS | `manatee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 5 | **Sarasota** | DrissionPage — Revize CMS | `sarasota.py` | ✅ Active | 10 min | 2026-04-27 |
 | 6 | **DeSoto** | JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-04-27 |
-| 7 | **Hendry** | JailTracker | `hendry.py` | ✅ Active | 10 min | 2026-04-27 |
+| 7 | **Hendry** | JailTracker (Blazor WASM + CAPTCHA) | `hendry.py` | ✅ Active | 10 min | 2026-06-11 |
 
 ---
 

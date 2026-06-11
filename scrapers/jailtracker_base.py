@@ -10,9 +10,16 @@ Handles the full flow:
 Counties using JailTracker (omsweb.public-safety-cloud.com):
   - Charlotte_County_FL
   - Manatee_County_FL
+  - SARASOTA_COUNTY_FL
+  - HILLSBOROUGH_COUNTY_FL
   (more to be discovered)
 
 NO Cloudflare protection — direct access from VPS datacenter IP.
+
+CAPTCHA solving priority (cost cascade — cheapest first):
+  1. ddddocr (FREE, local OCR — good on simple alphanumeric CAPTCHAs)
+  2. SolveCaptcha API (if SOLVECAPTCHA_KEY set — ~$0.50/1000, most reliable)
+  3. OpenAI GPT-4o vision (expensive fallback — ~60% accuracy on distorted text)
 """
 
 import base64
@@ -29,9 +36,9 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 JT_BASE = "https://omsweb.public-safety-cloud.com/jtclientweb"
-MAX_CAPTCHA_ATTEMPTS = 3
+MAX_CAPTCHA_ATTEMPTS = 5
 CAPTCHA_WAIT_S = 3
-PAGE_LOAD_WAIT_S = 5
+PAGE_LOAD_WAIT_S = 8
 DETAIL_DELAY_S = 1.0
 
 
@@ -113,36 +120,42 @@ class JailTrackerBaseScraper(BaseScraper):
                 pass
 
     def _solve_captcha(self, page, api_data: dict) -> bool:
-        """Solve the 4-character image CAPTCHA using OpenAI vision."""
+        """Solve the 4-character image CAPTCHA. Tries SolveCaptcha API first, then OpenAI."""
         for attempt in range(1, MAX_CAPTCHA_ATTEMPTS + 1):
             logger.info(f"[{self.county}] CAPTCHA attempt {attempt}/{MAX_CAPTCHA_ATTEMPTS}")
 
-            # Get captcha image from API data
-            captcha_data = api_data.get("captcha/getnewcaptchaclient", {})
+            # Wait for captcha image to appear in API data
+            captcha_data = {}
+            for _ in range(8):
+                captcha_data = api_data.get("captcha/getnewcaptchaclient", {})
+                if captcha_data.get("captchaImage"):
+                    break
+                time.sleep(1)
+
             captcha_image_b64 = captcha_data.get("captchaImage", "")
 
             if not captcha_image_b64:
-                # Try getting it from the page
+                # Try getting it from the DOM
                 captcha_img = page.query_selector("img[src*='data:image']")
                 if captcha_img:
                     captcha_image_b64 = captcha_img.get_attribute("src") or ""
 
             if not captcha_image_b64:
-                logger.warning(f"[{self.county}] No captcha image found")
-                # Click "Get New Code" and retry
-                new_code_btn = page.query_selector("button:has-text('Get New Code')")
-                if new_code_btn:
-                    new_code_btn.click()
-                    time.sleep(2)
+                logger.warning(f"[{self.county}] No captcha image found, clicking Get New Code")
+                self._click_new_code(page, api_data)
                 continue
 
             # Extract base64 data
             b64_part = captcha_image_b64.split(",")[1] if "," in captcha_image_b64 else captcha_image_b64
 
-            # Solve with OpenAI vision
-            answer = self._ocr_captcha_openai(b64_part)
-            if not answer:
-                logger.warning(f"[{self.county}] OCR returned empty, retrying")
+            # Cost cascade: ddddocr (free) → SolveCaptcha (cheap) → OpenAI (expensive)
+            answer = (
+                self._ocr_captcha_ddddocr(b64_part)
+                or self._ocr_captcha_solvecaptcha(b64_part)
+                or self._ocr_captcha_openai(b64_part)
+            )
+            if not answer or len(answer) != 4:
+                logger.warning(f"[{self.county}] OCR returned '{answer}' (bad length), retrying")
                 self._click_new_code(page, api_data)
                 continue
 
@@ -159,28 +172,45 @@ class JailTrackerBaseScraper(BaseScraper):
             validate_btn = page.query_selector("button:has-text('Validate')")
             if validate_btn:
                 validate_btn.click()
-            time.sleep(3)
+            time.sleep(5)
 
-            # Check if we passed
+            # Check result
             page_text = page.evaluate("() => document.body?.innerText || ''")
+
+            # Case 1: Incorrect answer
             if "incorrect" in page_text.lower():
                 logger.warning(f"[{self.county}] CAPTCHA incorrect, retrying...")
-                # Click retry link
                 retry = page.query_selector("text=Click Here to Try Again")
                 if retry:
                     retry.click()
-                    time.sleep(2)
-                    # Re-capture the new captcha data
+                    time.sleep(3)
                     api_data.pop("captcha/getnewcaptchaclient", None)
-                    time.sleep(1)
                 continue
-            elif "login" in page_text.lower() and "validate" in page_text.lower():
+
+            # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
+            if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
+                logger.info(f"[{self.county}] Blazor crash after CAPTCHA — reloading...")
+                api_data.clear()
+                page.reload(wait_until="networkidle", timeout=30000)
+                time.sleep(PAGE_LOAD_WAIT_S)
+                # Check if reload put us past the CAPTCHA
+                page_text2 = page.evaluate("() => document.body?.innerText || ''")
+                if "captcha" not in page_text2.lower() and "validate" not in page_text2.lower():
+                    logger.info(f"[{self.county}] CAPTCHA bypassed after reload! ✅")
+                    return True
+                # Still on captcha — retry
+                logger.warning(f"[{self.county}] Still on captcha after reload, retrying...")
+                continue
+
+            # Case 3: Still on captcha page
+            if "validate" in page_text.lower() and "captcha" in page_text.lower():
                 logger.warning(f"[{self.county}] Still on captcha page, retrying...")
                 self._click_new_code(page, api_data)
                 continue
-            else:
-                logger.info(f"[{self.county}] CAPTCHA solved! ✅")
-                return True
+
+            # Case 4: Success — we're past the captcha
+            logger.info(f"[{self.county}] CAPTCHA solved! ✅")
+            return True
 
         return False
 
@@ -192,8 +222,95 @@ class JailTrackerBaseScraper(BaseScraper):
             new_code_btn.click()
             time.sleep(2)
 
+    def _ocr_captcha_ddddocr(self, image_b64: str) -> str:
+        """Use ddddocr (free, local) for image CAPTCHA. Best cost: $0."""
+        try:
+            import ddddocr
+        except ImportError:
+            logger.debug(f"[{self.county}] ddddocr not installed, skipping free OCR")
+            return ""
+
+        try:
+            ocr = ddddocr.DdddOcr(show_ad=False)
+            image_bytes = base64.b64decode(image_b64)
+            answer = ocr.classification(image_bytes)
+            # Clean: only keep alphanumeric chars
+            answer = re.sub(r"[^a-zA-Z0-9]", "", answer)
+            if len(answer) >= 4:
+                answer = answer[:4]
+                logger.info(f"[{self.county}] ddddocr answered: {answer!r} (FREE)")
+                return answer
+            else:
+                logger.warning(f"[{self.county}] ddddocr returned '{answer}' (too short), falling through")
+                return ""
+        except Exception as e:
+            logger.warning(f"[{self.county}] ddddocr error: {e}")
+            return ""
+
+    def _ocr_captcha_solvecaptcha(self, image_b64: str) -> str:
+        """Use SolveCaptcha API for image CAPTCHA (cheapest, most reliable)."""
+        api_key = os.getenv("SOLVECAPTCHA_KEY", "")
+        if not api_key:
+            return ""  # Fall through to OpenAI
+
+        try:
+            import httpx
+
+            # Submit image captcha task
+            submit_resp = httpx.post(
+                "https://api.solvecaptcha.com/in.php",
+                data={
+                    "key": api_key,
+                    "method": "base64",
+                    "body": image_b64,
+                    "json": "1",
+                    "min_len": "4",
+                    "max_len": "4",
+                    "regsense": "1",  # Case-sensitive
+                    "numeric": "0",   # Letters + digits
+                },
+                timeout=30,
+            )
+            submit_data = submit_resp.json()
+            if submit_data.get("status") != 1:
+                logger.warning(f"[{self.county}] SolveCaptcha submit error: {submit_data}")
+                return ""
+
+            task_id = submit_data["request"]
+
+            # Poll for result (image CAPTCHAs are fast — usually <5s)
+            for _ in range(12):
+                time.sleep(3)
+                result_resp = httpx.get(
+                    "https://api.solvecaptcha.com/res.php",
+                    params={
+                        "key": api_key,
+                        "action": "get",
+                        "id": task_id,
+                        "json": "1",
+                    },
+                    timeout=15,
+                )
+                result_data = result_resp.json()
+                if result_data.get("status") == 1:
+                    answer = result_data["request"]
+                    answer = re.sub(r"[^a-zA-Z0-9]", "", answer)[:4]
+                    logger.info(f"[{self.county}] SolveCaptcha answered: {answer!r}")
+                    return answer
+                elif "CAPCHA_NOT_READY" in str(result_data.get("request", "")):
+                    continue
+                else:
+                    logger.warning(f"[{self.county}] SolveCaptcha error: {result_data}")
+                    return ""
+
+            logger.warning(f"[{self.county}] SolveCaptcha timeout")
+            return ""
+        except Exception as e:
+            logger.warning(f"[{self.county}] SolveCaptcha error: {e}")
+            return ""
+
     def _ocr_captcha_openai(self, image_b64: str) -> str:
-        """Use OpenAI GPT-4o-mini vision to read 4-char captcha."""
+        """Use OpenAI GPT-4o vision to read 4-char captcha (fallback)."""
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             logger.warning(f"[{self.county}] OPENAI_API_KEY not set, cannot solve captcha")
@@ -208,7 +325,7 @@ class JailTrackerBaseScraper(BaseScraper):
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-4o",
                     "messages": [
                         {
                             "role": "user",
@@ -216,16 +333,17 @@ class JailTrackerBaseScraper(BaseScraper):
                                 {
                                     "type": "text",
                                     "text": (
-                                        "Read the 4 characters in this CAPTCHA image. "
-                                        "Reply with ONLY the 4 characters, nothing else. "
-                                        "The characters are case-sensitive and may include "
-                                        "uppercase letters, lowercase letters, and digits."
+                                        "This is a CAPTCHA image containing exactly 4 characters. "
+                                        "The characters may be uppercase letters, lowercase letters, or digits. "
+                                        "They may be distorted, rotated, or have noise/lines through them. "
+                                        "Reply with ONLY the 4 characters you see. No explanation. No quotes. "
+                                        "Example valid responses: Ab3K, xY9m, H2dR"
                                     ),
                                 },
                                 {
                                     "type": "image_url",
                                     "image_url": {
-                                        "url": f"data:image/png;base64,{image_b64}",
+                                        "url": f"data:image/gif;base64,{image_b64}",
                                     },
                                 },
                             ],

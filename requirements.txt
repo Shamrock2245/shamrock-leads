@@ -30,6 +30,7 @@ beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
 patchright>=1.50.0  # Charlotte County — Cloudflare Turnstile bypass (also run: patchright install chromium)
 playwright>=1.48.0  # Obscura CDP connection for CF-protected counties (Charlotte, Manatee)
+ddddocr>=1.4.0      # Free local CAPTCHA OCR for JailTracker 4-char image CAPTCHAs (Hendry, etc.)
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.15.0
