@@ -28,7 +28,7 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 LOGIN_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/Account/Login"
-SEARCH_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/Home/Search"
+SEARCH_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/"
 RECAPTCHA_SITEKEY = "6LcK1HopAAAAAEZgVeXqiN2_4zp6cQwRRXfc3uKJ"
 SOCKS_PROXY = "socks5://172.18.0.1:1080"
 DAYS_BACK = 90
@@ -56,7 +56,7 @@ class HillsboroughCountyScraper(BaseScraper):
         browser = pw.chromium.launch(
             headless=True,
             proxy={"server": SOCKS_PROXY},
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
         )
 
         all_records: List[ArrestRecord] = []
@@ -136,12 +136,10 @@ class HillsboroughCountyScraper(BaseScraper):
         page.goto(LOGIN_URL, wait_until="load", timeout=30000)
         time.sleep(3)
 
-        # Fill credentials via keyboard (more reliable than fill())
-        page.locator("#Email").click()
-        page.locator("#Email").type(email, delay=30)
+        # Fill credentials
+        page.locator("#Email").fill(email)
         time.sleep(0.3)
-        page.locator("#Password").click()
-        page.locator("#Password").type(password, delay=30)
+        page.locator("#Password").fill(password)
 
         # Remember me
         try:
@@ -213,7 +211,7 @@ class HillsboroughCountyScraper(BaseScraper):
                 return False
 
             html = page.content()
-            if "Log out" in html or "Search" in html or "button_submit" in html:
+            if "Log Off" in html or "Welcome" in html:
                 logger.info("[Hillsborough] Cookie login successful ✅ (skipped reCAPTCHA!)")
                 return True
 
@@ -535,21 +533,37 @@ class HillsboroughCountyScraper(BaseScraper):
             task_id = submit_data["request"]
             logger.info(f"[Hillsborough] SolveCaptcha task: {task_id}")
 
-            # Step 2: Poll for result (up to 120s)
+            # Step 2: Poll for result (up to 180s)
             token = None
-            for i in range(24):
+            http_errors = 0
+            for i in range(36):
                 time.sleep(5)
-                result_resp = httpx.get(
-                    "https://api.solvecaptcha.com/res.php",
-                    params={
-                        "key": api_key,
-                        "action": "get",
-                        "id": task_id,
-                        "json": "1",
-                    },
-                    timeout=15,
-                )
-                result_data = result_resp.json()
+                try:
+                    result_resp = httpx.get(
+                        "https://api.solvecaptcha.com/res.php",
+                        params={
+                            "key": api_key,
+                            "action": "get",
+                            "id": task_id,
+                            "json": "1",
+                        },
+                        timeout=15,
+                    )
+                    if result_resp.status_code != 200:
+                        http_errors += 1
+                        logger.warning(f"[Hillsborough] SolveCaptcha HTTP {result_resp.status_code} (attempt {http_errors})")
+                        if http_errors >= 3:
+                            logger.error("[Hillsborough] SolveCaptcha: too many HTTP errors")
+                            return False
+                        continue
+                    result_data = result_resp.json()
+                except (ValueError, Exception) as parse_err:
+                    http_errors += 1
+                    logger.warning(f"[Hillsborough] SolveCaptcha parse error (attempt {http_errors}): {parse_err}")
+                    if http_errors >= 3:
+                        return False
+                    continue
+
                 if result_data.get("status") == 1:
                     token = result_data["request"]
                     logger.info(f"[Hillsborough] Token received in {(i+1)*5}s ✅")
@@ -610,6 +624,15 @@ class HillsboroughCountyScraper(BaseScraper):
         """
         logger.info("[Hillsborough] Performing search (form is on landing page)...")
 
+        # Fill Booking Date (required — form rejects blank searches)
+        try:
+            from datetime import datetime, timedelta
+            booking_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y")
+            page.locator("#SearchBookingDate").fill(booking_date)
+            logger.info(f"[Hillsborough] Set booking date: {booking_date}")
+        except Exception as e:
+            logger.warning(f"[Hillsborough] Could not set booking date: {e}")
+
         # Check the "Current Inmates Only" checkbox for active arrests
         try:
             is_checked = page.evaluate(
@@ -639,11 +662,11 @@ class HillsboroughCountyScraper(BaseScraper):
             pass
 
         # Solve the SECOND reCAPTCHA on the search form
-        # NOTE: Previous testing showed search works even without solving this,
-        # but we try anyway for reliability
+        # Go straight to API token injection — avoids clicking checkbox which
+        # loads heavy iframe challenge and causes memory crashes in Docker
         logger.info("[Hillsborough] Solving search form reCAPTCHA...")
-        if self._solve_recaptcha(page):
-            logger.info("[Hillsborough] Search reCAPTCHA solved! ✅")
+        if self._solve_via_api(page):
+            logger.info("[Hillsborough] Search reCAPTCHA solved via API ✅")
         else:
             logger.warning("[Hillsborough] Search reCAPTCHA not solved, submitting anyway")
 
@@ -656,7 +679,10 @@ class HillsboroughCountyScraper(BaseScraper):
             try:
                 page.click("button[type='submit']", timeout=3000)
             except Exception:
-                page.keyboard.press("Enter")
+                try:
+                    page.keyboard.press("Enter")
+                except Exception as e:
+                    logger.warning(f"[Hillsborough] Submit fallback failed: {e}")
 
         # Wait for results to load
         time.sleep(8)
