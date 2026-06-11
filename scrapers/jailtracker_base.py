@@ -95,6 +95,16 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Solve CAPTCHA
             if not self._solve_captcha(page, api_data):
+                # Last resort: check if any offender data was captured during CAPTCHA attempts
+                if api_data:
+                    logger.info(f"[{self.county}] CAPTCHA failed but checking captured API data... keys: {list(api_data.keys())}")
+                    for key, val in api_data.items():
+                        if "offender" in key.lower() and isinstance(val, list) and val:
+                            logger.info(f"[{self.county}] Found {len(val)} offenders in API data despite CAPTCHA failure!")
+                            records = self._parse_api_offenders(val)
+                            if records:
+                                logger.info(f"[{self.county}] Recovered {len(records)} records from crash data ✅")
+                                return records
                 logger.error(f"[{self.county}] Failed to solve CAPTCHA after {MAX_CAPTCHA_ATTEMPTS} attempts")
                 return []
 
@@ -210,6 +220,13 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
             if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
+                # The CAPTCHA might have been CORRECT — crash could be during roster loading.
+                # Check if offender data was already captured via API response interception.
+                for key, val in api_data.items():
+                    if "offender" in key.lower() and isinstance(val, list) and val:
+                        logger.info(f"[{self.county}] Blazor crashed but offender data captured! ({len(val)} records) ✅")
+                        return True
+
                 logger.info(f"[{self.county}] Blazor crash after CAPTCHA — navigating to fresh session...")
                 api_data.clear()
                 # Navigate to a NEW session URL instead of reloading the broken one
