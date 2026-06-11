@@ -45,7 +45,12 @@ import logging
 import os
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 from pymongo import MongoClient, UpdateOne
 
@@ -61,6 +66,47 @@ WATCH_MAX_BATCH     = int(os.getenv("WATCH_MAX_BATCH",     "50"))
 
 # Bond-type strings that indicate "no bond set yet"
 _NO_BOND_TYPES = {"NO BOND", "HOLD", "NONE", "DETAINER", "ICE HOLD", "IMMIGRATION"}
+
+# ── County Court Windows (Eastern Time) ───────────────────────────────────────
+# First appearance hearing schedules by county.
+# Format: { county: { day_range: (start_hour, start_min, end_hour, end_min) } }
+# "weekday" = Mon-Fri, "weekend" = Sat-Sun
+#
+# Lee County: M-F 10:30-11:30 AM ET, Sat-Sun 9:00-10:30 AM ET
+_ET = ZoneInfo("America/New_York")
+
+_COURT_WINDOWS: Dict[str, Dict[str, Tuple[int, int, int, int]]] = {
+    "Lee": {
+        "weekday": (10, 30, 11, 30),   # M-F  10:30 AM - 11:30 AM ET
+        "weekend": (9, 0, 10, 30),      # S-S   9:00 AM - 10:30 AM ET
+    },
+}
+
+
+def _is_in_court_window(county: str) -> bool:
+    """
+    Check if the current time (Eastern) falls within the county's
+    first-appearance court window. Returns True if:
+      - County has no configured window (always eligible), OR
+      - Current ET time is within the configured window.
+    """
+    windows = _COURT_WINDOWS.get(county)
+    if not windows:
+        return True  # No restriction — always eligible
+
+    now_et = datetime.now(_ET)
+    is_weekend = now_et.weekday() >= 5  # 5=Sat, 6=Sun
+    key = "weekend" if is_weekend else "weekday"
+    window = windows.get(key)
+    if not window:
+        return True
+
+    start_h, start_m, end_h, end_m = window
+    current_minutes = now_et.hour * 60 + now_et.minute
+    start_minutes = start_h * 60 + start_m
+    end_minutes = end_h * 60 + end_m
+
+    return start_minutes <= current_minutes <= end_minutes
 
 
 def _is_no_bond(record_doc: Dict[str, Any]) -> bool:
@@ -317,15 +363,49 @@ class FirstAppearanceWatcher:
         operations = []
         bond_set_records: List[ArrestRecord] = []
 
+        # Track consecutive failures per county to avoid hammering rate-limited APIs.
+        # After 3 consecutive failures for a county, skip remaining records for that
+        # county in this cycle. This prevents the watcher from burning API quota on
+        # counties that are currently 429'd (e.g., Lee County Sheriff API).
+        county_fail_count: Dict[str, int] = {}
+        county_skip_count: Dict[str, int] = {}
+
         for doc in candidates:
             county     = doc.get("county", "?")
             booking_id = doc.get("booking_number", "?")
             old_bond   = float(doc.get("bond_amount", 0) or 0)
 
+            # ── Court window guard: skip counties outside their hearing window ──
+            if not _is_in_court_window(county):
+                county_skip_count[county] = county_skip_count.get(county, 0) + 1
+                stats["no_change"] += 1
+                continue
+
+            # ── Rate-limit guard: skip counties with 3+ consecutive failures ──
+            if county_fail_count.get(county, 0) >= 3:
+                county_skip_count[county] = county_skip_count.get(county, 0) + 1
+                # Still update last_checked so we don't re-query this record next cycle
+                operations.append(UpdateOne(
+                    {"county": doc["county"], "booking_number": doc["booking_number"]},
+                    {"$set": {
+                        "last_checked": now.isoformat(),
+                        "last_checked_mode": "UPDATE_SKIPPED_RATELIMIT",
+                        "updated_at": now,
+                    }},
+                ))
+                stats["no_change"] += 1
+                continue
+
             try:
                 updated = self._refetch_record(doc)
                 if updated is None:
                     stats["errors"] += 1
+                    county_fail_count[county] = county_fail_count.get(county, 0) + 1
+                    if county_fail_count[county] == 3:
+                        logger.warning(
+                            f"⚡ FirstAppearanceWatcher: {county} hit 3 consecutive failures — "
+                            f"skipping remaining {county} records this cycle (rate-limited?)"
+                        )
                     # Still update last_checked so we don't hammer failed URLs
                     operations.append(UpdateOne(
                         {"county": doc["county"], "booking_number": doc["booking_number"]},
@@ -337,6 +417,8 @@ class FirstAppearanceWatcher:
                     ))
                     continue
 
+                # Reset failure count on success
+                county_fail_count[county] = 0
                 stats["rechecked"] += 1
                 new_bond = updated._parse_bond_numeric()
 
@@ -394,6 +476,7 @@ class FirstAppearanceWatcher:
                     f"{county}/{booking_id}: {e}"
                 )
                 stats["errors"] += 1
+                county_fail_count[county] = county_fail_count.get(county, 0) + 1
 
         # ── Bulk write to MongoDB ─────────────────────────────────────────────
         if operations:
@@ -414,6 +497,11 @@ class FirstAppearanceWatcher:
                     slack.notify_bond_set(record)
                 except Exception as e:
                     logger.warning(f"FirstAppearanceWatcher: Slack alert failed: {e}")
+
+        # Log skipped counties
+        if county_skip_count:
+            skip_summary = ", ".join(f"{c}: {n} skipped" for c, n in county_skip_count.items())
+            logger.info(f"⚡ FirstAppearanceWatcher rate-limit skips: {skip_summary}")
 
         logger.info(
             f"✅ FirstAppearanceWatcher cycle complete: "
