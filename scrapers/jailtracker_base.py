@@ -218,7 +218,11 @@ class JailTrackerBaseScraper(BaseScraper):
             if validate_btn:
                 validate_btn.click()
             # Give Blazor time to validate CAPTCHA and start loading roster
-            time.sleep(10)
+            time.sleep(8)
+
+            # Check the validatecaptcha response — if it returned true, CAPTCHA was correct
+            validate_result = api_data.get("Captcha/validatecaptcha")
+            logger.info(f"[{self.county}] Validate response: {validate_result}")
 
             # Debug: log what API calls have fired so far
             current_keys = [k for k in api_data.keys() if k != 'captcha/getnewcaptchaclient']
@@ -243,6 +247,10 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
             if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
+                # Check if CAPTCHA was actually validated successfully
+                captcha_correct = (validate_result is True or validate_result == "true" 
+                                   or (isinstance(validate_result, dict) and validate_result.get("valid")))
+                
                 # The CAPTCHA might have been CORRECT — crash could be during roster loading.
                 # Check if offender data was already captured via API response interception.
                 for key, val in api_data.items():
@@ -250,7 +258,25 @@ class JailTrackerBaseScraper(BaseScraper):
                         logger.info(f"[{self.county}] Blazor crashed but offender data captured! ({len(val)} records) ✅")
                         return True
 
-                logger.info(f"[{self.county}] Blazor crash after CAPTCHA — navigating to fresh session...")
+                if captcha_correct:
+                    # CAPTCHA was valid but Blazor crashed! Try fetching offender data directly
+                    logger.info(f"[{self.county}] CAPTCHA validated but Blazor crashed — trying direct JS fetch...")
+                    try:
+                        roster_data = page.evaluate(f"""() => {{
+                            return fetch('/jtclientweb/(S({page.url.split("(S(")[1].split(")")[0]}))/Offender/{self.county_jt_id}', {{
+                                headers: {{'Accept': 'application/json'}}
+                            }}).then(r => r.json()).catch(e => null);
+                        }}""")
+                        if roster_data and isinstance(roster_data, list):
+                            logger.info(f"[{self.county}] Direct fetch recovered {len(roster_data)} offenders! ✅")
+                            api_data[f"Offender/{self.county_jt_id}/direct"] = roster_data
+                            return True
+                        elif roster_data:
+                            logger.info(f"[{self.county}] Direct fetch returned: {str(roster_data)[:200]}")
+                    except Exception as e:
+                        logger.warning(f"[{self.county}] Direct JS fetch failed: {e}")
+
+                logger.info(f"[{self.county}] Blazor crash — navigating to fresh session...")
                 api_data.clear()
                 # Navigate to a NEW session URL instead of reloading the broken one
                 fresh_session = f"shamrock_{int(time.time())}"
