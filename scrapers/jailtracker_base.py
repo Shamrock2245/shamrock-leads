@@ -36,7 +36,7 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 JT_BASE = "https://omsweb.public-safety-cloud.com/jtclientweb"
-MAX_CAPTCHA_ATTEMPTS = 5
+MAX_CAPTCHA_ATTEMPTS = 8
 CAPTCHA_WAIT_S = 3
 PAGE_LOAD_WAIT_S = 8
 DETAIL_DELAY_S = 1.0
@@ -120,7 +120,14 @@ class JailTrackerBaseScraper(BaseScraper):
                 pass
 
     def _solve_captcha(self, page, api_data: dict) -> bool:
-        """Solve the 4-character image CAPTCHA. Tries SolveCaptcha API first, then OpenAI."""
+        """Solve the 4-character image CAPTCHA with smart cost cascade.
+        
+        ddddocr (free) gets first 2 attempts. If both fail, remaining attempts
+        skip ddddocr and use SolveCaptcha (cheap) → OpenAI (expensive).
+        """
+        ddddocr_failures = 0
+        max_ddddocr_tries = 2  # Give free solver 2 shots before paying
+
         for attempt in range(1, MAX_CAPTCHA_ATTEMPTS + 1):
             logger.info(f"[{self.county}] CAPTCHA attempt {attempt}/{MAX_CAPTCHA_ATTEMPTS}")
 
@@ -148,12 +155,22 @@ class JailTrackerBaseScraper(BaseScraper):
             # Extract base64 data
             b64_part = captcha_image_b64.split(",")[1] if "," in captcha_image_b64 else captcha_image_b64
 
-            # Cost cascade: ddddocr (free) → SolveCaptcha (cheap) → OpenAI (expensive)
-            answer = (
-                self._ocr_captcha_ddddocr(b64_part)
-                or self._ocr_captcha_solvecaptcha(b64_part)
-                or self._ocr_captcha_openai(b64_part)
-            )
+            # Smart cost cascade: try free solver first, fall through to paid after failures
+            answer = ""
+            used_ddddocr = False
+            if ddddocr_failures < max_ddddocr_tries:
+                answer = self._ocr_captcha_ddddocr(b64_part)
+                if answer:
+                    used_ddddocr = True
+            else:
+                logger.info(f"[{self.county}] ddddocr failed {ddddocr_failures}x, using paid solver")
+
+            if not answer:
+                answer = (
+                    self._ocr_captcha_solvecaptcha(b64_part)
+                    or self._ocr_captcha_openai(b64_part)
+                )
+
             if not answer or len(answer) != 4:
                 logger.warning(f"[{self.county}] OCR returned '{answer}' (bad length), retrying")
                 self._click_new_code(page, api_data)
@@ -179,7 +196,11 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Case 1: Incorrect answer
             if "incorrect" in page_text.lower():
-                logger.warning(f"[{self.county}] CAPTCHA incorrect, retrying...")
+                if used_ddddocr:
+                    ddddocr_failures += 1
+                    logger.warning(f"[{self.county}] CAPTCHA incorrect (ddddocr miss #{ddddocr_failures}), retrying...")
+                else:
+                    logger.warning(f"[{self.county}] CAPTCHA incorrect, retrying...")
                 retry = page.query_selector("text=Click Here to Try Again")
                 if retry:
                     retry.click()
