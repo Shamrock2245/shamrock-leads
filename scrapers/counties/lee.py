@@ -36,6 +36,7 @@ BASE_URL = "https://www.sheriffleefl.org"
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
+SOCKS_PROXY = "socks5h://172.18.0.1:1080"  # Residential IP via office iMac — bypasses 429 rate limiting
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
@@ -535,6 +536,7 @@ class LeeCountyScraper(BaseScraper):
                 kwargs = {
                     "headers": HEADERS,
                     "timeout": 30,
+                    "proxy": SOCKS_PROXY,
                 }
                 if params:
                     kwargs["params"] = params
