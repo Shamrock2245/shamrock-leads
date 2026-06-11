@@ -65,6 +65,10 @@ juriscraper>=2.6.0
 # Phonetic name matching (Metaphone, Soundex, Jaro-Winkler)
 jellyfish>=1.0.0
 
+# reCAPTCHA v2 audio solver (free, self-hosted — Hillsborough County)
+pydub>=0.25.1      # MP3→WAV conversion (requires ffmpeg system package)
+SpeechRecognition>=3.10.0  # Google Speech Recognition (free, no API key)
+
 # Development
 pytest>=8.0.0
 pytest-asyncio>=0.23.0

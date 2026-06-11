@@ -9,10 +9,11 @@ FROM python:3.12-slim
 LABEL maintainer="Shamrock Active Software"
 LABEL description="Florida Arrest Intelligence Platform"
 
-# System deps — Chromium for DrissionPage, xvfb for patchright (Charlotte)
+# System deps — Chromium for DrissionPage, xvfb for patchright (Charlotte), ffmpeg for reCAPTCHA audio solver
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    ffmpeg \
     xvfb \
     xauth \
     chromium \
