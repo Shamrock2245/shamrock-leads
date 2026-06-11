@@ -99,12 +99,26 @@ class JailTrackerBaseScraper(BaseScraper):
                 if api_data:
                     logger.info(f"[{self.county}] CAPTCHA failed but checking captured API data... keys: {list(api_data.keys())}")
                     for key, val in api_data.items():
-                        if "offender" in key.lower() and isinstance(val, list) and val:
-                            logger.info(f"[{self.county}] Found {len(val)} offenders in API data despite CAPTCHA failure!")
-                            records = self._parse_api_offenders(val)
-                            if records:
-                                logger.info(f"[{self.county}] Recovered {len(records)} records from crash data ✅")
-                                return records
+                        if "offender" in key.lower():
+                            val_type = type(val).__name__
+                            val_preview = str(val)[:300]
+                            logger.info(f"[{self.county}] API key '{key}' type={val_type}: {val_preview}")
+                            # Handle both list and dict responses
+                            offender_list = None
+                            if isinstance(val, list) and val:
+                                offender_list = val
+                            elif isinstance(val, dict):
+                                # Look for list inside dict (common pattern: {"Data": [...], ...})
+                                for dk, dv in val.items():
+                                    if isinstance(dv, list) and dv:
+                                        offender_list = dv
+                                        break
+                            if offender_list:
+                                logger.info(f"[{self.county}] Found {len(offender_list)} offenders in API data despite CAPTCHA failure!")
+                                records = self._parse_api_offenders(offender_list)
+                                if records:
+                                    logger.info(f"[{self.county}] Recovered {len(records)} records from crash data ✅")
+                                    return records
                 logger.error(f"[{self.county}] Failed to solve CAPTCHA after {MAX_CAPTCHA_ATTEMPTS} attempts")
                 return []
 
