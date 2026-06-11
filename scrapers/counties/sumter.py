@@ -83,7 +83,7 @@ class SumterCountyScraper(BaseScraper):
                 logger.error(f"Sumter JSON parse failed: {e}")
                 break
 
-            if not html_rows or len(html_rows) < 10:
+            if not html_rows or len(html_rows) < 1:
                 break
 
             batch = self._parse_html(html_rows, seen)
