@@ -127,9 +127,10 @@ class GladesCountyScraper(BaseScraper):
             except Exception:
                 pass
 
-            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
+            # Name: "LAST, FIRST MIDDLE  (RACE/\nSEX\n/ DOB: ...)"
+            # SmartCop format has race/sex split across lines with whitespace
             name_m = re.search(
-                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
+                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)",
                 block_text,
                 re.IGNORECASE
             )
@@ -137,16 +138,26 @@ class GladesCountyScraper(BaseScraper):
             race = name_m.group(2) if name_m else ""
             sex = name_m.group(3) if name_m else ""
 
-            # Try relaxed name regex if strict one failed
+            # Clean up: remove "Enlarge Photo" prefix from name
+            full_name = re.sub(r"^(?:Enlarge\s+Photo\s+)", "", full_name, flags=re.IGNORECASE).strip()
+            # Normalize sex: MALE→M, FEMALE→F
+            if sex.upper() == "MALE": sex = "M"
+            elif sex.upper() == "FEMALE": sex = "F"
+
+            # If strict regex failed, try extracting name before the parenthesis
             if not full_name:
-                name_m = re.search(
-                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
-                    block_text
+                # Try: "LAST, FIRST MIDDLE (anything"
+                name_m2 = re.search(
+                    r"(?:Enlarge Photo\s+)?([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(",
+                    block_text, re.IGNORECASE
                 )
-                if name_m:
-                    full_name = name_m.group(1).strip()
-                    race = name_m.group(2)
-                    sex = name_m.group(3)
+                if name_m2:
+                    full_name = name_m2.group(1).strip()
+                    # Extract race/sex separately
+                    rs = re.search(r"\(([A-Z])/\s*([A-Z]+)", block_text, re.IGNORECASE)
+                    if rs:
+                        race = rs.group(1)
+                        sex = rs.group(2)
 
             last, first, middle = "", "", ""
             if "," in full_name:
