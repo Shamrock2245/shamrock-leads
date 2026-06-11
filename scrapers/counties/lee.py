@@ -41,7 +41,7 @@ SOCKS_PROXY = "socks5h://172.18.0.1:1080"  # Residential IP via office iMac — 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
 MAX_PAGES = 15                 # Reduced: 15 × 200 = 3000 records max (enough for 30 days)
-MAX_ENRICH = 10                # Reduced from 25 — fewer charges API calls per run
+MAX_ENRICH = 5                 # Conservative: 5 enrichments per run to save API quota
 DETAIL_DELAY_S = 4.0           # Increased from 3.0 — more breathing room
 DETAIL_JITTER_S = 2.0          # Increased jitter
 RETRY_LIMIT = 2                # Reduced from 4 — stop faster on 429 (save quota)
@@ -130,14 +130,14 @@ class LeeCountyScraper(BaseScraper):
         e = end_date.strftime("%Y-%m-%d")
 
         # Rate limit: 480,000 requests per 12-hour window
-        # Only try 3 most-likely variants (was 7) to conserve API quota
+        # Only try 2 variants to conserve API quota — inCustody is preferred
+        # because it returns fewer records (only current inmates) and uses
+        # less bandwidth. Date-range is fallback only.
         variants = [
             # Variant 0: inCustody filter — most efficient, returns only current inmates
             {"inCustody": "true"},
-            # Variant 1: date-range fallback
+            # Variant 1: date-range fallback (only if inCustody returns nothing)
             {"startBooking": s, "endBooking": e},
-            # Variant 2: ISO date-range fallback
-            {"startBooking": f"{s}T00:00:00", "endBooking": f"{e}T23:59:59"},
         ]
 
         for i, params in enumerate(variants):
