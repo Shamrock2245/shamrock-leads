@@ -248,8 +248,8 @@ class JailTrackerBaseScraper(BaseScraper):
             # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
             if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
                 # Check if CAPTCHA was actually validated successfully
-                captcha_correct = (validate_result is True or validate_result == "true" 
-                                   or (isinstance(validate_result, dict) and validate_result.get("valid")))
+                captcha_correct = (isinstance(validate_result, dict) 
+                                   and validate_result.get("captchaMatched") is True)
                 
                 # The CAPTCHA might have been CORRECT — crash could be during roster loading.
                 # Check if offender data was already captured via API response interception.
@@ -259,22 +259,47 @@ class JailTrackerBaseScraper(BaseScraper):
                         return True
 
                 if captcha_correct:
-                    # CAPTCHA was valid but Blazor crashed! Try fetching offender data directly
-                    logger.info(f"[{self.county}] CAPTCHA validated but Blazor crashed — trying direct JS fetch...")
-                    try:
-                        roster_data = page.evaluate(f"""() => {{
-                            return fetch('/jtclientweb/(S({page.url.split("(S(")[1].split(")")[0]}))/Offender/{self.county_jt_id}', {{
-                                headers: {{'Accept': 'application/json'}}
-                            }}).then(r => r.json()).catch(e => null);
-                        }}""")
-                        if roster_data and isinstance(roster_data, list):
-                            logger.info(f"[{self.county}] Direct fetch recovered {len(roster_data)} offenders! ✅")
-                            api_data[f"Offender/{self.county_jt_id}/direct"] = roster_data
-                            return True
-                        elif roster_data:
-                            logger.info(f"[{self.county}] Direct fetch returned: {str(roster_data)[:200]}")
-                    except Exception as e:
-                        logger.warning(f"[{self.county}] Direct JS fetch failed: {e}")
+                    # CAPTCHA was valid but Blazor crashed! Try fetching offender data directly.
+                    # The session cookie is valid, so direct XHR should work.
+                    session_id = page.url.split("(S(")[1].split(")")[0] if "(S(" in page.url else ""
+                    logger.info(f"[{self.county}] CAPTCHA validated (captchaMatched=True) but Blazor crashed — trying direct fetch with session={session_id}...")
+                    
+                    # Try multiple possible roster endpoints
+                    endpoints = [
+                        f"/jtclientweb/(S({session_id}))/Offender/{self.county_jt_id}/GetSearch",
+                        f"/jtclientweb/(S({session_id}))/Offender/{self.county_jt_id}/jailRoster",
+                        f"/jtclientweb/Offender/{self.county_jt_id}/GetSearch",
+                        f"/jtclientweb/Offender/{self.county_jt_id}/jailRoster",
+                    ]
+                    
+                    for endpoint in endpoints:
+                        try:
+                            roster_data = page.evaluate(f"""async () => {{
+                                try {{
+                                    const resp = await fetch('{endpoint}', {{
+                                        headers: {{'Accept': 'application/json', 'Content-Type': 'application/json'}},
+                                        credentials: 'include'
+                                    }});
+                                    if (!resp.ok) return {{error: resp.status, url: '{endpoint}'}};
+                                    const text = await resp.text();
+                                    try {{ return JSON.parse(text); }} catch(e) {{ return {{raw: text.substring(0, 200)}}; }}
+                                }} catch(e) {{ return {{error: e.message}}; }}
+                            }}""")
+                            if roster_data:
+                                logger.info(f"[{self.county}] Endpoint {endpoint}: {str(roster_data)[:300]}")
+                                if isinstance(roster_data, list) and roster_data:
+                                    logger.info(f"[{self.county}] Direct fetch recovered {len(roster_data)} offenders! ✅")
+                                    api_data[f"Offender/{self.county_jt_id}/direct"] = roster_data
+                                    return True
+                                elif isinstance(roster_data, dict) and not roster_data.get("error"):
+                                    # Check for nested list
+                                    for dk, dv in roster_data.items():
+                                        if isinstance(dv, list) and dv and len(dv) > 0:
+                                            logger.info(f"[{self.county}] Found {len(dv)} records in {dk}! ✅")
+                                            api_data[f"Offender/{self.county_jt_id}/direct"] = dv
+                                            return True
+                        except Exception as e:
+                            logger.warning(f"[{self.county}] Fetch {endpoint} failed: {e}")
 
                 logger.info(f"[{self.county}] Blazor crash — navigating to fresh session...")
                 api_data.clear()
