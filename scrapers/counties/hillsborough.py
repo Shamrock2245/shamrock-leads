@@ -3,7 +3,10 @@ Hillsborough County Arrest Scraper — HCSO Arrest Inquiry Portal.
 ================================================================
 Source: Hillsborough County Sheriff's Office
 URL: https://webapps.hcso.tampa.fl.us/arrestinquiry/
-Method: Playwright + SOCKS5 residential proxy + SolveCaptcha reCAPTCHA v2
+Method: Pure HTTP (httpx) + SOCKS5 proxy + SolveCaptcha reCAPTCHA v2
+
+Zero browser needed — uses direct form POST with token injection.
+Memory-safe: ~50MB vs ~500MB+ for Playwright/Chromium.
 
 Requires env vars:
   HCSO_EMAIL       — login email
@@ -12,7 +15,8 @@ Requires env vars:
 
 HISTORY:
   v1: DrissionPage + reCAPTCHA checkbox click (unreliable)
-  v2 (current): Playwright + SOCKS proxy + SolveCaptcha token injection
+  v2: Playwright + SOCKS proxy + SolveCaptcha token injection (OOM crashes)
+  v3 (current): Pure httpx + SolveCaptcha — no browser at all
 """
 import json
 import logging
@@ -22,18 +26,31 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import httpx
+from bs4 import BeautifulSoup
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-LOGIN_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/Account/Login"
-SEARCH_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry/"
+BASE_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry"
+LOGIN_URL = f"{BASE_URL}/Account/Login"
+SEARCH_URL = f"{BASE_URL}/"
 RECAPTCHA_SITEKEY = "6LcK1HopAAAAAEZgVeXqiN2_4zp6cQwRRXfc3uKJ"
 SOCKS_PROXY = "socks5://172.18.0.1:1080"
 DAYS_BACK = 90
 MAX_PAGES = 20
 COOKIE_FILE = "/tmp/hcso_cookies.json"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 class HillsboroughCountyScraper(BaseScraper):
@@ -49,72 +66,68 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.warning("HCSO_EMAIL / HCSO_PASSWORD not set")
             return []
 
-        from playwright.sync_api import sync_playwright
-        from bs4 import BeautifulSoup
-
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            proxy={"server": SOCKS_PROXY},
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"],
-        )
-
-        all_records: List[ArrestRecord] = []
         try:
-            ctx = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
-            )
-            page = ctx.new_page()
-            page.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+            # Create HTTP client with SOCKS5 proxy
+            client = httpx.Client(
+                headers=HEADERS,
+                follow_redirects=True,
+                timeout=30.0,
+                proxy=SOCKS_PROXY,
+                verify=True,
             )
 
-            # Try cookie-based login first (skips reCAPTCHA entirely)
-            logged_in = self._try_cookie_login(ctx, page)
-
-            # Fall back to full login with reCAPTCHA
-            if not logged_in:
-                if not self._login(page, hcso_email, hcso_password):
-                    logger.error("Hillsborough: login failed")
+            # Step 1: Try cookie login
+            if not self._try_cookie_login(client):
+                # Step 2: Fresh login
+                if not self._login(client, hcso_email, hcso_password):
+                    logger.error("[Hillsborough] Login failed")
                     return []
-                # Save cookies for next run
-                self._save_cookies(ctx)
+                self._save_cookies(client)
 
-            # Search
-            if not self._perform_search(page):
-                logger.warning("Hillsborough: no search results")
+            # Step 3: Search
+            results_html = self._perform_search(client)
+            if not results_html:
+                logger.warning("[Hillsborough] Search returned no results")
                 return []
 
-            # Paginate and parse
-            for page_num in range(1, MAX_PAGES + 1):
-                soup = BeautifulSoup(page.content(), "html.parser")
+            # Step 4: Parse results + paginate
+            all_records: List[ArrestRecord] = []
+            seen_bookings = set()
+            page_num = 1
+            current_html = results_html
+
+            while page_num <= MAX_PAGES:
+                soup = BeautifulSoup(current_html, "html.parser")
                 page_records = self._parse_results_table(soup)
                 if not page_records:
                     break
-                all_records.extend(page_records)
+
+                # Dedup
+                new_records = []
+                for r in page_records:
+                    if r.Booking_Number not in seen_bookings:
+                        seen_bookings.add(r.Booking_Number)
+                        new_records.append(r)
+
+                if not new_records:
+                    logger.info(f"[Hillsborough] Page {page_num}: all duplicates, stopping")
+                    break
+
+                all_records.extend(new_records)
                 logger.info(
-                    f"[Hillsborough] Page {page_num}: +{len(page_records)} "
+                    f"[Hillsborough] Page {page_num}: +{len(new_records)} new "
                     f"(total: {len(all_records)})"
                 )
 
-                # Next page
-                try:
-                    next_btn = page.query_selector("text=Next >")
-                    if not next_btn:
-                        break
-                    cls = next_btn.get_attribute("class") or ""
-                    if "disabled" in cls:
-                        break
-                    next_btn.click()
-                    time.sleep(3)
-                except Exception:
+                # Try next page
+                next_html = self._get_next_page(client, soup, page_num)
+                if not next_html:
                     break
 
-            logger.info(f"Hillsborough: {len(all_records)} records total")
+                current_html = next_html
+                page_num += 1
+
+            logger.info(f"Hillsborough: {len(all_records)} unique records total")
             return all_records
 
         except Exception as e:
@@ -122,60 +135,57 @@ class HillsboroughCountyScraper(BaseScraper):
             raise
         finally:
             try:
-                browser.close()
-            except Exception:
-                pass
-            try:
-                pw.stop()
+                client.close()
             except Exception:
                 pass
 
     # ── Login ──────────────────────────────────────────────────────────
-    def _login(self, page, email: str, password: str) -> bool:
+    def _login(self, client: httpx.Client, email: str, password: str) -> bool:
         logger.info("[Hillsborough] Loading login page...")
-        page.goto(LOGIN_URL, wait_until="load", timeout=30000)
-        time.sleep(3)
 
-        # Fill credentials
-        page.locator("#Email").fill(email)
-        time.sleep(0.3)
-        page.locator("#Password").fill(password)
+        # GET login page → extract __RequestVerificationToken
+        resp = client.get(LOGIN_URL)
+        if resp.status_code != 200:
+            logger.error(f"[Hillsborough] Login page returned {resp.status_code}")
+            return False
 
-        # Remember me
-        try:
-            page.click("#RememberMe", timeout=2000)
-        except Exception:
-            pass
+        soup = BeautifulSoup(resp.text, "html.parser")
+        token = self._extract_verification_token(soup)
+        if not token:
+            logger.error("[Hillsborough] Could not find __RequestVerificationToken")
+            return False
 
-        # Solve reCAPTCHA
-        if not self._solve_recaptcha(page):
-            logger.warning("[Hillsborough] reCAPTCHA not solved, submitting anyway")
+        # Solve reCAPTCHA via SolveCaptcha API
+        recaptcha_token = self._solve_recaptcha_api(LOGIN_URL)
+        if not recaptcha_token:
+            logger.warning("[Hillsborough] reCAPTCHA not solved for login")
 
-        # Submit login — HCSO uses <input type="submit" class="btn btn-primary btn-lg">
-        try:
-            page.click("input[type='submit']", timeout=5000)
-        except Exception:
-            try:
-                page.click("button:has-text('Log in')", timeout=3000)
-            except Exception:
-                page.keyboard.press("Enter")
+        # POST login form
+        form_data = {
+            "__RequestVerificationToken": token,
+            "Email": email,
+            "Password": password,
+            "RememberMe": "true",
+            "g-recaptcha-response": recaptcha_token or "",
+        }
 
-        time.sleep(5)
+        resp = client.post(LOGIN_URL, data=form_data)
 
-        # Verify login
-        html = page.content()
-        if "Log out" in html or "Search" in html:
+        # Check if login succeeded (redirects to search page)
+        if resp.status_code == 200 and ("Log Off" in resp.text or "Welcome" in resp.text):
             logger.info("[Hillsborough] Login successful ✅")
             return True
-        if "arrestinquiry" in page.url.lower() and "Login" not in page.url:
-            logger.info("[Hillsborough] Login successful (URL check) ✅")
+
+        # Check URL — successful login redirects away from /Account/Login
+        if "Login" not in str(resp.url):
+            logger.info(f"[Hillsborough] Login successful (redirected to {resp.url}) ✅")
             return True
 
-        logger.warning(f"[Hillsborough] Login appears to have failed. URL: {page.url}")
+        logger.warning(f"[Hillsborough] Login failed. Status: {resp.status_code}, URL: {resp.url}")
         return False
 
     # ── Cookie Persistence ────────────────────────────────────────────
-    def _try_cookie_login(self, ctx, page) -> bool:
+    def _try_cookie_login(self, client: httpx.Client) -> bool:
         """Load saved cookies and check if session is still valid."""
         if not os.path.exists(COOKIE_FILE):
             return False
@@ -187,332 +197,178 @@ class HillsboroughCountyScraper(BaseScraper):
             if not cookies:
                 return False
 
-            # Check cookie age (ASP.NET cookies typically expire after 30 days)
+            # Check cookie age
             file_age = time.time() - os.path.getmtime(COOKIE_FILE)
             if file_age > 86400 * 7:  # 7 days
                 logger.info("[Hillsborough] Saved cookies expired (>7 days)")
                 os.remove(COOKIE_FILE)
                 return False
 
-            # Add cookies to context
-            ctx.add_cookies(cookies)
+            # Set cookies on client
+            for name, value in cookies.items():
+                client.cookies.set(name, value)
+
             logger.info(f"[Hillsborough] Loaded {len(cookies)} saved cookies")
 
-            # Test if session is valid by hitting the search page
-            page.goto(SEARCH_URL, wait_until="load", timeout=20000)
-            time.sleep(2)
-
-            if "Login" in page.url:
-                logger.info("[Hillsborough] Saved cookies expired (redirected to login)")
-                try:
-                    os.remove(COOKIE_FILE)
-                except Exception:
-                    pass
-                return False
-
-            html = page.content()
-            if "Log Off" in html or "Welcome" in html:
+            # Test if session is valid
+            resp = client.get(SEARCH_URL)
+            if resp.status_code == 200 and ("Log Off" in resp.text or "Welcome" in resp.text):
                 logger.info("[Hillsborough] Cookie login successful ✅ (skipped reCAPTCHA!)")
                 return True
 
             logger.info("[Hillsborough] Cookie session invalid")
-            return False
-
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Cookie login error: {e}")
-            return False
-
-    def _save_cookies(self, ctx):
-        """Save browser cookies for reuse on next run."""
-        try:
-            cookies = ctx.cookies()
-            with open(COOKIE_FILE, "w") as f:
-                json.dump(cookies, f)
-            logger.info(f"[Hillsborough] Saved {len(cookies)} cookies to {COOKIE_FILE}")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Could not save cookies: {e}")
-
-    # ── reCAPTCHA Solver (Unified Flow) ─────────────────────────────────
-    def _solve_recaptcha(self, page) -> bool:
-        """
-        Solve reCAPTCHA v2 — unified flow with ONE checkbox click.
-        
-        Flow:
-          1. Mouse-click checkbox with real coordinates
-          2. If auto-solved (good IP reputation) → done
-          3. If challenge appeared → switch to audio challenge
-          4. If audio loads → transcribe + submit (free)
-          5. If audio fails → SolveCaptcha API token injection (paid fallback)
-        """
-        # Step 1: Click the checkbox with realistic mouse coordinates
-        anchor_frame = self._click_recaptcha_checkbox(page)
-        if not anchor_frame:
-            logger.warning("[Hillsborough] Could not find reCAPTCHA checkbox")
-            return self._solve_via_api(page)
-
-        # Step 2: Check if auto-solved (happens with good IP reputation)
-        time.sleep(4)
-        if self._is_recaptcha_solved(anchor_frame, page):
-            logger.info("[Hillsborough] reCAPTCHA auto-solved via checkbox! ✅ (free)")
-            return True
-
-        logger.info("[Hillsborough] Challenge appeared, trying audio...")
-
-        # Step 3: Find the challenge bframe and switch to audio
-        bframe = self._get_bframe(page)
-        if not bframe:
-            logger.warning("[Hillsborough] No challenge frame found")
-            return self._solve_via_api(page)
-
-        # Try audio challenge (up to 3 attempts)
-        for attempt in range(1, 4):
-            logger.info(f"[Hillsborough] Audio attempt {attempt}/3")
-
-            # Switch to audio challenge
-            if not self._switch_to_audio(bframe):
-                logger.warning("[Hillsborough] Could not switch to audio")
-                break
-
-            time.sleep(4)
-
-            # Download and transcribe
-            audio_url = self._get_audio_url(bframe)
-            if not audio_url:
-                logger.warning("[Hillsborough] No audio URL found")
-                self._reload_challenge(bframe)
-                time.sleep(2)
-                continue
-
-            transcript = self._transcribe_audio(audio_url)
-            if not transcript:
-                logger.warning("[Hillsborough] Transcription failed")
-                self._reload_challenge(bframe)
-                time.sleep(2)
-                continue
-
-            # Submit answer
-            if self._submit_audio_answer(bframe, transcript, anchor_frame, page):
-                logger.info("[Hillsborough] reCAPTCHA solved via audio! ✅ (free)")
-                return True
-
-            logger.warning("[Hillsborough] Wrong answer, retrying...")
-            self._reload_challenge(bframe)
-            time.sleep(2)
-
-        # Step 4: Fallback to SolveCaptcha API (paid)
-        logger.info("[Hillsborough] Audio failed, trying SolveCaptcha API...")
-        return self._solve_via_api(page)
-
-    def _click_recaptcha_checkbox(self, page):
-        """Click checkbox with real mouse coordinates. Returns anchor frame or None."""
-        try:
-            iframe_el = None
-            anchor_frame = None
-            for el in page.query_selector_all("iframe"):
-                src = el.get_attribute("src") or ""
-                if "recaptcha" in src and "anchor" in src:
-                    iframe_el = el
-                    break
-            for f in page.frames:
-                if "recaptcha" in f.url and "anchor" in f.url:
-                    anchor_frame = f
-                    break
-
-            if not iframe_el or not anchor_frame:
-                return None
-
-            iframe_box = iframe_el.bounding_box()
-            checkbox_box = anchor_frame.evaluate("""() => {
-                var cb = document.querySelector('#recaptcha-anchor');
-                if (!cb) return null;
-                var rect = cb.getBoundingClientRect();
-                return {x: rect.x, y: rect.y, width: rect.width, height: rect.height};
-            }""")
-
-            if not iframe_box or not checkbox_box:
-                return None
-
-            click_x = iframe_box["x"] + checkbox_box["x"] + checkbox_box["width"] / 2
-            click_y = iframe_box["y"] + checkbox_box["y"] + checkbox_box["height"] / 2
-
-            page.mouse.move(click_x, click_y)
-            time.sleep(0.3)
-            page.mouse.click(click_x, click_y)
-            logger.info(f"[Hillsborough] Clicked checkbox at ({click_x:.0f}, {click_y:.0f})")
-            return anchor_frame
-
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Checkbox click error: {e}")
-            return None
-
-    def _is_recaptcha_solved(self, anchor_frame, page) -> bool:
-        """Check if reCAPTCHA is solved (checkbox checked or token populated)."""
-        try:
-            checked = anchor_frame.evaluate(
-                "() => document.querySelector('#recaptcha-anchor')?.getAttribute('aria-checked')"
-            )
-            if checked == "true":
-                return True
-        except Exception:
-            pass
-        try:
-            token = page.evaluate("""() => {
-                var el = document.querySelector('#g-recaptcha-response')
-                    || document.querySelector('[name="g-recaptcha-response"]');
-                return el ? el.value : '';
-            }""")
-            if token and len(token) > 20:
-                return True
-        except Exception:
-            pass
-        return False
-
-    def _get_bframe(self, page):
-        """Find the reCAPTCHA challenge bframe."""
-        for f in page.frames:
-            if "recaptcha" in f.url and "bframe" in f.url:
-                return f
-        return None
-
-    def _switch_to_audio(self, bframe) -> bool:
-        """Click the audio button in the challenge frame."""
-        try:
-            audio_btn = bframe.query_selector("#recaptcha-audio-button")
-            if audio_btn:
-                audio_btn.click(force=True, timeout=5000)
-                logger.info("[Hillsborough] Switched to audio")
-                time.sleep(3)
-                return True
-        except Exception:
-            pass
-        try:
-            bframe.evaluate(
-                "() => { var b = document.querySelector('#recaptcha-audio-button'); if (b) b.click(); }"
-            )
-            time.sleep(3)
-            return True
-        except Exception:
-            pass
-        return False
-
-    def _get_audio_url(self, bframe) -> str:
-        """Extract the audio challenge MP3 URL from the bframe."""
-        try:
-            # Method 1: Download link
-            link = bframe.query_selector(".rc-audiochallenge-tdownload-link")
-            if link:
-                href = link.get_attribute("href")
-                if href:
-                    return href
-
-            # Method 2: Audio source element
-            url = bframe.evaluate("""() => {
-                var src = document.querySelector('audio source');
-                if (src) return src.src || src.getAttribute('src');
-                var audio = document.querySelector('audio');
-                if (audio) return audio.src;
-                var el = document.querySelector('#audio-source');
-                if (el) return el.src || el.getAttribute('src');
-                return '';
-            }""")
-            if url:
-                return url
-
-            # Method 3: Payload links
-            url = bframe.evaluate("""() => {
-                var links = document.querySelectorAll('a[href*="payload"]');
-                for (var i = 0; i < links.length; i++) {
-                    if (links[i].href) return links[i].href;
-                }
-                return '';
-            }""")
-            return url or ""
-
-        except Exception:
-            return ""
-
-    def _transcribe_audio(self, audio_url: str) -> str:
-        """Download MP3, convert to WAV, transcribe via Google Speech Recognition."""
-        import tempfile
-        import random
-        import urllib.request
-
-        try:
-            tmp_dir = tempfile.mkdtemp()
-            mp3_path = os.path.join(tmp_dir, f"captcha_{random.randint(1000,9999)}.mp3")
-            wav_path = mp3_path.replace(".mp3", ".wav")
-
-            logger.info(f"[Hillsborough] Downloading audio: {audio_url[:60]}...")
-            urllib.request.urlretrieve(audio_url, mp3_path)
-
-            import pydub
-            sound = pydub.AudioSegment.from_mp3(mp3_path)
-            sound.export(wav_path, format="wav")
-
-            import speech_recognition as sr
-            recognizer = sr.Recognizer()
-            with sr.AudioFile(wav_path) as source:
-                audio_data = recognizer.record(source)
-                transcript = recognizer.recognize_google(audio_data)
-
-            logger.info(f"[Hillsborough] Transcript: '{transcript}'")
-
-            # Cleanup
             try:
-                os.remove(mp3_path)
-                os.remove(wav_path)
-                os.rmdir(tmp_dir)
+                os.remove(COOKIE_FILE)
             except Exception:
                 pass
-
-            return transcript.strip()
+            # Clear invalid cookies
+            client.cookies.clear()
+            return False
 
         except Exception as e:
-            logger.warning(f"[Hillsborough] Transcription error: {e}")
-            return ""
+            logger.warning(f"[Hillsborough] Cookie load error: {e}")
+            return False
 
-    def _submit_audio_answer(self, bframe, answer, anchor_frame, page) -> bool:
-        """Submit the transcribed answer and check if solved."""
+    def _save_cookies(self, client: httpx.Client):
+        """Save session cookies for future runs."""
         try:
-            input_field = bframe.query_selector("#audio-response")
-            if input_field:
-                input_field.fill(answer)
-                time.sleep(0.5)
-                verify_btn = bframe.query_selector("#recaptcha-verify-button")
-                if verify_btn:
-                    verify_btn.click(force=True)
-                    time.sleep(4)
-                    return self._is_recaptcha_solved(anchor_frame, page)
+            cookies = {name: value for name, value in client.cookies.items()}
+            if cookies:
+                with open(COOKIE_FILE, "w") as f:
+                    json.dump(cookies, f)
+                logger.info(f"[Hillsborough] Saved {len(cookies)} cookies to {COOKIE_FILE}")
         except Exception as e:
-            logger.warning(f"[Hillsborough] Submit error: {e}")
-        return False
+            logger.warning(f"[Hillsborough] Cookie save error: {e}")
 
-    def _reload_challenge(self, bframe):
-        """Click reload to get a new audio challenge."""
-        try:
-            reload_btn = bframe.query_selector("#recaptcha-reload-button")
-            if reload_btn:
-                reload_btn.click(force=True)
-                time.sleep(3)
-        except Exception:
-            pass
+    # ── Search ─────────────────────────────────────────────────────────
+    def _perform_search(self, client: httpx.Client) -> Optional[str]:
+        """Submit search form and return results HTML."""
+        logger.info("[Hillsborough] Performing search...")
 
-    def _solve_via_api(self, page) -> bool:
-        """Solve reCAPTCHA via SolveCaptcha API token injection.
-        
-        This bypasses ALL visual challenges — no clicking needed.
-        Sends the sitekey to the API, gets a valid token back, and
-        injects it into the g-recaptcha-response field.
-        """
+        # GET search page → extract verification token
+        resp = client.get(SEARCH_URL)
+        if resp.status_code != 200:
+            logger.error(f"[Hillsborough] Search page returned {resp.status_code}")
+            return None
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        token = self._extract_verification_token(soup)
+
+        # Solve search reCAPTCHA
+        recaptcha_token = self._solve_recaptcha_api(SEARCH_URL)
+        if not recaptcha_token:
+            logger.warning("[Hillsborough] Search reCAPTCHA not solved")
+
+        # Build search form data — use 90-day lookback for booking date
+        # Site requires at least one field (Name, Booking#, BookingDate, or ReleaseDate)
+        booking_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y")
+        logger.info(f"[Hillsborough] Search: current inmates, booking date >= {booking_date}")
+
+        form_data = {
+            "SearchBookingNumber": "",
+            "SearchName": "",
+            "SearchBookingDate": booking_date,
+            "SearchReleaseDate": "",
+            "SearchCurrentInmatesOnly": "true",
+            "SearchIncludeDetails": "true",
+            "SortOrder": "BookDate",
+            "g-recaptcha-response": recaptcha_token or "",
+        }
+        if token:
+            form_data["__RequestVerificationToken"] = token
+
+        # POST search
+        resp = client.post(SEARCH_URL, data=form_data)
+
+        if resp.status_code != 200:
+            logger.warning(f"[Hillsborough] Search POST returned {resp.status_code}")
+            return None
+
+        # Check for results
+        html = resp.text
+
+        # Check for failures FIRST (before success — "Booking" appears in form labels too)
+        if "Captcha validation has failed" in html:
+            logger.error("[Hillsborough] Search failed: Captcha validation failed")
+            return None
+
+        if "must be entered to perform a search" in html:
+            logger.error("[Hillsborough] Search failed: required field missing")
+            return None
+
+        # Now check for actual results table
+        if "table-striped" in html:
+            # Double-check it's a results table, not just the form
+            from bs4 import BeautifulSoup as BS
+            check_soup = BS(html, "html.parser")
+            results_table = check_soup.find("table", class_="table-striped")
+            if results_table:
+                rows = results_table.find_all("tr")
+                logger.info(f"[Hillsborough] Search returned results ✅ ({len(rows)} rows)")
+                return html
+
+        logger.warning(f"[Hillsborough] Search returned no results table (len={len(html)})")
+        return html
+
+    # ── Pagination ─────────────────────────────────────────────────────
+    def _get_next_page(self, client: httpx.Client, soup: BeautifulSoup, current_page: int) -> Optional[str]:
+        """Navigate to next results page via POST (pagination is JS-based)."""
+        # HCSO uses JavaScript void(0) pagination buttons with class 'btn-pager'
+        # We need to POST the form again with page number
+        pager_links = soup.find_all("a", class_="btn-pager")
+        has_next = False
+        for link in pager_links:
+            text = link.get_text(strip=True)
+            if text == str(current_page + 1) or text.startswith("Next"):
+                has_next = True
+                break
+
+        if not has_next:
+            logger.info(f"[Hillsborough] No page {current_page + 1} available, stopping")
+            return None
+
+        # POST with page parameter
+        token_input = soup.find("input", {"name": "__RequestVerificationToken"})
+        token = token_input.get("value", "") if token_input else ""
+
+        form_data = {
+            "SearchBookingNumber": "",
+            "SearchName": "",
+            "SearchBookingDate": (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y"),
+            "SearchReleaseDate": "",
+            "SearchCurrentInmatesOnly": "true",
+            "SearchIncludeDetails": "true",
+            "SortOrder": "BookDate",
+            "page": str(current_page + 1),
+            "g-recaptcha-response": "",
+        }
+        if token:
+            form_data["__RequestVerificationToken"] = token
+
+        resp = client.post(SEARCH_URL, data=form_data)
+        if resp.status_code == 200 and "table-striped" in resp.text:
+            logger.info(f"[Hillsborough] Loaded page {current_page + 1}")
+            return resp.text
+
+        # Also try GET with page param
+        resp = client.get(f"{SEARCH_URL}?page={current_page + 1}")
+        if resp.status_code == 200 and "table-striped" in resp.text:
+            logger.info(f"[Hillsborough] Loaded page {current_page + 1} (GET)")
+            return resp.text
+
+        logger.info(f"[Hillsborough] Could not load page {current_page + 1}")
+        return None
+
+    # ── SolveCaptcha API ───────────────────────────────────────────────
+    def _solve_recaptcha_api(self, page_url: str) -> Optional[str]:
+        """Solve reCAPTCHA v2 via SolveCaptcha API. Returns token string."""
         api_key = os.getenv("SOLVECAPTCHA_KEY", "")
         if not api_key:
-            logger.info("[Hillsborough] No SOLVECAPTCHA_KEY set, skipping API solve")
-            return False
+            logger.info("[Hillsborough] No SOLVECAPTCHA_KEY set")
+            return None
 
         logger.info("[Hillsborough] Solving reCAPTCHA via SolveCaptcha API...")
         try:
-            import httpx
-
             # Step 1: Submit task
             submit_resp = httpx.post(
                 "https://api.solvecaptcha.com/in.php",
@@ -520,7 +376,7 @@ class HillsboroughCountyScraper(BaseScraper):
                     "key": api_key,
                     "method": "userrecaptcha",
                     "googlekey": RECAPTCHA_SITEKEY,
-                    "pageurl": page.url,
+                    "pageurl": page_url,
                     "json": "1",
                 },
                 timeout=30,
@@ -528,13 +384,12 @@ class HillsboroughCountyScraper(BaseScraper):
             submit_data = submit_resp.json()
             if submit_data.get("status") != 1:
                 logger.error(f"[Hillsborough] SolveCaptcha submit failed: {submit_data}")
-                return False
+                return None
 
             task_id = submit_data["request"]
             logger.info(f"[Hillsborough] SolveCaptcha task: {task_id}")
 
             # Step 2: Poll for result (up to 180s)
-            token = None
             http_errors = 0
             for i in range(36):
                 time.sleep(5)
@@ -553,151 +408,43 @@ class HillsboroughCountyScraper(BaseScraper):
                         http_errors += 1
                         logger.warning(f"[Hillsborough] SolveCaptcha HTTP {result_resp.status_code} (attempt {http_errors})")
                         if http_errors >= 3:
-                            logger.error("[Hillsborough] SolveCaptcha: too many HTTP errors")
-                            return False
+                            return None
                         continue
                     result_data = result_resp.json()
-                except (ValueError, Exception) as parse_err:
+                except Exception as e:
                     http_errors += 1
-                    logger.warning(f"[Hillsborough] SolveCaptcha parse error (attempt {http_errors}): {parse_err}")
+                    logger.warning(f"[Hillsborough] SolveCaptcha poll error ({http_errors}): {e}")
                     if http_errors >= 3:
-                        return False
+                        return None
                     continue
 
                 if result_data.get("status") == 1:
                     token = result_data["request"]
                     logger.info(f"[Hillsborough] Token received in {(i+1)*5}s ✅")
-                    break
+                    return token
                 elif "CAPCHA_NOT_READY" in str(result_data.get("request", "")):
                     continue
                 else:
                     logger.error(f"[Hillsborough] SolveCaptcha error: {result_data}")
-                    return False
+                    return None
 
-            if not token:
-                logger.error("[Hillsborough] SolveCaptcha timeout (120s)")
-                return False
-
-            # Step 3: Inject token into the form
-            page.evaluate(
-                f"""() => {{
-                var el = document.querySelector('#g-recaptcha-response')
-                    || document.querySelector('[name="g-recaptcha-response"]');
-                if (el) {{
-                    el.style.display = 'block';
-                    el.value = '{token}';
-                }}
-                // Trigger the callback if defined
-                if (typeof ___grecaptcha_cfg !== 'undefined') {{
-                    var clients = ___grecaptcha_cfg.clients;
-                    for (var cid in clients) {{
-                        var client = clients[cid];
-                        if (client && client.cb) client.cb('{token}');
-                    }}
-                }}
-            }}"""
-            )
-            time.sleep(1)
-            return True
+            logger.error("[Hillsborough] SolveCaptcha timeout (180s)")
+            return None
 
         except Exception as e:
             logger.error(f"[Hillsborough] SolveCaptcha error: {e}")
-            return False
+            return None
 
-    # ── Search ─────────────────────────────────────────────────────────
-    def _perform_search(self, page) -> bool:
-        """
-        Submit the search form on the HCSO landing page.
-        
-        The search form is on the SAME page as the login landing page —
-        no navigation needed. The form has a SECOND reCAPTCHA that must
-        be solved before submission.
-        
-        Form fields (discovered via element dump):
-          #SearchBookingNumber  — text
-          #SearchName           — text (Last Name, First Name)
-          #SearchBookingDate    — datepicker (MM/DD/YYYY)
-          #SearchReleaseDate    — datepicker (MM/DD/YYYY)
-          #SearchCurrentInmatesOnly — checkbox
-          #SearchIncludeDetails — checkbox
-          #button_submit        — submit button
-        """
-        logger.info("[Hillsborough] Performing search (form is on landing page)...")
+    # ── Helpers ─────────────────────────────────────────────────────────
+    @staticmethod
+    def _extract_verification_token(soup: BeautifulSoup) -> Optional[str]:
+        """Extract ASP.NET __RequestVerificationToken from form."""
+        token_input = soup.find("input", {"name": "__RequestVerificationToken"})
+        if token_input:
+            return token_input.get("value", "")
+        return None
 
-        # Fill Booking Date (required — form rejects blank searches)
-        try:
-            from datetime import datetime, timedelta
-            booking_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y")
-            page.locator("#SearchBookingDate").fill(booking_date)
-            logger.info(f"[Hillsborough] Set booking date: {booking_date}")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Could not set booking date: {e}")
-
-        # Check the "Current Inmates Only" checkbox for active arrests
-        try:
-            is_checked = page.evaluate(
-                "() => document.querySelector('#SearchCurrentInmatesOnly')?.checked || false"
-            )
-            if not is_checked:
-                page.click("#SearchCurrentInmatesOnly", timeout=3000)
-                logger.info("[Hillsborough] Checked 'Current Inmates Only'")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Could not check 'Current Inmates Only': {e}")
-
-        # Check "Include Arrest Details" for charges/bond info
-        try:
-            is_checked = page.evaluate(
-                "() => document.querySelector('#SearchIncludeDetails')?.checked || false"
-            )
-            if not is_checked:
-                page.click("#SearchIncludeDetails", timeout=3000)
-                logger.info("[Hillsborough] Checked 'Include Arrest Details'")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Could not check details: {e}")
-
-        # Sort by Booking Date (most recent first)
-        try:
-            page.click("#rbSortBookDate", timeout=2000)
-        except Exception:
-            pass
-
-        # Solve the SECOND reCAPTCHA on the search form
-        # Go straight to API token injection — avoids clicking checkbox which
-        # loads heavy iframe challenge and causes memory crashes in Docker
-        logger.info("[Hillsborough] Solving search form reCAPTCHA...")
-        if self._solve_via_api(page):
-            logger.info("[Hillsborough] Search reCAPTCHA solved via API ✅")
-        else:
-            logger.warning("[Hillsborough] Search reCAPTCHA not solved, submitting anyway")
-
-        time.sleep(1)
-
-        # Submit search via #button_submit
-        try:
-            page.click("#button_submit", timeout=5000)
-        except Exception:
-            try:
-                page.click("button[type='submit']", timeout=3000)
-            except Exception:
-                try:
-                    page.keyboard.press("Enter")
-                except Exception as e:
-                    logger.warning(f"[Hillsborough] Submit fallback failed: {e}")
-
-        # Wait for results to load
-        time.sleep(8)
-
-        html = page.content()
-        has_results = "table-striped" in html or "Booking Name" in html or "Booking #" in html
-        if has_results:
-            logger.info("[Hillsborough] Search returned results ✅")
-        else:
-            # Log what we see for debugging
-            body_text = page.evaluate("() => document.body.innerText.substring(0, 300)")
-            logger.warning(f"[Hillsborough] No results table found. Body: {body_text[:200]}")
-        return has_results
-
-    # ── Parsing (preserved from v1) ────────────────────────────────────
+    # ── Parsing ────────────────────────────────────────────────────────
     def _parse_results_table(self, soup):
         records = []
         results_table = soup.find("table", class_="table-striped")
@@ -709,6 +456,12 @@ class HillsboroughCountyScraper(BaseScraper):
         while i < len(all_rows):
             try:
                 row = all_rows[i]
+                # Skip separator rows
+                cls = row.get("class", [])
+                if "table-separator" in cls:
+                    i += 1
+                    continue
+
                 cells = row.find_all("td", recursive=False)
                 if len(cells) >= 5:
                     name_link = cells[0].find("a")
@@ -718,7 +471,9 @@ class HillsboroughCountyScraper(BaseScraper):
                         )
                         if record:
                             records.append(record)
-                        i += 4
+                        # Skip remaining rows for this inmate block
+                        # Structure: name(i) → address(i+1) → dates(i+2) → charges(i+3) → separator(i+4)
+                        i += 5
                         continue
                 i += 1
             except Exception:
@@ -732,12 +487,14 @@ class HillsboroughCountyScraper(BaseScraper):
         if href and not href.startswith("http"):
             href = "https://webapps.hcso.tampa.fl.us" + href
         booking_number = cells[1].get_text(strip=True)
+        agency = cells[2].get_text(strip=True) if len(cells) > 2 else ""
         demo = cells[4].get_text(strip=True)
         demo_parts = [p.strip() for p in demo.split("/")]
         race = demo_parts[0] if len(demo_parts) >= 1 else ""
         sex = demo_parts[1] if len(demo_parts) >= 2 else ""
         dob = demo_parts[3] if len(demo_parts) >= 4 else ""
 
+        # Row i+1: Address
         address = ""
         if i + 1 < len(all_rows):
             for cell in all_rows[i + 1].find_all("td"):
@@ -745,19 +502,21 @@ class HillsboroughCountyScraper(BaseScraper):
                 if text.startswith("ADDRESS:"):
                     address = text.replace("ADDRESS:", "").strip()
 
+        # Row i+2: Release date / code / SOID
         booking_date, arrest_date, status = "", "", "In Custody"
         if i + 2 < len(all_rows):
             for cell in all_rows[i + 2].find_all("td"):
                 text = cell.get_text(strip=True)
-                if text.startswith("ARREST DATE:"):
-                    arrest_date = text.replace("ARREST DATE:", "").strip()
-                elif text.startswith("BOOKING DATE:"):
-                    booking_date = text.replace("BOOKING DATE:", "").strip()
-                elif text.startswith("RELEASE DATE:"):
+                if text.startswith("RELEASE DATE:"):
                     release = text.replace("RELEASE DATE:", "").strip()
                     if release:
                         status = "Released"
+                elif text.startswith("ARREST DATE:"):
+                    arrest_date = text.replace("ARREST DATE:", "").strip()
+                elif text.startswith("BOOKING DATE:"):
+                    booking_date = text.replace("BOOKING DATE:", "").strip()
 
+        # Row i+3: Charges table (nested <table>)
         charges_list, total_bond, case_number = [], 0.0, ""
         if i + 3 < len(all_rows):
             nested = all_rows[i + 3].find("table")
@@ -766,7 +525,7 @@ class HillsboroughCountyScraper(BaseScraper):
                     cc = cr.find_all("td")
                     if len(cc) >= 2:
                         desc = cc[1].get_text(strip=True)
-                        if desc and "Charge Type" not in desc:
+                        if desc and "Charge Type" not in desc and "Charge(s)" not in desc:
                             charges_list.append(desc)
                         if len(cc) >= 5:
                             bond_text = cc[4].get_text(strip=True)
@@ -804,6 +563,7 @@ class HillsboroughCountyScraper(BaseScraper):
             Bond_Amount=str(total_bond) if total_bond > 0 else "0",
             Case_Number=case_number,
             Detail_URL=href,
+            Agency=agency,
             LastCheckedMode="INITIAL",
         )
 
