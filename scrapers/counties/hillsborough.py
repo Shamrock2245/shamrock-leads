@@ -14,6 +14,7 @@ HISTORY:
   v1: DrissionPage + reCAPTCHA checkbox click (unreliable)
   v2 (current): Playwright + SOCKS proxy + SolveCaptcha token injection
 """
+import json
 import logging
 import os
 import re
@@ -32,6 +33,7 @@ RECAPTCHA_SITEKEY = "6LcK1HopAAAAAEZgVeXqiN2_4zp6cQwRRXfc3uKJ"
 SOCKS_PROXY = "socks5://172.18.0.1:1080"
 DAYS_BACK = 90
 MAX_PAGES = 20
+COOKIE_FILE = "/tmp/hcso_cookies.json"
 
 
 class HillsboroughCountyScraper(BaseScraper):
@@ -71,10 +73,16 @@ class HillsboroughCountyScraper(BaseScraper):
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
             )
 
-            # Login
-            if not self._login(page, hcso_email, hcso_password):
-                logger.error("Hillsborough: login failed")
-                return []
+            # Try cookie-based login first (skips reCAPTCHA entirely)
+            logged_in = self._try_cookie_login(ctx, page)
+
+            # Fall back to full login with reCAPTCHA
+            if not logged_in:
+                if not self._login(page, hcso_email, hcso_password):
+                    logger.error("Hillsborough: login failed")
+                    return []
+                # Save cookies for next run
+                self._save_cookies(ctx)
 
             # Search
             if not self._perform_search(page):
@@ -167,6 +175,64 @@ class HillsboroughCountyScraper(BaseScraper):
 
         logger.warning(f"[Hillsborough] Login appears to have failed. URL: {page.url}")
         return False
+
+    # ── Cookie Persistence ────────────────────────────────────────────
+    def _try_cookie_login(self, ctx, page) -> bool:
+        """Load saved cookies and check if session is still valid."""
+        if not os.path.exists(COOKIE_FILE):
+            return False
+
+        try:
+            with open(COOKIE_FILE, "r") as f:
+                cookies = json.load(f)
+
+            if not cookies:
+                return False
+
+            # Check cookie age (ASP.NET cookies typically expire after 30 days)
+            file_age = time.time() - os.path.getmtime(COOKIE_FILE)
+            if file_age > 86400 * 7:  # 7 days
+                logger.info("[Hillsborough] Saved cookies expired (>7 days)")
+                os.remove(COOKIE_FILE)
+                return False
+
+            # Add cookies to context
+            ctx.add_cookies(cookies)
+            logger.info(f"[Hillsborough] Loaded {len(cookies)} saved cookies")
+
+            # Test if session is valid by hitting the search page
+            page.goto(SEARCH_URL, wait_until="load", timeout=20000)
+            time.sleep(2)
+
+            if "Login" in page.url:
+                logger.info("[Hillsborough] Saved cookies expired (redirected to login)")
+                try:
+                    os.remove(COOKIE_FILE)
+                except Exception:
+                    pass
+                return False
+
+            html = page.content()
+            if "Log out" in html or "Search" in html or "button_submit" in html:
+                logger.info("[Hillsborough] Cookie login successful ✅ (skipped reCAPTCHA!)")
+                return True
+
+            logger.info("[Hillsborough] Cookie session invalid")
+            return False
+
+        except Exception as e:
+            logger.warning(f"[Hillsborough] Cookie login error: {e}")
+            return False
+
+    def _save_cookies(self, ctx):
+        """Save browser cookies for reuse on next run."""
+        try:
+            cookies = ctx.cookies()
+            with open(COOKIE_FILE, "w") as f:
+                json.dump(cookies, f)
+            logger.info(f"[Hillsborough] Saved {len(cookies)} cookies to {COOKIE_FILE}")
+        except Exception as e:
+            logger.warning(f"[Hillsborough] Could not save cookies: {e}")
 
     # ── reCAPTCHA Solver (Unified Flow) ─────────────────────────────────
     def _solve_recaptcha(self, page) -> bool:
