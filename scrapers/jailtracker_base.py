@@ -23,9 +23,11 @@ CAPTCHA solving priority (cost cascade — cheapest first):
 """
 
 import base64
+import json
 import logging
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from typing import List, Optional
@@ -82,7 +84,6 @@ class JailTrackerBaseScraper(BaseScraper):
                         key = resp.url.split("/jtclientweb/")[-1]
                         data = resp.json()
                         api_data[key] = data
-                        # Log every JSON response for debugging
                         data_size = len(str(data))
                         logger.info(f"[{self.county}] 📡 API: {key} ({data_size} chars)")
                     except Exception:
@@ -99,7 +100,7 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Solve CAPTCHA
             if not self._solve_captcha(page, api_data):
-                # Last resort: check if any offender data was captured during CAPTCHA attempts
+                # Check api_data for any offender data captured during attempts
                 if api_data:
                     logger.info(f"[{self.county}] CAPTCHA failed but checking captured API data... keys: {list(api_data.keys())}")
                     for key, val in api_data.items():
@@ -107,29 +108,39 @@ class JailTrackerBaseScraper(BaseScraper):
                             val_type = type(val).__name__
                             val_preview = str(val)[:300]
                             logger.info(f"[{self.county}] API key '{key}' type={val_type}: {val_preview}")
-                            # Handle both list and dict responses
                             offender_list = None
                             if isinstance(val, list) and val:
                                 offender_list = val
                             elif isinstance(val, dict):
-                                # Look for list inside dict (common pattern: {"Data": [...], ...})
-                                for dk, dv in val.items():
-                                    if isinstance(dv, list) and dv:
-                                        offender_list = dv
-                                        break
+                                if val.get("offenders"):
+                                    offender_list = val["offenders"]
+                                else:
+                                    for dk, dv in val.items():
+                                        if isinstance(dv, list) and dv:
+                                            offender_list = dv
+                                            break
                             if offender_list:
-                                logger.info(f"[{self.county}] Found {len(offender_list)} offenders in API data despite CAPTCHA failure!")
+                                logger.info(f"[{self.county}] Found {len(offender_list)} offenders in API data!")
                                 records = self._parse_api_offenders(offender_list)
                                 if records:
-                                    logger.info(f"[{self.county}] Recovered {len(records)} records from crash data ✅")
+                                    logger.info(f"[{self.county}] Recovered {len(records)} records ✅")
                                     return records
                 logger.error(f"[{self.county}] Failed to solve CAPTCHA after {MAX_CAPTCHA_ATTEMPTS} attempts")
                 return []
 
-            # Wait for roster to load after captcha
-            time.sleep(PAGE_LOAD_WAIT_S)
+            # _solve_captcha returned True — offender data should be in api_data
+            roster_key = f"Offender/{self.county_jt_id}/roster"
+            if roster_key in api_data:
+                roster_data = api_data[roster_key]
+                offenders = roster_data.get("offenders", []) if isinstance(roster_data, dict) else roster_data
+                logger.info(f"[{self.county}] 🎯 Got {len(offenders)} offenders via response capture")
+                records = self._parse_api_offenders(offenders)
+                if records:
+                    logger.info(f"[{self.county}] Scraped {len(records)} records from JailTracker ✅")
+                    return records
 
-            # Extract offender data from rendered DOM
+            # Fallback: wait for DOM and extract
+            time.sleep(PAGE_LOAD_WAIT_S)
             records = self._extract_roster(page, api_data)
             logger.info(f"[{self.county}] Scraped {len(records)} records from JailTracker")
             return records
@@ -213,117 +224,155 @@ class JailTrackerBaseScraper(BaseScraper):
             else:
                 page.fill("input", answer)
 
+            # Clear stale validate data before clicking
+            api_data.pop("Captcha/validatecaptcha", None)
+
+            # ── Register offender POST capture BEFORE clicking Validate ──
+            # Blazor sends the POST immediately after validate succeeds,
+            # so we must be listening before the click.
+            captured_resp = [None]
+
+            def _capture_offender(resp):
+                """Lightweight: stores Response ref only, no body() call."""
+                url = resp.url
+                if (
+                    f"Offender/{self.county_jt_id}" in url
+                    and "/AgencyOptions" not in url
+                    and resp.request.method == "POST"
+                ):
+                    # Only capture POST responses with a real captchaKey
+                    post_body = resp.request.post_data or ""
+                    if '"captchaKey":null' not in post_body and '"captchaKey"' in post_body:
+                        captured_resp[0] = resp
+                        logger.info(
+                            f"[{self.county}] 📡 Caught offender POST response: "
+                            f"status={resp.status} ct={resp.headers.get('content-type', '?')}"
+                        )
+
+            page.on("response", _capture_offender)
+
             # Click Validate
             validate_btn = page.query_selector("button:has-text('Validate')")
             if validate_btn:
                 validate_btn.click()
-            # Give Blazor time to validate CAPTCHA and start loading roster
-            time.sleep(8)
 
-            # Check the validatecaptcha response — if it returned true, CAPTCHA was correct
-            validate_result = api_data.get("Captcha/validatecaptcha")
+            # Wait for the validate response to arrive (up to 12s)
+            # IMPORTANT: Use page.wait_for_timeout() instead of time.sleep()
+            # because Playwright sync API only dispatches event callbacks
+            # (like on_response) during Playwright method calls, not during
+            # Python's time.sleep().
+            validate_result = None
+            for _ in range(24):
+                page.wait_for_timeout(500)  # Processes Playwright events!
+                validate_result = api_data.get("Captcha/validatecaptcha")
+                if validate_result is not None:
+                    break
+
             logger.info(f"[{self.county}] Validate response: {validate_result}")
 
-            # Debug: log what API calls have fired so far
-            current_keys = [k for k in api_data.keys() if k != 'captcha/getnewcaptchaclient']
-            logger.info(f"[{self.county}] Post-validate API keys: {current_keys}")
+            # ── Primary check: did the server confirm the CAPTCHA? ──
+            captcha_matched = (
+                isinstance(validate_result, dict)
+                and validate_result.get("captchaMatched") is True
+            )
 
-            # Check result
-            page_text = page.evaluate("() => document.body?.innerText || ''")
-
-            # Case 1: Incorrect answer
-            if "incorrect" in page_text.lower():
+            if not captcha_matched:
+                # Wrong answer — server explicitly said no
                 if used_ddddocr:
                     ddddocr_failures += 1
                     logger.warning(f"[{self.county}] CAPTCHA incorrect (ddddocr miss #{ddddocr_failures}), retrying...")
                 else:
                     logger.warning(f"[{self.county}] CAPTCHA incorrect, retrying...")
+                # Wait for Blazor to process and show retry UI
+                time.sleep(3)
                 retry = page.query_selector("text=Click Here to Try Again")
                 if retry:
                     retry.click()
-                    time.sleep(3)
+                    time.sleep(2)
                     api_data.pop("captcha/getnewcaptchaclient", None)
+                else:
+                    self._click_new_code(page, api_data)
                 continue
 
-            # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
+            # CAPTCHA matched! The response might already be captured.
+            logger.info(f"[{self.county}] CAPTCHA matched! ✅ Checking for captured response...")
+
+            # If not captured yet, wait a bit more for Blazor to process
+            if not captured_resp[0]:
+                logger.info(f"[{self.county}] Response not yet captured, waiting...")
+                page.wait_for_timeout(5000)
+
+            # Remove the temporary listener
+            page.remove_listener("response", _capture_offender)
+
+            # Now read the body from the main thread (safe — not in callback)
+            if captured_resp[0]:
+                try:
+                    resp_obj = captured_resp[0]
+                    raw_body = resp_obj.body()
+                    resp_ct = resp_obj.headers.get("content-type", "UNKNOWN")
+                    logger.info(
+                        f"[{self.county}] 📡 Response body: {len(raw_body)} bytes "
+                        f"(status={resp_obj.status}, ct={resp_ct})"
+                    )
+
+                    if raw_body and len(raw_body) > 2:
+                        data = json.loads(raw_body)
+                        if isinstance(data, dict) and "offenders" in data:
+                            n = len(data["offenders"])
+                            api_data[f"Offender/{self.county_jt_id}/roster"] = data
+                            logger.info(f"[{self.county}] 🎯 CAPTURED {n} offenders! ✅")
+                            return True
+                        elif isinstance(data, list):
+                            api_data[f"Offender/{self.county_jt_id}/roster"] = {"offenders": data}
+                            logger.info(f"[{self.county}] 🎯 CAPTURED {len(data)} offenders (list)! ✅")
+                            return True
+                        else:
+                            logger.warning(f"[{self.county}] 📡 Response JSON structure: {str(data)[:500]}")
+                    else:
+                        logger.warning(f"[{self.county}] 📡 Empty response body (0 bytes)")
+
+                except (json.JSONDecodeError, ValueError) as je:
+                    logger.warning(f"[{self.county}] 📡 Response body not JSON: {je}")
+                    try:
+                        logger.warning(f"[{self.county}] 📡 Raw body preview: {raw_body[:300]}")
+                    except Exception:
+                        pass
+
+                except Exception as body_err:
+                    logger.warning(f"[{self.county}] 📡 Failed to read response body: {body_err}")
+
+            else:
+                logger.warning(f"[{self.county}] ⚠️ No offender POST response captured")
+
+            # If we got here, we didn't capture data. Check page state.
+            current_keys = [k for k in api_data.keys() if k != 'captcha/getnewcaptchaclient']
+            logger.info(f"[{self.county}] Post-validate API keys: {current_keys}")
+
+            page_text = page.evaluate("() => document.body?.innerText || ''")
+
+            # Blazor crash — navigate to fresh session and retry
             if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
-                # Check if CAPTCHA was actually validated successfully
-                captcha_correct = (isinstance(validate_result, dict) 
-                                   and validate_result.get("captchaMatched") is True)
-                
-                # The CAPTCHA might have been CORRECT — crash could be during roster loading.
-                # Check if offender data was already captured via API response interception.
-                for key, val in api_data.items():
-                    if "offender" in key.lower() and isinstance(val, list) and val:
-                        logger.info(f"[{self.county}] Blazor crashed but offender data captured! ({len(val)} records) ✅")
-                        return True
-
-                if captcha_correct:
-                    # CAPTCHA was valid but Blazor crashed! Try fetching offender data directly.
-                    # The session cookie is valid, so direct XHR should work.
-                    session_id = page.url.split("(S(")[1].split(")")[0] if "(S(" in page.url else ""
-                    logger.info(f"[{self.county}] CAPTCHA validated (captchaMatched=True) but Blazor crashed — trying direct fetch with session={session_id}...")
-                    
-                    # Try multiple possible roster endpoints
-                    endpoints = [
-                        f"/jtclientweb/(S({session_id}))/Offender/{self.county_jt_id}/GetSearch",
-                        f"/jtclientweb/(S({session_id}))/Offender/{self.county_jt_id}/jailRoster",
-                        f"/jtclientweb/Offender/{self.county_jt_id}/GetSearch",
-                        f"/jtclientweb/Offender/{self.county_jt_id}/jailRoster",
-                    ]
-                    
-                    for endpoint in endpoints:
-                        try:
-                            roster_data = page.evaluate(f"""async () => {{
-                                try {{
-                                    const resp = await fetch('{endpoint}', {{
-                                        headers: {{'Accept': 'application/json', 'Content-Type': 'application/json'}},
-                                        credentials: 'include'
-                                    }});
-                                    if (!resp.ok) return {{error: resp.status, url: '{endpoint}'}};
-                                    const text = await resp.text();
-                                    try {{ return JSON.parse(text); }} catch(e) {{ return {{raw: text.substring(0, 200)}}; }}
-                                }} catch(e) {{ return {{error: e.message}}; }}
-                            }}""")
-                            if roster_data:
-                                logger.info(f"[{self.county}] Endpoint {endpoint}: {str(roster_data)[:300]}")
-                                if isinstance(roster_data, list) and roster_data:
-                                    logger.info(f"[{self.county}] Direct fetch recovered {len(roster_data)} offenders! ✅")
-                                    api_data[f"Offender/{self.county_jt_id}/direct"] = roster_data
-                                    return True
-                                elif isinstance(roster_data, dict) and not roster_data.get("error"):
-                                    # Check for nested list
-                                    for dk, dv in roster_data.items():
-                                        if isinstance(dv, list) and dv and len(dv) > 0:
-                                            logger.info(f"[{self.county}] Found {len(dv)} records in {dk}! ✅")
-                                            api_data[f"Offender/{self.county_jt_id}/direct"] = dv
-                                            return True
-                        except Exception as e:
-                            logger.warning(f"[{self.county}] Fetch {endpoint} failed: {e}")
-
-                logger.info(f"[{self.county}] Blazor crash — navigating to fresh session...")
+                logger.info(f"[{self.county}] Blazor crash after valid CAPTCHA — navigating to fresh session...")
                 api_data.clear()
-                # Navigate to a NEW session URL instead of reloading the broken one
                 fresh_session = f"shamrock_{int(time.time())}"
                 fresh_url = f"{JT_BASE}/(S({fresh_session}))/jailtracker/index/{self.county_jt_id}"
                 page.goto(fresh_url, wait_until="networkidle", timeout=45000)
                 time.sleep(CAPTCHA_WAIT_S)
-                # Check if fresh session bypasses CAPTCHA
                 page_text2 = page.evaluate("() => document.body?.innerText || ''")
                 if "captcha" not in page_text2.lower() and "validate" not in page_text2.lower():
                     logger.info(f"[{self.county}] CAPTCHA bypassed on fresh session! ✅")
                     return True
-                # Still on captcha — retry with fresh CAPTCHA image
                 logger.info(f"[{self.county}] Fresh session loaded, new CAPTCHA ready")
                 continue
 
-            # Case 3: Still on captcha page
+            # Still on captcha page (shouldn't happen after match=true)
             if "validate" in page_text.lower() and "captcha" in page_text.lower():
-                logger.warning(f"[{self.county}] Still on captcha page, retrying...")
+                logger.warning(f"[{self.county}] Still on captcha page despite match=true, retrying...")
                 self._click_new_code(page, api_data)
                 continue
 
-            # Case 4: Success — we're past the captcha
+            # Case 3: Success — CAPTCHA matched and page moved past captcha
             logger.info(f"[{self.county}] CAPTCHA solved! ✅")
             return True
 
@@ -485,9 +534,16 @@ class JailTrackerBaseScraper(BaseScraper):
         # The roster displays as a table or card grid
         # First check for offender data in API responses
         for key, val in api_data.items():
-            if "offender" in key.lower() and isinstance(val, list) and val:
-                logger.info(f"[{self.county}] Found {len(val)} offenders in API response")
-                return self._parse_api_offenders(val)
+            if "offender" in key.lower():
+                # Handle both list and dict responses
+                if isinstance(val, list) and val:
+                    logger.info(f"[{self.county}] Found {len(val)} offenders in API response (list)")
+                    return self._parse_api_offenders(val)
+                elif isinstance(val, dict) and val.get("offenders"):
+                    offenders = val["offenders"]
+                    if offenders:
+                        logger.info(f"[{self.county}] Found {len(offenders)} offenders in API response (dict)")
+                        return self._parse_api_offenders(offenders)
 
         # Fall back to DOM extraction
         records = self._extract_from_dom(page)
