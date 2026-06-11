@@ -80,7 +80,11 @@ class JailTrackerBaseScraper(BaseScraper):
                 if "json" in ct:
                     try:
                         key = resp.url.split("/jtclientweb/")[-1]
-                        api_data[key] = resp.json()
+                        data = resp.json()
+                        api_data[key] = data
+                        # Log every JSON response for debugging
+                        data_size = len(str(data))
+                        logger.info(f"[{self.county}] 📡 API: {key} ({data_size} chars)")
                     except Exception:
                         pass
 
@@ -213,7 +217,12 @@ class JailTrackerBaseScraper(BaseScraper):
             validate_btn = page.query_selector("button:has-text('Validate')")
             if validate_btn:
                 validate_btn.click()
-            time.sleep(5)
+            # Give Blazor time to validate CAPTCHA and start loading roster
+            time.sleep(10)
+
+            # Debug: log what API calls have fired so far
+            current_keys = [k for k in api_data.keys() if k != 'captcha/getnewcaptchaclient']
+            logger.info(f"[{self.county}] Post-validate API keys: {current_keys}")
 
             # Check result
             page_text = page.evaluate("() => document.body?.innerText || ''")
