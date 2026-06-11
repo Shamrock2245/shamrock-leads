@@ -210,17 +210,20 @@ class JailTrackerBaseScraper(BaseScraper):
 
             # Case 2: Blazor crash — "An unhandled error has occurred. Reload"
             if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
-                logger.info(f"[{self.county}] Blazor crash after CAPTCHA — reloading...")
+                logger.info(f"[{self.county}] Blazor crash after CAPTCHA — navigating to fresh session...")
                 api_data.clear()
-                page.reload(wait_until="networkidle", timeout=30000)
-                time.sleep(PAGE_LOAD_WAIT_S)
-                # Check if reload put us past the CAPTCHA
+                # Navigate to a NEW session URL instead of reloading the broken one
+                fresh_session = f"shamrock_{int(time.time())}"
+                fresh_url = f"{JT_BASE}/(S({fresh_session}))/jailtracker/index/{self.county_jt_id}"
+                page.goto(fresh_url, wait_until="networkidle", timeout=45000)
+                time.sleep(CAPTCHA_WAIT_S)
+                # Check if fresh session bypasses CAPTCHA
                 page_text2 = page.evaluate("() => document.body?.innerText || ''")
                 if "captcha" not in page_text2.lower() and "validate" not in page_text2.lower():
-                    logger.info(f"[{self.county}] CAPTCHA bypassed after reload! ✅")
+                    logger.info(f"[{self.county}] CAPTCHA bypassed on fresh session! ✅")
                     return True
-                # Still on captcha — retry
-                logger.warning(f"[{self.county}] Still on captcha after reload, retrying...")
+                # Still on captcha — retry with fresh CAPTCHA image
+                logger.info(f"[{self.county}] Fresh session loaded, new CAPTCHA ready")
                 continue
 
             # Case 3: Still on captcha page
