@@ -168,52 +168,80 @@ class HillsboroughCountyScraper(BaseScraper):
         logger.warning(f"[Hillsborough] Login appears to have failed. URL: {page.url}")
         return False
 
-    # ── reCAPTCHA Solver (Mouse Click → Audio → SolveCaptcha Token) ──
+    # ── reCAPTCHA Solver (Unified Flow) ─────────────────────────────────
     def _solve_recaptcha(self, page) -> bool:
         """
-        Solve reCAPTCHA v2 with cascading fallback:
-          1. Mouse click checkbox (auto-solves with good residential IP reputation)
-          2. Audio challenge solver (FREE — speech recognition)
-          3. SolveCaptcha API token injection (paid — bypasses all visual challenges)
+        Solve reCAPTCHA v2 — unified flow with ONE checkbox click.
+        
+        Flow:
+          1. Mouse-click checkbox with real coordinates
+          2. If auto-solved (good IP reputation) → done
+          3. If challenge appeared → switch to audio challenge
+          4. If audio loads → transcribe + submit (free)
+          5. If audio fails → SolveCaptcha API token injection (paid fallback)
         """
-        # Method 1: Authentic mouse click on checkbox
-        # With residential proxy + good IP reputation, this often auto-solves
-        if self._try_mouse_click_solve(page):
-            logger.info("[Hillsborough] reCAPTCHA solved via checkbox click! ✅ (free)")
+        # Step 1: Click the checkbox with realistic mouse coordinates
+        anchor_frame = self._click_recaptcha_checkbox(page)
+        if not anchor_frame:
+            logger.warning("[Hillsborough] Could not find reCAPTCHA checkbox")
+            return self._solve_via_api(page)
+
+        # Step 2: Check if auto-solved (happens with good IP reputation)
+        time.sleep(4)
+        if self._is_recaptcha_solved(anchor_frame, page):
+            logger.info("[Hillsborough] reCAPTCHA auto-solved via checkbox! ✅ (free)")
             return True
 
-        # Method 2: Audio challenge (free, self-hosted)
-        try:
-            from scrapers.recaptcha_audio_solver import RecaptchaAudioSolver
-            solver = RecaptchaAudioSolver(page)
-            if solver.solve():
+        logger.info("[Hillsborough] Challenge appeared, trying audio...")
+
+        # Step 3: Find the challenge bframe and switch to audio
+        bframe = self._get_bframe(page)
+        if not bframe:
+            logger.warning("[Hillsborough] No challenge frame found")
+            return self._solve_via_api(page)
+
+        # Try audio challenge (up to 3 attempts)
+        for attempt in range(1, 4):
+            logger.info(f"[Hillsborough] Audio attempt {attempt}/3")
+
+            # Switch to audio challenge
+            if not self._switch_to_audio(bframe):
+                logger.warning("[Hillsborough] Could not switch to audio")
+                break
+
+            time.sleep(4)
+
+            # Download and transcribe
+            audio_url = self._get_audio_url(bframe)
+            if not audio_url:
+                logger.warning("[Hillsborough] No audio URL found")
+                self._reload_challenge(bframe)
+                time.sleep(2)
+                continue
+
+            transcript = self._transcribe_audio(audio_url)
+            if not transcript:
+                logger.warning("[Hillsborough] Transcription failed")
+                self._reload_challenge(bframe)
+                time.sleep(2)
+                continue
+
+            # Submit answer
+            if self._submit_audio_answer(bframe, transcript, anchor_frame, page):
                 logger.info("[Hillsborough] reCAPTCHA solved via audio! ✅ (free)")
                 return True
-            logger.info("[Hillsborough] Audio solver failed, trying SolveCaptcha...")
-        except ImportError:
-            logger.info("[Hillsborough] Audio solver not available")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Audio solver error: {e}")
 
-        # Method 3: SolveCaptcha API token injection (paid, most reliable)
-        # This doesn't need to click anything — it gets a token from the API
-        # and injects it directly into the form
-        if self._solve_via_api(page):
-            return True
+            logger.warning("[Hillsborough] Wrong answer, retrying...")
+            self._reload_challenge(bframe)
+            time.sleep(2)
 
-        logger.warning("[Hillsborough] All reCAPTCHA methods failed")
-        return False
+        # Step 4: Fallback to SolveCaptcha API (paid)
+        logger.info("[Hillsborough] Audio failed, trying SolveCaptcha API...")
+        return self._solve_via_api(page)
 
-    def _try_mouse_click_solve(self, page) -> bool:
-        """Click the reCAPTCHA checkbox with real mouse coordinates.
-        
-        Google auto-solves when:
-          - IP has good reputation (residential proxy)
-          - Browser fingerprint looks legitimate
-          - Mouse movement is realistic
-        """
+    def _click_recaptcha_checkbox(self, page):
+        """Click checkbox with real mouse coordinates. Returns anchor frame or None."""
         try:
-            # Find the reCAPTCHA anchor iframe element
             iframe_el = None
             anchor_frame = None
             for el in page.query_selector_all("iframe"):
@@ -227,9 +255,8 @@ class HillsboroughCountyScraper(BaseScraper):
                     break
 
             if not iframe_el or not anchor_frame:
-                return False
+                return None
 
-            # Get positions for realistic mouse movement
             iframe_box = iframe_el.bounding_box()
             checkbox_box = anchor_frame.evaluate("""() => {
                 var cb = document.querySelector('#recaptcha-anchor');
@@ -239,31 +266,172 @@ class HillsboroughCountyScraper(BaseScraper):
             }""")
 
             if not iframe_box or not checkbox_box:
-                return False
+                return None
 
-            # Calculate absolute coordinates and click
             click_x = iframe_box["x"] + checkbox_box["x"] + checkbox_box["width"] / 2
             click_y = iframe_box["y"] + checkbox_box["y"] + checkbox_box["height"] / 2
 
             page.mouse.move(click_x, click_y)
             time.sleep(0.3)
             page.mouse.click(click_x, click_y)
-            logger.info(f"[Hillsborough] Mouse-clicked checkbox at ({click_x:.0f}, {click_y:.0f})")
+            logger.info(f"[Hillsborough] Clicked checkbox at ({click_x:.0f}, {click_y:.0f})")
+            return anchor_frame
 
-            # Wait and check if auto-solved
-            time.sleep(5)
+        except Exception as e:
+            logger.warning(f"[Hillsborough] Checkbox click error: {e}")
+            return None
+
+    def _is_recaptcha_solved(self, anchor_frame, page) -> bool:
+        """Check if reCAPTCHA is solved (checkbox checked or token populated)."""
+        try:
             checked = anchor_frame.evaluate(
                 "() => document.querySelector('#recaptcha-anchor')?.getAttribute('aria-checked')"
             )
             if checked == "true":
                 return True
+        except Exception:
+            pass
+        try:
+            token = page.evaluate("""() => {
+                var el = document.querySelector('#g-recaptcha-response')
+                    || document.querySelector('[name="g-recaptcha-response"]');
+                return el ? el.value : '';
+            }""")
+            if token and len(token) > 20:
+                return True
+        except Exception:
+            pass
+        return False
 
-            logger.info("[Hillsborough] Checkbox click didn't auto-solve (challenge appeared)")
-            return False
+    def _get_bframe(self, page):
+        """Find the reCAPTCHA challenge bframe."""
+        for f in page.frames:
+            if "recaptcha" in f.url and "bframe" in f.url:
+                return f
+        return None
+
+    def _switch_to_audio(self, bframe) -> bool:
+        """Click the audio button in the challenge frame."""
+        try:
+            audio_btn = bframe.query_selector("#recaptcha-audio-button")
+            if audio_btn:
+                audio_btn.click(force=True, timeout=5000)
+                logger.info("[Hillsborough] Switched to audio")
+                time.sleep(3)
+                return True
+        except Exception:
+            pass
+        try:
+            bframe.evaluate(
+                "() => { var b = document.querySelector('#recaptcha-audio-button'); if (b) b.click(); }"
+            )
+            time.sleep(3)
+            return True
+        except Exception:
+            pass
+        return False
+
+    def _get_audio_url(self, bframe) -> str:
+        """Extract the audio challenge MP3 URL from the bframe."""
+        try:
+            # Method 1: Download link
+            link = bframe.query_selector(".rc-audiochallenge-tdownload-link")
+            if link:
+                href = link.get_attribute("href")
+                if href:
+                    return href
+
+            # Method 2: Audio source element
+            url = bframe.evaluate("""() => {
+                var src = document.querySelector('audio source');
+                if (src) return src.src || src.getAttribute('src');
+                var audio = document.querySelector('audio');
+                if (audio) return audio.src;
+                var el = document.querySelector('#audio-source');
+                if (el) return el.src || el.getAttribute('src');
+                return '';
+            }""")
+            if url:
+                return url
+
+            # Method 3: Payload links
+            url = bframe.evaluate("""() => {
+                var links = document.querySelectorAll('a[href*="payload"]');
+                for (var i = 0; i < links.length; i++) {
+                    if (links[i].href) return links[i].href;
+                }
+                return '';
+            }""")
+            return url or ""
+
+        except Exception:
+            return ""
+
+    def _transcribe_audio(self, audio_url: str) -> str:
+        """Download MP3, convert to WAV, transcribe via Google Speech Recognition."""
+        import tempfile
+        import random
+        import urllib.request
+
+        try:
+            tmp_dir = tempfile.mkdtemp()
+            mp3_path = os.path.join(tmp_dir, f"captcha_{random.randint(1000,9999)}.mp3")
+            wav_path = mp3_path.replace(".mp3", ".wav")
+
+            logger.info(f"[Hillsborough] Downloading audio: {audio_url[:60]}...")
+            urllib.request.urlretrieve(audio_url, mp3_path)
+
+            import pydub
+            sound = pydub.AudioSegment.from_mp3(mp3_path)
+            sound.export(wav_path, format="wav")
+
+            import speech_recognition as sr
+            recognizer = sr.Recognizer()
+            with sr.AudioFile(wav_path) as source:
+                audio_data = recognizer.record(source)
+                transcript = recognizer.recognize_google(audio_data)
+
+            logger.info(f"[Hillsborough] Transcript: '{transcript}'")
+
+            # Cleanup
+            try:
+                os.remove(mp3_path)
+                os.remove(wav_path)
+                os.rmdir(tmp_dir)
+            except Exception:
+                pass
+
+            return transcript.strip()
 
         except Exception as e:
-            logger.warning(f"[Hillsborough] Mouse click error: {e}")
-            return False
+            logger.warning(f"[Hillsborough] Transcription error: {e}")
+            return ""
+
+    def _submit_audio_answer(self, bframe, answer, anchor_frame, page) -> bool:
+        """Submit the transcribed answer and check if solved."""
+        try:
+            input_field = bframe.query_selector("#audio-response")
+            if input_field:
+                input_field.fill(answer)
+                time.sleep(0.5)
+                verify_btn = bframe.query_selector("#recaptcha-verify-button")
+                if verify_btn:
+                    verify_btn.click(force=True)
+                    time.sleep(4)
+                    return self._is_recaptcha_solved(anchor_frame, page)
+        except Exception as e:
+            logger.warning(f"[Hillsborough] Submit error: {e}")
+        return False
+
+    def _reload_challenge(self, bframe):
+        """Click reload to get a new audio challenge."""
+        try:
+            reload_btn = bframe.query_selector("#recaptcha-reload-button")
+            if reload_btn:
+                reload_btn.click(force=True)
+                time.sleep(3)
+        except Exception:
+            pass
 
     def _solve_via_api(self, page) -> bool:
         """Solve reCAPTCHA via SolveCaptcha API token injection.
@@ -405,16 +573,13 @@ class HillsboroughCountyScraper(BaseScraper):
             pass
 
         # Solve the SECOND reCAPTCHA on the search form
+        # NOTE: Previous testing showed search works even without solving this,
+        # but we try anyway for reliability
         logger.info("[Hillsborough] Solving search form reCAPTCHA...")
-        try:
-            from scrapers.recaptcha_audio_solver import RecaptchaAudioSolver
-            solver = RecaptchaAudioSolver(page)
-            if solver.solve():
-                logger.info("[Hillsborough] Search reCAPTCHA solved! ✅")
-            else:
-                logger.warning("[Hillsborough] Search reCAPTCHA not solved, submitting anyway")
-        except Exception as e:
-            logger.warning(f"[Hillsborough] Search reCAPTCHA error: {e}")
+        if self._solve_recaptcha(page):
+            logger.info("[Hillsborough] Search reCAPTCHA solved! ✅")
+        else:
+            logger.warning("[Hillsborough] Search reCAPTCHA not solved, submitting anyway")
 
         time.sleep(1)
 
