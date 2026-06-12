@@ -99,3 +99,23 @@ async def event_stream() -> EventSourceResponse:
 async def events_health() -> dict:
     """Health check: returns number of active SSE subscribers."""
     return {"success": True, "subscribers": len(_subscribers)}
+
+
+from pydantic import BaseModel
+
+class PresenceBody(BaseModel):
+    record_id: str
+    user: str
+    action: str  # "viewing" or "closed"
+
+@events_bp.post("/events/presence")
+async def report_presence(body: PresenceBody) -> dict:
+    """Report that a user is viewing (or stopped viewing) a record.
+    Broadcasts a presence_update event to all connected SSE clients.
+    """
+    await publish_event("presence_update", {
+        "record_id": body.record_id,
+        "user": body.user,
+        "action": body.action
+    })
+    return {"success": True}

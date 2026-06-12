@@ -401,6 +401,24 @@ async def _run_overdue_tasks():
     if flagged > 0:
         logger.warning("[Tasks] Flagged %d tasks as overdue", flagged)
 
+async def _run_bounty_hunter():
+    from dashboard.services.bounty_hunter_service import BountyHunterService
+    from dashboard.extensions import get_db
+    svc = BountyHunterService(get_db())
+    result = await svc.scan_and_alert()
+    if result.get("found", 0) > 0:
+        logger.info("[BountyHunter] Found %d high value unposted bonds", result["found"])
+
+async def _run_watchdog():
+    from dashboard.services.watchdog_service import WatchdogService
+    from dashboard.extensions import get_db
+    svc = WatchdogService(get_db())
+    result = await svc.run_health_checks()
+    if result.get("errors"):
+        logger.warning("[Watchdog] Health check failed: %s", result["errors"])
+    else:
+        logger.debug("[Watchdog] Health check passed")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
@@ -430,6 +448,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
     CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
+    CronDef("bounty_hunter",      "BountyHunter",       3600, 120, _run_bounty_hunter),
+    CronDef("watchdog",           "Watchdog",            300,  60, _run_watchdog),
 ]
 
 

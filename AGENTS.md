@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-05-15
+> **Last Updated:** 2026-06-11
 > **Repo:** `Shamrock2245/shamrock-leads`
 > **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
@@ -26,6 +26,7 @@ ShamrockLeads is a **statewide arrest intelligence and bonded-case management pl
 13. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
 14. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
 15. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
+16. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
 
 ### Pipeline Flow (Full Lifecycle)
 
@@ -73,6 +74,7 @@ Move records safely through this lifecycle:
 14. Auto-detect re-arrests on active bonds `[IMPLEMENTED]`
 15. Monitor for court discharges/exonerations `[IMPLEMENTED]`
 16. Maintain immutable audit history for every state change `[IMPLEMENTED]`
+17. Automate social media presence via Postiz integration `[IMPLEMENTED]`
 
 ---
 
@@ -95,6 +97,7 @@ Move records safely through this lifecycle:
 | **Shannon** | AI iMessage auto-reply agent | ✅ Live | `dashboard/api/agent_brain.py`, `api/agent_brain_api.py` |
 | **Re-Arrest Detector** | Cross-reference new arrests against active bonds | ✅ Live | `dashboard/api/rearrest_detector.py`, `api/rearrest_notifier.py` |
 | **Data Retention** | Tiered purge policies for M0 512MB limit | ✅ Live | `dashboard/api/data_retention.py` |
+| **The Publicist** | Social media scheduling, cross-platform posting | ✅ Live | `social/main.py`, `.agent/skills/postiz-social-media/SKILL.md` |
 
 ---
 

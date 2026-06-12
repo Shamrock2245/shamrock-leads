@@ -45,13 +45,14 @@ class TwilioService:
         """Return True if Twilio credentials are present."""
         return bool(self.sid and self.token and (self.from_number or self.messaging_service_sid))
 
-    async def send_sms(self, to: str, body: str) -> dict:
+    async def send_sms(self, to: str, body: str, booking_number: Optional[str] = None) -> dict:
         """
         Send an SMS via Twilio REST API.
 
         Args:
             to:   Destination phone number in E.164 format (+12395550100).
             body: Message text (max 1600 chars; long messages are split by Twilio).
+            booking_number: Optional context for the Omnichannel timeline.
 
         Returns:
             Twilio message resource dict on success.
@@ -89,6 +90,23 @@ class TwilioService:
                 result.get("sid"),
                 result.get("status"),
             )
+            # Log to audit_events for Omnichannel Timeline
+            try:
+                from dashboard.extensions import get_collection
+                audit_events = get_collection("audit_events")
+                audit_doc = {
+                    "source": "twilio_service",
+                    "event_type": "outbound_sms",
+                    "payload": {"To": to, "Body": body, "sid": result.get("sid")},
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+                if booking_number:
+                    audit_doc["booking_number"] = booking_number
+                
+                await audit_events.insert_one(audit_doc)
+            except Exception as e:
+                logger.error(f"[twilio] Failed to log outbound SMS: {e}")
+
             return result
 
     async def schedule_court_reminders(

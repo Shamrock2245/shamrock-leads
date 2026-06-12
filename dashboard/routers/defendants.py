@@ -322,3 +322,27 @@ async def merge_defendants(request: Request):
     except Exception as exc:
         logger.exception("merge_defendants error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+@router.patch("/defendants/{defendant_id}/custom-fields")
+async def update_defendant_custom_fields(defendant_id: str, request: Request):
+    try:
+        data = (await request.json()) or {}
+        custom_fields = data.get("custom_fields")
+        if not isinstance(custom_fields, dict):
+            return JSONResponse({"error": "custom_fields must be a dictionary"}, 400)
+        
+        defendants_col = get_collection("defendants")
+        from datetime import datetime, timezone
+        result = await defendants_col.update_one(
+            {"defendant_id": defendant_id},
+            {"$set": {
+                "custom_fields": custom_fields, 
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        if result.modified_count or result.matched_count:
+            return {"success": True, "defendant_id": defendant_id}
+        return JSONResponse({"success": False, "error": "Defendant not found"}, 404)
+    except Exception as exc:
+        logger.exception("update_defendant_custom_fields error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

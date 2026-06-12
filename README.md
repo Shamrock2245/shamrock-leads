@@ -38,6 +38,7 @@ ShamrockLeads is the **core intelligence engine** for [Shamrock Bail Bonds](http
 17. **Syncs** court dates to Google Calendar with Twilio SMS reminders
 18. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
 19. **Visualizes** everything through a **21-tab Intelligence Dashboard**
+20. **Automates** social media presence across platforms via Postiz integration
 
 ---
 
@@ -310,6 +311,7 @@ shamrock-leads/
 | **Hosting** | Hetzner VPS (Docker) | Production at `178.156.179.237` |
 | **Proxy** | Nginx | Reverse proxy → `leads.shamrockbailbonds.biz` |
 | **Ops** | Node-RED | 39+ cron jobs, ops dashboard |
+| **Social** | Postiz + Temporal | Self-hosted social media manager (`social.shamrockbailbonds.biz`) |
 | **CI/CD** | GitHub Actions | Automated deployments |
 
 ---
@@ -365,7 +367,7 @@ ssh root@178.156.179.237 "cd /opt/shamrock-leads && git pull origin main && dock
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
+See [ROADMAP.md](ROADMAP.md) for full details. **All 16 phases are complete.**
 
 | Phase | Name | Status |
 |-------|------|--------|
@@ -385,6 +387,7 @@ See [ROADMAP.md](ROADMAP.md) for full details. **All 15 phases are complete.**
 | 13 | Bond Lifecycle Kanban + POA Automation | ✅ Complete |
 | 14 | Court Automation + Discharge Monitoring | ✅ Complete |
 | 15 | Intelligence Dashboard Overhaul | ✅ Complete |
+| 16 | Social Media Command Center (Postiz) | ✅ Complete |
 
 ---
 

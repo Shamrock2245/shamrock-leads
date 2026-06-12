@@ -1290,6 +1290,103 @@ function _resetRecheckButton() {
 }
 
 
+// ── Saved Views ──
+function saveCurrentView() {
+  const name = prompt("Enter a name for this saved view:");
+  if (!name) return;
+
+  const view = {
+    id: 'view_' + Date.now(),
+    name: name,
+    state: {
+      selectedCounties: [...SL_STATE.selectedCounties],
+      days: SL_STATE.days,
+      custody: SL_STATE.custody,
+      status: SL_STATE.status,
+      minBond: SL_STATE.minBond,
+      search: SL_STATE.search
+    }
+  };
+
+  const views = JSON.parse(localStorage.getItem('sl_saved_views') || '[]');
+  views.push(view);
+  localStorage.setItem('sl_saved_views', JSON.stringify(views));
+  
+  populateSavedViews();
+  if (window.SL && SL.toast) SL.toast(`Saved view: ${name}`);
+}
+
+function loadSavedView(id) {
+  if (!id) return;
+  if (id === '__clear__') {
+    if (confirm("Are you sure you want to delete all saved views?")) {
+      localStorage.removeItem('sl_saved_views');
+      populateSavedViews();
+      if (window.SL && SL.toast) SL.toast("All saved views cleared.");
+    }
+    document.getElementById('savedViewsSelect').value = '';
+    return;
+  }
+
+  const views = JSON.parse(localStorage.getItem('sl_saved_views') || '[]');
+  const view = views.find(v => v.id === id);
+  if (!view) return;
+
+  SL_STATE.selectedCounties = [...(view.state.selectedCounties || [])];
+  SL_STATE.days = view.state.days || 0;
+  SL_STATE.custody = view.state.custody || '';
+  SL_STATE.status = view.state.status || '';
+  SL_STATE.minBond = view.state.minBond || 0;
+  SL_STATE.search = view.state.search || '';
+
+  // Update DOM elements
+  if (document.getElementById('custodyFilter')) document.getElementById('custodyFilter').value = SL_STATE.custody;
+  if (document.getElementById('statusFilter')) document.getElementById('statusFilter').value = SL_STATE.status;
+  if (document.getElementById('searchInput')) document.getElementById('searchInput').value = SL_STATE.search;
+  
+  // Update Buttons
+  document.querySelectorAll('#dateRange button').forEach(b => {
+    b.classList.remove('active');
+    const val = parseInt(b.innerText);
+    if ((isNaN(val) && SL_STATE.days === 0 && b.innerText === 'All') || val === SL_STATE.days) {
+      b.classList.add('active');
+    }
+  });
+  document.querySelectorAll('#bondRange button').forEach(b => {
+    b.classList.remove('active');
+    if (
+      (SL_STATE.minBond === 0 && b.innerText === '$0+') ||
+      (SL_STATE.minBond === 1000 && b.innerText === '$1K+') ||
+      (SL_STATE.minBond === 2500 && b.innerText === '$2.5K+') ||
+      (SL_STATE.minBond === 5000 && b.innerText === '$5K+') ||
+      (SL_STATE.minBond === 10000 && b.innerText === '$10K+')
+    ) {
+      b.classList.add('active');
+    }
+  });
+
+  if (window.buildCountyOptions) buildCountyOptions(SL_STATE.counties);
+  if (window.applyFilters) applyFilters();
+  
+  document.getElementById('savedViewsSelect').value = '';
+}
+
+function populateSavedViews() {
+  const select = document.getElementById('savedViewsSelect');
+  if (!select) return;
+  const views = JSON.parse(localStorage.getItem('sl_saved_views') || '[]');
+  
+  let html = `<option value="">Saved Views...</option>`;
+  views.forEach(v => {
+    html += `<option value="${v.id}">${v.name}</option>`;
+  });
+  if (views.length > 0) {
+    html += `<option disabled>──────────</option>`;
+    html += `<option value="__clear__">Clear All Views</option>`;
+  }
+  select.innerHTML = html;
+}
+
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
@@ -1297,7 +1394,9 @@ window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody,
   triggerSignNowPhase1, triggerSignNowPhase2,
-  triggerCustodyRecheck, closeRecheckBanner };
+  triggerCustodyRecheck, closeRecheckBanner,
+  saveCurrentView, loadSavedView, populateSavedViews };
 
 // ── Init ──
 loadDashboard();
+populateSavedViews();

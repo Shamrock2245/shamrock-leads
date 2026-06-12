@@ -476,7 +476,7 @@ async def api_prospective_from_intake(request: Request):
             except Exception:
                 intake_query["intake_id"] = intake_id
         if booking_number:
-            intake_query["booking_number"] = booking_number
+            intake_query["defendant_booking_number"] = booking_number
 
         intake_doc = await intake_col.find_one(intake_query)
         if not intake_doc:
@@ -485,7 +485,10 @@ async def api_prospective_from_intake(request: Request):
                 return JSONResponse({"error": "Intake record not found"}, status_code=404)
             intake_doc = {}
 
-        bk = booking_number or intake_doc.get("booking_number", "")
+        # Extract defendant sub-object if present
+        def_info = intake_doc.get("defendant") or {}
+
+        bk = booking_number or intake_doc.get("defendant_booking_number") or intake_doc.get("booking_number", "")
         if not bk:
             return JSONResponse({"error": "Could not determine booking_number"}, status_code=400)
 
@@ -507,11 +510,12 @@ async def api_prospective_from_intake(request: Request):
             initial_stage = "contacted"
 
         # Build indemnitor from intake record
+        ind_info = intake_doc.get("indemnitor") or {}
         indemnitor = {
             "name": intake_doc.get("indemnitor_name") or intake_doc.get("name", ""),
-            "phone": intake_doc.get("indemnitor_phone") or intake_doc.get("phone", ""),
-            "email": intake_doc.get("indemnitor_email") or intake_doc.get("email", ""),
-            "relationship": intake_doc.get("relationship", ""),
+            "phone": intake_doc.get("indemnitor_phone") or ind_info.get("phone", ""),
+            "email": intake_doc.get("indemnitor_email") or ind_info.get("email", ""),
+            "relationship": ind_info.get("relation") or intake_doc.get("relationship", ""),
         }
 
         doc = {
@@ -523,18 +527,19 @@ async def api_prospective_from_intake(request: Request):
             ),
             "county": (
                 data.get("county")
-                or intake_doc.get("county")
+                or intake_doc.get("defendant_county")
+                or def_info.get("county")
                 or arrest_doc.get("county", "")
             ),
             "bond_amount": float(
                 data.get("bond_amount")
-                or intake_doc.get("bond_amount")
+                or def_info.get("bondAmount")
                 or arrest_doc.get("bond_amount", 0)
                 or 0
             ),
             "charges": (
                 data.get("charges")
-                or intake_doc.get("charges")
+                or def_info.get("charges")
                 or arrest_doc.get("charges", "")
             ),
             "lead_score": int(arrest_doc.get("lead_score", 0) or 0),

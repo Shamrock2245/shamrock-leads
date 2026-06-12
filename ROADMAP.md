@@ -1,7 +1,7 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.
-> **Last Updated:** 2026-05-27
+> **Last Updated:** 2026-06-11
 > **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
 
 ## Phase Overview
@@ -24,6 +24,7 @@
 | 13 | Bond Lifecycle Kanban + POA Automation | ✅ Complete |
 | 14 | Court Automation + Discharge Monitoring | ✅ Complete |
 | 15 | Intelligence Dashboard Overhaul | ✅ Complete |
+| 16 | Social Media Command Center (Postiz) | ✅ Complete |
 
 ---
 
@@ -197,6 +198,16 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 - `sl-tab-polish.js` — Tab transition polish
 - `sl-animations.js` — Micro-animations
 - `sl-refinements.js` — UX refinements
+
+---
+
+## Phase 16: Social Media Command Center (Postiz) ✅ COMPLETE
+
+- Self-hosted Postiz instance (`social.shamrockbailbonds.biz`) running on Docker
+- Social Engine API (port 5060) for AI-powered content repurposing
+- SSL / reverse proxy configured for secure social integrations
+- Integration with Temporal, Postgres, and Redis for workflow orchestration
+- Frontend command center via `sl-social.js`
 
 ---
 

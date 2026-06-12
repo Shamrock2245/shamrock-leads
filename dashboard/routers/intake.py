@@ -560,6 +560,7 @@ async def intake_update(request: Request, intake_id: str):
         "defendant_booking_number", "defendant_county",
         "notes", "matched_booking_number",
         "paperwork_packet_id", "paperwork_status",
+        "full_name", "email", "phone", "defendant_name", "county", "booking_number"
     }
     updates = {k: v for k, v in data.items() if k in allowed_fields}
     if not updates:

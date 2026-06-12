@@ -253,6 +253,61 @@ function initSSE() {
     } catch(_) {}
   });
 
+  // ── Bond status changed (Kanban live sync) ──────────────────────────────
+  es.addEventListener('bond_status_changed', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (typeof loadActiveBonds === 'function') loadActiveBonds();
+      // If the Kanban board is active and has a reload function
+      if (typeof window.SLKanban !== 'undefined' && window.SLKanban.reload) {
+        window.SLKanban.reload();
+      }
+      if (typeof SLActivityFeed !== 'undefined') {
+        const title = data.defendant_name || data.booking_number;
+        SLActivityFeed.addEvent(`🔄 <strong>${title}</strong> status changed to <span style="color:var(--accent)">${data.status}</span>`);
+      }
+    } catch(_) {}
+  });
+
+  // ── Presence Updates ────────────────────────────────────────────────────
+  es.addEventListener('presence_update', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      // We look for a card or element with data-booking="RECORD_ID"
+      // and toggle a presence indicator
+      const cards = document.querySelectorAll(`[data-booking="${data.record_id}"]`);
+      cards.forEach(card => {
+        let presenceBadge = card.querySelector('.sl-presence-badge');
+        if (data.action === 'viewing') {
+          if (!presenceBadge) {
+            presenceBadge = document.createElement('div');
+            presenceBadge.className = 'sl-presence-badge';
+            presenceBadge.style.cssText = 'position:absolute; top:-8px; right:-8px; background:#10b981; color:#fff; font-size:10px; padding:2px 6px; border-radius:10px; z-index:10; box-shadow:0 0 5px rgba(16,185,129,0.5);';
+            card.style.position = 'relative';
+            card.appendChild(presenceBadge);
+          }
+          presenceBadge.textContent = `👁 ${data.user} viewing`;
+          presenceBadge.style.display = 'block';
+        } else {
+          if (presenceBadge) presenceBadge.style.display = 'none';
+        }
+      });
+    } catch(_) {}
+  });
+
+  // ── Global Helper for Reporting Presence ────────────────────────────────
+  window.reportPresence = async function(recordId, action) {
+    try {
+      // Assuming a simple agent identifier, fallback to "Agent"
+      const agent = localStorage.getItem('sl_agent_name') || 'Agent';
+      await fetch('/api/events/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ record_id: String(recordId), user: agent, action: action })
+      });
+    } catch(e) { console.error('Failed to report presence', e); }
+  };
+
   // ── Payment confirmed ───────────────────────────────────────────────────
   es.addEventListener('payment_confirmed', (e) => {
     try {

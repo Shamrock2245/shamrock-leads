@@ -2,7 +2,7 @@
 
 > This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
-> **Last Updated:** 2026-05-27
+> **Last Updated:** 2026-06-11
 
 ---
 
@@ -42,6 +42,7 @@ SwipeSimple          → Bond premium payment collection
 Slack                → Real-time operational alerts (12+ channels)
 Google Workspace     → Gmail discharge scanner, GCal court sync, Drive case files
 Twilio               → SMS court reminders, 10DLC compliant
+Postiz               → Social media scheduling (social.shamrockbailbonds.biz)
 ```
 
 ### Docker Services
@@ -52,6 +53,8 @@ Twilio               → SMS court reminders, 10DLC compliant
 | `dashboard` | `shamrock-dashboard` | 5050 | 8088 | FastAPI dashboard (61 API modules, 36 services) |
 | `traccar` | `shamrock-traccar` | 8082 | 8082 | GPS tracking (OsmAnd, vehicle trackers) |
 | `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs (profile: ops) |
+| `social` | `shamrock-social` | 5060 | 8089 | Social Engine API (profile: social) |
+| `postiz` | `shamrock-postiz` | 5000 | 5200 | Postiz Social UI/API (profile: social) |
 
 ---
 

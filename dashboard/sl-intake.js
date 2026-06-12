@@ -152,12 +152,12 @@ const SLIntake = (() => {
         <tr>
           <td><span title="${item.SourceLabel || item.Source}">${icon} ${item.SourceLabel || item.Source}</span></td>
           <td style="white-space:nowrap;font-size:12px">${ts}</td>
-          <td>
+          <td ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'full_name', '${_esc(item.FullName)}')">
             <strong>${_esc(item.FullName)}</strong>
             ${item.Email ? `<br><span style="font-size:11px;color:var(--muted)">${_esc(item.Email)}</span>` : ''}
           </td>
-          <td style="white-space:nowrap">${_esc(item.Phone) || '—'}</td>
-          <td>${_esc(item.DefendantName) || '—'}</td>
+          <td style="white-space:nowrap" ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'phone', '${_esc(item.Phone)}')">${_esc(item.Phone) || '—'}</td>
+          <td ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'defendant_name', '${_esc(item.DefendantName)}')">${_esc(item.DefendantName) || '—'}</td>
           <td>${_esc(item.County) || '—'}</td>
           <td style="font-family:monospace;font-size:12px">${_esc(item.BookingNumber) || '—'}</td>
           <td>${riskBadge}</td>

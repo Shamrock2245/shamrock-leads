@@ -153,6 +153,10 @@ async function openShamrockNotes(bookingNumber, defendantData) {
   _notesModalBooking = bookingNumber;
   _notesModalDefendant = defendantData || null;
 
+  if (typeof window.reportPresence === 'function') {
+    window.reportPresence(bookingNumber, 'viewing');
+  }
+
   const notes = await _fetchNotesDoc(bookingNumber);
 
   // Check pipeline status
@@ -167,7 +171,7 @@ async function openShamrockNotes(bookingNumber, defendantData) {
   if (!modal) {
     modal = document.createElement('div');
     modal.id = 'slcNotesModal';
-    modal.className = 'slc-modal-overlay';
+    modal.className = 'slc-drawer-overlay';
     modal.addEventListener('click', e => { if (e.target === modal) closeShamrockNotes(); });
     document.body.appendChild(modal);
   }
@@ -186,8 +190,8 @@ async function openShamrockNotes(bookingNumber, defendantData) {
     : '<div class="slc-log-empty">No contact logged yet</div>';
 
   modal.innerHTML = `
-    <div class="slc-modal-box">
-      <div class="slc-modal-header">
+    <div class="slc-drawer-box">
+      <div class="slc-drawer-header">
         <div>
         <div class="slc-modal-title">📝 Shamrock Notes</div>
           <div class="slc-modal-subtitle">Booking #${bookingNumber}</div>
@@ -198,7 +202,7 @@ async function openShamrockNotes(bookingNumber, defendantData) {
         </div>
         <button class="slc-modal-close" onclick="closeShamrockNotes()">✕</button>
       </div>
-      <div class="slc-modal-body">
+      <div class="slc-drawer-body">
 
         <!-- ── Status & Flags ── -->
         <div class="slc-form-section">
@@ -265,11 +269,21 @@ async function openShamrockNotes(bookingNumber, defendantData) {
               <input type="text" id="slcNextAction" class="slc-input" value="${_esc(notes.next_action||'')}" placeholder="e.g. Call indemnitor back at 3pm">
             </div>
           </div>
-          <div class="slc-form-row">
             <div class="slc-form-field">
               <label class="slc-label">Agent</label>
               <input type="text" id="slcAgent" class="slc-input" value="${_esc(notes.agent||'')}" placeholder="Your name">
             </div>
+          </div>
+        </div>
+
+        <!-- ── Custom Tracking Fields (JSONB) ── -->
+        <div class="slc-form-section">
+          <div class="slc-form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>🏷️ Custom Tracking Fields</span>
+            <button class="slc-btn slc-btn-sm" style="background:#1e1e24;border:1px solid #333;color:#4ade80;" onclick="_addCustomFieldRow()">+ Add Field</button>
+          </div>
+          <div id="slcCustomFieldsContainer" style="display:flex; flex-direction:column; gap:8px;">
+            <div class="slc-log-empty" style="padding:10px 0;">Loading custom fields...</div>
           </div>
         </div>
 
@@ -311,7 +325,11 @@ async function openShamrockNotes(bookingNumber, defendantData) {
 
         <!-- ── Lifecycle Timeline ── -->
         <div class="slc-form-section">
-          <div class="slc-form-section-title">📅 Unified Lifecycle Timeline <span class="slc-count" id="slcTimelineCount">—</span></div>
+          <div class="slc-form-section-title" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>📅 Unified Lifecycle Timeline <span class="slc-count" id="slcTimelineCount">—</span></span>
+            <button class="slc-btn slc-btn-sm" style="background:#1e1e24;border:1px solid #333;color:#4ade80;font-size:11px;" onclick="generateAiSummary('${bookingNumber}')">✨ AI Summarize</button>
+          </div>
+          <div id="slcAiSummaryDisplay" style="display:none; background:#111; padding:12px; border-radius:8px; border:1px solid #333; color:#e2e8f0; font-size:13px; margin-bottom:12px; white-space:pre-wrap; line-height:1.5;"></div>
           <div class="slc-timeline" id="slcTimelineDisplay">
             <div class="slc-log-empty">Loading timeline…</div>
           </div>
@@ -360,6 +378,7 @@ async function openShamrockNotes(bookingNumber, defendantData) {
   });
   // Load lifecycle timeline asynchronously
   _loadLifecycleTimeline(bookingNumber);
+  _loadCustomFields(bookingNumber);
 
   // iOS Safari touch fix: force repaint before adding .active
   modal.style.display = 'flex';
@@ -378,6 +397,10 @@ function closeShamrockNotes() {
   const modal = document.getElementById('slcNotesModal');
   if (modal) modal.classList.remove('active');
   document.body.style.overflow = '';
+  
+  if (typeof window.reportPresence === 'function' && _notesModalBooking) {
+    window.reportPresence(_notesModalBooking, 'closed');
+  }
 }
 
 /* ── Lifecycle Timeline & Ledger Loader ──────────────────────────────────────── */
@@ -427,6 +450,11 @@ async function _loadLifecycleTimeline(bookingNumber) {
           tlHtml += `<div class="slc-timeline-capped-notice">Showing most recent ${events.length} of ${data.total_events} events</div>`;
         }
         if (tlEl) tlEl.innerHTML = tlHtml;
+
+        // Auto-summarize if > 20 events
+        if (events.length > 20) {
+          generateAiSummary(bookingNumber);
+        }
       }
     } else {
       if (tlEl) tlEl.innerHTML = `<div class="slc-log-empty" style="color:var(--muted)">Timeline unavailable</div>`;
@@ -493,12 +521,29 @@ async function saveShamrockNotes(bookingNumber) {
       body: JSON.stringify(payload),
     });
     const data = await _safeJSON(res);
+
+    // Save custom fields independently
+    const cfContainer = document.getElementById('slcCustomFieldsContainer');
+    if (cfContainer && !cfContainer.querySelector('.slc-log-empty')?.textContent.includes('Loading')) {
+      const customFields = {};
+      cfContainer.querySelectorAll('.slc-custom-field-row').forEach(row => {
+        const k = row.querySelector('.cf-key')?.value.trim();
+        const v = row.querySelector('.cf-val')?.value.trim();
+        if (k) customFields[k] = v;
+      });
+      fetch(`/api/active-bonds/${bookingNumber}/custom-fields`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_fields: customFields }),
+      }).catch(e => console.error('Custom fields save error:', e));
+    }
+
     if (!data) { if (typeof showToast === 'function') showToast('Save failed: bad response', 'error'); return; }
     if (data.success) {
       _notesCache[bookingNumber] = data.notes;
       _applyCardStyling(bookingNumber, data.notes);
       closeShamrockNotes();
-      if (typeof showToast === 'function') showToast('Notes saved ✓', 'success');
+      if (typeof showToast === 'function') showToast('Notes & Custom Fields saved ✓', 'success');
     } else {
       if (typeof showToast === 'function') showToast('Save failed: ' + (data.error || 'unknown'), 'error');
     }
@@ -975,3 +1020,40 @@ window.saveShamrockNotes = saveShamrockNotes;
 window.logContact = logContact;
 window.openFinalizeBond = openFinalizeBond;
 window.openDnbList = openDnbList;
+
+async function generateAiSummary(bookingNumber) {
+  const btn = document.querySelector('button[onclick^="generateAiSummary"]');
+  const display = document.getElementById('slcAiSummaryDisplay');
+  if (!btn || !display) return;
+
+  btn.disabled = true;
+  btn.textContent = "✨ Generating...";
+  display.style.display = 'block';
+  display.textContent = "Analyzing timeline and messages... Please wait.";
+
+  try {
+    const res = await fetch('/api/agent-brain/summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ booking_number: bookingNumber })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.summary) {
+        display.innerHTML = '<strong>✨ AI Intelligence Briefing</strong><br><br>' + _esc(data.summary).replace(/\n/g, '<br>');
+      } else {
+        display.textContent = "Could not generate summary.";
+      }
+    } else {
+      display.textContent = "Failed to fetch summary.";
+    }
+  } catch (err) {
+    display.textContent = "Error generating summary.";
+    console.error("AI Summary error:", err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "✨ AI Summarize";
+  }
+}
+window.generateAiSummary = generateAiSummary;

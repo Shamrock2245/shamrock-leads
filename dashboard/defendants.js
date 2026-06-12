@@ -102,7 +102,7 @@ function renderDefCard(d){
   const pillClass = isNoBond ? 'no-bond' : bondPill(d.bond_amount);
 
   return `
-  <div class="def-card" data-booking="${d.booking_number||''}">
+  <div class="def-card" data-booking="${d.booking_number||''}" onclick='openSplitView(this, ${JSON.stringify(d).replace(/'/g,"&#39;")})'>
     <!-- Header -->
     <div class="def-card-header">
       <div style="display:flex;gap:14px;align-items:center;flex:1;min-width:0">
@@ -172,11 +172,12 @@ function renderDefCard(d){
 
     <!-- Footer Actions -->
     <div class="def-card-footer">
-      ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail">🔗 Source</a>`:''}
-      <button class="btn-contact-indem" onclick='SLContact.openModal("${d.booking_number||""}",${JSON.stringify(d.full_name||"")},"${(d.county||"").replace(/"/g,"&quot;")}",${d.bond_amount||0},"${d.booking_number||""}")'>📞 Contact Indem</button>
-      <button onclick='trackAsInProgress(${JSON.stringify(d).replace(/'/g,"&#39;")})' style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track In Progress</button>
-      <button class="btn-write-bond" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'> Write Bond</button>
-      <button class="btn-record-bond" onclick='window.openRecordBondModal&&openRecordBondModal(${JSON.stringify(d).replace(/'/g,"&#39;")})'>☘️ Record Bond</button>
+      ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail" onclick="event.stopPropagation()">🔗 Source</a>`:''}
+      <button class="btn-detail" onclick="event.stopPropagation(); if(window.openShamrockNotes) openShamrockNotes('${d.booking_number}')">📜 Timeline & Notes</button>
+      <button class="btn-contact-indem" onclick='event.stopPropagation(); SLContact.openModal("${d.booking_number||""}",${JSON.stringify(d.full_name||"")},"${(d.county||"").replace(/"/g,"&quot;")}",${d.bond_amount||0},"${d.booking_number||""}")'>📞 Contact Indem</button>
+      <button onclick='event.stopPropagation(); trackAsInProgress(${JSON.stringify(d).replace(/'/g,"&#39;")})' style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track In Progress</button>
+      <button class="btn-write-bond" onclick='event.stopPropagation(); openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'> Write Bond</button>
+      <button class="btn-record-bond" onclick='event.stopPropagation(); window.openRecordBondModal&&openRecordBondModal(${JSON.stringify(d).replace(/'/g,"&#39;")})'>☘️ Record Bond</button>
     </div>
   </div>`;
 }
@@ -469,3 +470,144 @@ async function trackAsInProgress(defendant) {
     showToast('Network error: ' + err.message, 'error');
   }
 }
+
+
+/* ═══════════════════════════════════════════════════════
+   SPLIT VIEW & KEYBOARD NAVIGATION (Twenty UX)
+   ═══════════════════════════════════════════════════════ */
+let currentSplitIndex = -1;
+
+function openSplitView(cardEl, d) {
+  const wrapper = document.getElementById('defSplitWrapper');
+  const detailPane = document.getElementById('defDetailPane');
+  
+  if (!wrapper || !detailPane) return;
+  
+  // Update active card
+  document.querySelectorAll('.def-card.active-split').forEach(el => el.classList.remove('active-split'));
+  if (cardEl) {
+    cardEl.classList.add('active-split');
+    // Find index for keyboard navigation
+    const cards = Array.from(document.querySelectorAll('.def-card'));
+    currentSplitIndex = cards.indexOf(cardEl);
+  }
+  
+  wrapper.classList.add('split-active');
+  
+  // Render detail pane
+  const charges = parseCharges(d.charges, d.bond_amount, d.bond_type, d.case_number);
+  const hasMugshot = d.mugshot_url && d.mugshot_url.startsWith('http');
+  const fullAddr = [d.address, d.city, d.state, d.zip].filter(v => v && v !== '—').join(', ');
+  
+  detailPane.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 20px;">
+      <div style="display:flex; gap:16px; align-items:center;">
+        ${hasMugshot ? `<img src="${d.mugshot_url}" style="width:80px;height:80px;border-radius:12px;object-fit:cover;">` : `<div style="width:80px;height:80px;border-radius:12px;background:var(--panel-hover);display:flex;align-items:center;justify-content:center;font-size:32px;">👤</div>`}
+        <div>
+          <h2 style="margin:0; font-size:20px; font-weight:700;">${val(d.full_name)}</h2>
+          <div style="color:var(--muted); font-size:13px; margin-top:4px;">#${val(d.booking_number)} · ${val(d.county)} County</div>
+          <div style="margin-top:8px;">${statusBadge(d.status)}</div>
+        </div>
+      </div>
+      <button onclick="closeSplitView()" class="sl-btn sl-btn-ghost" style="padding:4px 8px;">✕</button>
+    </div>
+    
+    <div class="def-section" style="margin-bottom:20px">
+      <div class="def-section-title">🏛️ Booking Info</div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; font-size:13px;">
+        <div><strong style="color:var(--muted);display:block;font-size:11px;">Arrest Date</strong>${val(d.arrest_date)} ${d.arrest_time||''}</div>
+        <div><strong style="color:var(--muted);display:block;font-size:11px;">Agency</strong>${val(d.agency)}</div>
+        <div style="grid-column: 1/-1"><strong style="color:var(--muted);display:block;font-size:11px;">Address</strong>${fullAddr || '—'}</div>
+      </div>
+    </div>
+    
+    <div class="def-section" style="margin-bottom:20px">
+      <div class="def-section-title">⚖️ Charges</div>
+      <table class="def-charges-table" style="width:100%">
+        <thead><tr><th>Charge</th><th>Bond</th><th>Case</th></tr></thead>
+        <tbody>
+          ${charges.map(c => `<tr><td>${c.charge}</td><td style="font-weight:600">${c.bond}</td><td class="mono" style="font-size:11px">${c.case}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    
+    <div style="display:flex; gap:12px; margin-top:24px;">
+      <button class="sl-btn sl-btn-primary" style="flex:1" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'>Write Bond</button>
+      <button class="sl-btn sl-btn-secondary" style="flex:1" onclick="if(window.openShamrockNotes) openShamrockNotes('${d.booking_number}')">Notes</button>
+    </div>
+  `;
+}
+
+function closeSplitView() {
+  const wrapper = document.getElementById('defSplitWrapper');
+  if (wrapper) wrapper.classList.remove('split-active');
+  document.querySelectorAll('.def-card.active-split').forEach(el => el.classList.remove('active-split'));
+  currentSplitIndex = -1;
+}
+
+// Keyboard Navigation for Split View
+document.addEventListener('keydown', (e) => {
+  // Only trigger if we are on the defendants tab, split view is active, and no input is focused
+  const wrapper = document.getElementById('defSplitWrapper');
+  if (!wrapper || !wrapper.classList.contains('split-active')) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const cards = Array.from(document.querySelectorAll('.def-card'));
+    if (!cards.length) return;
+    
+    if (e.key === 'ArrowDown') {
+      currentSplitIndex = Math.min(currentSplitIndex + 1, cards.length - 1);
+    } else {
+      currentSplitIndex = Math.max(currentSplitIndex - 1, 0);
+    }
+    
+    const nextCard = cards[currentSplitIndex];
+    if (nextCard) {
+      nextCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      nextCard.click();
+    }
+  } else if (e.key === 'Escape') {
+    closeSplitView();
+  }
+});
+
+// ── Saved Views (Twenty UX) ──
+function applySavedView(viewId, btnEl) {
+  // Update UI active state
+  if (btnEl) {
+    document.querySelectorAll('#defSavedViews .view-tab').forEach(b => b.classList.remove('active'));
+    btnEl.classList.add('active');
+  }
+  
+  // Reset filters
+  document.getElementById('defSearch').value = '';
+  document.getElementById('defSort').value = 'arrest_date';
+  document.getElementById('defCustody').value = '';
+  document.querySelectorAll('#defBondRange button').forEach(b => b.classList.remove('active'));
+  document.querySelector('#defBondRange button').classList.add('active'); // Default zsh+
+  document.getElementById('defMinBond').value = '';
+  
+  // Apply specific view logic
+  if (viewId === 'high_value') {
+    document.getElementById('defSort').value = 'bond_amount';
+    document.getElementById('defMinBond').value = '5000';
+    // Highlight correct bond button
+    document.querySelectorAll('#defBondRange button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#defBondRange button')[3].classList.add('active'); // Assuming index 3 is K+
+  } else if (viewId === 'in_custody') {
+    document.getElementById('defCustody').value = 'true';
+  } else if (viewId === 'high_risk') {
+    document.getElementById('defSort').value = 'lead_score';
+  }
+  
+  // Reload
+  if (window.SL && SL.loadDefendants) {
+    SL.loadDefendants(1);
+  } else if (typeof loadDefendants === 'function') {
+    loadDefendants(1);
+  }
+}
+
+window.applySavedView = applySavedView;

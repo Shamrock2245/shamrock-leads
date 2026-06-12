@@ -1598,3 +1598,43 @@ async def api_bond_renewal_history(booking_number: str):
     except Exception as exc:
         logger.exception("renewal-history error for %s: %s", booking_number, exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH /api/active-bonds/<booking_number>/custom-fields
+# ─────────────────────────────────────────────────────────────────────────────
+@bonds_bp.patch("/active-bonds/{booking_number}/custom-fields")
+async def api_bond_custom_fields(booking_number: str, request: Request):
+    """Update custom fields for a bond."""
+    try:
+        data = (await request.json()) or {}
+        custom_fields = data.get("custom_fields")
+        if not isinstance(custom_fields, dict):
+            return JSONResponse({"error": "custom_fields must be a dictionary"}, 400)
+        
+        active_bonds = get_collection("active_bonds")
+        result = await active_bonds.update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                "custom_fields": custom_fields,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        if result.modified_count or result.matched_count:
+            return {"success": True, "booking_number": booking_number}
+        return JSONResponse({"success": False, "error": "Bond not found"}, 404)
+    except Exception as exc:
+        logger.exception("custom-fields error for %s: %s", booking_number, exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+@bonds_bp.get("/active-bonds/{booking_number}/custom-fields")
+async def api_get_bond_custom_fields(booking_number: str):
+    """Get custom fields for a bond."""
+    try:
+        active_bonds = get_collection("active_bonds")
+        bond = await active_bonds.find_one({"booking_number": booking_number}, {"_id": 0, "custom_fields": 1})
+        if not bond:
+            return {"success": True, "custom_fields": {}}
+        return {"success": True, "custom_fields": bond.get("custom_fields") or {}}
+    except Exception as exc:
+        logger.exception("get custom-fields error for %s: %s", booking_number, exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

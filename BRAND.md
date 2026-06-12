@@ -80,6 +80,7 @@ We are building a platform that will surpass **Captira** and **Bail Books** — 
 | **CI/CD** | GitHub Actions | Automated deployments |
 | **Ops** | Node-RED | 39+ cron jobs, ops dashboard |
 | **Location** | MaxMind GeoLite2 + Twilio SMS | Bond tracker / flight risk scoring |
+| **Social** | Postiz (Docker), Temporal | Multi-platform social media scheduling |
 
 ---
 
@@ -150,6 +151,7 @@ We are building toward **SOC II Type II** compliance. All agents must build with
 | Audit Logger | "The Auditor" | ✅ Live | `dashboard/api/events.py` |
 | Re-Arrest Detector | "The Sentinel" | ✅ Live | `dashboard/api/rearrest_detector.py` |
 | Data Retention | "The Janitor" | ✅ Live | `dashboard/api/data_retention.py` |
+| Social Media Manager | "The Publicist" | ✅ Live | `social/main.py`, `.agent/skills/postiz-social-media/SKILL.md` |
 
 ---
 
@@ -183,4 +185,4 @@ Every pull request, every commit, every feature must meet this bar:
 
 ---
 
-*Last updated: 2026-05-08 | Maintained by: Brendan / Shamrock Active Software LLC*
+*Last updated: 2026-06-11 | Maintained by: Brendan / Shamrock Active Software LLC*

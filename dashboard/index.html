@@ -114,6 +114,7 @@
   <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">Accounting</button>
   <button class="tab-btn" data-tab="tabSocial" onclick="SL.switchTab(this)">Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
   <button class="tab-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()">Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
+  <button class="tab-btn" data-tab="tabAutomations" onclick="SL.switchTab(this);SLAutomations.load()">Automations <span class="badge" id="automationsBadge"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">POA Inventory</button>
 </div>
 
@@ -3950,6 +3951,28 @@
 <div class="tab-content" id="tabSocial" style="padding: 0; display: flex; flex-direction: column; height: calc(100vh - 64px);">
   <iframe src="https://social.shamrockbailbonds.biz" style="flex: 1; width: 100%; border: none; border-radius: 0;"></iframe>
 </div><!-- end tabSocial -->
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TAB: AUTOMATIONS ENGINE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabAutomations">
+  <div class="header-banner">
+    <div class="header-title">
+      <h1>🤖 Automations Engine</h1>
+      <div class="header-subtitle">Manage native background tasks, agent crons, and event triggers.</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-primary" onclick="SLAutomations.load()">Refresh Status</button>
+    </div>
+  </div>
+  <div class="content-wrapper" style="max-width: 1200px; margin: 0 auto; padding-top: 20px;">
+    <div id="automationsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;">
+      <div style="text-align:center; padding: 40px; color: var(--muted); grid-column: 1 / -1;">
+        Loading automations...
+      </div>
+    </div>
+  </div>
+</div><!-- end tabAutomations -->
 
 <!-- ═══════════════════════════════════════════════════════
      TAB: ENRICHMENT COMMAND CENTER

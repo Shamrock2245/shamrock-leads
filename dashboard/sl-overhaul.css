@@ -1515,3 +1515,121 @@ body.drawer-open{overflow:hidden}
   .kb-card-name { font-size: 12px; }
   .kb-card-actions button { font-size: 9px; padding: 2px 5px; }
 }
+
+/* Add Twenty-CRM style slide-over drawer styles */
+.slc-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 9900;
+  display: flex;
+  justify-content: flex-end;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+  backdrop-filter: blur(2px);
+}
+.slc-drawer-overlay.active {
+  opacity: 1;
+  visibility: visible;
+}
+.slc-drawer-box {
+  width: 500px;
+  max-width: 100vw;
+  height: 100vh;
+  background: var(--bg-card, #1e293b);
+  border-left: 1px solid var(--border, #334155);
+  box-shadow: -10px 0 40px rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+.slc-drawer-overlay.active .slc-drawer-box {
+  transform: translateX(0);
+}
+.slc-drawer-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border, #334155);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  background: var(--bg-card, #1e293b);
+}
+.slc-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Split View Layout */
+.def-split-wrapper {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  transition: all 0.3s ease;
+}
+.def-list-pane {
+  flex: 1;
+  transition: all 0.3s ease;
+  min-width: 0; /* prevent blowout */
+}
+.def-detail-pane {
+  width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  overflow: hidden;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+.def-split-wrapper.split-active .def-detail-pane {
+  width: 480px;
+  opacity: 1;
+  visibility: visible;
+  padding: 20px;
+}
+.def-split-wrapper.split-active .def-grid {
+  grid-template-columns: 1fr; /* Stack cards when split */
+}
+.def-card.active-split {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139,92,246,0.3);
+}
+
+/* Saved Views Tabs (Twenty UX) */
+.saved-views-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.view-tab {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.view-tab:hover {
+  background: var(--panel-hover);
+  color: var(--fg);
+}
+.view-tab.active {
+  background: rgba(139, 92, 246, 0.1);
+  color: #8b5cf6;
+}

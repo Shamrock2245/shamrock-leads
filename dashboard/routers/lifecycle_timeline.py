@@ -224,7 +224,7 @@ async def get_lifecycle(booking_number: str):
 
         # 5. Audit events
         for ae in audit_events:
-            etype = ae.get("type", "note")
+            etype = ae.get("type", ae.get("event_type", "note"))
             icon_map = {
                 "bond_exonerated": ("discharge", "🎉"),
                 "bond_written": ("bond", "✅"),
@@ -232,14 +232,23 @@ async def get_lifecycle(booking_number: str):
                 "alert": ("alert", "🚨"),
                 "payment": ("payment", "💰"),
                 "court_reminder": ("court", "🏛️"),
+                "inbound_sms": ("message", "💬"),
+                "outbound_sms": ("message", "💬"),
             }
             icon_class, icon = icon_map.get(etype, ("note", "📋"))
+            detail_str = ae.get("detail", ae.get("notes", ""))
+            if not detail_str and etype in ("inbound_sms", "outbound_sms"):
+                payload = ae.get("payload", {})
+                if isinstance(payload, dict):
+                    detail_str = payload.get("Body", str(payload))
+                else:
+                    detail_str = str(payload)
             events.append({
                 "type": etype,
                 "icon_class": icon_class,
                 "icon": icon,
                 "title": ae.get("description", etype.replace("_", " ").title()),
-                "detail": ae.get("detail", ae.get("notes", ""))[:120],
+                "detail": detail_str[:120],
                 "timestamp": _iso(_ts(ae, "timestamp", "created_at")),
                 "badge": None,
             })

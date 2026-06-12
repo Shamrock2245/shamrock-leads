@@ -155,6 +155,14 @@ class BondStateMachine:
                 from dashboard.services.task_engine import TaskEngine
                 await TaskEngine.schedule_compliance_tasks(booking_number)
 
+            from dashboard.routers.events import publish_event
+            await publish_event("bond_status_changed", {
+                "booking_number": booking_number,
+                "from_status": current_status,
+                "to_status": new_status,
+                "actor": actor
+            })
+
             return {
                 "success": True,
                 "status": new_status,

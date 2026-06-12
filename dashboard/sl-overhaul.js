@@ -303,8 +303,10 @@
     }
   }
 
-  // Override Cmd+K keyboard shortcut
+  // Override Cmd+K and global keyboard shortcuts
   document.addEventListener('keydown', function (e) {
+    const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable;
+
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -314,8 +316,25 @@
         openCmdPalette();
       }
     }
+    
     if (e.key === 'Escape' && _cmdOpen) {
       closeCmdPalette();
+    }
+
+    // Global hotkeys (only when not typing in an input)
+    if (!isInput && !e.metaKey && !e.ctrlKey && !e.altKey && !_cmdOpen) {
+      if (e.key === '/') {
+        e.preventDefault();
+        openCmdPalette();
+      } else if (e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        navigateToTab('tabIntake');
+        if (window.toast) toast('Navigated to Intake Queue', 'info', 1500);
+      } else if (e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        navigateToTab('tabIndemnitor');
+        if (window.toast) toast('Navigated to Indemnitors', 'info', 1500);
+      }
     }
   }, true); // capture phase to override existing handler
 
