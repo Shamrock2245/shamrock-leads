@@ -1,6 +1,7 @@
 import logging
 import os
 import httpx
+import asyncio
 from datetime import datetime, timezone
 from writers.slack_notifier import SlackNotifier
 
@@ -53,7 +54,7 @@ class WatchdogService:
             for err in results["errors"]:
                 msg += f"• {err}\n"
             try:
-                self.slack.send_message(msg, channel=os.getenv("SLACK_WEBHOOK_ERRORS"))
+                await asyncio.to_thread(self.slack._post, self.slack.webhook_errors, {"text": msg})
             except:
                 pass
                 

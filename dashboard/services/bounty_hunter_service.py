@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection
 from writers.slack_notifier import SlackNotifier
@@ -21,6 +22,7 @@ class BountyHunterService:
             # and custody status implies they are still in custody.
             cursor = arrests_col.find({
                 "bond_written": {"$ne": True},
+                "bounty_alerted": {"$ne": True},
                 "bond_amount": {"$gte": 2500},
                 "custody_status": {"$in": ["In Custody", "IN CUSTODY", "Confined", "CONFINED", ""]}
             }).sort("scraped_at", -1).limit(50)
@@ -28,15 +30,12 @@ class BountyHunterService:
             high_value_leads = await cursor.to_list(length=50)
             
             if high_value_leads:
-                # We don't want to alert on the same lead repeatedly.
-                # In a full implementation, we'd check an alert log or use an 'alerted_bounty' flag.
-                # For now, we just pick the top 5 highest value ones that haven't been processed.
+                # Pick the top 3 highest value ones that haven't been processed
                 high_value_leads.sort(key=lambda x: x.get("bond_amount", 0), reverse=True)
                 top_leads = high_value_leads[:3]
                 
                 for lead in top_leads:
-                    # Check if already alerted (we can use nlp_enriched_at or a new flag, but for now we rely on the SlackNotifier deduplication if possible)
-                    # We will construct a Slack message.
+                    # Construct a Slack message payload
                     msg = (
                         f"🏹 *BOUNTY HUNTER ALERT* 🏹\n"
                         f"High-value unposted bond detected!\n\n"
@@ -45,8 +44,21 @@ class BountyHunterService:
                         f"🏛️ *County:* {lead.get('county')} | *Booking:* {lead.get('booking_number')}\n"
                         f"⚖️ *Charges:* {lead.get('charges', 'N/A')}\n"
                     )
-                    # Notify on #leads
-                    self.slack.notify_lead(lead, score=lead.get("lead_score", 85))
+                    
+                    blocks = [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": msg}
+                        }
+                    ]
+                    
+                    # Notify on #leads using _post asynchronously to avoid blocking the event loop
+                    success = await asyncio.to_thread(self.slack._post, self.slack.webhook_leads, {"blocks": blocks})
+                    if success:
+                        await arrests_col.update_one(
+                            {"_id": lead["_id"]},
+                            {"$set": {"bounty_alerted": True}}
+                        )
                     
             return {"scanned": 50, "found": len(high_value_leads)}
         except Exception as e:
