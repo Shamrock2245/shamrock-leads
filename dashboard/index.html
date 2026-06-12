@@ -112,7 +112,7 @@
   <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">Alpha Intel</button>
   <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
   <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">Accounting</button>
-  <button class="tab-btn" data-tab="tabSocial" onclick="SL.switchTab(this);SLSocial.load()">Social <span class="badge" id="socialBadge" style="background:#8b5cf6"></span></button>
+  <button class="tab-btn" data-tab="tabSocial" onclick="SL.switchTab(this)">Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
   <button class="tab-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()">Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
   <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">POA Inventory</button>
 </div>
@@ -302,11 +302,19 @@
     <!-- Active Filter Pills -->
     <div class="filter-pills" id="filterPills"></div>
 
-    <!-- Export Buttons -->
-    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-      <button class="btn-export" onclick="SL.exportCSV()">📥 Export CSV</button>
-      <button class="btn-export btn-slack" onclick="SL.copyToSlack()">📋 Copy to Slack</button>
-      <span class="meta" id="resultsMeta"></span>
+    <!-- Export Buttons & Saved Views -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn-export" onclick="SL.exportCSV()">📥 Export CSV</button>
+        <button class="btn-export btn-slack" onclick="SL.copyToSlack()">📋 Copy to Slack</button>
+        <span class="meta" id="resultsMeta"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="savedViewsSelect" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);font-size:12px" onchange="if(window.SL) SL.loadSavedView(this.value)">
+          <option value="">Saved Views...</option>
+        </select>
+        <button class="btn-export" onclick="if(window.SL) SL.saveCurrentView()">💾 Save View</button>
+      </div>
     </div>
 
     <!-- Leads Table -->
@@ -337,6 +345,14 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabDefendants">
   <div class="container">
+    <!-- ── Saved Custom Views (Twenty UX) ── -->
+    <div class="saved-views-tabs" id="defSavedViews">
+      <button class="view-tab active" onclick="applySavedView('all', this)">All Defendants</button>
+      <button class="view-tab" onclick="applySavedView('high_value', this)">🔥 High Value (>$5k)</button>
+      <button class="view-tab" onclick="applySavedView('in_custody', this)">🔒 In Custody</button>
+      <button class="view-tab" onclick="applySavedView('high_risk', this)">⚠️ High Risk</button>
+    </div>
+
     <!-- Defendant Filters & Sort -->
     <div class="filters">
       <input type="text" id="defSearch" placeholder="🔍 Search defendants..." style="flex:1;min-width:200px" oninput="SL.debounceDefSearch()">
@@ -381,7 +397,14 @@
       <span class="meta" id="defResultsMeta"></span>
     </div>
 
-    <div class="def-grid" id="defendantGrid"></div>
+    <div class="def-split-wrapper" id="defSplitWrapper">
+      <div class="def-list-pane">
+        <div class="def-grid" id="defendantGrid"></div>
+      </div>
+      <div class="def-detail-pane" id="defDetailPane">
+        <!-- Rendered via JS -->
+      </div>
+    </div>
     <div class="pagination" id="defPagination"></div>
   </div>
 </div>
@@ -3924,393 +3947,8 @@
 <!-- ═══════════════════════════════════════════════════════════════════
      TAB: SOCIAL MEDIA COMMAND CENTER
      ═══════════════════════════════════════════════════════════════════ -->
-<div class="tab-content" id="tabSocial">
-<style>
-/* ── Social Command Center Styles ─────────────────────────────────────── */
-.soc-wrap{max-width:1480px;margin:0 auto;padding:24px 20px}
-
-/* Header */
-.soc-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
-.soc-header h2{font-size:22px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:10px;margin:0}
-.soc-header-sub{font-size:12px;color:var(--muted);margin-top:4px}
-.soc-header-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.soc-conn-pill{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;background:var(--card);border:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-secondary)}
-.soc-conn-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.soc-conn-dot.green{background:#10b981;box-shadow:0 0 8px rgba(16,185,129,0.5)}
-.soc-conn-dot.red{background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.5)}
-.soc-conn-dot.yellow{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,0.5)}
-.soc-conn-dot.amber{background:#f97316;box-shadow:0 0 8px rgba(249,115,22,0.5)}
-.soc-platform-avatar{width:24px;height:24px;border-radius:50%;margin-top:4px}
-
-/* KPI Strip */
-.soc-kpi-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:24px}
-.soc-kpi{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 16px;text-align:center;transition:all .2s ease}
-.soc-kpi:hover{border-color:rgba(139,92,246,.3);box-shadow:0 0 20px rgba(139,92,246,.06)}
-.soc-kpi-label{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
-.soc-kpi-value{font-size:26px;font-weight:800;letter-spacing:-.5px}
-.soc-kpi-value.purple{color:#8b5cf6}
-.soc-kpi-value.amber{color:#f59e0b}
-.soc-kpi-value.green{color:#10b981}
-.soc-kpi-value.blue{color:#3b82f6}
-.soc-kpi-value.rose{color:#f43f5e}
-.soc-kpi-value.teal{color:#14b8a6}
-
-/* Platform Status Grid */
-.soc-platforms-section{margin-bottom:24px}
-.soc-platforms-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px;padding-left:2px}
-.soc-platform-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.soc-platform-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;transition:all .2s ease}
-.soc-platform-card.active{border-color:rgba(16,185,129,.3)}
-.soc-platform-card.disabled{opacity:.55}
-.soc-platform-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.1)}
-.soc-platform-icon{font-size:22px;margin-bottom:6px}
-.soc-platform-name{font-size:12px;font-weight:700;color:var(--text);margin-bottom:4px}
-.soc-platform-status{font-size:10px;color:var(--text-secondary)}
-.soc-platform-last{font-size:10px;color:var(--muted);margin-top:2px}
-
-/* Postiz connection info */
-.soc-disconnect-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:4px;transition:all .15s;opacity:.5;line-height:1}
-.soc-disconnect-btn:hover{opacity:1;color:#ef4444;background:rgba(239,68,68,.1)}
-.soc-acct-row{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:3px 4px;margin-top:3px;border-radius:6px;transition:background .15s}
-.soc-acct-row:hover{background:rgba(255,255,255,.03)}
-.soc-acct-name{font-size:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
-.soc-conn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}
-.soc-conn-dot.green{background:#10b981;box-shadow:0 0 6px rgba(16,185,129,.5)}
-.soc-conn-dot.red{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.5)}
-.soc-conn-dot.amber{background:#f59e0b;box-shadow:0 0 6px rgba(245,158,11,.5)}
-.soc-platform-avatar{width:28px;height:28px;border-radius:50%;margin-top:6px;border:2px solid rgba(16,185,129,.3);object-fit:cover}
-
-/* 2-column body */
-.soc-body{display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
-
-/* Queue panel */
-.soc-queue-panel{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
-.soc-queue-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap;gap:8px}
-.soc-queue-title{font-size:14px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
-.soc-queue-actions{display:flex;gap:6px;flex-wrap:wrap}
-.soc-filter-bar{display:flex;gap:6px;padding:12px 20px;border-bottom:1px solid var(--border);overflow-x:auto}
-.soc-filter-btn{padding:5px 14px;border:1px solid var(--border);border-radius:20px;background:transparent;color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;font-family:inherit}
-.soc-filter-btn.active{border-color:#8b5cf6;color:#8b5cf6;background:rgba(139,92,246,.08)}
-.soc-filter-btn:hover:not(.active){border-color:rgba(255,255,255,.2)}
-
-/* Post cards */
-.soc-post-card{padding:16px 20px;border-bottom:1px solid var(--border);transition:background .15s}
-.soc-post-card:hover{background:rgba(139,92,246,.02)}
-.soc-post-card:last-child{border-bottom:none}
-.soc-post-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px}
-.soc-post-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.soc-post-time{font-size:11px;color:var(--muted);white-space:nowrap}
-.soc-post-content{font-size:13px;color:var(--text-secondary);line-height:1.55;margin-bottom:10px;white-space:pre-wrap;word-break:break-word}
-.soc-post-actions{display:flex;gap:6px;flex-wrap:wrap}
-
-/* Badges & pills */
-.soc-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px}
-.soc-badge-pending{background:rgba(245,158,11,.12);color:#f59e0b}
-.soc-badge-approved{background:rgba(16,185,129,.12);color:#10b981}
-.soc-badge-rejected{background:rgba(239,68,68,.12);color:#ef4444}
-.soc-badge-posted{background:rgba(59,130,246,.12);color:#3b82f6}
-.soc-badge-failed{background:rgba(239,68,68,.12);color:#ef4444}
-.soc-badge-expired{background:rgba(148,163,184,.12);color:#94a3b8}
-.soc-platform-pill{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;background:rgba(139,92,246,.1);color:#a78bfa}
-.soc-source-pill{display:inline-flex;padding:2px 7px;border-radius:5px;font-size:9px;font-weight:600;background:rgba(148,163,184,.1);color:#94a3b8;text-transform:uppercase;letter-spacing:.4px}
-.soc-tone-pill{display:inline-flex;padding:2px 7px;border-radius:5px;font-size:9px;font-weight:600;background:rgba(20,184,166,.1);color:#14b8a6;text-transform:capitalize}
-.soc-h-score{display:inline-flex;align-items:center;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:700;font-family:'SF Mono','Fira Code',monospace;background:rgba(244,63,94,.08);color:#fb7185}
-
-/* Buttons */
-.soc-btn{padding:5px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text-secondary);font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
-.soc-btn:hover{border-color:rgba(255,255,255,.2);background:rgba(255,255,255,.03)}
-.soc-btn-approve{border-color:rgba(16,185,129,.3);color:#10b981}.soc-btn-approve:hover{background:rgba(16,185,129,.08)}
-.soc-btn-reject{border-color:rgba(239,68,68,.2);color:#ef4444}.soc-btn-reject:hover{background:rgba(239,68,68,.06)}
-.soc-btn-edit{border-color:rgba(59,130,246,.2);color:#3b82f6}.soc-btn-edit:hover{background:rgba(59,130,246,.06)}
-.soc-btn-humanize{border-color:rgba(139,92,246,.2);color:#8b5cf6}.soc-btn-humanize:hover{background:rgba(139,92,246,.06)}
-.soc-btn-publish{border-color:rgba(16,185,129,.3);color:#10b981;background:rgba(16,185,129,.06)}
-.soc-btn-publish:hover{background:rgba(16,185,129,.14)}
-.soc-btn-primary{padding:8px 18px;border:none;border-radius:10px;background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
-.soc-btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(139,92,246,.25)}
-.soc-btn-secondary{padding:8px 18px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text-secondary);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit}
-.soc-btn-grok{padding:8px 18px;border:none;border-radius:10px;background:linear-gradient(135deg,#f43f5e,#e11d48);color:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
-.soc-btn-grok:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(244,63,94,.25)}
-.soc-btn-gmail{padding:8px 18px;border:none;border-radius:10px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
-.soc-btn-gmail:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(59,130,246,.25)}
-
-/* Empty state */
-.soc-empty{text-align:center;padding:60px 20px}
-.soc-empty-icon{font-size:36px;margin-bottom:10px}
-.soc-empty-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px}
-.soc-empty-sub{font-size:12px;color:var(--muted);max-width:300px;margin:0 auto}
-
-/* Right sidebar panels */
-.soc-sidebar{display:flex;flex-direction:column;gap:16px}
-.soc-panel{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden}
-.soc-panel-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.soc-panel-title{font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px}
-.soc-panel-body{padding:16px 18px}
-.soc-field{margin-bottom:12px}
-.soc-field label{display:block;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px}
-.soc-field input,.soc-field select,.soc-field textarea{width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px;background:var(--input-bg,rgba(15,23,42,0.6));color:var(--text);font-size:12px;font-family:inherit;transition:border-color .2s}
-.soc-field input:focus,.soc-field textarea:focus{outline:none;border-color:#8b5cf6}
-.soc-field textarea{min-height:60px;resize:vertical}
-.soc-field-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.soc-divider{height:1px;background:var(--border);margin:8px 0}
-
-/* Modals */
-.soc-modal{display:none;position:fixed;inset:0;z-index:10002;background:rgba(0,0,0,.6);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px}
-.soc-modal-box{background:var(--card);border:1px solid var(--border);border-radius:18px;width:560px;max-width:94vw;max-height:85vh;overflow-y:auto;box-shadow:0 24px 60px rgba(0,0,0,.5)}
-.soc-modal-header{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border)}
-.soc-modal-header h3{font-size:16px;font-weight:700;margin:0;display:flex;align-items:center;gap:8px}
-.soc-modal-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px;transition:background .15s}
-.soc-modal-close:hover{background:rgba(255,255,255,.08)}
-.soc-modal-body{padding:22px}
-.soc-modal-footer{display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--border)}
-
-@media(max-width:960px){
-  .soc-body{grid-template-columns:1fr}
-  .soc-kpi-row{grid-template-columns:repeat(3,1fr)}
-  .soc-platform-grid{grid-template-columns:repeat(4,1fr)}
-}
-@media(max-width:600px){
-  .soc-kpi-row{grid-template-columns:repeat(2,1fr)}
-  .soc-platform-grid{grid-template-columns:repeat(3,1fr)}
-}
-</style>
-
-<div class="soc-wrap">
-
-  <!-- ═══ Header ═══ -->
-  <div class="soc-header">
-    <div>
-      <h2>📣 Social Command Center</h2>
-      <div class="soc-header-sub">Powered by Postiz · AI content via Grok · Humanizer · 30+ platform publishing</div>
-    </div>
-    <div class="soc-header-right">
-      <div class="soc-conn-pill" id="socEngineStatus">
-        <span class="soc-conn-dot yellow"></span> Checking…
-      </div>
-      <div class="soc-conn-pill" id="socPostizStatus">
-        <span class="soc-conn-dot yellow"></span> Postiz: Checking…
-      </div>
-      <button class="soc-btn-primary" onclick="SLSocial.openManualModal()">✏️ New Post</button>
-    </div>
-  </div>
-
-  <!-- ═══ KPI Strip ═══ -->
-  <div class="soc-kpi-row">
-    <div class="soc-kpi"><div class="soc-kpi-label">Total Queued</div><div class="soc-kpi-value purple" id="socKpiTotal">—</div></div>
-    <div class="soc-kpi"><div class="soc-kpi-label">Pending Review</div><div class="soc-kpi-value amber" id="socKpiPending">—</div></div>
-    <div class="soc-kpi"><div class="soc-kpi-label">Approved</div><div class="soc-kpi-value green" id="socKpiApproved">—</div></div>
-    <div class="soc-kpi"><div class="soc-kpi-label">Published</div><div class="soc-kpi-value blue" id="socKpiPosted">—</div></div>
-    <div class="soc-kpi"><div class="soc-kpi-label">Grok Harvested</div><div class="soc-kpi-value rose" id="socKpiGrokHarvested">—</div></div>
-    <div class="soc-kpi"><div class="soc-kpi-label">Avg Humanizer</div><div class="soc-kpi-value teal" id="socKpiHumanizerScore">—</div></div>
-  </div>
-
-  <!-- ═══ Platform Status ═══ -->
-  <div class="soc-platforms-section">
-    <div class="soc-platforms-label">Platform Status — via Postiz</div>
-    <div class="soc-platform-grid" id="socPlatformGrid">
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">𝕏</div><div class="soc-platform-name">Twitter</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">in</div><div class="soc-platform-name">LinkedIn</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">f</div><div class="soc-platform-name">Facebook</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">📷</div><div class="soc-platform-name">Instagram</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">🧵</div><div class="soc-platform-name">Threads</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">✈️</div><div class="soc-platform-name">Telegram</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">📍</div><div class="soc-platform-name">GBP</div><div class="soc-platform-status">⚪ Loading…</div></div>
-      <div class="soc-platform-card disabled"><div class="soc-platform-icon">▶️</div><div class="soc-platform-name">YouTube</div><div class="soc-platform-status">⚪ Loading…</div></div>
-    </div>
-  </div>
-
-  <!-- ═══ 2-Column Body ═══ -->
-  <div class="soc-body">
-
-    <!-- Queue Panel -->
-    <div class="soc-queue-panel">
-      <div class="soc-queue-header">
-        <div class="soc-queue-title">📋 Content Queue</div>
-        <div class="soc-queue-actions">
-          <button class="soc-btn soc-btn-approve" onclick="SLSocial.approveAll()">✅ Approve All</button>
-          <button class="soc-btn soc-btn-publish" onclick="SLSocial.publishBatch()">🚀 Publish Batch</button>
-          <button class="soc-btn" onclick="SLSocial.loadQueue()">🔄</button>
-        </div>
-      </div>
-      <div class="soc-filter-bar">
-        <button class="soc-filter-btn active" onclick="SLSocial.setFilter('all',this)">All</button>
-        <button class="soc-filter-btn" onclick="SLSocial.setFilter('pending',this)">⏳ Pending</button>
-        <button class="soc-filter-btn" onclick="SLSocial.setFilter('approved',this)">✅ Approved</button>
-        <button class="soc-filter-btn" onclick="SLSocial.setFilter('posted',this)">🚀 Posted</button>
-        <button class="soc-filter-btn" onclick="SLSocial.setFilter('rejected',this)">❌ Rejected</button>
-        <select style="margin-left:auto;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text-secondary);font-size:11px" onchange="SLSocial.setPlatformFilter(this.value)">
-          <option value="">All Platforms</option>
-          <option value="twitter">𝕏 Twitter</option>
-          <option value="linkedin">LinkedIn</option>
-          <option value="facebook">Facebook</option>
-          <option value="instagram">Instagram</option>
-          <option value="threads">Threads</option>
-          <option value="telegram">Telegram</option>
-        </select>
-      </div>
-      <div id="socQueueBody">
-        <div class="soc-empty">
-          <div class="soc-empty-icon">📝</div>
-          <div class="soc-empty-title">Loading content queue…</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Right Sidebar -->
-    <div class="soc-sidebar">
-
-      <!-- Grok Generation -->
-      <div class="soc-panel">
-        <div class="soc-panel-head">
-          <span class="soc-panel-title">🤖 Grok Content Generator</span>
-        </div>
-        <div class="soc-panel-body">
-          <div class="soc-field">
-            <label>Topic / Prompt</label>
-            <textarea id="socGrokTopic" rows="2" placeholder="e.g. 'bail bond tips for first-time indemnitors'"></textarea>
-          </div>
-          <div class="soc-field">
-            <label>Platform</label>
-            <select id="socGrokPlatform">
-              <option value="twitter">𝕏 Twitter</option>
-              <option value="linkedin">LinkedIn</option>
-              <option value="facebook">Facebook</option>
-              <option value="instagram">Instagram</option>
-              <option value="threads">Threads</option>
-            </select>
-          </div>
-          <button class="soc-btn-grok" style="width:100%;justify-content:center" onclick="SLSocial.grokGenerate()">
-            🤖 Generate with Grok
-          </button>
-          <div class="soc-divider"></div>
-          <div class="soc-field-row" style="margin-top:8px">
-            <div class="soc-field" style="margin:0">
-              <label>News Platform</label>
-              <select id="socGrokNewsPlatform" style="font-size:11px">
-                <option value="twitter">𝕏 Twitter</option>
-                <option value="linkedin">LinkedIn</option>
-              </select>
-            </div>
-            <button class="soc-btn-grok" style="align-self:end;font-size:11px;padding:8px 12px" onclick="SLSocial.grokNews()">
-              📰 News Hook
-            </button>
-          </div>
-          <div class="soc-divider"></div>
-          <div class="soc-field" style="margin-top:8px;margin-bottom:8px">
-            <label>Image Prompt</label>
-            <input id="socGrokImagePrompt" placeholder="Professional bail bonds office photo">
-          </div>
-          <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.grokImage()">
-            🖼️ Generate Image
-          </button>
-        </div>
-      </div>
-
-      <!-- Gmail Scanner -->
-      <div class="soc-panel">
-        <div class="soc-panel-head">
-          <span class="soc-panel-title">📧 Gmail Grok Scanner</span>
-        </div>
-        <div class="soc-panel-body">
-          <p style="font-size:12px;color:var(--text-secondary);margin:0 0 12px 0">Scan Gmail for Grok-written posts (from x.com notifications) and import them into the queue.</p>
-          <div style="display:flex;gap:8px">
-            <button class="soc-btn-gmail" style="flex:1;justify-content:center" onclick="SLSocial.gmailScan()">
-              📧 Scan Recent
-            </button>
-            <button class="soc-btn-secondary" style="flex:1;text-align:center" onclick="SLSocial.gmailBacklog()">
-              📚 Full Backlog
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Postiz History -->
-      <div class="soc-panel">
-        <div class="soc-panel-head">
-          <span class="soc-panel-title">📡 Postiz Post History</span>
-          <button class="soc-btn" style="font-size:10px;padding:4px 10px" onclick="SLSocial.loadPostizHistory()">🔄 Load</button>
-        </div>
-        <div id="socPostizHistoryBody" style="max-height:320px;overflow-y:auto">
-          <div class="soc-empty" style="padding:30px 20px">
-            <div class="soc-empty-icon">📡</div>
-            <div class="soc-empty-title" style="font-size:12px">Click Load to fetch Postiz history</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Quick Actions -->
-      <div class="soc-panel">
-        <div class="soc-panel-head">
-          <span class="soc-panel-title">⚡ Quick Actions</span>
-        </div>
-        <div class="soc-panel-body" style="display:flex;flex-direction:column;gap:8px">
-          <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.checkHealth()">
-            🔌 Check Postiz Health
-          </button>
-          <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.loadPostizStatus()">
-            🔄 Refresh Platforms
-          </button>
-          <button class="soc-btn-secondary" style="width:100%;text-align:center" onclick="SLSocial.load()">
-            🔄 Refresh Everything
-          </button>
-        </div>
-      </div>
-
-    </div><!-- /soc-sidebar -->
-  </div><!-- /soc-body -->
-</div><!-- /soc-wrap -->
-
-<!-- ═══ Edit Modal ═══ -->
-<div class="soc-modal" id="socEditModal">
-  <div class="soc-modal-box">
-    <div class="soc-modal-header">
-      <h3>✏️ Edit Post</h3>
-      <button class="soc-modal-close" onclick="SLSocial.closeEdit()">✕</button>
-    </div>
-    <div class="soc-modal-body">
-      <input type="hidden" id="socEditId">
-      <div class="soc-field">
-        <label>Post Content</label>
-        <textarea id="socEditText" rows="8" style="min-height:160px"></textarea>
-      </div>
-    </div>
-    <div class="soc-modal-footer">
-      <button class="soc-btn-secondary" onclick="SLSocial.closeEdit()">Cancel</button>
-      <button class="soc-btn-primary" onclick="SLSocial.saveEdit()">💾 Save Changes</button>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ Manual Post Modal ═══ -->
-<div class="soc-modal" id="socManualModal">
-  <div class="soc-modal-box">
-    <div class="soc-modal-header">
-      <h3>✏️ Create Post</h3>
-      <button class="soc-modal-close" onclick="SLSocial.closeManualModal()">✕</button>
-    </div>
-    <div class="soc-modal-body">
-      <div class="soc-field">
-        <label>Platform</label>
-        <select id="socManualPlatform">
-          <option value="twitter">𝕏 Twitter</option>
-          <option value="linkedin">LinkedIn</option>
-          <option value="facebook">Facebook</option>
-          <option value="instagram">Instagram</option>
-          <option value="threads">Threads</option>
-          <option value="telegram">Telegram</option>
-        </select>
-      </div>
-      <div class="soc-field">
-        <label>Post Content</label>
-        <textarea id="socManualContent" rows="6" placeholder="Write your post here…"></textarea>
-      </div>
-    </div>
-    <div class="soc-modal-footer">
-      <button class="soc-btn-secondary" onclick="SLSocial.closeManualModal()">Cancel</button>
-      <button class="soc-btn-primary" onclick="SLSocial.submitManual()">📋 Add to Queue</button>
-    </div>
-  </div>
-</div>
-
+<div class="tab-content" id="tabSocial" style="padding: 0; display: flex; flex-direction: column; height: calc(100vh - 64px);">
+  <iframe src="https://social.shamrockbailbonds.biz" style="flex: 1; width: 100%; border: none; border-radius: 0;"></iframe>
 </div><!-- end tabSocial -->
 
 <!-- ═══════════════════════════════════════════════════════
@@ -4548,6 +4186,32 @@
 
 </div><!-- end tabEnrichment -->
 
+<!-- ═══ OMNIBAR (COMMAND PALETTE) ═══ -->
+<div id="omnibarOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10002;align-items:flex-start;justify-content:center;padding-top:10vh;backdrop-filter:blur(4px)">
+  <div style="background:var(--bg-card,#1e293b);width:600px;max-width:90vw;border-radius:12px;border:1px solid var(--border,#334155);box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;display:flex;flex-direction:column">
+    <div style="padding:16px;border-bottom:1px solid var(--border,#334155);display:flex;align-items:center;gap:12px">
+      <span style="font-size:1.2rem;color:var(--text-muted,#94a3b8)">🔍</span>
+      <input type="text" id="omnibarInput" placeholder="Search defendants, indemnitors, or type > for commands..." style="flex:1;background:transparent;border:none;color:var(--text,#e2e8f0);font-size:1.1rem;outline:none;font-family:var(--font-primary,'Space Grotesk',sans-serif)">
+      <span style="font-size:0.75rem;color:var(--text-muted,#94a3b8);background:var(--bg-main,#0f172a);padding:4px 8px;border-radius:4px;border:1px solid var(--border,#334155)">ESC</span>
+    </div>
+    <div id="omnibarResults" style="max-height:400px;overflow-y:auto;padding:8px">
+      <!-- Results populated here -->
+    </div>
+  </div>
+</div>
+
+<!-- ═══ GLOBAL ACTIVITY FEED (SLIDE-OVER) ═══ -->
+<div id="globalActivityDrawer" style="display:none;position:fixed;top:56px;right:-350px;width:320px;bottom:0;background:var(--bg-card,#1e293b);border-left:1px solid var(--border,#334155);z-index:9999;transition:right 0.3s ease;box-shadow:-10px 0 30px rgba(0,0,0,0.3);flex-direction:column">
+  <div style="padding:16px;border-bottom:1px solid var(--border,#334155);display:flex;justify-content:space-between;align-items:center;background:var(--bg-card,#1e293b)">
+    <h3 style="margin:0;font-size:1rem">⚡️ Live Activity</h3>
+    <button onclick="SLActivityFeed.toggle()" style="background:none;border:none;color:var(--text-muted,#94a3b8);cursor:pointer;font-size:1.2rem">&times;</button>
+  </div>
+  <div id="globalActivityFeed" style="flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px">
+    <!-- Live events populate here -->
+  </div>
+</div>
+
+<script src="/sl-omnibar.js?v=1"></script>
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-imessage.js?v=4"></script>
 <script src="/sl-accounting.js?v=1"></script>
