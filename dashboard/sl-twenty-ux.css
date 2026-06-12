@@ -290,3 +290,81 @@ body {
     order: 3;
   }
 }
+
+/* ── 6. Tabulator Customization (Midnight Theme Override) ── */
+.tabulator {
+  background-color: transparent !important;
+  border: none !important;
+}
+.tabulator-header {
+  background-color: rgba(15, 23, 42, 0.6) !important;
+  border-bottom: 1px solid var(--border) !important;
+  color: var(--text-muted) !important;
+}
+.tabulator-row {
+  background-color: var(--surface) !important;
+  border-bottom: 1px solid rgba(255,255,255,0.04) !important;
+  transition: background-color var(--t-fast), transform var(--t-fast) !important;
+}
+.tabulator-row:hover {
+  background-color: var(--card-hover) !important;
+  transform: translateY(-1px);
+}
+.tabulator-cell {
+  border-right: none !important;
+  padding: 12px 16px !important;
+}
+.tabulator-footer {
+  background-color: transparent !important;
+  border-top: 1px solid var(--border) !important;
+}
+
+/* ── 7. Modal & Glassmorphism Refinements ── */
+#notifPanel, #calcModal > div, .glass-panel {
+  backdrop-filter: blur(24px) !important;
+  -webkit-backdrop-filter: blur(24px) !important;
+  background: rgba(30, 41, 59, 0.85) !important; /* surface with opacity */
+  border: 1px solid rgba(255,255,255,0.12) !important;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+  animation: slideUpFade 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideUpFade {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── 8. Cards & Buttons Polish ── */
+.metric-card, .sl-card, .card {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05) !important;
+  transition: transform var(--t-fast), box-shadow var(--t-fast);
+}
+.metric-card:hover, .sl-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+}
+
+.sl-btn-primary {
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255,255,255,0.2) !important;
+}
+.sl-btn-primary:hover {
+  box-shadow: 0 6px 16px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255,255,255,0.3) !important;
+  transform: translateY(-1px);
+}
+
+/* ── 9. Global Custom Scrollbars ── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.2);
+}
+
