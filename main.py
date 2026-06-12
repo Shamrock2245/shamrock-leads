@@ -127,13 +127,13 @@ def build_writers():
 
 def register_scrapers(sched):
     # ── SWFL Core (highest priority) ──────────────────────────────────────────
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
-    sched.register_scraper(CollierCountyScraper(), interval_minutes=15)
-    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=10)
-    sched.register_scraper(ManateeCountyScraper(), interval_minutes=10)
-    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=10)
-    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=60)
-    sched.register_scraper(HendryCountyScraper(), interval_minutes=10)
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=43)
+    sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
+    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=90)
+    sched.register_scraper(ManateeCountyScraper(), interval_minutes=75)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
     # ── Tampa Bay / Central FL ─────────────────────────────────────────────────
     sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
@@ -142,7 +142,7 @@ def register_scrapers(sched):
     sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
     sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
     sched.register_scraper(LakeCountyScraper(), interval_minutes=90)
-    sched.register_scraper(HernandoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(HernandoCountyScraper(), interval_minutes=120)
     sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
     sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
     sched.register_scraper(CitrusCountyScraper(), interval_minutes=120)
@@ -153,9 +153,9 @@ def register_scrapers(sched):
     sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
     sched.register_scraper(MartinCountyScraper(), interval_minutes=120)
     sched.register_scraper(StLucieCountyScraper(), interval_minutes=90)
-    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=120)
+    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=180)
     sched.register_scraper(HighlandsCountyScraper(), interval_minutes=120)
-    sched.register_scraper(GladesCountyScraper(), interval_minutes=180)
+    sched.register_scraper(GladesCountyScraper(), interval_minutes=360)
 
     # ── North Central FL ───────────────────────────────────────────────────────
     sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
