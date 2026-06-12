@@ -1,0 +1,292 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   ShamrockLeads — Twenty UX App Shell
+   Sidebar, Omnibar, and modern layout overrides.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. App Layout ── */
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden; /* App layout handles scrolling */
+}
+
+.app-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* ── 2. Sidebar ── */
+.sidebar {
+  width: 260px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-shrink: 0;
+  transition: width var(--t-fast);
+  z-index: 100;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 4px;
+}
+
+.sidebar-header {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  min-height: 60px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 10;
+}
+
+.sidebar-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.sidebar-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  letter-spacing: -0.2px;
+}
+.sidebar-title span {
+  display: block;
+  font-size: 10px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.sidebar-nav {
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 16px 0 6px 12px;
+}
+
+.sidebar-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--t-fast);
+  text-decoration: none;
+  width: 100%;
+  font-family: inherit;
+}
+
+.sidebar-btn:hover {
+  background: rgba(255,255,255,.04);
+  color: var(--text);
+}
+
+.sidebar-btn.active {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-btn-icon {
+  font-size: 16px;
+  width: 20px;
+  display: inline-flex;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity var(--t-fast);
+}
+
+.sidebar-btn.active .sidebar-btn-icon {
+  opacity: 1;
+}
+
+.sidebar-btn .badge {
+  margin-left: auto;
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sidebar-btn.active .badge {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ── 3. Main Content & Omnibar ── */
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg);
+}
+
+.omnibar {
+  height: 60px;
+  min-height: 60px;
+  background: rgba(15, 23, 42, 0.85); /* slate-900 with opacity */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 50;
+}
+
+.omnibar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.omnibar-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: 8px;
+  width: 360px;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.omnibar-search:hover {
+  background: rgba(255,255,255,0.06);
+  border-color: var(--border-hover);
+}
+
+.omnibar-search:focus-within {
+  border-color: var(--accent);
+  background: rgba(16, 185, 129, 0.05);
+  color: var(--text);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.omnibar-search input {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+  font-family: inherit;
+}
+.omnibar-search input::placeholder {
+  color: var(--text-muted);
+}
+
+.omnibar-search-shortcut {
+  background: var(--surface);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.omnibar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ── 4. Page Container ── */
+.page-container {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Override old header / tab-bar from index.html */
+.header, .tab-bar {
+  display: none !important;
+}
+
+/* ── 5. Responsive / Mobile ── */
+@media (max-width: 900px) {
+  .app-layout {
+    flex-direction: column;
+  }
+  .sidebar {
+    width: 100%;
+    height: auto;
+    max-height: 50vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-header {
+    padding: 12px 16px;
+    min-height: 54px;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 12px;
+    gap: 8px;
+  }
+  .sidebar-group-label {
+    display: none;
+  }
+  .sidebar-btn {
+    width: auto;
+    padding: 8px 12px;
+  }
+  .omnibar {
+    padding: 12px 16px;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .omnibar-search {
+    width: 100%;
+    order: 3;
+  }
+}

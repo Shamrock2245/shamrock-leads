@@ -21,16 +21,16 @@
   --purple:       #8b5cf6;
   --ai-purple:    #7c3aed;
 
-  /* Surface — deepened dark palette */
-  --bg:           #080d14;
-  --bg-main:      #080d14;
-  --bg-card:      #0d1520;
-  --bg-elevated:  #111c2d;
-  --surface:      #0d1520;
-  --card:         #0d1520;
-  --card-hover:   #111c2d;
-  --border:       rgba(255,255,255,.07);
-  --border-hover: rgba(255,255,255,.13);
+  /* Surface — vibrant Twenty CRM slate palette */
+  --bg:           #0f172a;
+  --bg-main:      #0f172a;
+  --bg-card:      #1e293b;
+  --bg-elevated:  #334155;
+  --surface:      #1e293b;
+  --card:         #1e293b;
+  --card-hover:   #334155;
+  --border:       rgba(255,255,255,.1);
+  --border-hover: rgba(255,255,255,.2);
 
   /* Text */
   --text:           #f1f5f9;

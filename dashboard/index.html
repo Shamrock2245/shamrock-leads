@@ -13,6 +13,7 @@
   <!-- Vanilla Calendar Pro — court calendar -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.css">
   <link rel="stylesheet" href="/sl-design-system.css?v=5">
+  <link rel="stylesheet" href="/sl-twenty-ux.css?v=1">
   <link rel="stylesheet" href="/styles.css?v=5">
   <link rel="stylesheet" href="/responsive.css?v=5">
   <link rel="stylesheet" href="/sl-overhaul.css?v=6">
@@ -34,27 +35,8 @@
     <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="header-logo" style="height:36px;margin-right:10px;vertical-align:middle">
     <h1>ShamrockLeads <small>Florida Arrest Intelligence</small></h1>
   </div>
-  <div class="header-right">
-    <span class="live">LIVE</span>
-    <span class="meta" id="refreshMeta">Auto-refresh in 30s</span>
-    <!-- Notification Bell -->
-    <div class="notif-bell-wrapper" style="position:relative;display:inline-block;margin-right:8px;cursor:pointer" onclick="SLNotifications.toggle()">
-      <span style="font-size:1.3rem" title="Notifications">🔔</span>
-      <span class="notif-badge" id="notifBadge" style="display:none;position:absolute;top:-4px;right:-6px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px">0</span>
-    </div>
-    <!-- Quick Calc -->
-    <button class="refresh-btn" onclick="SLCalc.open()" title="Premium Calculator" style="font-size:0.8rem">🧮 Calc</button>
-    <button class="refresh-btn" onclick="SL.refresh()">↻ Refresh</button>
-    <div class="theme-toggle" onclick="SL.toggleTheme()">
-      <span>☀️</span>
-      <div class="toggle-track"><div class="toggle-knob"></div></div>
-      <span>🌙</span>
-    </div>
-  </div>
-</div>
-
 <!-- ═══ NOTIFICATION CENTER PANEL ═══ -->
-<div id="notifPanel" style="display:none;position:fixed;top:56px;right:16px;width:380px;max-height:480px;overflow-y:auto;background:var(--bg-card,#1e293b);border:1px solid var(--border,#334155);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:10000;padding:0">
+<div id="notifPanel" style="display:none;position:fixed;top:60px;right:16px;width:380px;max-height:480px;overflow-y:auto;background:var(--bg-card,#1e293b);border:1px solid var(--border,#334155);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:10000;padding:0">
   <div style="padding:12px 16px;border-bottom:1px solid var(--border,#334155);display:flex;justify-content:space-between;align-items:center">
     <span style="font-weight:700;font-size:0.95rem">🔔 Notifications</span>
     <button onclick="SLNotifications.markAllRead()" style="background:none;border:none;color:var(--accent,#3b82f6);cursor:pointer;font-size:0.8rem">Mark all read</button>
@@ -91,32 +73,79 @@
   </div>
 </div>
 
-<!-- ═══ TAB BAR ═══ -->
-<div class="tab-bar">
-  <button class="tab-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)">Command Center</button>
-  <button class="tab-btn" data-tab="tabLeads" onclick="SL.switchTab(this)">Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)">Defendants</button>
-  <button class="tab-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load();SLProspective.loadReviewQueue()">Outreach <span class="badge" id="prospectiveBadge">—</span><span class="badge" id="reviewQueueBadge" style="display:none;background:#f59e0b;color:#000;margin-left:2px"></span></button>
-  <button class="tab-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()">Scraper Health</button>
-  <button class="tab-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()">Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()">Tracking <span class="badge" id="trackingBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()">Intake Queue <span class="badge" id="intakeBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()">Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
-  <button class="tab-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()">Revenue <span class="badge" id="analyticsBadge"></span></button>
-  <button class="tab-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()">Intelligence</button>
-  <button class="tab-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')">Legal NLP</button>
-  <button class="tab-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()">Calendar <span class="badge" id="calendarBadge"></span></button>
-  <button class="tab-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()">Reports</button>
-  <button class="tab-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()">Client Portal</button>
-  <button class="tab-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()">iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
-  <button class="tab-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()">Alpha Intel</button>
-  <button class="tab-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()">FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
-  <button class="tab-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()">Accounting</button>
-  <button class="tab-btn" data-tab="tabSocial" onclick="SL.switchTab(this)">Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
-  <button class="tab-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()">Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
-  <button class="tab-btn" data-tab="tabAutomations" onclick="SL.switchTab(this);SLAutomations.load()">Automations <span class="badge" id="automationsBadge"></span></button>
-  <button class="tab-btn inv-tab-trigger" onclick="SLInventory.open()">POA Inventory</button>
-</div>
+<div class="app-layout">
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="sidebar-logo">
+      <div class="sidebar-title">ShamrockLeads<span>Arrest Intelligence</span></div>
+    </div>
+    <div class="sidebar-nav">
+      <div class="sidebar-group-label">Intelligence</div>
+      <button class="sidebar-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">⚡</span> Command Center</button>
+      <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔍</span> Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
+      <button class="sidebar-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">👥</span> Defendants</button>
+      <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
+
+      <div class="sidebar-group-label">Operations</div>
+      <button class="sidebar-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()"><span class="sidebar-btn-icon">📋</span> Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
+      <button class="sidebar-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()"><span class="sidebar-btn-icon">📍</span> Tracking <span class="badge" id="trackingBadge">—</span></button>
+      <button class="sidebar-btn" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()"><span class="sidebar-btn-icon">📥</span> Intake Queue <span class="badge" id="intakeBadge">—</span></button>
+      <button class="sidebar-btn" data-tab="tabIndemnitor" onclick="SL.switchTab(this);SLIndemnitor.load()"><span class="sidebar-btn-icon">🛡️</span> Indemnitors <span class="badge" id="indemnitorBadge">—</span></button>
+
+      <div class="sidebar-group-label">Revenue & Tools</div>
+      <button class="sidebar-btn" data-tab="tabAnalytics" onclick="SL.switchTab(this);SLAnalytics.load()"><span class="sidebar-btn-icon">💵</span> Revenue <span class="badge" id="analyticsBadge"></span></button>
+      <button class="sidebar-btn" data-tab="tabCalendar" onclick="SL.switchTab(this);SLCalendar.load()"><span class="sidebar-btn-icon">📅</span> Calendar <span class="badge" id="calendarBadge"></span></button>
+      <button class="sidebar-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()"><span class="sidebar-btn-icon">📊</span> Reports</button>
+      <button class="sidebar-btn" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load();SLProspective.loadReviewQueue()"><span class="sidebar-btn-icon">☘️</span> Outreach <span class="badge" id="prospectiveBadge">—</span><span class="badge" id="reviewQueueBadge" style="display:none;background:#f59e0b;color:#000;margin-left:2px"></span></button>
+
+      <div class="sidebar-group-label">Advanced Tools</div>
+      <button class="sidebar-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()"><span class="sidebar-btn-icon">🧠</span> Intelligence</button>
+      <button class="sidebar-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')"><span class="sidebar-btn-icon">⚖️</span> Legal NLP</button>
+      <button class="sidebar-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()"><span class="sidebar-btn-icon">📱</span> Client Portal</button>
+      
+      <div class="sidebar-group-label">Integrations</div>
+      <button class="sidebar-btn" data-tab="tabImessage" onclick="SL.switchTab(this);SLiMessage.init()"><span class="sidebar-btn-icon">💬</span> iMessage <span class="badge" id="imessageBadge" style="display:none"></span></button>
+      <button class="sidebar-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()"><span class="sidebar-btn-icon">👁️</span> Alpha Intel</button>
+      <button class="sidebar-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()"><span class="sidebar-btn-icon">🚨</span> FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
+      <button class="sidebar-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()"><span class="sidebar-btn-icon">🧾</span> Accounting</button>
+      <button class="sidebar-btn" data-tab="tabSocial" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🌍</span> Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
+      <button class="sidebar-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()"><span class="sidebar-btn-icon">✨</span> Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
+      <button class="sidebar-btn" data-tab="tabAutomations" onclick="SL.switchTab(this);SLAutomations.load()"><span class="sidebar-btn-icon">⚙️</span> Automations <span class="badge" id="automationsBadge"></span></button>
+
+      <div class="sidebar-group-label">Quick Actions</div>
+      <button class="sidebar-btn" onclick="SLInventory.open()"><span class="sidebar-btn-icon">📁</span> POA Inventory</button>
+    </div>
+  </aside>
+
+  <div class="main-content">
+    <!-- ═══ OMNIBAR ═══ -->
+    <div class="omnibar">
+      <div class="omnibar-left">
+        <span class="live" style="background:rgba(16,185,129,.15);color:#10b981;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">LIVE</span>
+        <span class="meta" id="refreshMeta" style="font-size:11px;color:var(--muted)">Auto-refresh in 30s</span>
+      </div>
+      <div class="omnibar-search" onclick="SLOmnibar.open()">
+        <span class="omnibar-search-icon">🔍</span>
+        <input type="text" id="topSearchInput" placeholder="Search leads, defendants, cases..." class="omnibar-search-text" readonly style="cursor:pointer">
+        <span class="omnibar-search-shortcut">⌘K</span>
+      </div>
+      <div class="omnibar-actions">
+        <!-- Notification Bell -->
+        <div class="notif-bell-wrapper" style="position:relative;display:inline-block;cursor:pointer" onclick="SLNotifications.toggle()">
+          <span style="font-size:1.3rem" title="Notifications">🔔</span>
+          <span class="notif-badge" id="notifBadge" style="display:none;position:absolute;top:-4px;right:-6px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px">0</span>
+        </div>
+        <button class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLCalc.open()" title="Premium Calculator">🧮 Calc</button>
+        <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SL.refresh()">↻</button>
+        <div class="theme-toggle" onclick="SL.toggleTheme()" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:14px;background:rgba(255,255,255,.05);padding:4px 8px;border-radius:12px">
+          <span>🌙</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ PAGE CONTAINER ═══ -->
+    <div class="page-container">
 
 <!-- ═══════════════════════════════════════════════════════
      TAB 1: COMMAND CENTER
@@ -4233,6 +4262,10 @@
     <!-- Live events populate here -->
   </div>
 </div>
+
+    </div> <!-- /page-container -->
+  </div> <!-- /main-content -->
+</div> <!-- /app-layout -->
 
 <script src="/sl-omnibar.js?v=1"></script>
 <script src="/sl-notifications.js?v=4"></script>
