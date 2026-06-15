@@ -39,10 +39,10 @@ function switchTab(btn) {
   // Accept either a DOM element or a string tab ID (e.g. 'tabImessage')
   if (typeof btn === 'string') {
     const tabId = btn;
-    btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    btn = document.querySelector(`.tab-btn[data-tab="${tabId}"], .sidebar-btn[data-tab="${tabId}"]`);
     if (!btn) { console.warn('[switchTab] No tab button found for:', tabId); return; }
   }
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-btn, .sidebar-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   btn.classList.add('active');
   const tabId = btn.dataset.tab;
@@ -493,7 +493,7 @@ document.addEventListener('keydown', function(e) {
 
   // Number keys 1-9 for tab switching (no modifier)
   if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
-    const tabBtns = document.querySelectorAll('.tab-btn:not(.inv-tab-trigger)');
+    const tabBtns = document.querySelectorAll('.tab-btn:not(.inv-tab-trigger), .sidebar-btn');
     const idx = parseInt(e.key) - 1;
     if (tabBtns[idx]) tabBtns[idx].click();
     return;

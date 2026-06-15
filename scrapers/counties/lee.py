@@ -536,8 +536,10 @@ class LeeCountyScraper(BaseScraper):
                 kwargs = {
                     "headers": HEADERS,
                     "timeout": 30,
-                    "proxy": SOCKS_PROXY,
                 }
+                if SOCKS_PROXY:
+                    kwargs["proxy"] = SOCKS_PROXY
+                
                 if params:
                     kwargs["params"] = params
                 if HAS_CFFI:

@@ -3179,3 +3179,7 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
     grid-template-columns: 1fr;
   }
 }
+
+#tabSocial.active {
+    display: flex !important;
+}
