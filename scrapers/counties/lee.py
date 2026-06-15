@@ -36,14 +36,14 @@ BASE_URL = "https://www.sheriffleefl.org"
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
-SOCKS_PROXY = "socks5h://172.18.0.1:1080"  # Residential IP via office iMac — bypasses 429 rate limiting
+SOCKS_PROXY = None  # Disabled to use Hetzner VPS IP instead of the rate-limited iMac IP
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
 MAX_PAGES = 15                 # Reduced: 15 × 200 = 3000 records max (enough for 30 days)
 MAX_ENRICH = 5                 # Conservative: 5 enrichments per run to save API quota
-DETAIL_DELAY_S = 4.0           # Increased from 3.0 — more breathing room
-DETAIL_JITTER_S = 2.0          # Increased jitter
+DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
+DETAIL_JITTER_S = 4.0          # Increased jitter
 RETRY_LIMIT = 2                # Reduced from 4 — stop faster on 429 (save quota)
 BACKOFF_BASE_S = 5.0           # Increased from 2.0 — harder backoff on 429/503
 MAX_EXECUTION_S = 330
