@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request
 from starlette.responses import Response
 from fastapi.responses import JSONResponse
-from dashboard.extensions import get_collection
+from dashboard.extensions import get_collection, get_db
 from dashboard.services.risk_engine import compute_risk_score
 
 bonds_bp = APIRouter(prefix="/api", tags=["bonds"])
@@ -829,6 +829,20 @@ async def api_active_bond_edit(request: Request, booking_number: str):
             })
         except Exception as _audit_err:
             logger.warning("[bonds] audit write failed for %s: %s", booking_number, _audit_err)
+        # If court_date was updated, reschedule the Court Reminder compliance task
+        if "court_date" in updates:
+            try:
+                from dashboard.services.task_engine import TaskEngine
+                await TaskEngine.schedule_court_reminder(booking_number)
+                logger.info(
+                    "[bonds] Court reminder task rescheduled for %s after court_date edit",
+                    booking_number,
+                )
+            except Exception as _te_err:
+                logger.warning(
+                    "[bonds] TaskEngine.schedule_court_reminder failed for %s: %s",
+                    booking_number, _te_err,
+                )
         return {"success": True, "booking_number": booking_number, "updated": list(updates.keys())}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -1543,6 +1557,20 @@ async def api_renew_bond(request: Request, booking_number: str):
             logger.warning("[BondRenewal] BB reminder reschedule failed for %s: %s",
                            booking_number, rem_exc)
             reminders_scheduled = 0
+
+        # Reschedule Court Reminder compliance task when court_date changes
+        try:
+            from dashboard.services.task_engine import TaskEngine
+            await TaskEngine.schedule_court_reminder(booking_number)
+            logger.info(
+                "[BondRenewal] Court reminder task rescheduled for %s (new date: %s)",
+                booking_number, new_court_date,
+            )
+        except Exception as _te_err:
+            logger.warning(
+                "[BondRenewal] TaskEngine.schedule_court_reminder failed for %s: %s",
+                booking_number, _te_err,
+            )
 
         # Fire SSE event
         try:

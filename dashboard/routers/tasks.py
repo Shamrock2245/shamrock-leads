@@ -31,8 +31,10 @@ _LIST_PROJECTION = {
     "booking_number": 1,
     "task_type": 1,
     "title": 1,
+    "description": 1,
     "due_date": 1,
     "status": 1,
+    "surety_id": 1,
     "created_at": 1,
     "overdue_at": 1,
 }

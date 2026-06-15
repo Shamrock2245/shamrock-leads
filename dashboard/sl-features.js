@@ -184,7 +184,11 @@ function openBondModal(nameOrLead, bond, county, booking) {
     <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>
 
     <div class="wb-section" id="signnowSection">
-      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px">📝 SignNow Packet <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span></div>
+      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        📝 SignNow Packet
+        <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span>
+        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;margin-left:auto">🛡️ OSI Templates</span>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Indemnitor)</button>
         <button class="btn-export" id="btnPhase2" onclick="triggerSignNowPhase2()" style="background:rgba(34,197,94,0.15);color:var(--success)" disabled>📨 Send Phase 2 (Post-Approval)</button>
@@ -408,6 +412,19 @@ function selectSurety(s) {
   window._bondModalData.surety = s;
   document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
   document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');
+  // Update the SignNow surety badge to reflect which template set will be used
+  const snBadge = document.getElementById('sn-surety-badge');
+  if (snBadge) {
+    if (s === 'palmetto') {
+      snBadge.textContent = '\uD83C\uDF34 Palmetto Templates';
+      snBadge.style.background = 'rgba(34,197,94,0.12)';
+      snBadge.style.color = '#22c55e';
+    } else {
+      snBadge.textContent = '\uD83D\uDEE1\uFE0F OSI Templates';
+      snBadge.style.background = 'rgba(59,130,246,0.12)';
+      snBadge.style.color = '#60a5fa';
+    }
+  }
   // Re-fetch POA numbers for the newly selected surety
   const data = window._bondModalData;
   if (data) fetchPoaNumbers(s, data.bond, data.chargeList);
@@ -1396,6 +1413,35 @@ window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions,
   triggerSignNowPhase1, triggerSignNowPhase2,
   triggerCustodyRecheck, closeRecheckBanner,
   saveCurrentView, loadSavedView, populateSavedViews };
+
+/**
+ * openBondFromActiveBond — Opens the bond modal pre-populated from an existing active bond.
+ * Automatically pre-selects the correct surety (OSI vs Palmetto) so the SignNow
+ * template set is correct before Phase 1 / Phase 2 is triggered.
+ *
+ * @param {Object} bond - The active bond document from the active-bonds table
+ */
+function openBondFromActiveBond(bond) {
+  if (!bond) return;
+  const syntheticLead = {
+    full_name:      bond.defendant_name || '',
+    bond_amount:    bond.bond_amount || 0,
+    county:         bond.county || '',
+    booking_number: bond.booking_number || '',
+    charges:        bond.charges || '',
+  };
+  openBondModal(syntheticLead);
+  // Pre-select the surety after the modal renders
+  const rawSurety = (bond.insurance_company || bond.surety || 'osi').toLowerCase();
+  const surety = (rawSurety.includes('palm') || rawSurety.includes('psc')) ? 'palmetto' : 'osi';
+  setTimeout(() => {
+    selectSurety(surety);
+    // Scroll to the SignNow section
+    const snSection = document.getElementById('signnowSection');
+    if (snSection) snSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 150);
+}
+window.openBondFromActiveBond = openBondFromActiveBond;
 
 // ── Init ──
 loadDashboard();

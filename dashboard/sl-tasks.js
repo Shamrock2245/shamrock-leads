@@ -2,7 +2,9 @@
  * ShamrockLeads — Compliance Tasks Frontend
  * Handles the "Compliance Tasks" panel in the Command Center.
  *
- * Improvements (Phase 4 Polish):
+ * Phase 4 Polish — v2:
+ *  - Filter tabs: All / Overdue / Pending (with live counts)
+ *  - Surety-aware task badge (OSI vs Palmetto)
  *  - Micro-animation on task completion (flash green → slide-out)
  *  - data-task-id event delegation instead of inline onclick (XSS-safe)
  *  - Overdue badge with pulsing red dot
@@ -15,7 +17,6 @@
  */
 window.SLTasks = (() => {
   'use strict';
-
   const API = window.SL?.apiBase || '';
 
   // ── Task type → icon mapping (covers all types emitted by task_engine.py) ──
@@ -29,6 +30,10 @@ window.SLTasks = (() => {
     general:          '✅',
   };
 
+  // ── Active filter state ────────────────────────────────────────────────────
+  let _activeFilter = 'all';   // 'all' | 'overdue' | 'pending'
+  let _allTasks = [];
+
   // ── Render helpers ────────────────────────────────────────────────────────
   function _esc(str) {
     if (!str) return '';
@@ -38,7 +43,6 @@ window.SLTasks = (() => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
-
   function _relativeTime(dateStr) {
     const d = new Date(dateStr);
     if (isNaN(d)) return '—';
@@ -50,7 +54,6 @@ window.SLTasks = (() => {
     if (diffDays === 1) return 'Due tomorrow';
     return 'Due in ' + diffDays + 'd';
   }
-
   function _formatDate(dateStr) {
     const d = new Date(dateStr);
     if (isNaN(d)) return '—';
@@ -58,7 +61,6 @@ window.SLTasks = (() => {
       + ' · '
       + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   }
-
   /** Resolve the current agent name from the DOM, SL global, or localStorage. */
   function _currentAgent() {
     return (document.getElementById('slcAgent') || {}).value
@@ -67,76 +69,148 @@ window.SLTasks = (() => {
       || 'Dashboard Agent';
   }
 
+  /** Build the surety badge HTML for a task */
+  function _suretyBadge(task) {
+    const surety = (task.surety_id || task.insurance_company || '').toLowerCase();
+    if (surety.includes('palm') || surety.includes('psc')) {
+      return '<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(34,197,94,0.12);color:#22c55e;font-weight:600;margin-left:4px">🌴 Palmetto</span>';
+    }
+    if (surety.includes('osi') || surety.includes('old')) {
+      return '<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,0.12);color:#60a5fa;font-weight:600;margin-left:4px">🛡️ OSI</span>';
+    }
+    return '';
+  }
+
+  /** Render the filter tab bar above the task list */
+  function _renderFilterTabs(tasks) {
+    const tabsEl = document.getElementById('tasksFilterTabs');
+    if (!tabsEl) return;
+    const overdue = tasks.filter(t => new Date(t.due_date) < new Date()).length;
+    const pending = tasks.filter(t => new Date(t.due_date) >= new Date()).length;
+    const tabs = [
+      { id: 'all',     label: 'All',     count: tasks.length },
+      { id: 'overdue', label: 'Overdue', count: overdue },
+      { id: 'pending', label: 'Pending', count: pending },
+    ];
+    tabsEl.innerHTML = tabs.map(tab => {
+      const active = tab.id === _activeFilter;
+      const countColor = tab.id === 'overdue' && tab.count ? '#ef4444' : (active ? '#fff' : 'var(--muted)');
+      return `<button class="sl-task-tab${active ? ' active' : ''}" data-filter="${tab.id}"
+        style="padding:4px 12px;border-radius:16px;border:1px solid ${active ? 'var(--accent)' : 'var(--border)'};
+               background:${active ? 'var(--accent)' : 'transparent'};color:${active ? '#fff' : 'var(--text)'};
+               font-size:12px;cursor:pointer;font-weight:${active ? '600' : '400'};transition:all .15s">
+        ${_esc(tab.label)}
+        <span style="font-size:10px;margin-left:4px;color:${countColor}">${tab.count}</span>
+      </button>`;
+    }).join('');
+    tabsEl.querySelectorAll('.sl-task-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _activeFilter = btn.getAttribute('data-filter');
+        _renderTaskList(document.getElementById('tasksBody'), _allTasks);
+        _renderFilterTabs(_allTasks);
+      });
+    });
+  }
+
+  /** Render the filtered task list into bodyEl */
+  function _renderTaskList(bodyEl, tasks) {
+    if (!bodyEl) return;
+    const now = new Date();
+    const filtered = tasks.filter(t => {
+      const overdue = new Date(t.due_date) < now;
+      if (_activeFilter === 'overdue') return overdue;
+      if (_activeFilter === 'pending') return !overdue;
+      return true;
+    });
+    if (!filtered.length) {
+      bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
+        + '<div class="sl-tasks-empty-icon">☘️</div>'
+        + '<div class="ra-empty-text">' + (_activeFilter === 'overdue' ? 'No overdue tasks' : _activeFilter === 'pending' ? 'No upcoming tasks' : 'All clear!') + '</div>'
+        + '<div class="ra-empty-sub">No compliance tasks in this view</div>'
+        + '</div>';
+      return;
+    }
+    var html = '';
+    filtered.forEach(function(t) {
+      var overdue  = new Date(t.due_date) < now;
+      var icon     = TYPE_ICONS[t.task_type] || TYPE_ICONS.general;
+      var relTime  = _relativeTime(t.due_date);
+      var absTime  = _formatDate(t.due_date);
+      var dueBadge = overdue
+        ? '<span class="sl-task-due sl-task-due-overdue"><span class="sl-task-overdue-dot"></span>' + _esc(relTime) + '</span>'
+        : '<span class="sl-task-due sl-task-due-ok">⏰ ' + _esc(relTime) + '</span>';
+      var suretyBadge = _suretyBadge(t);
+
+      html += '<div class="sl-task-item' + (overdue ? ' sl-task-overdue' : '') + '" data-task-id="' + _esc(t._id) + '" role="listitem">'
+        + '<div class="sl-task-icon">' + icon + '</div>'
+        + '<div class="sl-task-content">'
+        + '<div class="sl-task-header">'
+        + '<span class="sl-task-title">' + _esc(t.title) + '</span>'
+        + suretyBadge
+        + '<span class="sl-task-booking">#' + _esc(t.booking_number) + '</span>'
+        + '</div>'
+        + '<div class="sl-task-desc">' + _esc(t.description) + '</div>'
+        + '<div class="sl-task-meta">' + dueBadge
+        + '<span class="sl-task-abs-time" title="' + _esc(absTime) + '">' + _esc(absTime) + '</span>'
+        + '</div>'
+        + '</div>'
+        + '<button class="sl-btn sl-btn-secondary sl-task-done-btn" data-task-id="' + _esc(t._id) + '" title="Mark as done" aria-label="Mark task done">'
+        + '<span class="sl-task-done-icon">✓</span>'
+        + '</button>'
+        + '</div>';
+    });
+    bodyEl.innerHTML = html;
+
+    // Attach click handlers via event delegation (XSS-safe — no inline onclick)
+    bodyEl.querySelectorAll('.sl-task-done-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var taskId = btn.getAttribute('data-task-id');
+        if (taskId) complete(taskId, btn);
+      });
+    });
+  }
+
   // ── Main load ─────────────────────────────────────────────────────────────
   async function load() {
     const bodyEl  = document.getElementById('tasksBody');
     const countEl = document.getElementById('tasksCount');
     if (!bodyEl) return;
-
-    bodyEl.innerHTML = '<div class="sl-tasks-loading"><span class="sl-tasks-spinner"></span> Loading tasks\u2026</div>';
-
+    bodyEl.innerHTML = '<div class="sl-tasks-loading"><span class="sl-tasks-spinner"></span> Loading tasks…</div>';
     try {
       const resp = await fetch(API + '/api/tasks');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data  = await resp.json();
-      const tasks = data.tasks || [];
+      _allTasks = data.tasks || [];
 
       // Update badge count (capped at 99+)
+      const overdueCnt = _allTasks.filter(t => new Date(t.due_date) < new Date()).length;
       if (countEl) {
-        countEl.textContent = tasks.length > 99 ? '99+' : tasks.length;
-        countEl.style.background = tasks.length ? '#f59e0b' : 'var(--surface)';
+        countEl.textContent = _allTasks.length > 99 ? '99+' : _allTasks.length;
+        // Badge turns red when there are overdue tasks
+        countEl.style.background = overdueCnt ? '#ef4444' : (_allTasks.length ? '#f59e0b' : 'var(--surface)');
+        countEl.title = overdueCnt ? overdueCnt + ' overdue' : _allTasks.length + ' pending';
       }
 
-      if (!tasks.length) {
+      if (!_allTasks.length) {
+        // Clear filter tabs
+        const tabsEl = document.getElementById('tasksFilterTabs');
+        if (tabsEl) tabsEl.innerHTML = '';
         bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
-          + '<div class="sl-tasks-empty-icon">\u2618\uFE0F</div>'
+          + '<div class="sl-tasks-empty-icon">☘️</div>'
           + '<div class="ra-empty-text">All clear!</div>'
           + '<div class="ra-empty-sub">No pending compliance tasks</div>'
           + '</div>';
         return;
       }
 
-      var html = '';
-      tasks.forEach(function(t) {
-        var overdue  = new Date(t.due_date) < new Date();
-        var icon     = TYPE_ICONS[t.task_type] || TYPE_ICONS.general;
-        var relTime  = _relativeTime(t.due_date);
-        var absTime  = _formatDate(t.due_date);
-        var dueBadge = overdue
-          ? '<span class="sl-task-due sl-task-due-overdue"><span class="sl-task-overdue-dot"></span>' + _esc(relTime) + '</span>'
-          : '<span class="sl-task-due sl-task-due-ok">\u23F0 ' + _esc(relTime) + '</span>';
-
-        html += '<div class="sl-task-item' + (overdue ? ' sl-task-overdue' : '') + '" data-task-id="' + _esc(t._id) + '" role="listitem">'
-          + '<div class="sl-task-icon">' + icon + '</div>'
-          + '<div class="sl-task-content">'
-          + '<div class="sl-task-header">'
-          + '<span class="sl-task-title">' + _esc(t.title) + '</span>'
-          + '<span class="sl-task-booking">#' + _esc(t.booking_number) + '</span>'
-          + '</div>'
-          + '<div class="sl-task-desc">' + _esc(t.description) + '</div>'
-          + '<div class="sl-task-meta">' + dueBadge
-          + '<span class="sl-task-abs-time" title="' + _esc(absTime) + '">' + _esc(absTime) + '</span>'
-          + '</div>'
-          + '</div>'
-          + '<button class="sl-btn sl-btn-secondary sl-task-done-btn" data-task-id="' + _esc(t._id) + '" title="Mark as done" aria-label="Mark task done">'
-          + '<span class="sl-task-done-icon">\u2713</span>'
-          + '</button>'
-          + '</div>';
-      });
-      bodyEl.innerHTML = html;
-
-      // Attach click handlers via event delegation (XSS-safe — no inline onclick)
-      bodyEl.querySelectorAll('.sl-task-done-btn').forEach(function(btn) {
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          var taskId = btn.getAttribute('data-task-id');
-          if (taskId) complete(taskId, btn);
-        });
-      });
+      // Render filter tabs and task list
+      _renderFilterTabs(_allTasks);
+      _renderTaskList(bodyEl, _allTasks);
 
     } catch (err) {
       bodyEl.innerHTML = '<div class="ra-empty">'
-        + '<div class="ra-empty-text" style="color:#ef4444">\u26A0 Error loading tasks</div>'
+        + '<div class="ra-empty-text" style="color:#ef4444">⚠ Error loading tasks</div>'
         + '<div class="ra-empty-sub" style="font-size:11px">' + _esc(err.message) + '</div>'
         + '</div>';
     }
@@ -150,7 +224,7 @@ window.SLTasks = (() => {
     // Disable button immediately to prevent double-click
     if (btnEl) {
       btnEl.disabled = true;
-      btnEl.innerHTML = '<span class="sl-task-done-icon">\u2026</span>';
+      btnEl.innerHTML = '<span class="sl-task-done-icon">…</span>';
     }
 
     try {
@@ -164,39 +238,46 @@ window.SLTasks = (() => {
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
+      // Remove from in-memory list
+      _allTasks = _allTasks.filter(t => String(t._id) !== String(taskId));
+
       // Micro-animation: flash green, then slide out
       itemEl.classList.add('sl-task-completing');
-      if (btnEl) btnEl.innerHTML = '<span class="sl-task-done-icon">\u2713</span>';
+      if (btnEl) btnEl.innerHTML = '<span class="sl-task-done-icon">✓</span>';
 
       setTimeout(function() {
         itemEl.classList.add('sl-task-done-exit');
         itemEl.addEventListener('transitionend', function() {
           itemEl.remove();
-          // Update count badge
-          var remaining = document.querySelectorAll('.sl-task-item').length;
-          var countEl   = document.getElementById('tasksCount');
+          // Refresh tabs and count with updated list
+          const countEl = document.getElementById('tasksCount');
           if (countEl) {
-            countEl.textContent = remaining > 99 ? '99+' : remaining;
-            if (!remaining) {
-              var bodyEl = document.getElementById('tasksBody');
-              if (bodyEl) bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
-                + '<div class="sl-tasks-empty-icon">\u2618\uFE0F</div>'
-                + '<div class="ra-empty-text">All clear!</div>'
-                + '<div class="ra-empty-sub">No pending compliance tasks</div>'
-                + '</div>';
-            }
+            const overdueCnt = _allTasks.filter(t => new Date(t.due_date) < new Date()).length;
+            countEl.textContent = _allTasks.length > 99 ? '99+' : _allTasks.length;
+            countEl.style.background = overdueCnt ? '#ef4444' : (_allTasks.length ? '#f59e0b' : 'var(--surface)');
+          }
+          _renderFilterTabs(_allTasks);
+          if (!_allTasks.length) {
+            const bodyEl = document.getElementById('tasksBody');
+            if (bodyEl) bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
+              + '<div class="sl-tasks-empty-icon">☘️</div>'
+              + '<div class="ra-empty-text">All clear!</div>'
+              + '<div class="ra-empty-sub">No pending compliance tasks</div>'
+              + '</div>';
           }
         }, { once: true });
       }, 400);
 
       if (window.SL && window.SL.toast) SL.toast('Task marked as complete', 'success');
+      else if (window.toast) toast('Task marked as complete', 'success');
 
     } catch (err) {
       if (btnEl) {
         btnEl.disabled = false;
-        btnEl.innerHTML = '<span class="sl-task-done-icon">\u2713</span>';
+        btnEl.innerHTML = '<span class="sl-task-done-icon">✓</span>';
       }
       if (window.SL && window.SL.toast) SL.toast('Failed to complete task', 'error');
+      else if (window.toast) toast('Failed to complete task', 'error');
     }
   }
 

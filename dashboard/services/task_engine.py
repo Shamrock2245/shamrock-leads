@@ -24,14 +24,34 @@ class TaskEngine:
         description: str,
         due_date: datetime,
         task_type: str = "general",
+        surety_id: str = "",
     ) -> str:
         """Create a compliance task, idempotent per (booking_number, task_type, status=pending).
 
         If a pending task of the same type already exists, its due_date and
         description are updated rather than creating a duplicate.
+
+        Args:
+            surety_id: Optional insurance company identifier ('osi' | 'palmetto').
+                       Stored on the task document so the UI can show the correct
+                       surety badge without an extra bond lookup.
         """
         db = get_db()
         due_date_str = due_date.isoformat() if isinstance(due_date, datetime) else due_date
+
+        # Resolve surety_id from the bond if not explicitly provided
+        _surety = surety_id
+        if not _surety:
+            try:
+                bond = await db.active_bonds.find_one(
+                    {"booking_number": booking_number},
+                    {"insurance_company": 1, "surety": 1},
+                )
+                if bond:
+                    raw = (bond.get("insurance_company") or bond.get("surety") or "").lower()
+                    _surety = "palmetto" if ("palm" in raw or "psc" in raw) else "osi"
+            except Exception:
+                pass
 
         existing = await db.tasks.find_one({
             "booking_number": booking_number,
@@ -45,6 +65,7 @@ class TaskEngine:
                     "due_date": due_date_str,
                     "description": description,
                     "title": title,
+                    "surety_id": _surety,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
@@ -61,12 +82,13 @@ class TaskEngine:
             "due_date": due_date_str,
             "task_type": task_type,
             "status": "pending",
+            "surety_id": _surety,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         result = await db.tasks.insert_one(task)
         logger.info(
-            "[TaskEngine] Created %s task for booking %s (due %s)",
-            task_type, booking_number, due_date_str[:10],
+            "[TaskEngine] Created %s task for booking %s (due %s) [surety=%s]",
+            task_type, booking_number, due_date_str[:10], _surety,
         )
         return str(result.inserted_id)
 

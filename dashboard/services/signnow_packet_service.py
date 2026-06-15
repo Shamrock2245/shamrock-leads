@@ -50,32 +50,39 @@ class SignNowPacketService:
     #   3. The surety-routing logic in build_packet_manifest() will pick it up
     # ──────────────────────────────────────────────────────────────────────
     TEMPLATE_MAP = {
-        # ── Shared Templates (used by both OSI and Palmetto) ──
-        "paperwork-header":      "9b9dad3e319f4b1580094e05f9844929d5a6f7de",
-        "faq-cosigners":         "0820b9fef3bd4c38a91643455881021f3f0c3a88",
-        "faq-defendants":        "1524f1c816c54a72be76d14fe128e4a6034579dc",
-        "indemnity-agreement":   "ed5e6ca0a3444796a127fbeb6a880658371aafd7",
-        "defendant-application": "d50adc808f3245f087b218d33da89e4ace15ecd4",
-        "promissory-note":       "460bd43c2f514305a3b296481713a00ee8311c79",
-        "disclosure-form":       "fb8b57bf55ac4d5e8bff820b018a0bfd3b17a37a",
-        "surety-terms":          "192aeb246230446bb0d7f658765afd2832704964",
-        "master-waiver":         "3b0e71188b3049cc8760d144e6c49df227ccd741",
-        "ssa-release":           "4800defff07541079760889d83109059585b0cea",
-        # ── OSI-Specific Templates ──
-        "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",  # Appearance Bond blank (OSI)
-        "collateral-receipt":    "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",  # osi-premium-collateral-template
-        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # shamrock-premium-finance-notice
+        # ── Shared Templates (Paperwork for All Packets) ──────────────────────
+        # Used by BOTH OSI and Palmetto. Single canonical forms.
+        # NOTE: appearance-bond is PRINT-ONLY — never sent via SignNow.
+        "paperwork-header":      "9b9dad3e319f4b1580094e05f9844929d5a6f7de",  # shamrock-paperwork-header
+        "faq-cosigners":         "0820b9fef3bd4c38a91643455881021f3f0c3a88",  # Shamrock Bail Bonds - FAQ Cosigners
+        "faq-defendants":        "1524f1c816c54a72be76d14fe128e4a6034579dc",  # Shamrock Bail Bonds - FAQ Defendants
+        "promissory-note":       "460bd43c2f514305a3b296481713a00ee8311c79",  # Promissory Side 2 FINAL
+        "disclosure-form":       "fb8b57bf55ac4d5e8bff820b018a0bfd3b17a37a",  # Disclosure FINAL
+        "master-waiver":         "3b0e71188b3049cc8760d144e6c49df227ccd741",  # shamrock-master-waiver
+        "ssa-release":           "4800defff07541079760889d83109059585b0cea",  # shamrock-ssa-release
 
-        # ── Palmetto-Specific Overrides ──
+        # ── OSI-Specific Templates (osi templates folder) ─────────────────────
+        # Default templates used when surety_id == "osi" (or unspecified)
+        "indemnity-agreement":   "ed5e6ca0a3444796a127fbeb6a880658371aafd7",  # Indemnity Agreement FINAL (OSI)
+        "defendant-application": "d50adc808f3245f087b218d33da89e4ace15ecd4",  # App for Appearance Bond FINAL (OSI)
+        "surety-terms":          "192aeb246230446bb0d7f658765afd2832704964",  # Surety Terms and Conditions (OSI)
+        "collateral-receipt":    "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",  # osi-premium-collateral-template
+        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # shamrock-premium-finance-notice (OSI)
+        # appearance-bond is PRINT-ONLY — physical printout only. DO NOT add to any phase doc list.
+        "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",  # PRINT-ONLY reference
+
+        # ── Palmetto-Specific Overrides (shamrock-palmetto-templates folder) ──
         # These override the OSI defaults when surety_id == "palmetto".
-        # To add a new Palmetto template:
-        #   1. Log in to SignNow as admin@shamrockbailbonds.biz
-        #   2. Open the template and copy the 40-char template ID from the URL
-        #   3. Add the key here using the pattern "<doc-key>-palmetto"
-        #   4. The surety-routing logic in get_template_id() will pick it up automatically
-        "appearance-bond-palmetto":    "9b1d3d0b64004153b347ceccda07420a906350e5",  # shamrock-palmetto-appearance-bond
-        # "collateral-receipt-palmetto": "",  # Uncomment + fill once Palmetto collateral template is created
-        # "payment-plan-palmetto":       "",  # Uncomment + fill once Palmetto payment plan template is created
+        # Naming convention: "<doc-key>-palmetto"
+        # Shared docs (master-waiver, ssa-release, faq-*, promissory-note, disclosure-form)
+        # use the SAME template for both sureties — no override needed.
+        "indemnity-agreement-palmetto":   "2359c0fdf9ea47ee8129d4426e698ece0112a85c",  # palmetto-indemnity-agreement
+        "defendant-application-palmetto": "9c6f62509e03453a8d212bd67c88eccf65e65958",  # palmetto-defendant-application
+        "surety-terms-palmetto":          "c897c72df2674beaa0ad9c8bbf1f5856e150d553",  # palmetto-surety-terms
+        "collateral-receipt-palmetto":    "b5b89aec16f44bf4b8538891707beebf71977a19",  # palmetto-collateral-receipt
+        "payment-plan-palmetto":          "661390d6984c40439c948bd31813ada600163a8f",  # palmetto-payment-plan-1
+        # appearance-bond-palmetto is PRINT-ONLY — physical printout only.
+        # "appearance-bond-palmetto": "2b1941fd671f4423857c90d0cc03c839a4188e55",  # PRINT-ONLY
     }
 
     # Document Multiplication Rules
@@ -558,11 +565,28 @@ class SignNowPacketService:
 
         target_docs = phase_1_docs if phase == 1 else phase_2_docs
 
+        # Palmetto overrides: these 5 doc keys have Palmetto-specific templates.
+        # Shared docs (master-waiver, ssa-release, faq-*, promissory-note, disclosure-form)
+        # use the same template for both sureties.
+        _palmetto_overrideable = {
+            "indemnity-agreement",
+            "defendant-application",
+            "surety-terms",
+            "collateral-receipt",
+            "payment-plan",
+        }
+
         for doc_key in target_docs:
             template_key = doc_key
-            # Route to surety-specific templates when Palmetto is selected
-            if doc_key in ("appearance-bond", "collateral-receipt", "payment-plan") and surety_id == "palmetto":
-                template_key = f"{doc_key}-palmetto"
+            if surety_id == "palmetto" and doc_key in _palmetto_overrideable:
+                palmetto_key = f"{doc_key}-palmetto"
+                if palmetto_key in self.TEMPLATE_MAP:
+                    template_key = palmetto_key
+                else:
+                    logger.warning(
+                        "[signnow] No Palmetto override for '%s' — falling back to OSI template",
+                        doc_key,
+                    )
 
             template_id = self.TEMPLATE_MAP.get(template_key)
             if not template_id:

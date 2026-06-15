@@ -301,6 +301,7 @@ function renderActiveBondsTable() {
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="openEditDrawer('${bkSafe}')">✏️ Edit</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g,'&quot;')})" title="Send SignNow packet (${ins.includes('PALM')||ins.includes('PSC')?'Palmetto':'OSI'} templates)">📝 Docs</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>

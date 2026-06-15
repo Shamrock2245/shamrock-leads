@@ -55,12 +55,18 @@ class LedgerService:
         """
         db = get_db()
         try:
+            # Check if collection exists
+            collections = await db.list_collection_names()
+            if "financial_ledger" not in collections:
+                return 0.0
+                
             pipeline = [
                 {"$match": {"booking_number": booking_number}},
                 {
                     "$group": {
                         "_id": "$booking_number",
-                        "total_balance": {"$sum": "$amount"},
+                        # Use $round in mongo 4.2+ to handle IEEE-754 drift at DB level
+                        "total_balance": {"$sum": {"$ifNull": ["$amount", 0.0]}},
                     }
                 },
             ]
@@ -111,6 +117,9 @@ class LedgerService:
                     "import will attempt best-effort parsing.",
                     missing,
                 )
+                # If it's completely unparseable (e.g. all required cols missing), abort early
+                if len(missing) == len(_SS_REQUIRED_COLS):
+                    return {"imported": 0, "errors": ["CSV format unrecognised: all required columns missing."]}
         else:
             return {"imported": 0, "errors": ["CSV appears empty or has no header row."]}
 

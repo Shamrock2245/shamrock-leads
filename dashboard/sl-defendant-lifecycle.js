@@ -421,33 +421,49 @@ async function _loadLifecycleTimeline(bookingNumber) {
       if (!events.length) {
         if (tlEl) tlEl.innerHTML = '<div class="slc-log-empty">No lifecycle events recorded yet</div>';
       } else {
-        // Group events by year for sticky year headers
-        let tlHtml = '';
-        let lastYear = null;
+        // Group events by year — each year group is collapsible
+        const yearGroups = {};
+        const yearOrder = [];
         events.forEach(e => {
           const d = e.timestamp ? new Date(e.timestamp) : null;
-          const year = d && !isNaN(d) ? d.getFullYear() : null;
-          if (year && year !== lastYear) {
-            tlHtml += `<div class="slc-timeline-year-group">${year}</div>`;
-            lastYear = year;
-          }
-          const timeStr = d && !isNaN(d)
-            ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-            : '—';
-          const badge = e.badge ? `<span class="lcp-event-badge ${e.badge.class||\'\'}">${_esc(e.badge.text||\'\')}</span>` : '';
-          const bookingTag = e.booking_number && e.booking_number !== bookingNumber ? `<span class="slc-timeline-booking">#${e.booking_number}</span>` : '';
-          tlHtml += `<div class="slc-timeline-entry">
-            <div class="slc-timeline-icon">${e.icon || '📋'}</div>
-            <div class="slc-timeline-body">
-              <div class="slc-timeline-label">${bookingTag} ${_esc(e.title || e.label || '')} ${badge}</div>
-              ${e.detail ? `<div class="slc-timeline-detail">${_esc(e.detail)}</div>` : ''}
-              <div class="slc-timeline-time">${timeStr}</div>
-            </div>
-          </div>`;
+          const year = (d && !isNaN(d)) ? d.getFullYear() : 'Unknown';
+          if (!yearGroups[year]) { yearGroups[year] = []; yearOrder.push(year); }
+          yearGroups[year].push(e);
+        });
+        // Collapse older years when there are more than 3 years of history
+        const multiYear = yearOrder.length > 3;
+        let tlHtml = '';
+        yearOrder.forEach((year, yi) => {
+          const safeId = 'tl-yr-' + String(year) + '-' + bookingNumber.replace(/[^a-z0-9]/gi, '');
+          const collapsed = multiYear && yi > 0;
+          const count = yearGroups[year].length;
+          tlHtml += `<div class="slc-timeline-year-group" onclick="_toggleYearGroup('${safeId}',this)" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px">`
+            + `<span class="slc-year-chevron" style="font-size:10px;transition:transform .2s;display:inline-block;transform:${collapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}">▼</span>`
+            + `<span>${year}</span>`
+            + `<span style="font-size:10px;color:var(--muted);font-weight:400;margin-left:4px">${count} event${count !== 1 ? 's' : ''}</span>`
+            + `</div>`;
+          tlHtml += `<div id="${safeId}" style="display:${collapsed ? 'none' : 'block'}">`;
+          yearGroups[year].forEach(e => {
+            const d = e.timestamp ? new Date(e.timestamp) : null;
+            const timeStr = (d && !isNaN(d))
+              ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+              : '—';
+            const badge = e.badge ? `<span class="lcp-event-badge ${e.badge.class || ''}">${_esc(e.badge.text || '')}</span>` : '';
+            const bookingTag = e.booking_number && e.booking_number !== bookingNumber
+              ? `<span class="slc-timeline-booking">#${e.booking_number}</span>` : '';
+            tlHtml += `<div class="slc-timeline-entry">`
+              + `<div class="slc-timeline-icon">${e.icon || '📋'}</div>`
+              + `<div class="slc-timeline-body">`
+              + `<div class="slc-timeline-label">${bookingTag} ${_esc(e.title || e.label || '')} ${badge}</div>`
+              + (e.detail ? `<div class="slc-timeline-detail">${_esc(e.detail)}</div>` : '')
+              + `<div class="slc-timeline-time">${timeStr}</div>`
+              + `</div></div>`;
+          });
+          tlHtml += '</div>';
         });
         // Show capped notice if the API returned a capped flag
         if (data.capped) {
-          tlHtml += `<div class="slc-timeline-capped-notice">Showing most recent ${events.length} of ${data.total_events} events</div>`;
+          tlHtml += `<div class="slc-timeline-capped-notice">Showing most recent ${events.length} of ${data.total_events} events. Use the API for full history.</div>`;
         }
         if (tlEl) tlEl.innerHTML = tlHtml;
 
@@ -1057,3 +1073,19 @@ async function generateAiSummary(bookingNumber) {
   }
 }
 window.generateAiSummary = generateAiSummary;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TIMELINE YEAR GROUP TOGGLE
+   Collapses/expands a year group in the unified timeline.
+   ═══════════════════════════════════════════════════════════════════════════ */
+function _toggleYearGroup(groupId, headerEl) {
+  const group = document.getElementById(groupId);
+  if (!group) return;
+  const isHidden = group.style.display === 'none';
+  group.style.display = isHidden ? 'block' : 'none';
+  const chevron = headerEl && headerEl.querySelector('.slc-year-chevron');
+  if (chevron) {
+    chevron.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+  }
+}
+window._toggleYearGroup = _toggleYearGroup;
