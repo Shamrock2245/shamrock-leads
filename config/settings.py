@@ -63,7 +63,7 @@ class Settings:
     )
 
     # --- Feature Flags ---
-    ENABLE_SHEETS_WRITER: bool = os.getenv("ENABLE_SHEETS_WRITER", "true").lower() == "true"
+    ENABLE_SHEETS_WRITER: bool = os.getenv("ENABLE_SHEETS_WRITER", "false").lower() == "true"
     ENABLE_MONGO_WRITER: bool = os.getenv("ENABLE_MONGO_WRITER", "true").lower() == "true"
     ENABLE_SLACK_ALERTS: bool = os.getenv("ENABLE_SLACK_ALERTS", "true").lower() == "true"
     ENABLE_LEAD_SCORING: bool = os.getenv("ENABLE_LEAD_SCORING", "true").lower() == "true"

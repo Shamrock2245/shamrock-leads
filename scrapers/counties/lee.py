@@ -19,12 +19,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Set, Tuple
 
-try:
-    from curl_cffi import requests as cffi_requests
-    HAS_CFFI = True
-except ImportError:
-    import requests as cffi_requests
-    HAS_CFFI = False
+import json
+import urllib.parse
+from playwright.sync_api import sync_playwright
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -36,7 +33,7 @@ BASE_URL = "https://www.sheriffleefl.org"
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
-SOCKS_PROXY = None  # Disabled to use Hetzner VPS IP instead of the rate-limited iMac IP
+SOCKS_PROXY = "socks5://172.18.0.1:1080"  # Route through obscura residential proxy
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
@@ -64,8 +61,6 @@ HEADERS = {
     "Sec-Fetch-Site": "same-origin",
 }
 
-# Chrome TLS impersonation fingerprint
-IMPERSONATE = "chrome131"
 
 
 class LeeCountyScraper(BaseScraper):
@@ -79,46 +74,52 @@ class LeeCountyScraper(BaseScraper):
         """Main scrape pipeline: fetch bookings → enrich with charges → return records."""
         start_time = time.time()
 
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date - timedelta(days=DAYS_BACK)
-
-        logger.info(
-            f"📅 Date range: {start_date.strftime('%Y-%m-%d')} "
-            f"to {end_date.strftime('%Y-%m-%d')}"
-        )
-
-        # Fetch raw bookings from API (try multiple query variants)
-        raw_arrests = self._fetch_arrests(start_date, end_date)
-        logger.info(f"📥 Total fetched: {len(raw_arrests)}")
-
-        if not raw_arrests:
-            return []
-
-        # Normalize raw API data → intermediate dicts
-        normalized = []
-        for raw in raw_arrests:
-            norm = self._normalize_record(raw)
-            if norm and norm.get("booking_number"):
-                normalized.append(norm)
-
-        logger.info(f"🔄 Normalized: {len(normalized)} records")
-
-        # Enrich with charges API (bond/court/case data)
-        elapsed = time.time() - start_time
-        remaining = MAX_EXECUTION_S - elapsed
-        max_enrich = min(len(normalized), MAX_ENRICH)
-
-        if remaining > 60 and max_enrich > 0:
-            logger.info(f"🔬 Enriching {max_enrich} records with charges API...")
-            enriched = self._enrich_with_charges(normalized[:max_enrich])
-            final = enriched + normalized[max_enrich:]
-        else:
-            logger.info("⏭️ Skipping enrichment (low time budget)")
-            final = normalized
-
-        # Convert to ArrestRecord instances
-        records = [self._to_arrest_record(n) for n in final]
-        return records
+        try:
+            end_date = datetime.now(timezone.utc)
+            start_date = end_date - timedelta(days=DAYS_BACK)
+    
+            logger.info(
+                f"📅 Date range: {start_date.strftime('%Y-%m-%d')} "
+                f"to {end_date.strftime('%Y-%m-%d')}"
+            )
+    
+            # Fetch raw bookings from API (try multiple query variants)
+            raw_arrests = self._fetch_arrests(start_date, end_date)
+            logger.info(f"📥 Total fetched: {len(raw_arrests)}")
+    
+            if not raw_arrests:
+                return []
+    
+            # Normalize raw API data → intermediate dicts
+            normalized = []
+            for raw in raw_arrests:
+                norm = self._normalize_record(raw)
+                if norm and norm.get("booking_number"):
+                    normalized.append(norm)
+    
+            logger.info(f"🔄 Normalized: {len(normalized)} records")
+    
+            # Enrich with charges API (bond/court/case data)
+            elapsed = time.time() - start_time
+            remaining = MAX_EXECUTION_S - elapsed
+            max_enrich = min(len(normalized), MAX_ENRICH)
+    
+            if remaining > 60 and max_enrich > 0:
+                logger.info(f"🔬 Enriching {max_enrich} records with charges API...")
+                enriched = self._enrich_with_charges(normalized[:max_enrich])
+                final = enriched + normalized[max_enrich:]
+            else:
+                logger.info("⏭️ Skipping enrichment (low time budget)")
+                final = normalized
+    
+            # Convert to ArrestRecord instances
+            records = [self._to_arrest_record(n) for n in final]
+            return records
+        finally:
+            self._cleanup()
+        
+    def _execute_scrape(self):
+        pass # implemented in scrape
 
     # ── API Fetch ──
 
@@ -527,41 +528,90 @@ class LeeCountyScraper(BaseScraper):
 
     # ── HTTP ──
 
-    def _http_fetch(
-        self, url: str, params: Dict[str, Any] = None
-    ):
-        """HTTP GET with curl_cffi browser impersonation + retries + exponential backoff."""
+    class MockResponse:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+        def json(self):
+            import json
+            try:
+                return json.loads(self.text)
+            except Exception:
+                raise ValueError("Failed to parse JSON")
+
+    def _get_page(self):
+        """Lazy-init Playwright browser and return the page object."""
+        if not hasattr(self, "pw") or self.pw is None:
+            self.pw = sync_playwright().start()
+            self.browser = self.pw.chromium.launch(
+                headless=True,
+                proxy={"server": SOCKS_PROXY} if SOCKS_PROXY else None,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            context = self.browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                viewport={"width": 1440, "height": 900},
+            )
+            self.page = context.new_page()
+            self.page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            """)
+        return self.page
+        
+    def _cleanup(self):
+        """Ensure Playwright resources are freed."""
+        if hasattr(self, "browser") and self.browser:
+            try: self.browser.close()
+            except: pass
+        if hasattr(self, "pw") and self.pw:
+            try: self.pw.stop()
+            except: pass
+        self.pw = None
+        self.browser = None
+        self.page = None
+
+    def _http_fetch(self, url: str, params: Dict[str, Any] = None):
+        """Fetch API using Playwright browser context to bypass Cloudflare."""
+        import urllib.parse
+        
+        if params:
+            qs = urllib.parse.urlencode(params)
+            full_url = f"{url}?{qs}"
+        else:
+            full_url = url
+            
         for attempt in range(RETRY_LIMIT):
             try:
-                kwargs = {
-                    "headers": HEADERS,
-                    "timeout": 30,
-                }
-                if SOCKS_PROXY:
-                    kwargs["proxy"] = SOCKS_PROXY
+                page = self._get_page()
+                resp = page.goto(full_url, wait_until="domcontentloaded", timeout=30000)
+                status_code = resp.status if resp else 200
                 
-                if params:
-                    kwargs["params"] = params
-                if HAS_CFFI:
-                    kwargs["impersonate"] = IMPERSONATE
-                resp = cffi_requests.get(url, **kwargs)
-                if resp.status_code == 200:
-                    return resp
-                if resp.status_code in (429, 500, 502, 503):
+                # Check for CF block in title
+                title = (page.title() or "").lower()
+                if "just a moment" in title or "attention" in title or "blocked" in title or status_code == 429:
+                    logger.warning(f"⚠️ Playwright hit Cloudflare/429 at {full_url}")
+                    status_code = 429
+                
+                if status_code == 200:
+                    # Extract the JSON text from the DOM. 
+                    body_text = page.evaluate("() => document.body.innerText")
+                    return self.MockResponse(200, body_text)
+                    
+                if status_code in (429, 500, 502, 503):
                     sleep_s = BACKOFF_BASE_S * (2**attempt) + random.uniform(0, BACKOFF_BASE_S)
-                    logger.warning(
-                        f"⏳ HTTP {resp.status_code} retry in {sleep_s:.1f}s"
-                    )
+                    logger.warning(f"⏳ HTTP {status_code} retry in {sleep_s:.1f}s")
                     time.sleep(sleep_s)
                     continue
-                return resp
+                    
+                return self.MockResponse(status_code, "{}")
+                
             except Exception as e:
                 sleep_s = BACKOFF_BASE_S * (2**attempt)
                 if attempt < RETRY_LIMIT - 1:
-                    logger.warning(f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {e}")
+                    logger.warning(f"⚠️ Playwright error, retrying in {sleep_s:.1f}s: {e}")
                     time.sleep(sleep_s)
                 else:
-                    logger.error(f"❌ HTTP failed after retries: {url}")
+                    logger.error(f"❌ Playwright failed after retries: {full_url}")
                     return None
         return None
 
@@ -704,3 +754,5 @@ class LeeCountyScraper(BaseScraper):
         except Exception as e:
             logger.warning(f"Lee _fetch_single_booking error ({booking_id}): {e}")
             return None
+        finally:
+            self._cleanup()
