@@ -270,9 +270,9 @@ services:
       FRONTEND_URL: "${POSTIZ_MAIN_URL:-https://social.shamrockbailbonds.biz}"
       NEXT_PUBLIC_BACKEND_URL: "${POSTIZ_MAIN_URL:-https://social.shamrockbailbonds.biz}/api"
       BACKEND_INTERNAL_URL: "http://localhost:3000"
-      # ── Auth ──
+      # ── Auth ── REQUIRED: set POSTIZ_JWT_SECRET in .env (never use default in prod)
       JWT_SECRET: "${POSTIZ_JWT_SECRET:-shamrock-postiz-jwt-secret-change-me}"
-      # ── Database ──
+      # ── Database ── REQUIRED: set POSTIZ_DB_PASSWORD in .env
       DATABASE_URL: "postgresql://postiz:${POSTIZ_DB_PASSWORD:-shamrock_postiz_2026}@postiz-postgres:5432/postiz"
       REDIS_URL: "redis://postiz-redis:6379"
       # ── Temporal (required v2.12+) ──
@@ -280,6 +280,8 @@ services:
       # ── Self-hosting config ──
       IS_GENERAL: "true"
       NOT_SECURED: "true"
+      # SECURITY: Disable public self-registration — this is a private internal tool
+      DISABLE_REGISTRATION: "true"
       STORAGE_PROVIDER: "local"
       UPLOAD_DIRECTORY: "/uploads"
       NEXT_PUBLIC_UPLOAD_DIRECTORY: "/uploads"
