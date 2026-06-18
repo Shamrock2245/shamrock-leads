@@ -301,7 +301,6 @@ async def api_predict(booking_number: str, target: str = Query(default="lead_qua
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.post("/ml/batch-predict")
 # ─────────────────────────────────────────────────────────────────────────────
-@ml_bp.post("/ml/batch-predict")
 async def api_batch_predict(request: Request):
     """Batch ML predictions for multiple arrest records.
 
@@ -419,7 +418,6 @@ async def api_feature_importance(target: str = Query(default="lead_quality"), al
 # ─────────────────────────────────────────────────────────────────────────────
 @ml_bp.get("/ml/predictions/compare/{booking_number}")
 # ─────────────────────────────────────────────────────────────────────────────
-@ml_bp.get("/ml/predictions/compare/{booking_number}")
 async def api_compare_predictions(booking_number: str):
     """Compare rule-based and ML predictions side-by-side.
 

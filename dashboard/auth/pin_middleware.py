@@ -173,11 +173,15 @@ def mount_login_routes(app):
         if not DASHBOARD_PIN or pin == DASHBOARD_PIN:
             token = _sign_token()
             response = JSONResponse({"success": True})
+            # secure=True is required on HTTPS — without it the browser
+            # silently drops the cookie and every subsequent API call returns 401,
+            # causing the dashboard to render as a black screen.
             response.set_cookie(
                 key=COOKIE_NAME,
                 value=token,
                 max_age=COOKIE_MAX_AGE,
                 httponly=True,
+                secure=True,
                 samesite="lax",
                 path="/",
             )

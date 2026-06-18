@@ -60,7 +60,6 @@ async def api_forecast(history: int = Query(default=90), horizon: int = Query(de
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/counties")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/heatmap/counties")
 async def api_county_heatmap(days: int = Query(default=30)):
     """County-level risk heatmap with composite scoring.
     Query params:
@@ -85,7 +84,6 @@ async def api_county_heatmap(days: int = Query(default=30)):
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/temporal")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/heatmap/temporal")
 async def api_temporal_heatmap(days: int = Query(default=30), county: str | None = Query(default=None)):
     """Hour × Day-of-week arrest pattern heatmap.
     Query params:
@@ -113,7 +111,6 @@ async def api_temporal_heatmap(days: int = Query(default=30), county: str | None
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/heatmap/charges")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/heatmap/charges")
 async def api_charge_heatmap(days: int = Query(default=30)):
     """County × Charge-category heatmap matrix.
     Query params:
@@ -138,7 +135,6 @@ async def api_charge_heatmap(days: int = Query(default=30)):
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/risk-trend")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/risk-trend")
 async def api_risk_trend(days: int = Query(default=90), county: str | None = Query(default=None)):
     """Daily risk trend with 7-day moving averages.
     Query params:
@@ -166,7 +162,6 @@ async def api_risk_trend(days: int = Query(default=90), county: str | None = Que
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/dashboard")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/dashboard")
 async def api_intelligence_dashboard():
     """Aggregated intelligence dashboard — all key data in one call.
 
@@ -360,7 +355,6 @@ async def api_court_prediction_batch(limit: int = Query(default=20), min_bond: i
 # ─────────────────────────────────────────────────────────────────────────────
 @intelligence_bp.get("/intelligence/forfeiture-risk")
 # ─────────────────────────────────────────────────────────────────────────────
-@intelligence_bp.get("/intelligence/forfeiture-risk")
 async def api_forfeiture_risk(limit: int = Query(default=50)):
     """Score all active bonds for forfeiture probability.
     Query params:

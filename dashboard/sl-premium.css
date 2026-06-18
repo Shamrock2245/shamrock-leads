@@ -62,9 +62,7 @@
 .sl-card,
 .def-card,
 .pipeline-card,
-.ra-panel {
-  animation: fadeInUp 0.45s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1)) both;
-}
+
 
 /* Stagger delays for stat cards */
 .stats-grid .stat-card:nth-child(1) { animation-delay: 0.05s; }
@@ -98,15 +96,7 @@
 /* Apply glass effect to main panels and cards */
 .panel,
 .sl-card,
-.stat-card {
-  background: rgba(13, 21, 32, 0.75);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow:
-    0 2px 12px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
+
 
 /* ── 4. Hover Lift Effects ───────────────────────────────────────────────── */
 

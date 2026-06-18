@@ -174,11 +174,6 @@
   overflow: hidden;
 }
 
-.im-sidebar-header {
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
 
 .im-sidebar-search {
   width: 100%;
@@ -486,12 +481,6 @@
   flex-shrink: 0;
 }
 
-.im-compose-hint {
-  font-size: 10px;
-  color: var(--muted);
-  margin-top: 6px;
-  text-align: right;
-}
 
 /* ── Column 3: Right panel ────────────────────────────────────────────────── */
 .im-right {
@@ -1344,14 +1333,7 @@
 .btn-imessage-send:active { transform: translateY(0); opacity: 1; }
 
 /* ── Lifecycle Timeline in Shamrock Notes modal ─────────────────────── */
-.slc-timeline {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 4px 0;
-}
+
 .slc-timeline-entry {
   display: flex;
   align-items: flex-start;

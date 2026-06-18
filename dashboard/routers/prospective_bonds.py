@@ -299,43 +299,8 @@ async def api_prospective_add_note(request: Request, booking_number: str):
         logger.exception("api_prospective_add_note error")
         return JSONResponse({"error": str(exc)}, status_code=500)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  PATCH /api/prospective-bonds/<booking_number>/indemnitor
-# ─────────────────────────────────────────────────────────────────────────────
-@prospective_bonds_bp.patch("/prospective-bonds/{booking_number}/indemnitor")
-async def api_prospective_update_indemnitor(request: Request, booking_number: str):
-    """Update the indemnitor/cosigner info on a prospective bond."""
-    try:
-        data = await request.json() or {}
-        col = get_collection("prospective_bonds")
-        existing = await col.find_one({"booking_number": booking_number})
-        if not existing:
-            return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
-
-        now = datetime.now(timezone.utc)
-        indemnitor = existing.get("indemnitor", {})
-        for field in ["name", "phone", "email", "relationship", "address", "dob"]:
-            if data.get(field) is not None:
-                indemnitor[field] = data[field]
-
-        await col.update_one(
-            {"booking_number": booking_number},
-            {
-                "$set": {"indemnitor": indemnitor, "updated_at": now},
-                "$push": {"timeline": {
-                    "timestamp": now.isoformat(),
-                    "event": "indemnitor_updated",
-                    "detail": f"Indemnitor info updated: {indemnitor.get('name', '')}",
-                    "agent": data.get("agent", "Dashboard"),
-                }},
-            },
-        )
-        return {"success": True, "indemnitor": indemnitor}
-
-    except Exception as exc:
-        logger.exception("api_prospective_update_indemnitor error")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+# NOTE: PATCH /api/prospective-bonds/{booking_number}/indemnitor
+# is handled by indemnitors.py (richer implementation with firstName/lastName support)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
