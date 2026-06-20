@@ -330,13 +330,13 @@ async def update_defendant_custom_fields(defendant_id: str, request: Request):
         custom_fields = data.get("custom_fields")
         if not isinstance(custom_fields, dict):
             return JSONResponse({"error": "custom_fields must be a dictionary"}, 400)
-        
+
         defendants_col = get_collection("defendants")
         from datetime import datetime, timezone
         result = await defendants_col.update_one(
             {"defendant_id": defendant_id},
             {"$set": {
-                "custom_fields": custom_fields, 
+                "custom_fields": custom_fields,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }}
         )

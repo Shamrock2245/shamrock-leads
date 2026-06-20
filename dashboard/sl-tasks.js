@@ -178,10 +178,19 @@ window.SLTasks = (() => {
     if (!bodyEl) return;
     bodyEl.innerHTML = '<div class="sl-tasks-loading"><span class="sl-tasks-spinner"></span> Loading tasks…</div>';
     try {
-      const resp = await fetch(API + '/api/tasks');
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      const data  = await resp.json();
-      _allTasks = data.tasks || [];
+      // Fetch both pending and overdue in parallel — overdue tasks are flagged
+      // by the cron job and stored with status='overdue', so we need both.
+      const [pendingResp, overdueResp] = await Promise.all([
+        fetch(API + '/api/tasks?status=pending&limit=200'),
+        fetch(API + '/api/tasks?status=overdue&limit=200'),
+      ]);
+      if (!pendingResp.ok) throw new Error('HTTP ' + pendingResp.status);
+      const pendingData = await pendingResp.json();
+      const overdueData = overdueResp.ok ? await overdueResp.json() : { tasks: [] };
+      // Merge: overdue first (highest urgency), then pending
+      const overdueIds = new Set((overdueData.tasks || []).map(t => String(t._id)));
+      const pendingOnly = (pendingData.tasks || []).filter(t => !overdueIds.has(String(t._id)));
+      _allTasks = [...(overdueData.tasks || []), ...pendingOnly];
 
       // Update badge count (capped at 99+)
       const overdueCnt = _allTasks.filter(t => new Date(t.due_date) < new Date()).length;

@@ -120,7 +120,6 @@ class TaskEngine:
           2. Court Reminder Call (3 days before court date, if known)
           3. 30-Day Check-in (30 days out)
         """
-        db = get_db()
         now = datetime.now(timezone.utc)
 
         # 1. Initial check-in

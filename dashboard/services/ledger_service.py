@@ -59,7 +59,7 @@ class LedgerService:
             collections = await db.list_collection_names()
             if "financial_ledger" not in collections:
                 return 0.0
-                
+
             pipeline = [
                 {"$match": {"booking_number": booking_number}},
                 {
