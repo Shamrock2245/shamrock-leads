@@ -131,18 +131,21 @@ async def signnow_webhook(request: Request):
 
     logger.info("[signnow_webhook] Received event=%s", event_type)
 
-    if event_type != 'document.complete':
+    if event_type not in ('document.complete', 'document_group.complete'):
         # Log non-complete events (e.g. document.update, invite.complete) but take no action
         return JSONResponse(status_code=200, content={"success": True, "action": "logged_only"})
 
     # ── Extract document ID ───────────────────────────────────────────────────
     doc_id = (
         data.get('document_id')
+        or data.get('document_group_id')
         or data.get('content', {}).get('document_id')
+        or data.get('content', {}).get('document_group_id')
         or data.get('meta', {}).get('document_id')
+        or data.get('meta', {}).get('document_group_id')
         or ""
     )
-    logger.info("[signnow_webhook] document.complete for doc_id=%s", doc_id)
+    logger.info("[signnow_webhook] %s for id=%s", event_type, doc_id)
 
     # ── Step 3: Look up paperwork_packets ────────────────────────────────────
     # Primary: match by signnow_document_id (stored when packet is pushed)
@@ -152,9 +155,13 @@ async def signnow_webhook(request: Request):
     packet = None
     if doc_id:
         packet = await packets_col.find_one({"signnow_document_id": doc_id})
+        if not packet:
+            packet = await packets_col.find_one({"signnow_group_id": doc_id})
     if not packet and doc_id:
-        # Fallback: the invite_id stored as "embed_<doc_id>"
+        # Fallback: the invite_id stored as "embed_<doc_id>" or "group_embed_<group_id>"
         packet = await packets_col.find_one({"signnow_invite_id": f"embed_{doc_id}"})
+        if not packet:
+            packet = await packets_col.find_one({"signnow_invite_id": f"group_embed_{doc_id}"})
     if not packet:
         # Last resort: search by any document_id in the documents[] array
         packet = await packets_col.find_one({"documents.signnow_doc_id": doc_id})
@@ -189,9 +196,11 @@ async def signnow_webhook(request: Request):
     if bond_case_id:
         bond_case = await bond_cases.find_one({"bond_case_id": bond_case_id})
 
-    # Fallback: look up by signnow_document_id (legacy path)
+    # Fallback: look up by signnow_document_id or signnow_group_id (legacy path)
     if not bond_case and doc_id:
         bond_case = await bond_cases.find_one({"signnow_document_id": doc_id})
+        if not bond_case:
+            bond_case = await bond_cases.find_one({"signnow_group_id": doc_id})
 
     # Fallback: look up by packet_id
     if not bond_case and packet_id:
@@ -228,10 +237,16 @@ async def signnow_webhook(request: Request):
     if doc_id and signnow_token:
         try:
             async with httpx.AsyncClient(timeout=60) as client:
-                dl_resp = await client.get(
-                    f"https://api.signnow.com/document/{doc_id}/download?type=collapsed",
-                    headers={"Authorization": f"Bearer {signnow_token}"},
-                )
+                if event_type == 'document_group.complete' or (packet and packet.get('signnow_group_id') == doc_id):
+                    dl_resp = await client.get(
+                        f"https://api.signnow.com/document-group/{doc_id}/download?type=merged",
+                        headers={"Authorization": f"Bearer {signnow_token}"},
+                    )
+                else:
+                    dl_resp = await client.get(
+                        f"https://api.signnow.com/document/{doc_id}/download?type=collapsed",
+                        headers={"Authorization": f"Bearer {signnow_token}"},
+                    )
                 dl_resp.raise_for_status()
                 pdf_bytes = dl_resp.content
                 logger.info(
@@ -332,6 +347,44 @@ async def signnow_webhook(request: Request):
         )
         await bond_cases.update_one(match_key, {"$set": bond_update})
         logger.info("[signnow_webhook] Bond case updated: %s", match_key)
+
+        # ── Step 8b: Auto-transition to Active ──────────────────────────────────
+        from dashboard.services.state_machine import BondStateMachine
+        from dashboard.services.audit_service import AuditService
+        
+        booking_number_for_sm = bond_case.get("booking_number")
+        
+        # Log to CRM Activity Feed
+        if booking_number_for_sm:
+            try:
+                await AuditService.log_event(
+                    entity_type="bond_case",
+                    entity_id=booking_number_for_sm,
+                    action="Document Group Completed",
+                    details={"reason": f"All required signatures collected for Packet {packet_id}"},
+                    actor="System (SignNow)",
+                    actor_type="system",
+                    event_context=str({
+                        "module": "paperwork",
+                        "signnow_document_id": doc_id,
+                        "packet_id": packet_id,
+                        "defendant_name": defendant_name
+                    })
+                )
+            except Exception as e:
+                logger.warning(f"[signnow_webhook] CRM Audit log failed: {e}")
+
+        if booking_number_for_sm and bond_case.get("status") != "active":
+            try:
+                await BondStateMachine.transition_bond(
+                    booking_number=booking_number_for_sm,
+                    new_status="active",
+                    actor="System (SignNow Webhook)",
+                    reason=f"Document Group {doc_id} signed"
+                )
+                logger.info(f"[signnow_webhook] Bond {booking_number_for_sm} automatically transitioned to active")
+            except Exception as e:
+                logger.warning(f"[signnow_webhook] Auto-transition to active failed for {booking_number_for_sm}: {e}")
 
     # ── Step 9: Publish SSE event ─────────────────────────────────────────────
     from dashboard.routers.events import publish_event

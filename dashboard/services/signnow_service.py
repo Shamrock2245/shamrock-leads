@@ -98,6 +98,79 @@ class SignNowService:
             resp.raise_for_status()
             return resp.json().get("data", {}).get("link")
 
+    async def create_document_group(self, document_ids: List[str], group_name: str) -> str:
+        """POST /documentgroup — creates a document group from existing documents."""
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "document_ids": document_ids,
+                "group_name": group_name
+            }
+            resp = await client.post(
+                f"{self.base_url}/documentgroup",
+                headers=self.headers,
+                json=payload
+            )
+            resp.raise_for_status()
+            return resp.json().get("id")
+
+    async def create_group_embedded_invite(self, group_id: str, signers: List[Dict[str, Any]]) -> dict:
+        """POST /v2/document-groups/{group_id}/embedded-invites — returns invite data."""
+        async with httpx.AsyncClient() as client:
+            payload = {"invites": signers}
+            resp = await client.post(
+                f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites",
+                headers=self.headers,
+                json=payload
+            )
+            
+            # Handle conflict (19004002) if invite already exists
+            if resp.status_code >= 400:
+                error_data = resp.json()
+                if error_data.get("errors") and any(e.get("code") == 19004002 for e in error_data["errors"]):
+                    # Fetch existing invites
+                    get_resp = await client.get(
+                        f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites",
+                        headers=self.headers
+                    )
+                    get_resp.raise_for_status()
+                    return get_resp.json()
+                resp.raise_for_status()
+                
+            return resp.json()
+
+    async def set_group_brand(self, group_id: str, brand_id: str) -> dict:
+        """PUT /v2/document-groups/{group_id}/brand — apply organization brand to group."""
+        async with httpx.AsyncClient() as client:
+            payload = {"brand_id": brand_id}
+            resp = await client.put(
+                f"{self.base_url}/v2/document-groups/{group_id}/brand",
+                headers=self.headers,
+                json=payload
+            )
+            resp.raise_for_status()
+            if resp.status_code == 204:
+                return {}
+            try:
+                return resp.json()
+            except json.JSONDecodeError:
+                return {}
+
+
+    async def get_group_invite_link(self, group_id: str, invite_id: str, expiration: int = 45) -> str:
+        """POST /v2/document-groups/{group_id}/embedded-invites/{invite_id}/link — returns URL."""
+        async with httpx.AsyncClient() as client:
+            payload = {
+                "auth_method": "none",
+                "link_expiration": expiration
+            }
+            resp = await client.post(
+                f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites/{invite_id}/link",
+                headers=self.headers,
+                json=payload
+            )
+            resp.raise_for_status()
+            return resp.json().get("data", {}).get("link")
+
     async def get_document_status(self, document_id: str) -> dict:
         """GET /document/{id} — check signing status."""
         async with httpx.AsyncClient() as client:

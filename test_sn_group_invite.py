@@ -3,8 +3,8 @@ import os
 import httpx
 import sys
 
-sys.path.append(os.path.join(os.getcwd(), 'dashboard'))
-from services.signnow_packet_service import SignNowPacketService
+sys.path.append(os.getcwd())
+from dashboard.services.signnow_packet_service import SignNowPacketService
 
 async def main():
     service = SignNowPacketService()

@@ -180,10 +180,33 @@ class SignNowPacketService:
         """PUT /document/{id} — hydrate text fields."""
         if not fields:
             return
-        resp = await client.put(
+
+        # 1. Fetch document to determine available fields
+        doc_resp = await client.get(
             f"{self.base_url}/document/{document_id}",
             headers=self._headers,
-            json={"fields": fields},
+            timeout=30,
+        )
+        doc_resp.raise_for_status()
+        
+        # Extract available text field names
+        available_fields = set()
+        for f in doc_resp.json().get("fields", []):
+            name = f.get("json_attributes", {}).get("name")
+            if name:
+                available_fields.add(name)
+                
+        # 2. Filter doc_prefill_fields
+        valid_fields = [f for f in fields if f.get("field_name") in available_fields]
+        
+        if not valid_fields:
+            return
+
+        # Use v2 prefill-texts endpoint
+        resp = await client.put(
+            f"{self.base_url}/v2/documents/{document_id}/prefill-texts",
+            headers=self._headers,
+            json={"fields": valid_fields},
             timeout=30,
         )
         resp.raise_for_status()
@@ -846,6 +869,7 @@ class SignNowPacketService:
         poa_number: Optional[str] = None,
         custom_manifest: Optional[List[str]] = None,
         routing_scenario: str = "phase_1",
+        routing_config: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Full production SignNow packet creation.
@@ -869,6 +893,7 @@ class SignNowPacketService:
             poa_number:   Required for phase 2 or all-in-one.
             custom_manifest: List of document keys to include in this packet.
             routing_scenario: "phase_1", "phase_2", or "all-in-one".
+            routing_config: Optional list of dicts specifying signers, roles, and order.
         """
         intake_id = intake_doc.get("intake_id", "unknown")
         logger.info(
@@ -961,6 +986,7 @@ class SignNowPacketService:
                         except Exception as e:
                             logger.warning(f"Failed to isolate charge for copy {item['copy_index']}: {e}")
 
+                    print(f"DEBUG prefill fields for {item['doc_key']}: {doc_prefill_fields}")
                     await self._prefill_fields(client, doc_id, doc_prefill_fields)
                     document_ids.append(doc_id)
                 except httpx.HTTPStatusError as exc:
@@ -980,12 +1006,31 @@ class SignNowPacketService:
                 f"Shamrock Bail Bonds — {defendant_name} Phase {phase} [{packet_id}]"
             )
             group_id = ""
-            if len(document_ids) > 1:
+            if len(document_ids) > 0:
                 try:
+                    # We can create a document group even for a single document to standardize on the group invite API
                     group_id = await self._create_document_group(
                         client, document_ids, group_name
                     )
                     logger.info("[signnow] Document group created: %s", group_id)
+                    
+                    # Apply white-label branding if configured
+                    import os
+                    brand_id = os.getenv("SIGNNOW_BRAND_ID")
+                    if brand_id:
+                        try:
+                            await client.put(
+                                f"{self.base_url}/v2/document-groups/{group_id}/brand",
+                                headers=self._headers,
+                                json={"brand_id": brand_id},
+                                timeout=15,
+                            )
+                            logger.info("[signnow] Applied brand_id %s to group %s", brand_id, group_id)
+                        except httpx.HTTPStatusError as exc:
+                            logger.warning(
+                                "[signnow] Failed to apply brand_id to group %s: %s",
+                                group_id, exc.response.status_code
+                            )
                 except httpx.HTTPStatusError as exc:
                     logger.warning(
                         "[signnow] Document group creation failed (%s) — "
@@ -996,41 +1041,48 @@ class SignNowPacketService:
             # Step 6: Create embedded invite
             signing_link = ""
             invite_id = ""
-            if signer_email:
-                try:
-                    if routing_scenario == "all-in-one" and group_id:
-                        # Sequential routing
-                        agent_email = "admin@shamrockbailbonds.biz" # Default agent email
-                        defendant_email = intake_doc.get("defendant", {}).get("email", "")
+            
+            # Determine routing config
+            final_routing_config = routing_config
+            if not final_routing_config and signer_email:
+                if routing_scenario == "all-in-one" or routing_scenario == "dynamic":
+                    agent_email = intake_doc.get("agent_email", "admin@shamrockbailbonds.biz")
+                    defendant_email = intake_doc.get("defendant", {}).get("email", "")
+                    if not defendant_email:
+                        defendant_email = f"defendant_{intake_id}@placeholder.shamrockbailbonds.biz"
                         
-                        # We need an email for the defendant, fallback to a placeholder if none to prevent API error
-                        if not defendant_email:
-                            defendant_email = f"defendant_{intake_id}@placeholder.shamrockbailbonds.biz"
-                            
-                        signers = [
-                            {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"},
-                            {"email": defendant_email, "role_name": "Signer 2", "order": 2, "auth_method": "none"},
-                            {"email": agent_email, "role_name": "Signer 3", "order": 3, "auth_method": "none"}
-                        ]
+                    final_routing_config = [
+                        {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"},
+                        {"email": defendant_email, "role_name": "Signer 2", "order": 2, "auth_method": "none"},
+                        {"email": agent_email, "role_name": "Signer 3", "order": 3, "auth_method": "none"}
+                    ]
+                else:
+                    final_routing_config = [
+                        {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"}
+                    ]
+
+            if final_routing_config:
+                try:
+                    if group_id:
                         signing_link = await self._create_document_group_invite(
-                            client, group_id, signers
+                            client, group_id, final_routing_config
                         )
                         invite_id = f"group_embed_{group_id}"
                         logger.info(
-                            "[signnow] Group embedded signing link for %s: %s",
-                            signer_email,
+                            "[signnow] Group embedded signing link generated for %s signers: %s",
+                            len(final_routing_config),
                             signing_link[:60] if signing_link else "(empty)",
                         )
                     else:
-                        # Traditional Phase 1 or Phase 2
+                        # Fallback for single doc without a group
                         primary_doc_id = document_ids[0]
                         signing_link = await self._get_embedded_link(
-                            client, primary_doc_id, signer_email
+                            client, primary_doc_id, final_routing_config[0]["email"]
                         )
                         invite_id = f"embed_{primary_doc_id}"
                         logger.info(
-                            "[signnow] Embedded signing link for %s: %s",
-                            signer_email,
+                            "[signnow] Embedded signing link fallback for %s: %s",
+                            final_routing_config[0]["email"],
                             signing_link[:60] if signing_link else "(empty)",
                         )
                 except httpx.HTTPStatusError as exc:
@@ -1039,9 +1091,8 @@ class SignNowPacketService:
                         exc.response.status_code,
                         exc.response.text[:200],
                     )
-
             else:
-                logger.warning("[signnow] No signer_email — skipping embedded invite")
+                logger.warning("[signnow] No routing config or signer_email — skipping embedded invite")
 
         return {
             "invite_id": invite_id,

@@ -25,6 +25,7 @@ class BondStateMachine:
     """Enforces valid state transitions for active bonds."""
 
     VALID_TRANSITIONS = {
+        "pending": ["active", "cancelled"],
         "active": ["monitoring", "alert", "exonerated", "forfeited", "surrendered"],
         "monitoring": ["active", "alert", "exonerated", "forfeited", "surrendered"],
         "alert": ["active", "monitoring", "exonerated", "forfeited", "surrendered"],
@@ -74,6 +75,22 @@ class BondStateMachine:
                 raise ValueError(
                     f"Invalid transition from '{current_status}' to '{new_status}'"
                 )
+
+            # Strict guard: Cannot move to 'active' unless signed
+            if new_status == "active":
+                packet = await db.paperwork_packets.find_one({
+                    "$or": [
+                        {"bond_case_id": booking_number},
+                        {"booking_number": booking_number}
+                    ]
+                })
+                # If packet exists, it must be signed. If no packet exists, we bypass 
+                # (to allow retrospective manual bond entry where there is no packet)
+                if packet and packet.get("status") not in ("signed", "completed"):
+                    raise ValueError(
+                        f"Cannot transition to 'active': Document Group is not signed. "
+                        f"Current packet status is '{packet.get('status')}'."
+                    )
 
             # 3. Atomic update with optimistic lock (filter on current status)
             now = datetime.now(timezone.utc)
