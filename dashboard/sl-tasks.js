@@ -181,8 +181,8 @@ window.SLTasks = (() => {
       // Fetch both pending and overdue in parallel — overdue tasks are flagged
       // by the cron job and stored with status='overdue', so we need both.
       const [pendingResp, overdueResp] = await Promise.all([
-        fetch(API + '/api/tasks?status=pending&limit=200'),
-        fetch(API + '/api/tasks?status=overdue&limit=200'),
+        fetch(API + '/api/tasks/?status=pending&limit=200'),
+        fetch(API + '/api/tasks/?status=overdue&limit=200'),
       ]);
       if (!pendingResp.ok) throw new Error('HTTP ' + pendingResp.status);
       const pendingData = await pendingResp.json();
