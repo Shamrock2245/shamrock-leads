@@ -24,6 +24,18 @@ def _get_calendar_service():
     return GoogleCalendarService()
 
 
+@bond_lifecycle_bp.get("/paperwork/config")
+async def get_paperwork_config():
+    """Returns the SignNow DOC_RULES and TEMPLATE_MAP for UI inspection."""
+    signnow_service = _get_signnow_service()
+    return JSONResponse(status_code=200, content={
+        'status': 'success',
+        'doc_rules': signnow_service.DOC_RULES,
+        'template_map': signnow_service.TEMPLATE_MAP
+    })
+
+
+
 @bond_lifecycle_bp.post("/phase1/trigger")
 async def trigger_phase_1(request: Request):
     """
@@ -34,16 +46,37 @@ async def trigger_phase_1(request: Request):
     if not data:
         return JSONResponse({'error': 'No data provided'}, status_code=400)
 
-    form_data = data.get('form_data', {})
-    signer_email = data.get('signer_email')
-    signer_name = data.get('signer_name')
+    from extensions import get_db
+    from bson.objectid import ObjectId
+    db = get_db()
+    
+    intake_id = data.get('intake_id')
+    booking_number = data.get('booking_number')
+    
+    intake_doc = None
+    if intake_id:
+        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
+    if not intake_doc and booking_number:
+        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
+        
+    if not intake_doc:
+        return JSONResponse({'error': 'Could not locate intake record for phase 1'}, status_code=404)
+
+    signer_email = data.get('signer_email') or intake_doc.get("indemnitor_email")
+    signer_name = data.get('signer_name') or intake_doc.get("indemnitor_name")
+    surety_id = data.get('surety_id') or intake_doc.get("surety_id", "osi")
 
     if not signer_email or not signer_name:
         return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
 
     try:
         signnow_service = _get_signnow_service()
-        result = signnow_service.handle_send_phase_1(form_data, signer_email, signer_name)
+        result = await signnow_service.send_phase_1(
+            intake_doc=intake_doc, 
+            signer_email=signer_email, 
+            signer_name=signer_name,
+            surety_id=surety_id
+        )
         return JSONResponse(status_code=200, content=result)
     except Exception as e:
         logger.error(f"Error in Phase 1 trigger: {str(e)}")
@@ -60,22 +93,40 @@ async def trigger_phase_2(request: Request):
     if not data:
         return JSONResponse({'error': 'No data provided'}, status_code=400)
 
-    form_data = data.get('form_data', {})
-    signer_email = data.get('signer_email')
-    signer_name = data.get('signer_name')
+    from extensions import get_db
+    from bson.objectid import ObjectId
+    db = get_db()
+    
+    intake_id = data.get('intake_id')
+    booking_number = data.get('booking_number')
+    
+    intake_doc = None
+    if intake_id:
+        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
+    if not intake_doc and booking_number:
+        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
+        
+    if not intake_doc:
+        return JSONResponse({'error': 'Could not locate intake record for phase 2'}, status_code=404)
+
+    signer_email = data.get('signer_email') or intake_doc.get("indemnitor_email")
+    signer_name = data.get('signer_name') or intake_doc.get("indemnitor_name")
     poa_number = data.get('poa_number')
-    agent_name = data.get('agent_name')
-    agent_license = data.get('agent_license')
     surety_id = data.get('surety_id', 'osi')
 
-    if not all([signer_email, signer_name, poa_number, agent_name, agent_license]):
-        return JSONResponse({'error': 'Missing required fields for Phase 2'}, status_code=400)
+    if not poa_number:
+        return JSONResponse({'error': 'Missing POA number for Phase 2'}, status_code=400)
+    if not signer_email or not signer_name:
+        return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
 
     try:
         signnow_service = _get_signnow_service()
-        result = signnow_service.handle_send_phase_2(
-            form_data, signer_email, signer_name,
-            poa_number, agent_name, agent_license, surety_id
+        result = await signnow_service.send_phase_2(
+            intake_doc=intake_doc,
+            signer_email=signer_email,
+            signer_name=signer_name,
+            poa_number=poa_number,
+            surety_id=surety_id
         )
         return JSONResponse(status_code=200, content=result)
     except ValueError as ve:
@@ -252,3 +303,124 @@ async def add_lifecycle_note(request: Request, booking_number: str):
     except Exception as exc:
         logger.exception('add_lifecycle_note error')
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+@bond_lifecycle_bp.post("/generate-packet")
+async def generate_packet(request: Request):
+    """
+    Unified endpoint to generate a SignNow packet with specific routing and custom manifests.
+    """
+    data = await request.json()
+    if not data:
+        return JSONResponse({'error': 'No data provided'}, status_code=400)
+
+    from extensions import get_db
+    from bson.objectid import ObjectId
+    db = get_db()
+    
+    intake_id = data.get('intake_id')
+    booking_number = data.get('booking_number')
+    
+    intake_doc = None
+    if intake_id:
+        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
+    if not intake_doc and booking_number:
+        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
+        
+    if not intake_doc:
+        # We might not have a formal intake, just use form_data
+        intake_doc = data.get('form_data', {})
+        intake_doc['intake_id'] = str(ObjectId()) # dummy ID if none
+        if not intake_doc.get('booking_number'):
+            intake_doc['booking_number'] = booking_number
+
+    signer_email = data.get('signer_email')
+    signer_name = data.get('signer_name')
+    surety_id = data.get('surety_id', 'osi')
+    poa_number = data.get('poa_number')
+    routing_scenario = data.get('routing_scenario', 'phase1_2')
+    custom_manifest = data.get('custom_manifest')
+
+    if not signer_email or not signer_name:
+        return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
+
+    # In case of Phase 1, we still might just pass custom manifest to Phase 1 trigger or directly to create_packet.
+    try:
+        signnow_service = _get_signnow_service()
+        import uuid
+        packet_id = str(uuid.uuid4())
+        
+        # We handle routing scenario explicitly inside create_packet now.
+        res = await signnow_service.create_packet(
+            intake_doc=intake_doc,
+            packet_id=packet_id,
+            phase=1 if routing_scenario == 'phase1_2' else 0, # Phase 0 meaning all_in_one
+            surety_id=surety_id,
+            signer_email=signer_email,
+            signer_name=signer_name,
+            routing_scenario=routing_scenario,
+            custom_manifest=custom_manifest,
+            poa_number=poa_number
+        )
+        return JSONResponse(status_code=200, content=res)
+    except Exception as e:
+        logger.error(f"Error in unified packet generation: {str(e)}")
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+@bond_lifecycle_bp.post("/file-to-drive/{identifier}")
+async def file_to_drive(request: Request, identifier: str):
+    """
+    Downloads the completed document group from SignNow and uploads it to Google Drive.
+    Target Folder Hierarchy: Root -> DefendantName -> DefendantName_Date -> PDF
+    """
+    from extensions import get_db
+    from dashboard.services.google_drive_service import GoogleDriveService
+    import datetime
+
+    # Get document group ID from DB
+    db = get_db()
+    packet = await db.paperwork_packets.find_one({"$or": [{"packet_id": identifier}, {"booking_number": identifier}]})
+    if not packet:
+        return JSONResponse({'error': 'Packet not found'}, status_code=404)
+        
+    group_id = packet.get("document_group_id")
+    if not group_id:
+        return JSONResponse({'error': 'No document group ID associated with this packet'}, status_code=400)
+        
+    # Get Defendant Name
+    defendant_name = packet.get("defendant_name", "Unknown_Defendant")
+    
+    try:
+        signnow_service = _get_signnow_service()
+        pdf_bytes = await signnow_service.download_document_group(group_id)
+        
+        drive_service = GoogleDriveService()
+        if not drive_service.is_configured:
+            return JSONResponse({'error': 'Google Drive OAuth is not configured'}, status_code=500)
+            
+        root_folder_id = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
+        
+        def_folder_id = drive_service.get_or_create_folder(defendant_name, root_folder_id)
+        if not def_folder_id:
+            return JSONResponse({'error': 'Failed to get/create Defendant folder'}, status_code=500)
+            
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        date_folder_name = f"{defendant_name}_{date_str}"
+        date_folder_id = drive_service.get_or_create_folder(date_folder_name, def_folder_id)
+        if not date_folder_id:
+            return JSONResponse({'error': 'Failed to get/create Date folder'}, status_code=500)
+            
+        filename = f"{defendant_name}_Completed_Bond_{date_str}.pdf"
+        link = drive_service.upload_pdf(pdf_bytes, filename, date_folder_id)
+        
+        if link:
+            # Update DB with drive link
+            await db.paperwork_packets.update_one(
+                {"packet_id": packet_id},
+                {"$set": {"drive_link": link, "status": "filed"}}
+            )
+            return JSONResponse({'status': 'success', 'drive_link': link})
+        else:
+            return JSONResponse({'error': 'Failed to upload PDF to Drive'}, status_code=500)
+            
+    except Exception as e:
+        logger.error(f"Error in file_to_drive: {str(e)}")
+        return JSONResponse({'error': str(e)}, status_code=500)

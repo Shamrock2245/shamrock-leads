@@ -161,7 +161,8 @@ function openBondModal(nameOrLead, bond, county, booking) {
             <div class="charge-bond-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
               <span class="charge-bond-num" style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
               <span class="charge-bond-desc" style="flex:1;font-size:12px">${ch}</span>
-              <button class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadBond('${encodeURIComponent(ch)}', ${i+1})">📄 Bond</button>
+              <button class="btn-export" style="font-size:11px;padding:4px 10px;margin-right:4px" onclick="editBond('${encodeURIComponent(ch)}', ${i+1})">✏️ Edit</button>
+              <button class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadBond('${encodeURIComponent(ch)}', ${i+1})">📄 Print</button>
             </div>`).join('')}
         </div>
         <div style="margin-top:12px;text-align:center">
@@ -185,13 +186,42 @@ function openBondModal(nameOrLead, bond, county, booking) {
 
     <div class="wb-section" id="signnowSection">
       <div class="wb-section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        📝 SignNow Packet
+        📝 Configure Paperwork & SignNow Packet
         <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span>
-        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;margin-left:auto">🛡️ OSI Templates</span>
+        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;margin-left:auto">🛡️ Templates</span>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+
+      <div style="margin-top:8px;font-size:13px">
+        <label style="display:block;margin-bottom:4px;font-weight:600">Routing Scenario</label>
+        <select id="routingScenarioSelect" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+          <option value="phase1_2">Phase 1 (Indemnitor First) -> Phase 2 (Defendant & Agent Later)</option>
+          <option value="all-in-one">All-in-One (Indemnitor -> Defendant -> Agent Sequential)</option>
+          <option value="kiosk">Kiosk Mode (Side-by-Side In Person)</option>
+        </select>
+      </div>
+
+      <div style="margin-top:12px;font-size:13px">
+        <label style="display:block;margin-bottom:4px;font-weight:600">Select Forms to Include</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--bg);padding:10px;border-radius:6px;border:1px solid var(--border)">
+          <label><input type="checkbox" class="doc-chk" value="paperwork-header" checked> Cover Sheet / Header</label>
+          <label><input type="checkbox" class="doc-chk" value="faq-cosigners" checked> FAQ (Co-Signers)</label>
+          <label><input type="checkbox" class="doc-chk" value="faq-defendants" checked> FAQ (Defendants)</label>
+          <label><input type="checkbox" class="doc-chk" value="indemnity-agreement" checked> Indemnity Agreement</label>
+          <label><input type="checkbox" class="doc-chk" value="promissory-note" checked> Promissory Note</label>
+          <label><input type="checkbox" class="doc-chk" value="defendant-application" checked> Defendant Application</label>
+          <label><input type="checkbox" class="doc-chk" value="disclosure-form" checked> Disclosure Form</label>
+          <label><input type="checkbox" class="doc-chk" value="master-waiver" checked> Master Waiver</label>
+          <label><input type="checkbox" class="doc-chk" value="ssa-release" checked> SSA Release</label>
+          <label><input type="checkbox" class="doc-chk" value="surety-terms" checked> Surety Terms</label>
+          <label><input type="checkbox" class="doc-chk" value="collateral-receipt" checked> Collateral Receipt</label>
+          <label><input type="checkbox" class="doc-chk" value="payment-plan" checked> Payment Plan</label>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
         <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Indemnitor)</button>
         <button class="btn-export" id="btnPhase2" onclick="triggerSignNowPhase2()" style="background:rgba(34,197,94,0.15);color:var(--success)" disabled>📨 Send Phase 2 (Post-Approval)</button>
+        <button class="btn-export" id="btnSendPacket" onclick="triggerSignNowPacket()" style="background:rgba(245,158,11,0.15);color:#f59e0b">📨 Send Custom Packet</button>
       </div>
       <div id="sn-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
     </div>
@@ -380,6 +410,39 @@ function onPoaInputChange(input, idx) {
       poa_prefix: val.includes(' ') ? val.split(' ')[0] : (input.dataset.poaPrefix || ''),
     };
   }
+}
+
+function editBond(chargeEncoded, idx) {
+  const data = window._bondModalData;
+  if (!data) return;
+  const charge = decodeURIComponent(chargeEncoded);
+  
+  const newAddress = prompt('Edit Defendant Address (Leave as is if correct):', data.lead.address || '');
+  if (newAddress === null) return;
+  
+  const newCourtDate = prompt('Edit Court Date & Time:', data.lead.court_date || '');
+  if (newCourtDate === null) return;
+
+  const newCaseNumber = prompt('Edit Case Number:', data.lead.case_number || '');
+  if (newCaseNumber === null) return;
+  
+  const newCollateral = prompt('Edit Collateral Description:', 'Indemnity Agreement, Promissory Note');
+  if (newCollateral === null) return;
+
+  const surety = data.surety;
+  const poaEntry = (data.poaNumbers && data.poaNumbers[idx - 1]) || {};
+  const inputEl = document.getElementById(`poaInput_${idx - 1}`);
+  const poaFull = (inputEl ? inputEl.value.trim() : '') || poaEntry.poa_full || '';
+  
+  const params = new URLSearchParams({
+    name: data.name, booking: data.booking, county: data.county,
+    bond: data.bond, charge, surety, date: data.date,
+    dob: data.lead.dob || '', address: newAddress,
+    court_date: newCourtDate, case_number: newCaseNumber,
+    collateral: newCollateral,
+    poa_number: poaFull,
+  });
+  window.open(`${API}/api/appearance-bond-pdf?${params}`, '_blank');
 }
 
 function downloadBond(chargeEncoded, idx) {
@@ -600,6 +663,7 @@ async function submitBond() {
 
   const payload = {
     insurance_company: data.surety,
+    surety_id: data.surety,
     poa_numbers: finalPoaNumbers,
     defendant: {
       full_name: data.name,
@@ -737,8 +801,11 @@ async function triggerSignNowPhase1() {
       signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
     }
     const payload = {
+      intake_id: data.lead._intake_id || '',
+      booking_number: data.booking,
       signer_email: signerEmail,
       signer_name: signerName,
+      surety_id: data.surety || 'osi',
       form_data: {
         defendant: data.lead,
         booking_number: data.booking,
@@ -754,7 +821,7 @@ async function triggerSignNowPhase1() {
     });
     const result = await r.json();
     if (result.status === 'success') {
-      if (snStatus) snStatus.textContent = `✅ Phase 1 sent to ${signerEmail} (${result.manifest_size} docs)`;
+      if (snStatus) snStatus.innerHTML = `✅ Phase 1 sent to ${signerEmail} (${result.manifest_size} docs). <a href="${result.signing_link}" target="_blank" style="color:#60a5fa;text-decoration:underline;margin-left:8px">Open Signing Link</a>`;
       if (phaseBadge) { phaseBadge.textContent = 'Phase 1 Sent'; phaseBadge.style.background = 'rgba(59,130,246,0.2)'; phaseBadge.style.color = '#60a5fa'; }
       document.getElementById('btnPhase2').disabled = false;
       toast('Phase 1 packet sent', 'success');
@@ -785,6 +852,8 @@ async function triggerSignNowPhase2() {
       signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
     }
     const payload = {
+      intake_id: data.lead._intake_id || '',
+      booking_number: data.booking,
       signer_email: signerEmail,
       signer_name: signerName,
       poa_number: poaNumber,
@@ -806,8 +875,8 @@ async function triggerSignNowPhase2() {
     });
     const result = await r.json();
     if (result.status === 'success') {
-      if (snStatus) snStatus.textContent = `✅ Phase 2 sent — POA ${poaNumber} (${result.manifest_size} docs)`;
-      if (phaseBadge) { phaseBadge.textContent = 'Phase 2 Sent'; phaseBadge.style.background = 'rgba(34,197,94,0.2)'; phaseBadge.style.color = 'var(--success)'; }
+      if (snStatus) snStatus.innerHTML = `✅ Phase 2 sent — POA ${poaNumber} (${result.manifest_size} docs). <a href="${result.signing_link}" target="_blank" style="color:#60a5fa;text-decoration:underline;margin-left:8px">Open Signing Link</a>`;
+      if (phaseBadge) { phaseBadge.textContent = 'Phase 2 Sent'; phaseBadge.style.background = 'rgba(16,185,129,0.2)'; phaseBadge.style.color = '#10b981'; }
       toast('Phase 2 packet sent', 'success');
     } else {
       if (snStatus) snStatus.textContent = `❌ ${result.error || 'Phase 2 failed'}`;
@@ -886,6 +955,19 @@ async function updateCustody(bookingNumber, newStatus, selectEl) {
     }
   } catch(e) {
     toast('Network error updating custody', 'error');
+  }
+
+  // Task B: Fetch the intake_id for this booking number so Phase 1/2 triggers work 
+  // if this bond is opened without a known intake_id
+  if (window._bondModalData && !window._bondModalData.lead._intake_id && bookingNumber) {
+    fetch(`${API}/api/intake/by-booking/${encodeURIComponent(bookingNumber)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.intake_id && window._bondModalData) {
+          window._bondModalData.lead._intake_id = d.intake_id;
+        }
+      })
+      .catch(() => {}); // non-fatal
   }
 }
 
@@ -1446,3 +1528,74 @@ window.openBondFromActiveBond = openBondFromActiveBond;
 // ── Init ──
 loadDashboard();
 populateSavedViews();
+
+async function triggerSignNowPacket() {
+  const data = window._bondModalData;
+  if (!data) { toast('No bond data', 'error'); return; }
+  const snStatus = document.getElementById('sn-status');
+  const phaseBadge = document.getElementById('sn-phase-badge');
+  const poaInput = document.getElementById('poaInput_0');
+  const poaNumber = poaInput ? poaInput.value.trim() : '';
+  
+  const routingScenario = document.getElementById('routingScenarioSelect').value;
+  
+  if (routingScenario === 'all-in-one' && !poaNumber) {
+    toast('Enter POA number before sending All-in-One packet', 'error'); return;
+  }
+  
+  // Get checked documents for custom manifest
+  const checkedDocs = Array.from(document.querySelectorAll('.doc-chk:checked')).map(el => el.value);
+  
+  if (snStatus) snStatus.textContent = 'Preparing SignNow packet...';
+  try {
+    let signerEmail = data.lead.indemnitor_email || '';
+    let signerName = data.lead.indemnitor_name || '';
+    if (!signerEmail) {
+      signerEmail = prompt('Enter indemnitor email:') || '';
+      if (!signerEmail) { if (snStatus) snStatus.textContent = 'Cancelled.'; return; }
+      signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
+    }
+    
+    // For Phase 1_2, we hit the phase1 endpoint for now. For all-in-one, we hit generate-packet directly.
+    // Actually, let's just hit the generate-packet endpoint directly for everything, since the backend handles it.
+    // Let's create a new unified endpoint or just use generate-packet.
+    
+    const payload = {
+      intake_id: data.lead._intake_id || '',
+      booking_number: data.booking,
+      signer_email: signerEmail,
+      signer_name: signerName,
+      agent_name: 'Brendan O\'Shaughnahill',
+      agent_license: 'P322089',
+      surety_id: data.surety || 'osi',
+      poa_number: poaNumber,
+      routing_scenario: routingScenario,
+      custom_manifest: checkedDocs,
+      form_data: {
+        defendant: data.lead,
+        booking_number: data.booking,
+        bond_amount: data.bond,
+        surety: data.surety,
+        charges: data.chargeList,
+      }
+    };
+    
+    const r = await fetch(`${API}/api/generate-packet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await r.json();
+    if (result.status === 'success') {
+      if (snStatus) snStatus.innerHTML = `✅ Packet sent to ${signerEmail} (${result.manifest_size || checkedDocs.length} docs). <a href="${result.signing_link || '#'}" target="_blank" style="color:#60a5fa;text-decoration:underline;margin-left:8px">Open Signing Link</a>`;
+      if (phaseBadge) { phaseBadge.textContent = 'Packet Sent'; phaseBadge.style.background = 'rgba(59,130,246,0.2)'; phaseBadge.style.color = '#60a5fa'; }
+      toast('Packet sent', 'success');
+    } else {
+      if (snStatus) snStatus.textContent = `❌ ${result.error || 'Packet creation failed'}`;
+      toast(result.error || 'Packet creation failed', 'error');
+    }
+  } catch(e) {
+    if (snStatus) snStatus.textContent = `❌ Network error: ${e.message}`;
+    toast('Network error', 'error');
+  }
+}

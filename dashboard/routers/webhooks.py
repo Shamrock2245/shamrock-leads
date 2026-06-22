@@ -58,19 +58,23 @@ def verify_signnow_signature(payload: bytes, signature: str) -> bool:
     SignNow sends the signature in the 'x-signnow-signature' header as a
     hex-encoded HMAC-SHA256 of the raw request body.
     """
-    secret = os.getenv('SIGNNOW_WEBHOOK_SECRET', '').encode('utf-8')
+    secret = os.getenv('SIGNNOW_WEBHOOK_SECRET', '')
     if not secret:
-        logger.error(
-            "[signnow_webhook] SIGNNOW_WEBHOOK_SECRET is not set — "
-            "rejecting webhook (fail-closed). Set this secret in .env to enable webhooks."
-        )
-        return False  # CHANGED: was True (fail-open) — now fail-closed
+        # In production, reject if secret is not configured.
+        # In dev (DEBUG=true), allow through with a warning.
+        if os.getenv("DEBUG", "false").lower() == "true":
+            logger.warning("[signnow_webhook] SIGNNOW_WEBHOOK_SECRET not set — allowing in DEBUG mode")
+            return True
+        logger.error("[signnow_webhook] SIGNNOW_WEBHOOK_SECRET not set — rejecting webhook (set DEBUG=true to bypass)")
+        return False
+        
+    secret_bytes = secret.encode('utf-8')
 
     if not signature:
         logger.warning("[signnow_webhook] No x-signnow-signature header present — rejecting")
         return False
 
-    expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+    expected = hmac.new(secret_bytes, payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature.lower())
 
 
@@ -622,3 +626,34 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     except Exception as exc:
         logger.exception("[wix_intake_webhook] Intake normalization failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/scraper-event
+# ─────────────────────────────────────────────────────────────────────────────
+
+@webhooks_bp.post("/webhooks/scraper-event")
+async def scraper_event_webhook(request: Request, api_key: str = Query(default="")):
+    """
+    Handle live events (e.g. new arrests) from scraper containers.
+    
+    Validates GAS_API_KEY and publishes to SSE stream for dashboard popups.
+    """
+    from dashboard.routers.events import publish_event
+    
+    # Auth check
+    expected_key = os.getenv("GAS_API_KEY", "")
+    provided = request.headers.get("X-Api-Key", "") or api_key
+    if expected_key and provided != expected_key:
+        logger.warning("[scraper_event_webhook] Unauthorized — invalid secret")
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        
+    data = await request.json() or {}
+    event_type = data.get("event_type", "new_arrest")
+    payload = data.get("payload", {})
+    
+    # Publish to SSE connected clients
+    await publish_event(event_type, payload)
+    logger.info(f"[scraper_event_webhook] Published {event_type} event to SSE")
+    
+    return JSONResponse(status_code=200, content={"success": True})

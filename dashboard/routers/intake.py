@@ -52,6 +52,23 @@ VALID_SOURCES = {
     "bookmarklet",
     "shamrock-leads-dashboard",
 }
+
+@intake_bp.get("/intake/by-booking/{booking_number}")
+async def get_intake_by_booking(booking_number: str):
+    """Fetch the latest intake record for a given booking number."""
+    collection = get_collection("intake_queue")
+    # Sort by descending _id to get the most recent submission if there are multiple
+    intake = await collection.find_one({"defendant_booking_number": booking_number}, sort=[("_id", -1)])
+    
+    if not intake:
+        return JSONResponse({'error': 'No intake found for this booking'}, status_code=404)
+        
+    return JSONResponse({
+        "status": "success",
+        "intake_id": str(intake.get("_id")) if "_id" in intake else intake.get("intake_id"),
+        "booking_number": booking_number
+    }, status_code=200)
+
 SOURCE_LABELS = {
     "wix_portal": "🌐 Wix Portal",
     "telegram": "📱 Telegram",

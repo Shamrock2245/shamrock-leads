@@ -197,9 +197,25 @@ function initSSE() {
   es.addEventListener('new_arrest', (e) => {
     try {
       const data = JSON.parse(e.data);
-      toast(`🚨 New arrest: ${data.full_name} (${data.county})`, 'info');
+      let chargeStr = 'Unknown charge';
+      if (Array.isArray(data.charges) && data.charges.length > 0) chargeStr = data.charges[0];
+      else if (typeof data.charges === 'string' && data.charges) chargeStr = data.charges;
+      if (chargeStr.length > 35) chargeStr = chargeStr.substring(0, 35) + '...';
+      
+      const bondStr = data.bond_amount && data.bond_amount !== "0" ? `$${data.bond_amount}` : 'No Bond';
+      
+      const richMsg = `
+        <div style="display:flex; flex-direction:column; gap:4px;">
+          <strong>${data.full_name}</strong>
+          <span style="font-size:0.85em; opacity:0.9;">📍 ${data.county} County</span>
+          <span style="font-size:0.85em; opacity:0.9;">⚖️ ${chargeStr}</span>
+          <span style="font-size:0.85em; font-weight:600; color:var(--accent);">💰 ${bondStr}</span>
+        </div>
+      `;
+      toast(richMsg, 'info');
       _addActivity('🚨', `New arrest: ${data.full_name} — ${data.county}`, 'info');
       _incrementBadge('leads');
+      _desktopNotif('🚨 New Arrest!', `${data.full_name} in ${data.county}`);
     } catch(_) {}
   });
 
@@ -619,10 +635,11 @@ function _processToastQueue() {
   if (!t) { _toastActive = false; return; }
   const icons = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
   t.querySelector('.toast-icon').textContent = icons[type] || 'ℹ️';
-  t.querySelector('.toast-message').textContent = msg;
+  // Use innerHTML to support premium multi-line rich text toasts
+  t.querySelector('.toast-message').innerHTML = msg;
   t.className = `toast-notification toast-${type} show`;
   setTimeout(() => {
     t.classList.remove('show');
     setTimeout(_processToastQueue, 300);
-  }, 3500);
+  }, 4500);
 }

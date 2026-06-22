@@ -24,7 +24,7 @@ class WatchdogService:
         try:
             # We assume we are running internally on port 5050
             async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.get("http://localhost:5050/api/counties-detail")
+                r = await client.get("http://localhost:5050/health")
                 if r.status_code == 200:
                     results["api_health"] = True
                 else:

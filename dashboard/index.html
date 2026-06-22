@@ -113,7 +113,7 @@
       <button class="sidebar-btn" data-tab="tabSocial" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🌍</span> Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
       <button class="sidebar-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()"><span class="sidebar-btn-icon">✨</span> Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
       <button class="sidebar-btn" data-tab="tabAutomations" onclick="SL.switchTab(this);SLAutomations.load()"><span class="sidebar-btn-icon">⚙️</span> Automations <span class="badge" id="automationsBadge"></span></button>
-
+      <button class="sidebar-btn" data-tab="tabPaperwork" onclick="SL.switchTab(this);SLPaperwork.load()"><span class="sidebar-btn-icon">📄</span> Paperwork Config</button>
       <div class="sidebar-group-label">Quick Actions</div>
       <button class="sidebar-btn" onclick="SLInventory.open()"><span class="sidebar-btn-icon">📁</span> POA Inventory</button>
     </div>
@@ -4005,10 +4005,64 @@
   </div>
 </div><!-- end tabAutomations -->
 
-<!-- ═══════════════════════════════════════════════════════
-     TAB: ENRICHMENT COMMAND CENTER
-     ═══════════════════════════════════════════════════════ -->
-<div class="tab-content" id="tabEnrichment">
+    <!-- ///////////////////////////////////////////////////////// -->
+    <!-- PAPERWORK CONFIG TAB -->
+    <!-- ///////////////////////////////////////////////////////// -->
+    <div class="tab-content" id="tabPaperwork">
+      <div class="header-banner glass-panel">
+        <div class="header-content">
+          <h1>Paperwork Configuration</h1>
+          <p>Verify document mapping, field names, and surety templates.</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-primary" onclick="SLPaperwork.load()">
+            <span class="icon">🔄</span> Refresh
+          </button>
+        </div>
+      </div>
+
+      <div class="glass-panel" style="margin-top:20px;">
+        <h3>OSI Documents</h3>
+        <div class="table-responsive">
+          <table class="data-table" id="tablePaperworkOsi">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Label</th>
+                <th>Template ID</th>
+                <th>Rule</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="glass-panel" style="margin-top:20px;">
+        <h3>Palmetto Documents</h3>
+        <div class="table-responsive">
+          <table class="data-table" id="tablePaperworkPalmetto">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Label</th>
+                <th>Template ID</th>
+                <th>Rule</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      
+      <div class="glass-panel" style="margin-top:20px;">
+        <h3>Document Rules</h3>
+        <pre id="paperworkDocRules" style="background:#1a1d24; padding:15px; border-radius:8px; overflow-x:auto; font-family:monospace; color:#10b981; font-size:12px;"></pre>
+      </div>
+    </div>
+    <!-- end tabPaperwork -->
+
+    <div class="tab-content" id="tabEnrichment">
 
   <div id="enrichFlash" class="enrich-flash"></div>
 
@@ -4278,6 +4332,7 @@
 <script src="/sl-social.js?v=1"></script>
 <script src="/sl-enrichment.js?v=1"></script>
 <script src="/sl-tasks.js?v=1"></script>
+<script src="/sl-paperwork.js?v=1"></script>
 
 </body>
 </html>

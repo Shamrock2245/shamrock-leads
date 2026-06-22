@@ -486,7 +486,7 @@ def fill_palmetto_bond(data: dict) -> bytes:
         "AgentField#1": AGENT_NAME,
         "writtenPremiumAmount": _amount_to_words(premium),
         "calculatedPremiumField": f"${premium:,.2f}",
-        "CollateralField": "Indemnity Agreement, Promissory Note",
+        "CollateralField": data.get("collateral") or "Indemnity Agreement, Promissory Note",
         "collateralDescriptionField": "",
         "AgencyField": AGENCY_NAME,
         "whoSignedField": "defendant and family/friends",

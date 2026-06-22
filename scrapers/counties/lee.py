@@ -21,7 +21,8 @@ from typing import List, Dict, Any, Optional, Set, Tuple
 
 import json
 import urllib.parse
-from playwright.sync_api import sync_playwright
+import os
+import requests
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -33,7 +34,7 @@ BASE_URL = "https://www.sheriffleefl.org"
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
-SOCKS_PROXY = "socks5://172.18.0.1:1080"  # Route through obscura residential proxy
+SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Route through obscura residential proxy if set
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
@@ -114,9 +115,47 @@ class LeeCountyScraper(BaseScraper):
     
             # Convert to ArrestRecord instances
             records = [self._to_arrest_record(n) for n in final]
+            
+            # Broadcast webhook for new arrests
+            self._broadcast_new_arrests(records)
+            
             return records
         finally:
             self._cleanup()
+
+    def _broadcast_new_arrests(self, records: List[ArrestRecord]):
+        """Emit webhook for newly found arrests today."""
+        webhook_url = os.getenv("DASHBOARD_INTERNAL_URL", "http://127.0.0.1:5050") + "/api/webhooks/scraper-event"
+        api_key = os.getenv("GAS_API_KEY", "")
+        if not api_key:
+            return
+            
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Only broadcast arrests from today to avoid spamming
+        new_today = [r for r in records if r.Arrest_Date.startswith(today_str)]
+        
+        for record in new_today[:5]: # Cap at 5
+            try:
+                payload = {
+                    "event_type": "new_arrest",
+                    "payload": {
+                        "county": self.county,
+                        "full_name": record.Full_Name,
+                        "booking_number": record.Booking_Number,
+                        "charges": record.Charges,
+                        "bond_amount": record.Bond_Amount,
+                        "mugshot_url": record.Mugshot_URL
+                    }
+                }
+                requests.post(
+                    webhook_url, 
+                    json=payload, 
+                    headers={"X-Api-Key": api_key},
+                    timeout=2
+                )
+            except Exception as e:
+                logger.debug(f"Failed to broadcast webhook: {e}")
         
     def _execute_scrape(self):
         pass # implemented in scrape
@@ -528,51 +567,13 @@ class LeeCountyScraper(BaseScraper):
 
     # ── HTTP ──
 
-    class MockResponse:
-        def __init__(self, status_code: int, text: str):
-            self.status_code = status_code
-            self.text = text
-        def json(self):
-            import json
-            try:
-                return json.loads(self.text)
-            except Exception:
-                raise ValueError("Failed to parse JSON")
-
-    def _get_page(self):
-        """Lazy-init Playwright browser and return the page object."""
-        if not hasattr(self, "pw") or self.pw is None:
-            self.pw = sync_playwright().start()
-            self.browser = self.pw.chromium.launch(
-                headless=True,
-                proxy={"server": SOCKS_PROXY} if SOCKS_PROXY else None,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            context = self.browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                viewport={"width": 1440, "height": 900},
-            )
-            self.page = context.new_page()
-            self.page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            """)
-        return self.page
-        
     def _cleanup(self):
-        """Ensure Playwright resources are freed."""
-        if hasattr(self, "browser") and self.browser:
-            try: self.browser.close()
-            except: pass
-        if hasattr(self, "pw") and self.pw:
-            try: self.pw.stop()
-            except: pass
-        self.pw = None
-        self.browser = None
-        self.page = None
+        pass
 
     def _http_fetch(self, url: str, params: Dict[str, Any] = None):
-        """Fetch API using Playwright browser context to bypass Cloudflare."""
+        """Fetch API using curl_cffi or Scrapfly to bypass IP blocks."""
         import urllib.parse
+        from curl_cffi import requests as cffi_requests
         
         if params:
             qs = urllib.parse.urlencode(params)
@@ -580,22 +581,42 @@ class LeeCountyScraper(BaseScraper):
         else:
             full_url = url
             
+        scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")
+        
         for attempt in range(RETRY_LIMIT):
             try:
-                page = self._get_page()
-                resp = page.goto(full_url, wait_until="domcontentloaded", timeout=30000)
-                status_code = resp.status if resp else 200
+                if scrapfly_key:
+                    scrapfly_url = f"https://api.scrapfly.io/scrape?key={scrapfly_key}&url={urllib.parse.quote(full_url)}&asp=true"
+                    resp = cffi_requests.get(scrapfly_url, impersonate="chrome110", timeout=45)
+                    
+                    if resp.status_code == 200:
+                        try:
+                            data = resp.json()
+                            content = data.get("result", {}).get("content", "{}")
+                            class MockScrapflyResp:
+                                def __init__(self, text):
+                                    self.text = text
+                                    self.status_code = 200
+                                def json(self):
+                                    import json
+                                    return json.loads(self.text)
+                            return MockScrapflyResp(content)
+                        except Exception:
+                            pass
+                else:
+                    # Fallback to curl_cffi with SOCKS proxy
+                    proxies = {"http": SOCKS_PROXY, "https": SOCKS_PROXY} if SOCKS_PROXY else None
+                    resp = cffi_requests.get(
+                        full_url, 
+                        impersonate="chrome110", 
+                        proxies=proxies,
+                        headers=HEADERS,
+                        timeout=30
+                    )
                 
-                # Check for CF block in title
-                title = (page.title() or "").lower()
-                if "just a moment" in title or "attention" in title or "blocked" in title or status_code == 429:
-                    logger.warning(f"⚠️ Playwright hit Cloudflare/429 at {full_url}")
-                    status_code = 429
-                
+                status_code = resp.status_code
                 if status_code == 200:
-                    # Extract the JSON text from the DOM. 
-                    body_text = page.evaluate("() => document.body.innerText")
-                    return self.MockResponse(200, body_text)
+                    return resp
                     
                 if status_code in (429, 500, 502, 503):
                     sleep_s = BACKOFF_BASE_S * (2**attempt) + random.uniform(0, BACKOFF_BASE_S)
@@ -603,15 +624,18 @@ class LeeCountyScraper(BaseScraper):
                     time.sleep(sleep_s)
                     continue
                     
-                return self.MockResponse(status_code, "{}")
+                class MockEmptyResp:
+                    status_code = status_code
+                    def json(self): return {}
+                return MockEmptyResp()
                 
             except Exception as e:
                 sleep_s = BACKOFF_BASE_S * (2**attempt)
                 if attempt < RETRY_LIMIT - 1:
-                    logger.warning(f"⚠️ Playwright error, retrying in {sleep_s:.1f}s: {e}")
+                    logger.warning(f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {e}")
                     time.sleep(sleep_s)
                 else:
-                    logger.error(f"❌ Playwright failed after retries: {full_url}")
+                    logger.error(f"❌ HTTP fetch failed after retries: {full_url}")
                     return None
         return None
 

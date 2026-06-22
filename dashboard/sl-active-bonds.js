@@ -307,6 +307,7 @@ function renderActiveBondsTable() {
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:var(--danger)" onclick="addManualAlert('${bkSafe}','${nameSafe}')">🚨 Alert</button>
           ${b.status !== 'exonerated' ? `<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#22c55e;color:#fff" onclick="exonerateFromActiveBonds('${bkSafe}','${nameSafe}')">✅ Exonerate</button>` : ''}
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#10b981;color:#fff" onclick="fileBondToDrive('${bkSafe}')">📁 File to Drive</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff" onclick="sendPaymentLink('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💳 Pay Link</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#8b5cf6;color:#fff" onclick="sendBondImessage('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💬 iMessage</button>
           <select style="font-size:10px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text)" onchange="updateBondStatus('${bkSafe}',this.value);this.value=''">
@@ -868,6 +869,7 @@ function openInTracking(bookingNumber) {
    EXONERATE
    ══════════════════════════════════════════════════════════════════ */
 async function exonerateFromActiveBonds(bookingNumber, defName) {
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#10b981;color:#fff" onclick="fileBondToDrive('${bkSafe}')">📁 File to Drive</button>
   const note = prompt(
     `✅ Exonerate bond for ${defName}?\n\n` +
     'This will:\n  • Stop all location tracking immediately\n  • Cancel all pending GPS capture links\n  • Cancel all pending court reminders\n\n' +
@@ -1942,5 +1944,23 @@ async function _loadRenewalHistory(bookingNumber) {
 
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center">Could not load renewal history</div>`;
+  }
+}
+
+async function fileBondToDrive(bookingNumber) {
+  toast('Fetching document from SignNow and uploading to Drive...', 'info');
+  try {
+    const r = await fetch(`${API}/api/file-to-drive/${encodeURIComponent(bookingNumber)}`, {
+      method: 'POST'
+    });
+    const result = await r.json();
+    if (result.status === 'success') {
+      toast('Bond filed to Drive successfully', 'success');
+      window.open(result.drive_link, '_blank');
+    } else {
+      toast(result.error || 'Failed to file to drive', 'error');
+    }
+  } catch(e) {
+    toast('Network error while filing to drive', 'error');
   }
 }

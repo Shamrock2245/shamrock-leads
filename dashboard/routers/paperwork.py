@@ -470,10 +470,12 @@ async def push_to_signnow(request: Request, packet_id: str):
             or intake.get("indemnitor_name", "Indemnitor")
         )
         telegram_chat_id = data.get("telegram_chat_id") or intake.get("telegram_chat_id")
+        routing_scenario = data.get("routing_scenario", "phase_1")
+        custom_manifest = data.get("custom_manifest")
 
-        if phase == 2 and not poa_number:
+        if (phase == 2 or routing_scenario == "all-in-one") and not poa_number:
             return JSONResponse(status_code=400, content={
-                "error": "Phase 2 requires a poa_number. "
+                "error": f"Scenario {routing_scenario} requires a poa_number. "
                          "Provide it in the request body or set it on the intake record.",
             })
 
@@ -487,6 +489,8 @@ async def push_to_signnow(request: Request, packet_id: str):
             signer_email=signer_email,
             signer_name=signer_name,
             poa_number=poa_number or None,
+            custom_manifest=custom_manifest,
+            routing_scenario=routing_scenario,
         )
 
         # Store the primary SignNow document ID for webhook correlation

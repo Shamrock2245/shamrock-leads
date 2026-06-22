@@ -72,17 +72,21 @@ class SignNowPacketService:
         "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",  # PRINT-ONLY reference
 
         # ── Palmetto-Specific Overrides (shamrock-palmetto-templates folder) ──
-        # These override the OSI defaults when surety_id == "palmetto".
-        # Naming convention: "<doc-key>-palmetto"
-        # Shared docs (master-waiver, ssa-release, faq-*, promissory-note, disclosure-form)
-        # use the SAME template for both sureties — no override needed.
-        "indemnity-agreement-palmetto":   "2359c0fdf9ea47ee8129d4426e698ece0112a85c",  # palmetto-indemnity-agreement
-        "defendant-application-palmetto": "9c6f62509e03453a8d212bd67c88eccf65e65958",  # palmetto-defendant-application
-        "surety-terms-palmetto":          "c897c72df2674beaa0ad9c8bbf1f5856e150d553",  # palmetto-surety-terms
-        "collateral-receipt-palmetto":    "b5b89aec16f44bf4b8538891707beebf71977a19",  # palmetto-collateral-receipt
-        "payment-plan-palmetto":          "661390d6984c40439c948bd31813ada600163a8f",  # palmetto-payment-plan-1
-        # appearance-bond-palmetto is PRINT-ONLY — physical printout only.
-        # "appearance-bond-palmetto": "2b1941fd671f4423857c90d0cc03c839a4188e55",  # PRINT-ONLY
+        # To add a new Palmetto template:
+        #   1. Log in to SignNow as admin@shamrockbailbonds.biz
+        #   2. Open the template and copy the 40-char template ID from the URL
+        #   3. Add the key here using the pattern "<doc-key>-palmetto"
+        #   4. The surety-routing logic in build_packet_manifest() will pick it up automatically
+        "appearance-bond-palmetto":      "9b1d3d0b64004153b347ceccda07420a906350e5",  # shamrock-palmetto-appearance-bond (reference only)
+        "faq-cosigners-palmetto":        "",  # Handled by shared
+        "faq-defendants-palmetto":       "",  # Handled by shared
+        "indemnity-agreement-palmetto":  "2359c0fdf9ea47ee8129d4426e698ece0112a85c",
+        "defendant-application-palmetto":"9c6f62509e03453a8d212bd67c88eccf65e65958",
+        "master-waiver-palmetto":        "",  # Handled by shared
+        "ssa-release-palmetto":          "",  # Handled by shared
+        "surety-terms-palmetto":         "c897c72df2674beaa0ad9c8bbf1f5856e150d553",
+        "collateral-receipt-palmetto":   "b5b89aec16f44bf4b8538891707beebf71977a19",
+        "payment-plan-palmetto":         "661390d6984c40439c948bd31813ada600163a8f",
     }
 
     # Document Multiplication Rules
@@ -95,15 +99,16 @@ class SignNowPacketService:
         "promissory-note":       {"rule": "shared",         "label": "Promissory Note"},
         "disclosure-form":       {"rule": "shared",         "label": "Disclosure Form"},
         "surety-terms":          {"rule": "shared",         "label": "Surety Terms"},
-        "master-waiver":         {"rule": "shared",         "label": "Master Waiver"},
+        "master-waiver":         {"rule": "per-person",     "label": "Master Waiver"},
         "ssa-release":           {"rule": "per-person",     "label": "SSA Release"},
         "collateral-receipt":    {"rule": "shared",         "label": "Collateral & Premium Receipt"},
         "payment-plan":          {"rule": "shared",         "label": "Payment Plan Agreement"},
-        "appearance-bond":       {"rule": "print-only",     "label": "Appearance Bond (Print Only)"},
+        "appearance-bond":       {"rule": "per-charge",     "label": "Appearance Bond"},
     }
 
     def __init__(self):
         self.api_token = os.environ.get("SIGNNOW_API_TOKEN", "")
+        self.api_token_expires_at = None
         self.base_url = SIGNNOW_BASE
 
     @property
@@ -118,7 +123,12 @@ class SignNowPacketService:
         Obtain a fresh Bearer token via Resource Owner Password Credentials.
         Falls back to the env var SIGNNOW_API_TOKEN if already set.
         """
-        if self.api_token:
+        static_token = os.environ.get("SIGNNOW_API_TOKEN", "")
+        if static_token:
+            self.api_token = static_token
+            return self.api_token
+
+        if self.api_token and self.api_token_expires_at and datetime.now(timezone.utc) < self.api_token_expires_at:
             return self.api_token
 
         basic_auth = os.environ.get(
@@ -143,9 +153,11 @@ class SignNowPacketService:
                 },
                 timeout=30,
             )
+            from datetime import timedelta
             resp.raise_for_status()
             token = resp.json().get("access_token", "")
             self.api_token = token
+            self.api_token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=25)
             return token
 
     async def _copy_template(self, client: httpx.AsyncClient, template_id: str, name: str) -> str:
@@ -249,6 +261,67 @@ class SignNowPacketService:
         )
         link_resp.raise_for_status()
         return link_resp.json().get("data", {}).get("link", "")
+
+    async def _create_document_group_invite(
+        self,
+        client: httpx.AsyncClient,
+        group_id: str,
+        signers: List[Dict[str, Any]],
+    ) -> str:
+        """
+        POST /v2/document-groups/{group_id}/embedded-invites then
+        POST /v2/document-groups/embedded-invites/{link_id}/link
+        
+        Args:
+            signers: List of dicts like:
+            [
+                {"email": "indemnitor@email.com", "role_name": "Signer 1", "order": 1, "auth_method": "none"},
+                {"email": "defendant@email.com", "role_name": "Signer 2", "order": 2, "auth_method": "none"},
+                {"email": "agent@email.com", "role_name": "Signer 3", "order": 3, "auth_method": "none"}
+            ]
+        Returns the embedded signing link for the first step.
+        """
+        invite_payload = {"invites": signers}
+        resp = await client.post(
+            f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites",
+            headers=self._headers,
+            json=invite_payload,
+            timeout=30,
+        )
+        
+        if resp.status_code == 409:
+            get_resp = await client.get(
+                f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites",
+                headers=self._headers,
+                timeout=30,
+            )
+            get_resp.raise_for_status()
+            invite_data = get_resp.json()
+        else:
+            resp.raise_for_status()
+            invite_data = resp.json()
+
+        # The link_id is usually nested under data
+        link_id = (
+            (invite_data.get("data") or [{}])[0].get("id")
+            or invite_data.get("id")
+            or ""
+        )
+        if not link_id:
+            logger.warning("No link_id returned from group embedded-invites for group %s", group_id)
+            return ""
+
+        # For document groups, the endpoint to generate the link is:
+        # POST /v2/document-groups/embedded-invites/{link_id}/link
+        link_resp = await client.post(
+            f"{self.base_url}/v2/document-groups/embedded-invites/{link_id}/link",
+            headers=self._headers,
+            json={"auth_method": "none", "link_expiration": 45},
+            timeout=30,
+        )
+        link_resp.raise_for_status()
+        return link_resp.json().get("data", {}).get("link", "")
+
 
     @staticmethod
     def _build_prefill_fields(intake_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -539,31 +612,37 @@ class SignNowPacketService:
         phase: int,
         surety_id: str = "osi",
         num_indemnitors: int = 1,
+        num_charges: int = 1,
+        custom_manifest: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Build the manifest of documents needed for a specific phase.
+        Build the manifest of documents needed.
         Handles surety-specific templates and multiplication rules.
         """
         manifest = []
 
-        phase_1_docs = [
-            "paperwork-header",
-            "faq-cosigners",
-            "indemnity-agreement",
-            "promissory-note",
-            "disclosure-form",
-            "ssa-release",
-        ]
-        phase_2_docs = [
-            "faq-defendants",
-            "defendant-application",
-            "surety-terms",
-            "master-waiver",
-            "collateral-receipt",
-            "payment-plan",
-        ]
-
-        target_docs = phase_1_docs if phase == 1 else phase_2_docs
+        if custom_manifest is not None:
+            target_docs = custom_manifest
+        else:
+            phase_1_docs = [
+                "paperwork-header",
+                "faq-cosigners",
+                "indemnity-agreement",
+                "promissory-note",
+                "disclosure-form",
+                "ssa-release",
+                "master-waiver",
+            ]
+            phase_2_docs = [
+                "faq-defendants",
+                "defendant-application",
+                "surety-terms",
+                "master-waiver",
+                "ssa-release",
+                "collateral-receipt",
+                "payment-plan",
+            ]
+            target_docs = phase_1_docs if phase == 1 else phase_2_docs
 
         # Palmetto overrides: these 5 doc keys have Palmetto-specific templates.
         # Shared docs (master-waiver, ssa-release, faq-*, promissory-note, disclosure-form)
@@ -599,7 +678,13 @@ class SignNowPacketService:
             if rule == "per-indemnitor":
                 copies_needed = num_indemnitors
             elif rule == "per-person":
-                copies_needed = num_indemnitors + 1  # +1 for defendant
+                if phase == 1:
+                    copies_needed = num_indemnitors
+                else:
+                    copies_needed = 1  # 1 for defendant in phase 2
+            elif rule == "per-charge":
+                # For Palmetto Appearance Bond
+                copies_needed = num_charges
 
             for i in range(copies_needed):
                 manifest.append(
@@ -614,13 +699,17 @@ class SignNowPacketService:
 
         return manifest
 
+    import warnings
+    import uuid
+
     def handle_send_phase_1(
         self,
         form_data: Dict[str, Any],
         signer_email: str,
         signer_name: str,
     ) -> Dict[str, Any]:
-        """Phase 1 manifest builder — sync wrapper. Use create_packet() for real sending."""
+        """[DEPRECATED] Use send_phase_1() instead."""
+        warnings.warn("handle_send_phase_1 is deprecated, use await send_phase_1()", DeprecationWarning)
         logger.info("Phase 1 manifest built for %s", signer_email)
         num_indemnitors = len(form_data.get("indemnitors", [{}]))
         manifest = self.build_packet_manifest(phase=1, num_indemnitors=num_indemnitors)
@@ -642,7 +731,8 @@ class SignNowPacketService:
         agent_license: str,
         surety_id: str = "osi",
     ) -> Dict[str, Any]:
-        """Phase 2 manifest builder — sync wrapper. Use create_packet() for real sending."""
+        """[DEPRECATED] Use send_phase_2() instead."""
+        warnings.warn("handle_send_phase_2 is deprecated, use await send_phase_2()", DeprecationWarning)
         if not poa_number:
             raise ValueError("Phase 2 requires a valid POA number")
         logger.info("Phase 2 manifest built for %s with POA %s", signer_email, poa_number)
@@ -656,6 +746,95 @@ class SignNowPacketService:
             "signer_email": signer_email,
         }
 
+    async def send_phase_1(
+        self,
+        intake_doc: Dict[str, Any],
+        signer_email: str,
+        signer_name: str,
+        surety_id: str = "osi",
+    ) -> Dict[str, Any]:
+        packet_id = str(uuid.uuid4())
+        logger.info(f"Sending Phase 1 for {signer_email} (Packet {packet_id})")
+        res = await self.create_packet(
+            intake_doc=intake_doc,
+            packet_id=packet_id,
+            phase=1,
+            surety_id=surety_id,
+            signer_email=signer_email,
+            signer_name=signer_name
+        )
+        
+        # Log to db
+        from extensions import get_db
+        db = get_db()
+        packet_doc = {
+            "packet_id": packet_id,
+            "phase": 1,
+            "surety_id": surety_id,
+            "intake_id": str(intake_doc.get("_id", "")),
+            "booking_number": intake_doc.get("booking_number", ""),
+            "signer_email": signer_email,
+            "signer_name": signer_name,
+            "status": "pending_signature",
+            "signnow_document_id": res.get("document_ids", []),
+            "signnow_group_id": res.get("group_id", ""),
+            "signnow_invite_id": res.get("invite_id", ""),
+            "signing_link": res.get("signing_link", ""),
+            "created_at": datetime.now(timezone.utc)
+        }
+        await db.paperwork_packets.update_one(
+            {"packet_id": packet_id},
+            {"$set": packet_doc},
+            upsert=True
+        )
+        return res
+
+    async def send_phase_2(
+        self,
+        intake_doc: Dict[str, Any],
+        signer_email: str,
+        signer_name: str,
+        poa_number: str,
+        surety_id: str = "osi",
+    ) -> Dict[str, Any]:
+        packet_id = str(uuid.uuid4())
+        logger.info(f"Sending Phase 2 for {signer_email} (Packet {packet_id})")
+        res = await self.create_packet(
+            intake_doc=intake_doc,
+            packet_id=packet_id,
+            phase=2,
+            surety_id=surety_id,
+            signer_email=signer_email,
+            signer_name=signer_name,
+            poa_number=poa_number
+        )
+        
+        # Log to db
+        from extensions import get_db
+        db = get_db()
+        packet_doc = {
+            "packet_id": packet_id,
+            "phase": 2,
+            "surety_id": surety_id,
+            "intake_id": str(intake_doc.get("_id", "")),
+            "booking_number": intake_doc.get("booking_number", ""),
+            "signer_email": signer_email,
+            "signer_name": signer_name,
+            "poa_number": poa_number,
+            "status": "pending_signature",
+            "signnow_document_id": res.get("document_ids", []),
+            "signnow_group_id": res.get("group_id", ""),
+            "signnow_invite_id": res.get("invite_id", ""),
+            "signing_link": res.get("signing_link", ""),
+            "created_at": datetime.now(timezone.utc)
+        }
+        await db.paperwork_packets.update_one(
+            {"packet_id": packet_id},
+            {"$set": packet_doc},
+            upsert=True
+        )
+        return res
+
     async def create_packet(
         self,
         intake_doc: Dict[str, Any],
@@ -665,32 +844,36 @@ class SignNowPacketService:
         signer_email: Optional[str] = None,
         signer_name: Optional[str] = None,
         poa_number: Optional[str] = None,
+        custom_manifest: Optional[List[str]] = None,
+        routing_scenario: str = "phase_1",
     ) -> Dict[str, Any]:
         """
         Full production SignNow packet creation.
 
         Steps:
           1. Ensure valid Bearer token (auto-fetches via ROPC if needed).
-          2. Build document manifest for the requested phase.
+          2. Build document manifest for the requested phase or custom manifest.
           3. Copy each template to a new document.
           4. Prefill all text fields on each copied document.
           5. Group all documents into a SignNow document group.
-          6. Create an embedded invite on the first signable document.
+          6. Create an embedded invite (for the first step/signer) and setup routing.
           7. Return invite_id, signing_link, document_ids, group_id.
 
         Args:
             intake_doc:   Full intake record from MongoDB intake_queue.
             packet_id:    Our internal packet ID (used for document naming).
-            phase:        1 = indemnitor signs, 2 = post-approval (requires poa_number).
+            phase:        1 = indemnitor signs, 2 = post-approval.
             surety_id:    "osi" or "palmetto" — determines template set.
-            signer_email: Override indemnitor email (defaults to intake_doc value).
-            signer_name:  Override indemnitor name (defaults to intake_doc value).
-            poa_number:   Required for phase 2.
+            signer_email: Override indemnitor email.
+            signer_name:  Override indemnitor name.
+            poa_number:   Required for phase 2 or all-in-one.
+            custom_manifest: List of document keys to include in this packet.
+            routing_scenario: "phase_1", "phase_2", or "all-in-one".
         """
         intake_id = intake_doc.get("intake_id", "unknown")
         logger.info(
-            "[signnow] Creating Phase %d packet %s for intake %s",
-            phase, packet_id, intake_id,
+            "[signnow] Creating packet %s for intake %s (Scenario: %s)",
+            packet_id, intake_id, routing_scenario
         )
 
         if surety_id is None:
@@ -703,8 +886,8 @@ class SignNowPacketService:
         if signer_name is None:
             signer_name = intake_doc.get("indemnitor_name", "Indemnitor")
 
-        if phase == 2 and not poa_number:
-            raise ValueError("Phase 2 requires a valid POA number")
+        if (phase == 2 or routing_scenario == "all-in-one") and not poa_number:
+            raise ValueError("Phase 2 and All-in-One require a valid POA number")
 
         await self._get_token()
 
@@ -712,10 +895,22 @@ class SignNowPacketService:
             1,
             len(intake_doc.get("indemnitors", [intake_doc.get("indemnitor", {})])),
         )
+        
+        # Calculate number of charges (comma-separated string or list)
+        charges_data = intake_doc.get("charges") or intake_doc.get("defendant", {}).get("charges", "")
+        if isinstance(charges_data, list):
+            num_charges = max(1, len(charges_data))
+        elif isinstance(charges_data, str):
+            num_charges = max(1, len([c for c in charges_data.split(",") if c.strip()]))
+        else:
+            num_charges = 1
+
         manifest = self.build_packet_manifest(
             phase=phase,
             surety_id=surety_id,
             num_indemnitors=num_indemnitors,
+            num_charges=num_charges,
+            custom_manifest=custom_manifest,
         )
 
         prefill_fields = self._build_prefill_fields(intake_doc)
@@ -742,7 +937,31 @@ class SignNowPacketService:
                         "[signnow] Copied template %s -> doc %s (%s)",
                         item["template_id"], doc_id, item["label"],
                     )
-                    await self._prefill_fields(client, doc_id, prefill_fields)
+                    
+                    # For per-charge rules, inject the specific charge into the prefill fields if possible
+                    # This relies on the 'charges' field string being parsable
+                    doc_prefill_fields = list(prefill_fields)
+                    if item["rule"] == "per-charge":
+                        try:
+                            charges_list = []
+                            charges_data = intake_doc.get("charges") or intake_doc.get("defendant", {}).get("charges", "")
+                            if isinstance(charges_data, list):
+                                charges_list = charges_data
+                            elif isinstance(charges_data, str):
+                                charges_list = [c.strip() for c in charges_data.split(",") if c.strip()]
+                            
+                            # Get the specific charge for this copy_index (1-based)
+                            charge_idx = item["copy_index"] - 1
+                            if charge_idx < len(charges_list):
+                                specific_charge = charges_list[charge_idx]
+                                # Override the generic 'charges' field with this specific charge
+                                doc_prefill_fields.append({"field_name": "ChargeDescription", "prefilled_text": specific_charge})
+                                doc_prefill_fields.append({"field_name": "charge-description", "prefilled_text": specific_charge})
+                                doc_prefill_fields.append({"field_name": "charges", "prefilled_text": specific_charge})
+                        except Exception as e:
+                            logger.warning(f"Failed to isolate charge for copy {item['copy_index']}: {e}")
+
+                    await self._prefill_fields(client, doc_id, doc_prefill_fields)
                     document_ids.append(doc_id)
                 except httpx.HTTPStatusError as exc:
                     logger.error(
@@ -774,27 +993,53 @@ class SignNowPacketService:
                         exc.response.status_code,
                     )
 
-            # Step 6: Create embedded invite on first document
-            primary_doc_id = document_ids[0]
+            # Step 6: Create embedded invite
             signing_link = ""
             invite_id = ""
             if signer_email:
                 try:
-                    signing_link = await self._get_embedded_link(
-                        client, primary_doc_id, signer_email
-                    )
-                    invite_id = f"embed_{primary_doc_id}"
-                    logger.info(
-                        "[signnow] Embedded signing link for %s: %s",
-                        signer_email,
-                        signing_link[:60] if signing_link else "(empty)",
-                    )
+                    if routing_scenario == "all-in-one" and group_id:
+                        # Sequential routing
+                        agent_email = "admin@shamrockbailbonds.biz" # Default agent email
+                        defendant_email = intake_doc.get("defendant", {}).get("email", "")
+                        
+                        # We need an email for the defendant, fallback to a placeholder if none to prevent API error
+                        if not defendant_email:
+                            defendant_email = f"defendant_{intake_id}@placeholder.shamrockbailbonds.biz"
+                            
+                        signers = [
+                            {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"},
+                            {"email": defendant_email, "role_name": "Signer 2", "order": 2, "auth_method": "none"},
+                            {"email": agent_email, "role_name": "Signer 3", "order": 3, "auth_method": "none"}
+                        ]
+                        signing_link = await self._create_document_group_invite(
+                            client, group_id, signers
+                        )
+                        invite_id = f"group_embed_{group_id}"
+                        logger.info(
+                            "[signnow] Group embedded signing link for %s: %s",
+                            signer_email,
+                            signing_link[:60] if signing_link else "(empty)",
+                        )
+                    else:
+                        # Traditional Phase 1 or Phase 2
+                        primary_doc_id = document_ids[0]
+                        signing_link = await self._get_embedded_link(
+                            client, primary_doc_id, signer_email
+                        )
+                        invite_id = f"embed_{primary_doc_id}"
+                        logger.info(
+                            "[signnow] Embedded signing link for %s: %s",
+                            signer_email,
+                            signing_link[:60] if signing_link else "(empty)",
+                        )
                 except httpx.HTTPStatusError as exc:
                     logger.error(
                         "[signnow] Embedded invite failed: %s — %s",
                         exc.response.status_code,
                         exc.response.text[:200],
                     )
+
             else:
                 logger.warning("[signnow] No signer_email — skipping embedded invite")
 
@@ -808,3 +1053,22 @@ class SignNowPacketService:
             "surety_id": surety_id,
             "status": "success",
         }
+
+    async def download_document_group(self, group_id: str) -> bytes:
+        """
+        Download the completed document group as a single merged PDF.
+        """
+        await self._get_token()
+        url = f"{self.base_url}/document-group/{group_id}/download"
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Accept": "application/pdf"
+        }
+        
+        # We need type='merged' query parameter
+        params = {"type": "merged"}
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(url, headers=headers, params=params)
+            r.raise_for_status()
+            return r.content

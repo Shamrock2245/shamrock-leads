@@ -3545,6 +3545,7 @@ def api_appearance_bond_pdf():
             "poa_number": _p("poa_number", ""),
             "court_type": _p("court_type", ""),
             "indemnitor_name": _p("indemnitor_name", ""),
+            "collateral": _p("collateral", ""),
         }
 
         pdf_bytes = generate_appearance_bond(data)

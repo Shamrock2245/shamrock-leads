@@ -14,7 +14,7 @@ class BountyHunterService:
     async def scan_and_alert(self):
         """Find active unposted bonds >$2,500 and surface them to Slack."""
         try:
-            if not self.db:
+            if self.db is None:
                 return {"scanned": 0, "found": 0}
             
             arrests_col = self.db["arrests"]
