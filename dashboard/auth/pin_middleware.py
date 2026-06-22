@@ -31,7 +31,15 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 OPEN_PATHS = frozenset({
     "/login", "/health", "/api/stats",
     "/docs", "/redoc", "/openapi.json",
+    "/manifest.json", "/favicon.ico",
 })
+
+# File extensions that are always public (static assets — JS, CSS, fonts, images)
+# These must load before the session cookie exists so the login page renders.
+_STATIC_EXTENSIONS = (
+    ".js", ".css", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2",
+    ".ttf", ".eot", ".webp", ".gif", ".json",
+)
 
 # Prefixes that bypass auth
 OPEN_PREFIXES = (
@@ -89,6 +97,12 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
 
         # Whitelisted paths pass through
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
+            return await call_next(request)
+
+        # Static assets (JS, CSS, fonts, images) are always public.
+        # They must be served before the session cookie exists so the
+        # login page itself can render correctly.
+        if any(path.endswith(ext) for ext in _STATIC_EXTENSIONS):
             return await call_next(request)
 
         # OAuth popup flow — login redirects + callbacks bypass auth
@@ -156,8 +170,6 @@ document.getElementById('f').addEventListener('submit',async e=>{
 
 def mount_login_routes(app):
     """Register /login GET and POST routes on the FastAPI app."""
-    from fastapi import FastAPI
-
     @app.get("/login", include_in_schema=False)
     async def login_page():
         return HTMLResponse(_LOGIN_HTML)
