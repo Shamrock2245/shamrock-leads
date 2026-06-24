@@ -869,7 +869,6 @@ function openInTracking(bookingNumber) {
    EXONERATE
    ══════════════════════════════════════════════════════════════════ */
 async function exonerateFromActiveBonds(bookingNumber, defName) {
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#10b981;color:#fff" onclick="fileBondToDrive('${bkSafe}')">📁 File to Drive</button>
   const note = prompt(
     `✅ Exonerate bond for ${defName}?\n\n` +
     'This will:\n  • Stop all location tracking immediately\n  • Cancel all pending GPS capture links\n  • Cancel all pending court reminders\n\n' +

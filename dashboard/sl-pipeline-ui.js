@@ -250,6 +250,7 @@
 
     // Make pipeline cards draggable attribute
     document.addEventListener('mouseenter', function (e) {
+      if (!e.target || typeof e.target.closest !== 'function') return;
       var card = e.target.closest('.pipeline-card');
       if (card && !card.draggable) card.draggable = true;
     }, true);
