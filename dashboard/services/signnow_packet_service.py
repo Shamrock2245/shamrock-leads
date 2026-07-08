@@ -1105,6 +1105,67 @@ class SignNowPacketService:
             "status": "success",
         }
 
+    async def create_packet_from_pdf(
+        self,
+        pdf_bytes: bytes,
+        filename: str,
+        signer_email: str,
+        routing_config: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Uploads a dynamically stitched PDF containing SignNow Text Tags.
+        Uses /document/fieldextract to automatically convert text tags into interactive fields.
+        """
+        await self._get_token()
+        
+        async with httpx.AsyncClient(timeout=60) as client:
+            # 1. Upload via fieldextract
+            # Note: We must use multipart/form-data for file uploads
+            files = {
+                "file": (filename, pdf_bytes, "application/pdf")
+            }
+            resp = await client.post(
+                f"{self.base_url}/document/fieldextract",
+                headers={"Authorization": f"Bearer {self.api_token}"},
+                files=files
+            )
+            resp.raise_for_status()
+            doc_id = resp.json().get("id")
+            if not doc_id:
+                raise RuntimeError("Failed to get doc_id from fieldextract")
+            
+            logger.info(f"[signnow] Uploaded stitched PDF with text tags to {doc_id}")
+            
+            # 2. Setup routing / embedded invite
+            signing_link = ""
+            invite_id = ""
+            
+            if not routing_config:
+                routing_config = [
+                    {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"}
+                ]
+            
+            try:
+                # We do not need a group for a single stitched document
+                signing_link = await self._get_embedded_link(
+                    client, doc_id, routing_config[0]["email"]
+                )
+                invite_id = f"embed_{doc_id}"
+                logger.info(f"[signnow] Embedded signing link generated for {routing_config[0]['email']}")
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "[signnow] Embedded invite failed: %s — %s",
+                    exc.response.status_code,
+                    exc.response.text[:200],
+                )
+                
+        return {
+            "invite_id": invite_id,
+            "signing_link": signing_link,
+            "group_id": "",
+            "document_ids": [doc_id],
+        }
+
     async def download_document_group(self, group_id: str) -> bytes:
         """
         Download the completed document group as a single merged PDF.
