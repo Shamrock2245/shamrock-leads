@@ -557,6 +557,13 @@ async def _ensure_all_indexes():
         # Social OAuth
         await _idx("social_accounts", [("platform", 1), ("account_id", 1)], unique=True, name="idx_social_platform_account", background=True)
         await _idx("social_accounts", [("status", 1), ("token_expires_at", 1)], name="idx_social_status_expiry", background=True)
+        # OSINT Intelligence (admin-only collections)
+        await _idx("osint_profiles", [("subject_id", 1), ("created_at", -1)], name="idx_osint_subject_created", background=True)
+        await _idx("osint_profiles", [("subject_type", 1), ("status", 1)], name="idx_osint_type_status", background=True)
+        await _idx("osint_profiles", [("created_at", 1)], name="idx_osint_ttl_1yr", background=True, expireAfterSeconds=31536000)
+        await _idx("osint_trape_sessions", [("subject_id", 1), ("created_at", -1)], name="idx_trape_subject_created", background=True)
+        await _idx("osint_trape_sessions", [("session_id", 1)], unique=True, name="idx_trape_session_id", background=True)
+        await _idx("osint_trape_sessions", [("created_at", 1)], name="idx_trape_ttl_1yr", background=True, expireAfterSeconds=31536000)
 
         if warnings:
             logger.warning("Index setup had %d issue(s): %s", len(warnings), "; ".join(warnings))

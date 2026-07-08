@@ -22,6 +22,7 @@
   <link rel="stylesheet" href="/sl-alpha-intel.css?v=2">
   <link rel="stylesheet" href="/sl-premium.css?v=1">
   <link rel="stylesheet" href="/sl-enrichment.css?v=1">
+  <link rel="stylesheet" href="/sl-osint.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -113,6 +114,7 @@
       <button class="sidebar-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()"><span class="sidebar-btn-icon">🧾</span> Accounting</button>
       <button class="sidebar-btn" data-tab="tabSocial" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🌍</span> Social <span class="badge" id="socialBadge" style="background:#8b5cf6; display:none;"></span></button>
       <button class="sidebar-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()"><span class="sidebar-btn-icon">✨</span> Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
+      <button class="sidebar-btn" data-tab="tabOSINT" onclick="SL.switchTab(this);SLOSINT.init()" style="border-left:3px solid #ef4444"><span class="sidebar-btn-icon">🕵️</span> OSINT Intel <span class="badge" id="osintBadge" style="background:#ef4444;display:none"></span></button>
       <button class="sidebar-btn" data-tab="tabAutomations" onclick="SL.switchTab(this);SLAutomations.load()"><span class="sidebar-btn-icon">⚙️</span> Automations <span class="badge" id="automationsBadge"></span></button>
       <button class="sidebar-btn" data-tab="tabPaperwork" onclick="SL.switchTab(this);SLPaperwork.load()"><span class="sidebar-btn-icon">📄</span> Paperwork Config</button>
       <div class="sidebar-group-label">Quick Actions</div>
@@ -4295,6 +4297,96 @@
 
 </div><!-- end tabEnrichment -->
 
+<!-- ═══════════════════════════════════════════════════════
+     OSINT INTELLIGENCE — Admin Only
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabOSINT">
+  <div class="container">
+    <!-- Header -->
+    <div class="osint-header">
+      <div class="osint-header-left">
+        <h2>🕵️ OSINT Intelligence</h2>
+        <p>Deep Background Research · Defendant &amp; Indemnitor Risk Profiling · Admin Only</p>
+      </div>
+      <div class="osint-header-right">
+        <span class="osint-admin-badge">🔒 Admin</span>
+        <div class="osint-tool-status" id="osintToolStatus"></div>
+      </div>
+    </div>
+
+    <div class="osint-two-col">
+      <!-- Left: Scan Form + Report List -->
+      <div class="osint-left-col">
+        <!-- Scan Form -->
+        <div class="osint-scan-card">
+          <div class="osint-scan-title">🔍 New Intelligence Scan</div>
+          <div class="osint-form-grid">
+            <div class="osint-field">
+              <label>Subject Type</label>
+              <select id="osintSubjectType">
+                <option value="defendant">Defendant</option>
+                <option value="indemnitor">Indemnitor</option>
+              </select>
+            </div>
+            <div class="osint-field">
+              <label>Subject ID (MongoDB ObjectId)</label>
+              <input type="text" id="osintSubjectId" placeholder="e.g. 64a1b2c3d4e5f6a7b8c9d0e1" />
+            </div>
+            <div class="osint-field">
+              <label>Full Legal Name</label>
+              <input type="text" id="osintFullName" placeholder="John Michael Smith" />
+            </div>
+            <div class="osint-field">
+              <label>Known Usernames (comma-separated)</label>
+              <input type="text" id="osintUsernames" placeholder="jsmith, john.smith239" />
+            </div>
+            <div class="osint-field">
+              <label>Email Address</label>
+              <input type="email" id="osintEmail" placeholder="subject@email.com" />
+            </div>
+            <div class="osint-field">
+              <label>Admin Notes (internal)</label>
+              <input type="text" id="osintNotes" placeholder="Optional context for this scan..." />
+            </div>
+          </div>
+          <div class="osint-options-row">
+            <label class="osint-toggle">
+              <input type="checkbox" id="osintRunMaigret" checked /> Maigret (3k+ sites)
+            </label>
+            <label class="osint-toggle">
+              <input type="checkbox" id="osintRunBlackbird" checked /> Blackbird (email/username)
+            </label>
+            <label class="osint-toggle">
+              <input type="checkbox" id="osintDeepScan" /> Deep Scan (all sites, slower)
+            </label>
+          </div>
+          <button class="osint-scan-btn" id="osintScanBtn">🔍 Run OSINT Scan</button>
+        </div>
+
+        <!-- Report List -->
+        <div>
+          <div class="osint-reports-header">
+            <span class="osint-reports-title">📋 Intelligence Reports</span>
+            <button class="osint-filter-btn" onclick="SLOSINT.load()" style="font-size:0.65rem">↻ Refresh</button>
+          </div>
+          <div class="osint-report-list" id="osintReportList">
+            <div class="osint-empty"><div class="osint-empty-icon">🔍</div>No reports yet. Run a scan to begin.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Detail Panel -->
+      <div class="osint-right-col">
+        <div id="osintDetailPanel" style="display:none"></div>
+        <div id="osintDetailEmpty" class="osint-empty" style="padding:60px 20px">
+          <div class="osint-empty-icon">🕵️</div>
+          Select a report from the list or run a new scan to view intelligence results.
+        </div>
+      </div>
+    </div>
+  </div>
+</div><!-- end tabOSINT -->
+
 <!-- ═══ OMNIBAR (COMMAND PALETTE) ═══ -->
 <div id="omnibarOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10002;align-items:flex-start;justify-content:center;padding-top:10vh;backdrop-filter:blur(4px)">
   <div style="background:var(--bg-card,#1e293b);width:600px;max-width:90vw;border-radius:12px;border:1px solid var(--border,#334155);box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;display:flex;flex-direction:column">
@@ -4333,6 +4425,7 @@
 <script src="/sl-social.js?v=1"></script>
 <script src="/sl-enrichment.js?v=1"></script>
 <script src="/sl-tasks.js?v=1"></script>
+<script src="/sl-osint.js?v=1"></script>
 <script src="/sl-paperwork.js?v=1"></script>
 
 </body>
