@@ -2,6 +2,7 @@
 # ShamrockLeads — Docker Image
 # Python 3.12 + APScheduler + MongoDB
 # + Chromium for DrissionPage + patchright (Charlotte) + nodriver (Seminole, Lake)
+# + OSINT Tools: Maigret (3000+ site recon), Blackbird (email/username recon)
 # ============================================
 FROM python:3.12-slim
 
@@ -10,9 +11,12 @@ LABEL maintainer="Shamrock Active Software"
 LABEL description="Florida Arrest Intelligence Platform"
 
 # System deps — Chromium for DrissionPage, xvfb for patchright (Charlotte), ffmpeg for reCAPTCHA audio solver
+# git + wget required for Blackbird clone; tor for optional anonymous OSINT routing
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
+    git \
     ffmpeg \
     xvfb \
     xauth \
@@ -31,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libpango-1.0-0 \
     libcairo2 \
+    tor \
     && rm -rf /var/lib/apt/lists/*
 
 # Tell DrissionPage / Chromium where to find the browser
@@ -51,14 +56,40 @@ RUN python -m patchright install chromium || true
 # Install nodriver's Chromium (for Seminole, Lake — JS-rendered jail portals)
 RUN python -m nodriver install || true
 
+# ── OSINT Tools ────────────────────────────────────────────────────────────────
+# These tools are invoked as subprocesses by dashboard/services/osint_service.py
+# All failures are non-fatal (|| echo WARNING) so the main app still starts.
+
+# Maigret: username recon across 3000+ social/forum/dating/gaming sites
+# Invoked as: maigret <username> --json --output /tmp/sl_osint_xxx/
+RUN pip install --no-cache-dir maigret \
+    || echo "WARNING: maigret install failed — OSINT username scans will be degraded"
+
+# Blackbird: email + username recon (separate site database from Maigret)
+# Cloned to /opt/blackbird; invoked as:
+#   python3 /opt/blackbird/blackbird.py --username <u> --json --output /tmp/sl_osint_xxx/
+RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
+    && pip install --no-cache-dir -r /opt/blackbird/requirements.txt \
+    && chmod +x /opt/blackbird/blackbird.py \
+    || echo "WARNING: blackbird install failed — OSINT email/username scans will be degraded"
+
+# Expose OSINT tool paths as env vars (overridable at runtime via docker-compose .env)
+ENV BLACKBIRD_DIR=/opt/blackbird
+ENV MAIGRET_PATH=/usr/local/bin/maigret
+# Note: Trape runs on the HOST VPS (not inside this container).
+#       Set TRAPE_SERVER_URL in .env to the public Trape subdomain.
+# ──────────────────────────────────────────────────────────────────────────────
+
 # Copy application
 COPY . .
 
 # ── Security: Non-root user ──
 # Chromium needs audio/video groups; xvfb needs write to /tmp
+# /opt/blackbird must be readable by appuser
 RUN groupadd -r appuser && \
     useradd -r -g appuser -G audio,video -s /sbin/nologin appuser && \
     chown -R appuser:appuser /app && \
+    chown -R appuser:appuser /opt/blackbird && \
     mkdir -p /app/logs && chown appuser:appuser /app/logs
 # USER appuser
 

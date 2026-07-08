@@ -15,7 +15,8 @@ description: "iMessage outreach via BlueBubbles bridge. Covers REST API, Private
 
 ## Infrastructure
 - **Office iMac:** `shamrockbailoffice@gmail.com` / Apple ID paired with `239-955-0178`
-- **BB Server:** Electron app on iMac, port 1234 (v1.9.6, Private API enabled, macOS 14.4.1)
+- **BB Server:** Electron app on iMac, port 1234 (v1.9.9, Private API enabled, macOS 14.4.1)
+- **M1 Crash Fix:** `sudo nvram boot-args=-arm64e_preview_abi` applied (prevents Messages.app crashes on Apple Silicon)
 - **BB Password:** `2245Bail`
 - **Permanent URL:** `https://bb.shamrockbailbonds.biz` (Cloudflare Named Tunnel — ✅ verified 2026-05-08)
 - **SSH Access:** `ssh imac` via `imac.shamrockbailbonds.biz` (Cloudflare tunnel)
@@ -61,10 +62,29 @@ ingress:
   - service: http_status:404
 ```
 
-### Persistence (macOS LaunchAgent)
-- **Plist:** `~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist`
-- **Restart:** `launchctl unload <plist> && launchctl load <plist>`
-- **Logs:** `log show --predicate 'process == "cloudflared"' --last 5m`
+### Persistence (macOS LaunchDaemon — SYSTEM LEVEL)
+> **UPGRADED from LaunchAgent to LaunchDaemon.** The tunnel now starts at system boot,
+> before any user logs in. This ensures 24/7 availability even when the office is closed.
+
+- **Plist:** `/Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist` (system-level)
+- **Source:** `scripts/imac/com.shamrock.cloudflared-tunnel.plist`
+- **Install:** `sudo launchctl load /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist`
+- **Restart:** `sudo launchctl kickstart -k system/com.shamrock.cloudflared-tunnel`
+- **Logs:** `/var/log/cloudflared-tunnel.log`
+- **Old plist removed:** `~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist` (deleted)
+
+### BlueBubbles Watchdog (NEW)
+- **Plist:** `~/Library/LaunchAgents/com.shamrock.bb-watchdog.plist`
+- **Script:** `~/bb_watchdog.sh` (source: `scripts/imac/bb_watchdog.sh`)
+- **Behavior:** Pings `localhost:1234` every 5 minutes. After 3 consecutive failures (15 min), kills and relaunches BlueBubbles.app
+- **Logs:** `~/Library/Logs/bb_watchdog.log`
+
+### One-Command Setup
+```bash
+# SSH into iMac, copy the setup script, then run:
+bash ~/Downloads/setup_imac_bb_reliability.sh
+sudo reboot  # Required for arm64e fix
+```
 
 ### Cloudflare API Credentials
 - **Account ID:** `e3ceb175a0ebe60c6e02fe2c38e17691`
@@ -81,7 +101,7 @@ ingress:
 ### Troubleshooting
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
-| `curl` to `bb.shamrockbailbonds.biz` times out | cloudflared not running on iMac | `launchctl load` the plist |
+| `curl` to `bb.shamrockbailbonds.biz` times out | cloudflared LaunchDaemon not running | `sudo launchctl kickstart -k system/com.shamrock.cloudflared-tunnel` |
 | DNS resolves but connection fails | BB server not listening on 1234 | Open BlueBubbles app on iMac |
 | `cloudflared tunnel list` shows 0 connections | Tunnel daemon crashed | Restart via launchctl |
 | Routes show `--` in CF dashboard | Published routes deleted | Run `cf_tunnel_check.py --fix` on iMac |
@@ -92,8 +112,11 @@ ingress:
 # Is BlueBubbles running?
 curl "http://localhost:1234/api/v1/server/info?password=2245Bail" | python3 -m json.tool
 
-# Is cloudflared running?
-launchctl list | grep cloudflare
+# Is cloudflared running (LaunchDaemon — system level)?
+sudo launchctl list | grep shamrock.cloudflared
+
+# Is the watchdog running?
+launchctl list | grep shamrock.bb-watchdog
 
 # Tunnel status
 cloudflared tunnel list
@@ -101,9 +124,14 @@ cloudflared tunnel list
 # View config
 cat ~/.cloudflared/config.yml
 
-# Restart tunnel
-launchctl unload ~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist
-launchctl load ~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist
+# Restart cloudflared daemon
+sudo launchctl kickstart -k system/com.shamrock.cloudflared-tunnel
+
+# View cloudflared logs
+tail -f /var/log/cloudflared-tunnel.log
+
+# View watchdog logs
+tail -f ~/Library/Logs/bb_watchdog.log
 ```
 
 ## Key Modules (dashboard/api/)
@@ -147,6 +175,7 @@ launchctl load ~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist
 ## References
 - [BB API Docs](https://documenter.getpostman.com/view/765844/UV5RnfwM)
 - [BB Server Repo](https://github.com/BlueBubblesApp/bluebubbles-server)
+- [BB v1.9.9 Release Notes (M1 fix)](https://github.com/BlueBubblesApp/bluebubbles-server/releases/tag/v1.9.9)
 - [BB Community Projects](https://github.com/BlueBubblesApp/bluebubbles-community-projects)
 - [ChatGPT Agent Reference](https://github.com/omega-bred/bluebubbles-chatgpt-agent)
 - [BB MCP Server](https://github.com/jfiggins/bluebubbles-mcp-server)

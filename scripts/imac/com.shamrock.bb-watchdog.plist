@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.shamrock.bb-watchdog.plist
+  BlueBubbles Server Watchdog — macOS LaunchAgent
+  Office M1 iMac (macOS 14.4.1 Sonoma)
+
+  INSTALL:
+    scp scripts/imac/com.shamrock.bb-watchdog.plist \
+        shamrockbailbonds@imac.shamrockbailbonds.biz:~/Library/LaunchAgents/
+    ssh shamrockbailbonds@imac.shamrockbailbonds.biz \
+        "launchctl load ~/Library/LaunchAgents/com.shamrock.bb-watchdog.plist"
+
+  VERIFY:
+    launchctl list | grep shamrock
+
+  LOGS:
+    ~/Library/Logs/bb_watchdog.log
+    ~/Library/Logs/bb_watchdog_stdout.log
+    ~/Library/Logs/bb_watchdog_stderr.log
+
+  UNINSTALL:
+    launchctl unload ~/Library/LaunchAgents/com.shamrock.bb-watchdog.plist
+    rm ~/Library/LaunchAgents/com.shamrock.bb-watchdog.plist
+-->
+<plist version="1.0">
+<dict>
+    <!-- Unique identifier -->
+    <key>Label</key>
+    <string>com.shamrock.bb-watchdog</string>
+
+    <!-- Script to run -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/shamrockbailbonds/bb_watchdog.sh</string>
+    </array>
+
+    <!-- Run every 5 minutes (300 seconds) -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Start immediately on load -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if the watchdog script itself crashes -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Log output -->
+    <key>StandardOutPath</key>
+    <string>/Users/shamrockbailbonds/Library/Logs/bb_watchdog_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/shamrockbailbonds/Library/Logs/bb_watchdog_stderr.log</string>
+
+    <!-- Environment — ensure PATH includes /usr/local/bin for curl -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/shamrockbailbonds</string>
+    </dict>
+</dict>
+</plist>

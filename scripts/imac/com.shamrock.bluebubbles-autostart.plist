@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.shamrock.bluebubbles-autostart.plist
+  BlueBubbles Server Auto-Start — macOS LaunchAgent
+  Office M1 iMac (macOS 14.4.1 Sonoma)
+
+  WHAT IT DOES:
+    Launches the BlueBubbles Electron app 30 seconds after user login.
+    The 30-second delay ensures the macOS Messages app and Apple ID
+    authentication have fully initialized before BB starts.
+
+  NOTE: BlueBubbles v1.9.8+ has a built-in "Launch Agent" auto-start option
+  in its Settings UI. If that is enabled, this plist is redundant — use one
+  or the other, NOT both. This plist is provided as a fallback if the built-in
+  option is not working reliably.
+
+  INSTALL:
+    scp scripts/imac/com.shamrock.bluebubbles-autostart.plist \
+        shamrockbailbonds@imac.shamrockbailbonds.biz:~/Library/LaunchAgents/
+    ssh shamrockbailbonds@imac.shamrockbailbonds.biz \
+        "launchctl load ~/Library/LaunchAgents/com.shamrock.bluebubbles-autostart.plist"
+
+  VERIFY:
+    launchctl list | grep shamrock.bluebubbles
+
+  UNINSTALL:
+    launchctl unload ~/Library/LaunchAgents/com.shamrock.bluebubbles-autostart.plist
+    rm ~/Library/LaunchAgents/com.shamrock.bluebubbles-autostart.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shamrock.bluebubbles-autostart</string>
+
+    <!-- Launch BlueBubbles.app via 'open' command -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/open</string>
+        <string>-a</string>
+        <string>BlueBubbles</string>
+    </array>
+
+    <!-- Start on login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 30-second startup delay — allows Messages.app + Apple ID to initialize -->
+    <key>StartInterval</key>
+    <integer>0</integer>
+
+    <!-- Do NOT keep-alive — BB manages its own process lifecycle -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/shamrockbailbonds/Library/Logs/bb_autostart_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/shamrockbailbonds/Library/Logs/bb_autostart_stderr.log</string>
+</dict>
+</plist>

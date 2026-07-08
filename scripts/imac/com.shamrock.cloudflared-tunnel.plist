@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.shamrock.cloudflared-tunnel.plist
+  Cloudflare Named Tunnel — macOS LaunchDaemon (SYSTEM LEVEL)
+  Office M1 iMac (macOS 14.4.1 Sonoma)
+
+  WHY LaunchDaemon (not LaunchAgent):
+    LaunchAgent runs only after a user logs in.
+    LaunchDaemon runs at system boot — the tunnel is available 24/7 even if
+    nobody is logged into the iMac. This is critical for after-hours AI agent
+    iMessage delivery.
+
+  TUNNEL DETAILS:
+    UUID:   bd9101bf-39a5-4b7a-97a8-d024c973c769
+    Routes: bb.shamrockbailbonds.biz → localhost:1234 (BlueBubbles)
+            imac.shamrockbailbonds.biz → localhost:22 (SSH)
+
+  INSTALL (requires sudo / admin):
+    scp scripts/imac/com.shamrock.cloudflared-tunnel.plist \
+        shamrockbailbonds@imac.shamrockbailbonds.biz:~/Downloads/
+    ssh shamrockbailbonds@imac.shamrockbailbonds.biz
+    sudo cp ~/Downloads/com.shamrock.cloudflared-tunnel.plist \
+            /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+    sudo chmod 644 /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+    sudo launchctl load /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+
+  VERIFY:
+    sudo launchctl list | grep shamrock.cloudflared
+    curl -s https://bb.shamrockbailbonds.biz/api/v1/ping?password=2245Bail
+
+  RESTART:
+    sudo launchctl unload /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+    sudo launchctl load   /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+
+  LOGS:
+    /var/log/cloudflared-tunnel.log
+    /var/log/cloudflared-tunnel-error.log
+
+  UNINSTALL:
+    sudo launchctl unload /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+    sudo rm /Library/LaunchDaemons/com.shamrock.cloudflared-tunnel.plist
+
+  NOTE: The existing LaunchAgent (com.cloudflare.bluebubbles-tunnel.plist) in
+  ~/Library/LaunchAgents should be UNLOADED and REMOVED once this daemon is active:
+    launchctl unload ~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist
+    rm ~/Library/LaunchAgents/com.cloudflare.bluebubbles-tunnel.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shamrock.cloudflared-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/cloudflared</string>
+        <string>tunnel</string>
+        <string>--config</string>
+        <string>/Users/shamrockbailbonds/.cloudflared/config.yml</string>
+        <string>run</string>
+        <string>bd9101bf-39a5-4b7a-97a8-d024c973c769</string>
+    </array>
+
+    <!-- Start at system boot (not just login) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Auto-restart if cloudflared crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Restart throttle: wait 10s before restarting on crash -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/var/log/cloudflared-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/cloudflared-tunnel-error.log</string>
+
+    <!-- Environment -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/shamrockbailbonds</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
