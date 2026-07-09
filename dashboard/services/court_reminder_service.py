@@ -16,15 +16,118 @@ the bond record and messaged independently.
 """
 
 import os
+import re
 import secrets
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
 
 _PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
+
+# Court-email and bond-record date formats (beyond strict ISO)
+_DATE_FORMATS = (
+    "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d",
+    "%B %d, %Y", "%b %d, %Y",
+    "%B %d %Y", "%b %d %Y",
+    "%m/%d/%y", "%m-%d-%y",
+)
+_TIME_FORMATS = (
+    "%I:%M %p", "%I:%M%p",
+    "%I:%M:%S %p", "%I:%M:%S%p",
+    "%H:%M", "%H:%M:%S",
+)
+_COMBINED_FORMATS = (
+    "%m/%d/%Y %I:%M %p", "%m/%d/%Y %I:%M%p",
+    "%m-%d-%Y %I:%M %p", "%Y-%m-%d %I:%M %p",
+    "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S%z",
+    "%m/%d/%Y %H:%M",
+    "%B %d, %Y %I:%M %p", "%b %d, %Y %I:%M %p",
+)
+
+
+def parse_court_date_string(court_date_str: str) -> Optional[datetime]:
+    """
+    Parse court date strings from ISO, court emails, and bond records.
+
+    Accepts e.g. '2026-05-15T09:00:00+00:00', '05/15/2026 09:00 AM',
+    'May 15, 2026 9:00AM', date-only '05/15/2026' (defaults to 09:00 UTC).
+    """
+    if not court_date_str or not str(court_date_str).strip():
+        return None
+
+    raw = str(court_date_str).strip()
+    # Normalize "9:00AM" → "9:00 AM"
+    raw = re.sub(r"(\d)(AM|PM)\b", r"\1 \2", raw, flags=re.IGNORECASE)
+
+    # ISO (with optional Z)
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        pass
+
+    for fmt in _COMBINED_FORMATS:
+        try:
+            dt = datetime.strptime(raw, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+
+    # Date-only → 09:00 UTC
+    for fmt in _DATE_FORMATS:
+        try:
+            dt = datetime.strptime(raw, fmt).replace(
+                hour=9, minute=0, second=0, microsecond=0, tzinfo=timezone.utc
+            )
+            return dt
+        except ValueError:
+            continue
+
+    # Split tokens: last 1–2 may be time ("09:00", "09:00 AM")
+    tokens = raw.split()
+    if len(tokens) >= 2:
+        for split_at in (len(tokens) - 2, len(tokens) - 1):
+            if split_at < 1:
+                continue
+            d_try = " ".join(tokens[:split_at])
+            t_try = " ".join(tokens[split_at:]).upper()
+            t_try = re.sub(r"(\d)(AM|PM)$", r"\1 \2", t_try)
+            date_dt = None
+            for fmt in _DATE_FORMATS:
+                try:
+                    date_dt = datetime.strptime(d_try, fmt)
+                    break
+                except ValueError:
+                    continue
+            if date_dt is None:
+                continue
+            time_dt = None
+            for fmt in _TIME_FORMATS:
+                try:
+                    time_dt = datetime.strptime(t_try, fmt)
+                    break
+                except ValueError:
+                    continue
+            if time_dt is None:
+                continue
+            return date_dt.replace(
+                hour=time_dt.hour,
+                minute=time_dt.minute,
+                second=time_dt.second,
+                microsecond=0,
+                tzinfo=timezone.utc,
+            )
+
+    return None
 
 
 class CourtReminderService:
@@ -46,12 +149,17 @@ class CourtReminderService:
         """Schedule 4-touch court date reminder sequence: 7d, 3d, 1d, morning-of.
 
         Sends to both defendant AND all indemnitor phone numbers on file.
+        Accepts ISO and court-email formats (e.g. '05/15/2026 09:00 AM').
         """
         try:
             court_reminders = get_collection("court_reminders")
-            court_date = datetime.fromisoformat(
-                court_date_str.replace("Z", "+00:00")
-            )
+            court_date = parse_court_date_string(court_date_str)
+            if court_date is None:
+                logger.error(
+                    "[CourtReminder] Unparseable court_date_str=%r for booking=%s",
+                    court_date_str, booking_number,
+                )
+                return {"success": False, "error": f"unparseable court_date: {court_date_str}"}
             if court_date.tzinfo is None:
                 court_date = court_date.replace(tzinfo=timezone.utc)
 

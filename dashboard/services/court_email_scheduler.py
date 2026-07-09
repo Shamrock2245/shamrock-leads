@@ -391,6 +391,21 @@ class CourtEmailScheduler:
                 sent += 1
         return sent
 
+    @staticmethod
+    def _parse_court_datetime(date_str: str, time_str: str = "09:00 AM") -> Optional[datetime]:
+        """
+        Parse court-email date/time into a timezone-aware datetime.
+
+        CourtEmailProcessor yields e.g. date_str='05/15/2026', time_str='09:00 AM'.
+        Delegates to parse_court_date_string (shared with CourtReminderService).
+        """
+        if not date_str:
+            return None
+        from dashboard.services.court_reminder_service import parse_court_date_string
+
+        combined = f"{date_str.strip()} {(time_str or '09:00 AM').strip()}".strip()
+        return parse_court_date_string(combined)
+
     def _schedule_court_reminders(self, parsed: Dict, contacts: Dict[str, List[str]]):
         """Best-effort schedule of BlueBubbles multi-touch court reminders."""
         try:
@@ -402,8 +417,17 @@ class CourtEmailScheduler:
             time_str = date_info.get("time_str") or "09:00 AM"
             if not date_str:
                 return
-            # Normalize to ISO-ish string
-            court_date_str = f"{date_str} {time_str}".strip()
+
+            court_dt = self._parse_court_datetime(date_str, time_str)
+            if court_dt is None:
+                logger.warning(
+                    "[CourtEmailScheduler] Unparseable court date %r %r — skip reminders",
+                    date_str, time_str,
+                )
+                return
+            # Always pass ISO so schedule_reminders parsing is deterministic
+            court_date_str = court_dt.isoformat()
+
             phones = contacts.get("defendant_phones") or contacts.get("phones") or []
             if not phones:
                 return

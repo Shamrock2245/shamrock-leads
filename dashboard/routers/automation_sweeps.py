@@ -176,15 +176,19 @@ async def bond_lifecycle_sweep(request: Request, api_key: str = ""):
     now = datetime.now(timezone.utc)
     stuck_before = now - timedelta(days=stuck_days)
 
-    bonds = get_collection("bonds")
+    # Canonical collection for bonded cases (not legacy "bonds")
+    bonds = get_collection("active_bonds")
     notes = get_collection("defendant_notes")
     issues: list[dict[str, Any]] = []
 
-    # Active / open bonds
+    # 7-status Kanban: open operational statuses only
     active_q = {
         "status": {
             "$in": [
                 "active",
+                "monitoring",
+                "alert",
+                "reinstated",
                 "open",
                 "posted",
                 "pending",
@@ -197,7 +201,7 @@ async def bond_lifecycle_sweep(request: Request, api_key: str = ""):
     try:
         active_bonds = await bonds.find(active_q).limit(300).to_list(length=300)
     except Exception as e:
-        logger.warning("[automation] bonds query failed: %s", e)
+        logger.warning("[automation] active_bonds query failed: %s", e)
         active_bonds = []
 
     missing_court = 0
@@ -340,13 +344,25 @@ async def risk_mitigation_sweep(request: Request, api_key: str = ""):
         except Exception:
             continue
 
-    # Court soon
+    # Court soon — active_bonds is the operational source of truth
     try:
-        bonds = get_collection("bonds")
+        bonds = get_collection("active_bonds")
         # ISO string or datetime court dates in window
         court_docs = await bonds.find(
             {
-                "status": {"$in": ["active", "open", "posted", "Active", "Open", "Posted"]},
+                "status": {
+                    "$in": [
+                        "active",
+                        "monitoring",
+                        "alert",
+                        "reinstated",
+                        "open",
+                        "posted",
+                        "Active",
+                        "Open",
+                        "Posted",
+                    ]
+                },
                 "court_date": {"$exists": True, "$nin": [None, ""]},
             }
         ).limit(200).to_list(length=200)
@@ -377,9 +393,9 @@ async def risk_mitigation_sweep(request: Request, api_key: str = ""):
     except Exception as e:
         logger.warning("[automation] court_soon query: %s", e)
 
-    # Forfeiture-ish statuses
+    # Forfeiture-ish statuses on active_bonds
     try:
-        bonds = get_collection("bonds")
+        bonds = get_collection("active_bonds")
         fort_docs = await bonds.find(
             {
                 "status": {
@@ -484,22 +500,34 @@ async def court_email_scan(request: Request, api_key: str = ""):
     since_hours = int(body.get("since_hours") or 24)
 
     try:
-        from dashboard.extensions import get_mongo_client
-        from dashboard.services.court_email_scheduler import CourtEmailScheduler
+        import asyncio
         import os as _os
 
-        client = get_mongo_client()
-        db_name = _os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
-        db = client[db_name] if client is not None else None
-        sched = CourtEmailScheduler(db=db)
+        from pymongo import MongoClient
+        from dashboard.services.court_email_scheduler import CourtEmailScheduler
 
-        # Temporarily widen window via Gmail reader if process_all uses fixed 1h —
-        # call process_all (uses since_hours=1 internally). For longer windows,
-        # run an extended fetch path.
-        if since_hours <= 1:
-            result = sched.process_all()
-        else:
-            result = _process_court_emails_extended(sched, since_hours)
+        uri = (_os.getenv("MONGODB_URI") or "").strip()
+        if not uri:
+            return JSONResponse(
+                {"ok": False, "error": "MONGODB_URI not configured"},
+                status_code=500,
+            )
+
+        def _sync_scan() -> dict:
+            # CourtEmailScheduler uses sync PyMongo (find_one/insert_one).
+            # Motor async DB makes every find_one() a coroutine → always truthy
+            # → every email treated as duplicate. Match cron.py pattern.
+            client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+            try:
+                db = client[_os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")]
+                sched = CourtEmailScheduler(db=db)
+                if since_hours <= 1:
+                    return sched.process_all()
+                return _process_court_emails_extended(sched, since_hours)
+            finally:
+                client.close()
+
+        result = await asyncio.to_thread(_sync_scan)
 
         return {
             "ok": True,
@@ -735,16 +763,38 @@ async def generate_discharge_report(request: Request, api_key: str = ""):
         import base64
 
         since = datetime.now(timezone.utc) - timedelta(days=days_back)
+        since_iso = since.isoformat()
         bonds_col = get_collection("active_bonds")
+        # Apply days_back window across timestamp field variants (datetime + ISO strings)
+        date_window = {
+            "$or": [
+                {"updated_at": {"$gte": since}},
+                {"exonerated_at": {"$gte": since}},
+                {"exonerated_at": {"$gte": since_iso}},
+                {"discharge_date": {"$gte": since}},
+                {"discharge_date": {"$gte": since_iso}},
+                {"status_updated_at": {"$gte": since}},
+            ]
+        }
         q: dict[str, Any] = {
             "status": {"$in": ["exonerated", "surrendered", "discharged"]},
+            **date_window,
         }
         docs = await bonds_col.find(q).sort("updated_at", -1).to_list(1000)
 
         # Also merge discharge_queue items that may not yet be on bonds
         try:
             dq = get_collection("discharge_queue")
-            queued = await dq.find({"status": {"$in": ["processed", "pending", "done"]}}).to_list(200)
+            dq_q: dict[str, Any] = {
+                "status": {"$in": ["processed", "pending", "done"]},
+                "$or": [
+                    {"processed_at": {"$gte": since}},
+                    {"created_at": {"$gte": since}},
+                    {"processed_at": {"$gte": since_iso}},
+                    {"created_at": {"$gte": since_iso}},
+                ],
+            }
+            queued = await dq.find(dq_q).to_list(200)
             for item in queued:
                 docs.append({
                     "defendant_name": item.get("defendant_name"),
