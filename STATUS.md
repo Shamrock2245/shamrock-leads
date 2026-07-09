@@ -56,6 +56,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 |------|------|
 | `shamrock-bail-portal-site` | Public site + GAS bond factory + school payment unlock |
 | `shamrock-bail-school` | Student LMS education funnel |
+| `shamrock-node-red` | **Automation fabric (n8n/Zapier analog)** — crons, webhooks, Watchdog, cross-service routing |
 
 Run from this repo:
 

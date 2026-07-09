@@ -1,6 +1,6 @@
-# Shamrock Ecosystem — Three-Repo Harmony
+# Shamrock Ecosystem — Four-Repo Harmony
 
-> How **shamrock-leads**, **shamrock-bail-portal-site**, and **shamrock-bail-school** work together.  
+> How **leads**, **portal**, **bail-school**, and **node-red** work together.  
 > **Last Updated:** 2026-07-08 · Per-repo truth: each repo’s `STATUS.md`
 
 ---
@@ -9,34 +9,39 @@
 
 | Business | Definition | Primary repos |
 |----------|------------|----------------|
-| **Bond Auto-CRM** | Phone/lead → outreach → intake → bond lifecycle (minimal human touch except risk gates) | `shamrock-leads` + portal GAS |
+| **Bond Auto-CRM** | Phone/lead → outreach → intake → bond lifecycle (minimal human touch except risk gates) | `shamrock-leads` + portal GAS + **node-red** orchestration |
 | **Bail School** | Pre-licensing: 20hr **$199**, 120hr **$649**; future CE; online + in-person | `shamrock-bail-school` + portal payment unlock |
 
 ---
 
 ## Roles
 
-| Repo | Role | Runtime | Primary URL |
-|------|------|---------|-------------|
+| Repo | Role | Runtime | Primary URL / port |
+|------|------|---------|---------------------|
 | **shamrock-leads** | Auto-CRM + scrapers + Super CRM dashboard | Hetzner Docker | `leads.shamrockbailbonds.biz` |
 | **shamrock-bail-portal-site** | Public clipboard + GAS factory + school Gmail unlock | Wix + GAS | `shamrockbailbonds.biz` |
 | **shamrock-bail-school** | Student LMS education funnel | Netlify Next.js | `school.shamrockbailbonds.biz` |
+| **shamrock-node-red** | **Open-source n8n/Zapier** — visual automation, crons, webhooks, cross-service glue | Hetzner Docker (often compose profile `ops`) | `:1880` editor/dashboard |
 
 ```
 County jails ──scrape──► shamrock-leads (Mongo + Slack)
                               │
-                              │ hot leads / intake match
-                              ▼
-                    shamrock-bail-portal-site (Wix + GAS)
+              ┌───────────────┼───────────────┐
+              │               │               │
+              ▼               ▼               ▼
+     shamrock-node-red   portal GAS      Slack / Twilio
+     (schedules,         (SignNow,       Telegram, etc.
+      webhooks,           packets)
+      Watchdog)
+              │
+              └──────► staff + clients
                               │
-              client magic links / SignNow / payments
-                              │
-                    (separate product) shamrock-bail-school
-                              │
-                    progress + certs ──► GAS school Code.gs / Sheets
+              (separate P&L) shamrock-bail-school
+                    progress + certs → school GAS / Sheets
 ```
 
-Bail School is **adjacent**, not on the critical arrest→bond path. FLDFS **bond** compliance reporting lives in leads (`/api/compliance/*`); FLDFS **education** compliance lives in bail-school.
+**Node-RED** is the central nervous system for time-based jobs and multi-system routing—not a second CRM UI and not the school LMS.  
+Bail School is **adjacent**, not on the critical arrest→bond path. FLDFS **bond** compliance lives in leads; FLDFS **education** compliance lives in bail-school.
 
 ---
 
