@@ -22,7 +22,7 @@ jobs:
   deploy:
     name: Deploy ShamrockLeads
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Deploy via SSH
@@ -35,7 +35,7 @@ jobs:
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
-          command_timeout: 10m
+          command_timeout: 20m
           envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |
             set -e
@@ -72,15 +72,54 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
-            # ── Clean up disk space (safe — preserves pulled images) ──
+            # ── Free disk before rebuild (failed builds leave layers; VPS is tight) ──
+            # Need ~2× image size free while old containers keep running during build.
             echo ""
             echo "🧹 Cleaning up disk space..."
-            docker image prune -af --filter "until=168h"  # Only prune images older than 7 days
-            docker container prune -f
-            docker volume prune -f
-            docker builder prune -af
+            df -h / || true
+            docker system df 2>/dev/null || true
+
+            # Stopped containers + anonymous volumes
+            docker container prune -f 2>/dev/null || true
+            docker volume prune -f 2>/dev/null || true
+
+            # BuildKit / intermediate layers (biggest source of "no space" mid-pip)
+            docker builder prune -af 2>/dev/null || true
+            docker buildx prune -af 2>/dev/null || true
+
+            # ALL unused images (not just 7d+) — running containers keep their images
+            docker image prune -af 2>/dev/null || true
+
+            # Host clutter that accumulates on small Hetzner volumes
             apt-get clean 2>/dev/null || true
-            echo "   Disk: $(df -h / | tail -1 | awk '{print $4}') free"
+            journalctl --vacuum-size=80M 2>/dev/null || true
+            rm -rf /tmp/pip-* /tmp/tmp* /var/tmp/pip-* 2>/dev/null || true
+            # Dangling docker overlay temp from crashed builds
+            rm -rf /var/lib/docker/tmp/* 2>/dev/null || true
+
+            FREE_KB=$(df -Pk / | awk 'NR==2 {print $4}')
+            echo "   Disk free: $(df -h / | awk 'NR==2 {print $4}') (${FREE_KB} KB)"
+
+            # If still under ~5 GB free, drop unused system objects hard
+            if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 5000000 ]; then
+              echo "   ⚠️ Low disk (<5GB) — docker system prune -af"
+              docker system prune -af 2>/dev/null || true
+              docker builder prune -af 2>/dev/null || true
+              FREE_KB=$(df -Pk / | awk 'NR==2 {print $4}')
+              echo "   Disk free after system prune: $(df -h / | awk 'NR==2 {print $4}')"
+            fi
+
+            # Last resort: stop stack, remove project images, rebuild cold (brief downtime)
+            if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 2500000 ]; then
+              echo "   ⚠️ Critical disk (<2.5GB) — stopping stack to reclaim image layers"
+              docker compose down --remove-orphans 2>/dev/null || true
+              docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
+                | grep -E 'shamrock|leads|dashboard' \
+                | awk '{print $2}' \
+                | xargs -r docker rmi -f 2>/dev/null || true
+              docker system prune -af 2>/dev/null || true
+              echo "   Disk free after emergency reclaim: $(df -h / | awk 'NR==2 {print $4}')"
+            fi
 
             # ── Ensure Obscura image is present (pulled, not built) ──
             echo ""
@@ -90,6 +129,9 @@ jobs:
             # ── Rebuild Docker images (only locally-built services) ──
             echo ""
             echo "🐳 Rebuilding Docker images..."
+            # Prefer BuildKit; avoid leaving orphan cache when build fails mid-pip
+            export DOCKER_BUILDKIT=1
+            export COMPOSE_DOCKER_CLI_BUILD=1
             docker compose build shamrock-leads dashboard
 
             # ── Rolling restart (avoids full downtime) ────────────

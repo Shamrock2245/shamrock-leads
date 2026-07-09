@@ -46,9 +46,13 @@ ENV CHROME_PATH=/usr/bin/chromium
 # Working directory
 WORKDIR /app
 
-# Install Python deps
+# Install Python deps (no pip cache layer — Hetzner volume is tight)
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /root/.cache/pip /tmp/pip-*
 
 # Install patchright's Chromium browser (for Charlotte County Cloudflare bypass)
 RUN python -m patchright install chromium || true
