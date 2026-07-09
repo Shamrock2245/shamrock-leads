@@ -379,11 +379,19 @@ async def api_write_bond(request: Request):
     if not booking.get("booking_number"):
         return JSONResponse({"success": False, "error": "Booking number required"}, status_code=400)
 
+    # Normalise surety to lowercase canonical form used by GAS template router
+    surety_id = insurer.lower().strip()
+    if surety_id not in ("osi", "palmetto"):
+        surety_id = "osi"  # safe default
+
     # ── Format GAS-compatible payload ──
     gas_payload = {
         "action": "sendPaperwork",
         "source": "shamrock-leads-dashboard",
-        "insuranceCompany": insurer.upper(),
+        # insuranceCompany: legacy GAS key (UPPERCASE) used by _shannon_buildFormData
+        "insuranceCompany": surety_id.upper(),
+        # surety_id: canonical lowercase key used by _resolveTemplateId in Telegram_Documents.js
+        "surety_id": surety_id,
         "defendant": {
             "fullName":   defendant.get("full_name", ""),
             "firstName":  defendant.get("first_name", ""),
@@ -428,6 +436,10 @@ async def api_write_bond(request: Request):
         # Intake source tracking
         "intake_id":  data.get("intake_id", ""),
         "intake_source": data.get("intake_source", "shamrock-leads-dashboard"),
+        # Agent constants — always locked to canonical values regardless of caller
+        "AgentName":         "Brendan O'Neal",
+        "AgentLicense":      "P139768",
+        "AgentLicenseNumber": "P139768",
     }
 
     # Log the formatted payload

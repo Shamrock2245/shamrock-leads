@@ -58,6 +58,9 @@ reportlab>=4.0.0
 python-dateutil>=2.8.0
 PyMuPDF>=1.24.0
 
+# Official OSI / Palmetto bond & discharge reports (XLSX)
+openpyxl>=3.1.0
+
 # Firebase Admin SDK (BlueBubbles URL sync via Firestore)
 firebase-admin>=6.4.0
 

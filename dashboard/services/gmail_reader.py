@@ -72,13 +72,18 @@ class GmailReaderService:
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
 
+            # readonly + modify (mark read) + send (court date notices to clients)
             creds = Credentials(
                 token=None,
                 refresh_token=self._refresh_token,
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=self._client_id,
                 client_secret=self._client_secret,
-                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                scopes=[
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                    "https://www.googleapis.com/auth/gmail.modify",
+                    "https://www.googleapis.com/auth/gmail.send",
+                ],
             )
 
             self._service = build("gmail", "v1", credentials=creds)
@@ -252,6 +257,66 @@ class GmailReaderService:
             else:
                 logger.error("[GmailReader] Failed to mark %s as read: %s", message_id, e)
             return False
+
+    def send_email(
+        self,
+        to: str,
+        subject: str,
+        body_text: str,
+        *,
+        body_html: str | None = None,
+        cc: str | None = None,
+        reply_to: str | None = None,
+    ) -> dict:
+        """
+        Send an email from admin@shamrockbailbonds.biz via Gmail API.
+
+        Requires gmail.send scope on the OAuth refresh token.
+        Returns {"success": bool, "id": str|None, "error": str|None}.
+        """
+        service = self.authenticate()
+        if not service:
+            return {"success": False, "id": None, "error": "gmail_not_configured"}
+
+        to = (to or "").strip()
+        if not to or "@" not in to:
+            return {"success": False, "id": None, "error": "invalid_recipient"}
+
+        try:
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+
+            msg = MIMEMultipart("alternative")
+            msg["To"] = to
+            msg["Subject"] = subject
+            msg["From"] = "Shamrock Bail Bonds <admin@shamrockbailbonds.biz>"
+            if cc:
+                msg["Cc"] = cc
+            if reply_to:
+                msg["Reply-To"] = reply_to
+            msg.attach(MIMEText(body_text or "", "plain", "utf-8"))
+            if body_html:
+                msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+            sent = (
+                service.users()
+                .messages()
+                .send(userId="me", body={"raw": raw})
+                .execute()
+            )
+            mid = sent.get("id")
+            logger.info("[GmailReader] ✅ Sent email to %s id=%s", to.split("@")[0] + "@…", mid)
+            return {"success": True, "id": mid, "error": None}
+        except Exception as e:
+            err_str = str(e)
+            if "insufficientPermissions" in err_str or "Insufficient Permission" in err_str:
+                logger.warning(
+                    "[GmailReader] Cannot send — OAuth token missing gmail.send scope"
+                )
+                return {"success": False, "id": None, "error": "missing_gmail_send_scope"}
+            logger.error("[GmailReader] send_email failed: %s", e)
+            return {"success": False, "id": None, "error": err_str[:300]}
 
     def get_labels(self) -> List[Dict]:
         """List all Gmail labels (for debugging / label-based filtering)."""

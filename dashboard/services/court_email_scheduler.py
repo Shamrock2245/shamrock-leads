@@ -154,21 +154,31 @@ class CourtEmailScheduler:
                             case_number, exon_err,
                         )
 
-                # ── Step 5: BlueBubbles notification (defendant + indemnitor) ──
-                if case_number:
+                # ── Step 5: Notify defendant + indemnitor (email + BlueBubbles) ──
+                if case_number or parsed.get("defendant_name"):
                     try:
                         sms_text = CourtEmailProcessor.generate_sms_summary(parsed)
+                        contacts = self._find_notification_contacts(
+                            parsed.get("defendant_name"),
+                            case_number,
+                        )
+                        # Email court date / forfeiture / discharge notices
+                        email_stats = self._send_court_emails(parsed, contacts, event_type)
+                        stats["emails_sent"] = stats.get("emails_sent", 0) + email_stats
+
+                        # BlueBubbles iMessage / SMS when phones on file
                         if sms_text:
-                            # Look up ALL relevant phone numbers
-                            phones = self._find_notification_phones(
-                                parsed.get("defendant_name"),
-                                case_number,
-                            )
-                            for phone in phones:
+                            for phone in contacts.get("phones") or []:
                                 self._send_bb_notification(phone, sms_text)
                                 stats["messages_sent"] += 1
-                    except Exception as bb_err:
-                        logger.warning("[CourtEmailScheduler] BB notification failed: %s", bb_err)
+
+                        # Schedule multi-touch court reminders on calendar court dates
+                        if event_type == "courtDate" and parsed.get("datetime_info"):
+                            self._schedule_court_reminders(parsed, contacts)
+                    except Exception as notify_err:
+                        logger.warning(
+                            "[CourtEmailScheduler] Client notification failed: %s", notify_err
+                        )
 
                 # ── Step 6: Log to MongoDB ──
                 self._log_processed_email(msg_id, email_data, parsed)
@@ -220,55 +230,207 @@ class CourtEmailScheduler:
             logger.error("[CourtEmailScheduler] Log write failed: %s", e)
 
     def _find_notification_phones(self, name: Optional[str], case_number: str) -> List[str]:
-        """
-        Look up phone numbers for BOTH the defendant and indemnitor.
-        Returns deduplicated list of phone numbers to notify.
-        """
-        if self._db is None:
-            return []
+        """Backward-compatible phone-only helper."""
+        return self._find_notification_contacts(name, case_number).get("phones") or []
 
-        phones = set()
+    def _find_notification_contacts(
+        self, name: Optional[str], case_number: str
+    ) -> Dict[str, List[str]]:
+        """
+        Look up phones + emails for defendant and indemnitor.
+        Returns {"phones": [...], "emails": [...], "defendant_phones": [], "indemnitor_phones": []}.
+        """
+        empty = {
+            "phones": [],
+            "emails": [],
+            "defendant_phones": [],
+            "indemnitor_phones": [],
+            "defendant_emails": [],
+            "indemnitor_emails": [],
+        }
+        if self._db is None:
+            return empty
+
+        phones: set = set()
+        emails: set = set()
+        def_phones: set = set()
+        ind_phones: set = set()
+        def_emails: set = set()
+        ind_emails: set = set()
+
+        def _add_phone(bucket: set, val: Optional[str]):
+            if val and str(val).strip():
+                bucket.add(str(val).strip())
+                phones.add(str(val).strip())
+
+        def _add_email(bucket: set, val: Optional[str]):
+            v = (val or "").strip().lower()
+            if v and "@" in v and "shamrock" not in v:  # never spam our own inbox as client
+                bucket.add(v)
+                emails.add(v)
 
         try:
-            # Defendant phone — try case_number match first, then name
             if case_number:
-                record = self._db["arrests"].find_one(
-                    {"case_number": case_number, "phone": {"$exists": True, "$ne": ""}},
-                    {"phone": 1},
+                for coll_name in ("active_bonds", "bonds", "bonded_cases", "arrests"):
+                    try:
+                        rec = self._db[coll_name].find_one(
+                            {"$or": [
+                                {"case_number": case_number},
+                                {"case_no": case_number},
+                            ]},
+                        )
+                    except Exception:
+                        rec = None
+                    if not rec:
+                        continue
+                    _add_phone(def_phones, rec.get("phone") or rec.get("defendant_phone"))
+                    _add_phone(ind_phones, rec.get("indemnitor_phone") or rec.get("cosigner_phone"))
+                    _add_email(def_emails, rec.get("email") or rec.get("defendant_email"))
+                    _add_email(ind_emails, rec.get("indemnitor_email") or rec.get("cosigner_email"))
+
+                indem = self._db["indemnitors"].find_one(
+                    {"case_number": case_number},
                 )
-                if record and record.get("phone"):
-                    phones.add(record["phone"])
+                if indem:
+                    _add_phone(ind_phones, indem.get("phone"))
+                    _add_email(ind_emails, indem.get("email"))
 
             if name:
                 record = self._db["defendants"].find_one(
-                    {"full_name": {"$regex": name, "$options": "i"}, "phone": {"$exists": True, "$ne": ""}},
-                    {"phone": 1},
+                    {"full_name": {"$regex": name, "$options": "i"}},
                 )
-                if record and record.get("phone"):
-                    phones.add(record["phone"])
-
-            # Indemnitor phone — look up via case/bond linkage
-            if case_number:
-                # Try indemnitors collection (linked by case_number)
-                indem = self._db["indemnitors"].find_one(
-                    {"case_number": case_number, "phone": {"$exists": True, "$ne": ""}},
-                    {"phone": 1},
-                )
-                if indem and indem.get("phone"):
-                    phones.add(indem["phone"])
-
-                # Also check bonded_cases for indemnitor_phone
-                bond_case = self._db["bonded_cases"].find_one(
-                    {"case_number": case_number, "indemnitor_phone": {"$exists": True, "$ne": ""}},
-                    {"indemnitor_phone": 1},
-                )
-                if bond_case and bond_case.get("indemnitor_phone"):
-                    phones.add(bond_case["indemnitor_phone"])
+                if record:
+                    _add_phone(def_phones, record.get("phone"))
+                    _add_email(def_emails, record.get("email"))
 
         except Exception as e:
-            logger.debug("[CourtEmailScheduler] Phone lookup failed: %s", e)
+            logger.debug("[CourtEmailScheduler] Contact lookup failed: %s", e)
 
-        return list(phones)
+        return {
+            "phones": list(phones),
+            "emails": list(emails),
+            "defendant_phones": list(def_phones),
+            "indemnitor_phones": list(ind_phones),
+            "defendant_emails": list(def_emails),
+            "indemnitor_emails": list(ind_emails),
+        }
+
+    def _send_court_emails(
+        self, parsed: Dict, contacts: Dict[str, List[str]], event_type: str
+    ) -> int:
+        """Email defendant + indemnitor about court events. Returns # sent."""
+        try:
+            from dashboard.services.gmail_reader import GmailReaderService
+            reader = GmailReaderService()
+            if not reader.is_configured:
+                return 0
+        except Exception:
+            return 0
+
+        defendant = parsed.get("defendant_name") or "the defendant"
+        case_number = parsed.get("case_number") or "N/A"
+        date_info = parsed.get("datetime_info") or {}
+        date_str = date_info.get("date_str") or "TBD"
+        time_str = date_info.get("time_str") or ""
+        when = f"{date_str}" + (f" at {time_str}" if time_str else "")
+        location = parsed.get("location") or "See court notice"
+        county = parsed.get("county") or ""
+
+        if event_type == "courtDate":
+            subject = f"Court Date Notice — {defendant} ({case_number})"
+            body = (
+                f"Shamrock Bail Bonds — Court Date Notice\n\n"
+                f"Defendant: {defendant}\n"
+                f"Case: {case_number}\n"
+                f"County: {county or 'Florida'}\n"
+                f"When: {when}\n"
+                f"Where: {location}\n\n"
+                f"Please appear on time. Failure to appear may result in bond forfeiture "
+                f"and a warrant for arrest.\n\n"
+                f"Questions? Call (239) 332-2245 or reply to this email.\n"
+                f"— Shamrock Bail Bonds\n"
+                f"1528 Broadway, Ft. Myers, FL 33901\n"
+            )
+            html = (
+                f"<div style='font-family:Calibri,Arial,sans-serif;color:#0f172a'>"
+                f"<h2 style='color:#0B3D2E'>☘️ Court Date Notice</h2>"
+                f"<p><b>Defendant:</b> {defendant}<br>"
+                f"<b>Case:</b> {case_number}<br>"
+                f"<b>When:</b> {when}<br>"
+                f"<b>Where:</b> {location}</p>"
+                f"<p style='color:#b91c1c'><b>Important:</b> Failure to appear may result in "
+                f"bond forfeiture and a warrant.</p>"
+                f"<p>Questions? Call <b>(239) 332-2245</b>.</p>"
+                f"<p style='color:#64748b;font-size:12px'>Shamrock Bail Bonds · 1528 Broadway, Ft. Myers, FL</p>"
+                f"</div>"
+            )
+        elif event_type == "forfeiture":
+            subject = f"URGENT — Bond Forfeiture Notice — {defendant} ({case_number})"
+            body = (
+                f"URGENT — Shamrock Bail Bonds\n\n"
+                f"A bond forfeiture notice was received for {defendant}, case {case_number}.\n"
+                f"Please contact us immediately at (239) 332-2245.\n"
+            )
+            html = None
+        elif event_type == "discharge":
+            subject = f"Bond Discharge — {defendant} ({case_number})"
+            body = (
+                f"Shamrock Bail Bonds\n\n"
+                f"Good news: a discharge/exoneration notice was received for {defendant}, "
+                f"case {case_number}. Your bond obligation may be released pending final confirmation.\n"
+                f"Call (239) 332-2245 with questions.\n"
+            )
+            html = None
+        else:
+            return 0
+
+        sent = 0
+        for addr in contacts.get("emails") or []:
+            result = reader.send_email(addr, subject, body, body_html=html, reply_to="admin@shamrockbailbonds.biz")
+            if result.get("success"):
+                sent += 1
+        return sent
+
+    def _schedule_court_reminders(self, parsed: Dict, contacts: Dict[str, List[str]]):
+        """Best-effort schedule of BlueBubbles multi-touch court reminders."""
+        try:
+            import asyncio
+            from dashboard.services.court_reminder_service import CourtReminderService
+
+            date_info = parsed.get("datetime_info") or {}
+            date_str = date_info.get("date_str")
+            time_str = date_info.get("time_str") or "09:00 AM"
+            if not date_str:
+                return
+            # Normalize to ISO-ish string
+            court_date_str = f"{date_str} {time_str}".strip()
+            phones = contacts.get("defendant_phones") or contacts.get("phones") or []
+            if not phones:
+                return
+            svc = CourtReminderService(db=self._db)
+
+            async def _run():
+                await svc.schedule_reminders(
+                    booking_number=parsed.get("case_number") or "unknown",
+                    defendant_name=parsed.get("defendant_name") or "Defendant",
+                    phone=phones[0],
+                    court_date_str=court_date_str,
+                    court_location=parsed.get("location") or "",
+                    case_number=parsed.get("case_number") or "",
+                    indemnitor_phones=contacts.get("indemnitor_phones") or [],
+                )
+
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.ensure_future(_run())
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                try:
+                    loop.run_until_complete(_run())
+                finally:
+                    loop.close()
+        except Exception as e:
+            logger.debug("[CourtEmailScheduler] schedule reminders skipped: %s", e)
 
     def _send_bb_notification(self, phone: str, message: str):
         """Send an iMessage/SMS via BlueBubbles. Works in both sync and async contexts."""

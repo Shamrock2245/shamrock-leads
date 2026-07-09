@@ -249,6 +249,9 @@ async def intake_submit(request: Request):
         "match_confidence": None,
         "match_strategy": None,
         "match_timestamp": None,
+        # Surety company routing — 'osi' (default) or 'palmetto'
+        # Staff can override in dashboard before triggering paperwork
+        "surety_id": (data.get("surety_id") or data.get("SuretyID") or "osi").lower().strip(),
         # Paperwork fields (populated by Phase 6)
         "paperwork_packet_id": None,
         "paperwork_status": None,
