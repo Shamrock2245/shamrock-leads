@@ -385,8 +385,13 @@ async def file_to_drive(request: Request, identifier: str):
     if not group_id:
         return JSONResponse({'error': 'No document group ID associated with this packet'}, status_code=400)
         
-    # Get Defendant Name
+    # Get Defendant Name and surety for correct Drive folder routing
     defendant_name = packet.get("defendant_name", "Unknown_Defendant")
+    # Normalise surety_id from packet (stored as 'osi' or 'palmetto')
+    surety_id = (packet.get("surety_id") or packet.get("insurance_company") or "osi").lower().strip()
+    if surety_id not in ("osi", "palmetto"):
+        surety_id = "osi"
+    packet_id = packet.get("packet_id", identifier)  # fix undefined variable
     
     try:
         signnow_service = _get_signnow_service()
@@ -395,29 +400,51 @@ async def file_to_drive(request: Request, identifier: str):
         drive_service = GoogleDriveService()
         if not drive_service.is_configured:
             return JSONResponse({'error': 'Google Drive OAuth is not configured'}, status_code=500)
-            
+
+        # ── Drive Folder Hierarchy ──
+        # Root (Completed Bonds)
+        #   └─ OSI /  Palmetto          ← surety subfolder (GAP-G fix)
+        #       └─ DefendantLastName, FirstInitial_YYYYMMDD
+        #           └─ PDF file
         root_folder_id = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
-        
-        def_folder_id = drive_service.get_or_create_folder(defendant_name, root_folder_id)
+
+        # Surety subfolder (OSI or Palmetto)
+        surety_label = surety_id.upper()  # 'OSI' or 'PALMETTO'
+        surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
+        if not surety_folder_id:
+            return JSONResponse({'error': f'Failed to get/create surety folder ({surety_label})'}, status_code=500)
+
+        # Defendant subfolder — naming convention: LastName, FirstInitial_YYYYMMDD
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        # Try to build canonical name from parts; fall back to full name
+        def_last = packet.get("defendant_last_name") or ""
+        def_first = packet.get("defendant_first_name") or ""
+        if def_last and def_first:
+            folder_name = f"{def_last}, {def_first[0].upper()}_{date_str}"
+        else:
+            folder_name = f"{defendant_name.replace(' ', '_')}_{date_str}"
+
+        def_folder_id = drive_service.get_or_create_folder(folder_name, surety_folder_id)
         if not def_folder_id:
             return JSONResponse({'error': 'Failed to get/create Defendant folder'}, status_code=500)
-            
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        date_folder_name = f"{defendant_name}_{date_str}"
-        date_folder_id = drive_service.get_or_create_folder(date_folder_name, def_folder_id)
-        if not date_folder_id:
-            return JSONResponse({'error': 'Failed to get/create Date folder'}, status_code=500)
-            
-        filename = f"{defendant_name}_Completed_Bond_{date_str}.pdf"
-        link = drive_service.upload_pdf(pdf_bytes, filename, date_folder_id)
+
+        filename = f"{folder_name}_Completed_Bond.pdf"
+        link = drive_service.upload_pdf(pdf_bytes, filename, def_folder_id)
         
         if link:
-            # Update DB with drive link
+            # Update DB with drive link, surety, and filed status
             await db.paperwork_packets.update_one(
                 {"packet_id": packet_id},
-                {"$set": {"drive_link": link, "status": "filed"}}
+                {"$set": {
+                    "drive_link": link,
+                    "drive_folder_id": def_folder_id,
+                    "surety_id": surety_id,
+                    "status": "filed",
+                    "filed_at": datetime.datetime.utcnow().isoformat()
+                }}
             )
-            return JSONResponse({'status': 'success', 'drive_link': link})
+            logger.info("[file-to-drive] Filed %s (%s) → Drive: %s", defendant_name, surety_label, link)
+            return JSONResponse({'status': 'success', 'drive_link': link, 'surety': surety_label})
         else:
             return JSONResponse({'error': 'Failed to upload PDF to Drive'}, status_code=500)
             

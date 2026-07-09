@@ -45,6 +45,33 @@ Bail School is **adjacent**, not on the critical arrest→bond path. FLDFS **bon
 
 ---
 
+## Super admin identity
+
+**`admin@shamrockbailbonds.biz` is always full admin** when logged into any Shamrock surface.
+
+| Repo | Mechanism |
+|------|-----------|
+| portal | `src/backend/super-admin.js` + `portal-auth.jsw` elevation |
+| school | `lib/auth.ts` `SUPER_ADMIN_EMAILS` (hardcoded ∪ `ADMIN_EMAILS`) |
+| leads | `dashboard/auth/super_admin.py` + session claims in PIN middleware |
+| node-red | Ops editor credentials; data admin via leads/portal as admin@ |
+
+Optional allowlist for additional admins: `ADMIN_EMAILS=admin@shamrockbailbonds.biz,...`
+
+## Automation (work smarter)
+
+Node-RED orchestrates three pillars (see `shamrock-node-red/docs/SUPER_ADMIN.md`):
+
+1. **Lead qualification** — score ≥ 70 hot, warm follow-up, high-value bonds  
+2. **Bond / relationship lifecycle** — stuck stages, missing court dates, closer drips  
+3. **Risk mitigation** — flight risk loop, court proximity, check-ins, forfeiture alerts  
+
+Leads machine API (auth: `GAS_API_KEY`):
+
+- `POST /api/automation/lead-qualification`
+- `POST /api/automation/bond-lifecycle`
+- `POST /api/automation/risk-mitigation`
+
 ## Shared contracts (must stay aligned)
 
 ### 1. API keys / secrets (same value across systems)

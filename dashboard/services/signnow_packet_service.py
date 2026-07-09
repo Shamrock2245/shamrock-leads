@@ -26,10 +26,10 @@ logger = logging.getLogger(__name__)
 SIGNNOW_BASE = "https://api.signnow.com"
 
 # Agent constants
-AGENT_NAME = "Brendan O'Shaughnahill"
-AGENT_LICENSE = "P322089"
+AGENT_NAME = "Brendan O'Neal"
+AGENT_LICENSE = "P139768"
 AGENCY_NAME = "Shamrock Bail Bonds"
-AGENCY_PHONE = "(239) 244-4114"
+AGENCY_PHONE = "(239) 332-2245"
 
 
 class SignNowPacketService:

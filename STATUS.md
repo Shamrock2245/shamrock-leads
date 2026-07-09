@@ -35,6 +35,13 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | Hardcoded Mongo/BB passwords scrubbed from scripts | ✅ |
 | Ecosystem secrets checklist | `scripts/check_ecosystem_secrets.py` |
 | Super CRM docs | `docs/SUPER_CRM.md`, `docs/ECOSYSTEM.md` |
+| **Surety realignment (July 2026)** | ✅ |
+| &nbsp;&nbsp;`bonds.py` — `surety_id` + `insuranceCompany` both forwarded to GAS | ✅ |
+| &nbsp;&nbsp;`bonds.py` — agent constants (Brendan O'Neal / P139768) injected in every GAS payload | ✅ |
+| &nbsp;&nbsp;`bond_lifecycle.py` — Drive filing uses `OSI/PALMETTO` surety subfolder | ✅ |
+| &nbsp;&nbsp;`bond_lifecycle.py` — `packet_id` undefined variable fixed | ✅ |
+| &nbsp;&nbsp;`signnow_packet_service.py` — agent name/license locked to Brendan O'Neal / P139768 | ✅ |
+| &nbsp;&nbsp;`intake.py` — `surety_id` persisted to MongoDB `intake_queue` | ✅ |
 
 ---
 
@@ -64,3 +71,11 @@ Run from this repo:
 python scripts/check_ecosystem_secrets.py
 python scripts/check_ecosystem_secrets.py --strict
 ```
+
+## Super-admin + court automation (July 2026)
+
+- Super-admin: `admin@shamrockbailbonds.biz` (see `dashboard/auth/super_admin.py`)
+- Automation API (GAS_API_KEY): `/api/automation/lead-qualification|bond-lifecycle|risk-mitigation|court-email-scan|bond-report|discharge-report`
+- Official OSI/Palmetto XLSX bond & discharge reports (`dashboard/services/bond_report_xlsx.py`)
+- Court email: Calendar + client email + BlueBubbles (`court_email_scheduler`)
+

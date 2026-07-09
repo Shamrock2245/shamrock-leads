@@ -8,18 +8,28 @@ Usage in main.py:
     from dashboard.auth.pin_middleware import PinAuthMiddleware, mount_login_routes
     app.add_middleware(PinAuthMiddleware)
     mount_login_routes(app)
+
+Session payload includes email + role so admin@shamrockbailbonds.biz is
+recognized as super-admin across privileged endpoints.
 """
 from __future__ import annotations
 
 import os
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response, JSONResponse, RedirectResponse, HTMLResponse
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+
+from dashboard.auth.super_admin import (
+    PRIMARY_SUPER_ADMIN,
+    is_admin_email,
+    normalize_email,
+    resolve_role_for_email,
+)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -44,6 +54,7 @@ _STATIC_EXTENSIONS = (
 # Prefixes that bypass auth
 OPEN_PREFIXES = (
     "/api/webhooks/",
+    "/api/automation/",  # Node-RED / machine sweeps (GAS_API_KEY enforced in router)
     "/g/",
     "/c/",
     "/api/portal/",
@@ -75,20 +86,53 @@ def _get_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret)
 
 
-def _sign_token() -> str:
-    """Create a signed session token."""
+def _sign_token(email: str | None = None, role: str | None = None) -> str:
+    """Create a signed session token with optional identity claims."""
     s = _get_serializer()
-    return s.dumps({"auth": True, "t": int(time.time())})
+    payload: dict[str, Any] = {"auth": True, "t": int(time.time())}
+    if email:
+        payload["email"] = normalize_email(email)
+        payload["role"] = role or resolve_role_for_email(email)
+    else:
+        # PIN-only unlock still grants full CRM access; default identity is super admin
+        # so staff tools that check email/role treat the operator as admin.
+        payload["email"] = PRIMARY_SUPER_ADMIN
+        payload["role"] = "admin"
+    return s.dumps(payload)
 
 
 def _verify_token(token: str) -> bool:
     """Verify a signed session token (valid for 7 days)."""
+    return _load_session(token) is not None
+
+
+def _load_session(token: str | None) -> dict[str, Any] | None:
+    """Return session payload or None if invalid/expired."""
+    if not token:
+        return None
     try:
         s = _get_serializer()
-        s.loads(token, max_age=COOKIE_MAX_AGE)
-        return True
+        data = s.loads(token, max_age=COOKIE_MAX_AGE)
+        if not isinstance(data, dict) or not data.get("auth"):
+            return None
+        return data
     except (BadSignature, SignatureExpired):
+        return None
+
+
+def get_session_from_request(request: Request) -> dict[str, Any] | None:
+    """Public helper for routers that need email/role from the session cookie."""
+    return _load_session(request.cookies.get(COOKIE_NAME))
+
+
+def session_is_admin(request: Request) -> bool:
+    """True when the current session is super-admin or ADMIN_EMAILS allowlist."""
+    sess = get_session_from_request(request)
+    if not sess:
         return False
+    if sess.get("role") == "admin":
+        return True
+    return is_admin_email(sess.get("email"))
 
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
@@ -127,9 +171,16 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in OAUTH_PREFIXES):
             return await call_next(request)
 
-        # Check signed session cookie
+        # Check signed session cookie — attach identity to request.state
         token = request.cookies.get(COOKIE_NAME)
-        if token and _verify_token(token):
+        sess = _load_session(token) if token else None
+        if sess:
+            request.state.sl_session = sess
+            request.state.sl_email = sess.get("email") or PRIMARY_SUPER_ADMIN
+            request.state.sl_role = sess.get("role") or "admin"
+            request.state.sl_is_admin = (
+                sess.get("role") == "admin" or is_admin_email(sess.get("email"))
+            )
             return await call_next(request)
 
         # Not authenticated
@@ -155,32 +206,43 @@ body{min-height:100vh;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(135deg,#00d26a,#00b85c);-webkit-background-clip:text;
   -webkit-text-fill-color:transparent}
 .sub{text-align:center;color:#8899aa;font-size:14px;margin-bottom:32px}
+label{display:block;font-size:12px;color:#8899aa;margin-bottom:6px;margin-top:12px}
 input{width:100%;padding:14px 16px;border:1px solid rgba(255,255,255,0.12);
-  background:rgba(255,255,255,0.06);border-radius:12px;color:#fff;font-size:18px;
-  letter-spacing:8px;text-align:center;outline:none;transition:border-color .3s}
+  background:rgba(255,255,255,0.06);border-radius:12px;color:#fff;font-size:16px;
+  outline:none;transition:border-color .3s}
+input#pin{font-size:18px;letter-spacing:8px;text-align:center}
 input:focus{border-color:#00d26a}
 button{width:100%;margin-top:16px;padding:14px;border:none;border-radius:12px;
   background:linear-gradient(135deg,#00d26a,#00b85c);color:#000;font-size:16px;
   font-weight:600;cursor:pointer;transition:transform .2s,box-shadow .2s}
 button:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,210,106,0.3)}
 .err{color:#ff6b6b;text-align:center;margin-top:12px;font-size:13px;min-height:20px}
+.hint{text-align:center;color:#667788;font-size:11px;margin-top:16px;line-height:1.4}
 </style></head><body>
 <div class="card">
   <div class="logo">☘️ Shamrock</div>
-  <div class="sub">Staff Dashboard — Enter PIN</div>
+  <div class="sub">Staff Dashboard — Super CRM</div>
   <form id="f" method="POST" action="/login">
-    <input type="password" name="pin" id="pin" maxlength="6" placeholder="••••••" autofocus>
+    <label for="email">Staff email (optional — admin@ = full admin)</label>
+    <input type="email" name="email" id="email" placeholder="admin@shamrockbailbonds.biz" autocomplete="username">
+    <label for="pin">PIN</label>
+    <input type="password" name="pin" id="pin" maxlength="12" placeholder="••••••" autofocus autocomplete="current-password">
     <button type="submit">Unlock</button>
     <div class="err" id="err"></div>
+    <div class="hint">Logged in as admin@shamrockbailbonds.biz grants admin across the ecosystem.</div>
   </form>
 </div>
 <script>
 document.getElementById('f').addEventListener('submit',async e=>{
   e.preventDefault();
   const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({pin:document.getElementById('pin').value})});
+    body:JSON.stringify({
+      pin:document.getElementById('pin').value,
+      email:document.getElementById('email').value||''
+    })});
   if(r.ok){window.location='/'}
-  else{document.getElementById('err').textContent='Invalid PIN';
+  else{const j=await r.json().catch(()=>({}));
+    document.getElementById('err').textContent=j.error||'Invalid PIN';
     document.getElementById('pin').value=''}
 });
 </script></body></html>"""
@@ -199,10 +261,31 @@ def mount_login_routes(app):
         except Exception:
             data = {}
         pin = data.get("pin", "")
+        email = normalize_email(data.get("email") or "")
 
         if not DASHBOARD_PIN or pin == DASHBOARD_PIN:
-            token = _sign_token()
-            response = JSONResponse({"success": True})
+            # PIN unlocks the CRM. Email (when provided) sets identity/role claims.
+            # Super-admin email always stores role=admin.
+            if email and not is_admin_email(email) and os.getenv(
+                "STRICT_ADMIN_EMAIL_LOGIN", ""
+            ).lower() in ("1", "true", "yes"):
+                # Optional hard mode: only ADMIN_EMAILS may log in (off by default)
+                return JSONResponse(
+                    {"error": "Email not authorized for dashboard access"},
+                    status_code=403,
+                )
+
+            role = resolve_role_for_email(email) if email else "admin"
+            session_email = email or PRIMARY_SUPER_ADMIN
+            token = _sign_token(email=session_email, role=role)
+            response = JSONResponse(
+                {
+                    "success": True,
+                    "email": session_email,
+                    "role": role,
+                    "is_admin": role == "admin" or is_admin_email(session_email),
+                }
+            )
             # secure=True is required on HTTPS — without it the browser
             # silently drops the cookie and every subsequent API call returns 401,
             # causing the dashboard to render as a black screen.
