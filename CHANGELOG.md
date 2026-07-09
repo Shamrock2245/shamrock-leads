@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.7.0] — 2026-07-08 (Super CRM hub + security hygiene + docs truth)
+
+### Added
+- `/api/crm/health`, `/api/crm/overview`, `/api/crm/pipeline`, `/api/crm/search` — Super CRM hub.
+- Omnibar uses CRM search (fallback to match-manager).
+- `scripts/check_ecosystem_secrets.py` — cross-repo env presence + shared key fingerprints.
+- `docs/SUPER_CRM.md`, `docs/ECOSYSTEM.md`, `STATUS.md`.
+- Expanded Mongo indexes for active_bonds, intake, indemnitors, tasks, payments, matches.
+
+### Security
+- Scrubbed hardcoded Mongo URIs and BlueBubbles passwords from one-off scripts.
+- Removed tracked session cookie dumps; tightened `.gitignore`.
+- Wix intake + scraper event webhooks **fail closed** if secrets missing.
+- Production can require `DASHBOARD_PIN` / `SECRET_KEY` (no open dashboard by default when configured).
+
+### Docs
+- Clarified product boundary: this repo is bond Auto-CRM; school LMS is separate.
+- Phase 18 roadmap: true phone→autopilot with explicit human gates (next).
+
+### Ops still required
+- VPS deploy of this release; BlueBubbles office reliability; rotate any previously leaked credentials.
+
+---
+
 ## [2.6.0] — 2026-05-27 (Dashboard Nesting Fix + Surety Normalization + Doc Refresh)
 
 ### Fixed — Dashboard

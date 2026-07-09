@@ -1,32 +1,36 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-06-11
-> **Repo:** `Shamrock2245/shamrock-leads`
-> **Mission:** Scrape every arrest in every Florida county. Score every lead. Write every bond.
-> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
+> **Last Updated:** 2026-07-08  
+> **Repo:** `Shamrock2245/shamrock-leads`  
+> **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
+> **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
+> Super CRM: `docs/SUPER_CRM.md` · Ecosystem secrets: `scripts/check_ecosystem_secrets.py`
 
 ---
 
 ## 1. What This Repo Does
 
-ShamrockLeads is a **statewide arrest intelligence and bonded-case management platform** that:
+ShamrockLeads is a **statewide arrest intelligence and bond Auto-CRM** platform that:
 
-1. **Scrapes** 51 Florida county jail rosters on scheduled intervals `[IMPLEMENTED]`
+1. **Scrapes** Florida county jail rosters on scheduled intervals `[IMPLEMENTED — 52 files]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
-6. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED]`
+6. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
 7. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 8. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
 9. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
 10. **Collects payments** via SwipeSimple `[IMPLEMENTED]`
 11. **Manages** the 7-status bond lifecycle via drag-and-drop Kanban `[IMPLEMENTED]`
-12. **Automates** iMessage outreach via BlueBubbles bridge `[IMPLEMENTED]`
+12. **Automates** iMessage outreach via BlueBubbles `[CODE COMPLETE — office tunnel/reliability is ops]`
 13. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
 14. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
 15. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
 16. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
+17. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
+
+**Not this repo:** Bail School student LMS → `shamrock-bail-school`.
 
 ### Pipeline Flow (Full Lifecycle)
 

@@ -1,19 +1,23 @@
-# ShamrockLeads — Florida Arrest Intelligence Platform
+# ShamrockLeads — Florida Arrest Intelligence + Bond Auto-CRM
 
-> **Scrape. Score. Route. Bond.** — Real-time arrest data across all 67 Florida counties.
+> **Scrape. Score. Route. Bond.** — Real-time arrest data and bond lifecycle ops.
 
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
 [![Counties](https://img.shields.io/badge/Active%20Scrapers-52-orange)](#county-coverage)
-[![Dashboard](https://img.shields.io/badge/Dashboard-21%20Tabs-blueviolet)](#intelligence-dashboard)
+[![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
+
+**True status:** see [`STATUS.md`](./STATUS.md) · Super CRM: [`docs/SUPER_CRM.md`](./docs/SUPER_CRM.md) · Ecosystem: [`docs/ECOSYSTEM.md`](./docs/ECOSYSTEM.md)
 
 ---
 
 ## What Is This?
 
-ShamrockLeads is the **core intelligence engine** for [Shamrock Bail Bonds](https://shamrockbailbonds.biz) — a Florida bail bond agency automating the full bond lifecycle from arrest scrape to signed paperwork to payment collection.
+ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamrock Bail Bonds](https://shamrockbailbonds.biz): scrape → score → outreach → intake → match → paperwork → pay → active bond lifecycle.
+
+**Product boundary:** Bail School education is **`shamrock-bail-school`** (separate funnel). This repo does not host the student LMS.
 
 **Strategic goal:** Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
 

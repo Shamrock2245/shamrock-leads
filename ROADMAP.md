@@ -1,8 +1,8 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
-> **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.
-> **Last Updated:** 2026-06-11
-> **Read `BRAND.md` first** — it defines who we are, what we're building, and the non-negotiable standards every agent must follow.
+> **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.  
+> **Last Updated:** 2026-07-08 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
+> **Read `BRAND.md` first.**
 
 ## Phase Overview
 
@@ -18,13 +18,15 @@
 | 7 | Signature Orchestration (SignNow) | ✅ Complete |
 | 8 | Payment Collection (SwipeSimple) | ✅ Complete |
 | 9 | Contact Discovery (OSINT) | ✅ Complete |
-| 10 | Outreach Sequencing (iMessage / BlueBubbles) | ✅ Complete |
+| 10 | Outreach Sequencing (iMessage / BlueBubbles) | ✅ Code · ⏳ BB office reliability ops |
 | 11 | Bond Tracker — Location Intelligence | ✅ Complete (separate repo) |
-| 12 | BlueBubbles Enhancement Suite | ✅ Complete |
+| 12 | BlueBubbles Enhancement Suite | ✅ Code · ⏳ production tunnel ops |
 | 13 | Bond Lifecycle Kanban + POA Automation | ✅ Complete |
 | 14 | Court Automation + Discharge Monitoring | ✅ Complete |
 | 15 | Intelligence Dashboard Overhaul | ✅ Complete |
 | 16 | Social Media Command Center (Postiz) | ✅ Complete |
+| 17 | Super CRM hub APIs + secrets hygiene | ✅ Complete (July 2026) |
+| 18 | True phone→autopilot state machine (explicit human gates) | 🔲 Next product focus |
 
 ---
 
