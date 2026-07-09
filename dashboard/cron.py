@@ -308,6 +308,7 @@ async def _run_auto_reply_bridge():
 async def _run_speed_to_contact():
     from dashboard.services.outreach_sequencer import OutreachSequencer
     from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.automation_digest import digest_speed_to_contact
     from dashboard.extensions import get_db
     from datetime import datetime, timezone
     db = get_db()
@@ -316,6 +317,9 @@ async def _run_speed_to_contact():
     mode = stc.get("mode", "review")
     if mode == "off":
         return  # Mode explicitly set to off
+    # Safety: never promote silent full_auto via missing config
+    if mode not in ("review", "full_auto"):
+        mode = "review"
     seq = OutreachSequencer(db)
     result = await seq.batch_start_new_arrests(
         hours_back=stc.get("hours_back", 1),
@@ -323,14 +327,21 @@ async def _run_speed_to_contact():
         mode=mode,
         min_lead_score=stc.get("min_lead_score", 70),
     )
+    result["mode"] = mode
     await db["automation_run_log"].insert_one({"automation": "speed_to_contact", "run_at": datetime.now(timezone.utc), "result": result})
     if result.get("started", 0) or result.get("queued", 0):
         logger.info("[SpeedToContact] mode=%s started=%s queued=%s no_phone=%s",
                     mode, result.get("started", 0), result.get("queued", 0), result.get("no_phone", 0))
+        if stc.get("slack_digest", True):
+            try:
+                await digest_speed_to_contact(result)
+            except Exception as e:
+                logger.debug("[SpeedToContact] digest: %s", e)
 
 async def _run_paperwork_chase():
     from dashboard.services.paperwork_chase_service import PaperworkChaseService
     from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.automation_digest import digest_paperwork_chase
     from dashboard.extensions import get_db
     from datetime import datetime, timezone
     db = get_db()
@@ -339,10 +350,16 @@ async def _run_paperwork_chase():
     svc = PaperworkChaseService(db)
     result = await svc.scan_and_chase(config=chase)
     await db["automation_run_log"].insert_one({"automation": "paperwork_chase", "run_at": datetime.now(timezone.utc), "result": result})
+    if chase.get("slack_digest", True):
+        try:
+            await digest_paperwork_chase(result)
+        except Exception as e:
+            logger.debug("[PaperworkChase] digest: %s", e)
 
 async def _run_intake_recovery():
     from dashboard.services.intake_recovery_service import IntakeRecoveryService
     from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.automation_digest import digest_intake_recovery
     from dashboard.extensions import get_db
     from datetime import datetime, timezone
     db = get_db()
@@ -351,6 +368,139 @@ async def _run_intake_recovery():
     svc = IntakeRecoveryService(db)
     result = await svc.scan_and_recover(config=recovery)
     await db["automation_run_log"].insert_one({"automation": "intake_recovery", "run_at": datetime.now(timezone.utc), "result": result})
+    if recovery.get("slack_digest", True):
+        try:
+            await digest_intake_recovery(result)
+        except Exception as e:
+            logger.debug("[IntakeRecovery] digest: %s", e)
+
+
+async def _run_poa_low_stock():
+    """Alert when surety POA inventory tiers fall below threshold."""
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.automation_digest import digest_poa_low_stock
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = await get_automation_config(db)
+    poa_cfg = cfg.get("poa_low_stock") or {}
+    threshold = int(poa_cfg.get("threshold") or 5)
+    pipeline = [
+        {"$match": {"status": {"$in": ["available", "Available", "AVAILABLE"]}}},
+        {"$group": {
+            "_id": {"surety_id": "$surety_id", "tier": "$tier"},
+            "available": {"$sum": 1},
+        }},
+        {"$match": {"available": {"$lte": threshold}}},
+    ]
+    rows = []
+    try:
+        async for r in db["poa_inventory"].aggregate(pipeline):
+            rows.append({
+                "surety_id": (r.get("_id") or {}).get("surety_id") or "unknown",
+                "tier": (r.get("_id") or {}).get("tier") or "?",
+                "available": r.get("available", 0),
+            })
+    except Exception as e:
+        logger.warning("[POALowStock] aggregate failed: %s", e)
+        return
+    await db["automation_run_log"].insert_one({
+        "automation": "poa_low_stock",
+        "run_at": datetime.now(timezone.utc),
+        "result": {"low_tiers": len(rows), "threshold": threshold, "rows": rows},
+    })
+    if rows:
+        logger.warning("[POALowStock] %d tiers ≤ %s", len(rows), threshold)
+        try:
+            await digest_poa_low_stock(rows, threshold)
+        except Exception as e:
+            logger.debug("[POALowStock] digest: %s", e)
+
+
+async def _run_surety_weekly_reports():
+    """Generate official OSI + Palmetto bond/discharge XLSX and store in Mongo."""
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.bond_report_xlsx import build_official_bond_report, filename_for
+    from dashboard.services.automation_digest import post_slack
+    from dashboard.extensions import get_db
+    from datetime import datetime, timedelta, timezone
+    import base64
+    db = get_db()
+    cfg = await get_automation_config(db)
+    rpt = cfg.get("surety_weekly_reports") or {}
+    sureties = rpt.get("sureties") or ["OSI", "PALMETTO"]
+    include_discharges = bool(rpt.get("include_discharges", True))
+    days_back = int(rpt.get("days_back_discharges") or 7)
+    since = datetime.now(timezone.utc) - timedelta(days=days_back)
+    bonds = db["active_bonds"]
+    stored = []
+    for surety in sureties:
+        try:
+            q = {
+                "status": {
+                    "$nin": [
+                        "void", "voided", "expired", "exonerated", "surrendered",
+                        "discharged", "forfeited", "closed", "cancelled",
+                    ]
+                },
+                "$or": [
+                    {"surety": {"$regex": surety, "$options": "i"}},
+                    {"surety_id": {"$regex": surety, "$options": "i"}},
+                    {"insurance_company": {"$regex": surety, "$options": "i"}},
+                ],
+            }
+            docs = await bonds.find(q).sort("bond_date", -1).to_list(2000)
+            voids = await bonds.find({
+                "status": {"$in": ["void", "voided", "expired", "VOID"]},
+                "$or": q["$or"],
+            }).to_list(500)
+            discharges = []
+            if include_discharges:
+                discharges = await bonds.find({
+                    "status": {"$in": ["exonerated", "surrendered", "discharged"]},
+                    "updated_at": {"$gte": since},
+                    "$or": q["$or"],
+                }).to_list(500)
+            xlsx = build_official_bond_report(
+                docs, surety=surety, report_type="Weekly Bond Liability Report",
+                voids=voids, discharges=discharges,
+            )
+            fname = filename_for(surety, "Weekly_Bond_Report")
+            meta = {
+                "ok": True,
+                "report_type": "surety_weekly",
+                "surety": surety,
+                "filename": fname,
+                "size_bytes": len(xlsx),
+                "active_rows": len(docs),
+                "voids": len(voids),
+                "discharges": len(discharges),
+                "created_at": datetime.now(timezone.utc),
+                "xlsx_b64": base64.b64encode(xlsx).decode("ascii")
+                if len(xlsx) < 12_000_000 else None,
+            }
+            await db["generated_reports"].insert_one(meta)
+            stored.append({"surety": surety, "filename": fname, "active": len(docs)})
+        except Exception as e:
+            logger.warning("[SuretyWeekly] %s failed: %s", surety, e)
+            stored.append({"surety": surety, "error": str(e)[:120]})
+    await db["automation_run_log"].insert_one({
+        "automation": "surety_weekly_reports",
+        "run_at": datetime.now(timezone.utc),
+        "result": {"reports": stored},
+    })
+    if stored:
+        lines = ["📊 *Weekly Surety Reports*"]
+        for s in stored:
+            if s.get("error"):
+                lines.append(f"• {s['surety']}: error")
+            else:
+                lines.append(f"• {s['surety']}: {s.get('filename')} ({s.get('active', 0)} active)")
+        try:
+            await post_slack("\n".join(lines))
+        except Exception:
+            pass
+        logger.info("[SuretyWeekly] stored %d reports", len(stored))
 
 
 async def _run_outreach_queue():
@@ -443,9 +593,11 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("geo_intelligence",   "GeoIntel",            300, 120, _run_geo_intel, default_enabled=False),
     CronDef("findmy_geofence",    "FindMyGeofence",      900, 180, _run_findmy, default_enabled=False),
     CronDef("auto_reply",         "AutoReplyBridge",      60,  30, _run_auto_reply_bridge),
-    CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=False),
-    CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=False),
-    CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=False),
+    CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=True),
+    CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=True),
+    CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=True),
+    CronDef("poa_low_stock",      "POALowStock",       21600, 240, _run_poa_low_stock, default_enabled=True),
+    CronDef("surety_weekly_reports", "SuretyWeekly",  604800, 600, _run_surety_weekly_reports, default_enabled=True),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
     CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
     CronDef("bounty_hunter",      "BountyHunter",       3600, 120, _run_bounty_hunter),

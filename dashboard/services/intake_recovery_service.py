@@ -60,9 +60,11 @@ class IntakeRecoveryService:
             full_cfg = await get_automation_config(self.db)
             config = full_cfg.get("intake_recovery", {})
 
+        mode = (config.get("mode") or "review").lower()  # review | full_auto
         stale_minutes = config.get("stale_minutes", 30)
         max_per_cycle = config.get("max_per_cycle", 10)
         cooldown_hours = config.get("cooldown_hours", 24)
+        send_client = mode == "full_auto"
 
         now = datetime.now(timezone.utc)
         stale_cutoff = now - timedelta(minutes=stale_minutes)
@@ -71,9 +73,11 @@ class IntakeRecoveryService:
         results = {
             "scanned": 0,
             "recovered_sent": 0,
+            "review_queued": 0,
             "skipped_cooldown": 0,
             "skipped_no_phone": 0,
             "errors": 0,
+            "mode": mode,
         }
 
         # Find intakes that are stale and incomplete
@@ -108,23 +112,50 @@ class IntakeRecoveryService:
                 continue
 
             try:
-                await self._send_recovery(intake)
-                await self._log_recovery(intake)
-                results["recovered_sent"] += 1
+                if send_client:
+                    await self._send_recovery(intake)
+                    await self._log_recovery(intake, channel="imessage")
+                    results["recovered_sent"] += 1
+                else:
+                    await self._queue_review(intake)
+                    await self._log_recovery(intake, channel="review")
+                    results["review_queued"] += 1
                 sent += 1
             except Exception as exc:
                 logger.error("[intake-recovery] Error for intake %s: %s", intake_id, exc)
                 results["errors"] += 1
 
-        if results["recovered_sent"] > 0:
+        acted = results["recovered_sent"] + results["review_queued"]
+        if acted > 0:
             logger.info(
-                "☘️  Intake recovery: scanned=%s sent=%s cooldown=%s no_phone=%s errors=%s",
-                results["scanned"], results["recovered_sent"],
+                "☘️  Intake recovery mode=%s: scanned=%s sent=%s review=%s cooldown=%s no_phone=%s errors=%s",
+                mode, results["scanned"], results["recovered_sent"], results["review_queued"],
                 results["skipped_cooldown"], results["skipped_no_phone"],
                 results["errors"],
             )
 
         return results
+
+    async def _queue_review(self, intake: dict):
+        """Staff notification only — no client message (review mode)."""
+        try:
+            from dashboard.routers.notifications import create_notification
+            defendant = intake.get("defendant_name") or intake.get("defendant_first_name") or "Unknown"
+            intake_id = intake.get("intake_id") or str(intake.get("_id", "?"))
+            phone = (intake.get("phone") or "").strip()
+            await create_notification(
+                notification_type="intake_recovery_review",
+                title=f"🔄 Abandoned intake: {defendant}",
+                message=(
+                    f"Intake {intake_id} stalled. Phone ...{phone[-4:] if len(phone) >= 4 else '????'}. "
+                    f"Call back or enable full_auto recovery."
+                ),
+                entity_id=intake_id,
+                entity_type="intake",
+                metadata={"mode": "review"},
+            )
+        except Exception as exc:
+            logger.debug("[intake-recovery] review notification skipped: %s", exc)
 
     async def _send_recovery(self, intake: dict):
         """Send a recovery iMessage/SMS to the indemnitor.
@@ -167,12 +198,12 @@ class IntakeRecoveryService:
         except Exception as exc:
             logger.error("[intake-recovery] Send error: %s", exc)
 
-    async def _log_recovery(self, intake: dict):
+    async def _log_recovery(self, intake: dict, channel: str = "imessage"):
         """Record the recovery attempt for dedup/audit."""
         await self.recovery_log.insert_one({
             "intake_id": intake.get("intake_id") or str(intake.get("_id", "")),
             "phone": intake.get("phone", ""),
             "defendant_name": intake.get("defendant_name", ""),
-            "channel": "imessage",
+            "channel": channel,
             "created_at": datetime.now(timezone.utc),
         })

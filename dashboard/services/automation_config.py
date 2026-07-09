@@ -21,12 +21,14 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # ── Default configuration ───────────────────────────────────────────────────
+# Revenue automations default ON in *review* mode (queue/staff digests).
+# Client free-sends require mode="full_auto" (Prime Directive #6).
 DEFAULT_CONFIG = {
     "type": "automation_master",
 
     # ── Speed-to-Contact (The Closer) ──
     "speed_to_contact": {
-        "enabled": False,
+        "enabled": True,
         "mode": "review",               # "off" | "review" | "full_auto"
         "min_lead_score": 70,           # Only auto-outreach for hot leads
         "hours_back": 1,                # Look back window per cycle
@@ -34,25 +36,46 @@ DEFAULT_CONFIG = {
         "interval_seconds": 1800,       # 30 minutes
         "require_phone": True,          # Skip if no phone number
         "auto_discover_contacts": True, # Run contact discovery for phoneless leads
+        "slack_digest": True,
     },
 
     # ── Unsigned Paperwork Chase ──
     "paperwork_chase": {
-        "enabled": False,
+        "enabled": True,
+        "mode": "review",               # "review" | "staff_only" | "full_auto"
         "nudge_1_hours": 2,             # First nudge after 2 hours
         "nudge_2_hours": 6,             # Second nudge after 6 hours
         "staff_alert_hours": 24,        # Slack alert to staff after 24 hours
         "max_nudges": 3,                # Max nudges per packet
         "interval_seconds": 3600,       # Check every hour
+        "slack_digest": True,
     },
 
     # ── Abandoned Intake Recovery ──
     "intake_recovery": {
-        "enabled": False,
+        "enabled": True,
+        "mode": "review",               # "review" | "full_auto"
         "stale_minutes": 30,            # Consider abandoned after 30 min
         "max_per_cycle": 10,            # Rate-limit per cycle
         "interval_seconds": 3600,       # Check every hour
         "cooldown_hours": 24,           # Don't re-nudge within 24h
+        "slack_digest": True,
+    },
+
+    # ── POA inventory low-stock alerts ──
+    "poa_low_stock": {
+        "enabled": True,
+        "threshold": 5,                 # Alert when available POAs ≤ this
+        "interval_seconds": 21600,      # 6 hours
+    },
+
+    # ── Weekly surety bond / discharge reports ──
+    "surety_weekly_reports": {
+        "enabled": True,
+        "interval_seconds": 604800,     # 7 days
+        "sureties": ["OSI", "PALMETTO"],
+        "include_discharges": True,
+        "days_back_discharges": 7,
     },
 
     # ── Auto-Reply AI (BlueBubbles inbound message handler) ──
@@ -136,17 +159,80 @@ DEFAULT_CONFIG = {
 }
 
 
+def _deep_merge_defaults(stored: dict, defaults: dict) -> dict:
+    """Fill missing keys from defaults without clobbering stored values."""
+    out = dict(stored)
+    for key, dval in defaults.items():
+        if key not in out:
+            out[key] = dval
+        elif isinstance(dval, dict) and isinstance(out.get(key), dict):
+            merged = dict(dval)
+            merged.update(out[key])  # stored wins per-field
+            # still fill nested keys that stored is missing
+            for nk, nv in dval.items():
+                if nk not in out[key]:
+                    merged[nk] = nv
+            out[key] = merged
+    return out
+
+
 async def get_automation_config(db) -> dict:
     """Load the automation master config from MongoDB.
     Creates the default document if it doesn't exist.
+    One-time migration enables revenue automations in review mode.
     """
     config_coll = db["automation_config"]
     cfg = await config_coll.find_one({"type": "automation_master"}, {"_id": 0})
     if not cfg:
-        default = DEFAULT_CONFIG.copy()
-        default["updated_at"] = datetime.now(timezone.utc).isoformat()
+        default = {**DEFAULT_CONFIG, "updated_at": datetime.now(timezone.utc).isoformat()}
+        default["_revenue_automations_v1"] = datetime.now(timezone.utc).isoformat()
         await config_coll.insert_one(default)
         return default
+
+    cfg = _deep_merge_defaults(cfg, DEFAULT_CONFIG)
+
+    # One-time: turn on revenue automations in *review* mode (safe).
+    # Does not re-enable if an operator later flips them off.
+    if not cfg.get("_revenue_automations_v1"):
+        now = datetime.now(timezone.utc).isoformat()
+        for section, enabled_default in (
+            ("speed_to_contact", True),
+            ("paperwork_chase", True),
+            ("intake_recovery", True),
+            ("poa_low_stock", True),
+            ("surety_weekly_reports", True),
+        ):
+            sec = dict(cfg.get(section) or DEFAULT_CONFIG.get(section) or {})
+            sec["enabled"] = enabled_default
+            if section == "speed_to_contact":
+                sec.setdefault("mode", "review")
+                sec.setdefault("slack_digest", True)
+            if section == "paperwork_chase":
+                sec.setdefault("mode", "review")
+                sec.setdefault("slack_digest", True)
+            if section == "intake_recovery":
+                sec.setdefault("mode", "review")
+                sec.setdefault("slack_digest", True)
+            cfg[section] = sec
+        cfg["_revenue_automations_v1"] = now
+        await config_coll.update_one(
+            {"type": "automation_master"},
+            {"$set": {
+                "speed_to_contact": cfg["speed_to_contact"],
+                "paperwork_chase": cfg["paperwork_chase"],
+                "intake_recovery": cfg["intake_recovery"],
+                "poa_low_stock": cfg.get("poa_low_stock", DEFAULT_CONFIG["poa_low_stock"]),
+                "surety_weekly_reports": cfg.get(
+                    "surety_weekly_reports", DEFAULT_CONFIG["surety_weekly_reports"]
+                ),
+                "_revenue_automations_v1": now,
+                "updated_at": now,
+                "updated_by": "migration_revenue_v1",
+            }},
+            upsert=True,
+        )
+        logger.info("☘️  Revenue automations migration v1 applied (review mode)")
+
     return cfg
 
 

@@ -60,10 +60,13 @@ class PaperworkChaseService:
             full_cfg = await get_automation_config(self.db)
             config = full_cfg.get("paperwork_chase", {})
 
+        mode = (config.get("mode") or "review").lower()  # review | staff_only | full_auto
         nudge_1_hours = config.get("nudge_1_hours", 2)
         nudge_2_hours = config.get("nudge_2_hours", 6)
         staff_alert_hours = config.get("staff_alert_hours", 24)
         max_nudges = config.get("max_nudges", 3)
+        send_client = mode == "full_auto"
+        send_staff = mode in ("full_auto", "staff_only", "review")
 
         now = datetime.now(timezone.utc)
         results = {
@@ -71,8 +74,10 @@ class PaperworkChaseService:
             "nudge_1_sent": 0,
             "nudge_2_sent": 0,
             "staff_alerts": 0,
+            "review_queued": 0,
             "skipped_max_nudges": 0,
             "errors": 0,
+            "mode": mode,
         }
 
         # Find packets in pending_signature or delivered status
@@ -114,39 +119,91 @@ class PaperworkChaseService:
             # Determine which nudge tier to send
             try:
                 if age_hours >= staff_alert_hours and not await self._already_chased(packet_id, "staff_alert"):
-                    await self._send_staff_alert(packet)
-                    await self._log_chase(packet, "staff_alert", age_hours)
-                    results["staff_alerts"] += 1
+                    if send_staff:
+                        await self._send_staff_alert(packet)
+                        await self._log_chase(packet, "staff_alert", age_hours)
+                        results["staff_alerts"] += 1
 
-                elif age_hours >= nudge_2_hours and not await self._already_chased(packet_id, "nudge_2"):
-                    await self._send_nudge(packet, nudge_level=2)
-                    await self._log_chase(packet, "nudge_2", age_hours)
-                    results["nudge_2_sent"] += 1
+                elif age_hours >= nudge_2_hours and not await self._already_chased_any(
+                    packet_id, ("nudge_2", "nudge_2_review")
+                ):
+                    if send_client:
+                        await self._send_nudge(packet, nudge_level=2)
+                        await self._log_chase(packet, "nudge_2", age_hours)
+                        results["nudge_2_sent"] += 1
+                    elif mode == "review":
+                        await self._queue_review(packet, "nudge_2", age_hours)
+                        await self._log_chase(packet, "nudge_2_review", age_hours)
+                        results["review_queued"] += 1
+                    # staff_only: wait for 24h staff alert tier
 
-                elif age_hours >= nudge_1_hours and not await self._already_chased(packet_id, "nudge_1"):
-                    await self._send_nudge(packet, nudge_level=1)
-                    await self._log_chase(packet, "nudge_1", age_hours)
-                    results["nudge_1_sent"] += 1
+                elif age_hours >= nudge_1_hours and not await self._already_chased_any(
+                    packet_id, ("nudge_1", "nudge_1_review")
+                ):
+                    if send_client:
+                        await self._send_nudge(packet, nudge_level=1)
+                        await self._log_chase(packet, "nudge_1", age_hours)
+                        results["nudge_1_sent"] += 1
+                    elif mode == "review":
+                        await self._queue_review(packet, "nudge_1", age_hours)
+                        await self._log_chase(packet, "nudge_1_review", age_hours)
+                        results["review_queued"] += 1
 
             except Exception as exc:
                 logger.error("[paperwork-chase] Error processing packet %s: %s", packet_id, exc)
                 results["errors"] += 1
 
-        total_actions = results["nudge_1_sent"] + results["nudge_2_sent"] + results["staff_alerts"]
+        total_actions = (
+            results["nudge_1_sent"]
+            + results["nudge_2_sent"]
+            + results["staff_alerts"]
+            + results["review_queued"]
+        )
         if total_actions > 0:
             logger.info(
-                "☘️  Paperwork chase: scanned=%s nudge1=%s nudge2=%s staff=%s errors=%s",
-                results["scanned"], results["nudge_1_sent"],
+                "☘️  Paperwork chase mode=%s: scanned=%s review=%s nudge1=%s nudge2=%s staff=%s errors=%s",
+                mode, results["scanned"], results["review_queued"], results["nudge_1_sent"],
                 results["nudge_2_sent"], results["staff_alerts"], results["errors"],
             )
 
         return results
+
+    async def _queue_review(self, packet: dict, chase_type: str, age_hours: float):
+        """Staff-facing review item — no client contact (review mode)."""
+        try:
+            from dashboard.routers.notifications import create_notification
+            defendant = packet.get("defendant_name", "Unknown")
+            packet_id = packet.get("packet_id", "?")
+            await create_notification(
+                notification_type="paperwork_chase_review",
+                title=f"📋 Chase ready: {defendant}",
+                message=(
+                    f"Packet {packet_id} unsigned ~{age_hours:.0f}h "
+                    f"({chase_type}). Approve chase or send manually."
+                ),
+                entity_id=packet_id,
+                entity_type="paperwork_packet",
+                metadata={
+                    "chase_type": chase_type,
+                    "age_hours": round(age_hours, 1),
+                    "mode": "review",
+                },
+            )
+        except Exception as exc:
+            logger.debug("[paperwork-chase] review notification skipped: %s", exc)
 
     async def _already_chased(self, packet_id: str, chase_type: str) -> bool:
         """Check if this specific chase level has already been sent."""
         existing = await self.chase_log.find_one({
             "packet_id": packet_id,
             "chase_type": chase_type,
+        })
+        return existing is not None
+
+    async def _already_chased_any(self, packet_id: str, chase_types: tuple) -> bool:
+        existing = await self.chase_log.find_one({
+            "packet_id": packet_id,
+            "chase_type": {"$in": list(chase_types)},
         })
         return existing is not None
 

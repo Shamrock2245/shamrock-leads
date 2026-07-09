@@ -56,6 +56,107 @@ async def automation_health():
     }
 
 
+@automation_bp.get("/schedule")
+async def automation_schedule(request: Request, api_key: str = ""):
+    """
+    Machine-readable Node-RED / external cron pack.
+    Auth: GAS_API_KEY (same as other automation sweeps).
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+    from dashboard.services.automation_schedule import NODE_RED_SCHEDULE
+
+    return {
+        "ok": True,
+        "auth_header": "X-API-Key: <GAS_API_KEY>",
+        "base_url": os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz"),
+        "jobs": NODE_RED_SCHEDULE,
+        "in_process_crons_note": (
+            "Revenue automations (speed_to_contact, paperwork_chase, intake_recovery, "
+            "poa_low_stock, surety_weekly_reports) run inside the FastAPI process via "
+            "dashboard/cron.py — no Node-RED required. Toggle in Super CRM Automations."
+        ),
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@automation_bp.post("/ops-digest")
+async def ops_digest(request: Request, api_key: str = ""):
+    """
+    Run lead-qualification + bond-lifecycle + risk-mitigation once and
+    optionally post a compact Slack summary (for Node-RED morning pack).
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    post = bool(body.get("post_slack", True))
+    # Reuse handlers by calling internal logic via nested requests is heavy —
+    # run simplified combined queries here for the digest only.
+    hours_back = int(body.get("hours_back") or 24)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours_back)
+
+    summary: dict[str, Any] = {"ok": True, "action": "ops_digest", "hours_back": hours_back}
+
+    try:
+        arrests = get_collection("arrests")
+        hot = await arrests.count_documents({
+            "lead_score": {"$gte": 70},
+            "$or": [
+                {"scraped_at": {"$gte": since}},
+                {"created_at": {"$gte": since}},
+            ],
+        })
+        summary["hot_leads_24h"] = hot
+    except Exception as e:
+        summary["hot_leads_error"] = str(e)[:120]
+
+    try:
+        ab = get_collection("active_bonds")
+        active_q = {"status": {"$in": ["active", "monitoring", "alert", "reinstated"]}}
+        active_n = await ab.count_documents(active_q)
+        missing_court = await ab.count_documents({
+            **active_q,
+            "$or": [
+                {"court_date": {"$exists": False}},
+                {"court_date": None},
+                {"court_date": ""},
+            ],
+        })
+        summary["active_bonds"] = active_n
+        summary["missing_court_date"] = missing_court
+    except Exception as e:
+        summary["bonds_error"] = str(e)[:120]
+
+    try:
+        ab = get_collection("active_bonds")
+        fort = await ab.count_documents({
+            "status": {"$regex": "forfeit|fta|warrant|estreature", "$options": "i"},
+        })
+        summary["forfeiture_flags"] = fort
+    except Exception:
+        pass
+
+    if post:
+        try:
+            from dashboard.services.automation_digest import digest_ops_sweep
+            counts = {k: v for k, v in summary.items() if isinstance(v, int)}
+            await digest_ops_sweep("ops_digest", counts)
+            summary["slack_posted"] = True
+        except Exception as e:
+            summary["slack_posted"] = False
+            summary["slack_error"] = str(e)[:120]
+
+    summary["ts"] = now.isoformat()
+    logger.info("[automation] ops-digest %s", summary)
+    return summary
+
+
 @automation_bp.post("/lead-qualification")
 async def lead_qualification_sweep(request: Request, api_key: str = ""):
     """

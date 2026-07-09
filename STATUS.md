@@ -75,7 +75,21 @@ python scripts/check_ecosystem_secrets.py --strict
 ## Super-admin + court automation (July 2026)
 
 - Super-admin: `admin@shamrockbailbonds.biz` (see `dashboard/auth/super_admin.py`)
-- Automation API (GAS_API_KEY): `/api/automation/lead-qualification|bond-lifecycle|risk-mitigation|court-email-scan|bond-report|discharge-report`
+- Automation API (GAS_API_KEY): `/api/automation/lead-qualification|bond-lifecycle|risk-mitigation|court-email-scan|bond-report|discharge-report|ops-digest|schedule`
 - Official OSI/Palmetto XLSX bond & discharge reports (`dashboard/services/bond_report_xlsx.py`)
 - Court email: Calendar + client email + BlueBubbles (`court_email_scheduler`)
+
+## Revenue automations (July 2026 — review-first)
+
+Enabled by default in **review** mode (migration `_revenue_automations_v1`):
+
+| Cron | Default mode | Client contact? |
+|------|--------------|-----------------|
+| `speed_to_contact` | `review` | Queues outreach for staff approval |
+| `paperwork_chase` | `review` | Staff notifications; `full_auto` to BB-nudge |
+| `intake_recovery` | `review` | Staff notifications; `full_auto` to iMessage |
+| `poa_low_stock` | on | Slack when POA tier ≤ threshold |
+| `surety_weekly_reports` | on | XLSX → `generated_reports` + Slack |
+
+Node-RED pack: `GET /api/automation/schedule` · docs `docs/automation/NODE_RED_SCHEDULE.md`
 

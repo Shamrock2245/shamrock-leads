@@ -44,6 +44,7 @@ def register_trigger(key: str, event: asyncio.Event) -> None:
 ALL_SERVICE_KEYS = {
     # Revenue Automation
     "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
+    "poa_low_stock", "surety_weekly_reports",
     # Intelligence Pipeline
     "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
@@ -57,9 +58,11 @@ ALL_SERVICE_KEYS = {
 
 # Service metadata for frontend rendering
 SERVICE_META = {
-    "speed_to_contact":    {"name": "Speed-to-Contact",    "icon": "🚀", "category": "revenue",  "desc": "Auto-outreach for hot leads via iMessage"},
-    "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Auto-nudge unsigned SignNow packets"},
-    "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intake submissions"},
+    "speed_to_contact":    {"name": "Speed-to-Contact",    "icon": "🚀", "category": "revenue",  "desc": "Queue hot-lead outreach for approval (review mode)"},
+    "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Unsigned packet chase — review/staff/full_auto"},
+    "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intakes (review by default)"},
+    "poa_low_stock":       {"name": "POA Low Stock",       "icon": "📕", "category": "revenue",  "desc": "Slack when POA inventory tiers run low"},
+    "surety_weekly_reports": {"name": "Surety Weekly Reports", "icon": "📊", "category": "revenue", "desc": "Official OSI/Palmetto weekly XLSX into Mongo"},
     "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages"},
     "docket_monitor":      {"name": "Docket Monitor",      "icon": "⚖️", "category": "intel",    "desc": "CourtListener docket scan for active bonds"},
     "court_intel":         {"name": "Court Intelligence",  "icon": "🏛️", "category": "intel",    "desc": "Court opinion ingestion (30-day window)"},
