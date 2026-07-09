@@ -45,6 +45,8 @@ ALL_SERVICE_KEYS = {
     # Revenue Automation
     "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
     "poa_low_stock", "surety_weekly_reports",
+    # Lifecycle suite
+    "forfeiture_scan", "signnow_poller", "compliance_backfill", "matching_backlog",
     # Intelligence Pipeline
     "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
@@ -63,6 +65,10 @@ SERVICE_META = {
     "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intakes (review by default)"},
     "poa_low_stock":       {"name": "POA Low Stock",       "icon": "📕", "category": "revenue",  "desc": "Slack when POA inventory tiers run low"},
     "surety_weekly_reports": {"name": "Surety Weekly Reports", "icon": "📊", "category": "revenue", "desc": "Official OSI/Palmetto weekly XLSX into Mongo"},
+    "forfeiture_scan":     {"name": "Forfeiture Scan",     "icon": "🔴", "category": "lifecycle", "desc": "Score active bonds; Slack high/critical risk"},
+    "signnow_poller":      {"name": "SignNow Poller",      "icon": "✍️", "category": "lifecycle", "desc": "Sync packet status; collect-payment tasks"},
+    "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
+    "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
     "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages"},
     "docket_monitor":      {"name": "Docket Monitor",      "icon": "⚖️", "category": "intel",    "desc": "CourtListener docket scan for active bonds"},
     "court_intel":         {"name": "Court Intelligence",  "icon": "🏛️", "category": "intel",    "desc": "Court opinion ingestion (30-day window)"},

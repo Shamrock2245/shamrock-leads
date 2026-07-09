@@ -297,6 +297,14 @@ async def score_portfolio(db, limit: int = 50) -> dict:
             pass
 
         scored = score_bond(bond, defendant, check_ins, court_dates, docket_events, fta_intelligence)
+        # Identity fields for automation write-back (not always on Bond_Case_ID alone)
+        scored["booking_number"] = (
+            bond.get("booking_number")
+            or bond.get("bookingNumber")
+            or bond.get("Booking_Number")
+            or ""
+        )
+        scored["_id"] = str(bond.get("_id", ""))
         results.append(scored)
 
     # Sort by priority (highest risk first)

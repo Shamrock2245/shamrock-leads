@@ -570,6 +570,93 @@ async def _run_watchdog():
         logger.debug("[Watchdog] Health check passed")
 
 
+async def _run_forfeiture_scan():
+    from dashboard.services.lifecycle_automations import LifecycleAutomations
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("forfeiture_scan") or {}
+    result = await LifecycleAutomations(db).run_forfeiture_scan(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "forfeiture_scan",
+        "run_at": datetime.now(timezone.utc),
+        "result": {k: v for k, v in result.items() if k != "top_risks"} | {
+            "top_risks": (result.get("top_risks") or [])[:5],
+        },
+    })
+    if result.get("critical_count") or result.get("high_risk_count"):
+        logger.warning(
+            "[ForfeitureScan] critical=%s high=%s exposure=%s tasks=%s",
+            result.get("critical_count"), result.get("high_risk_count"),
+            result.get("total_at_risk_exposure"), result.get("tasks_created"),
+        )
+
+
+async def _run_signnow_poller():
+    from dashboard.services.lifecycle_automations import LifecycleAutomations
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("signnow_poller") or {}
+    result = await LifecycleAutomations(db).run_signnow_poller(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "signnow_poller",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("signed") or result.get("voided"):
+        logger.info(
+            "[SignNowPoller] signed=%s voided=%s payment_tasks=%s errors=%s",
+            result.get("signed"), result.get("voided"),
+            result.get("payment_tasks"), result.get("errors"),
+        )
+    elif result.get("skipped"):
+        logger.debug("[SignNowPoller] skipped: %s", result.get("error"))
+
+
+async def _run_compliance_backfill():
+    from dashboard.services.lifecycle_automations import LifecycleAutomations
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("compliance_backfill") or {}
+    result = await LifecycleAutomations(db).run_compliance_backfill(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "compliance_backfill",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("backfilled"):
+        logger.info(
+            "[ComplianceBackfill] scanned=%s backfilled=%s",
+            result.get("scanned"), result.get("backfilled"),
+        )
+
+
+async def _run_matching_backlog():
+    from dashboard.services.lifecycle_automations import LifecycleAutomations
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("matching_backlog") or {}
+    result = await LifecycleAutomations(db).run_matching_backlog(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "matching_backlog",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("total_processed"):
+        logger.info(
+            "[MatchingBacklog] processed=%s auto=%s candidates=%s no_match=%s",
+            result.get("total_processed"), result.get("auto_linked"),
+            result.get("candidates_found"), result.get("no_match"),
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Registry
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -602,6 +689,10 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("drip_scanner",       "DripScanner",        1800,  60, _run_drip_scanner),
     CronDef("bounty_hunter",      "BountyHunter",       3600, 120, _run_bounty_hunter),
     CronDef("watchdog",           "Watchdog",            300,  60, _run_watchdog),
+    CronDef("forfeiture_scan",    "ForfeitureScan",    14400, 300, _run_forfeiture_scan, default_enabled=True),
+    CronDef("signnow_poller",     "SignNowPoller",      1800, 210, _run_signnow_poller, default_enabled=True),
+    CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
+    CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
 ]
 
 

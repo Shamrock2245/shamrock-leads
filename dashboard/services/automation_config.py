@@ -78,6 +78,41 @@ DEFAULT_CONFIG = {
         "days_back_discharges": 7,
     },
 
+    # ── Forfeiture portfolio scan (staff digest + optional tasks) ──
+    "forfeiture_scan": {
+        "enabled": True,
+        "limit": 100,
+        "slack_min_tier": "high",       # high | critical
+        "create_tasks": True,
+        "slack_digest": True,
+        "interval_seconds": 14400,      # 4 hours
+    },
+
+    # ── SignNow status poller + collect-payment tasks ──
+    "signnow_poller": {
+        "enabled": True,
+        "limit": 40,
+        "create_payment_tasks": True,
+        "slack_digest": True,
+        "interval_seconds": 1800,       # 30 minutes
+    },
+
+    # ── Compliance task backfill for active bonds ──
+    "compliance_backfill": {
+        "enabled": True,
+        "limit": 80,
+        "slack_digest": True,
+        "interval_seconds": 21600,      # 6 hours
+    },
+
+    # ── Matching backlog (batch_match + staff digest) ──
+    "matching_backlog": {
+        "enabled": True,
+        "limit": 50,
+        "slack_digest": True,
+        "interval_seconds": 3600,       # 1 hour
+    },
+
     # ── Auto-Reply AI (BlueBubbles inbound message handler) ──
     "auto_reply": {
         "enabled": False,
@@ -232,6 +267,32 @@ async def get_automation_config(db) -> dict:
             upsert=True,
         )
         logger.info("☘️  Revenue automations migration v1 applied (review mode)")
+
+    # One-time: lifecycle suite (forfeiture / SignNow / compliance / matching)
+    if not cfg.get("_lifecycle_automations_v1"):
+        now = datetime.now(timezone.utc).isoformat()
+        set_doc: dict = {
+            "_lifecycle_automations_v1": now,
+            "updated_at": now,
+            "updated_by": "migration_lifecycle_v1",
+        }
+        for section in (
+            "forfeiture_scan",
+            "signnow_poller",
+            "compliance_backfill",
+            "matching_backlog",
+        ):
+            sec = dict(cfg.get(section) or DEFAULT_CONFIG.get(section) or {})
+            sec["enabled"] = True
+            sec.setdefault("slack_digest", True)
+            cfg[section] = sec
+            set_doc[section] = sec
+        await config_coll.update_one(
+            {"type": "automation_master"},
+            {"$set": set_doc},
+            upsert=True,
+        )
+        logger.info("☘️  Lifecycle automations migration v1 applied")
 
     return cfg
 

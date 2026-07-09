@@ -93,3 +93,14 @@ Enabled by default in **review** mode (migration `_revenue_automations_v1`):
 
 Node-RED pack: `GET /api/automation/schedule` · docs `docs/automation/NODE_RED_SCHEDULE.md`
 
+## Lifecycle suite (July 2026 — on the clock)
+
+| Cron | Interval | Behavior |
+|------|----------|----------|
+| `forfeiture_scan` | 4h | Score active bonds; write risk fields; tasks + Slack for high/critical |
+| `signnow_poller` | 30m | Poll SignNow open packets → signed/void; create `collect_payment` tasks |
+| `compliance_backfill` | 6h | Active bonds missing check-in/court tasks → `TaskEngine` suite |
+| `matching_backlog` | 1h | `MatchingEngine.batch_match`; Slack digest for human review |
+
+Migration: `_lifecycle_automations_v1` (enable once on config load).
+
