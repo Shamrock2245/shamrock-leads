@@ -225,12 +225,75 @@ def create_indexes():
     except Exception as e:
         print(f"  ⚠️  idx_surety_availability: {e}")
 
+    # ── Super CRM collections ──
+    def _safe_index(coll, keys, **kwargs):
+        name = kwargs.get("name", str(keys))
+        try:
+            coll.create_index(keys, **kwargs)
+            print(f"  ✅ {name}")
+        except Exception as e:
+            print(f"  ⚠️  {name}: {e}")
+
+    print("\n💼 active_bonds:")
+    ab = db["active_bonds"]
+    _safe_index(ab, [("booking_number", ASCENDING)], name="idx_bond_booking")
+    _safe_index(ab, [("status", ASCENDING), ("updated_at", DESCENDING)], name="idx_bond_status")
+    _safe_index(ab, [("defendant_name", ASCENDING)], name="idx_bond_defendant")
+    _safe_index(ab, [("poa_number", ASCENDING)], name="idx_bond_poa", sparse=True)
+
+    print("\n📥 intake_queue:")
+    iq = db["intake_queue"]
+    _safe_index(iq, [("status", ASCENDING), ("created_at", DESCENDING)], name="idx_intake_status")
+    _safe_index(iq, [("defendant_name", ASCENDING)], name="idx_intake_defendant")
+    _safe_index(iq, [("phone", ASCENDING)], name="idx_intake_phone", sparse=True)
+
+    print("\n🛡️ indemnitors:")
+    ind = db["indemnitors"]
+    _safe_index(ind, [("phone", ASCENDING)], name="idx_indemnitor_phone", sparse=True)
+    _safe_index(ind, [("email", ASCENDING)], name="idx_indemnitor_email", sparse=True)
+    _safe_index(ind, [("name", ASCENDING)], name="idx_indemnitor_name")
+
+    print("\n☘️ prospective_bonds:")
+    pb = db["prospective_bonds"]
+    _safe_index(pb, [("stage", ASCENDING)], name="idx_prosp_stage")
+    _safe_index(pb, [("booking_number", ASCENDING)], name="idx_prosp_booking")
+    _safe_index(pb, [("defendant_name", ASCENDING)], name="idx_prosp_defendant")
+
+    print("\n✅ tasks:")
+    tasks = db["tasks"]
+    _safe_index(tasks, [("status", ASCENDING), ("due_date", ASCENDING)], name="idx_task_status_due")
+    _safe_index(tasks, [("booking_number", ASCENDING)], name="idx_task_booking")
+
+    print("\n💳 payments:")
+    pays = db["payments"]
+    _safe_index(pays, [("booking_number", ASCENDING)], name="idx_pay_booking", sparse=True)
+    _safe_index(pays, [("created_at", DESCENDING)], name="idx_pay_created")
+
+    print("\n🔗 matches:")
+    matches = db["matches"]
+    _safe_index(matches, [("Defendant_ID", ASCENDING)], name="idx_match_defendant", sparse=True)
+    _safe_index(matches, [("status", ASCENDING)], name="idx_match_status")
+
     print("\n" + "=" * 60)
     print("✅ All indexes created successfully!")
 
     # Print summary
     print("\n📊 Index Summary:")
-    for coll_name in ["arrests", "court_email_log", "error_log", "scraper_status", "defendants", "poa_inventory"]:
+    for coll_name in [
+        "arrests",
+        "court_email_log",
+        "error_log",
+        "scraper_status",
+        "defendants",
+        "poa_inventory",
+        "active_bonds",
+        "intake_queue",
+        "indemnitors",
+        "prospective_bonds",
+        "tasks",
+        "payments",
+        "matches",
+    ]:
         coll = db[coll_name]
         idx_count = len(list(coll.list_indexes()))
         print(f"  {coll_name}: {idx_count} indexes")

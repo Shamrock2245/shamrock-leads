@@ -87,8 +87,23 @@ Never put PII-bearing staff URLs in client-facing SMS; use brand domain + magic 
 
 ---
 
+## Secrets checklist (all three repos)
+
+From any of the three repos (or leads directly):
+
+```bash
+# From shamrock-leads
+python scripts/check_ecosystem_secrets.py
+python scripts/check_ecosystem_secrets.py --strict
+
+# From portal or school (wrapper finds sibling leads repo)
+python scripts/check_ecosystem_secrets.py --strict
+```
+
+Never prints secret values — only presence + fingerprints for shared-key alignment.
+
 ## Docs index
 
-- Leads: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `SECURITY.md`
+- Leads: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SUPER_CRM.md`, `SECURITY.md`
 - Portal: `SYSTEM.md`, `docs/DEPLOYMENT_CHECKLIST.md`, `SECRETS_ROTATION_GUIDE.md`
 - School: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SECURITY.md`

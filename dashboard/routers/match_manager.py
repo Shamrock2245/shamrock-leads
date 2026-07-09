@@ -426,6 +426,28 @@ async def api_match_search(q: str = Query(default="")):
         ).limit(10):
             doc["source"] = "prospective_bonds"
             results.append(doc)
+
+        # Search indemnitors (Super CRM parity)
+        try:
+            ind_col = get_collection("indemnitors")
+            async for doc in ind_col.find(
+                {"$or": [
+                    {"name": regex},
+                    {"full_name": regex},
+                    {"phone": regex},
+                    {"email": regex},
+                ]},
+                {"_id": 0, "name": 1, "full_name": 1, "phone": 1, "email": 1},
+            ).limit(5):
+                results.append({
+                    "source": "indemnitors",
+                    "defendant_name": doc.get("name") or doc.get("full_name") or "",
+                    "booking_number": doc.get("phone") or doc.get("email") or "",
+                    "bond_amount": "",
+                    "stage": "indemnitor",
+                })
+        except Exception:
+            pass
         
         return {"success": True, "results": results, "total": len(results)}
     

@@ -97,8 +97,18 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
     """Gate all routes behind PIN auth (except whitelisted paths)."""
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # No PIN configured → open access
+        # No PIN configured → open access in dev only
         if not DASHBOARD_PIN:
+            env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+            if env in ("production", "prod") or os.getenv("REQUIRE_DASHBOARD_PIN", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                return JSONResponse(
+                    {"error": "Dashboard PIN not configured"},
+                    status_code=503,
+                )
             return await call_next(request)
 
         path = request.url.path

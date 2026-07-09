@@ -128,7 +128,11 @@ window.SLOmnibar = {
     }
     
     try {
-      const res = await fetch(`/api/match-manager/search?q=${encodeURIComponent(query)}`);
+      // Super CRM unified search (falls back to match-manager)
+      let res = await fetch(`/api/crm/search?q=${encodeURIComponent(query)}`);
+      if (!res.ok) {
+        res = await fetch(`/api/match-manager/search?q=${encodeURIComponent(query)}`);
+      }
       const data = await res.json();
       this.results = data.results || [];
       this.selectedIndex = this.results.length > 0 ? 0 : -1;
@@ -140,9 +144,13 @@ window.SLOmnibar = {
   
   renderCommands: function(cmdQuery) {
     const commands = [
-      { type: 'command', title: 'New Intake', icon: '📝', action: () => { if (typeof SLIntake !== 'undefined') SL.switchTab(document.querySelector('[data-tab="tabIntake"]')); } },
+      { type: 'command', title: 'New Intake', icon: '📝', action: () => { const b = document.querySelector('[data-tab="tabIntake"]'); if (b) SL.switchTab(b); } },
+      { type: 'command', title: 'Active Bonds', icon: '📋', action: () => { const b = document.querySelector('[data-tab="tabActiveBonds"]'); if (b) { SL.switchTab(b); if (typeof loadActiveBonds === 'function') loadActiveBonds(); } } },
+      { type: 'command', title: 'Lead Explorer', icon: '🔍', action: () => { const b = document.querySelector('[data-tab="tabLeads"]'); if (b) SL.switchTab(b); } },
+      { type: 'command', title: 'Indemnitors', icon: '🛡️', action: () => { const b = document.querySelector('[data-tab="tabIndemnitor"]'); if (b) { SL.switchTab(b); if (window.SLIndemnitor) SLIndemnitor.load(); } } },
+      { type: 'command', title: 'Outreach Pipeline', icon: '☘️', action: () => { const b = document.querySelector('[data-tab="tabProspective"]'); if (b) { SL.switchTab(b); if (window.SLProspective) SLProspective.load(); } } },
       { type: 'command', title: 'Open Activity Feed', icon: '⚡️', action: () => SLActivityFeed.toggle() },
-      { type: 'command', title: 'Refresh Dashboard', icon: '↻', action: () => SL.refresh() }
+      { type: 'command', title: 'Refresh Dashboard', icon: '↻', action: () => { if (window.SL && SL.refresh) SL.refresh(); else location.reload(); } }
     ];
     
     this.results = commands.filter(c => c.title.toLowerCase().includes(cmdQuery));
@@ -171,10 +179,13 @@ window.SLOmnibar = {
         title = item.title;
         sub = 'Command';
       } else {
-        title = item.defendant_name || 'Unknown';
-        if (item.source === 'active_bonds') { icon = '🟢'; sub = `Active Bond • ${item.booking_number} • $${item.bond_amount}`; }
-        else if (item.source === 'arrests') { icon = '🚨'; sub = `Arrest • ${item.booking_number} • $${item.bond_amount || '0'}`; }
-        else if (item.source === 'prospective_bonds') { icon = '🟡'; sub = `Prospective • ${item.booking_number} • ${item.stage}`; }
+        title = item.defendant_name || item.title || 'Unknown';
+        if (item.source === 'active_bonds') { icon = '🟢'; sub = `Active Bond • ${item.booking_number || ''} • $${item.bond_amount || 0}`; }
+        else if (item.source === 'arrests') { icon = '🚨'; sub = `Lead • ${item.booking_number || ''} • $${item.bond_amount || 0} • ${item.lead_status || ''}`; }
+        else if (item.source === 'prospective_bonds') { icon = '🟡'; sub = `Outreach • ${item.booking_number || ''} • ${item.stage || ''}`; }
+        else if (item.source === 'indemnitors') { icon = '🛡️'; sub = `Indemnitor • ${item.booking_number || ''} • ${item.stage || ''}`; }
+        else if (item.source === 'intake_queue') { icon = '📥'; sub = `Intake • ${item.county || ''} • ${item.stage || ''}`; }
+        else if (item.source === 'tasks') { icon = '✅'; sub = `Task • ${item.booking_number || ''} • ${item.stage || ''}`; }
       }
       
       div.innerHTML = `<span style="font-size:1.5rem">${icon}</span><div><div style="font-weight:600">${title}</div><div style="font-size:0.8rem;opacity:0.8">${sub}</div></div>`;
@@ -206,10 +217,30 @@ window.SLOmnibar = {
     this.close();
     if (item.type === 'command') {
       item.action();
+      return;
+    }
+    const src = item.source || item.type || '';
+    if (src === 'active_bonds' || item.type === 'bond') {
+      const b = document.querySelector('[data-tab="tabActiveBonds"]');
+      if (b) SL.switchTab(b);
+      if (typeof loadActiveBonds === 'function') loadActiveBonds();
+    } else if (src === 'intake_queue' || item.type === 'intake') {
+      const b = document.querySelector('[data-tab="tabIntake"]');
+      if (b) SL.switchTab(b);
+      if (window.SLIntake) SLIntake.load();
+    } else if (src === 'indemnitors' || item.type === 'indemnitor') {
+      const b = document.querySelector('[data-tab="tabIndemnitor"]');
+      if (b) SL.switchTab(b);
+      if (window.SLIndemnitor) SLIndemnitor.load();
+    } else if (src === 'prospective_bonds' || item.type === 'prospective') {
+      const b = document.querySelector('[data-tab="tabProspective"]');
+      if (b) SL.switchTab(b);
+      if (window.SLProspective) SLProspective.load();
     } else {
-      // Jump to defendants tab and open notes
-      SL.switchTab(document.querySelector('[data-tab="tabDefendants"]'));
-      if (typeof openShamrockNotes === 'function') {
+      // Leads / tasks / default → defendants notes drawer
+      const b = document.querySelector('[data-tab="tabDefendants"]') || document.querySelector('[data-tab="tabLeads"]');
+      if (b) SL.switchTab(b);
+      if (typeof openShamrockNotes === 'function' && item.booking_number) {
         openShamrockNotes(item.booking_number, { Defendant_Name: item.defendant_name });
       }
     }

@@ -40,7 +40,8 @@ webdriver-manager>=4.0.0
 pdfplumber>=0.10.0
 
 # Dashboard — FastAPI + Uvicorn ASGI server (migrated from Quart)
-fastapi>=0.115.0
+fastapi>=0.115.0,<0.120.0
+starlette>=0.37.0,<0.41.0     # Pin with FastAPI — avoid Starlette 1.x on_startup breakage
 uvicorn[standard]>=0.30.0
 sse-starlette>=2.1.0          # Server-Sent Events for /api/events/stream
 motor>=3.3.0                  # Async MongoDB driver
