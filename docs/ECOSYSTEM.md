@@ -1,6 +1,16 @@
 # Shamrock Ecosystem — Three-Repo Harmony
 
-> How **shamrock-leads**, **shamrock-bail-portal-site**, and **shamrock-bail-school** work together.
+> How **shamrock-leads**, **shamrock-bail-portal-site**, and **shamrock-bail-school** work together.  
+> **Last Updated:** 2026-07-08 · Per-repo truth: each repo’s `STATUS.md`
+
+---
+
+## Two businesses
+
+| Business | Definition | Primary repos |
+|----------|------------|----------------|
+| **Bond Auto-CRM** | Phone/lead → outreach → intake → bond lifecycle (minimal human touch except risk gates) | `shamrock-leads` + portal GAS |
+| **Bail School** | Pre-licensing: 20hr **$199**, 120hr **$649**; future CE; online + in-person | `shamrock-bail-school` + portal payment unlock |
 
 ---
 
@@ -8,9 +18,9 @@
 
 | Repo | Role | Runtime | Primary URL |
 |------|------|---------|-------------|
-| **shamrock-leads** | Intelligence + ops brain: scrapers, scoring, dashboard, bond lifecycle, Slack, iMessage | Hetzner Docker (`leads.shamrockbailbonds.biz`) | MongoDB Atlas + FastAPI dashboard |
-| **shamrock-bail-portal-site** | Client-facing clipboard + GAS factory: Wix portal, Telegram, Shannon, SignNow packets, staff ops | Wix + GAS Web App | `shamrockbailbonds.biz` |
-| **shamrock-bail-school** | Education product: courses, quizzes, certificates, DFS roster | Netlify Next.js | `school.shamrockbailbonds.biz` |
+| **shamrock-leads** | Auto-CRM + scrapers + Super CRM dashboard | Hetzner Docker | `leads.shamrockbailbonds.biz` |
+| **shamrock-bail-portal-site** | Public clipboard + GAS factory + school Gmail unlock | Wix + GAS | `shamrockbailbonds.biz` |
+| **shamrock-bail-school** | Student LMS education funnel | Netlify Next.js | `school.shamrockbailbonds.biz` |
 
 ```
 County jails ──scrape──► shamrock-leads (Mongo + Slack)
