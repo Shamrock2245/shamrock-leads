@@ -36,7 +36,7 @@ HOME_DIR="/Users/${IMAC_USER}"
 LAUNCH_AGENTS="${HOME_DIR}/Library/LaunchAgents"
 LAUNCH_DAEMONS="/Library/LaunchDaemons"
 LOGS_DIR="${HOME_DIR}/Library/Logs"
-BB_URL="http://localhost:1234/api/v1/ping?password=2245Bail"
+BB_URL="http://localhost:1234/api/v1/ping?password=${BB_PASSWORD:?set BB_PASSWORD}"
 CF_TUNNEL_UUID="bd9101bf-39a5-4b7a-97a8-d024c973c769"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -176,7 +176,7 @@ mkdir -p "${LOGS_DIR}"
 # Write the watchdog script
 cat > "${HOME_DIR}/bb_watchdog.sh" << 'WATCHDOG'
 #!/usr/bin/env bash
-BB_URL="http://localhost:1234/api/v1/ping?password=2245Bail"
+BB_URL="http://localhost:1234/api/v1/ping?password=${BB_PASSWORD:?set BB_PASSWORD}"
 BB_APP_PATH="/Applications/BlueBubbles.app"
 LOG_FILE="${HOME}/Library/Logs/bb_watchdog.log"
 STATE_FILE="${HOME}/.bb_watchdog_failures"
@@ -303,11 +303,11 @@ echo ""
 log "Step 6: Verifying Cloudflare tunnel..."
 sleep 5
 
-if curl -s --max-time 10 "https://bb.shamrockbailbonds.biz/api/v1/ping?password=2245Bail" | grep -q "200\|pong\|true"; then
+if curl -s --max-time 10 "https://bb.shamrockbailbonds.biz/api/v1/ping?password=${BB_PASSWORD:?set BB_PASSWORD}" | grep -q "200\|pong\|true"; then
     ok "Tunnel is working — bb.shamrockbailbonds.biz is reachable"
 else
     warn "Tunnel not responding yet — this may take 10-30s after daemon start"
-    warn "Verify manually: curl 'https://bb.shamrockbailbonds.biz/api/v1/ping?password=2245Bail'"
+    warn "Verify manually: curl 'https://bb.shamrockbailbonds.biz/api/v1/ping?password=${BB_PASSWORD:?set BB_PASSWORD}'"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -329,5 +329,5 @@ echo "  IMPORTANT: If the arm64e fix was just applied, REBOOT NOW:"
 echo "    sudo reboot"
 echo ""
 echo "  After reboot, verify:"
-echo "    curl 'https://bb.shamrockbailbonds.biz/api/v1/ping?password=2245Bail'"
+echo "    curl 'https://bb.shamrockbailbonds.biz/api/v1/ping?password=${BB_PASSWORD:?set BB_PASSWORD}'"
 echo "════════════════════════════════════════════════════════════"

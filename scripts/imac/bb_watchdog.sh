@@ -25,7 +25,8 @@
 # ════════════════════════════════════════════════════════════════════════════════
 
 BB_URL="http://localhost:1234/api/v1/ping"
-BB_PASSWORD="2245Bail"
+BB_PASSWORD="${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}"
+if [ -z "$BB_PASSWORD" ]; then echo "Set BB_PASSWORD"; exit 1; fi
 BB_APP_NAME="BlueBubbles"
 BB_APP_PATH="/Applications/BlueBubbles.app"
 LOG_FILE="${HOME}/Library/Logs/bb_watchdog.log"

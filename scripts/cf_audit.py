@@ -187,8 +187,16 @@ for sub in subdomains:
 # 7. BLUEBUBBLES CONNECTIVITY TEST
 # ═══════════════════════════════════════════════════════════
 print(f"\n7️⃣  BlueBubbles Connectivity Test:")
-bb_url = "https://bb.shamrockbailbonds.biz/api/v1/server/info?password=2245Bail"
+import os as _os
+_bb_pw = _os.environ.get("BB_PASSWORD") or _os.environ.get("BLUEBUBBLES_PASSWORD", "")
+if not _bb_pw:
+    print("   ⚠️  Set BB_PASSWORD or BLUEBUBBLES_PASSWORD to test BlueBubbles")
+    bb_url = None
+else:
+    bb_url = f"https://bb.shamrockbailbonds.biz/api/v1/server/info?password={_bb_pw}"
 try:
+    if not bb_url:
+        raise RuntimeError("BB_PASSWORD not set")
     import ssl
     ctx = ssl.create_default_context()
     ctx.check_hostname = False

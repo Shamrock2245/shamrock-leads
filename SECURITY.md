@@ -31,6 +31,18 @@ If you discover a security vulnerability, please email `admin@shamrockbailbonds.
 - ✅ `.env` is listed in `.gitignore`
 - ✅ `.env.example` documents all required variables (values redacted)
 
+### Rotation required (2026-07 audit)
+
+The following were found in git history / tracked scripts and must be treated as **compromised**:
+
+| Secret | Where it appeared | Action |
+|--------|-------------------|--------|
+| MongoDB Atlas user `shamrock_leads` | `query_imports.py`, `query_txns.py` (scrubbed) | Rotate password in Atlas; update VPS `.env` `MONGODB_URI` |
+| BlueBubbles API password | shell scripts (`bb_watchdog`, tunnel setup, etc.) | Change BB server password; set `BB_PASSWORD` / `BLUEBUBBLES_PASSWORD_*` only in env |
+| Dashboard session material | `cookies.txt` (session cookie dump — removed from tree) | Rotate `SECRET_KEY` + `DASHBOARD_PIN` if dump was real |
+
+Cross-repo: keep `GAS_API_KEY` identical on leads VPS, portal GAS/Wix, and bail-school Netlify. See `docs/ECOSYSTEM.md`.
+
 ---
 
 ## PII Protection

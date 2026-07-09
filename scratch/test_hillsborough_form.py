@@ -23,7 +23,7 @@ co = scraper._get_browser_options()
 page = ChromiumPage(co)
 
 email = os.getenv("HCSO_EMAIL", "admin@shamrockbailbonds.biz")
-password = os.getenv("HCSO_PASSWORD", "WTFlorida1520!")
+password = os.getenv("HCSO_PASSWORD") or ""
 
 try:
     logger.info("Navigating to Hillsborough login page...")

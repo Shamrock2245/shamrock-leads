@@ -1,13 +1,28 @@
+"""One-off: print sample SwipeSimple transactions. Uses MONGODB_URI from env."""
 import asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
 import json
+import os
+import sys
+
+from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+
+load_dotenv()
+
 
 async def run():
-    client = AsyncIOMotorClient("mongodb+srv://shamrock_leads:sRf5ra92sM2K4Ntn@shamrock.1mgkm.mongodb.net/ShamrockBailDB?retryWrites=true&w=majority&appName=Shamrock")
-    db = client.ShamrockBailDB
+    uri = os.getenv("MONGODB_URI", "")
+    if not uri:
+        print("MONGODB_URI not set — copy .env.example and fill credentials", file=sys.stderr)
+        sys.exit(1)
+
+    client = AsyncIOMotorClient(uri)
+    db = client[os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")]
     txns = await db.transactions.find({"source": "swipesimple"}).limit(3).to_list(3)
     for t in txns:
         t.pop("_id", None)
-        print(json.dumps(t, indent=2))
+        print(json.dumps(t, indent=2, default=str))
 
-asyncio.run(run())
+
+if __name__ == "__main__":
+    asyncio.run(run())

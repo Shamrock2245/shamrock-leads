@@ -65,3 +65,14 @@ core.*
 *.orig
 *.swp
 *~
+
+# Session cookies / scraper dumps (never commit)
+cookies.txt
+*.cookies
+*_raw.html
+cf_challenge.html
+
+# Local deploy packaging artifacts
+.deploy*
+.deploy_*.json
+.deploy.b64

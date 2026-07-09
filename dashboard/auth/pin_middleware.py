@@ -60,10 +60,18 @@ OAUTH_PREFIXES = (
 
 
 def _get_serializer() -> URLSafeTimedSerializer:
-    """Build the cookie signer from the same secret derivation used by extensions.py."""
-    secret = os.getenv("SECRET_KEY") or (
-        "shamrock-" + (DASHBOARD_PIN or "leads-2245") + "-session-key-v1"
-    )
+    """Build the cookie signer from SECRET_KEY (required in production)."""
+    secret = os.getenv("SECRET_KEY", "").strip()
+    if not secret:
+        # Dev-only fallback — never use a predictable PIN-derived secret in prod
+        if os.getenv("ENV", os.getenv("ENVIRONMENT", "")).lower() in (
+            "production",
+            "prod",
+        ) or os.getenv("REQUIRE_SECRET_KEY", "").lower() in ("1", "true", "yes"):
+            raise RuntimeError(
+                "SECRET_KEY must be set for dashboard session cookies in production"
+            )
+        secret = "shamrock-dev-only-session-key-v1-not-for-production"
     return URLSafeTimedSerializer(secret)
 
 

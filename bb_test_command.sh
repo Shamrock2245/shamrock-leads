@@ -4,7 +4,7 @@ ssh root@178.156.179.237 "docker exec shamrock-dashboard python3 -c \"
 import asyncio, os, sys
 sys.path.insert(0, '/app')
 os.environ['BLUEBUBBLES_URL_0178'] = 'https://difficulty-dean-equations-purchased.trycloudflare.com'
-os.environ['BLUEBUBBLES_PASSWORD_0178'] = '2245Bail'
+os.environ['BLUEBUBBLES_PASSWORD_0178'] = os.environ.get('BLUEBUBBLES_PASSWORD_0178') or os.environ.get('BB_PASSWORD', '')
 from dashboard.extensions import init_bluebubbles
 init_bluebubbles()
 from dashboard.services.bb_client import get_default_bb_client

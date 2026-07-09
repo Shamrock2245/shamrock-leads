@@ -650,14 +650,17 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     """
     from dashboard.routers.intake import _normalize_intake
 
-    # Auth check
+    # Auth check — fail closed if no secret configured
     wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")
     provided = (
         request.headers.get("X-Wix-Webhook-Secret", "")
         or request.headers.get("X-Api-Key", "")
         or api_key
     )
-    if wix_secret and provided != wix_secret:
+    if not wix_secret:
+        logger.error("[wix_intake_webhook] WIX_WEBHOOK_SECRET/GAS_API_KEY not configured")
+        return JSONResponse({"error": "Webhook auth not configured"}, status_code=503)
+    if provided != wix_secret:
         logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -694,10 +697,13 @@ async def scraper_event_webhook(request: Request, api_key: str = Query(default="
     """
     from dashboard.routers.events import publish_event
     
-    # Auth check
+    # Auth check — fail closed if no key configured
     expected_key = os.getenv("GAS_API_KEY", "")
     provided = request.headers.get("X-Api-Key", "") or api_key
-    if expected_key and provided != expected_key:
+    if not expected_key:
+        logger.error("[scraper_event_webhook] GAS_API_KEY not configured")
+        return JSONResponse({"error": "Webhook auth not configured"}, status_code=503)
+    if provided != expected_key:
         logger.warning("[scraper_event_webhook] Unauthorized — invalid secret")
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
         

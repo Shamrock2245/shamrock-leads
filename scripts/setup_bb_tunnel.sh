@@ -154,8 +154,8 @@ TUNNEL_PID=$!
 sleep 5
 
 # Test connectivity
-echo "   Testing https://$HOSTNAME/api/v1/server?password=2245Bail ..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$HOSTNAME/api/v1/server?password=2245Bail" --max-time 10 || echo "000")
+echo "   Testing https://$HOSTNAME/api/v1/server?password=${BB_PASSWORD:?set BB_PASSWORD} ..."
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$HOSTNAME/api/v1/server?password=${BB_PASSWORD:?set BB_PASSWORD}" --max-time 10 || echo "000")
 
 # Kill test tunnel
 kill $TUNNEL_PID 2>/dev/null || true
