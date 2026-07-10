@@ -29,6 +29,9 @@ RUN pip install --no-cache-dir maigret \
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
     && pip install --no-cache-dir -r /opt/blackbird/requirements.txt \
     && chmod +x /opt/blackbird/blackbird.py \
+    && curl -fsSL -o /opt/blackbird/data/wmn-data.json \
+         https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json \
+    && test -s /opt/blackbird/data/wmn-data.json \
     || echo "WARNING: blackbird install failed — OSINT email/username scans will be degraded"
 
 ENV BLACKBIRD_DIR=/opt/blackbird \

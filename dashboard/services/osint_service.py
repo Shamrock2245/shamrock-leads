@@ -494,6 +494,16 @@ class OSINTService:
             result_meta["error"] = "blackbird not installed at BLACKBIRD_DIR"
             return result_meta
 
+        # WhatsMyName site DB must exist (baked into image). --no-update avoids
+        # writing into read-only /opt/blackbird/data at runtime.
+        wmn_path = os.path.join(bb_dir, "data", "wmn-data.json")
+        if not os.path.isfile(wmn_path) or os.path.getsize(wmn_path) < 1000:
+            result_meta["error"] = (
+                "blackbird missing data/wmn-data.json — rebuild image to "
+                "download WhatsMyName site list at build time"
+            )
+            return result_meta
+
         cmd = [PYTHON_CMD, bb_script, "--json", "--no-update"]
         if username:
             cmd += ["--username", username]
