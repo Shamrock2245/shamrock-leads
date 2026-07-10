@@ -691,14 +691,32 @@ async function showLocationHistory(bookingNumber, defName) {
 /* ══════════════════════════════════════════════════════════════════
    CHECK-IN MODAL
    ══════════════════════════════════════════════════════════════════ */
+let _abCheckinPortalUrl = '';
+
 function openCheckinModal(booking, name) {
   _abCheckinBooking = booking;
   _abCheckinName = name;
+  _abCheckinPortalUrl = '';
   const nameEl = document.getElementById('abCheckinDefName');
   if (nameEl) nameEl.textContent = `📍 Check-In: ${name}`;
-  ['abCheckinLat','abCheckinLng','abCheckinCounty'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['abCheckinLat','abCheckinLng','abCheckinCounty','abCheckinPhone'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const urlEl = document.getElementById('abCheckinPortalUrl');
+  if (urlEl) urlEl.textContent = '';
   const srcEl = document.getElementById('abCheckinSource');
   if (srcEl) srcEl.value = 'manual';
+  // Prefill defendant phone from bond if available (staff can correct)
+  try {
+    const bond = (_abBonds || []).find(b => b.booking_number === booking) || {};
+    const phone = bond.defendant_phone || bond.phone || '';
+    const phoneEl = document.getElementById('abCheckinPhone');
+    if (phoneEl && phone) phoneEl.value = phone;
+    if (bond.checkin_portal_url) {
+      _abCheckinPortalUrl = bond.checkin_portal_url;
+      if (urlEl) urlEl.textContent = bond.checkin_portal_url;
+    }
+  } catch (_) {}
   document.getElementById('abCheckinModal')?.classList.add('show');
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
@@ -708,7 +726,7 @@ function openCheckinModal(booking, name) {
       if (lng) lng.value = pos.coords.longitude.toFixed(6);
       const src = document.getElementById('abCheckinSource');
       if (src) src.value = 'gps';
-      toast('📍 GPS captured', 'success', 2000);
+      toast('📍 Staff GPS captured', 'success', 2000);
     }, () => {});
   }
 }
@@ -717,23 +735,135 @@ function closeCheckinModal() {
   document.getElementById('abCheckinModal')?.classList.remove('show');
   _abCheckinBooking = '';
   _abCheckinName = '';
+  _abCheckinPortalUrl = '';
+}
+
+async function enableBondCheckin() {
+  if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
+  try {
+    const agent = (typeof SL !== 'undefined' && SL.currentAgent) || localStorage.getItem('slcAgent') || 'staff';
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(_abCheckinBooking)}/enable-checkin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequency_days: 7, actor: agent, provision_traccar: true }),
+    });
+    const result = await r.json();
+    if (result.success) {
+      _abCheckinPortalUrl = result.portal_url || '';
+      const urlEl = document.getElementById('abCheckinPortalUrl');
+      if (urlEl) urlEl.textContent = _abCheckinPortalUrl || '(no URL — check bond exists)';
+      const setupEl = document.getElementById('abTraccarSetup');
+      const tr = result.traccar || {};
+      if (setupEl) {
+        if (tr.success && tr.setup) {
+          setupEl.textContent = `Traccar: ${tr.unique_id || ''}\n${tr.setup.instructions || ''}`;
+        } else if (tr.error) {
+          setupEl.textContent = `Traccar: not ready (${tr.error}) — portal check-ins still work`;
+        } else {
+          setupEl.textContent = '';
+        }
+      }
+      toast('✅ Monitoring + Traccar device ready — send portal link to defendant', 'success');
+    } else {
+      toast(result.error || 'Enable failed', 'error');
+    }
+  } catch (e) {
+    toast('Network error enabling check-in', 'error');
+  }
+}
+
+async function provisionTraccarContinuous() {
+  if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
+  if (!confirm('Enable continuous GPS via Traccar Client app? Defendant must install the app knowingly (not covert).')) {
+    return;
+  }
+  try {
+    const agent = (typeof SL !== 'undefined' && SL.currentAgent) || localStorage.getItem('slcAgent') || 'staff';
+    const phone = document.getElementById('abCheckinPhone')?.value?.trim() || '';
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(_abCheckinBooking)}/provision-traccar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ continuous_gps: true, actor: agent, phone }),
+    });
+    const result = await r.json();
+    const setupEl = document.getElementById('abTraccarSetup');
+    if (result.success) {
+      if (setupEl && result.setup) {
+        setupEl.textContent = result.setup.instructions || JSON.stringify(result.setup);
+      }
+      toast('📡 Traccar continuous GPS provisioned — install task created', 'success');
+    } else {
+      if (setupEl) setupEl.textContent = result.error || 'Traccar provision failed';
+      toast(result.error || 'Traccar provision failed', 'error');
+    }
+  } catch (e) {
+    toast('Network error provisioning Traccar', 'error');
+  }
+}
+
+function copyCheckinPortalUrl() {
+  if (!_abCheckinPortalUrl) {
+    toast('Enable monitoring first to generate a portal URL', 'error');
+    return;
+  }
+  navigator.clipboard?.writeText(_abCheckinPortalUrl).then(
+    () => toast('Portal URL copied', 'success'),
+    () => toast(_abCheckinPortalUrl, 'info', 8000),
+  );
+}
+
+async function sendBondCheckinLink() {
+  if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
+  const phone = document.getElementById('abCheckinPhone')?.value?.trim() || '';
+  if (!phone) {
+    toast('Enter the validated defendant phone before sending', 'error');
+    return;
+  }
+  if (!confirm(`Send transparent check-in link to this number for ${_abCheckinName || _abCheckinBooking}?`)) {
+    return;
+  }
+  try {
+    const agent = (typeof SL !== 'undefined' && SL.currentAgent) || localStorage.getItem('slcAgent') || 'staff';
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(_abCheckinBooking)}/send-checkin-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, actor: agent }),
+    });
+    const result = await r.json();
+    if (result.success || result.message_sent) {
+      _abCheckinPortalUrl = result.portal_url || _abCheckinPortalUrl;
+      const urlEl = document.getElementById('abCheckinPortalUrl');
+      if (urlEl && _abCheckinPortalUrl) urlEl.textContent = _abCheckinPortalUrl;
+      toast(`📲 Check-in link sent via ${result.channel || 'message'}`, 'success');
+    } else {
+      toast(result.error || 'Send failed', 'error');
+    }
+  } catch (e) {
+    toast('Network error sending check-in link', 'error');
+  }
 }
 
 async function submitCheckin() {
   if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
-  const lat    = parseFloat(document.getElementById('abCheckinLat')?.value) || null;
-  const lng    = parseFloat(document.getElementById('abCheckinLng')?.value) || null;
+  const lat    = parseFloat(document.getElementById('abCheckinLat')?.value);
+  const lng    = parseFloat(document.getElementById('abCheckinLng')?.value);
   const county = document.getElementById('abCheckinCounty')?.value?.trim() || '';
   const source = document.getElementById('abCheckinSource')?.value || 'manual';
   try {
     const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(_abCheckinBooking)}/check-in`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat, lng, county, source, accuracy: 0 }),
+      body: JSON.stringify({
+        method: source,
+        location: county,
+        notes: county ? `County: ${county}` : '',
+        gps_lat: Number.isFinite(lat) ? lat : null,
+        gps_lon: Number.isFinite(lng) ? lng : null,
+      }),
     });
     const result = await r.json();
     if (result.success) {
-      toast(`✅ Check-in recorded for ${_abCheckinName}${result.out_of_area ? ' ⚠️ OUT OF AREA' : ''}`, result.out_of_area ? 'error' : 'success');
+      toast(`✅ Check-in recorded for ${_abCheckinName}`, 'success');
       closeCheckinModal();
       loadActiveBonds();
     } else {

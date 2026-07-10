@@ -23,6 +23,9 @@ window.SLTasks = (() => {
   const TYPE_ICONS = {
     check_in:         '📋',
     check_in_30d:     '📅',
+    checkin_enroll:   '📍',
+    traccar_install:  '📡',
+    collect_payment:  '💵',
     court_reminder:   '🏛️',
     payment:          '💵',
     payment_reminder: '💵',

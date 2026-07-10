@@ -18,14 +18,12 @@ Staff-only (session-authed):
 """
 
 import os
-import secrets
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request
-from starlette.responses import Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
-_PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
+_PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
 
 from dashboard.extensions import get_collection
 from dashboard.services.client_portal_service import (
@@ -39,7 +37,9 @@ from dashboard.services.client_portal_service import (
 
 logger = logging.getLogger(__name__)
 
-portal_bp = APIRouter(prefix="/api", tags=["client_portal"])
+# No router prefix — routes own full paths:
+#   /c/{token}  and  /api/portal/...
+portal_bp = APIRouter(tags=["client_portal"])
 DASHBOARD_DIR = os.path.dirname(os.path.dirname(__file__))
 
 
@@ -47,28 +47,34 @@ DASHBOARD_DIR = os.path.dirname(os.path.dirname(__file__))
 # PUBLIC ROUTES — No auth required (token-gated)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@portal_bp.get("/c/{token}")
+@portal_bp.get("/c/{token}", response_class=HTMLResponse)
 async def portal_page(token: str):
     """Serve the client portal HTML page."""
-    # Quick token validation — just check if it exists
     token_data = await validate_token(token)
     if not token_data:
-        return JSONResponse(await _error_page("This link has expired or is no longer valid."), status_code=404)
+        return HTMLResponse(
+            await _error_page("This link has expired or is no longer valid."),
+            status_code=404,
+        )
 
-    # Serve the portal HTML — all data loading happens via JS fetch
     portal_path = os.path.join(DASHBOARD_DIR, "portal.html")
     if not os.path.isfile(portal_path):
         logger.error("portal.html not found at %s", portal_path)
-        return JSONResponse(await _error_page("Portal temporarily unavailable."), status_code=500)
+        return HTMLResponse(
+            await _error_page("Portal temporarily unavailable."),
+            status_code=500,
+        )
 
-    with open(portal_path, "r") as f:
+    with open(portal_path, "r", encoding="utf-8") as f:
         html = f.read()
 
-    resp = await JSONResponse(html)
-    resp.headers["Content-Type"] = "text/html; charset=utf-8"
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
-    return resp
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "X-Robots-Tag": "noindex, nofollow",
+        },
+    )
 
 
 @portal_bp.get("/api/portal/{token}/status")
@@ -91,15 +97,19 @@ async def portal_status(token: str):
 
 @portal_bp.post("/api/portal/{token}/checkin")
 async def portal_checkin(request: Request, token: str):
-    """Submit a defendant check-in (GPS + optional selfie)."""
+    """Submit a defendant check-in (explicit consent + GPS + optional selfie)."""
     token_data = await validate_token(token)
     if not token_data:
         return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
     if token_data["role"] != "defendant":
-        return JSONResponse({"error": "Check-in is only available for defendants"}, status_code=403)
+        return JSONResponse(
+            {"error": "Check-in is only available for defendants"},
+            status_code=403,
+        )
 
     data = await request.json() or {}
+    consent = bool(data.get("consent") is True or data.get("consent") == "true")
 
     result = await submit_portal_checkin(
         booking_number=token_data["booking_number"],
@@ -108,9 +118,13 @@ async def portal_checkin(request: Request, token: str):
         accuracy=data.get("accuracy"),
         selfie_data=data.get("selfie"),
         notes=data.get("notes", ""),
+        consent=consent,
+        consent_version=data.get("consent_version", ""),
     )
 
-    return result, 201 if result.get("success") else 400
+    if result.get("success"):
+        return JSONResponse(result, status_code=201)
+    return JSONResponse(result, status_code=400)
 
 
 @portal_bp.get("/api/portal/{token}/payment-link")
@@ -147,7 +161,10 @@ async def generate_token_endpoint(request: Request):
     if not booking_number:
         return JSONResponse({"error": "booking_number is required"}, status_code=400)
     if role not in ("defendant", "indemnitor"):
-        return JSONResponse({"error": "role must be 'defendant' or 'indemnitor'"}, status_code=400)
+        return JSONResponse(
+            {"error": "role must be 'defendant' or 'indemnitor'"},
+            status_code=400,
+        )
 
     result = await generate_portal_token(
         booking_number=booking_number,
@@ -158,6 +175,8 @@ async def generate_token_endpoint(request: Request):
     if result.get("success"):
         return JSONResponse(result, status_code=201)
     return JSONResponse(result, status_code=404)
+
+
 @portal_bp.get("/api/portal/tokens/{booking_number}")
 async def list_tokens(booking_number: str):
     """List all active portal tokens for a bond (staff view)."""
@@ -174,22 +193,36 @@ async def revoke_token_endpoint(request: Request):
         return JSONResponse({"error": "token is required"}, status_code=400)
 
     result = await revoke_portal_token(token)
-    return result, 200 if result.get("success") else 404
+    if result.get("success"):
+        return result
+    return JSONResponse(result, status_code=404)
 
 
 @portal_bp.post("/api/portal/send-link")
 async def send_portal_link(request: Request):
-    """Generate a portal link and send it via iMessage/SMS."""
+    """Generate a portal link and send it via iMessage/SMS (staff-gated)."""
     data = await request.json() or {}
     booking_number = data.get("booking_number", "").strip()
     role = data.get("role", "indemnitor").strip().lower()
     phone = data.get("phone", "").strip()
-    channel = data.get("channel", "imessage")  # imessage, sms, or both
 
     if not booking_number or not phone:
-        return JSONResponse({"error": "booking_number and phone are required"}, status_code=400)
+        return JSONResponse(
+            {"error": "booking_number and phone are required"},
+            status_code=400,
+        )
 
-    # Generate token
+    # Defendant check-in path: use enrollment service (transparent copy, no covert geo line)
+    if role == "defendant" and data.get("purpose") == "checkin":
+        from dashboard.services.checkin_enrollment_service import send_checkin_link
+        result = await send_checkin_link(
+            booking_number,
+            phone=phone,
+            actor=data.get("created_by") or data.get("actor") or "staff",
+        )
+        status = 200 if result.get("success") else 400
+        return JSONResponse(result, status_code=status)
+
     token_result = await generate_portal_token(
         booking_number=booking_number,
         role=role,
@@ -201,48 +234,26 @@ async def send_portal_link(request: Request):
     portal_url = token_result["url"]
     defendant_name = token_result.get("defendant_name", "defendant")
 
-    # Generate a geolocator link (mandatory project requirement for all outbound texts)
-    geo_token = secrets.token_urlsafe(12)
-    geo_url = f"{_PUBLIC_URL.rstrip('/')}/g/{geo_token}"
-    try:
-        geo_col = get_collection("geo_pings")
-        await geo_col.insert_one({
-            "token": geo_token,
-            "booking_number": booking_number,
-            "phone": phone,
-            "recipient": f"portal_link_{role}",
-            "status": "pending",
-            "ping_count": 0,
-            "pings": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-    except Exception:
-        geo_url = ""  # non-fatal
-
-    geo_line = f"\nConfirm your location: {geo_url}" if geo_url else ""
-
     if role == "indemnitor":
         msg = (
             f"Hi! Here's your Shamrock Bail Bonds portal link for "
             f"{defendant_name}'s bond. View status, make payments, and "
-            f"manage everything in one place:\n\n{portal_url}{geo_line}\n\n"
+            f"manage everything in one place:\n\n{portal_url}\n\n"
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
     else:
         msg = (
             f"Hi {defendant_name}! Here's your Shamrock Bail Bonds portal. "
-            f"Check in, view court dates, and stay compliant:\n\n{portal_url}{geo_line}\n\n"
+            f"Check in, view court dates, and stay compliant:\n\n{portal_url}\n\n"
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
 
-    # Send via iMessage (BlueBubbles)
     send_result = {"success": False, "error": "No messaging channel available"}
     try:
         from dashboard.services.bb_client import send_message_universal
         send_result = await send_message_universal(phone, msg)
     except Exception as e:
         logger.warning("Portal link send via iMessage failed: %s", e)
-        # Fallback to Twilio SMS
         try:
             from dashboard.services.twilio_service import TwilioService
             twilio = TwilioService()
@@ -262,22 +273,29 @@ async def send_portal_link(request: Request):
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GET  /api/portal/stats  — aggregate portal token stats for dashboard KPI
-# ─────────────────────────────────────────────────────────────────────────────
 @portal_bp.get("/api/portal/stats")
 async def portal_stats():
     """Return aggregate portal token stats for the dashboard KPI panel."""
     col = get_collection("portal_tokens")
     now = datetime.now(timezone.utc)
-    total_active = await col.count_documents({"expires_at": {"$gt": now}, "revoked": {"$ne": True}})
-    total_checkins = await col.count_documents({"last_checkin": {"$exists": True}})
+    total_active = await col.count_documents(
+        {"expires_at": {"$gt": now}, "active": True}
+    )
+    checkins_col = get_collection("bond_checkins")
+    total_checkins = await checkins_col.count_documents({})
     total_all_time = await col.count_documents({})
     return {
         "active_tokens": total_active,
         "total_checkins": total_checkins,
         "total_all_time": total_all_time,
     }
+
+
+@portal_bp.get("/api/portal/monitoring-conditions")
+async def portal_monitoring_conditions():
+    """Staff: return standard check-in condition language (Track C)."""
+    from dashboard.services.checkin_enrollment_service import get_condition_language
+    return get_condition_language()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

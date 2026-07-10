@@ -26,11 +26,27 @@ logger = logging.getLogger(__name__)
 
 # ── Traccar Connection Config ────────────────────────────────────────────────
 TRACCAR_URL = os.getenv("TRACCAR_URL", "http://traccar:8082")
+# OsmAnd protocol (Traccar Client app + one-shot portal check-in injects)
+TRACCAR_OSMAND_URL = os.getenv("TRACCAR_OSMAND_URL", "http://traccar:5055")
+# Public host for defendant app setup instructions (not internal docker DNS)
+TRACCAR_PUBLIC_HOST = os.getenv(
+    "TRACCAR_PUBLIC_HOST",
+    os.getenv("DASHBOARD_PUBLIC_HOST", "leads.shamrockbailbonds.biz"),
+)
+TRACCAR_OSMAND_PUBLIC_PORT = os.getenv("TRACCAR_OSMAND_PUBLIC_PORT", "5055")
 TRACCAR_EMAIL = os.getenv("TRACCAR_EMAIL", "admin@shamrockbailbonds.biz")
 TRACCAR_PASSWORD = os.getenv("TRACCAR_PASSWORD", "shamrock-traccar-2245")
 TRACCAR_TOKEN = os.getenv("TRACCAR_TOKEN", "")  # Optional: use token auth instead
 
 _TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+
+
+def booking_to_unique_id(booking_number: str) -> str:
+    """Stable Traccar uniqueId for a bond (alphanumeric + hyphen)."""
+    raw = (booking_number or "").strip().upper()
+    cleaned = "".join(c if c.isalnum() or c in "-_" else "-" for c in raw)
+    cleaned = cleaned.strip("-_") or "UNKNOWN"
+    return f"shamrock-{cleaned}"[:64]
 
 
 class TraccarClient:
@@ -175,6 +191,123 @@ class TraccarClient:
         client = await self._get_client()
         resp = await client.delete(f"/api/devices/{device_id}")
         return resp.status_code == 204
+
+    async def find_device_by_unique_id(self, unique_id: str) -> Optional[dict]:
+        """Return device dict if uniqueId is already registered, else None."""
+        try:
+            devices = await self.list_devices()
+        except Exception as e:
+            logger.warning("Traccar list_devices failed: %s", e)
+            return None
+        for d in devices:
+            if str(d.get("uniqueId") or "") == str(unique_id):
+                return d
+        return None
+
+    async def ensure_device(
+        self,
+        name: str,
+        unique_id: str,
+        *,
+        category: str = "person",
+        phone: str = "",
+        attributes: dict | None = None,
+    ) -> dict:
+        """Get existing device by uniqueId or create it (idempotent)."""
+        existing = await self.find_device_by_unique_id(unique_id)
+        if existing:
+            return existing
+        try:
+            return await self.create_device(
+                name=name,
+                unique_id=unique_id,
+                category=category,
+                phone=phone,
+                attributes=attributes,
+            )
+        except Exception as e:
+            # Race: another process created it
+            logger.warning("Traccar create_device failed, re-fetching: %s", e)
+            existing = await self.find_device_by_unique_id(unique_id)
+            if existing:
+                return existing
+            raise
+
+    async def report_osmand_position(
+        self,
+        unique_id: str,
+        lat: float,
+        lon: float,
+        *,
+        accuracy: float | None = None,
+        altitude: float | None = None,
+        speed: float | None = None,
+        timestamp: datetime | None = None,
+    ) -> dict:
+        """
+        Inject a one-shot GPS fix via OsmAnd protocol (port 5055).
+
+        Used for portal check-ins so positions appear in Traccar live map
+        without requiring continuous Traccar Client install. Device should
+        already exist (ensure_device) or Traccar may drop unknown IDs.
+        """
+        osmand_url = TRACCAR_OSMAND_URL.rstrip("/")
+        ts = timestamp or datetime.now(timezone.utc)
+        # OsmAnd accepts unix seconds or ISO-ish; unix is most reliable
+        params: dict = {
+            "id": unique_id,
+            "lat": f"{float(lat):.6f}",
+            "lon": f"{float(lon):.6f}",
+            "timestamp": int(ts.timestamp()),
+        }
+        if accuracy is not None:
+            # hdop is rough stand-in; still useful for filter
+            params["hdop"] = max(0.1, float(accuracy) / 10.0)
+            params["accuracy"] = float(accuracy)
+        if altitude is not None:
+            params["altitude"] = float(altitude)
+        if speed is not None:
+            params["speed"] = float(speed)
+
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.get(osmand_url + "/", params=params)
+                # OsmAnd endpoint often returns empty 200
+                ok = resp.status_code < 400
+                if not ok:
+                    logger.warning(
+                        "OsmAnd inject failed status=%s body=%s",
+                        resp.status_code, (resp.text or "")[:200],
+                    )
+                return {
+                    "success": ok,
+                    "status_code": resp.status_code,
+                    "unique_id": unique_id,
+                }
+        except Exception as e:
+            logger.warning("OsmAnd inject error unique_id=%s: %s", unique_id, e)
+            return {"success": False, "error": str(e), "unique_id": unique_id}
+
+    @staticmethod
+    def client_setup_instructions(unique_id: str) -> dict:
+        """Copy for staff / defendant when enabling continuous Traccar GPS."""
+        host = TRACCAR_PUBLIC_HOST
+        port = TRACCAR_OSMAND_PUBLIC_PORT
+        server_url = f"http://{host}:{port}"
+        return {
+            "app_android": "https://play.google.com/store/apps/details?id=org.traccar.client",
+            "app_ios": "https://apps.apple.com/app/traccar-client/id843156974",
+            "server_url": server_url,
+            "device_identifier": unique_id,
+            "frequency_seconds": 60,
+            "instructions": (
+                f"1. Install free Traccar Client (Android/iOS).\n"
+                f"2. Server URL: {server_url}\n"
+                f"3. Device identifier: {unique_id}\n"
+                f"4. Location accuracy: High · Frequency: 60 seconds · enable location permission.\n"
+                f"This is continuous GPS for bond monitoring — only with defendant knowledge."
+            ),
+        }
 
     # ── Position Tracking ────────────────────────────────────────────────────
 

@@ -425,6 +425,36 @@ async def signnow_webhook(request: Request):
     except Exception as tg_exc:
         logger.warning("[signnow_webhook] Telegram alert failed: %s", tg_exc)
 
+    # ── Step 12: Check-in enrollment (Track A+C) — staff task only, no auto-text
+    # Policy: docs/policies/monitoring-checkin-policy.md
+    enroll_booking = (
+        (bond_case or {}).get("booking_number")
+        or booking_number
+        or packet.get("booking_number")
+        or ""
+    )
+    if enroll_booking:
+        try:
+            from dashboard.services.checkin_enrollment_service import (
+                enable_checkin_monitoring,
+            )
+            enroll = await enable_checkin_monitoring(
+                enroll_booking,
+                frequency_days=7,
+                source="signnow_complete",
+                actor="System (SignNow Webhook)",
+                create_staff_task=True,
+            )
+            logger.info(
+                "[signnow_webhook] check-in enroll booking=%s portal=%s",
+                enroll_booking,
+                bool(enroll.get("portal_url")),
+            )
+        except Exception as enroll_exc:
+            logger.warning(
+                "[signnow_webhook] check-in enrollment failed: %s", enroll_exc
+            )
+
     return JSONResponse(status_code=200, content={"success": True})
 
 

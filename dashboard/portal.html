@@ -116,6 +116,26 @@ body {
 .btn-gold:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(200,168,78,0.3); }
 .btn + .btn { margin-top: 10px; }
 
+/* ── Check-in consent ── */
+.consent-box {
+  background: var(--shamrock-light);
+  border: 1px solid #c5e6d4;
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.55;
+}
+.consent-box strong { display: block; margin-bottom: 6px; font-size: 13px; color: var(--shamrock-dark); }
+.consent-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 12px 0 16px; font-size: 13px; line-height: 1.45; cursor: pointer;
+}
+.consent-row input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--shamrock); flex-shrink: 0; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none !important; }
+.gps-note { font-size: 11px; color: var(--muted); margin-top: 10px; text-align: center; }
+
 /* ── Check-in ── */
 .checkin-success {
   background: var(--shamrock-light); border-radius: var(--radius);
@@ -225,20 +245,40 @@ body {
     </div>
 
     <div class="section fade-up fade-up-3" id="checkinSection" style="display:none">
-      <div class="section-title">Check-In</div>
+      <div class="section-title">Required Check-In</div>
       <div class="card">
         <div id="checkinContent">
-          <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
-            Verify your location to stay compliant with your bond conditions.
+          <div class="consent-box" id="conditionBox">
+            <strong>Bond monitoring condition</strong>
+            <span id="conditionText">
+              As a condition of your bail bond, you agree to complete scheduled check-ins
+              with Shamrock Bail Bonds. Location is shared only when you tap Check In and
+              allow permission on this device.
+            </span>
+          </div>
+          <p style="font-size:13px;color:var(--muted);margin-bottom:8px" id="checkinDueText">
+            Verify your status to stay compliant with your bond conditions.
           </p>
-          <button class="btn btn-secondary" id="btnCheckin" onclick="doCheckin()">
+          <label class="consent-row" for="consentCheck">
+            <input type="checkbox" id="consentCheck" onchange="onConsentChange()">
+            <span>
+              I understand this check-in is required under my bond conditions. I consent to
+              Shamrock Bail Bonds recording the time of this check-in and, if I allow it,
+              my approximate location <em>only for this check-in</em> (not continuous tracking).
+            </span>
+          </label>
+          <button class="btn btn-secondary" id="btnCheckin" onclick="doCheckin()" disabled>
             📍 Check In Now
           </button>
+          <p class="gps-note">
+            Your browser will ask for location permission. You can still check in if you deny it;
+            call us at (239) 332-2245 if you need help.
+          </p>
         </div>
-        <div class="checkin-success" id="checkinSuccess">
+        <div class="checkin-success" id="checkinSuccess" style="display:none">
           <div class="icon">✅</div>
           <h3>Check-In Complete</h3>
-          <p id="checkinTime">Your location has been verified.</p>
+          <p id="checkinTime">Your check-in has been recorded.</p>
         </div>
       </div>
     </div>
@@ -372,14 +412,28 @@ function render() {
 }
 
 function renderDefendant(d) {
+  // Show check-in for defendants when required OR always offer if role is defendant
+  // (staff may enable mid-bond; portal still useful for court dates)
   if (d.check_in_required) {
     document.getElementById('checkinSection').style.display = '';
+    if (d.monitoring_condition_summary) {
+      document.getElementById('conditionText').textContent = d.monitoring_condition_summary;
+    }
+    let due = 'Complete your check-in to stay compliant with your bond conditions.';
     if (d.last_check_in) {
       const ago = timeAgo(d.last_check_in);
-      document.querySelector('#checkinContent p').textContent =
-        `Last check-in: ${ago}. Next due: ${d.next_check_in_due ? fmtDate(d.next_check_in_due) : 'TBD'}`;
+      due = `Last check-in: ${ago}. Next due: ${d.next_check_in_due ? fmtDate(d.next_check_in_due) : 'TBD'}.`;
+    } else if (d.next_check_in_due) {
+      due = `First check-in due: ${fmtDate(d.next_check_in_due)}. Frequency: every ${d.check_in_frequency_days || 7} days.`;
     }
+    document.getElementById('checkinDueText').textContent = due;
   }
+}
+
+function onConsentChange() {
+  const ok = document.getElementById('consentCheck')?.checked;
+  const btn = document.getElementById('btnCheckin');
+  if (btn) btn.disabled = !ok;
 }
 
 function renderIndemnitor(d) {
@@ -419,43 +473,65 @@ function renderIndemnitor(d) {
   }
 }
 
-// ── Check-In ──
+// ── Check-In (explicit consent required — Track A) ──
 async function doCheckin() {
   const btn = document.getElementById('btnCheckin');
+  const consented = document.getElementById('consentCheck')?.checked;
+  if (!consented) {
+    alert('Please check the consent box before checking in.');
+    return;
+  }
+
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0 auto"></div>';
 
   let lat = null, lng = null, acc = null;
   try {
-    const pos = await new Promise((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true, timeout: 10000, maximumAge: 0
+    if (navigator.geolocation) {
+      const pos = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true, timeout: 12000, maximumAge: 0
+        });
       });
-    });
-    lat = pos.coords.latitude;
-    lng = pos.coords.longitude;
-    acc = pos.coords.accuracy;
-  } catch(e) { /* GPS optional — still submit check-in */ }
+      lat = pos.coords.latitude;
+      lng = pos.coords.longitude;
+      acc = pos.coords.accuracy;
+    }
+  } catch (e) {
+    /* GPS optional if user denies — still submit check-in with consent */
+  }
 
   try {
     const res = await fetch(`${API}/api/portal/${TOKEN}/checkin`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ lat, lng, accuracy: acc })
+      body: JSON.stringify({
+        lat,
+        lng,
+        accuracy: acc,
+        consent: true,
+        consent_version: (caseData && caseData.consent_version) || 'checkin-v1-2026-07',
+      })
     });
-    if (res.ok) {
+    const body = await res.json().catch(() => ({}));
+    if (res.ok && body.success !== false) {
       document.getElementById('checkinContent').style.display = 'none';
       const success = document.getElementById('checkinSuccess');
       success.style.display = '';
+      const next = body.next_check_in_due ? ` Next due: ${fmtDate(body.next_check_in_due)}.` : '';
       document.getElementById('checkinTime').textContent =
-        `Verified at ${new Date().toLocaleString()}` + (lat ? ` · GPS captured` : '');
+        `Recorded at ${new Date().toLocaleString()}` +
+        (lat != null ? ' · Location verified' : ' · No GPS (permission denied or unavailable)') +
+        next;
     } else {
-      btn.innerHTML = '❌ Error — Try Again';
+      btn.innerHTML = '❌ ' + (body.error || 'Error — Try Again');
       btn.disabled = false;
+      onConsentChange();
     }
-  } catch(e) {
+  } catch (e) {
     btn.innerHTML = '❌ Network Error';
     btn.disabled = false;
+    onConsentChange();
   }
 }
 

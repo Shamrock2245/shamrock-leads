@@ -579,7 +579,7 @@ async def api_active_bonds_create(request: Request):
 
 @bonds_bp.post("/active-bonds/{booking_number}/check-in")
 async def api_active_bond_check_in(request: Request, booking_number):
-    """Record a defendant check-in."""
+    """Record a defendant check-in (staff/manual)."""
     active_bonds = get_collection("active_bonds")
     data = await request.json() or {}
     now = datetime.now(timezone.utc)
@@ -587,7 +587,7 @@ async def api_active_bond_check_in(request: Request, booking_number):
         bond = await active_bonds.find_one({"booking_number": booking_number})
         if not bond:
             return JSONResponse({"success": False, "error": "Bond not found"}, status_code=404)
-        freq_days = bond.get("check_in_frequency_days", 30)
+        freq_days = bond.get("check_in_frequency_days", 7)
         next_due = now + timedelta(days=freq_days)
         checkin_doc = {
             "booking_number": booking_number,
@@ -597,12 +597,21 @@ async def api_active_bond_check_in(request: Request, booking_number):
             "notes": data.get("notes", ""),
             "gps_lat": data.get("gps_lat"),
             "gps_lon": data.get("gps_lon"),
+            "status": "completed",
+            "source": "staff_manual",
         }
         checkins = get_collection("bond_checkins")
         await checkins.insert_one(checkin_doc)
         await active_bonds.update_one(
             {"booking_number": booking_number},
-            {"$set": {"last_checkin": now, "next_checkin_due": next_due, "updated_at": now}},
+            {"$set": {
+                "last_checkin": now,
+                "last_check_in": now.isoformat(),
+                "next_checkin_due": next_due,
+                "next_check_in_due": next_due.isoformat(),
+                "check_in_overdue": False,
+                "updated_at": now,
+            }},
         )
         return {
             "success": True,
@@ -612,6 +621,128 @@ async def api_active_bond_check_in(request: Request, booking_number):
         }
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@bonds_bp.post("/active-bonds/{booking_number}/enable-checkin")
+async def api_enable_checkin_monitoring(request: Request, booking_number: str):
+    """
+    Staff: enable transparent check-in monitoring (A+C) + Traccar device.
+    Creates defendant portal link + CRM task. Does NOT auto-text the defendant.
+    """
+    data = await request.json() or {}
+    try:
+        from dashboard.services.checkin_enrollment_service import enable_checkin_monitoring
+        result = await enable_checkin_monitoring(
+            booking_number,
+            frequency_days=int(data.get("frequency_days") or 7),
+            source=data.get("source") or "staff",
+            actor=data.get("actor") or data.get("agent") or "staff",
+            create_staff_task=data.get("create_staff_task", True),
+            force_new_token=bool(data.get("force_new_token")),
+            provision_traccar=data.get("provision_traccar", True),
+            continuous_gps=bool(data.get("continuous_gps")),
+        )
+        if not result.get("success"):
+            return JSONResponse(result, status_code=404)
+        return result
+    except Exception as e:
+        logger.exception("enable-checkin failed for %s", booking_number)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@bonds_bp.post("/active-bonds/{booking_number}/provision-traccar")
+async def api_provision_traccar(request: Request, booking_number: str):
+    """
+    Staff: ensure Traccar device for bond (in-stack GPS).
+
+    continuous_gps=true → also creates install task for Traccar Client app.
+    """
+    data = await request.json() or {}
+    try:
+        from dashboard.services.checkin_enrollment_service import (
+            provision_traccar_device,
+            enable_checkin_monitoring,
+        )
+        continuous = bool(data.get("continuous_gps") or data.get("continuous"))
+        actor = data.get("actor") or data.get("agent") or "staff"
+
+        # Ensure check-in monitoring is on when enabling continuous GPS
+        if continuous or data.get("enable_checkin", True):
+            await enable_checkin_monitoring(
+                booking_number,
+                source="staff_traccar",
+                actor=actor,
+                create_staff_task=False,
+                provision_traccar=False,
+                continuous_gps=continuous,
+            )
+
+        active_bonds = get_collection("active_bonds")
+        bond = await active_bonds.find_one({"booking_number": booking_number}) or {}
+        result = await provision_traccar_device(
+            booking_number,
+            defendant_name=bond.get("defendant_name") or data.get("defendant_name") or "",
+            county=bond.get("county") or data.get("county") or "",
+            phone=(data.get("phone") or bond.get("defendant_phone") or "")[:32],
+            continuous=continuous,
+            actor=actor,
+        )
+        if continuous and result.get("success"):
+            try:
+                from dashboard.services.task_engine import TaskEngine
+                setup = result.get("setup") or {}
+                await TaskEngine.create_task(
+                    booking_number=booking_number,
+                    title="Install Traccar Client (continuous GPS)",
+                    description=(
+                        f"Device ID: {result.get('unique_id')}. "
+                        f"{setup.get('instructions', '')}"
+                    ),
+                    due_date=datetime.now(timezone.utc),
+                    task_type="traccar_install",
+                )
+            except Exception as te:
+                logger.warning("traccar_install task: %s", te)
+        status = 200 if result.get("success") else 502
+        return JSONResponse(result, status_code=status)
+    except Exception as e:
+        logger.exception("provision-traccar failed for %s", booking_number)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@bonds_bp.post("/active-bonds/{booking_number}/send-checkin-link")
+async def api_send_checkin_link(request: Request, booking_number: str):
+    """
+    Staff-gated: send defendant check-in portal link via iMessage/SMS.
+    Requires phone — never invents a number. Human-in-the-loop only.
+    """
+    data = await request.json() or {}
+    phone = (data.get("phone") or "").strip()
+    if not phone:
+        return JSONResponse(
+            {"success": False, "error": "phone is required (validated defendant number)"},
+            status_code=400,
+        )
+    try:
+        from dashboard.services.checkin_enrollment_service import send_checkin_link
+        result = await send_checkin_link(
+            booking_number,
+            phone=phone,
+            actor=data.get("actor") or data.get("agent") or "staff",
+            channel=data.get("channel") or "imessage",
+        )
+        status = 200 if result.get("success") else 400
+        return JSONResponse(result, status_code=status)
+    except Exception as e:
+        logger.exception("send-checkin-link failed for %s", booking_number)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@bonds_bp.get("/monitoring-conditions")
+async def api_monitoring_conditions():
+    """Return standard bond check-in condition language for CRM / paperwork."""
+    from dashboard.services.checkin_enrollment_service import get_condition_language
+    return get_condition_language()
 
 
 @bonds_bp.post("/active-bonds/{booking_number}/alert")

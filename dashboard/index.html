@@ -1212,12 +1212,30 @@
         </div>
       </div>
     </div>
-    <!-- Manual Check-In Modal -->
+    <!-- Manual Check-In Modal (+ transparent portal enrollment A+C) -->
     <div class="modal-overlay" id="abCheckinModal">
       <div class="modal">
         <div class="modal-header"><h2>📍 Record Check-In</h2><button class="modal-close" onclick="closeCheckinModal()">&#x2715;</button></div>
         <div class="modal-body">
           <div id="abCheckinDefName" style="font-size:16px;font-weight:700;margin-bottom:12px"></div>
+          <div style="padding:12px;background:rgba(0,132,74,0.08);border:1px solid rgba(0,132,74,0.25);border-radius:8px;margin-bottom:14px">
+            <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:6px">Portal check-in (transparent — not covert GPS)</div>
+            <p style="font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.45">
+              After signing, enable monitoring and send the defendant a magic link. They consent and share location only when they tap Check In.
+            </p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+              <button type="button" class="btn-export" style="font-size:11px" onclick="enableBondCheckin()">Enable monitoring + Traccar</button>
+              <button type="button" class="btn-export" style="font-size:11px" onclick="provisionTraccarContinuous()">📡 Continuous GPS (Traccar app)</button>
+              <button type="button" class="btn-export" style="font-size:11px" onclick="copyCheckinPortalUrl()">Copy portal URL</button>
+            </div>
+            <div id="abTraccarSetup" style="font-size:10px;color:var(--muted);margin-bottom:8px;white-space:pre-wrap;line-height:1.4"></div>
+            <label style="font-size:12px;color:var(--muted)">Defendant phone (required to send link)
+              <input type="tel" id="abCheckinPhone" placeholder="Validated defendant mobile" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+            </label>
+            <button type="button" class="btn-primary" style="margin-top:10px;width:100%;font-size:13px" onclick="sendBondCheckinLink()">📲 Send check-in link (staff only)</button>
+            <div id="abCheckinPortalUrl" style="font-size:10px;color:var(--muted);margin-top:8px;word-break:break-all"></div>
+          </div>
+          <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)">OR record staff check-in now</div>
           <div style="display:grid;gap:10px">
             <label style="font-size:12px;color:var(--muted)">Latitude (optional)
               <input type="number" id="abCheckinLat" step="0.000001" placeholder="e.g. 26.1224" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
@@ -1232,8 +1250,7 @@
               <select id="abCheckinSource" style="width:100%;margin-top:4px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text)">
                 <option value="manual">Manual (office visit)</option>
                 <option value="phone">Phone call</option>
-                <option value="gps">GPS ping</option>
-                <option value="ip">IP geolocation</option>
+                <option value="gps">GPS (staff device)</option>
               </select>
             </label>
           </div>

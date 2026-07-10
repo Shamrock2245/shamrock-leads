@@ -19,8 +19,11 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-geo_intel_bp = APIRouter(prefix="/api", tags=["geo_intelligence"])
-traccar_webhook_bp = APIRouter(prefix="/api", tags=["traccar_webhook"])
+# Frontend + docs expect /api/geo-intel/* ; webhook at /api/traccar/webhook
+geo_intel_bp = APIRouter(prefix="/api/geo-intel", tags=["geo_intelligence"])
+traccar_webhook_bp = APIRouter(prefix="/api/traccar", tags=["traccar_webhook"])
+
+
 def _get_service():
     from dashboard.services.geo_intelligence import GeoIntelligenceService
     return GeoIntelligenceService()
@@ -373,6 +376,7 @@ async def photo_checkin(request: Request):
 async def traccar_webhook(request: Request):
     """Receive forwarded position/event data from Traccar.
 
+    Path: POST /api/traccar/webhook (matches config/traccar/traccar.xml forward.url)
     Traccar sends JSON with device + position on every update.
     Format: {device: {...}, position: {latitude, longitude, ...}}
     """

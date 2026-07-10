@@ -56,6 +56,7 @@ Before sending a signing link:
 - Slack alert fires on completion
 - Bond case `Packet_Status` updates to `signed`
 - Bond case `Signature_Status` updates to `signed`
+- **Check-in enrollment (A+C):** system enables transparent `check_in_required` monitoring, generates a defendant portal magic link, and creates a staff CRM task to **send** the check-in link. **No automatic client SMS/iMessage** — see `monitoring-checkin-policy.md`.
 
 ---
 

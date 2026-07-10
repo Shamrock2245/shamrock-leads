@@ -305,6 +305,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 8. `docs/policies/surety-policy.md` — if doing bond-writing work
 9. `docs/policies/matching-policy.md` — if doing matching work
 10. `docs/policies/signature-policy.md` — if doing signing work
+11. `docs/policies/monitoring-checkin-policy.md` — if doing check-in / monitoring (A+C; no covert GPS)
 
 ---
 

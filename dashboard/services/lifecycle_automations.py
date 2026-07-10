@@ -302,6 +302,24 @@ class LifecycleAutomations:
                         except Exception as te:
                             logger.warning("[signnow-poll] payment task: %s", te)
 
+                    # Check-in enrollment (A+C) — enable monitoring + staff task only
+                    if booking:
+                        try:
+                            from dashboard.services.checkin_enrollment_service import (
+                                enable_checkin_monitoring,
+                            )
+                            await enable_checkin_monitoring(
+                                booking,
+                                frequency_days=7,
+                                source="signnow_poller",
+                                actor="System (SignNow Poller)",
+                                create_staff_task=True,
+                            )
+                            results.setdefault("checkin_enrolls", 0)
+                            results["checkin_enrolls"] = results.get("checkin_enrolls", 0) + 1
+                        except Exception as ce:
+                            logger.warning("[signnow-poll] checkin enroll: %s", ce)
+
                     # Dashboard notification (no client contact)
                     try:
                         from dashboard.routers.notifications import create_notification
@@ -310,7 +328,7 @@ class LifecycleAutomations:
                             title=f"✅ Signed: {defendant}",
                             message=(
                                 f"Packet {packet_id} signed. "
-                                f"Collect premium for booking {booking or 'n/a'}."
+                                f"Collect premium + send check-in link for booking {booking or 'n/a'}."
                             ),
                             entity_id=packet_id,
                             entity_type="paperwork_packet",

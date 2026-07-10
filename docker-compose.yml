@@ -147,12 +147,18 @@ services:
       - OSINT_WORKER_URL=http://osint-worker:5065
       - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
       - OSINT_WORKER_TIMEOUT=${OSINT_WORKER_TIMEOUT:-300}
+      - TRACCAR_URL=${TRACCAR_URL:-http://traccar:8082}
+      - TRACCAR_OSMAND_URL=${TRACCAR_OSMAND_URL:-http://traccar:5055}
+      - TRACCAR_PUBLIC_HOST=${TRACCAR_PUBLIC_HOST:-leads.shamrockbailbonds.biz}
+      - TRACCAR_EMAIL=${TRACCAR_EMAIL:-admin@shamrockbailbonds.biz}
+      - TRACCAR_PASSWORD=${TRACCAR_PASSWORD:-}
+      - TRACCAR_TOKEN=${TRACCAR_TOKEN:-}
     ports:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:
       - shamrock-leads
       - osint-worker
-      # traccar removed — dashboard handles missing Traccar gracefully
+      - traccar                         # In-stack GPS (portal check-ins + continuous client)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
       interval: 30s

@@ -43,6 +43,13 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | &nbsp;&nbsp;`bond_lifecycle.py` — `packet_id` undefined variable fixed | ✅ |
 | &nbsp;&nbsp;`signnow_packet_service.py` — agent name/license locked to Brendan O'Neal / P139768 | ✅ |
 | &nbsp;&nbsp;`intake.py` — `surety_id` persisted to MongoDB `intake_queue` | ✅ |
+| **Bond check-in A+C (July 2026)** — transparent portal GPS + condition policy | ✅ code |
+| &nbsp;&nbsp;Policy `docs/policies/monitoring-checkin-policy.md` | ✅ |
+| &nbsp;&nbsp;Post-SignNow → enable `check_in_required` + staff task (no auto-text) | ✅ |
+| &nbsp;&nbsp;Portal consent UI + `POST /api/portal/{token}/checkin` consent gate | ✅ |
+| &nbsp;&nbsp;Staff enable/send: `/api/active-bonds/{bk}/enable-checkin`, `send-checkin-link` | ✅ |
+| **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired (not external vendor) |
+| Portal check-in → Traccar OsmAnd inject + `/api/geo-intel/*` routes fixed | ✅ |
 
 ---
 

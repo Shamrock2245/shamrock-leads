@@ -29,7 +29,10 @@ SWIPESIMPLE_PAYMENT_LINK = os.getenv(
     "SWIPESIMPLE_PAYMENT_LINK",
     "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd",
 )
-PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
+PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
+
+# Transparent check-in consent version (must match checkin_enrollment_service)
+CHECKIN_CONSENT_VERSION = "checkin-v1-2026-07"
 
 
 # ── Token Generation ──────────────────────────────────────────────────────────
@@ -193,13 +196,22 @@ async def get_portal_case_status(booking_number: str, role: str) -> dict:
     }
 
     if role == "defendant":
-        # Defendants see: check-in info, court dates, compliance
+        # Defendants see: check-in info, court dates, compliance (transparent monitoring)
+        from dashboard.services.checkin_enrollment_service import (
+            CONDITION_SUMMARY,
+            CONSENT_VERSION,
+        )
         status_data.update({
             "check_in_required": bond.get("check_in_required", False),
-            "check_in_frequency_days": bond.get("check_in_frequency_days", 30),
+            "check_in_frequency_days": bond.get("check_in_frequency_days", 7),
             "last_check_in": bond.get("last_check_in") or bond.get("last_checkin", ""),
             "next_check_in_due": bond.get("next_check_in_due") or bond.get("next_checkin_due", ""),
             "missed_check_ins": bond.get("missed_check_ins", 0),
+            "monitoring_condition_summary": (
+                bond.get("monitoring_condition_summary") or CONDITION_SUMMARY
+            ),
+            "consent_version": bond.get("checkin_consent_version") or CONSENT_VERSION,
+            "selfie_requested": bool(bond.get("checkin_selfie_requested", False)),
         })
 
     elif role == "indemnitor":
@@ -275,15 +287,36 @@ async def submit_portal_checkin(
     accuracy: Optional[float],
     selfie_data: Optional[str] = None,
     notes: str = "",
+    consent: bool = False,
+    consent_version: str = "",
 ) -> dict:
     """
-    Submit a defendant check-in from the portal.
-    Records GPS + optional selfie to the bond_checkins collection.
+    Submit a defendant check-in from the portal (explicit consent required).
+
+    Records GPS + optional selfie to bond_checkins. Location is only stored when
+    the defendant granted browser permission AND checked the consent box.
     """
+    if not consent:
+        return {
+            "success": False,
+            "error": "Explicit consent is required before check-in. "
+                     "Please acknowledge the disclosure and try again.",
+        }
+
     checkins_col = get_collection("bond_checkins")
     active_bonds = get_collection("active_bonds")
     audit_col = get_collection("audit_events")
     now = datetime.now(timezone.utc)
+
+    bond = await active_bonds.find_one(
+        {"booking_number": booking_number},
+        {"check_in_frequency_days": 1},
+    )
+    freq_days = 7
+    if bond:
+        freq_days = int(bond.get("check_in_frequency_days") or 7)
+    next_due = now + timedelta(days=max(1, freq_days))
+    cv = consent_version or CHECKIN_CONSENT_VERSION
 
     checkin_doc = {
         "booking_number": booking_number,
@@ -293,31 +326,41 @@ async def submit_portal_checkin(
         "gps_lon": lng,
         "gps_accuracy": accuracy,
         "has_selfie": bool(selfie_data),
-        "notes": notes,
+        "notes": (notes or "")[:500],
         "source": "client_portal",
+        "consent": True,
+        "consent_version": cv,
+        "consent_at": now.isoformat(),
+        "status": "completed",
     }
 
-    # Store selfie reference (base64 data would be in a separate field/storage)
+    # Store limited selfie reference only (full image storage is out of scope here)
     if selfie_data:
-        checkin_doc["selfie_thumbnail"] = selfie_data[:200]  # Store first 200 chars as thumbnail ref
+        checkin_doc["selfie_thumbnail"] = selfie_data[:200]
 
     result = await checkins_col.insert_one(checkin_doc)
 
-    # Update bond record
+    # Update bond record + schedule next due
+    set_fields = {
+        "last_check_in": now.isoformat(),
+        "last_checkin": now,
+        "last_checkin_method": "portal_self_service",
+        "next_checkin_due": next_due,
+        "next_check_in_due": next_due.isoformat(),
+        "check_in_overdue": False,
+        "updated_at": now,
+    }
+
     await active_bonds.update_one(
         {"booking_number": booking_number},
         {
-            "$set": {
-                "last_check_in": now.isoformat(),
-                "last_checkin": now.isoformat(),
-                "last_checkin_method": "portal_self_service",
-                "updated_at": now,
-            },
+            "$set": set_fields,
             "$inc": {"total_check_ins": 1},
-        }
+            "$setOnInsert": {"booking_number": booking_number},
+        },
     )
 
-    # If GPS provided, add to location history
+    # If GPS provided, add to location history (capped push — last 50 kept by ops retention)
     if lat is not None and lng is not None:
         location_entry = {
             "lat": lat,
@@ -325,16 +368,22 @@ async def submit_portal_checkin(
             "accuracy": accuracy,
             "source": "portal_checkin",
             "ts": now.isoformat(),
+            "consent_version": cv,
         }
         await active_bonds.update_one(
             {"booking_number": booking_number},
             {
-                "$push": {"location_history": location_entry},
+                "$push": {
+                    "location_history": {
+                        "$each": [location_entry],
+                        "$slice": -50,
+                    }
+                },
                 "$set": {"latest_location": location_entry},
-            }
+            },
         )
 
-    # Audit
+    # Audit — no raw coordinates in free-text logs
     await audit_col.insert_one({
         "event_type": "portal_checkin",
         "entity_id": booking_number,
@@ -342,17 +391,39 @@ async def submit_portal_checkin(
         "timestamp": now,
         "source": "client_portal",
         "details": {
-            "has_gps": lat is not None,
+            "has_gps": lat is not None and lng is not None,
             "has_selfie": bool(selfie_data),
-        }
+            "consent_version": cv,
+            "next_due": next_due.isoformat(),
+        },
     })
 
-    logger.info("Portal check-in submitted for booking=%s", booking_number)
+    # Push consented GPS into Traccar (in-stack) for Tracking live map
+    traccar_result = None
+    if lat is not None and lng is not None:
+        try:
+            from dashboard.services.checkin_enrollment_service import push_checkin_to_traccar
+            traccar_result = await push_checkin_to_traccar(
+                booking_number, float(lat), float(lng), accuracy=accuracy,
+            )
+        except Exception as te:
+            logger.warning("Traccar inject after portal check-in failed: %s", te)
+            traccar_result = {"success": False, "error": str(te)}
+
+    logger.info(
+        "Portal check-in submitted for booking=%s gps=%s traccar=%s",
+        booking_number, lat is not None,
+        bool((traccar_result or {}).get("success")),
+    )
 
     return {
         "success": True,
         "checkin_id": str(result.inserted_id),
         "checkin_at": now.isoformat(),
+        "next_check_in_due": next_due.isoformat(),
+        "gps_captured": lat is not None and lng is not None,
+        "traccar": traccar_result,
+        "gps_engine": "traccar",
     }
 
 
