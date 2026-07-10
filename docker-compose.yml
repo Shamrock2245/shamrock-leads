@@ -125,9 +125,10 @@ services:
       - no-new-privileges:true          # Prevent privilege escalation
     read_only: true                     # Root filesystem read-only
     tmpfs:
-      - /tmp:size=512m                  # Writable temp (Uvicorn + Maigret scans)
-      - /home/appuser:size=64m          # Maigret/XDG home (rootfs is RO)
-      - /opt/blackbird/results:size=128m  # Blackbird JSON export directory
+      # uid/gid 999 = appuser (image non-root). mode=1777 keeps /tmp sticky.
+      - /tmp:size=512m,mode=1777
+      - /home/appuser:size=64m,uid=999,gid=999,mode=0755
+      - /opt/blackbird/results:size=128m,uid=999,gid=999,mode=0755
     mem_limit: 2g                       # Cap memory (dashboard API)
     cpus: 1.5                           # Cap CPU
     logging:
