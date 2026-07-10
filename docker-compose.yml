@@ -147,12 +147,11 @@ services:
       - OSINT_WORKER_URL=http://osint-worker:5065
       - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
       - OSINT_WORKER_TIMEOUT=${OSINT_WORKER_TIMEOUT:-300}
+      # Traccar URLs (in-stack GPS). Credentials come from .env via env_file —
+      # do NOT blank TRACCAR_PASSWORD here or the client defaults get wiped.
       - TRACCAR_URL=${TRACCAR_URL:-http://traccar:8082}
       - TRACCAR_OSMAND_URL=${TRACCAR_OSMAND_URL:-http://traccar:5055}
       - TRACCAR_PUBLIC_HOST=${TRACCAR_PUBLIC_HOST:-leads.shamrockbailbonds.biz}
-      - TRACCAR_EMAIL=${TRACCAR_EMAIL:-admin@shamrockbailbonds.biz}
-      - TRACCAR_PASSWORD=${TRACCAR_PASSWORD:-}
-      - TRACCAR_TOKEN=${TRACCAR_TOKEN:-}
     ports:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:

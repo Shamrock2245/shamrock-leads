@@ -100,4 +100,7 @@
   <!-- ── Timezone ──────────────────────────────────────────────────────── -->
   <entry key='time.zone'>America/New_York</entry>
 
+  <!-- Public self-registration must stay off in production -->
+  <entry key='web.registration'>false</entry>
+
 </properties>
