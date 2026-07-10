@@ -34,7 +34,7 @@ python scripts/check_ecosystem_secrets.py --strict
 | A3 | SwipeSimple **20hr = $199.00**, **120hr = $649.00** in admin (matches `lib/courses.ts`) | Ops | [ ] |
 | A4 | Portal `setupSwipeSimpleTrigger()` / Gmail poller firing every ~5 min | Ops | [ ] |
 | A5 | E2E: real/test pay → `Student_Auth` Unlocked → magic-link email → dashboard modules | Ops | [ ] |
-| A6 | Certificate: `CERTIFICATE_TEMPLATE_ID` + `CERTIFICATE_FOLDER_ID` Script Properties set (no mock cert) | Ops | [ ] |
+| A6 | Certificate: `CERTIFICATE_TEMPLATE_ID` + `CERTIFICATE_FOLDER_ID` Script Properties set (no mock cert) | Ops | [x] *2026-07-10* — folder `11zU5p0…`, Slides `1lV89DFn…`, issued `1fd0NsXl…` |
 | A7 | Integrity ack + progress write to LMS sheet verified | Ops | [ ] |
 | A8 | Super-admin `admin@` can open both courses | Ops | [ ] |
 
