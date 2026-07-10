@@ -947,3 +947,237 @@ async def generate_discharge_report(request: Request, api_key: str = ""):
     except Exception as exc:
         logger.exception("[automation] discharge-report failed: %s", exc)
         return JSONResponse({"ok": False, "error": str(exc)[:400]}, status_code=500)
+
+
+@automation_bp.get("/osint-status")
+async def osint_worker_status(request: Request, api_key: str = ""):
+    """
+    Probe osint-worker readiness for Node-RED Watchdog / morning pack.
+    Auth: GAS_API_KEY.
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+    try:
+        from dashboard.services.osint_service import OSINTService
+        tools = OSINTService.probe_tools()
+        return {
+            "ok": True,
+            "action": "osint_status",
+            "ready_for_scans": bool(tools.get("ready_for_scans")),
+            "worker_reachable": bool(tools.get("worker_reachable", True)),
+            "worker_url": tools.get("worker_url"),
+            "maigret": tools.get("maigret"),
+            "blackbird": tools.get("blackbird"),
+            "defaults": tools.get("defaults"),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.exception("[automation] osint-status failed: %s", exc)
+        return JSONResponse(
+            {"ok": False, "error": str(exc)[:300], "ready_for_scans": False},
+            status_code=500,
+        )
+
+
+@automation_bp.post("/osint-hot-leads")
+async def osint_hot_leads_sweep(request: Request, api_key: str = ""):
+    """
+    Queue Maigret-default OSINT scans for recent hot arrests that lack a report.
+
+    Policy (matches osint-worker):
+      - Maigret ON by default
+      - Blackbird OFF unless email is known or second_opinion=true
+      - Limit batch size (expensive CLI work)
+      - Risk scores are advisory only
+
+    Body:
+      hours_back: int = 24
+      min_score: int = 70
+      limit: int = 5          # max new scans this cycle
+      deep_scan: bool = false
+      second_opinion: bool = false
+      skip_if_scanned_hours: int = 168  # skip if OSINT in last 7d
+      dry_run: bool = false
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    hours_back = int(body.get("hours_back") or 24)
+    min_score = int(body.get("min_score") or 70)
+    limit = min(int(body.get("limit") or 5), 15)
+    deep_scan = bool(body.get("deep_scan") or False)
+    second_opinion = bool(body.get("second_opinion") or False)
+    skip_hours = int(body.get("skip_if_scanned_hours") or 168)
+    dry_run = bool(body.get("dry_run") or False)
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours_back)
+    skip_since = now - timedelta(hours=skip_hours)
+
+    arrests = get_collection("arrests")
+    osint_col = get_collection("osint_profiles")
+
+    query_recent = {
+        "lead_score": {"$gte": min_score},
+        "$or": [
+            {"scraped_at": {"$gte": since}},
+            {"created_at": {"$gte": since}},
+        ],
+    }
+
+    cursor = arrests.find(query_recent).sort([("lead_score", -1), ("scraped_at", -1)]).limit(80)
+    docs = await cursor.to_list(length=80)
+
+    # Recent OSINT subject_ids to skip
+    recent_osint_ids: set[str] = set()
+    try:
+        ocur = osint_col.find(
+            {"created_at": {"$gte": skip_since}},
+            {"subject_id": 1},
+        ).limit(500)
+        async for o in ocur:
+            sid = o.get("subject_id")
+            if sid:
+                recent_osint_ids.add(str(sid))
+    except Exception as e:
+        logger.warning("[automation] osint skip lookup failed: %s", e)
+
+    candidates: list[dict[str, Any]] = []
+    skipped_scanned = 0
+    skipped_no_handle = 0
+
+    for doc in docs:
+        subject_id = str(doc.get("_id") or "")
+        if not subject_id:
+            continue
+        if subject_id in recent_osint_ids:
+            skipped_scanned += 1
+            continue
+
+        full_name = (
+            doc.get("full_name")
+            or doc.get("name")
+            or doc.get("defendant_name")
+            or ""
+        )
+        # Prefer explicit handles; fall back to name for worker name-derived usernames
+        usernames: list[str] = []
+        for key in ("username", "social_handle", "fb_username", "instagram"):
+            v = doc.get(key)
+            if v and isinstance(v, str) and len(v.strip()) >= 3:
+                usernames.append(v.strip())
+        email = doc.get("email") or None
+        if isinstance(email, str) and "@" not in email:
+            email = None
+
+        if not usernames and not full_name and not email:
+            skipped_no_handle += 1
+            continue
+
+        candidates.append({
+            "subject_id": subject_id,
+            "subject_type": "defendant",
+            "full_name": full_name or None,
+            "usernames": usernames[:3],
+            "email": email,
+            "lead_score": int(doc.get("lead_score") or 0),
+            "county": doc.get("county"),
+            "booking_number": doc.get("booking_number") or doc.get("bookingNumber"),
+        })
+        if len(candidates) >= limit:
+            break
+
+    queued: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    if not dry_run and candidates:
+        try:
+            from dashboard.services.osint_service import get_osint_service
+            svc = get_osint_service()
+            # Preflight worker
+            probe = svc.probe_tools()
+            if not probe.get("ready_for_scans"):
+                return {
+                    "ok": False,
+                    "action": "osint_hot_leads",
+                    "error": "osint-worker not ready",
+                    "probe": {
+                        "worker_reachable": probe.get("worker_reachable"),
+                        "ready_for_scans": probe.get("ready_for_scans"),
+                        "error": probe.get("error"),
+                    },
+                    "candidates": len(candidates),
+                    "ts": now.isoformat(),
+                }
+
+            for c in candidates:
+                try:
+                    # Maigret default; Blackbird only if email or second_opinion
+                    report_id = await svc.run_scan(
+                        subject_type=c["subject_type"],
+                        subject_id=c["subject_id"],
+                        full_name=c.get("full_name"),
+                        usernames=c.get("usernames") or [],
+                        email=c.get("email"),
+                        deep_scan=deep_scan,
+                        run_maigret=True,
+                        run_blackbird=True if (c.get("email") or second_opinion) else False,
+                        second_opinion=second_opinion,
+                        notes=f"auto:osint-hot-leads score={c.get('lead_score')} county={c.get('county')}",
+                        actor="node-red-osint",
+                    )
+                    queued.append({
+                        "report_id": report_id,
+                        "subject_id": c["subject_id"],
+                        "lead_score": c.get("lead_score"),
+                        "county": c.get("county"),
+                        "has_email": bool(c.get("email")),
+                        "has_username": bool(c.get("usernames")),
+                    })
+                except Exception as scan_err:
+                    errors.append(str(scan_err)[:120])
+        except Exception as exc:
+            logger.exception("[automation] osint-hot-leads failed: %s", exc)
+            return JSONResponse(
+                {"ok": False, "error": str(exc)[:400], "action": "osint_hot_leads"},
+                status_code=500,
+            )
+
+    result = {
+        "ok": True,
+        "action": "osint_hot_leads",
+        "window_hours": hours_back,
+        "min_score": min_score,
+        "dry_run": dry_run,
+        "policy": {
+            "maigret": True,
+            "blackbird": "email_or_second_opinion",
+            "second_opinion": second_opinion,
+            "deep_scan": deep_scan,
+            "risk_is_advisory": True,
+        },
+        "counts": {
+            "hot_scanned": len(docs),
+            "skipped_recent_osint": skipped_scanned,
+            "skipped_no_identifier": skipped_no_handle,
+            "candidates": len(candidates),
+            "queued": len(queued),
+            "errors": len(errors),
+        },
+        "queued": queued,
+        "errors": errors[:10],
+        "ts": now.isoformat(),
+    }
+    logger.info(
+        "[automation] osint-hot-leads scanned=%s candidates=%s queued=%s dry_run=%s",
+        len(docs),
+        len(candidates),
+        len(queued),
+        dry_run,
+    )
+    return result

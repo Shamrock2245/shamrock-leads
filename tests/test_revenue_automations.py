@@ -35,6 +35,8 @@ def test_node_red_schedule_has_core_jobs():
     assert "/api/automation/ops-digest" in paths
     assert "/api/automation/bond-report" in paths
     assert "/api/automation/discharge-report" in paths
+    assert "/api/automation/osint-hot-leads" in paths
+    assert "/api/automation/osint-status" in paths
 
 
 def test_cron_registry_enables_revenue_jobs():

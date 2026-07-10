@@ -18,6 +18,17 @@ In-process FastAPI crons already run revenue automations (speed-to-contact, pape
 | Mon 07:00 | `POST /api/automation/bond-report` | `{"surety":"OSI","store":true}` |
 | Mon 07:05 | `POST /api/automation/bond-report` | `{"surety":"PALMETTO","store":true}` |
 | Mon 07:15 | `POST /api/automation/discharge-report` | `{"surety":"ALL","days_back":7}` |
+| Daily 09:00 | `POST /api/automation/osint-hot-leads` | `{"hours_back":24,"min_score":70,"limit":5}` |
+| Every 6h | `GET /api/automation/osint-status` | (none) — worker health probe |
+
+### OSINT policy (osint-worker)
+
+| Default | Behavior |
+|---------|----------|
+| Maigret | **ON** (username footprint) |
+| Blackbird | **OFF** unless email present or `second_opinion: true` |
+| Risk score | **Advisory only** — not applied to bond risk automatically |
+| Batch limit | Max 5 new scans per cycle (CLI cost) |
 
 ## Revenue modes (Super CRM → Automations)
 
