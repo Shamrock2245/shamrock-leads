@@ -30,7 +30,7 @@ python scripts/check_ecosystem_secrets.py --strict
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | A1 | Netlify prod env: `GAS_WEBHOOK_URL`, `SESSION_SECRET`, `GAS_API_KEY` set | Ops | [ ] |
-| A2 | `GAS_WEBHOOK_URL` matches **stable** portal factory `/exec` (not a one-off deploy) | Ops | [ ] |
+| A2 | `GAS_WEBHOOK_URL` matches **stable** school factory `/exec` (Netlify uses deploy `…Qa_DMg`; leads `.env` uses `…CvP-Z` — **both redeployed @445/@446 on 2026-07-10**, same code; do not mint new IDs) | Ops | [x] *deployed* |
 | A3 | SwipeSimple **20hr = $199.00**, **120hr = $649.00** in admin (matches `lib/courses.ts`) | Ops | [ ] |
 | A4 | Portal `setupSwipeSimpleTrigger()` / Gmail poller firing every ~5 min | Ops | [ ] |
 | A5 | E2E: real/test pay → `Student_Auth` Unlocked → magic-link email → dashboard modules | Ops | [ ] |
