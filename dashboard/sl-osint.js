@@ -56,10 +56,22 @@
   // ── Tool Status Check ──────────────────────────────────────────────
   async function _checkToolStatus() {
     try {
-      const r = await fetch(`${API}/api/osint/status`, { headers: headers() });
-      if (!r.ok) return;
+      const r = await fetch(`${API}/api/osint/status`, {
+        headers: headers(),
+        credentials: 'same-origin',
+      });
+      if (!r.ok) {
+        const container = $('osintToolStatus');
+        if (container) {
+          container.innerHTML = `<span class="osint-tool-pill missing" title="HTTP ${r.status}">
+            <span class="dot"></span>Status unavailable (${r.status})
+          </span>`;
+        }
+        return;
+      }
       _toolStatus = await r.json();
       _renderToolStatus();
+      _syncScanButtonState();
     } catch (e) {
       console.warn('OSINT status check failed:', e);
     }
@@ -73,13 +85,36 @@
       { key: 'blackbird', label: 'Blackbird' },
       { key: 'trape',     label: 'Trape' },
     ];
+    const ready = !!_toolStatus.ready_for_scans;
     container.innerHTML = tools.map(t => {
       const info = _toolStatus[t.key] || {};
       const ok = info.available;
-      return `<span class="osint-tool-pill ${ok ? 'ready' : 'missing'}">
-        <span class="dot"></span>${t.label}
+      const tip = info.error || info.version || info.path || info.note || '';
+      return `<span class="osint-tool-pill ${ok ? 'ready' : 'missing'}" title="${_esc(tip)}">
+        <span class="dot"></span>${t.label}${ok && info.version ? ` · ${info.version}` : ''}
       </span>`;
-    }).join('');
+    }).join('') + (ready
+      ? ''
+      : `<span class="osint-tool-pill missing" title="Rebuild dashboard image with OSINT tools">
+          <span class="dot"></span>Scans blocked — tools missing
+        </span>`);
+  }
+
+  function _syncScanButtonState() {
+    const btn = $('osintScanBtn');
+    if (!btn || !_toolStatus) return;
+    if (!_toolStatus.ready_for_scans) {
+      btn.disabled = true;
+      btn.title = 'Maigret and Blackbird are not installed on this server.';
+    }
+  }
+
+  function _esc(s) {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // ── Load Reports ───────────────────────────────────────────────────
@@ -88,13 +123,16 @@
     if (!list) return;
     list.innerHTML = '<div class="osint-loading"><div class="osint-spinner"></div> Loading reports...</div>';
     try {
-      const r = await fetch(`${API}/api/osint/reports?limit=30`, { headers: headers() });
+      const r = await fetch(`${API}/api/osint/reports?limit=30`, {
+        headers: headers(),
+        credentials: 'same-origin',
+      });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
       _reports = d.reports || [];
       _renderReportList();
     } catch (e) {
-      list.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">🔍</div>No reports yet. Run a scan to begin.</div>`;
+      list.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">⚠️</div>Could not load reports: ${_esc(e.message)}</div>`;
     }
   }
 
@@ -115,14 +153,19 @@
     const riskClass = _riskClass(r.osint_risk_score || 0);
     const isActive = _activeReport && _activeReport._id === r._id;
 
+    const statusLabel = r.status || 'unknown';
+    const acctLabel = (statusLabel === 'failed')
+      ? (r.error ? 'tool error' : 'failed')
+      : `${r.total_accounts_found || 0} accounts`;
+
     return `<div class="osint-report-row ${isActive ? 'active' : ''}" onclick="SLOSINT.openReport('${r._id}')">
       <div class="osint-report-icon ${r.subject_type}">${icon}</div>
       <div class="osint-report-meta">
-        <div class="osint-report-name">${r.full_name || r.subject_id}</div>
-        <div class="osint-report-sub">${typeLabel} · ${r.total_accounts_found || 0} accounts · ${fmt(r.scan_completed_at || r.scan_started_at)}</div>
+        <div class="osint-report-name">${_esc(r.full_name || r.subject_id)}</div>
+        <div class="osint-report-sub">${typeLabel} · ${acctLabel} · ${fmt(r.scan_completed_at || r.scan_started_at)}</div>
       </div>
       <div class="osint-risk-gauge ${riskClass}">${r.osint_risk_score || 0}</div>
-      <span class="osint-status-badge ${r.status}">${r.status}</span>
+      <span class="osint-status-badge ${statusLabel}">${statusLabel}</span>
     </div>`;
   }
 
@@ -151,6 +194,11 @@
       return;
     }
 
+    if (_toolStatus && !_toolStatus.ready_for_scans) {
+      toast('OSINT tools are not installed on this server. Rebuild the dashboard image.', 'error');
+      return;
+    }
+
     const btn = $('osintScanBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">⟳</span> Scanning...'; }
 
@@ -158,6 +206,7 @@
       const r = await fetch(`${API}/api/osint/scan`, {
         method: 'POST',
         headers: headers(),
+        credentials: 'same-origin',
         body: JSON.stringify({
           subject_type: subjectType,
           subject_id: subjectId,
@@ -170,17 +219,24 @@
           notes: notes || null,
         }),
       });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Scan failed');
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const detail = typeof d.detail === 'string' ? d.detail
+          : (Array.isArray(d.detail) ? d.detail.map(x => x.msg || x).join('; ') : null);
+        throw new Error(detail || d.error || `Scan failed (HTTP ${r.status})`);
+      }
 
       toast(`Scan initiated. Report ID: ${d.report_id}`, 'success');
       await load();
-      // Auto-open the new report and start polling
       await openReport(d.report_id);
     } catch (e) {
       toast(`Scan error: ${e.message}`, 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.innerHTML = '🔍 Run OSINT Scan'; }
+      if (btn) {
+        btn.disabled = !(_toolStatus && _toolStatus.ready_for_scans);
+        btn.innerHTML = '🔍 Run OSINT Scan';
+        _syncScanButtonState();
+      }
     }
   }
 
@@ -195,25 +251,30 @@
     panel.style.display = 'block';
 
     try {
-      const r = await fetch(`${API}/api/osint/report/${reportId}`, { headers: headers() });
+      const r = await fetch(`${API}/api/osint/report/${reportId}`, {
+        headers: headers(),
+        credentials: 'same-origin',
+      });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const report = await r.json();
       _activeReport = report;
       _renderReport(report);
-      _renderReportList(); // Refresh list to highlight active
+      _renderReportList();
 
-      // Poll if still running
       if (report.status === 'running' || report.status === 'pending') {
         _pollTimer = setInterval(() => _pollReport(reportId), 4000);
       }
     } catch (e) {
-      panel.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">❌</div>Failed to load report: ${e.message}</div>`;
+      panel.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">❌</div>Failed to load report: ${_esc(e.message)}</div>`;
     }
   }
 
   async function _pollReport(reportId) {
     try {
-      const r = await fetch(`${API}/api/osint/report/${reportId}`, { headers: headers() });
+      const r = await fetch(`${API}/api/osint/report/${reportId}`, {
+        headers: headers(),
+        credentials: 'same-origin',
+      });
       if (!r.ok) return;
       const report = await r.json();
       _activeReport = report;
@@ -224,9 +285,16 @@
         clearInterval(_pollTimer);
         _pollTimer = null;
         if (report.status === 'complete') {
-          toast(`OSINT scan complete — ${report.total_accounts_found} accounts found.`, 'success');
+          const n = report.total_accounts_found || 0;
+          if (n === 0) {
+            toast('OSINT scan finished — 0 accounts found (tools ran OK).', 'info');
+          } else {
+            toast(`OSINT scan complete — ${n} accounts found.`, 'success');
+          }
+        } else if (report.status === 'partial') {
+          toast(`Partial OSINT results — ${report.total_accounts_found || 0} accounts. Check errors.`, 'error');
         } else if (report.status === 'failed') {
-          toast('OSINT scan failed. Check report for details.', 'error');
+          toast(`OSINT scan FAILED: ${report.error || 'see report'}`, 'error');
         }
       }
     } catch (e) {
@@ -307,14 +375,21 @@
 
         ${report.error ? `
           <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:0.8rem;color:#ef4444">
-            ⚠️ Scan error: ${report.error}
+            ⚠️ Scan error: ${_esc(report.error)}
           </div>` : ''}
+
+        ${(report.warnings && report.warnings.length) ? `
+          <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:0.8rem;color:#f59e0b">
+            ${(report.warnings || []).map(w => `⚡ ${_esc(w)}`).join('<br>')}
+          </div>` : ''}
+
+        ${_renderToolResults(report.tool_results || {})}
 
         <!-- Risk Signals -->
         ${_renderSignals(report.risk_signals || [])}
 
         <!-- Accounts -->
-        ${_renderAccounts(allAccounts)}
+        ${_renderAccounts(allAccounts, report)}
 
         <!-- Trape Section -->
         ${_renderTrapeSection(report)}
@@ -352,11 +427,38 @@
     </div>`;
   }
 
-  function _renderAccounts(accounts) {
+  function _renderToolResults(toolResults) {
+    const keys = Object.keys(toolResults || {});
+    if (!keys.length) return '';
+    return `<div class="osint-signals-section">
+      <div class="osint-section-title">🛠 Tool Results</div>
+      <div class="osint-signal-list">
+        ${keys.map(k => {
+          const t = toolResults[k] || {};
+          const ok = !!t.ok;
+          const sev = ok ? 'low' : 'high';
+          const detail = t.error || t.warning || (ok ? `${t.accounts || 0} accounts` : 'failed');
+          return `<div class="osint-signal-item ${sev}">
+            <span class="osint-signal-sev">${ok ? 'ok' : 'fail'}</span>
+            <div>
+              <div class="osint-signal-detail"><strong>${_esc(k)}</strong> — ${_esc(detail)}</div>
+              <div class="osint-signal-source">${t.attempted === false ? 'not attempted' : 'attempted'}${t.username ? ' · ' + _esc(t.username) : ''}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  function _renderAccounts(accounts, report) {
     if (!accounts.length) {
+      const failed = report && (report.status === 'failed' || report.status === 'partial');
+      const msg = failed
+        ? 'No accounts — scan did not complete successfully. See errors above (tools missing, wrong CLI, or timeout).'
+        : 'No accounts found. Tools finished without hits — try other usernames, email, or deep scan.';
       return `<div class="osint-accounts-section">
         <div class="osint-section-title">🌐 Social Footprint</div>
-        <div class="osint-empty" style="padding:16px">No accounts found yet.</div>
+        <div class="osint-empty" style="padding:16px">${msg}</div>
       </div>`;
     }
     const filtered = _accountFilter === 'all' ? accounts
@@ -410,6 +512,7 @@
       const r = await fetch(`${API}/api/osint/trape/session`, {
         method: 'POST',
         headers: headers(),
+        credentials: 'same-origin',
         body: JSON.stringify({
           subject_type: subjectType || $('osintSubjectType')?.value,
           subject_id: subjectId || $('osintSubjectId')?.value?.trim(),

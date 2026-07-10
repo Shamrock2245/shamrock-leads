@@ -65,13 +65,14 @@ RUN python -m nodriver install || true
 # All failures are non-fatal (|| echo WARNING) so the main app still starts.
 
 # Maigret: username recon across 3000+ social/forum/dating/gaming sites
-# Invoked as: maigret <username> --json --output /tmp/sl_osint_xxx/
+# Invoked as: maigret <username> -J simple -fo /tmp/sl_osint_xxx/
 RUN pip install --no-cache-dir maigret \
     || echo "WARNING: maigret install failed — OSINT username scans will be degraded"
 
 # Blackbird: email + username recon (separate site database from Maigret)
 # Cloned to /opt/blackbird; invoked as:
-#   python3 /opt/blackbird/blackbird.py --username <u> --json --output /tmp/sl_osint_xxx/
+#   python3 /opt/blackbird/blackbird.py --username <u> --json --no-update
+#   (writes JSON under /opt/blackbird/results/ — --json is a boolean flag)
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
     && pip install --no-cache-dir -r /opt/blackbird/requirements.txt \
     && chmod +x /opt/blackbird/blackbird.py \

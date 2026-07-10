@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -36,14 +37,56 @@ from dashboard.services.audit_service import AuditService
 log = logging.getLogger("shamrock.osint")
 
 # ── Tool paths ─────────────────────────────────────────────────────────────────
-MAIGRET_CMD = shutil.which("maigret") or os.getenv("MAIGRET_PATH", "maigret")
-BLACKBIRD_DIR = os.getenv("BLACKBIRD_DIR", "/opt/blackbird")
-BLACKBIRD_CMD = os.path.join(BLACKBIRD_DIR, "blackbird.py")
-PYTHON_CMD = shutil.which("python3") or "python3"
+def _resolve_maigret_cmd() -> Optional[str]:
+    """Locate maigret executable (PATH, env, common venv paths)."""
+    candidates = [
+        os.getenv("MAIGRET_PATH", "").strip(),
+        shutil.which("maigret") or "",
+        "/usr/local/bin/maigret",
+        "/usr/bin/maigret",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+        # env may point to a non-executable path string that still works via python -m
+        if c and os.path.isfile(c):
+            return c
+    # python -m maigret fallback
+    try:
+        import importlib.util
+        if importlib.util.find_spec("maigret") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_blackbird() -> tuple[Optional[str], Optional[str]]:
+    """Return (blackbird_dir, blackbird.py path) or (None, None)."""
+    dirs = [
+        os.getenv("BLACKBIRD_DIR", "").strip(),
+        "/opt/blackbird",
+        os.path.expanduser("~/blackbird"),
+    ]
+    for d in dirs:
+        if not d:
+            continue
+        script = os.path.join(d, "blackbird.py")
+        if os.path.isfile(script):
+            return d, script
+    return None, None
+
+
+MAIGRET_CMD = _resolve_maigret_cmd() or os.getenv("MAIGRET_PATH", "maigret")
+BLACKBIRD_DIR, BLACKBIRD_CMD = _resolve_blackbird()
+if not BLACKBIRD_DIR:
+    BLACKBIRD_DIR = os.getenv("BLACKBIRD_DIR", "/opt/blackbird")
+    BLACKBIRD_CMD = os.path.join(BLACKBIRD_DIR, "blackbird.py")
+PYTHON_CMD = shutil.which("python3") or shutil.which("python") or "python3"
 
 # Timeout for each tool (seconds)
-MAIGRET_TIMEOUT = int(os.getenv("OSINT_MAIGRET_TIMEOUT", "120"))
-BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "60"))
+MAIGRET_TIMEOUT = int(os.getenv("OSINT_MAIGRET_TIMEOUT", "180"))
+BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "120"))
 
 # Admin key for extra-layer access control
 OSINT_ADMIN_KEY = os.getenv("OSINT_ADMIN_KEY", "")
@@ -149,32 +192,122 @@ class OSINTService:
     def _trape_col(self):
         return self._get_db()["osint_trape_sessions"]
 
+    # ── Tool probe ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def probe_tools() -> Dict[str, Any]:
+        """
+        Synchronous tool availability + version probe (safe for status API).
+        """
+        maigret_cmd = _resolve_maigret_cmd()
+        bb_dir, bb_script = _resolve_blackbird()
+        trape_dir = os.getenv("TRAPE_DIR", "/opt/trape")
+        trape_path = os.path.join(trape_dir, "trape.py")
+        trape_server = os.getenv("TRAPE_SERVER_URL", "")
+
+        maigret_ok = False
+        maigret_version = None
+        maigret_error = None
+        if maigret_cmd == "python-module":
+            try:
+                import maigret as _m  # type: ignore
+                maigret_ok = True
+                maigret_version = getattr(_m, "__version__", "installed")
+                maigret_cmd = f"{PYTHON_CMD} -m maigret"
+            except Exception as e:
+                maigret_error = str(e)[:200]
+                maigret_cmd = None
+        elif maigret_cmd and (os.path.isfile(maigret_cmd) or shutil.which(str(maigret_cmd).split()[0])):
+            maigret_ok = True
+            try:
+                import subprocess
+                r = subprocess.run(
+                    [maigret_cmd, "--version"],
+                    capture_output=True, text=True, timeout=8,
+                )
+                maigret_version = (r.stdout or r.stderr or "").strip().split("\n")[0][:80]
+            except Exception as e:
+                maigret_version = f"unknown ({e})"
+        else:
+            maigret_error = "not found — install with: pip install maigret"
+
+        blackbird_ok = bool(bb_script and os.path.isfile(bb_script))
+        blackbird_error = None if blackbird_ok else (
+            "not found — clone https://github.com/p1ngul1n0/blackbird to /opt/blackbird"
+        )
+
+        return {
+            "maigret": {
+                "available": maigret_ok,
+                "path": maigret_cmd or "not found",
+                "version": maigret_version,
+                "error": maigret_error,
+            },
+            "blackbird": {
+                "available": blackbird_ok,
+                "path": bb_script or "not found",
+                "dir": bb_dir,
+                "error": blackbird_error,
+            },
+            "trape": {
+                "available": os.path.isfile(trape_path),
+                "path": trape_path if os.path.isfile(trape_path) else "not found",
+                "server_url": trape_server or "not configured — set TRAPE_SERVER_URL",
+                "note": (
+                    "Trape requires a separate public server. "
+                    "Use /api/osint/trape/session for operator payloads only."
+                ),
+            },
+            "ready_for_scans": maigret_ok or blackbird_ok,
+        }
+
     # ── Maigret ───────────────────────────────────────────────────────────────
 
     async def _run_maigret(
         self, username: str, deep: bool = False, tmpdir: str = ""
     ) -> Dict[str, Any]:
         """
-        Run Maigret CLI and return parsed JSON results.
-        Raises RuntimeError on tool failure.
+        Run Maigret CLI and return parsed JSON results + meta.
+        Maigret v0.6+ writes: {folder}/report_{username}_simple.json
+        Flags: -J simple -fo PATH (NOT --output file)
         """
+        result_meta: Dict[str, Any] = {
+            "tool": "maigret",
+            "ok": False,
+            "error": None,
+            "raw": {},
+            "accounts": [],
+        }
         if not username or len(username) < 2:
-            return {}
+            result_meta["error"] = "username too short"
+            return result_meta
 
-        report_path = os.path.join(tmpdir, f"maigret_{username}.json")
-        cmd = [
-            MAIGRET_CMD,
+        maigret_cmd = _resolve_maigret_cmd()
+        if not maigret_cmd:
+            result_meta["error"] = "maigret not installed"
+            return result_meta
+
+        safe_user = re.sub(r"[^\w.\-]", "_", username)[:64]
+        out_dir = tmpdir or tempfile.mkdtemp(prefix="maigret_")
+
+        if maigret_cmd == "python-module":
+            cmd = [PYTHON_CMD, "-m", "maigret"]
+        else:
+            cmd = [maigret_cmd]
+
+        cmd += [
             username,
-            "--json", "simple",
-            "--output", report_path,
-            "--no-recursion",  # Avoid runaway recursive searches
+            "-J", "simple",
+            "-fo", out_dir,
+            "--no-recursion",
             "--timeout", "15",
+            "--no-progressbar",
+            "--no-color",
         ]
         if not deep:
-            # Top-500 sites only for speed
             cmd += ["--top-sites", "500"]
         else:
-            cmd += ["-a"]  # All sites
+            cmd += ["-a"]
 
         log.info("Maigret scan initiated for subject %s", _redact(username))
 
@@ -184,39 +317,126 @@ class OSINTService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=MAIGRET_TIMEOUT)
-            if proc.returncode not in (0, 1):  # Maigret exits 1 if some sites fail
-                log.warning("Maigret returned code %d: %s", proc.returncode, stderr[:200])
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=MAIGRET_TIMEOUT
+            )
+            stderr_s = (stderr or b"").decode("utf-8", errors="replace")
+            stdout_s = (stdout or b"").decode("utf-8", errors="replace")
 
-            if os.path.exists(report_path):
+            # Prefer report_USERNAME_simple.json in folderoutput
+            candidates = [
+                os.path.join(out_dir, f"report_{username}_simple.json"),
+                os.path.join(out_dir, f"report_{safe_user}_simple.json"),
+            ]
+            # fallback: any *simple*.json in out_dir
+            if os.path.isdir(out_dir):
+                for fn in os.listdir(out_dir):
+                    if fn.endswith("_simple.json") or (
+                        fn.endswith(".json") and "simple" in fn
+                    ):
+                        candidates.append(os.path.join(out_dir, fn))
+
+            raw = {}
+            report_path = next((p for p in candidates if os.path.isfile(p)), None)
+            if report_path:
                 with open(report_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    raw = json.load(f)
+            elif proc.returncode not in (0, 1):
+                result_meta["error"] = (
+                    f"maigret exit {proc.returncode}: "
+                    f"{(stderr_s or stdout_s)[:300] or 'no output'}"
+                )
+                return result_meta
+            else:
+                result_meta["error"] = (
+                    "maigret finished but no JSON report found in folderoutput"
+                )
+                result_meta["stderr_tail"] = stderr_s[-400:]
+                return result_meta
+
+            accounts = self._parse_maigret_json(raw)
+            result_meta.update({
+                "ok": True,
+                "raw": raw,
+                "accounts": accounts,
+                "report_path": report_path,
+            })
+            if not accounts:
+                result_meta["warning"] = "maigret ran successfully but found 0 accounts"
+            return result_meta
+
         except asyncio.TimeoutError:
+            result_meta["error"] = f"maigret timed out after {MAIGRET_TIMEOUT}s"
             log.warning("Maigret timed out for subject %s", _redact(username))
         except FileNotFoundError:
-            log.error("Maigret not found at '%s'. Install with: pip install maigret", MAIGRET_CMD)
+            result_meta["error"] = f"maigret executable not found ({maigret_cmd})"
+            log.error("Maigret not found at '%s'", maigret_cmd)
         except Exception as exc:
+            result_meta["error"] = f"maigret error: {exc}"
             log.error("Maigret error for %s: %s", _redact(username), exc)
 
-        return {}
+        return result_meta
 
-    def _parse_maigret_json(self, raw: Dict[str, Any]) -> List[Dict]:
+    def _parse_maigret_json(self, raw: Any) -> List[Dict]:
         """
-        Parse Maigret's simple JSON format into a normalized account list.
-        Maigret simple JSON: { "sites": { "SiteName": { "status": {...}, "url_user": "...", ... } } }
+        Parse Maigret JSON into a normalized account list.
+
+        Supports:
+          - simple report: { "SiteName": { "status": {"status": "Claimed", "url": "..."}, "url_user": "..." } }
+          - nested: { "sites": { ... } }
         """
-        accounts = []
-        sites = raw.get("sites", {})
+        accounts: List[Dict] = []
+        if not raw:
+            return accounts
+
+        if isinstance(raw, dict) and "sites" in raw and isinstance(raw["sites"], dict):
+            sites = raw["sites"]
+        elif isinstance(raw, dict):
+            sites = raw
+        else:
+            return accounts
+
         for site_name, site_data in sites.items():
-            status = site_data.get("status", {})
-            status_id = status.get("id", "")
-            if status_id not in ("found", "claimed"):
+            if not isinstance(site_data, dict):
                 continue
+            # Skip meta keys if present
+            if site_name in ("username", "type", "generated_at"):
+                continue
+
+            status_blob = site_data.get("status", {})
+            if isinstance(status_blob, dict):
+                st = (
+                    status_blob.get("status")
+                    or status_blob.get("id")
+                    or ""
+                )
+                st = str(st).lower().strip()
+                url = (
+                    status_blob.get("url")
+                    or site_data.get("url_user")
+                    or ""
+                )
+                uname = (
+                    status_blob.get("username")
+                    or site_data.get("username")
+                    or ""
+                )
+                ids = status_blob.get("ids") or site_data.get("ids") or {}
+            else:
+                st = str(status_blob or "").lower().strip()
+                url = site_data.get("url_user") or site_data.get("url") or ""
+                uname = site_data.get("username") or ""
+                ids = site_data.get("ids") or {}
+
+            # Claimed / Found = real hit (Maigret uses "Claimed")
+            if st not in ("found", "claimed"):
+                continue
+
             accounts.append({
-                "platform": site_name,
-                "url": site_data.get("url_user", ""),
-                "username": site_data.get("username", ""),
-                "profile_data": site_data.get("ids", {}),
+                "platform": str(site_name),
+                "url": url,
+                "username": uname,
+                "profile_data": ids if isinstance(ids, dict) else {},
                 "source": "maigret",
                 "confidence": "found",
             })
@@ -228,66 +448,162 @@ class OSINTService:
         self, username: Optional[str] = None, email: Optional[str] = None, tmpdir: str = ""
     ) -> Dict[str, Any]:
         """
-        Run Blackbird CLI and return parsed JSON results.
-        Supports username or email search.
-        """
-        if not username and not email:
-            return {}
+        Run Blackbird CLI and return parsed results + meta.
 
-        report_path = os.path.join(tmpdir, "blackbird_report.json")
-        cmd = [PYTHON_CMD, BLACKBIRD_CMD]
+        Blackbird v2: `--json` is a boolean flag (writes under blackbird/results/),
+        NOT `--json /path/to/file`.
+        """
+        result_meta: Dict[str, Any] = {
+            "tool": "blackbird",
+            "ok": False,
+            "error": None,
+            "raw": {},
+            "accounts": [],
+        }
+        if not username and not email:
+            result_meta["error"] = "username or email required"
+            return result_meta
+
+        bb_dir, bb_script = _resolve_blackbird()
+        if not bb_script or not bb_dir:
+            result_meta["error"] = "blackbird not installed at BLACKBIRD_DIR"
+            return result_meta
+
+        cmd = [PYTHON_CMD, bb_script, "--json", "--no-update"]
         if username:
             cmd += ["--username", username]
-        elif email:
+        if email:
             cmd += ["--email", email]
-        cmd += ["--json", report_path]
 
         log.info(
             "Blackbird scan initiated for subject %s",
             _redact(username or email),
         )
 
+        results_root = os.path.join(bb_dir, "results")
+        before = set()
+        if os.path.isdir(results_root):
+            for root, _, files in os.walk(results_root):
+                for f in files:
+                    if f.endswith(".json"):
+                        before.add(os.path.join(root, f))
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=BLACKBIRD_DIR,
+                cwd=bb_dir,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=BLACKBIRD_TIMEOUT)
-            if proc.returncode not in (0, 1):
-                log.warning("Blackbird returned code %d: %s", proc.returncode, stderr[:200])
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=BLACKBIRD_TIMEOUT
+            )
+            stderr_s = (stderr or b"").decode("utf-8", errors="replace")
+            stdout_s = (stdout or b"").decode("utf-8", errors="replace")
 
-            if os.path.exists(report_path):
-                with open(report_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+            # Newest JSON under results/ not present before the run
+            after: List[str] = []
+            if os.path.isdir(results_root):
+                for root, _, files in os.walk(results_root):
+                    for f in files:
+                        if f.endswith(".json"):
+                            p = os.path.join(root, f)
+                            if p not in before:
+                                after.append(p)
+            # fallback: any recent json
+            if not after and os.path.isdir(results_root):
+                candidates = []
+                for root, _, files in os.walk(results_root):
+                    for f in files:
+                        if f.endswith(".json"):
+                            p = os.path.join(root, f)
+                            candidates.append((os.path.getmtime(p), p))
+                candidates.sort(reverse=True)
+                after = [p for _, p in candidates[:3]]
+
+            raw: Any = {}
+            if after:
+                after.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                with open(after[0], "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            elif proc.returncode not in (0, 1):
+                result_meta["error"] = (
+                    f"blackbird exit {proc.returncode}: "
+                    f"{(stderr_s or stdout_s)[:300] or 'no output'}"
+                )
+                return result_meta
+            else:
+                # Try parse stdout as JSON array
+                try:
+                    raw = json.loads(stdout_s) if stdout_s.strip().startswith(("[", "{")) else {}
+                except Exception:
+                    raw = {}
+                if not raw:
+                    result_meta["error"] = (
+                        "blackbird finished but no JSON results file found under results/"
+                    )
+                    result_meta["stderr_tail"] = stderr_s[-400:]
+                    return result_meta
+
+            accounts = self._parse_blackbird_json(raw)
+            result_meta.update({
+                "ok": True,
+                "raw": raw if isinstance(raw, dict) else {"results": raw},
+                "accounts": accounts,
+            })
+            if not accounts:
+                result_meta["warning"] = "blackbird ran successfully but found 0 accounts"
+            return result_meta
+
         except asyncio.TimeoutError:
+            result_meta["error"] = f"blackbird timed out after {BLACKBIRD_TIMEOUT}s"
             log.warning("Blackbird timed out for subject %s", _redact(username or email))
         except FileNotFoundError:
-            log.error(
-                "Blackbird not found at '%s'. Clone from: https://github.com/p1ngul1n0/blackbird",
-                BLACKBIRD_CMD,
-            )
+            result_meta["error"] = f"blackbird not found at {bb_script}"
+            log.error("Blackbird not found at '%s'", bb_script)
         except Exception as exc:
+            result_meta["error"] = f"blackbird error: {exc}"
             log.error("Blackbird error for %s: %s", _redact(username or email), exc)
 
-        return {}
+        return result_meta
 
-    def _parse_blackbird_json(self, raw: Dict[str, Any]) -> List[Dict]:
+    def _parse_blackbird_json(self, raw: Any) -> List[Dict]:
         """
-        Parse Blackbird's JSON output into a normalized account list.
-        Blackbird JSON: { "results": [ { "name": "...", "url": "...", "status": "FOUND" } ] }
+        Parse Blackbird JSON into normalized accounts.
+
+        Formats:
+          - list of account dicts (current export)
+          - { "results": [ ... ] }
+        Account dicts use name/url/status (FOUND).
         """
-        accounts = []
-        results = raw.get("results", [])
+        accounts: List[Dict] = []
+        if isinstance(raw, list):
+            results = raw
+        elif isinstance(raw, dict):
+            results = raw.get("results") or raw.get("sites") or raw.get("accounts") or []
+            if not results and raw.get("name") and raw.get("url"):
+                results = [raw]
+        else:
+            return accounts
+
         for item in results:
-            if item.get("status", "").upper() != "FOUND":
+            if not isinstance(item, dict):
+                continue
+            st = str(item.get("status") or item.get("Status") or "FOUND").upper()
+            # Blackbird may omit status on export of found-only lists
+            if st and st not in ("FOUND", "CLAIMED", "TRUE", "1", "OK"):
+                # skip explicit not-found
+                if st in ("NOT FOUND", "NOT_FOUND", "FALSE", "0"):
+                    continue
+            platform = item.get("name") or item.get("site") or item.get("platform") or "Unknown"
+            url = item.get("url") or item.get("app") or ""
+            if not url and not platform:
                 continue
             accounts.append({
-                "platform": item.get("name", "Unknown"),
-                "url": item.get("url", ""),
-                "username": item.get("username", ""),
-                "profile_data": item.get("metadata", {}),
+                "platform": str(platform),
+                "url": str(url),
+                "username": item.get("username") or item.get("user") or "",
+                "profile_data": item.get("metadata") or item.get("data") or {},
                 "source": "blackbird",
                 "confidence": "found",
             })
@@ -356,10 +672,13 @@ class OSINTService:
         doc = {
             "subject_type": subject_type,
             "subject_id": subject_id,
+            "full_name": full_name,
             "scan_requested_by": actor,
             "scan_started_at": now,
             "scan_completed_at": None,
             "status": "running",
+            "run_maigret": run_maigret,
+            "run_blackbird": run_blackbird,
             "maigret_accounts": [],
             "blackbird_accounts": [],
             "total_accounts_found": 0,
@@ -369,6 +688,8 @@ class OSINTService:
             "ai_summary": None,
             "raw_maigret_json": None,
             "raw_blackbird_json": None,
+            "tool_results": {},
+            "warnings": [],
             "error": None,
             "notes": notes,
             "created_at": now,
@@ -425,7 +746,15 @@ class OSINTService:
         run_blackbird: bool,
         actor: str,
     ) -> None:
-        """Background task: runs tools, parses results, updates MongoDB."""
+        """
+        Background task: runs tools, parses results, updates MongoDB.
+
+        Fail-loud rules (never look "complete with 0 accounts" on tool failure):
+          - Requested tool missing / crashed / no report file → failed or partial
+          - All requested tools failed → status=failed
+          - Mix of ok + failed → status=partial when any accounts found, else failed
+          - Tools ok with 0 hits → status=complete (legitimate empty) + warnings
+        """
         col = self._collection
 
         # Build username candidates from name + explicit usernames
@@ -440,82 +769,275 @@ class OSINTService:
                     f"{first}_{last}",
                     f"{first[0]}{last}",
                 ]
-        # Deduplicate and sanitize
-        username_candidates = list({u.strip() for u in username_candidates if u and len(u) >= 3})
+        # Deduplicate and sanitize (preserve order: explicit usernames first)
+        seen: set[str] = set()
+        ordered: List[str] = []
+        for u in username_candidates:
+            key = (u or "").strip()
+            if len(key) < 3 or key.lower() in seen:
+                continue
+            seen.add(key.lower())
+            ordered.append(key)
+        username_candidates = ordered
 
         all_maigret_accounts: List[Dict] = []
         all_blackbird_accounts: List[Dict] = []
-        raw_maigret: Dict = {}
-        raw_blackbird: Dict = {}
-        error_msg: Optional[str] = None
+        raw_maigret: Any = None
+        raw_blackbird: Any = None
+        tool_results: Dict[str, Any] = {}
+        warnings: List[str] = []
+        error_parts: List[str] = []
+        fatal_exc: Optional[str] = None
+
+        # Pre-flight: tools actually present when requested
+        probe = self.probe_tools()
+        maigret_available = bool(probe.get("maigret", {}).get("available"))
+        blackbird_available = bool(probe.get("blackbird", {}).get("available"))
+
+        want_maigret = bool(run_maigret)
+        want_blackbird = bool(run_blackbird)
+
+        if want_maigret and not maigret_available:
+            error_parts.append(
+                "maigret not installed in this container — "
+                + str(probe.get("maigret", {}).get("error") or "pip install maigret")
+            )
+            tool_results["maigret"] = {
+                "ok": False,
+                "error": "not installed",
+                "attempted": False,
+            }
+            want_maigret = False  # do not attempt subprocess
+
+        if want_blackbird and not blackbird_available:
+            error_parts.append(
+                "blackbird not installed — "
+                + str(probe.get("blackbird", {}).get("error") or "clone to /opt/blackbird")
+            )
+            tool_results["blackbird"] = {
+                "ok": False,
+                "error": "not installed",
+                "attempted": False,
+            }
+            want_blackbird = False
+
+        if want_maigret and not username_candidates:
+            error_parts.append(
+                "maigret requested but no username candidates "
+                "(provide usernames or a full first+last name)"
+            )
+            tool_results["maigret"] = {
+                "ok": False,
+                "error": "no username candidates",
+                "attempted": False,
+            }
+            want_maigret = False
+
+        if want_blackbird and not username_candidates and not email:
+            error_parts.append(
+                "blackbird requested but no username or email provided"
+            )
+            tool_results["blackbird"] = {
+                "ok": False,
+                "error": "no username or email",
+                "attempted": False,
+            }
+            want_blackbird = False
 
         try:
             with tempfile.TemporaryDirectory(prefix="sl_osint_") as tmpdir:
-                tasks = []
-
-                # Maigret — run for each username candidate
-                if run_maigret and username_candidates:
+                # ── Maigret primary ──────────────────────────────────────────
+                if want_maigret:
                     primary_username = username_candidates[0]
-                    tasks.append(
-                        self._run_maigret(primary_username, deep=deep_scan, tmpdir=tmpdir)
+                    mg = await self._run_maigret(
+                        primary_username, deep=deep_scan, tmpdir=tmpdir
                     )
-                else:
-                    tasks.append(asyncio.sleep(0))  # placeholder
+                    if isinstance(mg, Exception):
+                        tool_results["maigret"] = {
+                            "ok": False,
+                            "error": str(mg),
+                            "attempted": True,
+                        }
+                        error_parts.append(f"maigret: {mg}")
+                    else:
+                        raw_maigret = mg.get("raw") or {}
+                        accounts = list(mg.get("accounts") or [])
+                        all_maigret_accounts.extend(accounts)
+                        entry = {
+                            "ok": bool(mg.get("ok")),
+                            "error": mg.get("error"),
+                            "warning": mg.get("warning"),
+                            "attempted": True,
+                            "accounts": len(accounts),
+                            "username": primary_username[:64],
+                        }
+                        tool_results["maigret"] = entry
+                        if not mg.get("ok"):
+                            error_parts.append(
+                                f"maigret: {mg.get('error') or 'failed'}"
+                            )
+                        elif mg.get("warning"):
+                            warnings.append(str(mg["warning"]))
 
-                # Blackbird — prefer email, fall back to username
-                if run_blackbird:
-                    bb_username = username_candidates[0] if username_candidates else None
-                    tasks.append(
-                        self._run_blackbird(username=bb_username, email=email, tmpdir=tmpdir)
-                    )
-                else:
-                    tasks.append(asyncio.sleep(0))  # placeholder
-
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Parse Maigret
-                if run_maigret and not isinstance(results[0], Exception) and results[0]:
-                    raw_maigret = results[0]
-                    all_maigret_accounts = self._parse_maigret_json(raw_maigret)
-
-                # Parse Blackbird
-                if run_blackbird and not isinstance(results[1], Exception) and results[1]:
-                    raw_blackbird = results[1]
-                    all_blackbird_accounts = self._parse_blackbird_json(raw_blackbird)
-
-                # If we have multiple username candidates, run Maigret on secondary ones
-                if run_maigret and len(username_candidates) > 1:
-                    for alt_username in username_candidates[1:3]:  # Max 3 total
-                        alt_raw = await self._run_maigret(alt_username, deep=False, tmpdir=tmpdir)
-                        if alt_raw:
-                            alt_accounts = self._parse_maigret_json(alt_raw)
-                            # Merge, deduplicating by platform+url
-                            existing_keys = {(a["platform"], a["url"]) for a in all_maigret_accounts}
-                            for acct in alt_accounts:
+                    # Secondary username candidates (max 3 total)
+                    if len(username_candidates) > 1 and tool_results.get("maigret", {}).get("ok"):
+                        existing_keys = {
+                            (a["platform"], a["url"]) for a in all_maigret_accounts
+                        }
+                        alt_meta = []
+                        for alt_username in username_candidates[1:3]:
+                            alt = await self._run_maigret(
+                                alt_username, deep=False, tmpdir=tmpdir
+                            )
+                            if not isinstance(alt, dict) or not alt.get("ok"):
+                                alt_meta.append({
+                                    "username": alt_username[:64],
+                                    "ok": False,
+                                    "error": (alt or {}).get("error") if isinstance(alt, dict) else str(alt),
+                                })
+                                continue
+                            for acct in alt.get("accounts") or []:
                                 key = (acct["platform"], acct["url"])
                                 if key not in existing_keys:
                                     all_maigret_accounts.append(acct)
                                     existing_keys.add(key)
+                            alt_meta.append({
+                                "username": alt_username[:64],
+                                "ok": True,
+                                "accounts": len(alt.get("accounts") or []),
+                            })
+                        tool_results["maigret"]["alt_usernames"] = alt_meta
+                        tool_results["maigret"]["accounts"] = len(all_maigret_accounts)
+
+                # ── Blackbird ────────────────────────────────────────────────
+                if want_blackbird:
+                    bb_username = username_candidates[0] if username_candidates else None
+                    bb = await self._run_blackbird(
+                        username=bb_username, email=email, tmpdir=tmpdir
+                    )
+                    if isinstance(bb, Exception):
+                        tool_results["blackbird"] = {
+                            "ok": False,
+                            "error": str(bb),
+                            "attempted": True,
+                        }
+                        error_parts.append(f"blackbird: {bb}")
+                    else:
+                        raw_blackbird = bb.get("raw") or {}
+                        accounts = list(bb.get("accounts") or [])
+                        all_blackbird_accounts.extend(accounts)
+                        tool_results["blackbird"] = {
+                            "ok": bool(bb.get("ok")),
+                            "error": bb.get("error"),
+                            "warning": bb.get("warning"),
+                            "attempted": True,
+                            "accounts": len(accounts),
+                        }
+                        if not bb.get("ok"):
+                            error_parts.append(
+                                f"blackbird: {bb.get('error') or 'failed'}"
+                            )
+                        elif bb.get("warning"):
+                            warnings.append(str(bb["warning"]))
 
         except Exception as exc:
             log.error("OSINT scan %s failed: %s", report_id, exc)
-            error_msg = str(exc)
+            fatal_exc = str(exc)
+            error_parts.append(fatal_exc)
 
-        # Combine all accounts
-        all_accounts = all_maigret_accounts + all_blackbird_accounts
-        platforms = list({a["platform"] for a in all_accounts})
+        # Combine all accounts (dedupe platform+url across tools)
+        deduped: List[Dict] = []
+        seen_acct: set = set()
+        for a in all_maigret_accounts + all_blackbird_accounts:
+            key = (a.get("platform"), a.get("url"), a.get("source"))
+            if key in seen_acct:
+                continue
+            seen_acct.add(key)
+            deduped.append(a)
+        all_accounts = deduped
+        platforms = list({a["platform"] for a in all_accounts if a.get("platform")})
+
+        # ── Status decision (fail loud) ────────────────────────────────────
+        attempted = [
+            k for k, v in tool_results.items()
+            if isinstance(v, dict) and v.get("attempted")
+        ]
+        succeeded = [
+            k for k, v in tool_results.items()
+            if isinstance(v, dict) and v.get("ok")
+        ]
+        failed_tools = [
+            k for k, v in tool_results.items()
+            if isinstance(v, dict) and not v.get("ok")
+        ]
+        any_tool_requested = bool(run_maigret or run_blackbird)
+
+        if fatal_exc:
+            status = "failed"
+        elif not any_tool_requested:
+            status = "failed"
+            error_parts.append("no tools selected for scan")
+        elif not attempted and failed_tools:
+            # All requested tools blocked pre-flight (missing install / no inputs)
+            status = "failed"
+        elif attempted and not succeeded:
+            status = "failed"
+        elif failed_tools and succeeded:
+            status = "partial" if all_accounts else "failed"
+        elif succeeded and not all_accounts:
+            # Legitimate empty result — tools ran correctly
+            status = "complete"
+            warnings.append(
+                "Scan completed successfully but found 0 accounts. "
+                "Try alternate usernames, email, or deep scan."
+            )
+        else:
+            status = "complete"
+
+        error_msg = "; ".join(error_parts) if error_parts else None
+        # Never present tool-failure as a quiet empty complete
+        if status == "failed" and not error_msg:
+            error_msg = "OSINT scan failed — no tools produced results"
+        if status == "partial" and not error_msg:
+            error_msg = f"Partial results — failed tools: {', '.join(failed_tools)}"
 
         # Score and derive risk signals
+        # Only apply "social_inactivity" when tools actually succeeded empty
         score_delta, signals = _score_signals(all_accounts, subject_type)
+        if status == "failed":
+            # Strip misleading "no social presence" signal when scan didn't run
+            signals = [
+                s for s in signals
+                if s.get("signal_type") != "social_inactivity"
+            ]
+            score_delta = min(
+                sum(
+                    15 if s.get("severity") == "high" else 8
+                    for s in signals
+                ),
+                40,
+            ) if signals else 0
+            signals.append({
+                "signal_type": "osint_scan_failed",
+                "severity": "high",
+                "detail": error_msg or "OSINT tools failed or are not installed.",
+                "source": "osint_engine",
+            })
+        elif status == "partial":
+            signals.append({
+                "signal_type": "osint_partial",
+                "severity": "medium",
+                "detail": error_msg or "One or more OSINT tools failed.",
+                "source": "osint_engine",
+            })
 
-        # AI summary
+        # AI summary only when we have accounts
         ai_summary = await self._generate_ai_summary(all_accounts, signals, subject_type)
 
-        # Update the report document
         now = datetime.now(timezone.utc)
         update = {
             "$set": {
-                "status": "failed" if error_msg else "complete",
+                "status": status,
                 "scan_completed_at": now,
                 "maigret_accounts": all_maigret_accounts,
                 "blackbird_accounts": all_blackbird_accounts,
@@ -524,15 +1046,18 @@ class OSINTService:
                 "risk_signals": signals,
                 "osint_risk_score": score_delta,
                 "ai_summary": ai_summary,
-                # Store raw JSON for forensic purposes — not exposed in default UI
                 "raw_maigret_json": raw_maigret if raw_maigret else None,
                 "raw_blackbird_json": raw_blackbird if raw_blackbird else None,
+                "tool_results": tool_results,
+                "warnings": warnings,
                 "error": error_msg,
+                "run_maigret": run_maigret,
+                "run_blackbird": run_blackbird,
+                "full_name": full_name,
             }
         }
         await col.update_one({"_id": ObjectId(report_id)}, update)
 
-        # Audit completion
         await AuditService.log_event(
             entity_type=subject_type,
             entity_id=subject_id,
@@ -542,7 +1067,9 @@ class OSINTService:
                 "accounts_found": len(all_accounts),
                 "risk_score_delta": score_delta,
                 "signals_count": len(signals),
-                "status": "failed" if error_msg else "complete",
+                "status": status,
+                "tools_ok": succeeded,
+                "tools_failed": failed_tools,
             },
             actor=actor,
             actor_type="admin",
@@ -550,10 +1077,13 @@ class OSINTService:
         )
 
         log.info(
-            "OSINT scan %s complete — %d accounts, score delta +%d",
+            "OSINT scan %s %s — %d accounts, score delta +%d, tools_ok=%s failed=%s",
             report_id,
+            status,
             len(all_accounts),
             score_delta,
+            succeeded,
+            failed_tools,
         )
 
     # ── Report Retrieval ──────────────────────────────────────────────────────

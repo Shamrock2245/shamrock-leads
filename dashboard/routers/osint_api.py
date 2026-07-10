@@ -4,8 +4,11 @@ OSINT Intelligence API Router — ShamrockLeads
 Admin-only endpoints for OSINT background research on defendants and indemnitors.
 
 All endpoints require:
-  1. Standard PIN authentication (via PinAuthMiddleware cookie).
-  2. X-Admin-Key header matching the OSINT_ADMIN_KEY environment variable.
+  1. Standard PIN authentication (via PinAuthMiddleware cookie), AND
+  2. Either:
+       - an admin session (role=admin / ADMIN_EMAILS), OR
+       - X-Admin-Key matching OSINT_ADMIN_KEY (or DASHBOARD_PIN fallback), OR
+       - X-Admin-Token matching DASHBOARD_PIN
 
 Endpoints:
   POST   /api/osint/scan                    → Initiate Maigret + Blackbird scan
@@ -21,11 +24,11 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 
+from dashboard.auth.pin_middleware import session_is_admin
 from dashboard.models.osint import OSINTScanRequest, TrapeSessionRequest
 from dashboard.services.osint_service import get_osint_service
 
@@ -36,10 +39,13 @@ router = APIRouter(prefix="/api/osint", tags=["osint"])
 # OSINT_ADMIN_KEY takes precedence; fall back to DASHBOARD_PIN for consistency
 # with the existing bonds.py admin guard pattern.
 OSINT_ADMIN_KEY = os.getenv("OSINT_ADMIN_KEY") or os.getenv("DASHBOARD_PIN", "")
+DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "")
 
 # PII fields that must never appear in audit event details
-_PII_FIELDS = {"phone", "ssn", "address", "dob", "email", "name", "full_name",
-               "first_name", "last_name", "date_of_birth", "social_security"}
+_PII_FIELDS = {
+    "phone", "ssn", "address", "dob", "email", "name", "full_name",
+    "first_name", "last_name", "date_of_birth", "social_security",
+}
 
 
 def _scrub_pii(details: dict) -> dict:
@@ -47,63 +53,59 @@ def _scrub_pii(details: dict) -> dict:
     return {k: v for k, v in details.items() if k.lower() not in _PII_FIELDS}
 
 
-# ── Admin Key Guard ────────────────────────────────────────────────────────────
+# ── Admin Guard ────────────────────────────────────────────────────────────────
 
-def _require_admin(x_admin_key: Optional[str]) -> None:
+def _require_admin(
+    request: Request,
+    x_admin_key: Optional[str] = None,
+    x_admin_token: Optional[str] = None,
+) -> None:
     """
     Enforce admin-only access on top of the existing PIN middleware.
-    Consistent with the X-Admin-Token pattern used in bonds.py.
-    If neither OSINT_ADMIN_KEY nor DASHBOARD_PIN is set, PIN auth is sufficient.
+
+    Accepts (any one is enough):
+      1. Signed session cookie with admin role / admin email
+      2. X-Admin-Key == OSINT_ADMIN_KEY (or DASHBOARD_PIN fallback)
+      3. X-Admin-Token == DASHBOARD_PIN (bonds-style header)
     """
-    if not OSINT_ADMIN_KEY:
-        return  # No key configured — PIN auth is sufficient
-    if x_admin_key != OSINT_ADMIN_KEY:
-        raise HTTPException(
-            status_code=403,
-            detail="OSINT module requires admin authorization. Provide X-Admin-Key header.",
-        )
+    if session_is_admin(request):
+        return
+
+    if OSINT_ADMIN_KEY and x_admin_key and x_admin_key == OSINT_ADMIN_KEY:
+        return
+
+    if DASHBOARD_PIN and x_admin_token and x_admin_token == DASHBOARD_PIN:
+        return
+
+    # Dev mode: no PIN / key configured
+    if not OSINT_ADMIN_KEY and not DASHBOARD_PIN:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "OSINT module requires admin authorization. "
+            "Log in as admin, or provide X-Admin-Key / X-Admin-Token."
+        ),
+    )
 
 
 # ── Tool Status ────────────────────────────────────────────────────────────────
 
 @router.get("/status", summary="Check OSINT tool availability")
 async def osint_status(
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """Returns the availability status of Maigret, Blackbird, and Trape."""
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
-    maigret_path = shutil.which("maigret") or os.getenv("MAIGRET_PATH", "")
-    blackbird_dir = os.getenv("BLACKBIRD_DIR", "/opt/blackbird")
-    blackbird_path = os.path.join(blackbird_dir, "blackbird.py")
-    trape_dir = os.getenv("TRAPE_DIR", "/opt/trape")
-    trape_path = os.path.join(trape_dir, "trape.py")
-    trape_server = os.getenv("TRAPE_SERVER_URL", "")
-
-    return {
-        "maigret": {
-            "available": bool(maigret_path and os.path.exists(maigret_path)),
-            "path": maigret_path or "not found — install with: pip install maigret",
-        },
-        "blackbird": {
-            "available": os.path.exists(blackbird_path),
-            "path": blackbird_path if os.path.exists(blackbird_path) else (
-                "not found — clone from: https://github.com/p1ngul1n0/blackbird"
-            ),
-        },
-        "trape": {
-            "available": os.path.exists(trape_path),
-            "path": trape_path if os.path.exists(trape_path) else (
-                "not found — clone from: https://github.com/jofpin/trape"
-            ),
-            "server_url": trape_server or "not configured — set TRAPE_SERVER_URL env var",
-            "note": (
-                "Trape requires manual server startup and a publicly accessible URL. "
-                "Use /api/osint/trape/session to generate session payloads."
-            ),
-        },
-        "admin_key_configured": bool(OSINT_ADMIN_KEY),
-    }
+    svc = get_osint_service()
+    tools = svc.probe_tools()
+    tools["admin_key_configured"] = bool(OSINT_ADMIN_KEY)
+    tools["ready_for_scans"] = bool(tools.get("ready_for_scans"))
+    return tools
 
 
 # ── Scan Endpoints ─────────────────────────────────────────────────────────────
@@ -113,12 +115,13 @@ async def initiate_scan(
     body: OSINTScanRequest,
     request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """
     Initiates an asynchronous OSINT scan for a defendant or indemnitor.
     Returns immediately with a report_id. Poll GET /api/osint/report/{id} for results.
     """
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     # Validate at least one search identifier is provided
     has_identifier = any([
@@ -132,7 +135,34 @@ async def initiate_scan(
             detail="At least one search identifier is required: full_name, usernames, or email.",
         )
 
+    # Pre-flight: refuse scan if no tools installed for selected engines
     svc = get_osint_service()
+    probe = svc.probe_tools()
+    if body.run_maigret and not probe.get("maigret", {}).get("available"):
+        if body.run_blackbird and not probe.get("blackbird", {}).get("available"):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "OSINT tools not installed in this container. "
+                    "Maigret and Blackbird are both unavailable. "
+                    "Rebuild the dashboard image with OSINT tools."
+                ),
+            )
+    if not body.run_maigret and body.run_blackbird and not probe.get("blackbird", {}).get("available"):
+        raise HTTPException(
+            status_code=503,
+            detail="Blackbird is not installed. Rebuild dashboard image or disable Blackbird.",
+        )
+    if body.run_maigret and not body.run_blackbird and not probe.get("maigret", {}).get("available"):
+        raise HTTPException(
+            status_code=503,
+            detail="Maigret is not installed. Rebuild dashboard image or disable Maigret.",
+        )
+    if not probe.get("ready_for_scans") and (body.run_maigret or body.run_blackbird):
+        raise HTTPException(
+            status_code=503,
+            detail="No OSINT tools available (ready_for_scans=false).",
+        )
 
     try:
         report_id = await svc.run_scan(
@@ -155,16 +185,22 @@ async def initiate_scan(
         "report_id": report_id,
         "status": "running",
         "message": "Scan initiated. Poll GET /api/osint/report/{report_id} for results.",
+        "tools": {
+            "maigret": probe.get("maigret", {}).get("available"),
+            "blackbird": probe.get("blackbird", {}).get("available"),
+        },
     }
 
 
 @router.get("/report/{report_id}", summary="Get OSINT scan report")
 async def get_report(
     report_id: str,
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """Retrieve a completed OSINT report by ID (raw tool JSON excluded)."""
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     svc = get_osint_service()
     report = await svc.get_report(report_id)
@@ -176,13 +212,15 @@ async def get_report(
 @router.get("/report/{report_id}/raw", summary="Get full OSINT report with raw tool output")
 async def get_raw_report(
     report_id: str,
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """
     Retrieve the full OSINT report including raw Maigret and Blackbird JSON.
     For forensic/investigative use only.
     """
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     svc = get_osint_service()
     report = await svc.get_raw_report(report_id)
@@ -193,13 +231,15 @@ async def get_raw_report(
 
 @router.get("/reports", summary="List OSINT reports")
 async def list_reports(
+    request: Request,
     subject_id: Optional[str] = Query(None, description="Filter by subject MongoDB ID"),
     subject_type: Optional[str] = Query(None, description="Filter by 'defendant' or 'indemnitor'"),
     limit: int = Query(20, ge=1, le=100),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """List OSINT reports, optionally filtered by subject."""
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     svc = get_osint_service()
     reports = await svc.list_reports(
@@ -215,7 +255,9 @@ async def list_reports(
 @router.post("/trape/session", summary="Create a Trape tracking session")
 async def create_trape_session(
     body: TrapeSessionRequest,
+    request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """
     Generates a Trape tracking session for skip-trace operations.
@@ -229,7 +271,7 @@ async def create_trape_session(
     - Set TRAPE_SERVER_URL and TRAPE_DIR environment variables.
     - The subject must visit the tracking URL for data collection to occur.
     """
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     svc = get_osint_service()
     try:
@@ -252,12 +294,13 @@ async def update_trape_session(
     session_id: str,
     request: Request,
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """
     Update a Trape session with data collected from the target's browser.
-    This endpoint can be called by a Trape webhook or manually by the operator.
+    This endpoint can be called by a Trape webhook or manual entry.
     """
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     try:
         data = await request.json()
@@ -273,12 +316,14 @@ async def update_trape_session(
 
 @router.get("/trape/sessions", summary="List Trape tracking sessions")
 async def list_trape_sessions(
+    request: Request,
     subject_id: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
     """List all Trape tracking sessions."""
-    _require_admin(x_admin_key)
+    _require_admin(request, x_admin_key, x_admin_token)
 
     svc = get_osint_service()
     sessions = await svc.list_trape_sessions(subject_id=subject_id, limit=limit)
