@@ -67,13 +67,9 @@ class CharlotteCountyScraper(BaseScraper):
                 url = BOOKINGS_URL if pg == 1 else f"{BOOKINGS_URL}?page={pg}"
                 logger.info(f"[Charlotte] Roster page {pg}")
 
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(2)
-
-                # Check for Cloudflare
-                title = (page.title() or "").lower()
-                if "just a moment" in title or "attention" in title or "blocked" in title:
-                    logger.error(f"[Charlotte] Cloudflare blocked on page {pg}")
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                if not self._wait_past_cloudflare(page, label=f"page {pg}"):
+                    # Keep whatever we already collected; don't zero the run
                     break
 
                 # Extract rows from the FIRST table (the structured one with headers)
@@ -135,7 +131,7 @@ class CharlotteCountyScraper(BaseScraper):
                 if new_count == 0:
                     break
 
-                time.sleep(1)  # Polite delay between pages
+                time.sleep(3)  # Polite delay — CF rate-limits aggressive paging
 
             logger.info(f"[Charlotte] Scraped {len(records)} records from roster table 🧦")
             return records
@@ -152,6 +148,31 @@ class CharlotteCountyScraper(BaseScraper):
                 pw.stop()
             except Exception:
                 pass
+
+    @staticmethod
+    def _wait_past_cloudflare(page, label: str = "", max_wait: int = 25) -> bool:
+        """Wait for CF challenge to clear; return False if still blocked."""
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            title = (page.title() or "").lower()
+            if "just a moment" not in title and "attention" not in title and "blocked" not in title:
+                # Prefer table present
+                try:
+                    if page.query_selector("table tbody tr"):
+                        return True
+                except Exception:
+                    pass
+                # Title clear but no rows yet — short extra wait
+                time.sleep(1.5)
+                try:
+                    if page.query_selector("table"):
+                        return True
+                except Exception:
+                    pass
+                return True
+            time.sleep(1.5)
+        logger.error(f"[Charlotte] Cloudflare still blocked on {label or 'page'}")
+        return False
 
     @staticmethod
     def _parse_date(text: str) -> Optional[str]:

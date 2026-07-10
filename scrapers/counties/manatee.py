@@ -67,13 +67,8 @@ class ManateeCountyScraper(BaseScraper):
                 url = BOOKINGS_URL if pg == 1 else f"{BOOKINGS_URL}?page={pg}"
                 logger.info(f"[Manatee] Roster page {pg}")
 
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(2)
-
-                # Check for Cloudflare
-                title = (page.title() or "").lower()
-                if "just a moment" in title or "attention" in title or "blocked" in title:
-                    logger.error(f"[Manatee] Cloudflare blocked on page {pg}")
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                if not self._wait_past_cloudflare(page, label=f"page {pg}"):
                     break
 
                 # Extract rows from the FIRST table (structured headers)
@@ -144,7 +139,7 @@ class ManateeCountyScraper(BaseScraper):
                 if new_count == 0:
                     break
 
-                time.sleep(1)  # Polite delay between pages
+                time.sleep(3)  # Polite delay — CF rate-limits aggressive paging
 
             logger.info(f"[Manatee] Scraped {len(records)} records from roster table 🧦")
             return records
@@ -161,6 +156,30 @@ class ManateeCountyScraper(BaseScraper):
                 pw.stop()
             except Exception:
                 pass
+
+    @staticmethod
+    @staticmethod
+    def _wait_past_cloudflare(page, label: str = "", max_wait: int = 25) -> bool:
+        """Wait for CF challenge to clear; return False if still blocked."""
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            title = (page.title() or "").lower()
+            if "just a moment" not in title and "attention" not in title and "blocked" not in title:
+                try:
+                    if page.query_selector("table tbody tr"):
+                        return True
+                except Exception:
+                    pass
+                time.sleep(1.5)
+                try:
+                    if page.query_selector("table"):
+                        return True
+                except Exception:
+                    pass
+                return True
+            time.sleep(1.5)
+        logger.error(f"[Manatee] Cloudflare still blocked on {label or 'page'}")
+        return False
 
     @staticmethod
     def _parse_date(text: str) -> Optional[str]:
