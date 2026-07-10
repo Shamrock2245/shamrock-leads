@@ -86,6 +86,7 @@
       { key: 'trape',     label: 'Trape' },
     ];
     const ready = !!_toolStatus.ready_for_scans;
+    const workerOk = _toolStatus.worker_reachable !== false;
     container.innerHTML = tools.map(t => {
       const info = _toolStatus[t.key] || {};
       const ok = info.available;
@@ -93,11 +94,15 @@
       return `<span class="osint-tool-pill ${ok ? 'ready' : 'missing'}" title="${_esc(tip)}">
         <span class="dot"></span>${t.label}${ok && info.version ? ` · ${info.version}` : ''}
       </span>`;
-    }).join('') + (ready
-      ? ''
-      : `<span class="osint-tool-pill missing" title="Rebuild dashboard image with OSINT tools">
-          <span class="dot"></span>Scans blocked — tools missing
-        </span>`);
+    }).join('')
+      + `<span class="osint-tool-pill ${workerOk ? 'ready' : 'missing'}" title="${_esc(_toolStatus.worker_url || 'osint-worker')}">
+          <span class="dot"></span>Worker
+        </span>`
+      + (ready
+        ? ''
+        : `<span class="osint-tool-pill missing" title="Start osint-worker or check tools">
+            <span class="dot"></span>Scans blocked
+          </span>`);
   }
 
   function _syncScanButtonState() {
@@ -184,8 +189,12 @@
     const usernames   = ($('osintUsernames')?.value || '').split(',').map(u => u.trim()).filter(Boolean);
     const email       = $('osintEmail')?.value?.trim();
     const deepScan    = $('osintDeepScan')?.checked || false;
+    // Policy defaults live on worker when flags omitted; UI still sends explicit bools
     const runMaigret  = $('osintRunMaigret')?.checked !== false;
-    const runBlackbird = $('osintRunBlackbird')?.checked !== false;
+    const runBlackbirdExplicit = !!$('osintRunBlackbird')?.checked;
+    const secondOpinion = !!$('osintSecondOpinion')?.checked;
+    // Auto-enable blackbird for email-focused recon if user left it unchecked
+    const runBlackbird = runBlackbirdExplicit || secondOpinion || !!email;
     const notes       = $('osintNotes')?.value?.trim();
 
     if (!subjectId) { toast('Subject ID is required.', 'error'); return; }
@@ -195,7 +204,12 @@
     }
 
     if (_toolStatus && !_toolStatus.ready_for_scans) {
-      toast('OSINT tools are not installed on this server. Rebuild the dashboard image.', 'error');
+      toast(
+        _toolStatus.worker_reachable === false
+          ? 'OSINT worker is offline. Start osint-worker service.'
+          : 'OSINT tools unavailable on worker.',
+        'error'
+      );
       return;
     }
 
@@ -216,6 +230,7 @@
           deep_scan: deepScan,
           run_maigret: runMaigret,
           run_blackbird: runBlackbird,
+          second_opinion: secondOpinion,
           notes: notes || null,
         }),
       });
@@ -293,6 +308,8 @@
           }
         } else if (report.status === 'partial') {
           toast(`Partial OSINT results — ${report.total_accounts_found || 0} accounts. Check errors.`, 'error');
+        } else if (report.status === 'degraded') {
+          toast(`OSINT scan degraded (bot blocks) — ${report.total_accounts_found || 0} accounts. Treat carefully.`, 'error');
         } else if (report.status === 'failed') {
           toast(`OSINT scan FAILED: ${report.error || 'see report'}`, 'error');
         }

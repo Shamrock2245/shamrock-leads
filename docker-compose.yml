@@ -86,6 +86,47 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── OSINT Worker (Maigret + Blackbird CLIs) ──
+  # Writable FS, internal network only. Dashboard calls http://osint-worker:5065
+  osint-worker:
+    build:
+      context: .
+      dockerfile: osint-worker/Dockerfile
+    container_name: shamrock-osint-worker
+    hostname: osint-worker
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
+      - OSINT_MAIGRET_TIMEOUT=${OSINT_MAIGRET_TIMEOUT:-180}
+      - OSINT_BLACKBIRD_TIMEOUT=${OSINT_BLACKBIRD_TIMEOUT:-150}
+      - OSINT_QUICK_TOP_SITES=${OSINT_QUICK_TOP_SITES:-250}
+      - OSINT_DEEP_TOP_SITES=${OSINT_DEEP_TOP_SITES:-800}
+    expose:
+      - "5065"                            # Internal only — no host port
+    networks:
+      - shamrock-net
+    security_opt:
+      - no-new-privileges:true
+    # Writable root for CLI tools (not public-facing)
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5065/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Intelligence Dashboard (FastAPI + Uvicorn) ──
   dashboard:
     build:
@@ -103,10 +144,14 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+      - OSINT_WORKER_URL=http://osint-worker:5065
+      - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
+      - OSINT_WORKER_TIMEOUT=${OSINT_WORKER_TIMEOUT:-300}
     ports:
       - "8088:5050"                     # Dashboard UI (external 8088)
     depends_on:
       - shamrock-leads
+      - osint-worker
       # traccar removed — dashboard handles missing Traccar gracefully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
@@ -125,11 +170,7 @@ services:
       - no-new-privileges:true          # Prevent privilege escalation
     read_only: true                     # Root filesystem read-only
     tmpfs:
-      # uid/gid 999 = appuser (image non-root). mode=1777 keeps /tmp sticky.
-      - /tmp:size=512m,mode=1777
-      - /home/appuser:size=64m,uid=999,gid=999,mode=0755
-      - /opt/blackbird/results:size=128m,uid=999,gid=999,mode=0755
-      - /opt/blackbird/logs:size=32m,uid=999,gid=999,mode=0755
+      - /tmp:size=256m,mode=1777        # Uvicorn temp only (OSINT CLIs live on worker)
     mem_limit: 2g                       # Cap memory (dashboard API)
     cpus: 1.5                           # Cap CPU
     logging:

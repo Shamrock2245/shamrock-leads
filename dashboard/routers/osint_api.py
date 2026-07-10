@@ -135,33 +135,20 @@ async def initiate_scan(
             detail="At least one search identifier is required: full_name, usernames, or email.",
         )
 
-    # Pre-flight: refuse scan if no tools installed for selected engines
     svc = get_osint_service()
     probe = svc.probe_tools()
-    if body.run_maigret and not probe.get("maigret", {}).get("available"):
-        if body.run_blackbird and not probe.get("blackbird", {}).get("available"):
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "OSINT tools not installed in this container. "
-                    "Maigret and Blackbird are both unavailable. "
-                    "Rebuild the dashboard image with OSINT tools."
-                ),
-            )
-    if not body.run_maigret and body.run_blackbird and not probe.get("blackbird", {}).get("available"):
+    if not probe.get("worker_reachable", True) and not probe.get("ready_for_scans"):
         raise HTTPException(
             status_code=503,
-            detail="Blackbird is not installed. Rebuild dashboard image or disable Blackbird.",
+            detail=(
+                "osint-worker is unreachable. "
+                f"{probe.get('error') or 'Start the osint-worker service.'}"
+            ),
         )
-    if body.run_maigret and not body.run_blackbird and not probe.get("maigret", {}).get("available"):
+    if not probe.get("ready_for_scans"):
         raise HTTPException(
             status_code=503,
-            detail="Maigret is not installed. Rebuild dashboard image or disable Maigret.",
-        )
-    if not probe.get("ready_for_scans") and (body.run_maigret or body.run_blackbird):
-        raise HTTPException(
-            status_code=503,
-            detail="No OSINT tools available (ready_for_scans=false).",
+            detail="No OSINT tools available on worker (ready_for_scans=false).",
         )
 
     try:
@@ -174,6 +161,7 @@ async def initiate_scan(
             deep_scan=body.deep_scan,
             run_maigret=body.run_maigret,
             run_blackbird=body.run_blackbird,
+            second_opinion=body.second_opinion,
             notes=body.notes,
             actor="admin",
         )
@@ -184,10 +172,17 @@ async def initiate_scan(
     return {
         "report_id": report_id,
         "status": "running",
-        "message": "Scan initiated. Poll GET /api/osint/report/{report_id} for results.",
+        "message": "Scan initiated via osint-worker. Poll GET /api/osint/report/{report_id}.",
+        "worker": probe.get("worker_url"),
         "tools": {
             "maigret": probe.get("maigret", {}).get("available"),
             "blackbird": probe.get("blackbird", {}).get("available"),
+        },
+        "policy_defaults": probe.get("defaults") or {
+            "maigret_default": True,
+            "blackbird_default": False,
+            "blackbird_on_email": True,
+            "blackbird_on_second_opinion": True,
         },
     }
 

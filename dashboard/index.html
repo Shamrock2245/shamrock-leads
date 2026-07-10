@@ -4350,16 +4350,23 @@
             </div>
           </div>
           <div class="osint-options-row">
-            <label class="osint-toggle">
-              <input type="checkbox" id="osintRunMaigret" checked /> Maigret (3k+ sites)
+            <label class="osint-toggle" title="Default ON — username footprint via Maigret">
+              <input type="checkbox" id="osintRunMaigret" checked /> Maigret (default)
             </label>
-            <label class="osint-toggle">
-              <input type="checkbox" id="osintRunBlackbird" checked /> Blackbird (email/username)
+            <label class="osint-toggle" title="Default OFF. Auto-runs when email is set. Or enable for second opinion.">
+              <input type="checkbox" id="osintRunBlackbird" /> Blackbird (email / 2nd opinion)
             </label>
-            <label class="osint-toggle">
-              <input type="checkbox" id="osintDeepScan" /> Deep Scan (all sites, slower)
+            <label class="osint-toggle" title="Force Maigret + Blackbird dual-engine">
+              <input type="checkbox" id="osintSecondOpinion" /> Second opinion (both engines)
+            </label>
+            <label class="osint-toggle" title="Larger site list (~800). Still no recursion.">
+              <input type="checkbox" id="osintDeepScan" /> Deep scan (slower)
             </label>
           </div>
+          <p style="font-size:0.72rem;color:var(--muted);margin:0 0 10px">
+            Policy: Maigret-only by default. Blackbird auto-enables when an email is provided, or when you check Second opinion.
+            Risk score is <strong>advisory only</strong> (not applied to bond risk automatically).
+          </p>
           <button class="osint-scan-btn" id="osintScanBtn">🔍 Run OSINT Scan</button>
         </div>
 

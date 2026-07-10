@@ -30,13 +30,29 @@ class OSINTScanRequest(BaseModel):
     email: Optional[str] = Field(None, description="Known email address")
     phone: Optional[str] = Field(None, description="Known phone number")
     dob: Optional[str] = Field(None, description="Date of birth (YYYY-MM-DD)")
-    # Scan options
+    # Scan options — policy defaults applied on osint-worker when flags are omitted
     deep_scan: bool = Field(
         False,
-        description="If True, runs Maigret against all 3000+ sites (slower). Default: top-500.",
+        description=(
+            "If True, expands Maigret top-sites coverage (still no recursion / full -a). "
+            "Default quick scan uses ~250 high-signal sites."
+        ),
     )
-    run_maigret: bool = Field(True, description="Include Maigret username scan")
-    run_blackbird: bool = Field(True, description="Include Blackbird username/email scan")
+    run_maigret: Optional[bool] = Field(
+        None,
+        description="Include Maigret. Default ON when omitted.",
+    )
+    run_blackbird: Optional[bool] = Field(
+        None,
+        description=(
+            "Include Blackbird. Default OFF when omitted; auto-ON when email is set "
+            "or second_opinion=true."
+        ),
+    )
+    second_opinion: bool = Field(
+        False,
+        description="Force dual-engine (Maigret + Blackbird) for a second opinion",
+    )
     notes: Optional[str] = Field(None, description="Admin notes for this scan request")
 
 
@@ -89,7 +105,10 @@ class OSINTReport(BaseModel):
     scan_requested_by: str = Field("admin", description="Actor who initiated the scan")
     scan_started_at: Optional[datetime] = None
     scan_completed_at: Optional[datetime] = None
-    status: str = Field("pending", description="'pending', 'running', 'complete', 'failed'")
+    status: str = Field(
+        "pending",
+        description="'pending', 'running', 'complete', 'failed', 'partial', 'degraded'",
+    )
     # Tool outputs
     maigret_accounts: List[SocialAccount] = Field(default_factory=list)
     blackbird_accounts: List[SocialAccount] = Field(default_factory=list)
