@@ -151,7 +151,15 @@ class PalmBeachCountyScraper(BaseScraper):
         while current_page <= max_pages:
             # Check for results
             if not page.wait.ele_displayed("css:div[id^='allresults_']", timeout=10):
-                page_text = page.text or ""
+                # DrissionPage ChromiumPage has no .text — use .html (or body text)
+                try:
+                    page_text = page.html or ""
+                except Exception:
+                    try:
+                        body = page.ele("tag:body")
+                        page_text = (body.text if body else "") or ""
+                    except Exception:
+                        page_text = ""
                 if "0 matches" in page_text or "no results" in page_text.lower():
                     logger.info(f"Palm Beach: no results for {target_date}")
                 break

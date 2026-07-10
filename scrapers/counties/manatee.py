@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://manatee-sheriff.revize.com"
 BOOKINGS_URL = f"{BASE_URL}/bookings"
-SOCKS_PROXY = "socks5://172.18.0.1:1080"
 MAX_PAGES = 20
 
 
@@ -38,11 +37,13 @@ class ManateeCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         from playwright.sync_api import sync_playwright
+        from scrapers.socks_proxy import require_socks_or_raise
 
+        socks = require_socks_or_raise()
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
             headless=True,
-            proxy={"server": SOCKS_PROXY},
+            proxy={"server": socks},
             args=["--disable-blink-features=AutomationControlled"],
         )
 

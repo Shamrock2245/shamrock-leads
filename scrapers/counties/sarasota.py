@@ -37,7 +37,6 @@ MAIN_URL = f"{REVIZE_BASE}/index.php"
 DETAIL_URL_TPL = f"{REVIZE_BASE}/viewInmate.php?id={{inmate_id}}"
 
 # ── Proxy & Limits ──
-SOCKS_PROXY = "socks5://172.18.0.1:1080"
 DETAIL_DELAY_S = 1.0          # Polite delay between detail page visits
 MAX_INMATES = 1500             # Safety cap (typical population ~600-800)
 CF_WAIT_S = 8                  # Wait for Cloudflare Turnstile to auto-solve
@@ -52,11 +51,13 @@ class SarasotaCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         from playwright.sync_api import sync_playwright
+        from scrapers.socks_proxy import require_socks_or_raise
 
+        socks = require_socks_or_raise()
         pw = sync_playwright().start()
         browser = pw.chromium.launch(
             headless=True,
-            proxy={"server": SOCKS_PROXY},
+            proxy={"server": socks},
             args=["--disable-blink-features=AutomationControlled"],
         )
 

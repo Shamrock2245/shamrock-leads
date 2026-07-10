@@ -1,40 +1,23 @@
 """
-Hendry County Arrest Scraper — BustedNewspaper RSS Feed
-=======================================================
-Source: BustedNewspaper.com (aggregates from Hendry County Sheriff's Office)
-URL: https://bustednewspaper.com/mugshots/florida/hendry-county/feed/
-Method: HTTP GET → RSS/XML parse → ArrestRecord
-
-Extracts from BustedNewspaper's hourly-updated RSS feed:
-  - Full name (LAST, FIRST MIDDLE format)
-  - Age, height, weight, race, sex
-  - Booking date
-  - Charge descriptions with Florida statute numbers
-  - Bond amounts per charge
-  - Mugshot URLs (CDN-hosted)
-  - Detail page URL for each booking
-
-NO CAPTCHA required — simple HTTP GET to a WordPress RSS feed.
-NO headless browser needed.
-NO anti-bot evasion required.
+Hendry County Arrest Scraper — Official OCV S3 inmates.json (primary)
+======================================================================
+Source: Hendry County Sheriff's Office via MyOCV CMS
+URL: https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json
+Method: HTTP GET → JSON parse → ArrestRecord
 
 HISTORY:
-  - v1 (original): OCV S3 JSON + curl_cffi detail page enrichment
-    → Phase 1 (demographics) worked, Phase 2 (charges/bonds) unreliable
-  - v2: JailTracker rewrite — Blazor WASM with CAPTCHA solving
-    → Server-side 400 errors, session bugs, pagination broken
-  - v3 (current): BustedNewspaper RSS feed — dead simple, reliable
-    → Gets name, charges, bonds, mugshots from clean XML
-    → Updated hourly by BustedNewspaper's own JailTracker scraper
+  - v1: OCV SPA HTML enrichment (unreliable)
+  - v2: JailTracker Blazor WASM + CAPTCHA (broken)
+  - v3: BustedNewspaper RSS (blocked/aborted from VPS 2026-07)
+  - v4 (current): Official OCV S3 JSON feed (286+ current inmates)
 """
 
-import hashlib
+from __future__ import annotations
+
 import logging
 import re
-import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from html import unescape
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -43,184 +26,115 @@ from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-# RSS feed URL — updated hourly per <sy:updatePeriod>
-RSS_FEED_URL = "https://bustednewspaper.com/mugshots/florida/hendry-county/feed/"
-
-# RSS namespaces
-NS = {
-    "content": "http://purl.org/rss/1.0/modules/content/",
-    "dc": "http://purl.org/dc/elements/1.1/",
-}
+OCV_INMATES_URL = "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json"
+FACILITY = "Hendry County Jail"
+AGENCY = "Hendry County Sheriff's Office"
+COUNTY = "Hendry"
 
 
 class HendryCountyScraper(BaseScraper):
-    """
-    Hendry County scraper using BustedNewspaper RSS feed.
-
-    BustedNewspaper aggregates arrest data from the Hendry County
-    Sheriff's Office JailTracker system and publishes it as a
-    WordPress RSS feed — complete with structured HTML tables
-    containing booking details and charges.
-
-    The RSS feed updates hourly and contains the ~20 most recent
-    bookings with full details inline in <content:encoded>.
-    """
+    """Hendry County — official OCV inmates.json (no CAPTCHA)."""
 
     @property
     def county(self) -> str:
-        return "Hendry"
+        return COUNTY
 
     def scrape(self) -> List[ArrestRecord]:
-        """
-        Fetch the BustedNewspaper RSS feed and parse each <item>
-        into an ArrestRecord.
-
-        Returns:
-            List of ArrestRecord instances from the RSS feed.
-        """
-        logger.info(f"📡 {self.county}: Fetching BustedNewspaper RSS feed...")
-
+        logger.info("📡 %s: Fetching official OCV inmates.json...", self.county)
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/126.0.0.0 Safari/537.36"
             ),
-            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            "Accept": "application/json, text/plain, */*",
         }
-
-        resp = requests.get(RSS_FEED_URL, headers=headers, timeout=30)
+        resp = requests.get(OCV_INMATES_URL, headers=headers, timeout=45)
         resp.raise_for_status()
-
-        # Parse RSS XML
-        root = ET.fromstring(resp.content)
-        channel = root.find("channel")
-        if channel is None:
-            logger.warning(f"⚠️ {self.county}: No <channel> in RSS feed")
+        data = resp.json()
+        if not isinstance(data, list):
+            logger.warning("⚠️ %s: unexpected JSON type %s", self.county, type(data))
             return []
 
-        items = channel.findall("item")
-        logger.info(f"📋 {self.county}: Found {len(items)} items in RSS feed")
-
         records: List[ArrestRecord] = []
-        seen_guids: set = set()
-
-        for item in items:
+        seen: set = set()
+        for item in data:
+            if not isinstance(item, dict):
+                continue
             try:
-                record = self._parse_item(item)
-                if record is None:
+                rec = self._parse_inmate(item)
+                if not rec:
                     continue
-
-                # Deduplicate within this batch by GUID/booking key
-                dedup_key = record.get_dedup_key()
-                if dedup_key in seen_guids:
+                key = rec.get_dedup_key()
+                if key in seen:
                     continue
-                seen_guids.add(dedup_key)
-
-                records.append(record)
+                seen.add(key)
+                records.append(rec)
             except Exception as e:
-                title = item.findtext("title", "unknown")
-                logger.warning(
-                    f"⚠️ {self.county}: Failed to parse item '{title}': {e}"
-                )
+                logger.warning("⚠️ %s: skip inmate: %s", self.county, e)
 
-        logger.info(
-            f"✅ {self.county}: Parsed {len(records)} unique records "
-            f"from {len(items)} RSS items"
-        )
+        logger.info("✅ %s: Parsed %s records from OCV JSON", self.county, len(records))
         return records
 
-    def _parse_item(self, item: ET.Element) -> Optional[ArrestRecord]:
-        """
-        Parse a single RSS <item> into an ArrestRecord.
+    def _parse_inmate(self, item: Dict[str, Any]) -> Optional[ArrestRecord]:
+        inmate_id = str(item.get("inmateID") or "").strip()
+        last = str(item.get("lastName") or "").strip()
+        first = str(item.get("firstName") or "").strip()
+        title = str(item.get("title") or "").strip()
 
-        The <content:encoded> contains HTML with structured tables:
-        - Booking Details table: name, age, height, hair, eye, weight,
-          race, sex, booked
-        - Charges tables (one per charge): charge description,
-          jurisdiction, bond details, bond amount
-        """
-        # Get basic fields from RSS
-        title = item.findtext("title", "")
-        link = item.findtext("link", "")
-        pub_date = item.findtext("pubDate", "")
-        guid = item.findtext("guid", link)
+        if title and "," in title:
+            full_name = title.upper()
+            # title is often "LAST, FIRST MIDDLE"
+            parts = [p.strip() for p in title.split(",", 1)]
+            last_name = parts[0].upper() if parts else last.upper()
+            rest = parts[1].split() if len(parts) > 1 else []
+            first_name = (rest[0] if rest else first).upper()
+            middle_name = " ".join(rest[1:]).upper() if len(rest) > 1 else ""
+        else:
+            last_name = last.upper()
+            first_name = first.upper()
+            middle_name = ""
+            full_name = f"{last_name}, {first_name}".strip(", ")
 
-        # Get the full HTML content
-        content_encoded = item.findtext("content:encoded", "", NS)
-        if not content_encoded:
+        if not full_name or full_name == ",":
             return None
 
-        # Unescape HTML entities
-        html = unescape(content_encoded)
-
-        # Parse booking details from the HTML table
-        booking = self._extract_table_data(html)
-
-        # Parse name — RSS format is "LAST, FIRST MIDDLE"
-        raw_name = booking.get("name", "")
-        if not raw_name:
-            # Fallback: extract from title ("Agosto, Christal Mugshot | ...")
-            name_match = re.match(r"^(.+?)\s+Mugshot\s*\|", title)
-            if name_match:
-                raw_name = name_match.group(1).upper()
-
-        if not raw_name:
+        booking_number = inmate_id or self._fallback_booking(full_name, item)
+        if not booking_number:
             return None
 
-        first_name, middle_name, last_name = self._parse_name(raw_name)
-        full_name = raw_name.strip()
+        content = str(item.get("content") or "")
+        demographics = self._parse_content_html(content)
 
-        # Parse booking date/time from pubDate or table
-        booking_date = booking.get("booked", "")
-        booking_time = ""
-        if pub_date:
-            try:
-                # RFC 2822: "Thu, 11 Jun 2026 09:17:16 +0000"
-                from email.utils import parsedate_to_datetime
-                dt = parsedate_to_datetime(pub_date)
-                if not booking_date:
-                    booking_date = dt.strftime("%Y-%m-%d")
-                booking_time = dt.strftime("%H:%M:%S")
-            except Exception:
-                pass
+        booking_date, booking_time = self._parse_booked_date(
+            demographics.get("booked") or content, item.get("date")
+        )
 
-        # Parse charges and bond from the charge tables
-        charges_list, total_bond = self._extract_charges(html)
-        charges_str = " | ".join(charges_list) if charges_list else ""
-
-        # Parse age
-        age_str = booking.get("age", "")
-        age_clean = re.sub(r"\s*years?\s*old\s*", "", age_str, flags=re.I).strip()
-
-        # Parse height — "5 ft 09in(s)" → "509"
-        height_raw = booking.get("height", "")
-        height = self._normalize_height(height_raw)
-
-        # Parse weight — "160 lbs" → "160"
-        weight_raw = booking.get("weight", "")
-        weight = re.sub(r"\s*lbs?\s*", "", weight_raw, flags=re.I).strip()
-
-        # Parse race code
-        race = booking.get("race", "").strip().upper()
-
-        # Parse sex — "Female" → "F", "Male" → "M"
-        sex_raw = booking.get("sex", "").strip()
+        race = (demographics.get("race") or "").strip().upper()[:20]
+        sex_raw = (demographics.get("gender") or demographics.get("sex") or "").strip()
         sex = sex_raw[0].upper() if sex_raw else ""
+        age = (demographics.get("age") or "").strip()
+        height = self._normalize_height(demographics.get("height") or "")
+        weight = re.sub(
+            r"\s*lbs?\s*", "", demographics.get("weight") or "", flags=re.I
+        ).strip()
+        if "unavailable" in weight.lower():
+            weight = ""
 
-        # Extract mugshot URL
-        mugshot_url = self._extract_mugshot_url(html)
-        # Skip the "no mugshot" placeholder
-        if mugshot_url and "nomug.jpg" in mugshot_url:
-            mugshot_url = ""
+        charges, total_bond = self._parse_charges(item.get("chargeArray"), content)
+        status_cd = str(item.get("custody_status_cd") or demographics.get("custody") or "IN")
+        status = "In Custody" if status_cd.upper() in ("IN", "ACTIVE", "") else status_cd
 
-        # Generate a stable booking number from the GUID
-        # BustedNewspaper doesn't provide actual booking numbers,
-        # so we create a deterministic one from the GUID
-        booking_number = self._generate_booking_number(guid, full_name, booking_date)
+        mug = ""
+        images = item.get("images") or []
+        if isinstance(images, list) and images:
+            img0 = images[0] if isinstance(images[0], dict) else {}
+            large = str(img0.get("large") or img0.get("small") or "")
+            if large and "missing-image" not in large:
+                mug = large
 
         return ArrestRecord(
-            County="Hendry",
+            County=COUNTY,
             Booking_Number=booking_number,
             Full_Name=full_name,
             First_Name=first_name,
@@ -228,177 +142,124 @@ class HendryCountyScraper(BaseScraper):
             Last_Name=last_name,
             Booking_Date=booking_date,
             Booking_Time=booking_time,
-            Arrest_Date=booking_date,  # Same as booking for this source
-            Age_At_Arrest=age_clean,
+            Arrest_Date=booking_date,
+            Age_At_Arrest=age,
             Race=race,
             Sex=sex,
             Height=height,
             Weight=weight,
-            Mugshot_URL=mugshot_url,
-            Charges=charges_str,
+            Mugshot_URL=mug,
+            Charges=charges,
             Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Status="In Custody",  # RSS only shows current inmates
-            Facility="Hendry County Jail",
-            Agency="Hendry County Sheriff's Office",
-            Detail_URL=link,
+            Status=status,
+            Facility=FACILITY,
+            Agency=AGENCY,
+            Detail_URL="https://www.hendrysheriff.org/inmateSearch",
+            Person_ID=inmate_id,
+            Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+            LastChecked=datetime.now(timezone.utc).isoformat(),
+            LastCheckedMode="scrape",
             extra_data={
-                "source": "bustednewspaper_rss",
-                "rss_guid": guid,
-                "individual_charges": charges_list,
+                "source": "ocv_s3_inmates_json",
+                "agencyID": item.get("agencyID"),
+                "siteID": item.get("siteID"),
             },
         )
 
-    def _extract_table_data(self, html: str) -> dict:
-        """
-        Extract key-value pairs from the booking details HTML table.
+    def _parse_content_html(self, html: str) -> Dict[str, str]:
+        out: Dict[str, str] = {}
+        if not html:
+            return out
+        patterns = {
+            "height": r"Height:\s*([^<\n]+)",
+            "weight": r"Weight:\s*([^<\n]+)",
+            "gender": r"Gender:\s*([^<\n]+)",
+            "race": r"Race:\s*([^<\n]+)",
+            "age": r"Age:\s*([^<\n]+)",
+            "custody": r"Custody Status:\s*([^<\n]+)",
+            "booked": r"Booked Date:\s*([^<\n]+)",
+            "inmate_id": r"Inmate ID:\s*([^<\n]+)",
+        }
+        for key, pat in patterns.items():
+            m = re.search(pat, html, re.I)
+            if m:
+                val = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+                if val and "unavailable" not in val.lower():
+                    out[key] = val
+        return out
 
-        The table format is:
-            <table class="mt">
-              <tr><th>name</th><td>AGOSTO, CHRISTAL</td></tr>
-              <tr><th>age</th><td>35 years old</td></tr>
-              ...
-            </table>
-        """
-        data = {}
-        # Match the first table (booking details, not charges)
-        table_match = re.search(
-            r'<table\s+class="mt">(.*?)</table>',
-            html,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if not table_match:
-            return data
-
-        table_html = table_match.group(1)
-        rows = re.findall(
-            r"<th>(.*?)</th>\s*<td[^>]*>(.*?)</td>",
-            table_html,
-            re.DOTALL | re.IGNORECASE,
-        )
-        for key, value in rows:
-            # Strip HTML tags from values
-            clean_key = re.sub(r"<[^>]+>", "", key).strip().lower()
-            clean_val = re.sub(r"<[^>]+>", "", value).strip()
-            data[clean_key] = clean_val
-
-        return data
-
-    def _extract_charges(self, html: str) -> Tuple[List[str], float]:
-        """
-        Extract charges and bond amounts from the charge tables.
-
-        Each charge is in its own <table border="1" class="mt">:
-            <tr><th>charge description</th><td>322.34.2A — ...</td></tr>
-            <tr><th>jurisdiction</th><td></td></tr>
-            <tr><th>bond details</th><td></td></tr>
-            <tr><th>bond amount</th><td>150</td></tr>
-
-        Returns:
-            (list_of_charge_strings, total_bond_amount)
-        """
-        charges = []
-        total_bond = 0.0
-
-        # Find all tables with border="1" (charge tables)
-        charge_tables = re.findall(
-            r'<table\s+border="1"[^>]*>(.*?)</table>',
-            html,
-            re.DOTALL | re.IGNORECASE,
-        )
-
-        for table_html in charge_tables:
-            rows = re.findall(
-                r"<th>(.*?)</th>\s*<td[^>]*>(.*?)</td>",
-                table_html,
-                re.DOTALL | re.IGNORECASE,
+    def _parse_booked_date(
+        self, booked_str: str, date_obj: Any
+    ) -> Tuple[str, str]:
+        # "07/10/2026 10:10:22 EDT"
+        if booked_str:
+            m = re.search(
+                r"(\d{1,2}/\d{1,2}/\d{4})(?:\s+(\d{1,2}:\d{2}:\d{2}))?",
+                booked_str,
             )
-            charge_data = {}
-            for key, value in rows:
-                clean_key = re.sub(r"<[^>]+>", "", key).strip().lower()
-                clean_val = re.sub(r"<[^>]+>", "", value).strip()
-                # Decode HTML entities like &#8211; (em-dash)
-                clean_val = unescape(clean_val)
-                charge_data[clean_key] = clean_val
+            if m:
+                try:
+                    d = datetime.strptime(m.group(1), "%m/%d/%Y")
+                    t = m.group(2) or ""
+                    return d.strftime("%Y-%m-%d"), t
+                except Exception:
+                    pass
+        if isinstance(date_obj, dict) and "sec" in date_obj:
+            try:
+                dt = datetime.fromtimestamp(int(date_obj["sec"]), tz=timezone.utc)
+                return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M:%S")
+            except Exception:
+                pass
+        return "", ""
 
-            desc = charge_data.get("charge description", "")
-            if desc:
-                bond_str = charge_data.get("bond amount", "").strip()
-                if bond_str:
+    def _parse_charges(
+        self, charge_array: Any, content: str
+    ) -> Tuple[str, float]:
+        charges: List[str] = []
+        total = 0.0
+        # Real charge rows are list of dicts; schema-only is list of strings
+        if isinstance(charge_array, list) and charge_array:
+            if isinstance(charge_array[0], dict):
+                for ch in charge_array:
+                    if not isinstance(ch, dict):
+                        continue
+                    desc = (
+                        ch.get("chargeDescription")
+                        or ch.get("description")
+                        or ch.get("charge")
+                        or ""
+                    )
+                    code = ch.get("chargeCode") or ch.get("code") or ""
+                    bond = ch.get("bondAmount") or ch.get("bond") or 0
+                    label = f"{code} — {desc}".strip(" —") if code else str(desc)
+                    if label:
+                        charges.append(label)
                     try:
-                        bond_val = float(re.sub(r"[$,]", "", bond_str))
-                        total_bond += bond_val
-                        charges.append(f"{desc} [Bond: ${bond_val:,.0f}]")
-                    except (ValueError, TypeError):
-                        charges.append(desc)
-                else:
-                    charges.append(desc)
+                        total += float(
+                            str(bond).replace("$", "").replace(",", "") or 0
+                        )
+                    except Exception:
+                        pass
+        if not charges and content:
+            # Fallback: free-text charge mentions
+            for m in re.finditer(r"Charge[s]?:\s*([^<\n]+)", content, re.I):
+                charges.append(m.group(1).strip())
+        return " | ".join(charges), total
 
-        # Also check for the "no charges" message
-        if not charges and "Information about charges is not available yet" in html:
-            charges = ["Charges pending"]
+    def _normalize_height(self, raw: str) -> str:
+        if not raw:
+            return ""
+        m = re.search(r"(\d)\s*ft\s*(\d{1,2})", raw, re.I)
+        if m:
+            return f"{m.group(1)}{int(m.group(2)):02d}"
+        return re.sub(r"[^\d]", "", raw)[:3]
 
-        return charges, total_bond
-
-    def _extract_mugshot_url(self, html: str) -> str:
-        """Extract the mugshot image URL from the HTML content."""
-        # Look for the first <img> tag with src
-        img_match = re.search(
-            r'<img[^>]+src="(https://cdn\.bustednewspaper\.com/[^"]+)"',
-            html,
-            re.IGNORECASE,
-        )
-        if img_match:
-            return img_match.group(1)
-        return ""
-
-    def _parse_name(self, raw_name: str) -> Tuple[str, str, str]:
-        """
-        Parse "LAST, FIRST MIDDLE" into (first, middle, last).
-
-        Examples:
-            "AGOSTO, CHRISTAL" → ("Christal", "", "Agosto")
-            "DE SANTIAGO BALDERAS, JUAN ANTONIO" → ("Juan", "Antonio", "De Santiago Balderas")
-            "MOLINA-CASTRO, MARVIN LEONARDO" → ("Marvin", "Leonardo", "Molina-Castro")
-        """
-        if "," in raw_name:
-            parts = raw_name.split(",", 1)
-            last = parts[0].strip().title()
-            rest = parts[1].strip().split()
-            first = rest[0].title() if rest else ""
-            middle = " ".join(r.title() for r in rest[1:]) if len(rest) > 1 else ""
-        else:
-            # No comma — treat as "FIRST LAST"
-            parts = raw_name.strip().split()
-            first = parts[0].title() if parts else ""
-            last = parts[-1].title() if len(parts) > 1 else ""
-            middle = " ".join(p.title() for p in parts[1:-1]) if len(parts) > 2 else ""
-
-        return first, middle, last
-
-    def _normalize_height(self, height_raw: str) -> str:
-        """
-        Normalize height from "5 ft 09in(s)" to "509" format.
-        """
-        match = re.match(r"(\d+)\s*ft\s*(\d+)", height_raw, re.I)
-        if match:
-            feet = match.group(1)
-            inches = match.group(2).zfill(2)
-            return f"{feet}{inches}"
-        return height_raw.strip()
-
-    def _generate_booking_number(
-        self, guid: str, name: str, booking_date: str
-    ) -> str:
-        """
-        Generate a stable, deterministic booking number from the GUID.
-
-        BustedNewspaper doesn't expose actual booking numbers from JailTracker.
-        We create a stable hash-based ID that won't change between runs,
-        ensuring proper deduplication.
-
-        Format: BN-HENDRY-{date}-{hash8}
-        """
-        raw = f"{guid}:{name}:{booking_date}"
-        hash_hex = hashlib.md5(raw.encode()).hexdigest()[:8].upper()
-        date_short = booking_date.replace("-", "") if booking_date else "00000000"
-        return f"BN-HENDRY-{date_short}-{hash_hex}"
+    def _fallback_booking(self, full_name: str, item: Dict[str, Any]) -> str:
+        oid = ""
+        _id = item.get("_id")
+        if isinstance(_id, dict):
+            oid = str(_id.get("$id") or "")
+        elif _id:
+            oid = str(_id)
+        base = oid or re.sub(r"[^A-Z0-9]", "", full_name.upper())[:16]
+        return f"HENDRY-{base}"

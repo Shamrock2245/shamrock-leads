@@ -20,11 +20,11 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 1 | **Lee** | curl_cffi GET — sheriffleefl.org | `lee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
-| 3 | **Charlotte** | DrissionPage — Revize CMS + Cloudflare bypass | `charlotte.py` | ✅ Active | 10 min | 2026-04-28 |
-| 4 | **Manatee** | DrissionPage — Revize CMS | `manatee.py` | ✅ Active | 10 min | 2026-04-27 |
-| 5 | **Sarasota** | DrissionPage — Revize CMS | `sarasota.py` | ✅ Active | 10 min | 2026-04-27 |
+| 3 | **Charlotte** | Playwright + SOCKS — Revize CMS table (CF) | `charlotte.py` | ⚠️ Needs residential SOCKS | 90 min | 2026-07-10 |
+| 4 | **Manatee** | Playwright + SOCKS — Revize CMS table (CF) | `manatee.py` | ⚠️ Needs residential SOCKS | 75 min | 2026-07-10 |
+| 5 | **Sarasota** | Playwright + SOCKS — Revize dropdown+details | `sarasota.py` | ⚠️ Needs residential SOCKS | 90 min | 2026-07-10 |
 | 6 | **DeSoto** | JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-04-27 |
-| 7 | **Hendry** | JailTracker (Blazor WASM + CAPTCHA) | `hendry.py` | ✅ Active | 10 min | 2026-06-11 |
+| 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
 ---
 
@@ -57,7 +57,7 @@
 ## Tier 4 — Southeast / Treasure Coast (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 22 | **Palm Beach** | DrissionPage — date search blotter | `palm_beach.py` | ✅ Active | 120 min | 2026-04-27 |
+| 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
 | 23 | **Broward** | HTTP GET — sequential ID probe | `broward.py` | ✅ Active | 60 min | 2026-04-27 |
 | 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
