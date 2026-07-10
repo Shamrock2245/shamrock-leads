@@ -135,10 +135,14 @@ jobs:
             docker compose build shamrock-leads dashboard
 
             # ── Rolling restart (avoids full downtime) ────────────
+            # Force-recreate so Docker never fails with:
+            #   "Conflict. The container name /shamrock-leads is already in use"
+            # (orphaned/stopped containers from a prior half-failed deploy).
             echo ""
             echo "🔄 Rolling restart..."
-            docker compose up -d --remove-orphans
-
+            docker rm -f shamrock-leads shamrock-dashboard shamrock-osint-worker 2>/dev/null || true
+            docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker 2>/dev/null \
+              || docker compose up -d --remove-orphans --force-recreate
             # ── Re-apply iptables rule for SOCKS proxy (iMac tunnel) ──
             echo ""
             echo "🔌 Re-applying SOCKS proxy firewall rule..."
