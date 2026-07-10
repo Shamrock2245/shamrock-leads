@@ -39,12 +39,15 @@ ENV BLACKBIRD_DIR=/opt/blackbird \
 COPY . .
 
 # ── Security: Non-root user ──
+# Maigret needs a real writable HOME (creates ~/.maigret). Create /home/appuser.
 RUN groupadd -r appuser && \
-    useradd -r -g appuser -s /sbin/nologin appuser && \
+    useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser && \
     chown -R appuser:appuser /app && \
-    mkdir -p /app/dashboard/uploads && chown appuser:appuser /app/dashboard/uploads && \
+    mkdir -p /app/dashboard/uploads /home/appuser/.maigret /home/appuser/.cache && \
+    chown -R appuser:appuser /home/appuser /app/dashboard/uploads && \
     (chown -R appuser:appuser /opt/blackbird 2>/dev/null || true) && \
     mkdir -p /opt/blackbird/results && chown -R appuser:appuser /opt/blackbird/results 2>/dev/null || true
+ENV HOME=/home/appuser
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \

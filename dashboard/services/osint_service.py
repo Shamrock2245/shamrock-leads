@@ -295,15 +295,33 @@ class OSINTService:
         else:
             cmd = [maigret_cmd]
 
+        # Maigret 0.6+ requires a writable HOME (~/.maigret) and may rewrite
+        # its sites DB on exit. Use a private temp home + writable --db copy so
+        # container RO site-packages / missing /home/appuser do not kill scans.
+        maigret_home = os.path.join(out_dir, ".maigret_home")
+        os.makedirs(os.path.join(maigret_home, ".cache"), exist_ok=True)
+        db_path = os.path.join(maigret_home, "data.json")
+        try:
+            import maigret as _maigret_mod  # type: ignore
+            pkg_dir = os.path.dirname(getattr(_maigret_mod, "__file__", "") or "")
+            src_db = os.path.join(pkg_dir, "resources", "data.json")
+            if os.path.isfile(src_db) and not os.path.isfile(db_path):
+                shutil.copy2(src_db, db_path)
+        except Exception:
+            pass
+
         cmd += [
             username,
             "-J", "simple",
             "-fo", out_dir,
             "--no-recursion",
+            "--no-autoupdate",
             "--timeout", "15",
             "--no-progressbar",
             "--no-color",
         ]
+        if os.path.isfile(db_path):
+            cmd += ["--db", db_path]
         if not deep:
             cmd += ["--top-sites", "500"]
         else:
@@ -311,11 +329,18 @@ class OSINTService:
 
         log.info("Maigret scan initiated for subject %s", _redact(username))
 
+        child_env = os.environ.copy()
+        child_env["HOME"] = maigret_home
+        child_env["XDG_CACHE_HOME"] = os.path.join(maigret_home, ".cache")
+        child_env["XDG_CONFIG_HOME"] = os.path.join(maigret_home, ".config")
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=child_env,
+                cwd=out_dir,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=MAIGRET_TIMEOUT
