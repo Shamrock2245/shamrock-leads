@@ -15,6 +15,12 @@ Usage:
 
 Shared keys (must match across systems when set):
   GAS_API_KEY, WIX_WEBHOOK_SECRET (portal↔leads), SESSION_SECRET (school)
+
+GAS Web App URL policy (non-negotiable):
+  Keep GAS_WEB_APP_URL / GAS_WEBHOOK_URL stable — re-deploy existing deployment only.
+  Never mint a new /macros/s/…/exec URL without human approval.
+  If the URL must change, STOP and notify the human so they update Wix Secrets Manager.
+  See docs/policies/gas-url-policy.md
 """
 from __future__ import annotations
 

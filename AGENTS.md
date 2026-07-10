@@ -1,10 +1,10 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-07-08  
+> **Last Updated:** 2026-07-10  
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
-> Super CRM: `docs/SUPER_CRM.md` · Ecosystem secrets: `scripts/check_ecosystem_secrets.py`
+> Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · GAS URL policy: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
 
 ---
 
@@ -271,6 +271,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 7. **Minimize PII** — Never log phone numbers, SSNs, addresses in Slack/console/debug output.
 8. **Source-of-truth hierarchy** — Arrest facts: county source → MongoDB. Case workflow: MongoDB. Signatures: SignNow. Payments: SwipeSimple. GAS/Sheets: downstream only.
 9. **Surety-aware ops** — Every bond-writing action specifies the surety. Never assume OSI or Palmetto.
+10. **GAS URL stability** — Keep the Google Apps Script **Web App URL** unchanged. Update code and re-deploy the **existing** deployment only (`clasp deploy -i <EXISTING_ID>`). **Never** mint a new `/macros/s/…/exec` URL without explicit human approval. If the URL must change, **stop and notify the human** so they can update **Wix Secrets Manager** (and Netlify/VPS/Node-RED). Policy: `docs/policies/gas-url-policy.md`.
 
 ---
 
@@ -288,6 +289,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 10. **The Chain Is Law** — ArrestLead → Defendant → Indemnitor → Match → BondCase → Packet → Signature → Payment. No shortcuts.
 11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities.
 12. **End-to-End Integration** — All systems must integrate seamlessly across SignNow, Twilio, iMessage, and Google Drive.
+13. **Stable GAS endpoints** — Prefer same Web App URL forever; deploy versions onto it. URL changes are a human + Wix Secrets event (see rule 10 / `docs/policies/gas-url-policy.md`).
 
 ---
 
@@ -297,9 +299,10 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 2. `AGENTS.md` (this file) — Digital workforce, scoring, safety rules
 3. `DATA_MODEL.md` — Entity definitions, MongoDB collections
 4. `ROADMAP.md` — What's implemented vs planned
-5. `docs/policies/surety-policy.md` — if doing bond-writing work
-6. `docs/policies/matching-policy.md` — if doing matching work
-7. `docs/policies/signature-policy.md` — if doing signing work
+5. `docs/ECOSYSTEM.md` + `docs/policies/gas-url-policy.md` — if touching GAS, Wix webhooks, school auth, or Node-RED → GAS
+6. `docs/policies/surety-policy.md` — if doing bond-writing work
+7. `docs/policies/matching-policy.md` — if doing matching work
+8. `docs/policies/signature-policy.md` — if doing signing work
 
 ---
 
@@ -315,6 +318,7 @@ Escalate immediately if:
 - Signing/payment recipient ≠ validated indemnitor
 - Signed packet needs correction
 - Source data stale, conflicting, or corrupted
+- **GAS Web App URL would change** (new deployment ID / new `/exec` path) — notify human to update **Wix Secrets Manager** before any cutover
 
 ---
 

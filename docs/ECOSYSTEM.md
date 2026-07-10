@@ -1,7 +1,8 @@
 # Shamrock Ecosystem — Four-Repo Harmony
 
 > How **leads**, **portal**, **bail-school**, and **node-red** work together.  
-> **Last Updated:** 2026-07-08 · Per-repo truth: each repo’s `STATUS.md`
+> **Last Updated:** 2026-07-10 · Per-repo truth: each repo’s `STATUS.md`  
+> **GAS URL policy:** [`docs/policies/gas-url-policy.md`](./policies/gas-url-policy.md)
 
 ---
 
@@ -86,6 +87,18 @@ Leads machine API (auth: `GAS_API_KEY`):
 
 **Rule:** After any secret rotation, update **VPS `.env`**, **Wix Secrets**, **GAS Script Properties**, and **Netlify** in the same change window.
 
+### 1b. GAS Web App URL stability (**non-negotiable**)
+
+> Full policy: [`docs/policies/gas-url-policy.md`](./policies/gas-url-policy.md)
+
+| Do | Do not |
+|----|--------|
+| `clasp push` + **`clasp deploy -i <EXISTING_ID>`** (URL unchanged) | Create a **new** Web App deployment that mints a new `/macros/s/…/exec` URL |
+| Edit GAS source, re-deploy the **same** deployment | Silently rewrite `GAS_WEBHOOK_URL` / `GAS_WEB_APP_URL` across repos |
+| If a URL change is unavoidable: **stop and tell the human** | Assume Wix Secrets Manager was updated by deploy tooling |
+
+**Why:** Wix Secrets Manager (`GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL`) is **outside** the agent-managed ecosystem. A new GAS URL breaks portal → GAS until the human updates Wix (and Netlify / VPS / Node-RED).
+
 ### 2. Data handoffs
 
 | From | To | Mechanism |
@@ -146,6 +159,7 @@ Never prints secret values — only presence + fingerprints for shared-key align
 
 ## Docs index
 
+- **GAS URL stability (all repos):** `docs/policies/gas-url-policy.md`
 - Leads: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SUPER_CRM.md`, `SECURITY.md`
-- Portal: `SYSTEM.md`, `docs/DEPLOYMENT_CHECKLIST.md`, `SECRETS_ROTATION_GUIDE.md`
+- Portal: `SYSTEM.md`, `docs/DEPLOYMENT_CHECKLIST.md`, `SECRETS_ROTATION_GUIDE.md`, `backend-gas/GAS_DEVELOPMENT_RULES.md`
 - School: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SECURITY.md`
