@@ -51,13 +51,18 @@ We write bonds under two surety companies. Every agent must know these cold.
 
 ## 4. Our Strategic Vision
 
-We are building a platform that will surpass **Captira** and **Bail Books** — the current industry leaders — in both functionality and user experience. Our competitive advantages are:
+We are building **Shamrock’s Platform** — one operating system for bond Auto-CRM + Bail School + omni-channel intake — to become the **authoritative bail brand expert in Florida** and the reference model for operators across the U.S.
+
+We will surpass **Captira** and **Bail Books** in both functionality and user experience. Competitive advantages:
 
 1. **Speed** — We know about an arrest before the family does. Our scrapers run every 10 minutes on core counties.
 2. **Intelligence** — Every arrest is scored 0–100 before a human sees it. Hot leads get immediate Slack alerts.
 3. **Automation** — From first outreach to signed paperwork to payment collection, the system handles the workflow.
 4. **Compliance** — Every state change is audited. Every PII access is logged. We are building toward SOC II readiness.
-5. **Reach** — 50 active county scrapers today. 67 counties is the target. Statewide coverage is the moat.
+5. **Reach** — 50+ active county scrapers today. 67 counties is the target. Statewide coverage is the moat.
+6. **Education** — Bail School (20hr / 120hr) trains the next generation and extends brand authority beyond the bond counter.
+
+**Platform docs:** `docs/PLATFORM.md` · **Production bar:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`
 
 ---
 

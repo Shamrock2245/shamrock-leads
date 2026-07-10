@@ -1,8 +1,8 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.  
-> **Last Updated:** 2026-07-08 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
-> **Read `BRAND.md` first.**
+> **Last Updated:** 2026-07-10 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
+> **Read `BRAND.md` first.** Platform: [`docs/PLATFORM.md`](./docs/PLATFORM.md) · Prod: [`docs/ECOSYSTEM_PROD_CHECKLIST.md`](./docs/ECOSYSTEM_PROD_CHECKLIST.md)
 
 ## Phase Overview
 

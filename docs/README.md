@@ -7,9 +7,11 @@
 ## Required Reading Order (For Agents)
 
 1. **[BRAND.md](../BRAND.md)** — Identity, vision, design standards, non-negotiable rules
-2. **[AGENTS.md](../AGENTS.md)** — Digital workforce (15 agents), scoring, safety rules, escalation
-3. **[DATA_MODEL.md](../DATA_MODEL.md)** — 16 MongoDB collections, entity relationships, dedup keys
-4. **[ROADMAP.md](../ROADMAP.md)** — 15-phase lifecycle (all complete), remaining gaps
+2. **[PLATFORM.md](PLATFORM.md)** — Shamrock’s Platform thesis (FL / U.S. brand authority)
+3. **[ECOSYSTEM_PROD_CHECKLIST.md](ECOSYSTEM_PROD_CHECKLIST.md)** — Single production checklist across the ecosystem
+4. **[AGENTS.md](../AGENTS.md)** — Digital workforce, scoring, safety rules, escalation
+5. **[DATA_MODEL.md](../DATA_MODEL.md)** — MongoDB collections, entity relationships, dedup keys
+6. **[ROADMAP.md](../ROADMAP.md)** / **[STATUS.md](../STATUS.md)** — Implemented vs live truth
 
 ---
 
@@ -17,10 +19,14 @@
 
 | Document | Purpose |
 |----------|---------|
+| [PLATFORM.md](PLATFORM.md) | Platform north star — one brand, two businesses, authority thesis |
+| [ECOSYSTEM_PROD_CHECKLIST.md](ECOSYSTEM_PROD_CHECKLIST.md) | Production cutover checklist (P0–P3) |
+| [ECOSYSTEM.md](ECOSYSTEM.md) | Repo roles, secrets, handoffs |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, Docker services, data flows, integrations |
 | [API_REFERENCE.md](API_REFERENCE.md) | REST API endpoints (200+ across 61 modules) |
 | [SCHEMAS.md](SCHEMAS.md) | MongoDB collection field-level schemas |
 | [COUNTY_REGISTRY.md](COUNTY_REGISTRY.md) | All 67 FL counties: JMS vendor, scraper status, URLs |
+| [policies/gas-url-policy.md](policies/gas-url-policy.md) | Stable GAS Web App URL law |
 
 ---
 

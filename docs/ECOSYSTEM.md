@@ -1,7 +1,9 @@
-# Shamrock Ecosystem — Four-Repo Harmony
+# Shamrock’s Platform — Ecosystem Harmony
 
-> How **leads**, **portal**, **bail-school**, and **node-red** work together.  
+> How **leads**, **portal**, **bail-school**, **node-red**, and **telegram** form **one platform**.  
 > **Last Updated:** 2026-07-10 · Per-repo truth: each repo’s `STATUS.md`  
+> **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
+> **Production checklist:** [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md)  
 > **GAS URL policy:** [`docs/policies/gas-url-policy.md`](./policies/gas-url-policy.md)
 
 ---
@@ -159,6 +161,8 @@ Never prints secret values — only presence + fingerprints for shared-key align
 
 ## Docs index
 
+- **Platform north star:** `docs/PLATFORM.md`
+- **Production checklist (all repos):** `docs/ECOSYSTEM_PROD_CHECKLIST.md`
 - **GAS URL stability (all repos):** `docs/policies/gas-url-policy.md`
 - Leads: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SUPER_CRM.md`, `SECURITY.md`
 - Portal: `SYSTEM.md`, `docs/DEPLOYMENT_CHECKLIST.md`, `SECRETS_ROTATION_GUIDE.md`, `backend-gas/GAS_DEVELOPMENT_RULES.md`

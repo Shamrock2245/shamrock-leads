@@ -4,7 +4,7 @@
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
-> Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · GAS URL policy: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
+> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md` · Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · GAS URL: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
 
 ---
 
@@ -296,13 +296,15 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 ## 12. Required Read Order for Agents
 
 1. `BRAND.md` — Identity, vision, design standards, non-negotiables
-2. `AGENTS.md` (this file) — Digital workforce, scoring, safety rules
-3. `DATA_MODEL.md` — Entity definitions, MongoDB collections
-4. `ROADMAP.md` — What's implemented vs planned
-5. `docs/ECOSYSTEM.md` + `docs/policies/gas-url-policy.md` — if touching GAS, Wix webhooks, school auth, or Node-RED → GAS
-6. `docs/policies/surety-policy.md` — if doing bond-writing work
-7. `docs/policies/matching-policy.md` — if doing matching work
-8. `docs/policies/signature-policy.md` — if doing signing work
+2. `docs/PLATFORM.md` — Shamrock’s Platform thesis (FL / U.S. brand authority)
+3. `docs/ECOSYSTEM_PROD_CHECKLIST.md` — production bar (ops + code gaps)
+4. `AGENTS.md` (this file) — Digital workforce, scoring, safety rules
+5. `DATA_MODEL.md` — Entity definitions, MongoDB collections
+6. `ROADMAP.md` / `STATUS.md` — What's implemented vs live
+7. `docs/ECOSYSTEM.md` + `docs/policies/gas-url-policy.md` — if touching GAS, Wix webhooks, school auth, or Node-RED → GAS
+8. `docs/policies/surety-policy.md` — if doing bond-writing work
+9. `docs/policies/matching-policy.md` — if doing matching work
+10. `docs/policies/signature-policy.md` — if doing signing work
 
 ---
 

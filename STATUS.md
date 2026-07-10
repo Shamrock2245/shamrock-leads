@@ -1,9 +1,10 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-08  
+> **Last verified:** 2026-07-10  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
-> **Role:** Bond **Auto-CRM** + arrest intelligence (not Bail School LMS)
+> **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
+> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`
 
 ---
 
@@ -47,12 +48,16 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ## Honest gaps / ops
 
+Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
+
 | Item | Status |
 |------|--------|
-| BlueBubbles production reliability (office Mac + tunnel) | ⏳ Ops (scheduled separately) |
-| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | Verify on host |
+| BlueBubbles production reliability (office Mac + tunnel) | ⏳ Ops (checklist D1–D2) |
+| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | Verify on host (checklist B1) |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |
-| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (not claimed complete) |
+| Gmail discharge / GCal / Drive OAuth | Env-gated (501/dry-run until configured) |
+| Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
+| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18 / checklist P2.5) |
 | Hetzner deploy after each `main` push | Depends on GitHub Action + VPS health |
 
 ---
