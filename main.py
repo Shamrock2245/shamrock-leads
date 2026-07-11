@@ -94,6 +94,26 @@ from scrapers.counties.monroe import MonroeCountyScraper
 from scrapers.counties.okeechobee import OkeechobeeCountyScraper
 from scrapers.counties.hardee import HardeeCountyScraper
 
+# ── Georgia Scrapers ───────────────────────────────────────────────────────────
+from scrapers.counties_ga.eas_batch_runner import run_eas_batch
+from scrapers.counties_ga.fulton import FultonScraper
+from scrapers.counties_ga.chatham import ChathamScraper
+from scrapers.counties_ga.walton import WaltonScraper as WaltonGAScraper
+from scrapers.counties_ga.forsyth import ForsythScraper as ForsythGAScraper
+from scrapers.counties_ga.hall import HallScraper
+from scrapers.counties_ga.douglas import DouglasScraper
+from scrapers.counties_ga.banks import BanksScraper
+from scrapers.counties_ga.lowndes import LowndesScraper
+from scrapers.counties_ga.houston import HoustonScraper
+from scrapers.counties_ga.floyd import FloydScraper
+from scrapers.counties_ga.catoosa import CatoosaScraper
+from scrapers.counties_ga.decatur import DecaturScraper
+from scrapers.counties_ga.lee import LeeScraper
+from scrapers.counties_ga.oglethorpe import OglethorpeScraper
+from scrapers.counties_ga.gwinnett import GwinnettScraper
+from scrapers.counties_ga.richmond import RichmondScraper
+from scrapers.counties_ga.glynn import GlynnScraper
+
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
     format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
@@ -196,6 +216,42 @@ def register_scrapers(sched):
     sched.register_scraper(MonroeCountyScraper(), interval_minutes=120)    # Keys SO
     sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)# Custom HTML
     sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)    # OCV API
+
+    # ── Georgia — Tier 1 Metro ─────────────────────────────────────────────────
+    sched.register_scraper(FultonScraper(), interval_minutes=30)           # Socrata API — Atlanta core, 1.1M pop
+    sched.register_scraper(GwinnettScraper(), interval_minutes=30)         # SmartWebClient — 960K pop
+    sched.register_scraper(ChathamScraper(), interval_minutes=30)          # Custom HTML — Savannah, 300K pop
+    sched.register_scraper(RichmondScraper(), interval_minutes=60)         # ColdFusion — Augusta, 202K pop
+    sched.register_scraper(ForsythGAScraper(), interval_minutes=30)        # P2C — 250K pop
+    sched.register_scraper(HallScraper(), interval_minutes=30)             # P2C — 200K pop
+    sched.register_scraper(LowndesScraper(), interval_minutes=60)          # Tyler Odyssey — Valdosta
+
+    # ── Georgia — Tier 2 Mid-Market ───────────────────────────────────────────
+    sched.register_scraper(DouglasScraper(), interval_minutes=60)          # Zuercher
+    sched.register_scraper(HoustonScraper(), interval_minutes=60)          # Zuercher
+    sched.register_scraper(FloydScraper(), interval_minutes=60)            # Zuercher — Rome
+    sched.register_scraper(CatoosaScraper(), interval_minutes=60)          # Zuercher — Ringgold
+    sched.register_scraper(GlynnScraper(), interval_minutes=60)            # Custom HTML — Brunswick
+
+    # ── Georgia — Southern Software Counties ──────────────────────────────────
+    sched.register_scraper(BanksScraper(), interval_minutes=120)           # Southern SW
+    sched.register_scraper(DecaturScraper(), interval_minutes=120)         # Southern SW — Bainbridge
+    sched.register_scraper(LeeScraper(), interval_minutes=120)             # Southern SW — Leesburg
+    sched.register_scraper(OglethorpeScraper(), interval_minutes=120)      # Southern SW
+
+    # ── Georgia — EAS Batch (27 counties in one run) ──────────────────────────
+    # EAS batch runs as a standalone function — registered via APScheduler directly
+    scheduler.scheduler.add_job(
+        run_eas_batch,
+        trigger=IntervalTrigger(minutes=60),
+        id="eas_batch_georgia",
+        name="EAS Batch Runner (27 GA Counties)",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+
+    # ── Georgia — Walton XML Feed ─────────────────────────────────────────────
+    sched.register_scraper(WaltonGAScraper(), interval_minutes=30)         # XML Feed
 
 # Global watcher instance (set in main)
 _fa_watcher: "FirstAppearanceWatcher | None" = None
