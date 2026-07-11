@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+
+## [2.7.0] — 2026-07-11 (Georgia Expansion Phase 1c - Track A & B)
+### Added — Scrapers
+- **Track A (Base Class Reuse)**: Added 6 new Georgia counties using existing base classes:
+  - Houston, Floyd, Catoosa (Zuercher)
+  - Decatur, Lee, Oglethorpe (Southern Software)
+- **Track B (Custom HTML)**: Added 4 high-value Georgia county custom parsers:
+  - Gwinnett (SmartWebClient ASP.NET ViewState POST)
+  - Richmond (ColdFusion POST)
+  - Glynn (Custom HTML)
+  - Cobb (Stubbed pending backend recovery)
+### Changed — Core
+- **Scheduler**: Added `run_eas_batch` as a standalone APScheduler job for the 27 EAS counties. Registered all 10 new Track A & B scrapers with tier-appropriate intervals (30-120 mins).
+### Changed — Documentation
+- **Registry**: Updated `GEORGIA_COUNTY_REGISTRY.md` to mark 10 new counties as Active.
+- **Core Docs**: Updated `README.md`, `ROADMAP.md`, `STATUS.md`, `AGENTS.md`, `DATA_MODEL.md`, and `GEMINI.md` to reflect the new scale: 100 total scrapers (52 FL, 48 GA).
 ## [2.7.0] — 2026-07-08 (Super CRM hub + security hygiene + docs truth)
 
 ### Added

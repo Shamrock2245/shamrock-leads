@@ -1,6 +1,6 @@
 ---
 name: scraper-builder
-description: Step-by-step guide to add a new county scraper to ShamrockLeads. Use when adding any of the 67 Florida or 159 Georgia counties.
+description: Step-by-step guide to add a new county scraper to ShamrockLeads. Use when adding any of the 67 Florida or 159 Georgia counties (Currently 100 active).
 ---
 
 # Scraper Builder

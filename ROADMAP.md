@@ -10,7 +10,7 @@
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
 | 1b | FL County Expansion (52 scraper files / 67 total) | ✅ Complete |
-| 1c | GA County Expansion (38 scraper files / 159 total) | 🔄 In Progress |
+| 1c | GA County Expansion (48 active counties / 159 total) | 🔄 In Progress |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -65,7 +65,7 @@ Expanded from 20 to **52 county scraper files** across Florida. All scrapers are
 
 Expanding operations to the State of Georgia (159 counties).
 
-**Scraper file count:** 38 active counties via 9 scraper files in `scrapers/counties_ga/`.
+**Scraper file count:** 38 active counties via 19 scraper files in `scrapers/counties_ga/`.
 
 **Scraper strategies:**
 | Strategy | Base Class | Counties |
@@ -75,9 +75,9 @@ Expanding operations to the State of Georgia (159 counties).
 | Southern Software | `SouthernSWBaseScraper`| Banks, Decatur, Lee, Oglethorpe |
 | Socrata Open Data | `SocrataBaseScraper` | Fulton (Atlanta) |
 | XML Feed | `XMLFeedBaseScraper` | Walton |
-| Custom HTML | `BaseScraper` | Chatham |
+| Custom HTML | `BaseScraper` | Chatham, Gwinnett, Richmond, Glynn, Cobb |
 
-**Remaining ~121 counties:** Need URL recon and custom HTML parsers. See `docs/GEORGIA_COUNTY_REGISTRY.md`.
+**Remaining ~111 counties:** Need URL recon and custom HTML parsers. See `docs/GEORGIA_COUNTY_REGISTRY.md`.
 
 ---
 

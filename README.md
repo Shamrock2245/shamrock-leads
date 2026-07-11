@@ -168,7 +168,7 @@ A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,
 
 ## County Coverage
 
-**90 active scraper files** across Florida and Georgia, utilizing shared base classes for common JMS platforms:
+**100 active scraper files** across Florida and Georgia, utilizing shared base classes for common JMS platforms:
 
 ### Scraper Strategies
 
@@ -234,7 +234,7 @@ shamrock-leads/
 │   ├── socrata_base.py        # Socrata Open Data (Georgia)
 │   ├── generic_adaptive.py    # Auto-detect scraper for unknown JMS
 │   ├── counties/              # Florida county scrapers (52 active)
-│   └── counties_ga/           # Georgia county scrapers (38 active)
+│   └── counties_ga/           # Georgia county scrapers (48 active)
 ├── scoring/
 │   └── lead_scorer.py         # Rule-based lead qualification (0–100)
 ├── writers/
