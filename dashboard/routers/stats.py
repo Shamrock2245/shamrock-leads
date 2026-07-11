@@ -611,3 +611,254 @@ async def api_counties_stats():
             "total_bond": round(r["total_bond"] or 0, 2), "latest_scrape": r["latest_scrape"],
         })
     return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BOND INTELLIGENCE — Multi-State Bond Analytics
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/bond-intelligence")
+async def api_bond_intelligence(
+    state: str = Query("", description="Filter by state code: FL, GA, SC"),
+    county: str = Query("", description="Filter by county name"),
+    days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
+):
+    """Comprehensive bond intelligence — totals, averages, distributions, top charges, trends."""
+    arrests = get_collection("arrests")
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=days)
+    match_stage: dict = {"$or": [
+        {"scraped_at": {"$gte": cutoff.isoformat()}},
+        {"scraped_at": {"$gte": cutoff}},
+        {"created_at": {"$gte": cutoff.isoformat()}},
+    ]}
+    if state:
+        match_stage["state"] = state.upper()
+    if county:
+        match_stage["county"] = {"$regex": county, "$options": "i"}
+    try:
+        summary_result = {}
+        async for doc in arrests.aggregate([
+            {"$match": match_stage},
+            {"$group": {
+                "_id": None,
+                "total_arrests": {"$sum": 1},
+                "total_bond_value": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
+                "max_bond": {"$max": "$bond_amount"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
+                "no_bond": {"$sum": {"$cond": [{"$lte": ["$bond_amount", 0]}, 1, 0]}},
+                "in_custody": {"$sum": {"$cond": [
+                    {"$regexMatch": {"input": {"$ifNull": ["$custody_status", ""]}, "regex": "custody|confined|held|booked", "options": "i"}},
+                    1, 0,
+                ]}},
+            }},
+        ]):
+            summary_result = doc
+
+        by_state = []
+        async for doc in arrests.aggregate([
+            {"$match": match_stage},
+            {"$group": {
+                "_id": "$state",
+                "total_arrests": {"$sum": 1},
+                "total_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
+                "max_bond": {"$max": "$bond_amount"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
+            }},
+            {"$sort": {"total_bond": -1}},
+        ]):
+            by_state.append({
+                "state": doc["_id"] or "Unknown",
+                "total_arrests": doc["total_arrests"],
+                "total_bond": round(doc["total_bond"] or 0, 2),
+                "avg_bond": round(doc["avg_bond"] or 0, 2),
+                "max_bond": round(doc["max_bond"] or 0, 2),
+                "with_bond": doc["with_bond"],
+            })
+
+        by_county = []
+        async for doc in arrests.aggregate([
+            {"$match": match_stage},
+            {"$group": {
+                "_id": {"county": "$county", "state": "$state"},
+                "total_arrests": {"$sum": 1},
+                "total_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
+                "max_bond": {"$max": "$bond_amount"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
+            }},
+            {"$sort": {"total_bond": -1}},
+            {"$limit": 25},
+        ]):
+            by_county.append({
+                "county": doc["_id"]["county"] or "Unknown",
+                "state": doc["_id"]["state"] or "Unknown",
+                "total_arrests": doc["total_arrests"],
+                "total_bond": round(doc["total_bond"] or 0, 2),
+                "avg_bond": round(doc["avg_bond"] or 0, 2),
+                "max_bond": round(doc["max_bond"] or 0, 2),
+                "with_bond": doc["with_bond"],
+            })
+
+        distribution = []
+        bucket_labels = {1: "$1–$499", 500: "$500–$999", 1000: "$1K–$2.4K", 2500: "$2.5K–$4.9K",
+                         5000: "$5K–$9.9K", 10000: "$10K–$24.9K", 25000: "$25K–$49.9K",
+                         50000: "$50K–$99.9K", 100000: "$100K–$499.9K", 500000: "$500K+"}
+        async for doc in arrests.aggregate([
+            {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+            {"$bucket": {
+                "groupBy": "$bond_amount",
+                "boundaries": [1, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 500000, 9999999],
+                "default": "Other",
+                "output": {"count": {"$sum": 1}, "total": {"$sum": "$bond_amount"}},
+            }},
+        ]):
+            distribution.append({
+                "range": bucket_labels.get(doc["_id"], str(doc["_id"])),
+                "count": doc["count"],
+                "total": round(doc["total"] or 0, 2),
+            })
+
+        top_charges = []
+        async for doc in arrests.aggregate([
+            {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+            {"$unwind": {"path": "$charges", "preserveNullAndEmptyArrays": False}},
+            {"$group": {"_id": "$charges", "count": {"$sum": 1},
+                        "total_bond": {"$sum": "$bond_amount"}, "avg_bond": {"$avg": "$bond_amount"}}},
+            {"$sort": {"total_bond": -1}},
+            {"$limit": 20},
+        ]):
+            if doc["_id"] and len(str(doc["_id"])) > 2:
+                top_charges.append({
+                    "charge": str(doc["_id"])[:80], "count": doc["count"],
+                    "total_bond": round(doc["total_bond"] or 0, 2),
+                    "avg_bond": round(doc["avg_bond"] or 0, 2),
+                })
+
+        trend = []
+        async for doc in arrests.aggregate([
+            {"$match": match_stage},
+            {"$addFields": {"date_str": {"$dateToString": {"format": "%Y-%m-%d", "date": {
+                "$cond": [{"$eq": [{"$type": "$scraped_at"}, "date"]}, "$scraped_at",
+                          {"$toDate": {"$ifNull": ["$scraped_at", "$created_at"]}}]
+            }}}}},
+            {"$group": {"_id": "$date_str", "arrests": {"$sum": 1},
+                        "bond_total": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
+                        "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}}}},
+            {"$sort": {"_id": 1}},
+            {"$limit": 30},
+        ]):
+            trend.append({"date": doc["_id"], "arrests": doc["arrests"],
+                          "bond_total": round(doc["bond_total"] or 0, 2),
+                          "avg_bond": round(doc["avg_bond"] or 0, 2)})
+
+        return {
+            "summary": {
+                "total_arrests": summary_result.get("total_arrests", 0),
+                "total_bond_value": round(summary_result.get("total_bond_value", 0), 2),
+                "avg_bond": round(summary_result.get("avg_bond") or 0, 2),
+                "max_bond": round(summary_result.get("max_bond") or 0, 2),
+                "with_bond": summary_result.get("with_bond", 0),
+                "no_bond": summary_result.get("no_bond", 0),
+                "in_custody": summary_result.get("in_custody", 0),
+                "bond_capture_rate": round(
+                    (summary_result.get("with_bond", 0) / max(summary_result.get("total_arrests", 1), 1)) * 100, 1),
+            },
+            "by_state": by_state, "by_county": by_county,
+            "distribution": distribution, "top_charges": top_charges, "trend": trend,
+            "filters": {"state": state, "county": county, "days": days},
+        }
+    except Exception as exc:
+        import traceback
+        return {"error": str(exc), "trace": traceback.format_exc()}
+
+
+@router.get("/arrests/recent")
+async def api_arrests_recent(
+    limit: int = Query(50, ge=1, le=200),
+    state: str = Query("", description="Filter by state: FL, GA, SC"),
+    county: str = Query("", description="Filter by county"),
+    min_bond: float = Query(0, ge=0),
+    hours: int = Query(24, ge=1, le=168),
+):
+    """Live recent arrests feed — newest first, multi-state aware."""
+    arrests = get_collection("arrests")
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=hours)
+    query: dict = {"$or": [
+        {"scraped_at": {"$gte": cutoff.isoformat()}},
+        {"scraped_at": {"$gte": cutoff}},
+        {"created_at": {"$gte": cutoff.isoformat()}},
+    ]}
+    if state:
+        query["state"] = state.upper()
+    if county:
+        query["county"] = {"$regex": county, "$options": "i"}
+    if min_bond > 0:
+        query["bond_amount"] = {"$gte": min_bond}
+    total = await arrests.count_documents(query)
+    results = []
+    async for doc in arrests.find(query, {"_id": 0}).sort("scraped_at", -1).limit(limit):
+        results.append(serialize_doc(doc))
+    return {"arrests": results, "total": total, "hours": hours,
+            "filters": {"state": state, "county": county, "min_bond": min_bond}}
+
+
+@router.get("/arrests/stats/multi-state")
+async def api_arrests_multistate_stats():
+    """High-level arrest stats by state — for Command Center KPI cards."""
+    arrests = get_collection("arrests")
+    now = datetime.now(timezone.utc)
+    h24 = now - timedelta(hours=24)
+    h168 = now - timedelta(hours=168)
+    try:
+        states: dict = {}
+        async for doc in arrests.aggregate([{"$group": {"_id": "$state", "total": {"$sum": 1}}}]):
+            s = doc["_id"] or "Unknown"
+            states.setdefault(s, {})["total"] = doc["total"]
+        async for doc in arrests.aggregate([
+            {"$match": {"$or": [{"scraped_at": {"$gte": h24.isoformat()}}, {"scraped_at": {"$gte": h24}}]}},
+            {"$group": {"_id": "$state", "count": {"$sum": 1}}},
+        ]):
+            states.setdefault(doc["_id"] or "Unknown", {})["last_24h"] = doc["count"]
+        async for doc in arrests.aggregate([
+            {"$match": {"$or": [{"scraped_at": {"$gte": h168.isoformat()}}, {"scraped_at": {"$gte": h168}}]}},
+            {"$group": {"_id": "$state", "count": {"$sum": 1}}},
+        ]):
+            states.setdefault(doc["_id"] or "Unknown", {})["last_7d"] = doc["count"]
+        async for doc in arrests.aggregate([
+            {"$match": {"bond_amount": {"$gt": 0}}},
+            {"$group": {"_id": "$state", "total_bond": {"$sum": "$bond_amount"},
+                        "avg_bond": {"$avg": "$bond_amount"}, "max_bond": {"$max": "$bond_amount"}}},
+        ]):
+            s = doc["_id"] or "Unknown"
+            states.setdefault(s, {}).update({
+                "total_bond": round(doc["total_bond"] or 0, 2),
+                "avg_bond": round(doc["avg_bond"] or 0, 2),
+                "max_bond": round(doc["max_bond"] or 0, 2),
+            })
+        async for doc in arrests.aggregate([
+            {"$match": {"lead_score": {"$gte": 70}}},
+            {"$group": {"_id": "$state", "hot": {"$sum": 1}}},
+        ]):
+            states.setdefault(doc["_id"] or "Unknown", {})["hot_leads"] = doc["hot"]
+
+        out = [{"state": s, "total": d.get("total", 0), "last_24h": d.get("last_24h", 0),
+                "last_7d": d.get("last_7d", 0), "total_bond": d.get("total_bond", 0),
+                "avg_bond": d.get("avg_bond", 0), "max_bond": d.get("max_bond", 0),
+                "hot_leads": d.get("hot_leads", 0)} for s, d in sorted(states.items())]
+
+        return {
+            "by_state": out,
+            "totals": {
+                "all_time": sum(s["total"] for s in out),
+                "last_24h": sum(s["last_24h"] for s in out),
+                "total_bond_value": round(sum(s["total_bond"] for s in out), 2),
+                "states_active": len(out),
+            },
+        }
+    except Exception as exc:
+        import traceback
+        return {"error": str(exc), "trace": traceback.format_exc()}

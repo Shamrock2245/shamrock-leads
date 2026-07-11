@@ -89,6 +89,7 @@
       <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔍</span> Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
       <button class="sidebar-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">👥</span> Defendants</button>
       <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">3 STATES</span></button>
+      <button class="sidebar-btn" data-tab="tabBondIntel" onclick="SL.switchTab(this);SLBondIntel.load()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">💰</span> Bond Intelligence <span class="badge" id="bondIntelBadge" style="background:#10b981;color:#000;font-size:9px">LIVE</span></button>
       <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
 
       <div class="sidebar-group-label">Operations</div>
@@ -359,7 +360,7 @@
         <thead>
           <tr>
             <th data-sort="full_name" onclick="SL.sortBy('full_name')">Name</th>
-            <th data-sort="county" onclick="SL.sortBy('county')">County</th>
+            <th data-sort="state" onclick="SL.sortBy('state')">State</th><th data-sort="county" onclick="SL.sortBy('county')">County</th>
             <th>Charges</th>
             <th data-sort="bond_amount" onclick="SL.sortBy('bond_amount')">Bond</th>
             <th data-sort="lead_score" onclick="SL.sortBy('lead_score')">Score</th>
@@ -810,6 +811,68 @@
 <!-- ═══════════════════════════════════════════════════════
      TAB: MULTI-STATE OPERATIONS
      ═══════════════════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════
+     TAB: BOND INTELLIGENCE
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabBondIntel">
+  <div class="container">
+    <!-- Filter Bar -->
+    <div class="bond-filter-bar">
+      <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">State:</span>
+      <button class="bond-state-btn active" data-state="" onclick="SLBondIntel.setState('')">All States</button>
+      <button class="bond-state-btn" data-state="FL" onclick="SLBondIntel.setState('FL')">🌴 Florida</button>
+      <button class="bond-state-btn" data-state="GA" onclick="SLBondIntel.setState('GA')">🍑 Georgia</button>
+      <button class="bond-state-btn" data-state="SC" onclick="SLBondIntel.setState('SC')">🌙 South Carolina</button>
+      <span style="margin-left:12px;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Window:</span>
+      <button class="bond-days-btn" data-days="7" onclick="SLBondIntel.setDays(7)">7d</button>
+      <button class="bond-days-btn active" data-days="30" onclick="SLBondIntel.setDays(30)">30d</button>
+      <button class="bond-days-btn" data-days="90" onclick="SLBondIntel.setDays(90)">90d</button>
+      <button class="bond-days-btn" data-days="365" onclick="SLBondIntel.setDays(365)">1yr</button>
+      <button class="btn" onclick="SLBondIntel.load()" style="margin-left:auto;background:var(--panel-bg);border:1px solid var(--border);padding:5px 14px;font-size:12px">&#x1F504; Refresh</button>
+    </div>
+    <!-- State KPI Cards -->
+    <div class="bond-kpi-row" id="bondStateKPIs">
+      <div style="text-align:center;color:var(--text-muted);padding:32px;grid-column:1/-1">Loading bond intelligence...</div>
+    </div>
+    <!-- Summary Metric Cards -->
+    <div class="bond-summary-grid" id="bondSummaryCards"></div>
+    <!-- Charts Row -->
+    <div class="bond-charts-row">
+      <div class="panel">
+        <div class="bond-panel-title">📊 Bond Distribution by Amount</div>
+        <div id="bondDistChart"></div>
+      </div>
+      <div class="panel">
+        <div class="bond-panel-title">📈 Daily Arrest &amp; Bond Trend</div>
+        <div id="bondTrendChart"></div>
+      </div>
+    </div>
+    <!-- Data Row: County Leaderboard + Top Charges -->
+    <div class="bond-data-row">
+      <div class="panel">
+        <div class="bond-panel-title">🏆 Top Counties by Bond Volume</div>
+        <div id="bondCountyLeaderboard"></div>
+      </div>
+      <div class="panel">
+        <div class="bond-panel-title">⚖️ Top Charges by Bond Value</div>
+        <div id="bondTopCharges"></div>
+      </div>
+    </div>
+    <!-- Live Recent Arrests Feed -->
+    <div class="panel">
+      <div class="bond-panel-title" style="justify-content:space-between">
+        <span>⚡ Live Arrest Feed — Last 24 Hours</span>
+        <button class="btn" onclick="SLBondIntel.load()" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 10px;font-size:11px">↻ Refresh</button>
+      </div>
+      <div id="bondIntelContainer">
+        <div class="bond-feed-container" id="bondRecentFeed">
+          <div style="text-align:center;color:var(--text-muted);padding:24px">Loading live feed...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="tab-content" id="tabMultiState">
   <!-- SLMultiState renders its own shell dynamically via sl-multi-state.js -->
 </div>
@@ -868,7 +931,7 @@
     <!-- Fleet Table -->
     <div class="panel">
       <div class="panel-title" style="display:flex;justify-content:space-between;align-items:center">
-        <span>&#x1F3E5; Scraper Fleet &mdash; <span id="healthCountLabel">49 counties</span></span>
+        <span>&#x1F3E5; Scraper Fleet &mdash; <span id="healthCountLabel">191 counties</span></span>
         <span style="font-size:12px;color:var(--text-muted)" id="healthLastRefresh"></span>
       </div>
       <div class="table-wrap">
@@ -4459,7 +4522,9 @@
 <script src="/sl-tasks.js?v=1"></script>
 <script src="/sl-osint.js?v=1"></script>
 <script src="/sl-paperwork.js?v=1"></script>
-<link rel="stylesheet" href="/sl-multi-state.css?v=1">
+<link rel="stylesheet" href="/sl-bond-intelligence.css?v=1">
+  <link rel="stylesheet" href="/sl-multi-state.css?v=1">
+<script src="/sl-bond-intelligence.js?v=1"></script>
 <script src="/sl-multi-state.js?v=1"></script>
 </body>
 </html>

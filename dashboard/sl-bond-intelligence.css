@@ -1,0 +1,181 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+   SL Bond Intelligence — Premium Dark Glassmorphism Styles
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── State KPI Cards ── */
+.bond-kpi-row {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 900px) {
+  .bond-kpi-row { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 540px) {
+  .bond-kpi-row { grid-template-columns: 1fr; }
+}
+
+.bond-kpi-card {
+  background: var(--panel-bg, #111827);
+  border: 1px solid var(--border, #1f2937);
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: transform .15s, box-shadow .15s;
+}
+.bond-kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.bond-kpi-grand {
+  background: linear-gradient(135deg, rgba(16,185,129,.08), rgba(59,130,246,.08));
+  border-color: rgba(16,185,129,.3);
+}
+.bond-kpi-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 6px;
+}
+.bond-kpi-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text, #f9fafb);
+  line-height: 1.1;
+  margin-bottom: 2px;
+}
+.bond-kpi-sub {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 8px;
+}
+.bond-kpi-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted, #6b7280);
+}
+
+/* ── Summary Metric Cards ── */
+.bond-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+}
+@media (max-width: 1100px) {
+  .bond-summary-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 600px) {
+  .bond-summary-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+.bond-summary-card {
+  background: var(--panel-bg, #111827);
+  border: 1px solid var(--border, #1f2937);
+  border-radius: 10px;
+  padding: 14px 12px;
+  text-align: center;
+  transition: transform .15s;
+}
+.bond-summary-card:hover { transform: translateY(-1px); }
+.bond-summary-icon { font-size: 20px; margin-bottom: 6px; }
+.bond-summary-value {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-bottom: 4px;
+}
+.bond-summary-label {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+/* ── Charts Row ── */
+.bond-charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 800px) {
+  .bond-charts-row { grid-template-columns: 1fr; }
+}
+
+/* ── Data Row (Leaderboard + Top Charges) ── */
+.bond-data-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 900px) {
+  .bond-data-row { grid-template-columns: 1fr; }
+}
+
+/* ── Filter Controls ── */
+.bond-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.bond-state-btn, .bond-days-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border, #1f2937);
+  background: var(--panel-bg, #111827);
+  color: var(--text-muted, #6b7280);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.bond-state-btn.active, .bond-days-btn.active {
+  background: var(--accent, #00d4aa);
+  color: #000;
+  border-color: var(--accent, #00d4aa);
+}
+.bond-state-btn:hover:not(.active), .bond-days-btn:hover:not(.active) {
+  border-color: var(--accent, #00d4aa);
+  color: var(--text, #f9fafb);
+}
+
+/* ── Recent Arrests Feed ── */
+.bond-feed-row {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, #1f2937);
+  cursor: pointer;
+  transition: background .12s;
+  border-radius: 6px;
+}
+.bond-feed-row:hover {
+  background: rgba(255,255,255,.03);
+}
+.bond-feed-container {
+  max-height: 420px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.bond-feed-container::-webkit-scrollbar { width: 4px; }
+.bond-feed-container::-webkit-scrollbar-track { background: transparent; }
+.bond-feed-container::-webkit-scrollbar-thumb { background: var(--border, #1f2937); border-radius: 2px; }
+
+/* ── Panel Titles ── */
+.bond-panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
