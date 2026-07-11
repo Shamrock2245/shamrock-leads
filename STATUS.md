@@ -27,7 +27,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| 52 county scrapers, scoring, Slack, Mongo | ✅ |
+| 90 county scrapers (52 FL, 38 GA), scoring, Slack, Mongo | ✅ |
 | FastAPI dashboard Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
 | Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ July 2026 |
 | Omnibar → CRM search | ✅ |

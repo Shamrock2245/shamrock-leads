@@ -11,7 +11,7 @@
 ShamrockLeads is the core intelligence engine for **Shamrock Bail Bonds** — a Florida bail bond agency
 automating the full bond lifecycle from arrest scrape to signed paperwork to payment collection.
 
-**Strategic goal:** Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year by dominating the Florida (67 counties) and Georgia (159 counties) markets.
 
 ---
 
@@ -31,7 +31,7 @@ automating the full bond lifecycle from arrest scrape to signed paperwork to pay
 
 ```
 Hetzner VPS (Docker Compose)
-  shamrock-leads     → Python 3.12 scraper engine + APScheduler (50 counties)
+  shamrock-leads     → Python 3.12 scraper engine + APScheduler (FL + GA counties)
   shamrock-dashboard → FastAPI async API (port 5050 → Nginx :443 → external :8088)
   node-red           → Ops dashboard (port 1880)
 
@@ -86,7 +86,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| County scraper files | 52 (in `scrapers/counties/`) |
+| County scraper files | 90 (52 FL in `scrapers/counties/`, 38 GA in `scrapers/counties_ga/`) |
 | API blueprint modules | 66 (in `dashboard/routers/`) |
 | Service modules | 45 (in `dashboard/services/`) |
 | Frontend JS modules | 45 (`sl-*.js` + `defendants.js`) |
@@ -167,7 +167,8 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 | `DATA_MODEL.md` | Entity definitions, MongoDB collections |
 | `ROADMAP.md` | Phase-by-phase implementation status |
 | `docs/SCHEMAS.md` | Full MongoDB collection schemas |
-| `docs/COUNTY_REGISTRY.md` | All 67 counties with JMS vendors and scraper status |
+| `docs/COUNTY_REGISTRY.md` | All 67 FL counties with JMS vendors and scraper status |
+| `docs/GEORGIA_COUNTY_REGISTRY.md` | All 159 GA counties with JMS vendors and scraper status |
 | `docs/policies/surety-policy.md` | POA inventory, surety selection, premium splits |
 | `docs/policies/matching-policy.md` | Match confidence scoring and validation gates |
 | `docs/policies/signature-policy.md` | Packet binding rules, signing workflow |

@@ -1,11 +1,11 @@
 ---
 name: county-jms-patterns
-description: JMS vendor reverse-engineering guide. Covers Odyssey, JailTracker, New World, and custom jail roster systems used across Florida counties.
+description: JMS vendor reverse-engineering guide. Covers Odyssey, JailTracker, New World, EAS, Zuercher, and custom jail roster systems used across Florida and Georgia counties.
 ---
 
 # County JMS Patterns
 
-> Reverse-engineering guide for Florida Jail Management Systems.
+> Reverse-engineering guide for Florida and Georgia Jail Management Systems.
 
 ## When to Use
 - Investigating a new county's jail roster system
@@ -27,6 +27,10 @@ curl -s https://[roster-url] | head -100
 | Fingerprint | Vendor |
 |-------------|--------|
 | `Tyler Technologies` in footer | Odyssey |
+| `offenderindex.com` | Eagle Advantage Solutions (EAS) |
+| `Zuercher Technologies` | Zuercher Portal |
+| `Southern Software` | Southern Software Citizen Connect |
+| `SmartWebClient` | P2C (CentralSquare) |
 | `Powered by JailTracker` | JailTracker |
 | `New World Systems` in meta | New World |
 | `__VIEWSTATE` hidden field | ASP.NET (often New World) |
@@ -155,6 +159,58 @@ def scrape(self):
 
 ### Known New World Counties
 Manatee, Hillsborough
+
+---
+
+## Eagle Advantage Solutions (EAS)
+
+### Characteristics
+- **Hosted Platform** — `offenderindex.com`
+- **Widespread in GA** — Used by 27+ Georgia counties
+- **Simple HTML** — Easy to parse tables
+- **Predictable URLs** — `https://offenderindex.com/[county]coga/`
+
+### Scraper Strategy
+- Use the `EASBaseScraper` class
+- All EAS counties can be run efficiently in a single batch process using `eas_batch_runner.py`
+
+### Known EAS Counties
+Bacon, Barrow, Bryan, Bulloch, Camden, Carroll, Columbia, Coweta, Dawson, Effingham, Elbert, Emanuel, Gordon, Habersham, Haralson, Jackson, Jones, Laurens, Lumpkin, Monroe, Morgan, Newton, Paulding, Troup, Upson, Walker, Ware
+
+---
+
+## Zuercher Technologies
+
+### Characteristics
+- **Single Page Application (SPA)** — React/Angular frontend
+- **JSON API** — Hidden behind the SPA
+- **CSRF Tokens** — Requires extracting a token from the initial HTML load
+- **POST Requests** — API requires specific POST payloads
+
+### Scraper Strategy
+- Use the `ZuercherBaseScraper` class
+- Fetch initial HTML to extract CSRF token
+- Send POST request to `/api/PublicPortal/Inmates/Search`
+
+### Known Zuercher Counties
+Douglas, Houston, Floyd, Catoosa
+
+---
+
+## Southern Software Citizen Connect
+
+### Characteristics
+- **ASP.NET Application**
+- **Query String Routing** — `AgencyID` parameter controls which county is shown
+- **Predictable HTML** — Table structure is consistent across counties
+- **Pagination** — Required for larger counties
+
+### Scraper Strategy
+- Use the `SouthernSWBaseScraper` class
+- Extract data from the standard `.grid` tables
+
+### Known Southern Software Counties
+Banks, Decatur, Lee, Oglethorpe
 
 ---
 

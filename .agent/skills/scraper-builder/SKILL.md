@@ -1,6 +1,6 @@
 ---
 name: scraper-builder
-description: Step-by-step guide to add a new county scraper to ShamrockLeads. Use when adding any of the 67 Florida counties.
+description: Step-by-step guide to add a new county scraper to ShamrockLeads. Use when adding any of the 67 Florida or 159 Georgia counties.
 ---
 
 # Scraper Builder
@@ -13,7 +13,7 @@ description: Step-by-step guide to add a new county scraper to ShamrockLeads. Us
 - User says "add [county name]", "build scraper for [county]", "enable [county]"
 
 ## Prerequisites
-- County roster URL (from `docs/COUNTY_REGISTRY.md`)
+- County roster URL (from `docs/COUNTY_REGISTRY.md` or `docs/GEORGIA_COUNTY_REGISTRY.md`)
 - JMS vendor identified (Odyssey, JailTracker, New World, Custom)
 
 ---
@@ -72,6 +72,8 @@ Choose the closest template based on JMS vendor:
 | Odyssey | `scrapers/counties/lee.py` |
 | JailTracker | `scrapers/counties/hendry.py` |
 | New World | `scrapers/counties/manatee.py` |
+| Zuercher | `scrapers/counties_ga/douglas.py` |
+| Southern Software | `scrapers/counties_ga/banks.py` |
 | Custom | `scrapers/base_scraper.py` (start fresh) |
 
 ### Step 2.2b — Stealth Package Selection (When DrissionPage Fails)
@@ -189,7 +191,7 @@ Check the first few records:
 ## Phase 4: Deploy
 
 ### Step 4.1 — Update County Registry
-Mark the county as ✅ Active in `docs/COUNTY_REGISTRY.md`
+Mark the county as ✅ Active in `docs/COUNTY_REGISTRY.md` or `docs/GEORGIA_COUNTY_REGISTRY.md`
 
 ### Step 4.2 — Push & Deploy
 ```bash

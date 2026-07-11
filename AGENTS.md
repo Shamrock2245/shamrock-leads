@@ -12,7 +12,7 @@
 
 ShamrockLeads is a **statewide arrest intelligence and bond Auto-CRM** platform that:
 
-1. **Scrapes** Florida county jail rosters on scheduled intervals `[IMPLEMENTED — 52 files]`
+1. **Scrapes** Florida and Georgia county jail rosters on scheduled intervals `[IMPLEMENTED — 90 files]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
@@ -86,7 +86,7 @@ Move records safely through this lifecycle:
 
 | Agent | Role | Status | Key File(s) |
 |-------|------|--------|-------------|
-| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties/*.py`, `base_scraper.py` |
+| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties/*.py`, `scrapers/counties_ga/*.py`, `base_scraper.py` |
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
@@ -117,7 +117,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  51 County Scrapers  │  │  Slack relay               │ │
+│  │  90 County Scrapers  │  │  7 dashboard pages         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
 │  │  Lead Scorer         │            │                   │

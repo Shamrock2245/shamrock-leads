@@ -9,7 +9,8 @@
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
-| 1b | County Expansion (52 scraper files / 67 total) | ✅ Complete |
+| 1b | FL County Expansion (52 scraper files / 67 total) | ✅ Complete |
+| 1c | GA County Expansion (38 scraper files / 159 total) | 🔄 In Progress |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -36,7 +37,7 @@
 
 ---
 
-## Phase 1b: County Expansion ✅ COMPLETE
+## Phase 1b: FL County Expansion ✅ COMPLETE
 
 Expanded from 20 to **52 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
 
@@ -57,6 +58,26 @@ Expanded from 20 to **52 county scraper files** across Florida. All scrapers are
 | `SmartCOPBaseScraper` | SmartCOP Solutions | Columbia, Dixie, Gadsden, Glades, Hardee, Jackson, Suwannee, Taylor + more |
 
 **Remaining 15 counties:** Small rural counties (🟡 Needs URL recon). See `docs/COUNTY_REGISTRY.md`.
+
+---
+
+## Phase 1c: GA County Expansion 🔄 IN PROGRESS
+
+Expanding operations to the State of Georgia (159 counties).
+
+**Scraper file count:** 38 active counties via 9 scraper files in `scrapers/counties_ga/`.
+
+**Scraper strategies:**
+| Strategy | Base Class | Counties |
+|----------|------------|----------|
+| EAS Batch Runner | `EASBaseScraper` | 27 counties (offenderindex.com) |
+| Zuercher API | `ZuercherBaseScraper` | Douglas, Houston, Floyd, Catoosa |
+| Southern Software | `SouthernSWBaseScraper`| Banks, Decatur, Lee, Oglethorpe |
+| Socrata Open Data | `SocrataBaseScraper` | Fulton (Atlanta) |
+| XML Feed | `XMLFeedBaseScraper` | Walton |
+| Custom HTML | `BaseScraper` | Chatham |
+
+**Remaining ~121 counties:** Need URL recon and custom HTML parsers. See `docs/GEORGIA_COUNTY_REGISTRY.md`.
 
 ---
 
@@ -217,7 +238,7 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 
 - **SOC II Readiness**: All data flows (MongoDB, SignNow, Twilio) must meet SOC II standards.
 - **Brand Exclusivity**: All work is exclusively `Shamrock2245`. Never reference WTF.
-- **Strategic Goal**: Scale from $3–5M/year (Lee County) to $20–50M/year (67 counties statewide).
+- **Strategic Goal**: Scale from $3–5M/year (Lee County) to $50M+/year by dominating the Florida (67 counties) and Georgia (159 counties) markets.
 - **Competitor Benchmark**: Captira and Bail Books are the floor, not the ceiling.
 
 ---
