@@ -171,6 +171,24 @@ from scrapers.counties_ga.twiggs import TwiggsScraper
 from scrapers.counties_ga.upson import UpsonScraper
 from scrapers.counties_ga.walton import WaltonScraper
 
+# ── South Carolina Scrapers ────────────────────────────────────────────────────────
+from scrapers.counties_sc.anderson import AndersonScraper
+from scrapers.counties_sc.cherokee import CherokeeScraper
+from scrapers.counties_sc.chester import ChesterScraper
+from scrapers.counties_sc.chesterfield import ChesterfieldScraper
+from scrapers.counties_sc.colleton import ColletonScraper
+from scrapers.counties_sc.dorchester import DorchesterScraper
+from scrapers.counties_sc.greenwood import GreenwoodScraper
+from scrapers.counties_sc.kershaw import KershawScraper
+from scrapers.counties_sc.lancaster import LancasterScraper
+from scrapers.counties_sc.laurens import LaurensScraper
+from scrapers.counties_sc.lee import LeeScraper
+from scrapers.counties_sc.lexington import LexingtonScraper
+from scrapers.counties_sc.oconee import OconeeScraper
+from scrapers.counties_sc.pickens import PickensScraper
+from scrapers.counties_sc.sumter import SumterScraper
+from scrapers.counties_sc.union import UnionScraper
+
 def main():
     global scheduler, _fa_watcher
     logger.info("=" * 60)
@@ -327,5 +345,23 @@ if __name__ == "__main__":
     sched.register_scraper(TwiggsScraper(), interval_minutes=120)
     sched.register_scraper(UpsonScraper(), interval_minutes=120)
     sched.register_scraper(WaltonScraper(), interval_minutes=120)
+
+    # ── South Carolina All Counties ────────────────────────────────────────────
+    sched.register_scraper(AndersonScraper(), interval_minutes=120)
+    sched.register_scraper(CherokeeScraper(), interval_minutes=120)
+    sched.register_scraper(ChesterScraper(), interval_minutes=120)
+    sched.register_scraper(ChesterfieldScraper(), interval_minutes=120)
+    sched.register_scraper(ColletonScraper(), interval_minutes=120)
+    sched.register_scraper(DorchesterScraper(), interval_minutes=120)
+    sched.register_scraper(GreenwoodScraper(), interval_minutes=120)
+    sched.register_scraper(KershawScraper(), interval_minutes=120)
+    sched.register_scraper(LancasterScraper(), interval_minutes=60)
+    sched.register_scraper(LaurensScraper(), interval_minutes=120)
+    sched.register_scraper(LeeScraper(), interval_minutes=60)
+    sched.register_scraper(LexingtonScraper(), interval_minutes=60)
+    sched.register_scraper(OconeeScraper(), interval_minutes=120)
+    sched.register_scraper(PickensScraper(), interval_minutes=120)
+    sched.register_scraper(SumterScraper(), interval_minutes=120)
+    sched.register_scraper(UnionScraper(), interval_minutes=120)
 
 

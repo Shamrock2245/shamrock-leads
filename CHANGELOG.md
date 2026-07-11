@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 
+## [2.9.0] — 2026-07-11 (South Carolina Expansion Phase 1d)
+### Added — Scrapers
+- **South Carolina Recon**: Executed parallel recon across all 46 SC counties.
+- **Base Class Reuse (SC)**: Built 16 new South Carolina scrapers leveraging existing base classes:
+  - Zuercher (8): Anderson, Cherokee, Colleton, Kershaw, Laurens, Oconee, Pickens, Union
+  - JailTracker (2): Chester, Greenwood
+  - Southern Software (2): Chesterfield, Dorchester
+  - P2C (2): Lee, Lexington
+  - New World (1): Lancaster
+  - SmartCOP (1): Sumter
+### Changed — Core
+- **Scheduler**: Registered 16 new SC scrapers in `main.py`.
+### Changed — Documentation
+- **Scale Update**: System now tracks 176 total active scrapers (52 FL, 108 GA, 16 SC).
+- **Registry**: Added `SC_RECON_RESULTS.md` documenting the portal status of all 46 counties.
+
 ## [2.8.0] — 2026-07-11 (Georgia Expansion Phase 1c - Track C)
 ### Added — Scrapers
 - **Track C (Deep Recon)**: Built 60 new Georgia county scrapers based on parallel recon results.

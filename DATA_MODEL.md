@@ -11,7 +11,7 @@
 
 | Collection | Purpose | Dedup Key |
 |------------|---------|-----------|
-| `arrests` | Raw scraped arrest records from 160 FL/GA counties (39 fields) | `county` + `booking_number` |
+| `arrests` | Raw scraped arrest records from 176 FL/GA/SC counties (39 fields) | `county` + `booking_number` |
 | `defendants` | Normalized defendant profiles | `Defendant_ID` (UUID) |
 | `indemnitors` | Indemnitor intake records | `Indemnitor_ID` (UUID) |
 | `matches` | Validated defendant↔indemnitor links | `Match_ID` (UUID) |
