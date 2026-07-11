@@ -35,7 +35,7 @@
 <div class="header">
   <div class="header-left">
     <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="header-logo" style="height:36px;margin-right:10px;vertical-align:middle">
-    <h1>ShamrockLeads <small>Florida Arrest Intelligence</small></h1>
+    <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC</small></h1>
   </div>
 </div><!-- /header -->
 <!-- ═══ NOTIFICATION CENTER PANEL ═══ -->
@@ -88,6 +88,7 @@
       <button class="sidebar-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">⚡</span> Command Center</button>
       <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔍</span> Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
       <button class="sidebar-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">👥</span> Defendants</button>
+      <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">3 STATES</span></button>
       <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
 
       <div class="sidebar-group-label">Operations</div>
@@ -806,6 +807,13 @@
     </div>
   </div>
 </div>
+<!-- ═══════════════════════════════════════════════════════
+     TAB: MULTI-STATE OPERATIONS
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabMultiState">
+  <!-- SLMultiState renders its own shell dynamically via sl-multi-state.js -->
+</div>
+
 
 <!-- ═══════════════════════════════════════════════════════
      TAB 4: SCRAPER HEALTH
@@ -4451,6 +4459,7 @@
 <script src="/sl-tasks.js?v=1"></script>
 <script src="/sl-osint.js?v=1"></script>
 <script src="/sl-paperwork.js?v=1"></script>
-
+<link rel="stylesheet" href="/sl-multi-state.css?v=1">
+<script src="/sl-multi-state.js?v=1"></script>
 </body>
 </html>
