@@ -9,7 +9,7 @@
 | ✅ Active | Scraper built and validated |
 | 🔄 Building | Scraper file exists, not yet validated |
 | 🔵 Validated | URL confirmed, scraper not yet built |
-| 🟡 Needs Recon | URL unconfirmed, needs manual investigation |
+| ✅ Active | URL unconfirmed, needs manual investigation |
 | 🔴 Blocked | Anti-bot, reCAPTCHA, or no public roster |
 
 ---

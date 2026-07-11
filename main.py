@@ -96,201 +96,80 @@ from scrapers.counties.hardee import HardeeCountyScraper
 
 # ── Georgia Scrapers ───────────────────────────────────────────────────────────
 from scrapers.counties_ga.eas_batch_runner import run_eas_batch
-from scrapers.counties_ga.fulton import FultonScraper
-from scrapers.counties_ga.chatham import ChathamScraper
-from scrapers.counties_ga.walton import WaltonScraper as WaltonGAScraper
-from scrapers.counties_ga.forsyth import ForsythScraper as ForsythGAScraper
-from scrapers.counties_ga.hall import HallScraper
-from scrapers.counties_ga.douglas import DouglasScraper
+from scrapers.counties_ga.bacon import BaconScraper
+from scrapers.counties_ga.baker import BakerScraper
 from scrapers.counties_ga.banks import BanksScraper
-from scrapers.counties_ga.lowndes import LowndesScraper
-from scrapers.counties_ga.houston import HoustonScraper
-from scrapers.counties_ga.floyd import FloydScraper
+from scrapers.counties_ga.barrow import BarrowScraper
+from scrapers.counties_ga.bartow import BartowScraper
+from scrapers.counties_ga.bibb import BibbScraper
+from scrapers.counties_ga.brantley import BrantleyScraper
+from scrapers.counties_ga.bryan import BryanScraper
+from scrapers.counties_ga.bulloch import BullochScraper
+from scrapers.counties_ga.camden import CamdenScraper
+from scrapers.counties_ga.carroll import CarrollScraper
 from scrapers.counties_ga.catoosa import CatoosaScraper
+from scrapers.counties_ga.chatham import ChathamScraper
+from scrapers.counties_ga.cherokee import CherokeeScraper
+from scrapers.counties_ga.clarke import ClarkeScraper
+from scrapers.counties_ga.cobb import CobbScraper
+from scrapers.counties_ga.columbia import ColumbiaScraper
+from scrapers.counties_ga.coweta import CowetaScraper
+from scrapers.counties_ga.crawford import CrawfordScraper
+from scrapers.counties_ga.dawson import DawsonScraper
 from scrapers.counties_ga.decatur import DecaturScraper
-from scrapers.counties_ga.lee import LeeScraper
-from scrapers.counties_ga.oglethorpe import OglethorpeScraper
-from scrapers.counties_ga.gwinnett import GwinnettScraper
-from scrapers.counties_ga.richmond import RichmondScraper
+from scrapers.counties_ga.dekalb import DeKalbScraper
+from scrapers.counties_ga.dodge import DodgeScraper
+from scrapers.counties_ga.dougherty import DoughertyScraper
+from scrapers.counties_ga.douglas import DouglasScraper
+from scrapers.counties_ga.echols import EcholsScraper
+from scrapers.counties_ga.emanuel import EmanuelScraper
+from scrapers.counties_ga.fayette import FayetteScraper
+from scrapers.counties_ga.floyd import FloydScraper
+from scrapers.counties_ga.forsyth import ForsythScraper
+from scrapers.counties_ga.fulton import FultonScraper
 from scrapers.counties_ga.glynn import GlynnScraper
-
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger("shamrock-leads")
-scheduler = None
-
-def build_writers():
-    writers = []
-    if settings.ENABLE_MONGO_WRITER and settings.mongo_configured():
-        try:
-            mongo = MongoWriter()
-            writers.append(mongo)
-            logger.info("MongoDB writer initialized")
-        except Exception as e:
-            logger.error(f"MongoDB writer failed: {e}")
-    if settings.ENABLE_SHEETS_WRITER and settings.sheets_configured():
-        try:
-            from writers.sheets_writer import SheetsWriter
-            sheets = SheetsWriter(spreadsheet_id=settings.GOOGLE_SPREADSHEET_ID, credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS)
-            writers.append(sheets)
-            logger.info("Sheets writer initialized")
-        except ImportError:
-            logger.warning("gspread not installed")
-        except Exception as e:
-            logger.error(f"Sheets writer failed: {e}")
-    if not writers:
-        logger.warning("No writers configured!")
-    return writers
-
-def register_scrapers(sched):
-    # ── SWFL Core (highest priority) ──────────────────────────────────────────
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=43)
-    sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
-    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=90)
-    sched.register_scraper(ManateeCountyScraper(), interval_minutes=75)
-    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=90)
-    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
-    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
-
-    # ── Tampa Bay / Central FL ─────────────────────────────────────────────────
-    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
-    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
-    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
-    sched.register_scraper(LakeCountyScraper(), interval_minutes=90)
-    sched.register_scraper(HernandoCountyScraper(), interval_minutes=120)
-    sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
-    sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(CitrusCountyScraper(), interval_minutes=120)
-    sched.register_scraper(SumterCountyScraper(), interval_minutes=180)
-
-    # ── South FL / Metro ───────────────────────────────────────────────────────
-    sched.register_scraper(BrowardCountyScraper(), interval_minutes=60)
-    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
-    sched.register_scraper(MartinCountyScraper(), interval_minutes=120)
-    sched.register_scraper(StLucieCountyScraper(), interval_minutes=90)
-    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=180)
-    sched.register_scraper(HighlandsCountyScraper(), interval_minutes=120)
-    sched.register_scraper(GladesCountyScraper(), interval_minutes=360)
-
-    # ── North Central FL ───────────────────────────────────────────────────────
-    sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
-    sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
-    sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
-    # MarionCountyScraper DISABLED — jail.marionso.com blocks datacenter IPs (403)
-    # Needs residential proxy to re-enable
-    # sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
-
-    # ── Panhandle / NW FL ──────────────────────────────────────────────────────
-    sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(MiamiDadeCountyScraper(), interval_minutes=60)
-    sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(BayCountyScraper(), interval_minutes=120)
-    # LeonCountyScraper DISABLED — target server throws unhandled 500 Runtime Error when results exist
-    # Needs sheriff IT to fix their IIS search page to re-enable
-    # sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
-
-    # ── NE FL / First Coast ────────────────────────────────────────────────────
-    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
-    sched.register_scraper(StJohnsCountyScraper(), interval_minutes=120)
-
-    # ── North FL / Rural ───────────────────────────────────────────────────────
-    sched.register_scraper(TaylorCountyScraper(), interval_minutes=240)
-    sched.register_scraper(DixieCountyScraper(), interval_minutes=240)
-
-    # ── Phase 1 Priority Expansion ────────────────────────────────────────────
-    sched.register_scraper(FlaglerCountyScraper(), interval_minutes=120)   # New World
-    sched.register_scraper(NassauCountyScraper(), interval_minutes=120)    # New World
-    sched.register_scraper(ClayCountyScraper(), interval_minutes=120)      # Custom HTML
-    sched.register_scraper(ColumbiaCountyScraper(), interval_minutes=120)  # P2C
-    sched.register_scraper(SuwanneeCountyScraper(), interval_minutes=180)  # SmartWeb
-    sched.register_scraper(SantaRosaCountyScraper(), interval_minutes=120) # SmartWeb
-    sched.register_scraper(WaltonCountyScraper(), interval_minutes=120)    # New World
-    sched.register_scraper(JacksonCountyScraper(), interval_minutes=360)   # Stub — no public roster
-    sched.register_scraper(GadsdenCountyScraper(), interval_minutes=180)   # Needs recon
-    sched.register_scraper(MonroeCountyScraper(), interval_minutes=120)    # Keys SO
-    sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)# Custom HTML
-    sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)    # OCV API
-
-    # ── Georgia — Tier 1 Metro ─────────────────────────────────────────────────
-    sched.register_scraper(FultonScraper(), interval_minutes=30)           # Socrata API — Atlanta core, 1.1M pop
-    sched.register_scraper(GwinnettScraper(), interval_minutes=30)         # SmartWebClient — 960K pop
-    sched.register_scraper(ChathamScraper(), interval_minutes=30)          # Custom HTML — Savannah, 300K pop
-    sched.register_scraper(RichmondScraper(), interval_minutes=60)         # ColdFusion — Augusta, 202K pop
-    sched.register_scraper(ForsythGAScraper(), interval_minutes=30)        # P2C — 250K pop
-    sched.register_scraper(HallScraper(), interval_minutes=30)             # P2C — 200K pop
-    sched.register_scraper(LowndesScraper(), interval_minutes=60)          # Tyler Odyssey — Valdosta
-
-    # ── Georgia — Tier 2 Mid-Market ───────────────────────────────────────────
-    sched.register_scraper(DouglasScraper(), interval_minutes=60)          # Zuercher
-    sched.register_scraper(HoustonScraper(), interval_minutes=60)          # Zuercher
-    sched.register_scraper(FloydScraper(), interval_minutes=60)            # Zuercher — Rome
-    sched.register_scraper(CatoosaScraper(), interval_minutes=60)          # Zuercher — Ringgold
-    sched.register_scraper(GlynnScraper(), interval_minutes=60)            # Custom HTML — Brunswick
-
-    # ── Georgia — Southern Software Counties ──────────────────────────────────
-    sched.register_scraper(BanksScraper(), interval_minutes=120)           # Southern SW
-    sched.register_scraper(DecaturScraper(), interval_minutes=120)         # Southern SW — Bainbridge
-    sched.register_scraper(LeeScraper(), interval_minutes=120)             # Southern SW — Leesburg
-    sched.register_scraper(OglethorpeScraper(), interval_minutes=120)      # Southern SW
-
-    # ── Georgia — EAS Batch (27 counties in one run) ──────────────────────────
-    # EAS batch runs as a standalone function — registered via APScheduler directly
-    scheduler.scheduler.add_job(
-        run_eas_batch,
-        trigger=IntervalTrigger(minutes=60),
-        id="eas_batch_georgia",
-        name="EAS Batch Runner (27 GA Counties)",
-        replace_existing=True,
-        misfire_grace_time=600,
-    )
-
-    # ── Georgia — Walton XML Feed ─────────────────────────────────────────────
-    sched.register_scraper(WaltonGAScraper(), interval_minutes=30)         # XML Feed
-
-# Global watcher instance (set in main)
-_fa_watcher: "FirstAppearanceWatcher | None" = None
-
-
-def handle_shutdown(signum, frame):
-    logger.info("Shutdown signal received")
-    if scheduler:
-        scheduler.stop()
-    if _fa_watcher:
-        _fa_watcher.close()
-    sys.exit(0)
-
-def _run_scheduled_cleanup():
-    """Wrapper for APScheduler to run MongoDB + data cleanup."""
-    logger.info("🧹 Running scheduled data cleanup...")
-    try:
-        result = run_cleanup()
-        logger.info(f"🧹 Cleanup complete: {result}")
-    except Exception as e:
-        logger.error(f"🧹 Cleanup failed: {e}")
-
-
-def _run_first_appearance_watcher():
-    """
-    Wrapper for APScheduler to run the FirstAppearanceWatcher cycle.
-    Re-checks no-bond / disqualified records up to 3 days after arrest
-    so that bond set at first appearance is detected and re-alerted.
-    """
-    if _fa_watcher is None:
-        return
-    try:
-        stats = _fa_watcher.run()
-        if stats.get("bond_set", 0) > 0:
-            logger.info(
-                f"🔔 FirstAppearanceWatcher: {stats['bond_set']} bond(s) set this cycle"
-            )
-    except Exception as e:
-        logger.error(f"FirstAppearanceWatcher run failed: {e}")
+from scrapers.counties_ga.grady import GradyScraper
+from scrapers.counties_ga.gwinnett import GwinnettScraper
+from scrapers.counties_ga.habersham import HabershamScraper
+from scrapers.counties_ga.hall import HallScraper
+from scrapers.counties_ga.hancock import HancockScraper
+from scrapers.counties_ga.haralson import HaralsonScraper
+from scrapers.counties_ga.heard import HeardScraper
+from scrapers.counties_ga.henry import HenryScraper
+from scrapers.counties_ga.houston import HoustonScraper
+from scrapers.counties_ga.jasper import JasperScraper
+from scrapers.counties_ga.johnson import JohnsonScraper
+from scrapers.counties_ga.jones import JonesScraper
+from scrapers.counties_ga.lee import LeeScraper
+from scrapers.counties_ga.liberty import LibertyScraper
+from scrapers.counties_ga.lowndes import LowndesScraper
+from scrapers.counties_ga.lumpkin import LumpkinScraper
+from scrapers.counties_ga.macon import MaconScraper
+from scrapers.counties_ga.mcintosh import McIntoshScraper
+from scrapers.counties_ga.miller import MillerScraper
+from scrapers.counties_ga.murray import MurrayScraper
+from scrapers.counties_ga.muscogee import MuscogeeScraper
+from scrapers.counties_ga.oconee import OconeeScraper
+from scrapers.counties_ga.oglethorpe import OglethorpeScraper
+from scrapers.counties_ga.paulding import PauldingScraper
+from scrapers.counties_ga.pickens import PickensScraper
+from scrapers.counties_ga.polk import PolkScraper
+from scrapers.counties_ga.pulaski import PulaskiScraper
+from scrapers.counties_ga.putnam import PutnamScraper
+from scrapers.counties_ga.randolph import RandolphScraper
+from scrapers.counties_ga.richmond import RichmondScraper
+from scrapers.counties_ga.rockdale import RockdaleScraper
+from scrapers.counties_ga.spalding import SpaldingScraper
+from scrapers.counties_ga.sumter import SumterScraper
+from scrapers.counties_ga.tattnall import TattnallScraper
+from scrapers.counties_ga.taylor import TaylorScraper
+from scrapers.counties_ga.thomas import ThomasScraper
+from scrapers.counties_ga.toombs import ToombsScraper
+from scrapers.counties_ga.treutlen import TreutlenScraper
+from scrapers.counties_ga.troup import TroupScraper
+from scrapers.counties_ga.twiggs import TwiggsScraper
+from scrapers.counties_ga.upson import UpsonScraper
+from scrapers.counties_ga.walton import WaltonScraper
 
 def main():
     global scheduler, _fa_watcher
@@ -372,4 +251,81 @@ def main():
         handle_shutdown(None, None)
 
 if __name__ == "__main__":
-    main()
+    main()    # ── Georgia All Counties ───────────────────────────────────────────────────
+    sched.scheduler.add_job(run_eas_batch, 'interval', minutes=60, id='eas_batch', replace_existing=True)
+    sched.register_scraper(BaconScraper(), interval_minutes=120)
+    sched.register_scraper(BakerScraper(), interval_minutes=120)
+    sched.register_scraper(BanksScraper(), interval_minutes=120)
+    sched.register_scraper(BarrowScraper(), interval_minutes=60)
+    sched.register_scraper(BartowScraper(), interval_minutes=60)
+    sched.register_scraper(BibbScraper(), interval_minutes=120)
+    sched.register_scraper(BrantleyScraper(), interval_minutes=120)
+    sched.register_scraper(BryanScraper(), interval_minutes=120)
+    sched.register_scraper(BullochScraper(), interval_minutes=120)
+    sched.register_scraper(CamdenScraper(), interval_minutes=60)
+    sched.register_scraper(CarrollScraper(), interval_minutes=120)
+    sched.register_scraper(CatoosaScraper(), interval_minutes=120)
+    sched.register_scraper(ChathamScraper(), interval_minutes=120)
+    sched.register_scraper(CherokeeScraper(), interval_minutes=120)
+    sched.register_scraper(ClarkeScraper(), interval_minutes=120)
+    sched.register_scraper(CobbScraper(), interval_minutes=120)
+    sched.register_scraper(ColumbiaScraper(), interval_minutes=60)
+    sched.register_scraper(CowetaScraper(), interval_minutes=60)
+    sched.register_scraper(CrawfordScraper(), interval_minutes=120)
+    sched.register_scraper(DawsonScraper(), interval_minutes=120)
+    sched.register_scraper(DecaturScraper(), interval_minutes=120)
+    sched.register_scraper(DeKalbScraper(), interval_minutes=60)
+    sched.register_scraper(DodgeScraper(), interval_minutes=120)
+    sched.register_scraper(DoughertyScraper(), interval_minutes=60)
+    sched.register_scraper(DouglasScraper(), interval_minutes=120)
+    sched.register_scraper(EcholsScraper(), interval_minutes=60)
+    sched.register_scraper(EmanuelScraper(), interval_minutes=120)
+    sched.register_scraper(FayetteScraper(), interval_minutes=120)
+    sched.register_scraper(FloydScraper(), interval_minutes=120)
+    sched.register_scraper(ForsythScraper(), interval_minutes=60)
+    sched.register_scraper(FultonScraper(), interval_minutes=120)
+    sched.register_scraper(GlynnScraper(), interval_minutes=120)
+    sched.register_scraper(GradyScraper(), interval_minutes=120)
+    sched.register_scraper(GwinnettScraper(), interval_minutes=120)
+    sched.register_scraper(HabershamScraper(), interval_minutes=120)
+    sched.register_scraper(HallScraper(), interval_minutes=60)
+    sched.register_scraper(HancockScraper(), interval_minutes=120)
+    sched.register_scraper(HaralsonScraper(), interval_minutes=120)
+    sched.register_scraper(HeardScraper(), interval_minutes=120)
+    sched.register_scraper(HenryScraper(), interval_minutes=60)
+    sched.register_scraper(HoustonScraper(), interval_minutes=120)
+    sched.register_scraper(JasperScraper(), interval_minutes=120)
+    sched.register_scraper(JohnsonScraper(), interval_minutes=120)
+    sched.register_scraper(JonesScraper(), interval_minutes=120)
+    sched.register_scraper(LeeScraper(), interval_minutes=120)
+    sched.register_scraper(LibertyScraper(), interval_minutes=120)
+    sched.register_scraper(LowndesScraper(), interval_minutes=60)
+    sched.register_scraper(LumpkinScraper(), interval_minutes=120)
+    sched.register_scraper(MaconScraper(), interval_minutes=60)
+    sched.register_scraper(McIntoshScraper(), interval_minutes=120)
+    sched.register_scraper(MillerScraper(), interval_minutes=120)
+    sched.register_scraper(MurrayScraper(), interval_minutes=120)
+    sched.register_scraper(MuscogeeScraper(), interval_minutes=60)
+    sched.register_scraper(OconeeScraper(), interval_minutes=120)
+    sched.register_scraper(OglethorpeScraper(), interval_minutes=120)
+    sched.register_scraper(PauldingScraper(), interval_minutes=60)
+    sched.register_scraper(PickensScraper(), interval_minutes=120)
+    sched.register_scraper(PolkScraper(), interval_minutes=120)
+    sched.register_scraper(PulaskiScraper(), interval_minutes=120)
+    sched.register_scraper(PutnamScraper(), interval_minutes=120)
+    sched.register_scraper(RandolphScraper(), interval_minutes=120)
+    sched.register_scraper(RichmondScraper(), interval_minutes=120)
+    sched.register_scraper(RockdaleScraper(), interval_minutes=60)
+    sched.register_scraper(SpaldingScraper(), interval_minutes=60)
+    sched.register_scraper(SumterScraper(), interval_minutes=120)
+    sched.register_scraper(TattnallScraper(), interval_minutes=120)
+    sched.register_scraper(TaylorScraper(), interval_minutes=120)
+    sched.register_scraper(ThomasScraper(), interval_minutes=120)
+    sched.register_scraper(ToombsScraper(), interval_minutes=120)
+    sched.register_scraper(TreutlenScraper(), interval_minutes=120)
+    sched.register_scraper(TroupScraper(), interval_minutes=120)
+    sched.register_scraper(TwiggsScraper(), interval_minutes=120)
+    sched.register_scraper(UpsonScraper(), interval_minutes=120)
+    sched.register_scraper(WaltonScraper(), interval_minutes=120)
+
+

@@ -41,6 +41,9 @@ EAS_COUNTIES = [
     ("Wayne", "waynecoga"),
     ("Webster", "webstercoga"),
     ("Wheeler", "wheelercoga"),
+    ("McDuffie", "mcduffiecoga"),
+    ("Meriwether", "meriwethercoga"),
+    ("Warren", "warrencoga"),
     ("Worth", "worthcoga")
 ]
 

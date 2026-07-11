@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 
+## [2.8.0] — 2026-07-11 (Georgia Expansion Phase 1c - Track C)
+### Added — Scrapers
+- **Track C (Deep Recon)**: Built 60 new Georgia county scrapers based on parallel recon results.
+- **InteropWeb Base Class**: Created `interopweb_base.py` to handle the standard HTML table format used by 35 rural Georgia counties.
+- **SmartCOP Base Class**: Created `smartcop_base.py` to handle ASP.NET ViewState POSTs for Putnam, Sumter, and Taylor counties.
+- **EAS Batch Expansion**: Added McDuffie, Meriwether, and Warren to `eas_batch_runner.py` (now 30 counties).
+- **Base Class Reuse**: Added 10 Tyler/New World counties, 3 Zuercher counties, 4 P2C counties, and 2 JailTracker counties.
+### Changed — Core
+- **Scheduler**: Registered 57 new standalone scrapers in `main.py`.
+### Changed — Documentation
+- **Scale Update**: System now tracks 160 total active scrapers (52 FL, 108 GA).
+- **Registry**: Updated `GEORGIA_COUNTY_REGISTRY.md` and added `GEORGIA_RECON_TRACK_C.md` with full discovery results.
+
 ## [2.7.0] — 2026-07-11 (Georgia Expansion Phase 1c - Track A & B)
 ### Added — Scrapers
 - **Track A (Base Class Reuse)**: Added 6 new Georgia counties using existing base classes:

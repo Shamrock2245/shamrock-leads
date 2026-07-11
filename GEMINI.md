@@ -86,7 +86,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| County scraper files | 90 (52 FL in `scrapers/counties/`, 48 GA in `scrapers/counties_ga/`) |
+| County scraper files | 90 (52 FL in `scrapers/counties/`, 108 GA in `scrapers/counties_ga/`) |
 | API blueprint modules | 66 (in `dashboard/routers/`) |
 | Service modules | 45 (in `dashboard/services/`) |
 | Frontend JS modules | 45 (`sl-*.js` + `defendants.js`) |
