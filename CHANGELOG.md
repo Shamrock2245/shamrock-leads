@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ---
 
 
+## [2.10.0] — 2026-07-11 (South Carolina Expansion Phase 1e)
+### Added — Scrapers
+- **SC Custom HTML Stubs**: Built and registered 15 custom HTML scraper stubs for the remaining confirmed SC portals:
+  - Tier 1 (High Value): Greenville, Charleston, Richland, Horry, York, Beaufort, Aiken
+  - Tier 2: Florence, Darlington, Marion, Newberry, Berkeley, Bamberg, Hampton, Jasper
+### Changed — Core
+- **Scheduler**: Registered 15 new SC scrapers in `main.py` (now tracking 31 SC counties total).
+### Changed — Documentation
+- **Scale Update**: System now tracks 191 total active scrapers (52 FL, 108 GA, 31 SC).
+
 ## [2.9.0] — 2026-07-11 (South Carolina Expansion Phase 1d)
 ### Added — Scrapers
 - **South Carolina Recon**: Executed parallel recon across all 46 SC counties.

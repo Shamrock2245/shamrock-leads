@@ -172,6 +172,21 @@ from scrapers.counties_ga.upson import UpsonScraper
 from scrapers.counties_ga.walton import WaltonScraper
 
 # ── South Carolina Scrapers ────────────────────────────────────────────────────────
+from scrapers.counties_sc.aiken import AikenScraper
+from scrapers.counties_sc.bamberg import BambergScraper
+from scrapers.counties_sc.beaufort import BeaufortScraper
+from scrapers.counties_sc.berkeley import BerkeleyScraper
+from scrapers.counties_sc.charleston import CharlestonScraper
+from scrapers.counties_sc.darlington import DarlingtonScraper
+from scrapers.counties_sc.florence import FlorenceScraper
+from scrapers.counties_sc.greenville import GreenvilleScraper
+from scrapers.counties_sc.hampton import HamptonScraper
+from scrapers.counties_sc.horry import HorryScraper
+from scrapers.counties_sc.jasper import JasperScraper
+from scrapers.counties_sc.marion import MarionScraper
+from scrapers.counties_sc.newberry import NewberryScraper
+from scrapers.counties_sc.richland import RichlandScraper
+from scrapers.counties_sc.york import YorkScraper
 from scrapers.counties_sc.anderson import AndersonScraper
 from scrapers.counties_sc.cherokee import CherokeeScraper
 from scrapers.counties_sc.chester import ChesterScraper
@@ -347,6 +362,21 @@ if __name__ == "__main__":
     sched.register_scraper(WaltonScraper(), interval_minutes=120)
 
     # ── South Carolina All Counties ────────────────────────────────────────────
+    sched.register_scraper(AikenScraper(), interval_minutes=60)
+    sched.register_scraper(BambergScraper(), interval_minutes=60)
+    sched.register_scraper(BeaufortScraper(), interval_minutes=60)
+    sched.register_scraper(BerkeleyScraper(), interval_minutes=60)
+    sched.register_scraper(CharlestonScraper(), interval_minutes=60)
+    sched.register_scraper(DarlingtonScraper(), interval_minutes=60)
+    sched.register_scraper(FlorenceScraper(), interval_minutes=60)
+    sched.register_scraper(GreenvilleScraper(), interval_minutes=60)
+    sched.register_scraper(HamptonScraper(), interval_minutes=60)
+    sched.register_scraper(HorryScraper(), interval_minutes=60)
+    sched.register_scraper(JasperScraper(), interval_minutes=60)
+    sched.register_scraper(MarionScraper(), interval_minutes=60)
+    sched.register_scraper(NewberryScraper(), interval_minutes=60)
+    sched.register_scraper(RichlandScraper(), interval_minutes=60)
+    sched.register_scraper(YorkScraper(), interval_minutes=60)
     sched.register_scraper(AndersonScraper(), interval_minutes=120)
     sched.register_scraper(CherokeeScraper(), interval_minutes=120)
     sched.register_scraper(ChesterScraper(), interval_minutes=120)

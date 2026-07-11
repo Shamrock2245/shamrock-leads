@@ -168,7 +168,7 @@ A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,
 
 ## County Coverage
 
-**176 active scraper files** across Florida and Georgia, utilizing shared base classes for common JMS platforms:
+**191 active scraper files** across Florida and Georgia, utilizing shared base classes for common JMS platforms:
 
 ### Scraper Strategies
 

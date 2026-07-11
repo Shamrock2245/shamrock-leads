@@ -12,7 +12,7 @@
 
 ShamrockLeads is a **statewide arrest intelligence and bond Auto-CRM** platform that:
 
-1. **Scrapes** Florida and Georgia county jail rosters on scheduled intervals `[IMPLEMENTED — 176 files]`
+1. **Scrapes** Florida and Georgia county jail rosters on scheduled intervals `[IMPLEMENTED — 191 files]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
@@ -117,7 +117,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  176 County Scrapers  │  │  7 dashboard pages         │ │
+│  │  191 County Scrapers  │  │  7 dashboard pages         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
 │  │  Lead Scorer         │            │                   │
