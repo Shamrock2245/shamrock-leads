@@ -21,12 +21,19 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 
 
 def serialize_doc(doc: dict) -> dict:
-    """Convert datetime values to ISO strings for JSON serialization."""
+    """Convert values to JSON-safe types.
+
+    - datetime  → ISO-8601 string
+    - ObjectId  → hex string
+    - booking_number (int/float) → string  (prevents JS .replace() TypeError)
+    """
     for k, v in doc.items():
         if isinstance(v, datetime):
             doc[k] = v.isoformat()
         elif isinstance(v, ObjectId):
             doc[k] = str(v)
+        elif k == "booking_number" and not isinstance(v, str):
+            doc[k] = str(v) if v is not None else ""
     return doc
 
 

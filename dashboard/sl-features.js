@@ -50,8 +50,8 @@ async function loadDefendants() {
       const stBadge = stLower.includes('custody')?'custody':stLower.includes('release')||stLower.includes('bonded')?'released':stLower.includes('not in')?'released':'other';
       const sc = (l.lead_status||'').toLowerCase();
       const scoreCls = sc==='hot'?'score-hot':sc==='warm'?'score-warm':'score-cold';
-      const bkSafe = (l.booking_number||'').replace(/'/g,"\\'");
-      const bkEscD = (l.booking_number||'').replace(/"/g,'&quot;');
+      const bkSafe = String(l.booking_number||'').replace(/'/g,"\\'");
+      const bkEscD = String(l.booking_number||'').replace(/"/g,'&quot;');
       const custDrop = `<select class="def-status-badge ${stBadge}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEscD}',this.value,this)"><option value="" ${!stVal?'selected':''}>${stVal||'\u2014'}</option><option value="In Custody" ${'In Custody'===stVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===stVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===stVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===stVal?'selected':''}>Bonded Out</option></select>`;
       return `<div class="def-card" data-booking="${bkEscD}">
         <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
@@ -63,7 +63,7 @@ async function loadDefendants() {
           <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
-          <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact</button>
+          <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${String(l.booking_number||'')}')">📞 Contact</button>
           <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track</button>
             <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Bond</button>
           <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Life</button>
