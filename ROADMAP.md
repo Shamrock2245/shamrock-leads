@@ -1,16 +1,20 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.  
-> **Last Updated:** 2026-07-10 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
-> **Read `BRAND.md` first.** Platform: [`docs/PLATFORM.md`](./docs/PLATFORM.md) · Prod: [`docs/ECOSYSTEM_PROD_CHECKLIST.md`](./docs/ECOSYSTEM_PROD_CHECKLIST.md)
+> **Last Updated:** 2026-07-14 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
+> **Read `BRAND.md` first.** Platform: [`docs/PLATFORM.md`](./docs/PLATFORM.md) · Prod: [`docs/ECOSYSTEM_PROD_CHECKLIST.md`](./docs/ECOSYSTEM_PROD_CHECKLIST.md) · Multi-state: [`docs/MULTI_STATE_SCRAPER_ROADMAP.md`](./docs/MULTI_STATE_SCRAPER_ROADMAP.md)
 
 ## Phase Overview
 
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
-| 1b | FL County Expansion (52 scraper files / 67 total) | ✅ Complete |
-| 1c | GA County Expansion (108 active counties / 159 total) | 🔄 In Progress |
+| 1b | FL County Expansion (51 registered / 67 goal) | ✅ Complete (core market) |
+| 1c | GA County Expansion (74 registered / 159 goal) | 🔄 In Progress |
+| 1d | SC County Expansion (46/46 registered) | ✅ Registered · ⏳ production depth |
+| 1e | NC Wave-1 (27 registered / 100 goal) | ✅ Wave-1 code · ⏳ first production scrapes |
+| 1f | Multi-State Ops dashboard (FL/GA/SC/NC) | ✅ Complete (July 2026) |
+| 1g | TN / TX / CT / LA / MS | 🔲 Scaffold packages only |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -37,47 +41,67 @@
 
 ---
 
-## Phase 1b: FL County Expansion ✅ COMPLETE
+## Phase 1b: FL County Expansion ✅ COMPLETE (core market)
 
-Expanded from 20 to **52 county scraper files** across Florida. All scrapers are registered in `main.py` with per-county intervals.
+**Registered:** 51 FL scrapers in `scrapers/counties/` (legacy job IDs `scraper_<county>`).
 
-**Scraper file count:** 52 files in `scrapers/counties/` (excluding `__init__.py`).
+**Shared bases:** P2C, SmartCOP, JailTracker, New World, Kologik, Southern SW, etc.
 
-**Scraper strategies:**
-| Strategy | Library | Counties |
-|----------|---------|----------|
-| Browser Automation | DrissionPage | Charlotte, Hillsborough, Manatee, Pinellas, Volusia, Pasco + more |
-| Stealth Browser | Patchright | Sarasota |
-| TLS Fingerprint | curl_cffi | Collier, Hendry |
-| Standard HTTP | requests + BS4 | Lee, DeSoto, Brevard, Escambia, Orange, Polk + more |
-
-**Shared base classes:**
-| Base Class | Platform | Counties |
-|-----------|----------|----------|
-| `P2CBaseScraper` | Police-to-Citizen (CentralSquare) | Clay, Marion, Alachua, Putnam |
-| `SmartCOPBaseScraper` | SmartCOP Solutions | Columbia, Dixie, Gadsden, Glades, Hardee, Jackson, Suwannee, Taylor + more |
-
-**Remaining 15 counties:** Small rural counties (🟡 Needs URL recon). See `docs/COUNTY_REGISTRY.md`.
+**Remaining FL counties:** rural / no public roster — see `docs/COUNTY_REGISTRY.md`.
 
 ---
 
 ## Phase 1c: GA County Expansion 🔄 IN PROGRESS
 
-Expanding operations to the State of Georgia (159 counties).
+**Registered:** 74 GA scrapers in `scrapers/counties_ga/` (+ EAS batch for rural cluster).
 
-**Scraper file count:** 38 active counties via 75 scraper files in `scrapers/counties_ga/`.
+**Bases:** EAS, Zuercher, Southern SW, InteropWeb, SmartCOP, Socrata, XML Feed, Odyssey stubs.
 
-**Scraper strategies:**
-| Strategy | Base Class | Counties |
-|----------|------------|----------|
-| EAS Batch Runner | `EASBaseScraper` | 27 counties (offenderindex.com) |
-| Zuercher API | `ZuercherBaseScraper` | Douglas, Houston, Floyd, Catoosa |
-| Southern Software | `SouthernSWBaseScraper`| Banks, Decatur, Lee, Oglethorpe |
-| Socrata Open Data | `SocrataBaseScraper` | Fulton (Atlanta) |
-| XML Feed | `XMLFeedBaseScraper` | Walton |
-| Custom HTML | `BaseScraper` | Chatham, Gwinnett, Richmond, Glynn, Cobb |
+See `docs/GEORGIA_COUNTY_REGISTRY.md`. Goal: all 159 counties over time.
 
-**Remaining ~111 counties:** Need URL recon and custom HTML parsers. See `docs/GEORGIA_COUNTY_REGISTRY.md`.
+---
+
+## Phase 1d: SC County Expansion ✅ REGISTERED (production depth ongoing)
+
+**Registered:** **46/46** SC counties in `scrapers/counties_sc/` (`scraper_sc_*`).
+
+- Platform wrappers: Zuercher, JailTracker, Southern SW, P2C, New World, SmartCOP
+- Custom production paths: Beaufort (XML), Charleston, York, Florence, Horry, Richland, Jasper, Greenville (proxy/CAPTCHA), …
+- Scaffolds for no-portal / broken recon URLs (Spartanburg 404, rural counties)
+
+**Docs:** `docs/SC_COUNTY_REGISTRY.md`, `docs/SC_RECON_RESULTS.md`
+
+---
+
+## Phase 1e: NC Wave-1 ✅ CODE · ⏳ FIRST PROD SCRAPES
+
+**Registered:** **27** NC wave-1 scrapers in `scrapers/counties_nc/` (`scraper_nc_*`).
+
+| Platform | Examples |
+|----------|----------|
+| Southern SW | Anson, Duplin, Edgecombe, Harnett, Henderson, … |
+| Zuercher | Brunswick, Davie, Hoke, Pender, Rutherford |
+| P2C classic | Alamance, Cabarrus, Cleveland, Iredell, Lincoln, … |
+| Custom | Mecklenburg, Durham, Davidson, Gaston |
+
+**Docs:** `docs/NC_COUNTY_REGISTRY.md`, `docs/NC_RECON_RESULTS.md`  
+**Next:** first successful production scrapes → expand beyond wave-1 (100-county goal).
+
+---
+
+## Phase 1f: Multi-State Ops Dashboard ✅ COMPLETE
+
+- **Multi-State Ops** tab: `/api/ops/*` registry, state KPIs, live arrest feed (FL/GA/SC/NC)
+- **Bond Intelligence** tab: bond analytics by state
+- Lead Explorer: state column + filter; `REGISTERED_COUNTIES` labels `County (ST)`
+- Run-now triggers emit state-prefixed keys (`nc_mecklenburg`, `sc_lee`)
+
+---
+
+## Phase 1g: Remaining Palmetto states 🔲 SCAFFOLD
+
+Package dirs exist: `counties_tn/`, `counties_tx/`, `counties_ct/`, `counties_la/`, `counties_ms/`.  
+Order of battle: see `docs/MULTI_STATE_SCRAPER_ROADMAP.md` (NC→TN→LA/MS→TX→CT).
 
 ---
 

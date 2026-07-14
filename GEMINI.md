@@ -86,17 +86,15 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| County scraper files | 90 (52 FL in `scrapers/counties/`, 108 GA, 31 SC in `scrapers/counties_ga/`) |
-| API blueprint modules | 66 (in `dashboard/routers/`) |
-| Service modules | 45 (in `dashboard/services/`) |
-| Frontend JS modules | 45 (`sl-*.js` + `defendants.js`) |
-| Frontend CSS files | 9 (`styles.css`, `sl-overhaul.css`, `sl-imessage.css`, `sl-design-system.css`, `sl-premium.css`, `sl-intelligence.css`, `sl-alpha-intel.css`, `sl-enrichment.css`, `responsive.css`) |
-| Frontend JS LOC | ~24,900 |
-| Frontend CSS LOC | ~9,600 |
-| Backend API LOC | ~26,300 |
-| Backend services LOC | ~15,700 |
+| Registered scrapers | **198** (51 FL · 74 GA · 46 SC · 27 NC) — see `STATUS.md` |
+| Scraper paths | `counties/`, `counties_ga/`, `counties_sc/`, `counties_nc/` (+ TN/TX/CT/LA/MS scaffolds) |
+| Job ID form | FL: `scraper_<county>` · other: `scraper_<st>_<county>` |
+| API blueprint modules | 66+ (in `dashboard/routers/`) incl. `multi_state_ops.py` |
+| Service modules | 45+ (in `dashboard/services/`) |
+| Frontend JS modules | 45+ (`sl-*.js` + Multi-State Ops + Bond Intelligence) |
+| Frontend CSS files | 11+ (incl. `sl-multi-state.css`, `sl-bond-intelligence.css`) |
 | Agent skills | 36 (in `.agent/skills/`) |
-| Dashboard tabs | 21 (Command Center, Lead Explorer, Defendants, Outreach, Health, Active Bonds, Tracking, Intake, Indemnitors, Analytics, Intelligence, Legal NLP, Calendar, Reports, Portal, iMessage, Accounting, Alpha Intel, FTA, Social, Enrichment) |
+| Dashboard tabs | Super CRM + **Multi-State Ops** + **Bond Intelligence** + lifecycle/ops tabs |
 
 ---
 

@@ -1,15 +1,15 @@
-# ShamrockLeads — Florida & Georgia Arrest Intelligence + Bond Auto-CRM
+# ShamrockLeads — Multi-State Arrest Intelligence + Bond Auto-CRM
 
-> **Scrape. Score. Route. Bond.** — Real-time arrest data and bond lifecycle ops.
+> **Scrape. Score. Route. Bond.** — Real-time arrest data and bond lifecycle ops across FL · GA · SC · NC.
 
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Active%20Scrapers-90-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-198-orange)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
 
-**True status:** see [`STATUS.md`](./STATUS.md) · Super CRM: [`docs/SUPER_CRM.md`](./docs/SUPER_CRM.md) · Ecosystem: [`docs/ECOSYSTEM.md`](./docs/ECOSYSTEM.md)
+**True status:** see [`STATUS.md`](./STATUS.md) · Multi-state: [`docs/MULTI_STATE_SCRAPER_ROADMAP.md`](./docs/MULTI_STATE_SCRAPER_ROADMAP.md) · Super CRM: [`docs/SUPER_CRM.md`](./docs/SUPER_CRM.md) · Ecosystem: [`docs/ECOSYSTEM.md`](./docs/ECOSYSTEM.md)
 
 ---
 
@@ -19,12 +19,12 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 **Product boundary:** Bail School education is **`shamrock-bail-school`** (separate funnel). This repo does not host the student LMS.
 
-**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year by dominating the Florida (67 counties) and Georgia (159 counties) markets.
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint** (FL, SC, NC, TN, TX, CT, LA, MS) plus **Georgia** adjacent market — with OSI primary in Florida.
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **52 Florida and 38 Georgia county** jail rosters on scheduled intervals
-2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema
+1. **Scrapes** real-time booking data from **198 registered county scrapers** (51 FL · 74 GA · 46 SC · 27 NC) on scheduled intervals
+2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
 5. **Alerts** bondsmen via Slack with real-time hot lead notifications
@@ -41,7 +41,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 16. **Monitors** Gmail for court discharge/exoneration emails
 17. **Syncs** court dates to Google Calendar with Twilio SMS reminders
 18. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
-19. **Visualizes** everything through a **21-tab Intelligence Dashboard**
+19. **Visualizes** multi-state ops via Super CRM + **Multi-State Ops** + **Bond Intelligence**
 20. **Automates** social media presence across platforms via Postiz integration
 
 ---
@@ -168,32 +168,34 @@ A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,
 
 ## County Coverage
 
-**191 active scraper files** across Florida and Georgia, utilizing shared base classes for common JMS platforms:
+**198 registered scrapers** (dashboard `REGISTERED_COUNTIES`) across **FL · GA · SC · NC**, reusing shared JMS bases:
 
-### Scraper Strategies
+| State | Registered | Path | Job ID form |
+|-------|----------:|------|-------------|
+| Florida | 51 | `scrapers/counties/` | `scraper_<county>` (legacy) |
+| Georgia | 74 | `scrapers/counties_ga/` | `scraper_ga_<county>` |
+| South Carolina | 46 | `scrapers/counties_sc/` | `scraper_sc_<county>` |
+| North Carolina | 27 (wave-1) | `scrapers/counties_nc/` | `scraper_nc_<county>` |
 
-| Strategy | Library | Use Case | Counties |
-|----------|---------|----------|----------|
-| **Browser Automation** | DrissionPage | JS-heavy, login walls, anti-bot | Charlotte, Hillsborough, Manatee, Pinellas, Volusia, Pasco + more |
-| **Stealth Browser** | Patchright | Advanced anti-bot (Playwright fork) | Sarasota |
-| **TLS Fingerprint** | curl_cffi | TLS fingerprint detection | Collier, Hendry |
-| **Standard HTTP** | requests + BeautifulSoup | Simple HTML/REST APIs | Lee, DeSoto, Brevard, Escambia, Orange, Polk + more |
+**CLI:** `python main.py lee` · `python main.py sc_jasper` · `python main.py nc_mecklenburg`
 
-### Shared Base Classes (Florida & Georgia)
+### Shared Base Classes
 
-| Base Class | JMS Platform | Counties |
-|-----------|-------------|----------|
-| `EASBaseScraper` | Eagle Advantage Solutions | 27 Georgia counties (via `eas_batch_runner`) |
-| `P2CBaseScraper` | Police-to-Citizen (CentralSquare) | FL: Clay, Marion, Alachua, Putnam. GA: Forsyth, Hall |
-| `SmartCOPBaseScraper` | SmartCOP Solutions | FL: Columbia, Dixie, Gadsden, Glades, Hardee, Jackson + 13 more |
-| `ZuercherBaseScraper` | Zuercher Technologies | GA: Douglas, Houston, Floyd, Catoosa |
-| `SouthernSWBaseScraper` | Southern Software | GA: Banks, Decatur, Lee, Oglethorpe |
-| `SocrataBaseScraper` | Socrata Open Data API | GA: Fulton |
-| `XMLFeedBaseScraper` | Direct XML Feeds | GA: Walton |
-| `GenericAdaptiveScraper` | Auto-detect (HTML tables) | Fallback for unknown platforms |
+| Base Class | JMS Platform | Used in |
+|-----------|-------------|---------|
+| `EASBaseScraper` | Eagle Advantage Solutions | GA rural batch |
+| `P2CBaseScraper` | Police-to-Citizen (CentralSquare) | FL, GA, SC, NC |
+| `SmartCOPBaseScraper` | SmartCOP Solutions | FL, GA, SC |
+| `ZuercherBaseScraper` | Zuercher Technologies | GA, SC, NC |
+| `SouthernSWBaseScraper` | Southern Software | GA, SC, NC |
+| `JailTrackerBaseScraper` | JailTracker | FL, SC, GA |
+| `NewWorldBaseScraper` | New World InmateInquiry | FL, GA, SC |
+| `KologikBaseScraper` | Kologik Vue roster | FL (reusable) |
+| `OdysseyBaseScraper` | Tyler Odyssey family | GA stubs |
+| `SocrataBaseScraper` / `XMLFeedBaseScraper` | Open data / XML | GA |
 
-> **Goal:** All 67 Florida counties and 159 Georgia counties. 
-> See [COUNTY_REGISTRY.md](docs/COUNTY_REGISTRY.md) (FL) and [GEORGIA_COUNTY_REGISTRY.md](docs/GEORGIA_COUNTY_REGISTRY.md) (GA) for full registries.
+> **Roadmap:** Palmetto states TN → LA/MS → TX → CT after NC depth.  
+> Registries: [FL](docs/COUNTY_REGISTRY.md) · [GA](docs/GEORGIA_COUNTY_REGISTRY.md) · [SC](docs/SC_COUNTY_REGISTRY.md) · [NC](docs/NC_COUNTY_REGISTRY.md) · [Multi-state plan](docs/MULTI_STATE_SCRAPER_ROADMAP.md).
 
 ---
 

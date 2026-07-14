@@ -2,17 +2,19 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build).  
-> Last updated: 2026-07-14
+> Last updated: 2026-07-14  
+> **Live registered (dashboard):** 51 FL · 74 GA · 46 SC · 27 NC = **198** — see root `STATUS.md`
 
 ## Why this order
 
-1. **FL** — OSI home market + densest scrapers already live  
-2. **SC** — Palmetto HQ-adjacent; recon complete for all 46  
-3. **GA** — large existing Track A/B/C investment  
-4. **NC → TN** — shared JMS vendors with SC/GA (Zuercher, Southern SW, JailTracker)  
-5. **LA → MS** — Gulf corridor overlap with FL panhandle ops  
-6. **TX** — largest county count; needs dedicated recon wave  
-7. **CT** — only 8 counties; quick once bases are solid  
+1. **FL** — OSI home market + densest scrapers already live ✅  
+2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
+3. **GA** — large existing Track A/B/C investment 🔄  
+4. **NC** — wave-1 **27 registered**; deepen scrapes then expand 🔄  
+5. **TN** — shared JMS vendors with SC/GA (Zuercher, Southern SW, JailTracker) 🔲  
+6. **LA → MS** — Gulf corridor overlap with FL panhandle ops 🔲  
+7. **TX** — largest county count; needs dedicated recon wave 🔲  
+8. **CT** — only 8 counties; quick once bases are solid 🔲  
 
 ## Shared platform bases (leverage first)
 
@@ -41,19 +43,18 @@
 
 ## Per-state playbook
 
-### SC (current focus)
-1. **Richland ✅** — captcha bypass + digraph roster walk live  
-2. **Greenville** — Incapsula; enable via residential SOCKS env  
-3. Harden platform wrappers (Zuercher JSON, JailTracker captcha)  
-4. Proxy path for 403 jailroster.org family  
-5. Scaffold remaining no-portal counties as explicit empty + Slack-quiet  
+### SC (registered — harden production)
+1. **All 46 modules registered** — see `docs/SC_COUNTY_REGISTRY.md`  
+2. Live custom paths: Beaufort XML, Charleston, York, Florence, Horry, Richland, Jasper, …  
+3. **Greenville** — Incapsula; residential SOCKS when available  
+4. Proxy path for 403 jailroster.org family; scaffold quiet no-portal counties  
 
-### NC / TN
-1. **NC recon ✅** — `docs/NC_RECON_RESULTS.md` + `docs/NC_COUNTY_REGISTRY.md`  
-2. Wave 1 builds: Southern SW (11) + Zuercher (5) + classic P2C 200s + Mecklenburg/Durham custom  
-3. Cloud P2C (Wake/Guilford/Forsyth) needs residential WAF strategy  
-4. TN recon pass → `docs/TN_RECON_RESULTS.md`  
-5. Register only after first successful local scrape  
+### NC (wave-1 registered — first prod scrapes)
+1. **NC recon ✅** + **27 wave-1 scrapers registered** — `docs/NC_COUNTY_REGISTRY.md`  
+2. Platforms: Southern SW + Zuercher + classic P2C + Meck/Durham custom  
+3. Dashboard Multi-State Ops filters NC; run-now uses `nc_*` keys  
+4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
+5. TN recon pass next → `docs/TN_RECON_RESULTS.md`
 
 ### TX
 1. Prioritize top-25 population counties first (Harris, Dallas, Tarrant, Bexar, Travis…)  

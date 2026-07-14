@@ -5,6 +5,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.13.0] — 2026-07-14 (Docs truth sync + multi-state harmony)
+
+### Changed — Documentation
+- **Authoritative scale:** 198 registered scrapers (51 FL, 74 GA, 46 SC, 27 NC) in `STATUS.md`, `AGENTS.md`, `ROADMAP.md`, `README.md`, `DATA_MODEL.md`, `GEMINI.md`.
+- Roadmap phases **1d–1g** (SC full register, NC wave-1, Multi-State Ops, remaining Palmetto scaffolds).
+- Multi-state identity rules documented for agents (`scraper_<st>_<county>`, CLI prefixes).
+
+## [2.12.0] — 2026-07-14 (Dashboard multi-state + NC visibility)
+
+### Added — Dashboard
+- **North Carolina** on Multi-State Ops (KPI cards, registry filter, charts) and Bond Intelligence.
+- Lead Explorer **state** filter + column (FL/GA/SC/NC).
+- `REGISTERED_COUNTIES` expanded to full SC (46) + NC wave-1 (27); `parse_registered_county` / trigger-key helpers.
+- `/api/ops` registry scans `counties_nc/`; state summary always surfaces FL/GA/SC/NC.
+
+### Changed — Core
+- Scraper run-now/run-all emit state-prefixed trigger keys (`nc_mecklenburg`, `sc_lee`).
+- Scheduler `_resolve_job_id` accepts `County (ST)` labels.
+- Leads query parses `Mecklenburg (NC)` → `{county, state}`.
+
+## [2.11.0] — 2026-07-14 (SC full coverage + NC wave-1 + state-prefixed IDs)
+
+### Added — Scrapers
+- **SC:** remaining counties → **46/46** modules; hardened Charleston, Greenville, Richland, Florence, York, Horry, etc.
+- **NC wave-1:** 27 counties (Southern SW, Zuercher, P2C, Mecklenburg/Durham scaffolds).
+- Platform bases: `kologik_base.py`, `new_world_base.py`, `odyssey_base.py`; Southern SW / Zuercher / P2C hardening.
+- Scaffold packages: `counties_tn/`, `counties_tx/`, `counties_ct/`, `counties_la/`, `counties_ms/`.
+- Docs: `MULTI_STATE_SCRAPER_ROADMAP.md`, `SC_COUNTY_REGISTRY.md`, `NC_COUNTY_REGISTRY.md`, `NC_RECON_RESULTS.md`.
+
+### Changed — Core
+- `BaseScraper.state` + non-FL `scraper_id` form `scraper_<st>_<county>` (FL legacy preserved).
+- `main.py` state-aliased imports (GA_/SC_/NC_); scheduler multi-state `run_now` resolution.
+
+### Added — Dashboard (prior same week)
+- Multi-State Ops tab + `/api/ops/*`; Bond Intelligence tab; Beaufort XML live path; defendants `booking_number` TypeError fix.
 
 ## [2.10.0] — 2026-07-11 (South Carolina Expansion Phase 1e)
 ### Added — Scrapers

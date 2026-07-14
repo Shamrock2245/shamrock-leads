@@ -1,19 +1,19 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-07-10  
+> **Last Updated:** 2026-07-14  
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
-> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md` · Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · GAS URL: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
+> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md` · Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · Multi-state: `docs/MULTI_STATE_SCRAPER_ROADMAP.md` · GAS URL: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
 
 ---
 
 ## 1. What This Repo Does
 
-ShamrockLeads is a **statewide arrest intelligence and bond Auto-CRM** platform that:
+ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** Florida and Georgia county jail rosters on scheduled intervals `[IMPLEMENTED — 191 files]`
-2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema `[IMPLEMENTED]`
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC** on scheduled intervals `[IMPLEMENTED — 198 registered scrapers]`
+2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
@@ -29,8 +29,22 @@ ShamrockLeads is a **statewide arrest intelligence and bond Auto-CRM** platform 
 15. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
 16. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
 17. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
+18. **Multi-State Ops + Bond Intelligence** dashboard surfaces for FL/GA/SC/NC `[IMPLEMENTED July 2026]`
 
 **Not this repo:** Bail School student LMS → `shamrock-bail-school`.
+
+### Multi-state scraper identity (non-negotiable)
+
+| State | Code path | Job ID form | CLI one-shot |
+|-------|-----------|-------------|--------------|
+| FL | `scrapers/counties/` | `scraper_<county>` (legacy) | `python main.py lee` |
+| GA | `scrapers/counties_ga/` | `scraper_ga_<county>` | `python main.py ga_lee` |
+| SC | `scrapers/counties_sc/` | `scraper_sc_<county>` | `python main.py sc_jasper` |
+| NC | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
+
+- Dashboard labels use `County (ST)` in `REGISTERED_COUNTIES` (`dashboard/extensions.py`).
+- Scheduler resolves bare names, `sc_lee`, and `Lee (FL)` via `_resolve_job_id`.
+- Never collapse same-name counties across states (Lee FL ≠ Lee SC ≠ Lee GA).
 
 ### Pipeline Flow (Full Lifecycle)
 
@@ -86,7 +100,7 @@ Move records safely through this lifecycle:
 
 | Agent | Role | Status | Key File(s) |
 |-------|------|--------|-------------|
-| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties/*.py`, `scrapers/counties_ga/*.py`, `base_scraper.py` |
+| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties*.py` (FL/GA/SC/NC), `*_base.py`, `base_scraper.py` |
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
@@ -117,7 +131,8 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  191 County Scrapers  │  │  7 dashboard pages         │ │
+│  │  198 County Scrapers  │  │  Super CRM + Multi-State  │ │
+│  │  (FL/GA/SC/NC)        │  │  Ops + Bond Intel         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
 │  │  Lead Scorer         │            │                   │

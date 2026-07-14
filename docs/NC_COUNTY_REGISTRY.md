@@ -8,10 +8,11 @@
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| 🔲 Planned (portal mapped) | ~55 | URL + platform in recon |
+| ✅ Wave-1 registered | **27** | Southern SW, Zuercher, P2C classic, Davidson, Gaston, Meck/Durham scaffolds |
+| Scheduler / dashboard | **27** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
+| 🔲 Planned (portal mapped, not wave-1) | ~55 | URL + platform in recon |
 | ⬜ No public web roster / app / VINE | ~45 | Skip or VINE-only until portal appears |
-| ✅ Live / built | **27** wave-1 registered | Southern SW, Zuercher, P2C classic, Davidson, Gaston, Meck/Durham scaffolds |
-| Scheduler registered | **27** | `scraper_nc_*` |
+| First production scrapes | ⏳ | Run via dashboard Multi-State Ops or `python main.py nc_mecklenburg` |
 
 **CLI one-shot (planned):** use `nc_` prefix to avoid FL/GA name collisions:
 

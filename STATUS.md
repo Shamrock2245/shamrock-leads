@@ -1,10 +1,11 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-10  
+> **Last verified:** 2026-07-14  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
-> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`
+> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`  
+> **Multi-state plan:** `docs/MULTI_STATE_SCRAPER_ROADMAP.md`
 
 ---
 
@@ -23,33 +24,47 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
+## Scale (authoritative — 2026-07-14)
+
+| State | Registered scrapers | Code path | Notes |
+|-------|--------------------:|-----------|-------|
+| **FL** | **51** | `scrapers/counties/` | OSI home market; legacy `scraper_<county>` IDs |
+| **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
+| **SC** | **46** | `scrapers/counties_sc/` | All counties registered (mix live / platform / scaffold) |
+| **NC** | **27** | `scrapers/counties_nc/` | Wave-1 (Southern SW, Zuercher, P2C, Meck/Durham…) |
+| **Total** | **198** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
+
+**Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_sc_lee`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py nc_mecklenburg` / `sc_lee`.
+
+**Scaffold packages (no counties yet):** `counties_tn/`, `counties_tx/`, `counties_ct/`, `counties_la/`, `counties_ms/`.
+
+---
+
 ## Code on `main` (recent, implemented)
 
 | Area | Status |
 |------|--------|
-| 90 county scrapers (52 FL, 108 GA, 31 SC), scoring, Slack, Mongo | ✅ |
-| FastAPI dashboard Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
+| **198** registered county scrapers (FL/GA/SC/NC), scoring, Slack, Mongo | ✅ |
+| Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ July 14 |
+| Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, … | ✅ |
+| FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
+| **Multi-State Ops** tab + `/api/ops/*` (registry, state KPIs, live feed) | ✅ · **4 states** |
+| **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
+| Lead Explorer **state** column + filter (FL/GA/SC/NC) | ✅ July 14 |
 | Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ July 2026 |
 | Omnibar → CRM search | ✅ |
 | Mongo index script expanded for CRM collections | ✅ |
 | Webhooks fail-closed without secrets | ✅ |
-| Hardcoded Mongo/BB passwords scrubbed from scripts | ✅ |
 | Ecosystem secrets checklist | `scripts/check_ecosystem_secrets.py` |
 | Super CRM docs | `docs/SUPER_CRM.md`, `docs/ECOSYSTEM.md` |
+| SC registries / recon | `docs/SC_COUNTY_REGISTRY.md`, `docs/SC_RECON_RESULTS.md` |
+| NC registries / recon | `docs/NC_COUNTY_REGISTRY.md`, `docs/NC_RECON_RESULTS.md` |
 | **Surety realignment (July 2026)** | ✅ |
 | &nbsp;&nbsp;`bonds.py` — `surety_id` + `insuranceCompany` both forwarded to GAS | ✅ |
-| &nbsp;&nbsp;`bonds.py` — agent constants (Brendan O'Neal / P139768) injected in every GAS payload | ✅ |
-| &nbsp;&nbsp;`bond_lifecycle.py` — Drive filing uses `OSI/PALMETTO` surety subfolder | ✅ |
-| &nbsp;&nbsp;`bond_lifecycle.py` — `packet_id` undefined variable fixed | ✅ |
-| &nbsp;&nbsp;`signnow_packet_service.py` — agent name/license locked to Brendan O'Neal / P139768 | ✅ |
+| &nbsp;&nbsp;Agent constants (Brendan O'Neal / P139768) in GAS + SignNow | ✅ |
 | &nbsp;&nbsp;`intake.py` — `surety_id` persisted to MongoDB `intake_queue` | ✅ |
 | **Bond check-in A+C (July 2026)** — transparent portal GPS + condition policy | ✅ code |
-| &nbsp;&nbsp;Policy `docs/policies/monitoring-checkin-policy.md` | ✅ |
-| &nbsp;&nbsp;Post-SignNow → enable `check_in_required` + staff task (no auto-text) | ✅ |
-| &nbsp;&nbsp;Portal consent UI + `POST /api/portal/{token}/checkin` consent gate | ✅ |
-| &nbsp;&nbsp;Staff enable/send: `/api/active-bonds/{bk}/enable-checkin`, `send-checkin-link` | ✅ |
-| **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired (not external vendor) |
-| Portal check-in → Traccar OsmAnd inject + `/api/geo-intel/*` routes fixed | ✅ |
+| **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired |
 
 ---
 
@@ -59,13 +74,17 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 
 | Item | Status |
 |------|--------|
+| NC wave-1 scrapers **registered** but many still need first successful production scrape | ⏳ Run via Multi-State Ops / scheduler |
+| SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
+| GA remaining counties beyond registered set | ⏳ Recon + wrappers |
+| TN / TX / CT / LA / MS | 🔲 Scaffold only — recon waves next |
 | BlueBubbles production reliability (office Mac + tunnel) | ⏳ Ops (checklist D1–D2) |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | Verify on host (checklist B1) |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (501/dry-run until configured) |
 | Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
-| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18 / checklist P2.5) |
-| Hetzner deploy after each `main` push | Depends on GitHub Action + VPS health |
+| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
+| Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
 
 ---
 
@@ -75,9 +94,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 |------|------|
 | `shamrock-bail-portal-site` | Public site + GAS bond factory + school payment unlock |
 | `shamrock-bail-school` | Student LMS education funnel |
-| `shamrock-node-red` | **Automation fabric (n8n/Zapier analog)** — crons, webhooks, Watchdog, cross-service routing |
-
-Run from this repo:
+| `shamrock-node-red` | **Automation fabric** — crons, webhooks, Watchdog, cross-service routing |
 
 ```bash
 python scripts/check_ecosystem_secrets.py
@@ -93,8 +110,6 @@ python scripts/check_ecosystem_secrets.py --strict
 
 ## Revenue automations (July 2026 — review-first)
 
-Enabled by default in **review** mode (migration `_revenue_automations_v1`):
-
 | Cron | Default mode | Client contact? |
 |------|--------------|-----------------|
 | `speed_to_contact` | `review` | Queues outreach for staff approval |
@@ -109,10 +124,7 @@ Node-RED pack: `GET /api/automation/schedule` · docs `docs/automation/NODE_RED_
 
 | Cron | Interval | Behavior |
 |------|----------|----------|
-| `forfeiture_scan` | 4h | Score active bonds; write risk fields; tasks + Slack for high/critical |
-| `signnow_poller` | 30m | Poll SignNow open packets → signed/void; create `collect_payment` tasks |
-| `compliance_backfill` | 6h | Active bonds missing check-in/court tasks → `TaskEngine` suite |
+| `forfeiture_scan` | 4h | Score active bonds; tasks + Slack for high/critical |
+| `signnow_poller` | 30m | Poll SignNow open packets → signed/void |
+| `compliance_backfill` | 6h | Missing check-in/court tasks → `TaskEngine` |
 | `matching_backlog` | 1h | `MatchingEngine.batch_match`; Slack digest for human review |
-
-Migration: `_lifecycle_automations_v1` (enable once on config load).
-

@@ -1,5 +1,6 @@
 > Master reference for every Georgia county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-07-10 | **Active Scrapers:** 38 (EAS batch + Tier 1s) | **Total Counties:** 159
+> **Last Updated:** 2026-07-14 | **Registered (dashboard):** 74 GA labels in `REGISTERED_COUNTIES` | **Total Counties:** 159  
+> Authoritative multi-state scale: root [`STATUS.md`](../STATUS.md)
 
 ---
 

@@ -8,11 +8,11 @@
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| Registered in scheduler | **46** (all SC counties) | `scraper_sc_*` job IDs |
-| Production HTML/XML verified | 5+ | Beaufort (XML), Jasper (WP cards), Charleston, York, Florence, Horry |
-| Platform thin wrappers | 16 | Zuercher, JailTracker, Southern SW, P2C, SmartCOP, New World |
+| Registered in scheduler / dashboard | **46** (all SC counties) | `scraper_sc_*` job IDs · `County (SC)` labels |
+| Production HTML/XML verified | 5+ | Beaufort (XML), Jasper (WP cards), Charleston, York, Florence, Horry, Richland |
+| Platform thin wrappers | 16+ | Zuercher, JailTracker, Southern SW, P2C, SmartCOP, New World |
 | Scaffold / blocked | rest | No public portal, CAPTCHA, Cloudflare, or bad recon URL |
-| Missing module entirely | 11 | Mostly “no public portal” rural counties |
+| Missing module entirely | **0** | All 46 files present under `scrapers/counties_sc/` |
 
 **CLI one-shot:** use state prefix to avoid FL/GA name collisions:
 
