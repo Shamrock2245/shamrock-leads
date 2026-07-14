@@ -128,8 +128,9 @@ async def lookup_defendant(last_name: str = "", first_name: str = "", dob: str =
             return {"found": True, "defendant": fuzzy, "match_type": "fuzzy"}
         return {"found": False, "identity_key": identity_key}
     except Exception as exc:
-        logger.exception("lookup_defendant error")
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        # PII-safe: log only exception type, not the full message which may contain names/DOB
+        logger.error("lookup_defendant error: %s", type(exc).__name__)
+        return JSONResponse({"error": "Internal server error"}, status_code=500)
 
 
 @router.get("/defendants/{defendant_id}")
@@ -233,15 +234,28 @@ async def get_defendant_timeline_by_booking(
     # Fallback to single booking timeline if not linked to a defendant
     lifecycle_data = await get_lifecycle(booking_number)
     if isinstance(lifecycle_data, dict) and lifecycle_data.get("ok"):
-        events = lifecycle_data.get("events", [])
-        for event in events:
+        all_events = lifecycle_data.get("events", [])
+        for event in all_events:
             event["booking_number"] = booking_number
+        # Apply the same MAX_EVENTS cap and pagination as the unified timeline
+        MAX_EVENTS = 500
+        total_events = len(all_events)
+        capped = total_events > MAX_EVENTS
+        if capped:
+            all_events = all_events[:MAX_EVENTS]
+        start = (page - 1) * limit
+        end = start + limit
+        page_events = all_events[start:end]
         return {
             "defendant_id": None,
-            "events": events,
-            "total_events": len(events)
+            "events": page_events,
+            "total_events": min(total_events, MAX_EVENTS),
+            "page": page,
+            "limit": limit,
+            "pages": max(1, (min(total_events, MAX_EVENTS) + limit - 1) // limit),
+            "capped": capped,
         }
-    return {"defendant_id": None, "events": [], "total_events": 0}
+    return {"defendant_id": None, "events": [], "total_events": 0, "page": page, "limit": limit, "pages": 1, "capped": False}
 
 
 @router.post("/defendants/normalize")
@@ -322,6 +336,7 @@ async def merge_defendants(request: Request):
     except Exception as exc:
         logger.exception("merge_defendants error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
 
 @router.patch("/defendants/{defendant_id}/custom-fields")
 async def update_defendant_custom_fields(defendant_id: str, request: Request):

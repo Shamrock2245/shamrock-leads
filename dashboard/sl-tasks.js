@@ -254,31 +254,58 @@ window.SLTasks = (() => {
       _allTasks = _allTasks.filter(t => String(t._id) !== String(taskId));
 
       // Micro-animation: flash green, then slide out
-      itemEl.classList.add('sl-task-completing');
+      // Uses GSAP when available for buttery-smooth physics; falls back to CSS transitions.
       if (btnEl) btnEl.innerHTML = '<span class="sl-task-done-icon">✓</span>';
 
-      setTimeout(function() {
-        itemEl.classList.add('sl-task-done-exit');
-        itemEl.addEventListener('transitionend', function() {
-          itemEl.remove();
-          // Refresh tabs and count with updated list
-          const countEl = document.getElementById('tasksCount');
-          if (countEl) {
-            const overdueCnt = _allTasks.filter(t => new Date(t.due_date) < new Date()).length;
-            countEl.textContent = _allTasks.length > 99 ? '99+' : _allTasks.length;
-            countEl.style.background = overdueCnt ? '#ef4444' : (_allTasks.length ? '#f59e0b' : 'var(--surface)');
-          }
-          _renderFilterTabs(_allTasks);
-          if (!_allTasks.length) {
-            const bodyEl = document.getElementById('tasksBody');
-            if (bodyEl) bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
-              + '<div class="sl-tasks-empty-icon">☘️</div>'
-              + '<div class="ra-empty-text">All clear!</div>'
-              + '<div class="ra-empty-sub">No pending compliance tasks</div>'
-              + '</div>';
-          }
-        }, { once: true });
-      }, 400);
+      function _afterRemove() {
+        itemEl.remove();
+        const countEl = document.getElementById('tasksCount');
+        if (countEl) {
+          const overdueCnt = _allTasks.filter(t => new Date(t.due_date) < new Date()).length;
+          countEl.textContent = _allTasks.length > 99 ? '99+' : _allTasks.length;
+          countEl.style.background = overdueCnt ? '#ef4444' : (_allTasks.length ? '#f59e0b' : 'var(--surface)');
+        }
+        _renderFilterTabs(_allTasks);
+        if (!_allTasks.length) {
+          const bodyEl = document.getElementById('tasksBody');
+          if (bodyEl) bodyEl.innerHTML = '<div class="ra-empty sl-tasks-empty-state">'
+            + '<div class="sl-tasks-empty-icon">☘️</div>'
+            + '<div class="ra-empty-text">All clear!</div>'
+            + '<div class="ra-empty-sub">No pending compliance tasks</div>'
+            + '</div>';
+        }
+      }
+
+      if (typeof gsap !== 'undefined') {
+        // GSAP path: flash green background, then collapse height to 0 with spring ease
+        const tl = gsap.timeline();
+        tl.to(itemEl, {
+          backgroundColor: 'rgba(16,185,129,0.18)',
+          borderColor: 'rgba(16,185,129,0.5)',
+          duration: 0.25,
+          ease: 'power1.out',
+        })
+        .to(itemEl, {
+          opacity: 0,
+          x: 24,
+          maxHeight: 0,
+          paddingTop: 0,
+          paddingBottom: 0,
+          marginBottom: 0,
+          borderWidth: 0,
+          duration: 0.38,
+          ease: 'power2.inOut',
+          delay: 0.12,
+          onComplete: _afterRemove,
+        });
+      } else {
+        // CSS fallback path (original behaviour)
+        itemEl.classList.add('sl-task-completing');
+        setTimeout(function() {
+          itemEl.classList.add('sl-task-done-exit');
+          itemEl.addEventListener('transitionend', _afterRemove, { once: true });
+        }, 400);
+      }
 
       if (window.SL && window.SL.toast) SL.toast('Task marked as complete', 'success');
       else if (window.toast) toast('Task marked as complete', 'success');

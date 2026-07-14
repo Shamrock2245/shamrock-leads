@@ -13,9 +13,12 @@ Phase 2 — After bondsman approval + POA entry:
   master-waiver, collateral-receipt, payment-plan
 """
 from __future__ import annotations
+import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+import uuid
+import warnings
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -110,6 +113,10 @@ class SignNowPacketService:
         self.api_token = os.environ.get("SIGNNOW_API_TOKEN", "")
         self.api_token_expires_at = None
         self.base_url = SIGNNOW_BASE
+        # asyncio.Lock prevents concurrent token refresh races in multi-coroutine FastAPI workers.
+        # One coroutine acquires the lock, fetches a fresh token, then releases — others wait and
+        # reuse the already-refreshed token instead of hammering the OAuth endpoint in parallel.
+        self._token_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def _headers(self) -> Dict[str, str]:
@@ -122,43 +129,114 @@ class SignNowPacketService:
         """
         Obtain a fresh Bearer token via Resource Owner Password Credentials.
         Falls back to the env var SIGNNOW_API_TOKEN if already set.
+
+        Thread-safety: guarded by self._token_lock so that concurrent FastAPI
+        coroutines never race to refresh the same token simultaneously.
         """
         static_token = os.environ.get("SIGNNOW_API_TOKEN", "")
         if static_token:
             self.api_token = static_token
             return self.api_token
 
-        if self.api_token and self.api_token_expires_at and datetime.now(timezone.utc) < self.api_token_expires_at:
+        # Fast path: token still valid — no lock needed for a read
+        if (
+            self.api_token
+            and self.api_token_expires_at
+            and datetime.now(timezone.utc) < self.api_token_expires_at
+        ):
             return self.api_token
 
-        basic_auth = os.environ.get(
-            "SIGNNOW_BASIC_AUTH",
-            "M2I0ZGQ1MWUwYTA3NTU3ZTViMGU2YjQyNDE1NzU5ZGI6YjQ2MzNiZmU3ZjkwNDgzYWJjZjQ4MDE2MjBhZWRjNTk=",
-        )
-        username = os.environ.get("SIGNNOW_USERNAME", "admin@shamrockbailbonds.biz")
-        password = os.environ.get("SIGNNOW_PASSWORD", "")
+        # Slow path: acquire lock, re-check (another coroutine may have refreshed
+        # while we were waiting), then fetch a new token with exponential backoff.
+        async with self._token_lock:
+            # Re-check inside the lock (double-checked locking pattern)
+            if (
+                self.api_token
+                and self.api_token_expires_at
+                and datetime.now(timezone.utc) < self.api_token_expires_at
+            ):
+                return self.api_token
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self.base_url}/oauth2/token",
-                headers={
-                    "Authorization": f"Basic {basic_auth}",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                data={
-                    "grant_type": "password",
-                    "username": username,
-                    "password": password,
-                    "scope": "*",
-                },
-                timeout=30,
+            basic_auth = os.environ.get(
+                "SIGNNOW_BASIC_AUTH",
+                "M2I0ZGQ1MWUwYTA3NTU3ZTViMGU2YjQyNDE1NzU5ZGI6YjQ2MzNiZmU3ZjkwNDgzYWJjZjQ4MDE2MjBhZWRjNTk=",
             )
-            from datetime import timedelta
-            resp.raise_for_status()
-            token = resp.json().get("access_token", "")
-            self.api_token = token
-            self.api_token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=25)
-            return token
+            username = os.environ.get("SIGNNOW_USERNAME", "admin@shamrockbailbonds.biz")
+            password = os.environ.get("SIGNNOW_PASSWORD", "")
+
+            _MAX_RETRIES = 3
+            _BACKOFF_BASE = 1.5  # seconds
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.post(
+                            f"{self.base_url}/oauth2/token",
+                            headers={
+                                "Authorization": f"Basic {basic_auth}",
+                                "Content-Type": "application/x-www-form-urlencoded",
+                            },
+                            data={
+                                "grant_type": "password",
+                                "username": username,
+                                "password": password,
+                                "scope": "*",
+                            },
+                            timeout=30,
+                        )
+                        resp.raise_for_status()
+                        token = resp.json().get("access_token", "")
+                        self.api_token = token
+                        # Expire 2 minutes early to avoid using a token at the boundary
+                        self.api_token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=23)
+                        logger.debug("[SignNow] Token refreshed (attempt %d)", attempt + 1)
+                        return token
+                except httpx.HTTPStatusError as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "[SignNow] Token refresh HTTP %s (attempt %d/%d)",
+                        exc.response.status_code, attempt + 1, _MAX_RETRIES,
+                    )
+                    if exc.response.status_code in (400, 401, 403):
+                        # Auth errors are terminal — no point retrying with same creds
+                        raise
+                except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "[SignNow] Token refresh network error (attempt %d/%d): %s",
+                        attempt + 1, _MAX_RETRIES, exc,
+                    )
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_BACKOFF_BASE ** attempt)
+            raise RuntimeError(f"[SignNow] Token refresh failed after {_MAX_RETRIES} attempts: {last_exc}") from last_exc
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        *,
+        max_retries: int = 2,
+        **kwargs,
+    ) -> httpx.Response:
+        """Execute an httpx request, transparently refreshing the token on 401.
+
+        On a 401 Unauthorized response the token is invalidated and re-fetched
+        once before the request is retried.  A second 401 raises immediately to
+        avoid an infinite loop.
+        """
+        for attempt in range(max_retries + 1):
+            kwargs.setdefault("headers", {}).update(self._headers)
+            resp = await getattr(client, method)(url, **kwargs)
+            if resp.status_code == 401 and attempt < max_retries:
+                logger.warning("[SignNow] 401 on %s — invalidating token and retrying", url)
+                # Force token expiry so _get_token fetches a fresh one
+                self.api_token = ""
+                self.api_token_expires_at = None
+                await self._get_token()
+                continue
+            return resp
+        return resp  # type: ignore[return-value]  # unreachable but satisfies type checker
 
     async def _copy_template(self, client: httpx.AsyncClient, template_id: str, name: str) -> str:
         """POST /template/{id}/copy — returns new document_id."""
@@ -720,10 +798,7 @@ class SignNowPacketService:
                     }
                 )
 
-        return manifest
-
-    import warnings
-    import uuid
+                return manifest
 
     def handle_send_phase_1(
         self,

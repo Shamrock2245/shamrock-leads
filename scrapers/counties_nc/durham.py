@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+import hashlib
 
 logger = logging.getLogger(__name__)
 PORTAL_URL = "https://www2.dconc.gov/sheriff/ips/default.aspx"
@@ -96,7 +97,7 @@ class DurhamScraper(BaseScraper):
                     continue
                 out.append(ArrestRecord(
                     County=self.county, State="NC", Full_Name=name,
-                    Booking_Number=str(cells[1] if len(cells) > 1 else f"DUR_{abs(hash(name))%100000}"),
+                    Booking_Number=str(cells[1] if len(cells) > 1 else f"DUR_{hashlib.md5(f"{name}|DURHAM".encode()).hexdigest()[:10]}"),
                     Charges=cells[2] if len(cells) > 2 else "Unknown",
                     Bond_Amount=re.sub(r"[^\d.]", "", cells[3] if len(cells) > 3 else "0") or "0",
                     Status="In Custody", Detail_URL=PORTAL_URL,

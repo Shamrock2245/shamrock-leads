@@ -64,6 +64,16 @@ function switchTab(btn) {
   if (tabId === 'tabHealth') renderHealth();
   if (tabId === 'tabAnalytics') { if (typeof SLAnalytics !== 'undefined') SLAnalytics.load(); }
   if (tabId === 'tabCalendar') { if (typeof SLCalendar !== 'undefined') SLCalendar.load(); }
+
+  // Re-trigger GSAP counter animation for Multi-State Ops state-card metrics
+  // when the tab becomes visible (metrics are injected dynamically after init).
+  if (tabId === 'tabMultiState') {
+    requestAnimationFrame(() => {
+      if (typeof SLAnimations !== 'undefined' && typeof SLAnimations.animateCounters === 'function') {
+        SLAnimations.animateCounters('.ms-metric-val');
+      }
+    });
+  }
 }
 
 // ── Badge Helpers ─────────────────────────────────────────────────────────

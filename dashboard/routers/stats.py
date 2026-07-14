@@ -2,14 +2,19 @@ from __future__ import annotations
 """Stats Router — FastAPI port of api/stats.py (13 endpoints)"""
 import csv
 import io
+import logging
 import re as re_mod
 from datetime import datetime, timezone, timedelta
+
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
+
 from dashboard.deps import get_collection
 from dashboard.extensions import REGISTERED_COUNTIES
 from dashboard.routers.helpers import serialize_doc, async_csv_streamer
 from dashboard.models.leads import LeadsQueryModel
+
+logger = logging.getLogger("shamrock.stats")
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -619,8 +624,9 @@ async def api_scraper_health():
 
         return out
     except Exception as exc:
-        import traceback
-        return {"error": str(exc), "trace": traceback.format_exc()}
+        # PII-safe: full traceback may contain query params with names/booking numbers
+        logger.error("[stats] api_bond_intelligence error: %s", type(exc).__name__, exc_info=True)
+        return {"error": "Internal server error"}
 
 
 @router.get("/counties")
@@ -806,8 +812,9 @@ async def api_bond_intelligence(
             "filters": {"state": state, "county": county, "days": days},
         }
     except Exception as exc:
-        import traceback
-        return {"error": str(exc), "trace": traceback.format_exc()}
+        # PII-safe: full traceback may contain query params with names/booking numbers
+        logger.error("[stats] api_arrests_multistate_stats error: %s", type(exc).__name__, exc_info=True)
+        return {"error": "Internal server error"}
 
 
 @router.get("/arrests/recent")
@@ -895,5 +902,6 @@ async def api_arrests_multistate_stats():
             },
         }
     except Exception as exc:
-        import traceback
-        return {"error": str(exc), "trace": traceback.format_exc()}
+        # PII-safe: full traceback may contain query params with names/booking numbers
+        logger.error("[stats] error: %s", type(exc).__name__, exc_info=True)
+        return {"error": "Internal server error"}

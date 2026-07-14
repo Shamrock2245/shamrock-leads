@@ -15,6 +15,7 @@ from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+import hashlib
 
 logger = logging.getLogger(__name__)
 PORTAL_URL = "https://mecksheriffweb.mecklenburgcountync.gov/Inmate"
@@ -103,7 +104,7 @@ class MecklenburgScraper(BaseScraper):
                 name = cells[0]
                 if not name or len(name) < 2:
                     continue
-                booking = cells[1] if len(cells) > 1 else f"MECK_{abs(hash(name)) % 100000}"
+                booking = cells[1] if len(cells) > 1 else f"MECK_{hashlib.md5(f"{name}|MECKLE".encode()).hexdigest()[:10]}"
                 charges = "Unknown"
                 bond = "0"
                 for c in cells[2:]:

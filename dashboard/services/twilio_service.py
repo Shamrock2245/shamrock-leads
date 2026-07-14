@@ -13,6 +13,7 @@ Environment variables required:
   TWILIO_FROM_NUMBER             -- Twilio phone number (+12395550178)
   TWILIO_MESSAGING_SERVICE_SID   -- Optional: Messaging Service SID (MG...)
 """
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -76,13 +77,26 @@ class TwilioService:
         else:
             payload["From"] = self.from_number
 
+        _MAX_RETRIES = 3
+        _BACKOFF_BASE = 2.0  # seconds
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                url,
-                auth=(self.sid, self.token),
-                data=payload,
-            )
-            resp.raise_for_status()
+            for attempt in range(_MAX_RETRIES):
+                resp = await client.post(
+                    url,
+                    auth=(self.sid, self.token),
+                    data=payload,
+                )
+                # Retry on rate-limit (429) and transient server errors (503)
+                if resp.status_code in (429, 503) and attempt < _MAX_RETRIES - 1:
+                    wait = _BACKOFF_BASE ** attempt
+                    logger.warning(
+                        "[twilio] HTTP %s — retrying in %.1fs (attempt %d/%d)",
+                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                break
             result = resp.json()
             logger.info(
                 "[twilio] SMS sent to ...%s | SID=%s | status=%s",

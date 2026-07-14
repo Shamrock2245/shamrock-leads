@@ -6,10 +6,11 @@ Approach: POST with ViewState + date range for last 7 days
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import List
 
 import requests
@@ -124,7 +125,8 @@ class CharlestonScraper(BaseScraper):
                     bond_str = col("bond", "bail") or (cells[5] if len(cells) > 5 else "0")
 
                     if not booking_num:
-                        booking_num = f"CHS_{re.sub(r'[^A-Za-z0-9]', '', full_name)[:16]}_{abs(hash(full_name + booking_date_str)) % 100000}"
+                        # Deterministic fallback — stable across Python processes (hash() is not)
+                        booking_num = f"CHS_{hashlib.md5(f'{full_name}|{booking_date_str}|CHS'.encode()).hexdigest()[:10]}"
 
                     bond = re.sub(r"[^\d.]", "", bond_str) or "0"
                     records.append(

@@ -1,10 +1,11 @@
 """
 Horry County (SC) Arrest Scraper.
 """
+import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import List
 
 import requests
@@ -78,7 +79,7 @@ class HorryScraper(BaseScraper):
                     table = t
                     break
             if not table:
-                logger.warning(f"Horry: No inmate table found")
+                logger.warning("Horry: No inmate table found")
                 return []
             for row in table.find_all("tr")[1:]:
                 cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
@@ -89,7 +90,8 @@ class HorryScraper(BaseScraper):
                 booking_date_str = cells[2] if len(cells) > 2 else ""
                 bond_str = cells[3] if len(cells) > 3 else "0"
                 bond = re.sub(r"[^\d.]", "", bond_str) or "0"
-                booking_num = f"SC_{re.sub(r'[^A-Za-z0-9]', '', full_name)[:16]}_{abs(hash(full_name+booking_date_str)) % 100000}"
+                # Deterministic fallback — stable across Python processes (hash() is not)
+                booking_num = f"SC_{hashlib.md5(f'{full_name}|{booking_date_str}|HORRY'.encode()).hexdigest()[:10]}"
                 records.append(ArrestRecord(
                     County=self.county,
                     State="SC",
