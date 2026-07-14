@@ -38,11 +38,13 @@
 /* ── STATE CARDS ─────────────────────────────────────────────────────────── */
 .ms-state-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 16px;
   padding: 20px 24px;
 }
-@media (max-width: 900px) { .ms-state-cards { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .ms-state-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 640px) { .ms-state-cards { grid-template-columns: 1fr; } }
+.ms-state-card { cursor: pointer; }
 
 .ms-state-card {
   background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);

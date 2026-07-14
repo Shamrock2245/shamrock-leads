@@ -436,10 +436,25 @@ class ScraperScheduler:
           - job_id itself (``scraper_lee``, ``scraper_sc_lee``)
           - bare county (``lee``) — prefers FL, then any match
           - state-prefixed (``sc_lee``, ``sc-lee``, ``lee_sc``, ``Lee SC``)
+          - registered label (``Lee (FL)``, ``Mecklenburg (NC)``)
         """
+        import re
         raw = (county or "").strip()
         if not raw:
             return None
+
+        state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "ms"}
+
+        # "County (ST)" form used by dashboard REGISTERED_COUNTIES
+        m = re.match(r"^(.+?)\s*\(([A-Za-z]{2})\)$", raw)
+        if m:
+            cty = m.group(1).strip().lower().replace(" ", "_").replace("-", "_")
+            st = m.group(2).lower()
+            jid = f"scraper_{cty}" if st == "fl" else f"scraper_{st}_{cty}"
+            if jid in self._scrapers:
+                return jid
+            raw = f"{st}_{cty}"
+
         key = raw.lower().replace(" ", "_").replace("-", "_")
 
         # Already a job id
@@ -450,7 +465,6 @@ class ScraperScheduler:
 
         # state_county or county_state forms
         parts = [p for p in key.split("_") if p]
-        state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "ms"}
         candidates = []
         if len(parts) >= 2:
             if parts[0] in state_codes:

@@ -15,12 +15,39 @@ router = APIRouter(prefix="/api", tags=["stats"])
 
 
 def _build_leads_query(query: LeadsQueryModel):
+    from dashboard.extensions import parse_registered_county
+
     q: dict = {}
     if query.status:
         q["lead_status"] = query.status
+    if getattr(query, "state", None):
+        states = [s.strip().upper() for s in query.state.split(",") if s.strip()]
+        if len(states) == 1:
+            q["state"] = states[0]
+        elif states:
+            q["state"] = {"$in": states}
     if query.county:
         cs = [c.strip() for c in query.county.split(",") if c.strip()]
-        q["county"] = cs[0] if len(cs) == 1 else {"$in": cs}
+        clauses = []
+        bare_only = []
+        for c in cs:
+            name, st = parse_registered_county(c)
+            if st:
+                clauses.append({"county": name, "state": st})
+            else:
+                bare_only.append(name)
+        if bare_only:
+            if len(bare_only) == 1:
+                clauses.append({"county": bare_only[0]})
+            else:
+                clauses.append({"county": {"$in": bare_only}})
+        if len(clauses) == 1:
+            # Merge single clause into top-level query
+            for k, v in clauses[0].items():
+                # If state already set and clause also has state, prefer clause
+                q[k] = v
+        elif clauses:
+            q["$or"] = clauses
     if query.custody == "true":
         q["status"] = {"$regex": "custody|confined|held", "$options": "i"}
     elif query.custody == "released":
@@ -40,6 +67,8 @@ def _build_leads_query(query: LeadsQueryModel):
             {"booking_number": {"$regex": escaped, "$options": "i"}},
             {"case_number": {"$regex": escaped, "$options": "i"}},
             {"address": {"$regex": escaped, "$options": "i"}},
+            {"county": {"$regex": escaped, "$options": "i"}},
+            {"state": {"$regex": escaped, "$options": "i"}},
         ]
         if "$or" in q:
             existing = q.pop("$or")
@@ -205,7 +234,7 @@ async def api_leads(
         skip = (query.page - 1) * query.limit
         projection = {
             "_id": 0, "full_name": 1, "first_name": 1, "last_name": 1,
-            "booking_number": 1, "county": 1, "charges": 1, "bond_amount": 1,
+            "booking_number": 1, "county": 1, "state": 1, "charges": 1, "bond_amount": 1,
             "bond_type": 1, "lead_score": 1, "lead_status": 1, "status": 1,
             "arrest_date": 1, "booking_date": 1, "court_date": 1,
             "court_location": 1, "case_number": 1, "dob": 1, "sex": 1,
@@ -222,8 +251,14 @@ async def api_leads(
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,
             "pages": max(1, (total + query.limit - 1) // query.limit),
             "counties": counties_list,
-            "query": {"status": query.status, "county": query.county, "search": query.search,
-                      "sort": query.sort, "order": query.order},
+            "query": {
+                "status": query.status,
+                "county": query.county,
+                "state": getattr(query, "state", "") or "",
+                "search": query.search,
+                "sort": query.sort,
+                "order": query.order,
+            },
         }
     except Exception as e:
         return {"error": str(e)}
@@ -619,7 +654,7 @@ async def api_counties_stats():
 
 @router.get("/bond-intelligence")
 async def api_bond_intelligence(
-    state: str = Query("", description="Filter by state code: FL, GA, SC"),
+    state: str = Query("", description="Filter by state code: FL, GA, SC, NC"),
     county: str = Query("", description="Filter by county name"),
     days: int = Query(30, ge=1, le=365, description="Lookback window in days"),
 ):
@@ -778,7 +813,7 @@ async def api_bond_intelligence(
 @router.get("/arrests/recent")
 async def api_arrests_recent(
     limit: int = Query(50, ge=1, le=200),
-    state: str = Query("", description="Filter by state: FL, GA, SC"),
+    state: str = Query("", description="Filter by state: FL, GA, SC, NC"),
     county: str = Query("", description="Filter by county"),
     min_bond: float = Query(0, ge=0),
     hours: int = Query(24, ge=1, le=168),

@@ -4,13 +4,13 @@
 const SL = (() => {
 const API = location.origin;
 const PRESETS = {
-  swfl: ['Lee','Collier','Charlotte','DeSoto','Hendry','Sarasota','Manatee'],
+  swfl: ['Lee (FL)','Collier (FL)','Charlotte (FL)','DeSoto (FL)','Hendry (FL)','Sarasota (FL)','Manatee (FL)'],
   all: [],
   none: []
 };
 let state = {
   counties: [], selectedCounties: [], days: 3, custody: '', status: '',
-  minBond: 0, search: '', sort: 'arrest_date', order: 'desc',
+  stateCode: '', minBond: 0, search: '', sort: 'arrest_date', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
   scraperData: {}, mongoData: {}, prevHotCount: -1
 };
@@ -107,9 +107,12 @@ function debounceDefSearch() { clearTimeout(searchTimer); searchTimer = setTimeo
 async function applyFilters() {
   state.custody = document.getElementById('custodyFilter').value;
   state.status = document.getElementById('statusFilter').value;
+  const stateEl = document.getElementById('stateFilter');
+  state.stateCode = stateEl ? stateEl.value : '';
   state.limit = parseInt(document.getElementById('limitSelect').value);
   const params = new URLSearchParams({ page: state.page, limit: state.limit, sort: state.sort, order: state.order });
   if (state.selectedCounties.length) params.set('county', state.selectedCounties.join(','));
+  if (state.stateCode) params.set('state', state.stateCode);
   if (state.days) params.set('days', state.days);
   if (state.custody) params.set('custody', state.custody);
   if (state.status) params.set('status', state.status);
@@ -144,7 +147,8 @@ function ftaBadge(l) {
 // ── Render Leads Table ──
 function renderLeads() {
   const tb = document.getElementById('leadsBody');
-  if (!state.leads.length) { tb.innerHTML = '<tr><td colspan="9" class="loading">No leads match current filters</td></tr>'; return; }
+  if (!state.leads.length) { tb.innerHTML = '<tr><td colspan="10" class="loading">No leads match current filters</td></tr>'; return; }
+  const stateColors = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
   tb.innerHTML = state.leads.map(l => {
     const bond = l.bond_amount || 0;
     const bc = bond >= 10000 ? 'bond-high' : bond >= 2500 ? 'bond-mid' : 'bond-low';
@@ -154,8 +158,11 @@ function renderLeads() {
     const custBadge = (l.status||'').toLowerCase().includes('custody') ? '<span class="def-status-badge custody">In Custody</span>' : (l.status||'').toLowerCase().includes('release') ? '<span class="def-status-badge released">Released</span>' : `<span class="def-status-badge other">${l.status||'—'}</span>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
     const fta = ftaBadge(l);
+    const st = (l.state || 'FL').toUpperCase();
+    const stColor = stateColors[st] || '#64748b';
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
+      <td><span class="ms-state-pill" style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
       <td><span class="county-count">${l.county||'—'}</span></td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
@@ -172,6 +179,7 @@ function renderLeads() {
 function renderPills() {
   const el = document.getElementById('filterPills'); const pills = [];
   if (state.selectedCounties.length) pills.push(pill(`Counties: ${state.selectedCounties.length}`, () => { state.selectedCounties = []; buildCountyOptions(state.counties); applyFilters(); }));
+  if (state.stateCode) pills.push(pill(`State: ${state.stateCode}`, () => { const el = document.getElementById('stateFilter'); if (el) el.value=''; state.stateCode=''; applyFilters(); }));
   if (state.days) pills.push(pill(`${state.days}d range`, () => { setDaysQuiet(0); applyFilters(); }));
   if (state.minBond) pills.push(pill(`$${state.minBond.toLocaleString()}+ bond`, () => { setBondQuiet(0); applyFilters(); }));
   if (state.custody) pills.push(pill(`Custody: ${state.custody}`, () => { document.getElementById('custodyFilter').value=''; applyFilters(); }));
@@ -183,8 +191,9 @@ function renderPills() {
 function pill(label, onclick) { const id = 'p'+Math.random().toString(36).slice(2,6); window['_pill_'+id] = onclick; return `<span class="filter-pill">${label}<span class="pill-close" onclick="window._pill_${id}()">✕</span></span>`; }
 function setDaysQuiet(d) { state.days = d; document.querySelectorAll('#dateRange button').forEach((b,i) => b.classList.toggle('active', [1,2,3,5,0][i] === d)); }
 function setBondQuiet(v) { state.minBond = v; document.querySelectorAll('#bondRange button').forEach((b,i) => b.classList.toggle('active', [0,1000,2500,5000,10000][i] === v)); }
-function clearAll() { state.selectedCounties=[]; setDaysQuiet(3); setBondQuiet(0); state.search=''; state.custody=''; state.status='';
+function clearAll() { state.selectedCounties=[]; setDaysQuiet(3); setBondQuiet(0); state.search=''; state.custody=''; state.status=''; state.stateCode='';
   document.getElementById('searchInput').value=''; document.getElementById('custodyFilter').value=''; document.getElementById('statusFilter').value='';
+  const sf = document.getElementById('stateFilter'); if (sf) sf.value='';
   buildCountyOptions(state.counties); applyFilters(); }
 
 // ── Pagination ──
@@ -284,6 +293,7 @@ function submitBond() { toast('Bond packet generation coming soon','info'); clos
 function exportCSV() {
   const params = new URLSearchParams({sort:state.sort,order:state.order});
   if (state.selectedCounties.length) params.set('county', state.selectedCounties.join(','));
+  if (state.stateCode) params.set('state', state.stateCode);
   if (state.days) params.set('days', state.days);
   if (state.custody) params.set('custody', state.custody);
   if (state.status) params.set('status', state.status);
@@ -294,7 +304,7 @@ function exportCSV() {
 }
 function copyToSlack() {
   if (!state.leads.length) { toast('No leads to copy','error'); return; }
-  const lines = state.leads.slice(0,20).map(l => `• *${l.full_name}* — ${l.county} — $${(l.bond_amount||0).toLocaleString()} — Score: ${l.lead_score||0} (${l.lead_status||''})`);
+  const lines = state.leads.slice(0,20).map(l => `• *${l.full_name}* — ${l.county}${l.state?' ('+l.state+')':''} — $${(l.bond_amount||0).toLocaleString()} — Score: ${l.lead_score||0} (${l.lead_status||''})`);
   const text = `*☘️ ShamrockLeads Export* (${state.total} total)\n${lines.join('\n')}${state.total>20?'\n_...and '+(state.total-20)+' more_':''}`;
   navigator.clipboard.writeText(text).then(()=>toast('Copied to clipboard — paste in Slack!','success')).catch(()=>toast('Copy failed','error'));
 }

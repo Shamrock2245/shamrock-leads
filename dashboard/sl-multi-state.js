@@ -1,8 +1,7 @@
 /**
  * SLMultiState — Multi-State Operations Dashboard Module
- * Shows live scraper status, arrest data, and system health across FL, GA, SC.
- * Uses ApexCharts for charts, Tabulator for the data grid.
- * API: /api/ops/*
+ * Shows live scraper status, arrest data, and system health across FL, GA, SC, NC.
+ * Uses ApexCharts for charts. API: /api/ops/*
  */
 const SLMultiState = (() => {
   let _registryData = [];
@@ -16,10 +15,19 @@ const SLMultiState = (() => {
   let _platformChart = null;
   let _initialized = false;
 
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC'];
+  const STATE_NAMES = {
+    FL: 'Florida',
+    GA: 'Georgia',
+    SC: 'South Carolina',
+    NC: 'North Carolina',
+  };
+  const STATE_EMOJI = { FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅' };
   const STATE_COLORS = {
     FL: '#00d4aa',
     GA: '#f59e0b',
     SC: '#8b5cf6',
+    NC: '#3b82f6',
   };
 
   const PLATFORM_COLORS = {
@@ -33,6 +41,7 @@ const SLMultiState = (() => {
     'XML Feed':      '#84cc16',
     'New World':     '#f97316',
     'Tyler Odyssey': '#6366f1',
+    'Kologik':       '#eab308',
     'SmartCOP':      '#14b8a6',
     'SmartWeb':      '#a78bfa',
     'Custom HTML':   '#94a3b8',
@@ -101,7 +110,7 @@ const SLMultiState = (() => {
           <span class="ms-title-icon">🌎</span>
           <div>
             <h2 class="ms-title-text">Multi-State Operations</h2>
-            <p class="ms-title-sub">Live scraper network across Florida, Georgia &amp; South Carolina</p>
+            <p class="ms-title-sub">Live scraper network across Florida, Georgia, South Carolina &amp; North Carolina</p>
           </div>
         </div>
         <div class="ms-header-actions">
@@ -113,6 +122,7 @@ const SLMultiState = (() => {
 
       <!-- STATE KPI CARDS -->
       <div id="msStateCards" class="ms-state-cards">
+        <div class="ms-kpi-skeleton"></div>
         <div class="ms-kpi-skeleton"></div>
         <div class="ms-kpi-skeleton"></div>
         <div class="ms-kpi-skeleton"></div>
@@ -155,11 +165,12 @@ const SLMultiState = (() => {
           </div>
           <div class="ms-registry-filters">
             <input id="msSearch" type="text" class="ms-search" placeholder="Search county…" oninput="SLMultiState.setSearch(this.value)">
-            <select class="ms-select" onchange="SLMultiState.setStateFilter(this.value)">
+            <select id="msStateFilter" class="ms-select" onchange="SLMultiState.setStateFilter(this.value)">
               <option value="ALL">All States</option>
               <option value="FL">Florida</option>
               <option value="GA">Georgia</option>
               <option value="SC">South Carolina</option>
+              <option value="NC">North Carolina</option>
             </select>
             <select class="ms-select" onchange="SLMultiState.setStatusFilter(this.value)">
               <option value="">All Status</option>
@@ -209,22 +220,19 @@ const SLMultiState = (() => {
   function _renderStateCards(states) {
     const container = document.getElementById('msStateCards');
     if (!container) return;
-    const stateOrder = ['FL', 'GA', 'SC'];
-    const stateNames = { FL: 'Florida', GA: 'Georgia', SC: 'South Carolina' };
-    const stateEmoji = { FL: '🌴', GA: '🍑', SC: '🌙' };
 
-    container.innerHTML = stateOrder.map(s => {
+    container.innerHTML = STATE_ORDER.map(s => {
       const d = states[s] || {};
       const color = STATE_COLORS[s] || '#64748b';
       const healthPct = d.total_counties > 0
         ? Math.round((d.active_scrapers / d.total_counties) * 100)
         : 0;
       return `
-        <div class="ms-state-card" style="--state-color:${color}">
+        <div class="ms-state-card" style="--state-color:${color}" onclick="SLMultiState.setStateFilter('${s}')" title="Filter registry to ${STATE_NAMES[s]}">
           <div class="ms-state-card-header">
-            <span class="ms-state-emoji">${stateEmoji[s]}</span>
+            <span class="ms-state-emoji">${STATE_EMOJI[s] || '📍'}</span>
             <div>
-              <div class="ms-state-name">${stateNames[s]}</div>
+              <div class="ms-state-name">${STATE_NAMES[s] || s}</div>
               <div class="ms-state-abbr">${s}</div>
             </div>
             <div class="ms-state-health-ring">
@@ -278,7 +286,7 @@ const SLMultiState = (() => {
     _registryChart = new ApexCharts(el, {
       chart: { type: 'donut', background: 'transparent', height: 220 },
       series: values,
-      labels: labels.map(s => ({ FL: 'Florida', GA: 'Georgia', SC: 'South Carolina' }[s] || s)),
+      labels: labels.map(s => STATE_NAMES[s] || s),
       colors,
       legend: { labels: { colors: '#94a3b8' } },
       dataLabels: { style: { colors: ['#0f172a'] } },
@@ -291,10 +299,8 @@ const SLMultiState = (() => {
   function _renderArrestsChart(states) {
     const el = document.getElementById('msArrestsChart');
     if (!el || typeof ApexCharts === 'undefined') return;
-    const stateOrder = ['FL', 'GA', 'SC'];
-    const stateNames = { FL: 'Florida', GA: 'Georgia', SC: 'South Carolina' };
-    const series = stateOrder.map(s => ({
-      name: stateNames[s] || s,
+    const series = STATE_ORDER.map(s => ({
+      name: STATE_NAMES[s] || s,
       data: [states[s]?.arrests_7d || 0],
     }));
     new ApexCharts(el, {
@@ -302,7 +308,7 @@ const SLMultiState = (() => {
       series,
       xaxis: { categories: ['Last 7 Days'], labels: { style: { colors: '#94a3b8' } } },
       yaxis: { labels: { style: { colors: '#94a3b8' } } },
-      colors: stateOrder.map(s => STATE_COLORS[s]),
+      colors: STATE_ORDER.map(s => STATE_COLORS[s]),
       plotOptions: { bar: { columnWidth: '50%', borderRadius: 4 } },
       legend: { labels: { colors: '#94a3b8' } },
       theme: { mode: 'dark' },
@@ -378,8 +384,10 @@ const SLMultiState = (() => {
 
     tbody.innerHTML = filtered.map(r => {
       const sc = _statusCfg(r.status || 'never_run');
+      const cEsc = (r.county || '').replace(/'/g, "\\'");
+      const sEsc = (r.state || '').replace(/'/g, "\\'");
       return `
-        <tr class="ms-registry-row" data-county="${r.county}">
+        <tr class="ms-registry-row" data-county="${r.county}" data-state="${r.state}">
           <td class="ms-county-cell">
             <span class="ms-county-name">${r.county}</span>
           </td>
@@ -395,8 +403,8 @@ const SLMultiState = (() => {
           <td class="ms-muted">${_fmtRelative(r.last_run_iso)}</td>
           <td class="ms-muted">${_fmtNum(r.total_records)}</td>
           <td>
-            <button class="ms-action-btn" onclick="SLMultiState.runCounty('${r.county}')" title="Run Now">▶</button>
-            <button class="ms-action-btn ms-action-btn-secondary" onclick="SLMultiState.viewCountyArrests('${r.county}','${r.state}')" title="View Arrests">🔍</button>
+            <button class="ms-action-btn" onclick="SLMultiState.runCounty('${cEsc}','${sEsc}')" title="Run Now">▶</button>
+            <button class="ms-action-btn ms-action-btn-secondary" onclick="SLMultiState.viewCountyArrests('${cEsc}','${sEsc}')" title="View Arrests">🔍</button>
           </td>
         </tr>
       `;
@@ -453,16 +461,17 @@ const SLMultiState = (() => {
   }
 
   // ─── ACTIONS ──────────────────────────────────────────────────────────────
-  async function runCounty(county) {
+  async function runCounty(county, state) {
     try {
       const res = await fetch('/api/scraper/run-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ county }),
+        body: JSON.stringify({ county, state: state || undefined }),
       });
       const data = await res.json();
       if (data.ok) {
-        _showToast(`▶ Run queued for ${county}`, 'success');
+        const label = state ? `${county} (${state})` : county;
+        _showToast(`▶ Run queued for ${label}`, 'success');
       } else {
         _showToast(`Error: ${data.error || 'Unknown'}`, 'error');
       }
@@ -472,7 +481,7 @@ const SLMultiState = (() => {
   }
 
   async function runAll() {
-    if (!confirm('Trigger an immediate run for ALL 191 scrapers? This will put significant load on the server.')) return;
+    if (!confirm('Trigger an immediate run for ALL registered scrapers (FL/GA/SC/NC)? This will put significant load on the server.')) return;
     try {
       const res = await fetch('/api/scraper/run-all', { method: 'POST' });
       const data = await res.json();
@@ -485,14 +494,23 @@ const SLMultiState = (() => {
   }
 
   function viewCountyArrests(county, state) {
-    // Switch to Lead Explorer tab and filter by county
+    // Switch to Lead Explorer and filter by county (+ state when available)
     const leadsBtn = document.querySelector('[data-tab="tabLeads"]');
     if (leadsBtn) leadsBtn.click();
     setTimeout(() => {
-      const searchEl = document.getElementById('leadSearch');
+      const stateSel = document.getElementById('stateFilter');
+      if (stateSel && state) {
+        stateSel.value = state;
+      }
+      const searchEl = document.getElementById('searchInput') || document.getElementById('leadSearch');
       if (searchEl) {
         searchEl.value = county;
         searchEl.dispatchEvent(new Event('input'));
+      }
+      if (window.SL && typeof window.SL.applyFilters === 'function') {
+        if (stateSel) window.SL.applyFilters();
+      } else if (typeof applyFilters === 'function') {
+        applyFilters();
       }
     }, 300);
   }
@@ -507,7 +525,12 @@ const SLMultiState = (() => {
   }
 
   // ─── FILTER SETTERS ───────────────────────────────────────────────────────
-  function setStateFilter(v) { _stateFilter = v; _renderRegistry(); }
+  function setStateFilter(v) {
+    _stateFilter = v || 'ALL';
+    const sel = document.getElementById('msStateFilter');
+    if (sel) sel.value = _stateFilter;
+    _renderRegistry();
+  }
   function setStatusFilter(v) { _statusFilter = v; _renderRegistry(); }
   function setSearch(v) { _searchQuery = v; _renderRegistry(); }
   function refresh() { _refresh(); }

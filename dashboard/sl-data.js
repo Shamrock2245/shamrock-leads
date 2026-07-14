@@ -4,9 +4,11 @@
 async function applyFilters() {
   SL_STATE.custody = document.getElementById('custodyFilter')?.value || '';
   SL_STATE.status = document.getElementById('statusFilter')?.value || '';
+  SL_STATE.stateCode = document.getElementById('stateFilter')?.value || '';
   SL_STATE.limit = parseInt(document.getElementById('limitSelect')?.value || 50);
   const p = new URLSearchParams({ page: SL_STATE.page, limit: SL_STATE.limit, sort: SL_STATE.sort, order: SL_STATE.order });
   if (SL_STATE.selectedCounties.length) p.set('county', SL_STATE.selectedCounties.join(','));
+  if (SL_STATE.stateCode) p.set('state', SL_STATE.stateCode);
   if (SL_STATE.days) p.set('days', SL_STATE.days);
   if (SL_STATE.custody) p.set('custody', SL_STATE.custody);
   if (SL_STATE.status) p.set('status', SL_STATE.status);
@@ -28,7 +30,8 @@ async function applyFilters() {
 
 function renderLeads() {
   const tb = document.getElementById('leadsBody');
-  if (!SL_STATE.leads.length) { tb.innerHTML = '<tr><td colspan="9" class="loading">No leads match current filters</td></tr>'; return; }
+  if (!SL_STATE.leads.length) { tb.innerHTML = '<tr><td colspan="10" class="loading">No leads match current filters</td></tr>'; return; }
+  const stateColors = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
   tb.innerHTML = SL_STATE.leads.map(l => {
     const bond = l.bond_amount || 0;
     const bc = bond >= 10000 ? 'bond-high' : bond >= 2500 ? 'bond-mid' : 'bond-low';
@@ -41,8 +44,11 @@ function renderLeads() {
     const bkEsc = (l.booking_number||'').replace(/"/g,'&quot;');
     const custDropdown = `<select class="def-status-badge ${custClass}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEsc}',this.value,this)"><option value="" ${!custVal?'selected':''}>${custVal||'—'}</option><option value="In Custody" ${'In Custody'===custVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===custVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===custVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===custVal?'selected':''}>Bonded Out</option></select>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
+    const st = (l.state || 'FL').toUpperCase();
+    const stColor = stateColors[st] || '#64748b';
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
+      <td><span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
       <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
@@ -59,6 +65,7 @@ function renderLeads() {
 function renderPills() {
   const el = document.getElementById('filterPills'); const pills = [];
   if (SL_STATE.selectedCounties.length) pills.push(mkPill(`Counties: ${SL_STATE.selectedCounties.length}`, () => { SL_STATE.selectedCounties = []; buildCountyOptions(SL_STATE.counties); applyFilters(); }));
+  if (SL_STATE.stateCode) pills.push(mkPill(`State: ${SL_STATE.stateCode}`, () => { const sf = document.getElementById('stateFilter'); if (sf) sf.value=''; SL_STATE.stateCode=''; applyFilters(); }));
   if (SL_STATE.days) pills.push(mkPill(`${SL_STATE.days}d range`, () => { SL_STATE.days = 0; applyFilters(); }));
   if (SL_STATE.minBond) pills.push(mkPill(`$${SL_STATE.minBond.toLocaleString()}+ bond`, () => { SL_STATE.minBond = 0; applyFilters(); }));
   if (SL_STATE.custody) pills.push(mkPill(`Custody: ${SL_STATE.custody}`, () => { document.getElementById('custodyFilter').value=''; applyFilters(); }));
@@ -69,8 +76,9 @@ function renderPills() {
 }
 function mkPill(label, onclick) { const id = 'p'+Math.random().toString(36).slice(2,6); window['_pill_'+id] = onclick; return `<span class="filter-pill">${label}<span class="pill-close" onclick="window._pill_${id}()">✕</span></span>`; }
 function clearAll() {
-  SL_STATE.selectedCounties=[]; SL_STATE.days=0; SL_STATE.minBond=0; SL_STATE.search=''; SL_STATE.custody=''; SL_STATE.status='';
+  SL_STATE.selectedCounties=[]; SL_STATE.days=0; SL_STATE.minBond=0; SL_STATE.search=''; SL_STATE.custody=''; SL_STATE.status=''; SL_STATE.stateCode='';
   document.getElementById('searchInput').value=''; document.getElementById('custodyFilter').value=''; document.getElementById('statusFilter').value='';
+  const sf = document.getElementById('stateFilter'); if (sf) sf.value='';
   document.querySelectorAll('#dateRange button').forEach((b,i) => b.classList.toggle('active', i===4));
   document.querySelectorAll('#bondRange button').forEach((b,i) => b.classList.toggle('active', i===0));
   buildCountyOptions(SL_STATE.counties); applyFilters();

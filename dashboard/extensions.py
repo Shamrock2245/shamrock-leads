@@ -151,7 +151,9 @@ POA_RECEIPT_DATA = [
     {"surety_id": "palmetto", "prefix": "PSC105", "max_bond": 105_000, "start": 2644815, "end": 2644815, "exp": None},
 ]
 
-# ── Master list of all registered scraper counties (FL + GA + SC) ──
+# ── Master list of all registered scraper counties (FL + GA + SC + NC) ──
+# Format: "County (ST)" so multi-state name collisions (Lee, Sumter, Polk…) stay unique.
+# Mongo stores bare county + separate state field — parsers strip the (ST) for queries.
 REGISTERED_COUNTIES = sorted([
     # ── Florida ──
     "Alachua (FL)",
@@ -280,20 +282,29 @@ REGISTERED_COUNTIES = sorted([
     "Twiggs (GA)",
     "Upson (GA)",
     "Walton (GA)",
-    # ── South Carolina ──
+    # ── South Carolina (all 46) ──
+    "Abbeville (SC)",
     "Aiken (SC)",
+    "Allendale (SC)",
     "Anderson (SC)",
     "Bamberg (SC)",
+    "Barnwell (SC)",
     "Beaufort (SC)",
     "Berkeley (SC)",
+    "Calhoun (SC)",
     "Charleston (SC)",
     "Cherokee (SC)",
     "Chester (SC)",
     "Chesterfield (SC)",
+    "Clarendon (SC)",
     "Colleton (SC)",
     "Darlington (SC)",
+    "Dillon (SC)",
     "Dorchester (SC)",
+    "Edgefield (SC)",
+    "Fairfield (SC)",
     "Florence (SC)",
+    "Georgetown (SC)",
     "Greenville (SC)",
     "Greenwood (SC)",
     "Hampton (SC)",
@@ -305,14 +316,69 @@ REGISTERED_COUNTIES = sorted([
     "Lee (SC)",
     "Lexington (SC)",
     "Marion (SC)",
+    "Marlboro (SC)",
+    "McCormick (SC)",
     "Newberry (SC)",
     "Oconee (SC)",
+    "Orangeburg (SC)",
     "Pickens (SC)",
     "Richland (SC)",
+    "Saluda (SC)",
+    "Spartanburg (SC)",
     "Sumter (SC)",
     "Union (SC)",
-    "York (SC)"
+    "Williamsburg (SC)",
+    "York (SC)",
+    # ── North Carolina (wave-1 registered scrapers) ──
+    "Alamance (NC)",
+    "Anson (NC)",
+    "Brunswick (NC)",
+    "Cabarrus (NC)",
+    "Cleveland (NC)",
+    "Davidson (NC)",
+    "Davie (NC)",
+    "Duplin (NC)",
+    "Durham (NC)",
+    "Edgecombe (NC)",
+    "Gaston (NC)",
+    "Harnett (NC)",
+    "Henderson (NC)",
+    "Hoke (NC)",
+    "Iredell (NC)",
+    "Lincoln (NC)",
+    "Mecklenburg (NC)",
+    "New Hanover (NC)",
+    "Pender (NC)",
+    "Polk (NC)",
+    "Rutherford (NC)",
+    "Sampson (NC)",
+    "Scotland (NC)",
+    "Stokes (NC)",
+    "Surry (NC)",
+    "Transylvania (NC)",
+    "Union (NC)",
 ])
+
+
+def parse_registered_county(label: str) -> tuple[str, str | None]:
+    """Split ``Lee (FL)`` → ``("Lee", "FL")``; bare names keep state None."""
+    raw = (label or "").strip()
+    m = re_mod.match(r"^(.+?)\s*\(([A-Za-z]{2})\)$", raw)
+    if m:
+        return m.group(1).strip(), m.group(2).upper()
+    return raw, None
+
+
+def registered_county_to_trigger_key(label: str) -> str:
+    """Map REGISTERED_COUNTIES label to scheduler trigger key.
+
+    FL → bare county (``lee``). Other states → ``sc_lee`` / ``nc_mecklenburg``.
+    """
+    name, st = parse_registered_county(label)
+    slug = name.lower().replace(" ", "_").replace("-", "_")
+    if not st or st == "FL":
+        return slug
+    return f"{st.lower()}_{slug}"
 
 
 

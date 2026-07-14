@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 ShamrockLeads — Multi-State Operations API
 Endpoints:
-  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC)
+  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC)
   GET /api/ops/scraper-registry       — Full registry with state + platform metadata
   GET /api/ops/arrests/multi-state    — Recent arrests across all states with filters
   GET /api/ops/county-heatmap         — Arrest volume by county (all states)
@@ -24,15 +24,26 @@ from dashboard.extensions import get_collection, get_db
 logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
+# Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
+ACTIVE_STATES = ("FL", "GA", "SC", "NC")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER REGISTRY — built from the actual scraper files on disk
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_registry() -> list[dict]:
     """Dynamically build the full scraper registry from the scrapers/ directory."""
+    base = os.path.normpath(os.path.join(os.path.dirname(__file__), "../../scrapers"))
     state_dirs = {
-        "FL": os.path.join(os.path.dirname(__file__), "../../scrapers/counties"),
-        "GA": os.path.join(os.path.dirname(__file__), "../../scrapers/counties_ga"),
-        "SC": os.path.join(os.path.dirname(__file__), "../../scrapers/counties_sc"),
+        "FL": os.path.join(base, "counties"),
+        "GA": os.path.join(base, "counties_ga"),
+        "SC": os.path.join(base, "counties_sc"),
+        "NC": os.path.join(base, "counties_nc"),
+        # Scaffolded packages (appear when scrapers are added):
+        "TN": os.path.join(base, "counties_tn"),
+        "TX": os.path.join(base, "counties_tx"),
+        "CT": os.path.join(base, "counties_ct"),
+        "LA": os.path.join(base, "counties_la"),
+        "MS": os.path.join(base, "counties_ms"),
     }
     platform_map = {
         "jailtracker_base": "JailTracker",
@@ -45,6 +56,7 @@ def _build_registry() -> list[dict]:
         "xml_feed_base": "XML Feed",
         "new_world_base": "New World",
         "odyssey_base": "Tyler Odyssey",
+        "kologik_base": "Kologik",
         "smartcop_base": "SmartCOP",
         "smartweb_parser": "SmartWeb",
         "base_scraper": "Custom HTML",
@@ -68,13 +80,33 @@ def _build_registry() -> list[dict]:
                 if key in content:
                     platform = val
                     break
-            m = re.search(r'return\s+"([^"]+)"', content)
+            # Prefer explicit county property / COUNTY_NAME over first string return
+            m = re.search(r'COUNTY_NAME\s*=\s*["\']([^"\']+)["\']', content)
+            if not m:
+                m = re.search(
+                    r'def county\(self\)[^:]*:\s*(?:.*?return\s+["\']([^"\']+)["\'])',
+                    content,
+                    re.DOTALL,
+                )
+            if not m:
+                m = re.search(r'return\s+"([^"]+)"', content)
             county = m.group(1) if m else fname.replace(".py", "").replace("_", " ").title()
+            county_slug = county.lower().replace(" ", "_").replace("-", "_")
+            scraper_id = (
+                f"scraper_{county_slug}" if state == "FL"
+                else f"scraper_{state.lower()}_{county_slug}"
+            )
             registry.append({
                 "county": county,
                 "state": state,
                 "platform": platform,
                 "file": fname,
+                "scraper_id": scraper_id,
+                "trigger_key": (
+                    county_slug if state == "FL"
+                    else f"{state.lower()}_{county_slug}"
+                ),
+                "label": f"{county} ({state})",
             })
     return registry
 
@@ -104,23 +136,34 @@ async def get_scraper_registry(state: str = ""):
     if state:
         registry = [r for r in registry if r["state"].upper() == state.upper()]
 
-    # Enrich with last-run data from MongoDB
+    # Enrich with last-run data from MongoDB (keyed by bare county; also try scraper_id)
     scraper_status = get_collection("scraper_status")
-    status_docs = {}
+    status_by_county: dict = {}
+    status_by_id: dict = {}
     async for doc in scraper_status.find({}, {"_id": 0}):
-        status_docs[doc.get("county", "")] = doc
+        c = doc.get("county", "")
+        if c:
+            status_by_county[c] = doc
+        sid = doc.get("scraper_id") or doc.get("job_id")
+        if sid:
+            status_by_id[sid] = doc
 
     result = []
     for r in registry:
-        status = status_docs.get(r["county"], {})
+        status = (
+            status_by_id.get(r.get("scraper_id", ""))
+            or status_by_county.get(r["county"], {})
+        )
+        last_run = status.get("last_run_at") or status.get("last_run")
+        last_run_iso = last_run.isoformat() if hasattr(last_run, "isoformat") else last_run
         result.append({
             **r,
             "status": status.get("status", "never_run"),
-            "last_run": status.get("last_run_at", None),
-            "last_run_iso": status.get("last_run_at", {}).isoformat() if hasattr(status.get("last_run_at"), "isoformat") else None,
-            "records_last_run": status.get("records_last_run", 0),
+            "last_run": last_run,
+            "last_run_iso": last_run_iso,
+            "records_last_run": status.get("records_last_run", status.get("records", 0)),
             "total_records": status.get("total_records", 0),
-            "error_message": status.get("error_message", None),
+            "error_message": status.get("error_message") or status.get("error"),
             "enabled": status.get("enabled", True),
         })
 
@@ -131,6 +174,7 @@ async def get_scraper_registry(state: str = ""):
     return {
         "total": len(result),
         "by_state": {s: len(v) for s, v in by_state.items()},
+        "states": list(ACTIVE_STATES),
         "scrapers": result,
     }
 
@@ -154,34 +198,54 @@ async def get_state_summary():
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
+    # Always surface FL/GA/SC/NC even when a dir is empty (zeros).
+    for st in ACTIVE_STATES:
+        state_counties.setdefault(st, [])
+
     result = {}
     for state, counties in state_counties.items():
         total_counties = len(counties)
 
-        # Arrest counts
+        # Arrest counts — accept both datetime and ISO string scraped_at
+        state_match = {"$or": [
+            {"state": state},
+            {"state": state.lower()},
+            {"State": state},
+        ]}
         arrests_24h = await arrests.count_documents({
-            "state": state,
-            "scraped_at": {"$gte": cutoff_24h},
+            **state_match,
+            "$and": [{"$or": [
+                {"scraped_at": {"$gte": cutoff_24h}},
+                {"scraped_at": {"$gte": cutoff_24h.isoformat()}},
+            ]}],
         })
         arrests_7d = await arrests.count_documents({
-            "state": state,
-            "scraped_at": {"$gte": cutoff_7d},
+            **state_match,
+            "$and": [{"$or": [
+                {"scraped_at": {"$gte": cutoff_7d}},
+                {"scraped_at": {"$gte": cutoff_7d.isoformat()}},
+            ]}],
         })
-        total_arrests = await arrests.count_documents({"state": state})
+        total_arrests = await arrests.count_documents(state_match)
 
         # Scraper health
         active = 0
         errors = 0
         never_run = 0
-        async for doc in scraper_status.find({"county": {"$in": counties}}, {"_id": 0, "status": 1}):
-            s = doc.get("status", "never_run")
-            if s in ("ok", "healthy"):
-                active += 1
-            elif s in ("error", "offline"):
-                errors += 1
-            else:
-                never_run += 1
-        never_run += total_counties - active - errors - never_run
+        if counties:
+            async for doc in scraper_status.find(
+                {"county": {"$in": counties}}, {"_id": 0, "status": 1}
+            ):
+                s = doc.get("status", "never_run")
+                if s in ("ok", "healthy"):
+                    active += 1
+                elif s in ("error", "offline"):
+                    errors += 1
+                else:
+                    never_run += 1
+        accounted = active + errors + never_run
+        if total_counties > accounted:
+            never_run += total_counties - accounted
 
         result[state] = {
             "state": state,
@@ -194,7 +258,11 @@ async def get_state_summary():
             "total_arrests": total_arrests,
         }
 
-    return {"states": result, "generated_at": now.isoformat()}
+    return {
+        "states": result,
+        "state_order": list(ACTIVE_STATES),
+        "generated_at": now.isoformat(),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,17 +285,23 @@ async def get_multi_state_arrests(
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
 
-    query: dict = {"scraped_at": {"$gte": cutoff}}
+    query: dict = {"$or": [
+        {"scraped_at": {"$gte": cutoff}},
+        {"scraped_at": {"$gte": cutoff.isoformat()}},
+    ]}
     if state:
-        query["state"] = state.upper()
+        st = state.upper()
+        query["state"] = {"$in": [st, st.lower()]}
     if county:
-        query["county"] = {"$regex": county, "$options": "i"}
+        # Accept "Mecklenburg" or "Mecklenburg (NC)"
+        bare = re.sub(r"\s*\([A-Za-z]{2}\)\s*$", "", county).strip()
+        query["county"] = {"$regex": f"^{re.escape(bare)}$", "$options": "i"}
     if q:
-        query["$or"] = [
+        query["$and"] = query.get("$and", []) + [{"$or": [
             {"full_name": {"$regex": q, "$options": "i"}},
             {"booking_number": {"$regex": q, "$options": "i"}},
             {"charges": {"$regex": q, "$options": "i"}},
-        ]
+        ]}]
 
     total = await arrests.count_documents(query)
     results = []

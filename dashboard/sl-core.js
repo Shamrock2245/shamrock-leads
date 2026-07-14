@@ -4,7 +4,7 @@
 */
 window.SL_STATE = {
   counties: [], selectedCounties: [], days: 0, custody: '', status: '',
-  minBond: 0, search: '', sort: 'arrest_date', order: 'desc',
+  stateCode: '', minBond: 0, search: '', sort: 'arrest_date', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
   defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defBond: 0, defPage: 1, defLimit: 48,
   scraperData: {}, mongoData: {}, prevHotCount: -1,
@@ -21,7 +21,7 @@ window.SL_STATE = {
 
 const API = location.origin;
 const PRESETS = {
-  swfl: ['Lee','Collier','Charlotte','DeSoto','Hendry','Sarasota','Manatee'],
+  swfl: ['Lee (FL)','Collier (FL)','Charlotte (FL)','DeSoto (FL)','Hendry (FL)','Sarasota (FL)','Manatee (FL)'],
   all: [], none: []
 };
 let searchTimer = null;

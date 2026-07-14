@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field, field_validator
 class LeadsQueryModel(BaseModel):
     """Pydantic model for structured, type-safe lead querying."""
     status: Optional[str] = Field(default="", description="Lead status: Hot, Warm, Cold, etc.")
-    county: Optional[str] = Field(default="", description="Single county or comma-separated list of counties")
+    county: Optional[str] = Field(default="", description="Single county or comma-separated list (supports 'Lee (FL)' labels)")
+    state: Optional[str] = Field(default="", description="State code filter: FL, GA, SC, NC (comma-separated OK)")
     custody: Optional[str] = Field(default="", description="Custody status filter: true (in custody) or released")
     days: Optional[int] = Field(default=None, description="Number of recent days to filter by scraped_at")
     min_bond: Optional[float] = Field(default=None, description="Minimum bond amount")

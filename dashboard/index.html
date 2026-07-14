@@ -35,7 +35,7 @@
 <div class="header">
   <div class="header-left">
     <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="header-logo" style="height:36px;margin-right:10px;vertical-align:middle">
-    <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC</small></h1>
+    <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC · NC</small></h1>
   </div>
 </div><!-- /header -->
 <!-- ═══ NOTIFICATION CENTER PANEL ═══ -->
@@ -88,7 +88,7 @@
       <button class="sidebar-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">⚡</span> Command Center</button>
       <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔍</span> Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
       <button class="sidebar-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">👥</span> Defendants</button>
-      <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">3 STATES</span></button>
+      <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">4 STATES</span></button>
       <button class="sidebar-btn" data-tab="tabBondIntel" onclick="SL.switchTab(this);SLBondIntel.load()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">💰</span> Bond Intelligence <span class="badge" id="bondIntelBadge" style="background:#10b981;color:#000;font-size:9px">LIVE</span></button>
       <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
 
@@ -300,6 +300,14 @@
         <button onclick="SL.setDays(5)">5d</button>
         <button class="active" onclick="SL.setDays(0)">All</button>
       </div>
+
+      <select id="stateFilter" onchange="SL.applyFilters()" title="Filter by state">
+        <option value="">All States</option>
+        <option value="FL">🌴 Florida</option>
+        <option value="GA">🍑 Georgia</option>
+        <option value="SC">🌙 South Carolina</option>
+        <option value="NC">🦅 North Carolina</option>
+      </select>
 
       <select id="custodyFilter" onchange="SL.applyFilters()">
         <option value="">All Custody</option>
@@ -823,6 +831,7 @@
       <button class="bond-state-btn" data-state="FL" onclick="SLBondIntel.setState('FL')">🌴 Florida</button>
       <button class="bond-state-btn" data-state="GA" onclick="SLBondIntel.setState('GA')">🍑 Georgia</button>
       <button class="bond-state-btn" data-state="SC" onclick="SLBondIntel.setState('SC')">🌙 South Carolina</button>
+      <button class="bond-state-btn" data-state="NC" onclick="SLBondIntel.setState('NC')">🦅 North Carolina</button>
       <span style="margin-left:12px;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Window:</span>
       <button class="bond-days-btn" data-days="7" onclick="SLBondIntel.setDays(7)">7d</button>
       <button class="bond-days-btn active" data-days="30" onclick="SLBondIntel.setDays(30)">30d</button>
@@ -3196,16 +3205,16 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/sl-core.js?v=4"></script>
+<script src="/sl-core.js?v=5"></script>
 <script src="/sl-rearrest.js?v=4"></script>
-<script src="/sl-data.js?v=4"></script>
+<script src="/sl-data.js?v=5"></script>
 <!-- Tabulator v6 JS -->
 <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
 <!-- ApexCharts -->
 <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
 <!-- Vanilla Calendar Pro -->
 <script src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
-<script src="/sl-features.js?v=4"></script>
+<script src="/sl-features.js?v=5"></script>
 <script src="/sl-active-bonds.js?v=5"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-tracking.js?v=4"></script>
@@ -4523,8 +4532,8 @@
 <script src="/sl-osint.js?v=1"></script>
 <script src="/sl-paperwork.js?v=1"></script>
 <link rel="stylesheet" href="/sl-bond-intelligence.css?v=1">
-  <link rel="stylesheet" href="/sl-multi-state.css?v=1">
-<script src="/sl-bond-intelligence.js?v=1"></script>
-<script src="/sl-multi-state.js?v=1"></script>
+  <link rel="stylesheet" href="/sl-multi-state.css?v=2">
+<script src="/sl-bond-intelligence.js?v=2"></script>
+<script src="/sl-multi-state.js?v=2"></script>
 </body>
 </html>

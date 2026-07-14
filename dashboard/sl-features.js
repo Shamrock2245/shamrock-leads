@@ -892,6 +892,7 @@ async function triggerSignNowPhase2() {
 function exportCSV() {
   const p = new URLSearchParams({sort:SL_STATE.sort,order:SL_STATE.order});
   if (SL_STATE.selectedCounties.length) p.set('county', SL_STATE.selectedCounties.join(','));
+  if (SL_STATE.stateCode) p.set('state', SL_STATE.stateCode);
   if (SL_STATE.days) p.set('days', SL_STATE.days);
   if (SL_STATE.custody) p.set('custody', SL_STATE.custody);
   if (SL_STATE.status) p.set('status', SL_STATE.status);
@@ -902,7 +903,7 @@ function exportCSV() {
 }
 function copyToSlack() {
   if (!SL_STATE.leads.length) { toast('No leads to copy','error'); return; }
-  const lines = SL_STATE.leads.slice(0,20).map(l => `• *${l.full_name}* — ${l.county} — $${(l.bond_amount||0).toLocaleString()} — Score: ${l.lead_score||0} (${l.lead_status||''})`);
+  const lines = SL_STATE.leads.slice(0,20).map(l => `• *${l.full_name}* — ${l.county}${l.state?' ('+l.state+')':''} — $${(l.bond_amount||0).toLocaleString()} — Score: ${l.lead_score||0} (${l.lead_status||''})`);
   const text = `*☘️ ShamrockLeads Export* (${SL_STATE.total} total)\n${lines.join('\n')}${SL_STATE.total>20?'\n_...and '+(SL_STATE.total-20)+' more_':''}`;
   navigator.clipboard.writeText(text).then(()=>toast('Copied — paste in Slack!','success')).catch(()=>toast('Copy failed','error'));
 }

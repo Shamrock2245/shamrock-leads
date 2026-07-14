@@ -16,7 +16,9 @@ const SLBondIntel = (() => {
     FL: { name: 'Florida',        flag: '🌴', color: '#f59e0b' },
     GA: { name: 'Georgia',        flag: '🍑', color: '#10b981' },
     SC: { name: 'South Carolina', flag: '🌙', color: '#3b82f6' },
+    NC: { name: 'North Carolina', flag: '🦅', color: '#8b5cf6' },
   };
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC'];
 
   function _fmt$(n) {
     if (!n || n === 0) return '—';
@@ -75,11 +77,11 @@ const SLBondIntel = (() => {
           <span style="color:var(--accent)">${_fmt$(totals.total_bond_value)} bond value</span>
         </div>
       </div>
-      ${['FL','GA','SC'].map(code => {
+      ${STATE_ORDER.map(code => {
         const m = STATE_META[code];
         const d = byState[code] || {};
         return `
-          <div class="bond-kpi-card" style="border-top:3px solid ${m.color}">
+          <div class="bond-kpi-card" style="border-top:3px solid ${m.color};cursor:pointer" onclick="SLBondIntel.setState('${code}')" title="Filter to ${m.name}">
             <div class="bond-kpi-label">${m.flag} ${m.name}</div>
             <div class="bond-kpi-value" style="color:${m.color}">${_fmtN(d.total || 0)}</div>
             <div class="bond-kpi-sub">Total Arrests</div>
