@@ -10,5 +10,9 @@ class TattnallScraper(InteropWebBaseScraper):
         return "Tattnall"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.interopweb.com/tattnall/CurrentInmates.aspx"

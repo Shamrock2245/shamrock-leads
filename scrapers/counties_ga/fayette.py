@@ -10,5 +10,9 @@ class FayetteScraper(InteropWebBaseScraper):
         return "Fayette"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://lookup.fayettesheriff.org/inmatelookup.php"

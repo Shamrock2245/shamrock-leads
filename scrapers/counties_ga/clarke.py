@@ -10,5 +10,9 @@ class ClarkeScraper(InteropWebBaseScraper):
         return "Clarke"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "http://enigma.athensclarkecounty.com/photo/jailcurrent.asp"

@@ -10,5 +10,9 @@ class DecaturScraper(SouthernSWBaseScraper):
         return "Decatur"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def agency_id(self) -> str:
         return "DecaturCoSOGA"

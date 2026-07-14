@@ -2,8 +2,10 @@
 Charleston County (SC) Arrest Scraper.
 Platform: Custom ASP.NET ViewState form
 URL: https://inmatesearch.charlestoncounty.gov/
-Approach: POST with ViewState + date range for last 24 hours
+Approach: POST with ViewState + date range for last 7 days
 """
+from __future__ import annotations
+
 import logging
 import re
 import time
@@ -17,7 +19,6 @@ from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
-
 PORTAL_URL = "https://inmatesearch.charlestoncounty.gov/"
 
 
@@ -31,8 +32,7 @@ class CharlestonScraper(BaseScraper):
         return "SC"
 
     def _get_viewstate(self, session: requests.Session) -> dict:
-        """Fetch the page and extract ASP.NET hidden form fields."""
-        resp = session.get(PORTAL_URL, timeout=15)
+        resp = session.get(PORTAL_URL, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         fields = {}
@@ -43,7 +43,7 @@ class CharlestonScraper(BaseScraper):
         return fields
 
     def scrape(self) -> List[ArrestRecord]:
-        records = []
+        records: List[ArrestRecord] = []
         start_time = time.time()
         session = requests.Session()
         session.headers.update({
@@ -53,15 +53,13 @@ class CharlestonScraper(BaseScraper):
         })
 
         try:
-            # Step 1: GET to collect ViewState tokens
             vs = self._get_viewstate(session)
             if not vs.get("__VIEWSTATE"):
                 logger.error("Charleston: Failed to extract ViewState")
                 return []
 
-            # Step 2: POST — search last 24 hours
             now = datetime.now()
-            yesterday = now - timedelta(days=1)
+            start = now - timedelta(days=7)
             date_fmt = "%m/%d/%Y"
 
             payload = {
@@ -72,7 +70,7 @@ class CharlestonScraper(BaseScraper):
                 "__EVENTVALIDATION": vs.get("__EVENTVALIDATION", ""),
                 "ctl00$MainContent$txtLastName": "",
                 "ctl00$MainContent$txtFirstName": "",
-                "ctl00$MainContent$txtBookDtFrom": yesterday.strftime(date_fmt),
+                "ctl00$MainContent$txtBookDtFrom": start.strftime(date_fmt),
                 "ctl00$MainContent$txtBookDtTo": now.strftime(date_fmt),
                 "ctl00$MainContent$txtArrestDtFrom": "",
                 "ctl00$MainContent$txtArrestDtTo": "",
@@ -81,69 +79,73 @@ class CharlestonScraper(BaseScraper):
                 "ctl00$MainContent$btnSearch": "Search",
             }
 
-            resp = session.post(PORTAL_URL, data=payload, timeout=20)
+            resp = session.post(PORTAL_URL, data=payload, timeout=30)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Step 3: Parse results table
             table = soup.find("table", id=re.compile(r"GridView|gvResults|grdInmates", re.I))
             if not table:
-                tables = soup.find_all("table")
-                for t in tables:
-                    headers = [th.text.strip().lower() for th in t.find_all("th")]
-                    if any(h in headers for h in ["name", "last name", "inmate"]):
+                for t in soup.find_all("table"):
+                    headers = [th.get_text(strip=True).lower() for th in t.find_all("th")]
+                    if any(h in headers for h in ("name", "last name", "inmate", "booking")):
                         table = t
                         break
 
             if not table:
-                logger.warning(f"Charleston: No results table found.")
+                logger.warning("Charleston: No results table found")
                 return []
 
-            rows = table.find_all("tr")[1:]  # Skip header row
-            for row in rows:
-                cells = [td.text.strip() for td in row.find_all("td")]
-                if len(cells) < 3:
+            headers = [th.get_text(" ", strip=True).lower() for th in table.find_all("tr")[0].find_all(["th", "td"])]
+            for row in table.find_all("tr")[1:]:
+                cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
+                if len(cells) < 2:
                     continue
-
                 try:
-                    full_name = f"{cells[0]}, {cells[1]}" if len(cells) > 1 else cells[0]
-                    booking_num = cells[2] if len(cells) > 2 else ""
-                    booking_date_str = cells[3] if len(cells) > 3 else ""
-                    charge = cells[4] if len(cells) > 4 else "Unknown"
-                    bond_str = cells[5] if len(cells) > 5 else "0"
+                    # Prefer header mapping; fall back to positional
+                    def col(*keys, default=""):
+                        for i, h in enumerate(headers):
+                            if any(k in h for k in keys) and i < len(cells):
+                                return cells[i]
+                        return default
 
-                    booking_date = datetime.now(timezone.utc)
-                    for fmt in ["%m/%d/%Y", "%m/%d/%Y %I:%M %p", "%Y-%m-%d"]:
-                        try:
-                            booking_date = datetime.strptime(booking_date_str.strip(), fmt).replace(tzinfo=timezone.utc)
-                            break
-                        except ValueError:
-                            continue
+                    last = col("last") or (cells[0] if cells else "")
+                    first = col("first") or (cells[1] if len(cells) > 1 else "")
+                    if "last" not in " ".join(headers) and len(cells) >= 2:
+                        # some layouts are "Last, First" in one cell
+                        if "," in cells[0] and not first:
+                            last, first = [p.strip() for p in cells[0].split(",", 1)]
+                        full_name = f"{last}, {first}".strip(", ")
+                    else:
+                        full_name = f"{last}, {first}".strip(", ") if last or first else cells[0]
 
-                    bond_amount = 0.0
-                    bond_clean = re.sub(r"[^\d.]", "", bond_str)
-                    if bond_clean:
-                        bond_amount = float(bond_clean)
+                    booking_num = col("booking", "inmate #", "number") or (cells[2] if len(cells) > 2 else "")
+                    booking_date_str = col("book", "date") or (cells[3] if len(cells) > 3 else "")
+                    charge = col("charge", "offense") or (cells[4] if len(cells) > 4 else "Unknown")
+                    bond_str = col("bond", "bail") or (cells[5] if len(cells) > 5 else "0")
 
-                    rec = ArrestRecord(
-                        state="SC",
-                        county=self.county,
-                        full_name=full_name.title(),
-                        booking_number=booking_num,
-                        charges=[charge],
-                        bond_amount=bond_amount,
-                        booking_date=booking_date,
-                        scraped_at=datetime.now(timezone.utc),
-                        source_url=PORTAL_URL,
+                    if not booking_num:
+                        booking_num = f"CHS_{re.sub(r'[^A-Za-z0-9]', '', full_name)[:16]}_{abs(hash(full_name + booking_date_str)) % 100000}"
+
+                    bond = re.sub(r"[^\d.]", "", bond_str) or "0"
+                    records.append(
+                        ArrestRecord(
+                            County=self.county,
+                            State="SC",
+                            Full_Name=full_name.title(),
+                            First_Name=first.title() if first else "",
+                            Last_Name=last.title() if last else "",
+                            Booking_Number=str(booking_num),
+                            Booking_Date=booking_date_str,
+                            Charges=charge or "Unknown",
+                            Bond_Amount=bond,
+                            Status="In Custody",
+                            Detail_URL=PORTAL_URL,
+                        )
                     )
-                    records.append(rec)
                 except Exception as row_err:
-                    logger.debug(f"Charleston: Row parse error — {row_err}")
-                    continue
-
+                    logger.debug(f"Charleston row error: {row_err}")
         except Exception as e:
             logger.error(f"Charleston scrape failed: {e}")
 
-        elapsed = time.time() - start_time
-        logger.info(f"Charleston: {len(records)} records in {elapsed:.1f}s")
+        logger.info(f"Charleston: {len(records)} records in {time.time() - start_time:.1f}s")
         return records

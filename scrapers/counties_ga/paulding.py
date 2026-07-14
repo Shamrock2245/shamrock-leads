@@ -10,5 +10,9 @@ class PauldingScraper(NewWorldBaseScraper):
         return "Paulding"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://inmate.paulding.gov:9443/NewWorld.InmateInquiry/GA1100000"

@@ -16,6 +16,10 @@ class LowndesScraper(BaseScraper):
     def county(self) -> str:
         return "Lowndes"
 
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> list[ArrestRecord]:
         # Implementation would use Odyssey base class, stubbed for now
         logger.info("Lowndes scraper initialized (Odyssey portal)")

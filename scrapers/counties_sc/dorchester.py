@@ -1,14 +1,18 @@
 """
-Dorchester County (SC) Arrest Scraper.
-Uses SouthernSoftwareBaseScraper.
+Dorchester County (SC) Arrest Scraper — Southern Software Citizen Connect.
 """
-from scrapers.southern_sw_base import SouthernSoftwareBaseScraper
+from scrapers.southern_sw_base import SouthernSWBaseScraper
 
-class DorchesterScraper(SouthernSoftwareBaseScraper):
+
+class DorchesterScraper(SouthernSWBaseScraper):
     @property
     def county(self) -> str:
         return "Dorchester"
-        
+
+    @property
+    def state(self) -> str:
+        return "SC"
+
     @property
     def agency_id(self) -> str:
         return "DorchesterCoSC"

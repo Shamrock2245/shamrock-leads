@@ -155,7 +155,7 @@ class ScraperScheduler:
             for doc in pending:
                 trigger_type = doc.get("type", "run_now")
                 county = doc.get("county", "")
-                job_id = f"scraper_{county.lower().replace(' ', '_')}"
+                job_id = self._resolve_job_id(county) or f"scraper_{county.lower().replace(' ', '_')}"
                 scraper = self._scrapers.get(job_id)
 
                 # ── Custody Recheck Trigger ──
@@ -429,15 +429,71 @@ class ScraperScheduler:
         logger.info("🛑 Stopping scheduler...")
         self.scheduler.shutdown(wait=True)
 
+    def _resolve_job_id(self, county: str) -> Optional[str]:
+        """Resolve a county key to a registered scraper job_id.
+
+        Accepts:
+          - job_id itself (``scraper_lee``, ``scraper_sc_lee``)
+          - bare county (``lee``) — prefers FL, then any match
+          - state-prefixed (``sc_lee``, ``sc-lee``, ``lee_sc``, ``Lee SC``)
+        """
+        raw = (county or "").strip()
+        if not raw:
+            return None
+        key = raw.lower().replace(" ", "_").replace("-", "_")
+
+        # Already a job id
+        if key in self._scrapers:
+            return key
+        if f"scraper_{key}" in self._scrapers:
+            return f"scraper_{key}"
+
+        # state_county or county_state forms
+        parts = [p for p in key.split("_") if p]
+        state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "ms"}
+        candidates = []
+        if len(parts) >= 2:
+            if parts[0] in state_codes:
+                st, cty = parts[0], "_".join(parts[1:])
+                candidates.append(f"scraper_{st}_{cty}" if st != "fl" else f"scraper_{cty}")
+            if parts[-1] in state_codes:
+                st, cty = parts[-1], "_".join(parts[:-1])
+                candidates.append(f"scraper_{st}_{cty}" if st != "fl" else f"scraper_{cty}")
+        candidates.append(f"scraper_{key}")  # FL legacy
+
+        for cid in candidates:
+            if cid in self._scrapers:
+                return cid
+
+        # Fuzzy: unique county-name match across states
+        matches = [
+            jid for jid, s in self._scrapers.items()
+            if s.county.lower().replace(" ", "_") == key
+            or jid.endswith(f"_{key}")
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            # Prefer FL
+            for m in matches:
+                if not any(m.startswith(f"scraper_{st}_") for st in state_codes if st != "fl"):
+                    return m
+            logger.error(
+                f"❌ Ambiguous county '{county}' matches {matches}. "
+                f"Use state prefix (e.g. sc_{key})."
+            )
+            return None
+        return None
+
     def run_now(self, county: str) -> Optional[dict]:
-        """Trigger an immediate run for a specific county."""
-        job_id = f"scraper_{county.lower().replace(' ', '_')}"
-        scraper = self._scrapers.get(job_id)
+        """Trigger an immediate run for a specific county (optionally state-prefixed)."""
+        job_id = self._resolve_job_id(county)
+        scraper = self._scrapers.get(job_id) if job_id else None
         if not scraper:
             logger.error(f"❌ No scraper registered for county: {county}")
             return None
 
-        logger.info(f"⚡ Manual trigger: {county}")
+        logger.info(f"⚡ Manual trigger: {county} → {job_id}")
         return scraper.run(writers=self._writers)
 
     def get_status(self) -> dict:

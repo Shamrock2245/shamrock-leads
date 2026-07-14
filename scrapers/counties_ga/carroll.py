@@ -10,5 +10,9 @@ class CarrollScraper(InteropWebBaseScraper):
         return "Carroll"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "http://www.interopweb.com/Carroll"

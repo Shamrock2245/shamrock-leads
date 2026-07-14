@@ -10,5 +10,9 @@ class EmanuelScraper(InteropWebBaseScraper):
         return "Emanuel"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://interopweb.com/emanueljailpop/"

@@ -1,13 +1,21 @@
 """
 Base scraper for Southern Software Citizen Connect.
-Used by several Georgia counties.
+
+Current Citizen Connect flow (2026):
+  1. GET  /bookingsearch/index.php?AgencyID={agency_id}
+  2. Read hidden JMSAgencyID from #formcurrentconfinementsonload
+  3. POST /bookingsearch/fetchesforajax/fetch_current_confinements.php
+     with JMSAgencyID (+ search/agency/sort)
+
+Returns HTML booking-card fragments with name, booked date, bond, charges.
 """
 
+from __future__ import annotations
+
 import logging
-import time
 import re
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -17,127 +25,282 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
+CC_BASE = "https://cc.southernsoftware.com/bookingsearch"
+
+
 class SouthernSWBaseScraper(BaseScraper):
-    """
-    Base scraper for Southern Software Citizen Connect.
-    Subclasses only need to provide the county name and AgencyID.
-    """
-    
+    """Subclasses provide ``county`` and ``agency_id`` (Citizen Connect AgencyID)."""
+
     @property
     def county(self) -> str:
         raise NotImplementedError("Subclasses must define county name")
-        
+
     @property
     def agency_id(self) -> str:
-        raise NotImplementedError("Subclasses must define AgencyID (e.g., 'BanksCoGA')")
+        raise NotImplementedError("Subclasses must define AgencyID (e.g., 'HarnettCoNC')")
 
     def scrape(self) -> List[ArrestRecord]:
-        """Fetch bookings from Southern Software portal."""
-        start_time = time.time()
-        url = f"https://cc.southernsoftware.com/index/index.php?AgencyID={self.agency_id}"
-        
-        logger.info(f"📥 Fetching Southern Software roster for {self.county} at {url}")
-        
+        start = time.time()
+        agency = self.agency_id
+        index_url = f"{CC_BASE}/index.php?AgencyID={agency}"
+        logger.info(f"📥 Southern Software roster for {self.county} ({agency})")
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        })
+
         try:
-            session = requests.Session()
-            session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-            })
-            
-            # Step 1: Get the main page to establish session/cookies
-            resp = session.get(url, timeout=15)
+            resp = session.get(index_url, timeout=25)
             if resp.status_code != 200:
-                logger.error(f"Failed to fetch {url}: HTTP {resp.status_code}")
+                logger.error(f"{self.county}: index HTTP {resp.status_code}")
                 return []
-                
-            # Step 2: Look for the Inmate Confinements link or POST form
-            # Southern Software usually requires a POST to filter by "Last 24 Hours" or "Currently Confined"
-            search_url = f"https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID={self.agency_id}"
-            
-            # Default to getting the last 24 hours to keep payload small
-            payload = {
-                "SearchType": "Last24Hours", # or "CurrentlyConfined"
-                "Submit": "Search"
-            }
-            
-            search_resp = session.post(search_url, data=payload, timeout=15)
-            if search_resp.status_code != 200:
-                logger.warning(f"POST search failed, falling back to GET parsing")
-                html = resp.text
-            else:
-                html = search_resp.text
-                
-            soup = BeautifulSoup(html, 'html.parser')
-            
-            # Look for inmate cards or table rows
-            # Southern SW often uses div cards with class 'inmate-card' or similar
-            cards = soup.find_all('div', class_=re.compile(r'inmate.*', re.I))
-            
-            if not cards:
-                # Try table fallback
-                tables = soup.find_all('table')
-                for t in tables:
-                    if 'Name' in t.text and ('Booking' in t.text or 'Charge' in t.text):
-                        cards = t.find_all('tr')[1:] # Skip header
-                        break
-                        
-            if not cards:
-                logger.warning(f"Could not find inmate data for {self.county}")
-                return []
-                
-            records = []
-            for card in cards:
-                text = card.text.strip()
-                if not text or len(text) < 10:
-                    continue
-                    
-                # Extract basic info - highly dependent on specific county layout
-                # Usually: Name is in a header tag
-                name_elem = card.find(['h3', 'h4', 'strong'])
-                name_raw = name_elem.text.strip() if name_elem else "Unknown"
-                
-                # Try to parse name
-                name_parts = name_raw.split(',')
-                last_name = name_parts[0].strip() if len(name_parts) > 0 else ""
-                first_mid = name_parts[1].strip() if len(name_parts) > 1 else ""
-                
-                # Create record
-                record = ArrestRecord(
-                    County=self.county,
-                    Full_Name=name_raw,
-                    First_Name=first_mid.split(' ')[0] if first_mid else "",
-                    Last_Name=last_name,
-                    Status="In Custody"
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            jms = self._extract_jms_agency_id(soup)
+            if not jms:
+                logger.warning(f"{self.county}: no JMSAgencyID on index; trying agency_id alone")
+                jms = agency
+
+            # Paginate current confinements via IDX (20 cards/page)
+            records: List[ArrestRecord] = []
+            seen: set = set()
+            for idx in range(1, 80):  # hard cap ~1600 inmates
+                html = self._fetch_endpoint(
+                    session,
+                    "fetch_current_confinements.php",
+                    jms,
+                    index_url,
+                    idx=idx,
                 )
-                
-                # Extract details via regex or specific labels
-                labels = card.find_all('label')
-                for label in labels:
-                    lbl_text = label.text.strip().lower()
-                    val_elem = label.find_next_sibling()
-                    val_text = val_elem.text.strip() if val_elem else ""
-                    
-                    if 'booking' in lbl_text and 'date' in lbl_text:
-                        record.Booking_Date = val_text
-                    elif 'booking' in lbl_text and 'number' in lbl_text:
-                        record.Booking_Number = val_text
-                    elif 'charge' in lbl_text:
-                        record.Charges = val_text
-                    elif 'bond' in lbl_text:
-                        bond = val_text.replace('$', '').replace(',', '').strip()
-                        if bond and bond.replace('.', '').isdigit():
-                            record.Bond_Amount = bond
-                            
-                # Fallback for booking number
-                if not record.Booking_Number:
-                    record.Booking_Number = f"{last_name.upper()}_{int(time.time())}"
-                    
-                records.append(record)
-                
-            logger.info(f"✅ Found {len(records)} records for {self.county} in {time.time() - start_time:.1f}s")
+                if not html:
+                    break
+                page = self._parse_booking_cards(html)
+                if not page:
+                    break
+                new = 0
+                for rec in page:
+                    key = f"{rec.Full_Name}|{rec.Booking_Date}|{rec.Booking_Number}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    records.append(rec)
+                    new += 1
+                if new == 0:
+                    break
+                time.sleep(0.2)
+
+            if not records:
+                # Fallback: last 7 days admits (single page)
+                html = self._fetch_endpoint(
+                    session, "fetch_last7days.php", jms, index_url, idx=1
+                )
+                records = self._parse_booking_cards(html) if html else []
+
+            logger.info(
+                f"✅ {self.county}: Southern SW {len(records)} records "
+                f"in {time.time() - start:.1f}s"
+            )
             return records
-            
         except Exception as e:
             logger.error(f"Error scraping Southern SW {self.county}: {e}")
             return []
+
+    @staticmethod
+    def _extract_jms_agency_id(soup: BeautifulSoup) -> str:
+        tag = soup.find("input", {"name": "JMSAgencyID"}) or soup.find(
+            "input", {"id": "JMSAgencyID"}
+        )
+        if tag and tag.get("value"):
+            return tag["value"].strip()
+        # Fallback: any NC/SC/GA ORI pattern in page
+        m = re.search(r'name="JMSAgencyID"[^>]*value="([^"]+)"', str(soup))
+        return m.group(1) if m else ""
+
+    def _fetch_endpoint(
+        self,
+        session: requests.Session,
+        endpoint: str,
+        jms: str,
+        referer: str,
+        idx: int = 1,
+    ) -> str:
+        url = f"{CC_BASE}/fetchesforajax/{endpoint}"
+        data = {
+            "JMSAgencyID": jms,
+            "search": "",
+            "agency": "",
+            "sort": "name",
+            "IDX": str(idx),
+        }
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": referer,
+            "Origin": "https://cc.southernsoftware.com",
+            "Accept": "text/html, */*; q=0.01",
+        }
+        try:
+            resp = session.post(url, data=data, headers=headers, timeout=45)
+            if resp.status_code != 200:
+                logger.warning(f"{self.county}: {endpoint} HTTP {resp.status_code}")
+                return ""
+            return resp.text or ""
+        except Exception as e:
+            logger.warning(f"{self.county}: {endpoint} failed: {e}")
+            return ""
+
+    def _parse_booking_cards(self, html: str) -> List[ArrestRecord]:
+        soup = BeautifulSoup(html, "html.parser")
+        cards = soup.find_all("div", class_=re.compile(r"booking-card", re.I))
+        if not cards:
+            # Broader card fallback
+            cards = [
+                c
+                for c in soup.find_all("div", class_=re.compile(r"\bcard\b", re.I))
+                if c.find(["h4", "h5"]) and (
+                    "Booked" in c.get_text() or "Bond" in c.get_text() or "Charge" in c.get_text()
+                )
+            ]
+
+        records: List[ArrestRecord] = []
+        for card in cards:
+            try:
+                rec = self._parse_one_card(card)
+                if rec:
+                    records.append(rec)
+            except Exception as e:
+                logger.debug(f"{self.county}: card parse error: {e}")
+        return records
+
+    def _parse_one_card(self, card) -> Optional[ArrestRecord]:
+        # Name is typically first h5 in booking-header
+        name_el = card.find(["h5", "h4", "h3"])
+        if not name_el:
+            return None
+        name = name_el.get_text(" ", strip=True)
+        if not name or name.lower().startswith("total inmates"):
+            return None
+
+        text = card.get_text("\n", strip=True)
+
+        def field(pattern: str) -> str:
+            m = re.search(pattern, text, re.I | re.M)
+            return m.group(1).strip() if m else ""
+
+        booked = field(r"Booked:\s*([0-9/.\-]+)")
+        arrest_dt = field(r"Arrest Date/Time:\s*([^\n]+)")
+        agency = field(r"Arresting Agency:\s*([^\n]+)")
+        bond_total = field(r"Bond Total:\s*\$?\s*([\d,]+\.?\d*)")
+        demo = field(r"Demographics:\s*([^\n]+)")
+
+        # Charges: lines under Charges section / charge-item blocks
+        charges: List[str] = []
+        for item in card.find_all(class_=re.compile(r"charge-item|charge-details", re.I)):
+            t = item.get_text(" ", strip=True)
+            # strip leading index numbers
+            t = re.sub(r"^\d+\s*", "", t).strip()
+            if t and len(t) > 2 and not t.lower().startswith("docket"):
+                # Prefer description before bond/docket noise
+                t = re.split(r"\bBond:|\bDocket:", t)[0].strip()
+                if t:
+                    charges.append(t)
+        if not charges:
+            # Heuristic: lines that look like offense descriptions
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or len(line) < 4:
+                    continue
+                if any(
+                    k in line.lower()
+                    for k in (
+                        "booked",
+                        "demographics",
+                        "arresting",
+                        "bond total",
+                        "view full",
+                        "years /",
+                        "docket",
+                        "charges",
+                    )
+                ):
+                    continue
+                if re.match(r"^\$?[\d,]+", line):
+                    continue
+                if line.isdigit():
+                    continue
+                if line == name:
+                    continue
+                if re.search(r"[A-Za-z]{3,}", line):
+                    charges.append(line)
+                    if len(charges) >= 8:
+                        break
+
+        age = race = sex = ""
+        if demo:
+            # e.g. "47 years / W / F"
+            m = re.match(
+                r"(\d+)\s*years?\s*/\s*([A-Za-z]+)\s*/\s*([A-Za-z]+)", demo
+            )
+            if m:
+                age, race, sex = m.group(1), m.group(2), m.group(3)
+
+        first = last = middle = ""
+        if "," in name:
+            last, rest = [p.strip() for p in name.split(",", 1)]
+            parts = rest.split()
+            first = parts[0] if parts else ""
+            middle = " ".join(parts[1:]) if len(parts) > 1 else ""
+        else:
+            parts = name.split()
+            if len(parts) >= 2:
+                first = parts[0]
+                last = parts[-1]
+                middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+            else:
+                last = name
+
+        booking_num = (
+            f"SSW_{re.sub(r'[^A-Za-z0-9]', '', last)[:12]}_"
+            f"{re.sub(r'[^0-9]', '', booked)[:8]}_"
+            f"{age or '0'}"
+        )
+        bond = re.sub(r"[^\d.]", "", bond_total) or "0"
+        if bond == "0":
+            # sum individual bond lines
+            bonds = re.findall(r"Bond:\s*\$?\s*([\d,]+\.?\d*)", text, re.I)
+            total = 0.0
+            for b in bonds:
+                try:
+                    total += float(b.replace(",", ""))
+                except ValueError:
+                    pass
+            if total:
+                bond = str(int(total) if total == int(total) else total)
+
+        return ArrestRecord(
+            County=self.county,
+            State=self.state or "FL",
+            Full_Name=name,
+            First_Name=first,
+            Middle_Name=middle,
+            Last_Name=last,
+            Booking_Number=booking_num,
+            Booking_Date=booked or (arrest_dt[:10] if arrest_dt else ""),
+            Arrest_Date=arrest_dt.split()[0] if arrest_dt else booked,
+            Age_At_Arrest=age,
+            Race=race,
+            Sex=(sex or "")[:1].upper(),
+            Agency=agency,
+            Charges=" | ".join(charges) if charges else "Unknown",
+            Bond_Amount=str(bond),
+            Status="In Custody",
+            Detail_URL=f"{CC_BASE}/index.php?AgencyID={self.agency_id}",
+        )
+
+
+# Alias used by some county modules
+SouthernSoftwareBaseScraper = SouthernSWBaseScraper

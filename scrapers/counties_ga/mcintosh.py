@@ -10,5 +10,9 @@ class McIntoshScraper(InteropWebBaseScraper):
         return "McIntosh"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://mcintoshjailroster.org/"

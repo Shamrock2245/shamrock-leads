@@ -10,5 +10,9 @@ class CrawfordScraper(InteropWebBaseScraper):
         return "Crawford"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://inmates.crawfordcountysheriff.org/"

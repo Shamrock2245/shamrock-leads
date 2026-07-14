@@ -11,5 +11,9 @@ class HallScraper(P2CBaseScraper):
         return "Hall"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def p2c_url(self) -> str:
         return "https://hallcounty.policetocitizen.com/Inmates/Catalog"

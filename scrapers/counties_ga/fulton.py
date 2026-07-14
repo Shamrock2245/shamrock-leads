@@ -12,6 +12,10 @@ class FultonScraper(SocrataBaseScraper):
         return "Fulton"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def socrata_url(self) -> str:
         # Fulton County Jail Inmates Open Data dataset
         return "https://sharefulton.fultoncountyga.gov/resource/3vfv-9mmr.json"

@@ -10,5 +10,9 @@ class DodgeScraper(InteropWebBaseScraper):
         return "Dodge"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://dodgecountysheriff.org/jail-population/"

@@ -10,5 +10,9 @@ class MuscogeeScraper(OdysseyBaseScraper):
         return "Muscogee"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://portal-gamuscogee.tylertech.cloud/app/JailSearch/"

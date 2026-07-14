@@ -10,5 +10,9 @@ class JasperScraper(InteropWebBaseScraper):
         return "Jasper"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://jasperso.com/inmate-roster/"

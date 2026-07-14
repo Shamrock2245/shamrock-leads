@@ -106,10 +106,15 @@ class P2CBaseScraper(BaseScraper):
                     h = lnk["href"]
                     if not h.startswith("http"): h = self.P2C_URL.rsplit("/",1)[0]+"/"+h.lstrip("/")
                     detail = h
-                records.append(ArrestRecord(County=self.county, Booking_Number=rec_bk,
+                records.append(ArrestRecord(
+                    County=self.county,
+                    State=getattr(self, "state", None) or "FL",
+                    Booking_Number=rec_bk or f"P2C_{re.sub(r'[^A-Za-z0-9]', '', rec_name)[:16]}",
                     Full_Name=rec_name, First_Name=f, Middle_Name=m, Last_Name=l,
                     Booking_Date=rec_date, Bond_Amount=rec_bond, Status="In Custody",
-                    Facility=self.FACILITY_NAME, Detail_URL=detail, LastCheckedMode="INITIAL"))
+                    Facility=self.FACILITY_NAME, Detail_URL=detail or self.P2C_URL,
+                    Charges="Unknown", LastCheckedMode="INITIAL",
+                ))
         return records
 
     @staticmethod

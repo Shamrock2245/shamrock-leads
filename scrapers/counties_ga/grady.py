@@ -10,5 +10,9 @@ class GradyScraper(InteropWebBaseScraper):
         return "Grady"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://tcsi-roster.azurewebsites.net/default.aspx?code=grady&type=roster&i=44"

@@ -10,5 +10,9 @@ class LeeScraper(SouthernSWBaseScraper):
         return "Lee"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def agency_id(self) -> str:
         return "LeeCoSOGA"

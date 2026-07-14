@@ -17,6 +17,10 @@ class GlynnScraper(BaseScraper):
     def county(self) -> str:
         return "Glynn"
         
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
         url = "https://glynncountysheriff.org/inmate-search"

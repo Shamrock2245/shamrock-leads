@@ -10,5 +10,9 @@ class TroupScraper(InteropWebBaseScraper):
         return "Troup"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://troupcountyjailga.org/"

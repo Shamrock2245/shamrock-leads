@@ -20,6 +20,10 @@ class ChathamScraper(BaseScraper):
     def county(self) -> str:
         return "Chatham"
 
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
         # days=1 gets last 24 hours, days=7 gets last week

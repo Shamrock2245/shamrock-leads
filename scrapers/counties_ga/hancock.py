@@ -10,5 +10,9 @@ class HancockScraper(InteropWebBaseScraper):
         return "Hancock"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.hancockso.com/InmateRoster/hancock_inmatelist.html"

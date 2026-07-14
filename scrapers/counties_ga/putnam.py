@@ -10,5 +10,9 @@ class PutnamScraper(SmartCOPBaseScraper):
         return "Putnam"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://smartweb.pcso.us/smartwebclient/jail.aspx"

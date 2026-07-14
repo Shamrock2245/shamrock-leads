@@ -10,5 +10,9 @@ class TwiggsScraper(InteropWebBaseScraper):
         return "Twiggs"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://interopweb.com/twiggsjailpop/"

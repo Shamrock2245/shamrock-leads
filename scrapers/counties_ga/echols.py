@@ -10,5 +10,9 @@ class EcholsScraper(OdysseyBaseScraper):
         return "Echols"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://portalprod.lowndescounty.com/PublicAccess/"

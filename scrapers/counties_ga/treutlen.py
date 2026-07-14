@@ -10,5 +10,9 @@ class TreutlenScraper(InteropWebBaseScraper):
         return "Treutlen"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://treutlenjailroster.org/"

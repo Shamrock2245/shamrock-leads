@@ -10,5 +10,9 @@ class LumpkinScraper(ZuercherBaseScraper):
         return "Lumpkin"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://lumpkin-so-ga.zuercherportal.com/"

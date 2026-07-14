@@ -10,5 +10,9 @@ class MillerScraper(InteropWebBaseScraper):
         return "Miller"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.millercountysheriff.org/roster.php"

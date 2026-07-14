@@ -10,5 +10,9 @@ class JonesScraper(InteropWebBaseScraper):
         return "Jones"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.jcsheriff.org/inmateSearch"

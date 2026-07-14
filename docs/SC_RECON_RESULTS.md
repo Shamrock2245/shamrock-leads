@@ -74,7 +74,7 @@
 ## Needs Deeper Investigation (6 counties)
 | County | URL | Notes |
 |---|---|---|
-| Calhoun | https://jailroster.kologik.com/?_fl0070000 | Kologik platform — unknown |
+| Calhoun | https://jailroster.kologik.com/?_fl0070000 | **MIS-ID: Calhoun FL (Blountstown / FL0070000), not SC** |
 | Greenville | https://app.greenvillecounty.org/inmate_search.htm | Largest SC county, needs custom parser |
 | Marlboro | https://marlborocountyjailsc.org/ | Custom HTML |
 | Orangeburg | https://vinelink.vineapps.com/state/SC | VINE statewide — may not be county-specific |

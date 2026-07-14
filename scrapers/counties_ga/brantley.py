@@ -10,5 +10,9 @@ class BrantleyScraper(InteropWebBaseScraper):
         return "Brantley"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.interopweb.com/brantley/"

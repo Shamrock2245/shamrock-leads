@@ -10,5 +10,9 @@ class HoustonScraper(ZuercherBaseScraper):
         return "Houston"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def zuercher_domain(self) -> str:
         return "houston-so-ga.zuercherportal.com"

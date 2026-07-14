@@ -17,6 +17,10 @@ class RichmondScraper(BaseScraper):
     def county(self) -> str:
         return "Richmond"
         
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
         url = "https://www.richmondcountysheriffsoffice.com/inmate-inquiry.cfm"

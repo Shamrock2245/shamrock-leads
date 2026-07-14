@@ -10,5 +10,9 @@ class PulaskiScraper(InteropWebBaseScraper):
         return "Pulaski"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://interopweb.com/pulaskisojailpop/"

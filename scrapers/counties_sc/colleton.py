@@ -1,14 +1,18 @@
 """
-Colleton County (SC) Arrest Scraper.
-Uses ZuercherBaseScraper.
+Colleton County (SC) Arrest Scraper — Zuercher portal.
 """
 from scrapers.zuercher_base import ZuercherBaseScraper
+
 
 class ColletonScraper(ZuercherBaseScraper):
     @property
     def county(self) -> str:
         return "Colleton"
-        
+
     @property
-    def portal_url(self) -> str:
-        return "https://colleton-so-sc.zuercherportal.com/#/inmates"
+    def state(self) -> str:
+        return "SC"
+
+    @property
+    def zuercher_domain(self) -> str:
+        return "colleton-so-sc.zuercherportal.com"

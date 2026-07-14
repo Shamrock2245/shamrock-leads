@@ -10,5 +10,9 @@ class HabershamScraper(InteropWebBaseScraper):
         return "Habersham"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "http://www.interopweb.com/habersham/Inmates24Hours.aspx"

@@ -1,14 +1,16 @@
 """
-Chester County (SC) Arrest Scraper.
-Uses JailTrackerBaseScraper.
+Chester County (SC) Arrest Scraper — JailTracker.
 """
 from scrapers.jailtracker_base import JailTrackerBaseScraper
 
+
 class ChesterScraper(JailTrackerBaseScraper):
+    county_jt_id = "Chester_County_SC"
+
     @property
     def county(self) -> str:
         return "Chester"
-        
+
     @property
-    def portal_url(self) -> str:
-        return "https://omsweb.public-safety-cloud.com/jtclientweb/jailtracker/index/Chester_County_SC"
+    def state(self) -> str:
+        return "SC"

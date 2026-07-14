@@ -10,5 +10,9 @@ class CamdenScraper(NewWorldBaseScraper):
         return "Camden"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "http://66.222.93.2/NewWorld.InmateInquiry/CamdenCounty/"

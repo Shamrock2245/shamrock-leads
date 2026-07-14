@@ -1,14 +1,18 @@
 """
-Oconee County (SC) Arrest Scraper.
-Uses ZuercherBaseScraper.
+Oconee County (SC) Arrest Scraper — Zuercher portal.
 """
 from scrapers.zuercher_base import ZuercherBaseScraper
+
 
 class OconeeScraper(ZuercherBaseScraper):
     @property
     def county(self) -> str:
         return "Oconee"
-        
+
     @property
-    def portal_url(self) -> str:
-        return "https://oconee-so-sc.zuercherportal.com/#/inmates"
+    def state(self) -> str:
+        return "SC"
+
+    @property
+    def zuercher_domain(self) -> str:
+        return "oconee-so-sc.zuercherportal.com"

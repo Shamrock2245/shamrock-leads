@@ -10,5 +10,9 @@ class SpaldingScraper(P2CBaseScraper):
         return "Spalding"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "http://208.97.5.12/jailinmates.aspx"

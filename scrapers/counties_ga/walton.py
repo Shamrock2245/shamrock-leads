@@ -11,5 +11,9 @@ class WaltonScraper(XMLFeedBaseScraper):
         return "Walton"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def feed_url(self) -> str:
         return "https://wcso.waltoncountyga.gov/jailroster.xml"

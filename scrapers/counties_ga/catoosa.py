@@ -10,5 +10,9 @@ class CatoosaScraper(ZuercherBaseScraper):
         return "Catoosa"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def zuercher_domain(self) -> str:
         return "catoosa-so-ga.zuercherportal.com"

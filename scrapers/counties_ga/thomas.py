@@ -10,5 +10,9 @@ class ThomasScraper(InteropWebBaseScraper):
         return "Thomas"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.thomascountysheriff.com/inmate-roster"

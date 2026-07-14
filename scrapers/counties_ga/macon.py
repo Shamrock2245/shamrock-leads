@@ -10,5 +10,9 @@ class MaconScraper(OdysseyBaseScraper):
         return "Macon"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "http://50.77.170.147/NewWorld.InmateInquiry/IL0580000/"

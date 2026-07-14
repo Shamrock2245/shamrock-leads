@@ -474,9 +474,23 @@ class BaseScraper(ABC):
         return False
 
     @property
+    def state(self) -> str:
+        """Two-letter state code. Override for non-FL scrapers (GA, SC, etc.)."""
+        return "FL"
+
+    @property
     def scraper_id(self) -> str:
-        """Unique identifier for this scraper."""
-        return f"scraper_{self.county.lower().replace(' ', '_')}"
+        """Unique identifier for this scraper.
+
+        FL keeps the legacy form ``scraper_<county>`` for dashboard compatibility.
+        Other states use ``scraper_<st>_<county>`` so multi-state names (Lee, Sumter,
+        etc.) do not collide.
+        """
+        county_slug = self.county.lower().replace(" ", "_").replace("-", "_")
+        st = (self.state or "FL").upper()
+        if st == "FL":
+            return f"scraper_{county_slug}"
+        return f"scraper_{st.lower()}_{county_slug}"
 
     def run(self, writers: list = None) -> dict:
         """

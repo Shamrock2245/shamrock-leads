@@ -29,7 +29,22 @@ class ZuercherBaseScraper(BaseScraper):
         
     @property
     def zuercher_domain(self) -> str:
-        raise NotImplementedError("Subclasses must define Zuercher domain (e.g., 'douglas-so-ga.zuercherportal.com')")
+        """Hostname only, e.g. 'douglas-so-ga.zuercherportal.com'.
+
+        Subclasses may define ``portal_url`` instead; domain is derived.
+        """
+        portal = getattr(self, "portal_url", None)
+        if portal:
+            from urllib.parse import urlparse
+            url = portal() if callable(portal) else portal
+            if not isinstance(url, str):
+                url = str(url)
+            host = urlparse(url).netloc or url.replace("https://", "").replace("http://", "").split("/")[0]
+            return host
+        raise NotImplementedError(
+            "Subclasses must define zuercher_domain or portal_url "
+            "(e.g., 'douglas-so-ga.zuercherportal.com')"
+        )
 
     def scrape(self) -> List[ArrestRecord]:
         """
@@ -127,6 +142,7 @@ class ZuercherBaseScraper(BaseScraper):
                         
                 record = ArrestRecord(
                     County=self.county,
+                    State=(self.state or "FL"),
                     Full_Name=full_name,
                     First_Name=first_name,
                     Last_Name=last_name,
@@ -135,7 +151,8 @@ class ZuercherBaseScraper(BaseScraper):
                     Booking_Date=booking_date,
                     Charges=" | ".join(charges_list),
                     Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-                    Status="In Custody"
+                    Status="In Custody",
+                    Detail_URL=base_url,
                 )
                 records.append(record)
                 

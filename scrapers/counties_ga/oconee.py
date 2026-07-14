@@ -10,5 +10,9 @@ class OconeeScraper(ZuercherBaseScraper):
         return "Oconee"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://oconee-so-sc.zuercherportal.com/#/inmates"

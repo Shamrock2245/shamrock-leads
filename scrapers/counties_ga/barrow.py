@@ -10,5 +10,9 @@ class BarrowScraper(NewWorldBaseScraper):
         return "Barrow"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "http://jail.barrowsheriff.com:8095/NewWorld.InmateInquiry/GA0070000"

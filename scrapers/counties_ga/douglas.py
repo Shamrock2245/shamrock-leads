@@ -11,5 +11,9 @@ class DouglasScraper(ZuercherBaseScraper):
         return "Douglas"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def zuercher_domain(self) -> str:
         return "douglas-so-ga.zuercherportal.com"

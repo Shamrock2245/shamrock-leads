@@ -51,12 +51,15 @@ class BeaufortSCScraper(BaseScraper):
                     arr_time_str = inmate.find('tmin').text.strip() if inmate.find('tmin') else "00:00"
                     arrest_date = None
                     if arr_date_str:
-                        try:
-                            # Usually MM/DD/YYYY
-                            dt_str = f"{arr_date_str} {arr_time_str}"
-                            arrest_date = self.parse_date(dt_str, ["%m/%d/%Y %H:%M", "%m/%d/%Y %H%M"])
-                        except:
-                            pass
+                        dt_str = f"{arr_date_str} {arr_time_str}"
+                        for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y %H%M", "%m/%d/%Y"):
+                            try:
+                                arrest_date = datetime.strptime(dt_str.strip(), fmt).replace(
+                                    tzinfo=timezone.utc
+                                )
+                                break
+                            except ValueError:
+                                continue
 
                     # Charges
                     charges = []
@@ -78,18 +81,19 @@ class BeaufortSCScraper(BaseScraper):
                     if not charges:
                         charges = ["UNKNOWN CHARGE"]
 
-                    record = ArrestRecord()
-                    record.County = self.county
-                    record.Booking_Number = booking_num
-                    record.Full_Name = name
-                    record.Arrest_Date = arrest_date.isoformat() if arrest_date else ""
-                    record.Charges = " | ".join(charges) if charges else "UNKNOWN CHARGE"
-                    record.Bond_Amount = str(bond_total)
-                    record.Status = "In Custody"
-                    record.Scrape_Timestamp = now.isoformat()
-                    record.Source_URL = self.BASE_URL
-                    
-                    record.Lead_Score = "0"
+                    record = ArrestRecord(
+                        County=self.county,
+                        State="SC",
+                        Booking_Number=booking_num,
+                        Full_Name=name,
+                        Arrest_Date=arrest_date.isoformat() if arrest_date else "",
+                        Booking_Date=arrest_date.isoformat() if arrest_date else "",
+                        Charges=" | ".join(charges) if charges else "UNKNOWN CHARGE",
+                        Bond_Amount=str(bond_total),
+                        Status="In Custody",
+                        Detail_URL=self.BASE_URL,
+                        Facility="Beaufort County Detention Center",
+                    )
                     records.append(record)
                     
                 except Exception as e:
@@ -110,3 +114,7 @@ if __name__ == "__main__":
     print(f"Found {len(res)} records")
     if res:
         print(vars(res[0]))
+
+# Import alias for scheduler registration
+BeaufortScraper = BeaufortSCScraper
+

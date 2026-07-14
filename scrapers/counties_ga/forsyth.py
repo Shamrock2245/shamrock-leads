@@ -11,5 +11,9 @@ class ForsythScraper(P2CBaseScraper):
         return "Forsyth"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def p2c_url(self) -> str:
         return "https://forsythsheriffga.policetocitizen.com/Inmates/Catalog"

@@ -10,5 +10,9 @@ class RandolphScraper(InteropWebBaseScraper):
         return "Randolph"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://www.randolphcountyso.org/inmate_roster.php"

@@ -10,5 +10,9 @@ class RockdaleScraper(OdysseyBaseScraper):
         return "Rockdale"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://portal-garockdale.tylertech.cloud/JailSearch/default.aspx"

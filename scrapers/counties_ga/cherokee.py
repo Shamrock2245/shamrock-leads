@@ -10,5 +10,9 @@ class CherokeeScraper(InteropWebBaseScraper):
         return "Cherokee"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://sheriff.cherokeecountyga.gov/jaillist/inmate-search-report.php"

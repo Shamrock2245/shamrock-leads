@@ -1,14 +1,18 @@
 """
-Union County (SC) Arrest Scraper.
-Uses ZuercherBaseScraper.
+Union County (SC) Arrest Scraper — Zuercher portal.
 """
 from scrapers.zuercher_base import ZuercherBaseScraper
+
 
 class UnionScraper(ZuercherBaseScraper):
     @property
     def county(self) -> str:
         return "Union"
-        
+
     @property
-    def portal_url(self) -> str:
-        return "https://union-so-sc.zuercherportal.com/#/inmates"
+    def state(self) -> str:
+        return "SC"
+
+    @property
+    def zuercher_domain(self) -> str:
+        return "union-so-sc.zuercherportal.com"

@@ -10,5 +10,9 @@ class HenryScraper(NewWorldBaseScraper):
         return "Henry"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://inmatesearch.co.henry.ga.us/"

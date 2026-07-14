@@ -18,6 +18,10 @@ class CobbScraper(BaseScraper):
     def county(self) -> str:
         return "Cobb"
         
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
         url = "http://inmate-search.cobbsheriff.org/inquiry.asp?inmate_name=&serial="

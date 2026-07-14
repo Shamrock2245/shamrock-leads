@@ -10,5 +10,9 @@ class FloydScraper(ZuercherBaseScraper):
         return "Floyd"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def zuercher_domain(self) -> str:
         return "floyd-so-ga.zuercherportal.com"

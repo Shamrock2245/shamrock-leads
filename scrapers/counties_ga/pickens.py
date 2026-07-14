@@ -10,5 +10,9 @@ class PickensScraper(JailTrackerBaseScraper):
         return "Pickens"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://omsweb.public-safety-cloud.com/jtclientweb/jailtracker/index/Pickens_County_GA"

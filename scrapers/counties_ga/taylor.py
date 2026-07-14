@@ -10,5 +10,9 @@ class TaylorScraper(SmartCOPBaseScraper):
         return "Taylor"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx"

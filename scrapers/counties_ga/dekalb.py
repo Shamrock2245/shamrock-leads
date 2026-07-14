@@ -10,5 +10,9 @@ class DeKalbScraper(OdysseyBaseScraper):
         return "DeKalb"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def base_url(self) -> str:
         return "https://correctionsrecordssearch.com/dekalbcountyga"

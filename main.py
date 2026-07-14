@@ -3,6 +3,9 @@ ShamrockLeads — Entry Point
 
 Initializes writers, registers scrapers, starts the APScheduler,
 and provides a simple CLI interface for testing.
+
+Supported states (Palmetto surety footprint):
+  FL (live), GA (live), SC (building out), then NC/TN/TX/CT/LA/MS.
 """
 
 import sys
@@ -20,14 +23,12 @@ from core.first_appearance_watcher import FirstAppearanceWatcher
 from writers.mongo_writer import MongoWriter
 from maintenance.cleanup import run_cleanup
 
-# Dashboard server
 try:
     from dashboard.server import start_dashboard_server
     DASHBOARD_AVAILABLE = True
 except ImportError:
     DASHBOARD_AVAILABLE = False
 
-# ── Wave 1 — SWFL Core ──────────────────────────────────────────────────────
 from scrapers.counties.lee import LeeCountyScraper
 from scrapers.counties.collier import CollierCountyScraper
 from scrapers.counties.charlotte import CharlotteCountyScraper
@@ -94,120 +95,460 @@ from scrapers.counties.monroe import MonroeCountyScraper
 from scrapers.counties.okeechobee import OkeechobeeCountyScraper
 from scrapers.counties.hardee import HardeeCountyScraper
 
-# ── Georgia Scrapers ───────────────────────────────────────────────────────────
+# ── Georgia Scrapers ───────────────────────────────────────────────────────
 from scrapers.counties_ga.eas_batch_runner import run_eas_batch
-from scrapers.counties_ga.bacon import BaconScraper
-from scrapers.counties_ga.baker import BakerScraper
-from scrapers.counties_ga.banks import BanksScraper
-from scrapers.counties_ga.barrow import BarrowScraper
-from scrapers.counties_ga.bartow import BartowScraper
-from scrapers.counties_ga.bibb import BibbScraper
-from scrapers.counties_ga.brantley import BrantleyScraper
-from scrapers.counties_ga.bryan import BryanScraper
-from scrapers.counties_ga.bulloch import BullochScraper
-from scrapers.counties_ga.camden import CamdenScraper
-from scrapers.counties_ga.carroll import CarrollScraper
-from scrapers.counties_ga.catoosa import CatoosaScraper
-from scrapers.counties_ga.chatham import ChathamScraper
-from scrapers.counties_ga.cherokee import CherokeeScraper
-from scrapers.counties_ga.clarke import ClarkeScraper
-from scrapers.counties_ga.cobb import CobbScraper
-from scrapers.counties_ga.columbia import ColumbiaScraper
-from scrapers.counties_ga.coweta import CowetaScraper
-from scrapers.counties_ga.crawford import CrawfordScraper
-from scrapers.counties_ga.dawson import DawsonScraper
-from scrapers.counties_ga.decatur import DecaturScraper
-from scrapers.counties_ga.dekalb import DeKalbScraper
-from scrapers.counties_ga.dodge import DodgeScraper
-from scrapers.counties_ga.dougherty import DoughertyScraper
-from scrapers.counties_ga.douglas import DouglasScraper
-from scrapers.counties_ga.echols import EcholsScraper
-from scrapers.counties_ga.emanuel import EmanuelScraper
-from scrapers.counties_ga.fayette import FayetteScraper
-from scrapers.counties_ga.floyd import FloydScraper
-from scrapers.counties_ga.forsyth import ForsythScraper
-from scrapers.counties_ga.fulton import FultonScraper
-from scrapers.counties_ga.glynn import GlynnScraper
-from scrapers.counties_ga.grady import GradyScraper
-from scrapers.counties_ga.gwinnett import GwinnettScraper
-from scrapers.counties_ga.habersham import HabershamScraper
-from scrapers.counties_ga.hall import HallScraper
-from scrapers.counties_ga.hancock import HancockScraper
-from scrapers.counties_ga.haralson import HaralsonScraper
-from scrapers.counties_ga.heard import HeardScraper
-from scrapers.counties_ga.henry import HenryScraper
-from scrapers.counties_ga.houston import HoustonScraper
-from scrapers.counties_ga.jasper import JasperScraper
-from scrapers.counties_ga.johnson import JohnsonScraper
-from scrapers.counties_ga.jones import JonesScraper
-from scrapers.counties_ga.lee import LeeScraper
-from scrapers.counties_ga.liberty import LibertyScraper
-from scrapers.counties_ga.lowndes import LowndesScraper
-from scrapers.counties_ga.lumpkin import LumpkinScraper
-from scrapers.counties_ga.macon import MaconScraper
-from scrapers.counties_ga.mcintosh import McIntoshScraper
-from scrapers.counties_ga.miller import MillerScraper
-from scrapers.counties_ga.murray import MurrayScraper
-from scrapers.counties_ga.muscogee import MuscogeeScraper
-from scrapers.counties_ga.oconee import OconeeScraper
-from scrapers.counties_ga.oglethorpe import OglethorpeScraper
-from scrapers.counties_ga.paulding import PauldingScraper
-from scrapers.counties_ga.pickens import PickensScraper
-from scrapers.counties_ga.polk import PolkScraper
-from scrapers.counties_ga.pulaski import PulaskiScraper
-from scrapers.counties_ga.putnam import PutnamScraper
-from scrapers.counties_ga.randolph import RandolphScraper
-from scrapers.counties_ga.richmond import RichmondScraper
-from scrapers.counties_ga.rockdale import RockdaleScraper
-from scrapers.counties_ga.spalding import SpaldingScraper
-from scrapers.counties_ga.sumter import SumterScraper
-from scrapers.counties_ga.tattnall import TattnallScraper
-from scrapers.counties_ga.taylor import TaylorScraper
-from scrapers.counties_ga.thomas import ThomasScraper
-from scrapers.counties_ga.toombs import ToombsScraper
-from scrapers.counties_ga.treutlen import TreutlenScraper
-from scrapers.counties_ga.troup import TroupScraper
-from scrapers.counties_ga.twiggs import TwiggsScraper
-from scrapers.counties_ga.upson import UpsonScraper
-from scrapers.counties_ga.walton import WaltonScraper
+from scrapers.counties_ga.bacon import BaconScraper as GA_BaconScraper
+from scrapers.counties_ga.baker import BakerScraper as GA_BakerScraper
+from scrapers.counties_ga.banks import BanksScraper as GA_BanksScraper
+from scrapers.counties_ga.barrow import BarrowScraper as GA_BarrowScraper
+from scrapers.counties_ga.bartow import BartowScraper as GA_BartowScraper
+from scrapers.counties_ga.bibb import BibbScraper as GA_BibbScraper
+from scrapers.counties_ga.brantley import BrantleyScraper as GA_BrantleyScraper
+from scrapers.counties_ga.bryan import BryanScraper as GA_BryanScraper
+from scrapers.counties_ga.bulloch import BullochScraper as GA_BullochScraper
+from scrapers.counties_ga.camden import CamdenScraper as GA_CamdenScraper
+from scrapers.counties_ga.carroll import CarrollScraper as GA_CarrollScraper
+from scrapers.counties_ga.catoosa import CatoosaScraper as GA_CatoosaScraper
+from scrapers.counties_ga.chatham import ChathamScraper as GA_ChathamScraper
+from scrapers.counties_ga.cherokee import CherokeeScraper as GA_CherokeeScraper
+from scrapers.counties_ga.clarke import ClarkeScraper as GA_ClarkeScraper
+from scrapers.counties_ga.cobb import CobbScraper as GA_CobbScraper
+from scrapers.counties_ga.columbia import ColumbiaScraper as GA_ColumbiaScraper
+from scrapers.counties_ga.coweta import CowetaScraper as GA_CowetaScraper
+from scrapers.counties_ga.crawford import CrawfordScraper as GA_CrawfordScraper
+from scrapers.counties_ga.dawson import DawsonScraper as GA_DawsonScraper
+from scrapers.counties_ga.decatur import DecaturScraper as GA_DecaturScraper
+from scrapers.counties_ga.dekalb import DeKalbScraper as GA_DeKalbScraper
+from scrapers.counties_ga.dodge import DodgeScraper as GA_DodgeScraper
+from scrapers.counties_ga.dougherty import DoughertyScraper as GA_DoughertyScraper
+from scrapers.counties_ga.douglas import DouglasScraper as GA_DouglasScraper
+from scrapers.counties_ga.echols import EcholsScraper as GA_EcholsScraper
+from scrapers.counties_ga.emanuel import EmanuelScraper as GA_EmanuelScraper
+from scrapers.counties_ga.fayette import FayetteScraper as GA_FayetteScraper
+from scrapers.counties_ga.floyd import FloydScraper as GA_FloydScraper
+from scrapers.counties_ga.forsyth import ForsythScraper as GA_ForsythScraper
+from scrapers.counties_ga.fulton import FultonScraper as GA_FultonScraper
+from scrapers.counties_ga.glynn import GlynnScraper as GA_GlynnScraper
+from scrapers.counties_ga.grady import GradyScraper as GA_GradyScraper
+from scrapers.counties_ga.gwinnett import GwinnettScraper as GA_GwinnettScraper
+from scrapers.counties_ga.habersham import HabershamScraper as GA_HabershamScraper
+from scrapers.counties_ga.hall import HallScraper as GA_HallScraper
+from scrapers.counties_ga.hancock import HancockScraper as GA_HancockScraper
+from scrapers.counties_ga.haralson import HaralsonScraper as GA_HaralsonScraper
+from scrapers.counties_ga.heard import HeardScraper as GA_HeardScraper
+from scrapers.counties_ga.henry import HenryScraper as GA_HenryScraper
+from scrapers.counties_ga.houston import HoustonScraper as GA_HoustonScraper
+from scrapers.counties_ga.jasper import JasperScraper as GA_JasperScraper
+from scrapers.counties_ga.johnson import JohnsonScraper as GA_JohnsonScraper
+from scrapers.counties_ga.jones import JonesScraper as GA_JonesScraper
+from scrapers.counties_ga.lee import LeeScraper as GA_LeeScraper
+from scrapers.counties_ga.liberty import LibertyScraper as GA_LibertyScraper
+from scrapers.counties_ga.lowndes import LowndesScraper as GA_LowndesScraper
+from scrapers.counties_ga.lumpkin import LumpkinScraper as GA_LumpkinScraper
+from scrapers.counties_ga.macon import MaconScraper as GA_MaconScraper
+from scrapers.counties_ga.mcintosh import McIntoshScraper as GA_McIntoshScraper
+from scrapers.counties_ga.miller import MillerScraper as GA_MillerScraper
+from scrapers.counties_ga.murray import MurrayScraper as GA_MurrayScraper
+from scrapers.counties_ga.muscogee import MuscogeeScraper as GA_MuscogeeScraper
+from scrapers.counties_ga.oconee import OconeeScraper as GA_OconeeScraper
+from scrapers.counties_ga.oglethorpe import OglethorpeScraper as GA_OglethorpeScraper
+from scrapers.counties_ga.paulding import PauldingScraper as GA_PauldingScraper
+from scrapers.counties_ga.pickens import PickensScraper as GA_PickensScraper
+from scrapers.counties_ga.polk import PolkScraper as GA_PolkScraper
+from scrapers.counties_ga.pulaski import PulaskiScraper as GA_PulaskiScraper
+from scrapers.counties_ga.putnam import PutnamScraper as GA_PutnamScraper
+from scrapers.counties_ga.randolph import RandolphScraper as GA_RandolphScraper
+from scrapers.counties_ga.richmond import RichmondScraper as GA_RichmondScraper
+from scrapers.counties_ga.rockdale import RockdaleScraper as GA_RockdaleScraper
+from scrapers.counties_ga.spalding import SpaldingScraper as GA_SpaldingScraper
+from scrapers.counties_ga.sumter import SumterScraper as GA_SumterScraper
+from scrapers.counties_ga.tattnall import TattnallScraper as GA_TattnallScraper
+from scrapers.counties_ga.taylor import TaylorScraper as GA_TaylorScraper
+from scrapers.counties_ga.thomas import ThomasScraper as GA_ThomasScraper
+from scrapers.counties_ga.toombs import ToombsScraper as GA_ToombsScraper
+from scrapers.counties_ga.treutlen import TreutlenScraper as GA_TreutlenScraper
+from scrapers.counties_ga.troup import TroupScraper as GA_TroupScraper
+from scrapers.counties_ga.twiggs import TwiggsScraper as GA_TwiggsScraper
+from scrapers.counties_ga.upson import UpsonScraper as GA_UpsonScraper
+from scrapers.counties_ga.walton import WaltonScraper as GA_WaltonScraper
 
-# ── South Carolina Scrapers ────────────────────────────────────────────────────────
-from scrapers.counties_sc.aiken import AikenScraper
-from scrapers.counties_sc.bamberg import BambergScraper
-from scrapers.counties_sc.beaufort import BeaufortScraper
-from scrapers.counties_sc.berkeley import BerkeleyScraper
-from scrapers.counties_sc.charleston import CharlestonScraper
-from scrapers.counties_sc.darlington import DarlingtonScraper
-from scrapers.counties_sc.florence import FlorenceScraper
-from scrapers.counties_sc.greenville import GreenvilleScraper
-from scrapers.counties_sc.hampton import HamptonScraper
-from scrapers.counties_sc.horry import HorryScraper
-from scrapers.counties_sc.jasper import JasperScraper
-from scrapers.counties_sc.marion import MarionScraper
-from scrapers.counties_sc.newberry import NewberryScraper
-from scrapers.counties_sc.richland import RichlandScraper
-from scrapers.counties_sc.york import YorkScraper
-from scrapers.counties_sc.anderson import AndersonScraper
-from scrapers.counties_sc.cherokee import CherokeeScraper
-from scrapers.counties_sc.chester import ChesterScraper
-from scrapers.counties_sc.chesterfield import ChesterfieldScraper
-from scrapers.counties_sc.colleton import ColletonScraper
-from scrapers.counties_sc.dorchester import DorchesterScraper
-from scrapers.counties_sc.greenwood import GreenwoodScraper
-from scrapers.counties_sc.kershaw import KershawScraper
-from scrapers.counties_sc.lancaster import LancasterScraper
-from scrapers.counties_sc.laurens import LaurensScraper
-from scrapers.counties_sc.lee import LeeScraper
-from scrapers.counties_sc.lexington import LexingtonScraper
-from scrapers.counties_sc.oconee import OconeeScraper
-from scrapers.counties_sc.pickens import PickensScraper
-from scrapers.counties_sc.sumter import SumterScraper
-from scrapers.counties_sc.union import UnionScraper
+# ── South Carolina Scrapers ────────────────────────────────────────────────
+from scrapers.counties_sc.abbeville import AbbevilleScraper as SC_AbbevilleScraper
+from scrapers.counties_sc.aiken import AikenScraper as SC_AikenScraper
+from scrapers.counties_sc.allendale import AllendaleScraper as SC_AllendaleScraper
+from scrapers.counties_sc.anderson import AndersonScraper as SC_AndersonScraper
+from scrapers.counties_sc.bamberg import BambergScraper as SC_BambergScraper
+from scrapers.counties_sc.barnwell import BarnwellScraper as SC_BarnwellScraper
+from scrapers.counties_sc.beaufort import BeaufortScraper as SC_BeaufortScraper
+from scrapers.counties_sc.berkeley import BerkeleyScraper as SC_BerkeleyScraper
+from scrapers.counties_sc.calhoun import CalhounScraper as SC_CalhounScraper
+from scrapers.counties_sc.charleston import CharlestonScraper as SC_CharlestonScraper
+from scrapers.counties_sc.cherokee import CherokeeScraper as SC_CherokeeScraper
+from scrapers.counties_sc.chester import ChesterScraper as SC_ChesterScraper
+from scrapers.counties_sc.chesterfield import ChesterfieldScraper as SC_ChesterfieldScraper
+from scrapers.counties_sc.clarendon import ClarendonScraper as SC_ClarendonScraper
+from scrapers.counties_sc.colleton import ColletonScraper as SC_ColletonScraper
+from scrapers.counties_sc.darlington import DarlingtonScraper as SC_DarlingtonScraper
+from scrapers.counties_sc.dillon import DillonScraper as SC_DillonScraper
+from scrapers.counties_sc.dorchester import DorchesterScraper as SC_DorchesterScraper
+from scrapers.counties_sc.edgefield import EdgefieldScraper as SC_EdgefieldScraper
+from scrapers.counties_sc.fairfield import FairfieldScraper as SC_FairfieldScraper
+from scrapers.counties_sc.florence import FlorenceScraper as SC_FlorenceScraper
+from scrapers.counties_sc.georgetown import GeorgetownScraper as SC_GeorgetownScraper
+from scrapers.counties_sc.greenville import GreenvilleScraper as SC_GreenvilleScraper
+from scrapers.counties_sc.greenwood import GreenwoodScraper as SC_GreenwoodScraper
+from scrapers.counties_sc.hampton import HamptonScraper as SC_HamptonScraper
+from scrapers.counties_sc.horry import HorryScraper as SC_HorryScraper
+from scrapers.counties_sc.jasper import JasperScraper as SC_JasperScraper
+from scrapers.counties_sc.kershaw import KershawScraper as SC_KershawScraper
+from scrapers.counties_sc.lancaster import LancasterScraper as SC_LancasterScraper
+from scrapers.counties_sc.laurens import LaurensScraper as SC_LaurensScraper
+from scrapers.counties_sc.lee import LeeScraper as SC_LeeScraper
+from scrapers.counties_sc.lexington import LexingtonScraper as SC_LexingtonScraper
+from scrapers.counties_sc.marion import MarionScraper as SC_MarionScraper
+from scrapers.counties_sc.marlboro import MarlboroScraper as SC_MarlboroScraper
+from scrapers.counties_sc.mccormick import McCormickScraper as SC_McCormickScraper
+from scrapers.counties_sc.newberry import NewberryScraper as SC_NewberryScraper
+from scrapers.counties_sc.oconee import OconeeScraper as SC_OconeeScraper
+from scrapers.counties_sc.orangeburg import OrangeburgScraper as SC_OrangeburgScraper
+from scrapers.counties_sc.pickens import PickensScraper as SC_PickensScraper
+from scrapers.counties_sc.richland import RichlandScraper as SC_RichlandScraper
+from scrapers.counties_sc.saluda import SaludaScraper as SC_SaludaScraper
+from scrapers.counties_sc.spartanburg import SpartanburgScraper as SC_SpartanburgScraper
+from scrapers.counties_sc.sumter import SumterScraper as SC_SumterScraper
+from scrapers.counties_sc.union import UnionScraper as SC_UnionScraper
+from scrapers.counties_sc.williamsburg import WilliamsburgScraper as SC_WilliamsburgScraper
+from scrapers.counties_sc.york import YorkScraper as SC_YorkScraper
+
+# ── North Carolina Scrapers ────────────────────────────────────────────────
+from scrapers.counties_nc.alamance import AlamanceScraper as NC_AlamanceScraper
+from scrapers.counties_nc.anson import AnsonScraper as NC_AnsonScraper
+from scrapers.counties_nc.brunswick import BrunswickScraper as NC_BrunswickScraper
+from scrapers.counties_nc.cabarrus import CabarrusScraper as NC_CabarrusScraper
+from scrapers.counties_nc.cleveland import ClevelandScraper as NC_ClevelandScraper
+from scrapers.counties_nc.davidson import DavidsonScraper as NC_DavidsonScraper
+from scrapers.counties_nc.davie import DavieScraper as NC_DavieScraper
+from scrapers.counties_nc.duplin import DuplinScraper as NC_DuplinScraper
+from scrapers.counties_nc.durham import DurhamScraper as NC_DurhamScraper
+from scrapers.counties_nc.edgecombe import EdgecombeScraper as NC_EdgecombeScraper
+from scrapers.counties_nc.gaston import GastonScraper as NC_GastonScraper
+from scrapers.counties_nc.harnett import HarnettScraper as NC_HarnettScraper
+from scrapers.counties_nc.henderson import HendersonScraper as NC_HendersonScraper
+from scrapers.counties_nc.hoke import HokeScraper as NC_HokeScraper
+from scrapers.counties_nc.iredell import IredellScraper as NC_IredellScraper
+from scrapers.counties_nc.lincoln import LincolnScraper as NC_LincolnScraper
+from scrapers.counties_nc.mecklenburg import MecklenburgScraper as NC_MecklenburgScraper
+from scrapers.counties_nc.new_hanover import NewHanoverScraper as NC_NewHanoverScraper
+from scrapers.counties_nc.pender import PenderScraper as NC_PenderScraper
+from scrapers.counties_nc.polk import PolkScraper as NC_PolkScraper
+from scrapers.counties_nc.rutherford import RutherfordScraper as NC_RutherfordScraper
+from scrapers.counties_nc.sampson import SampsonScraper as NC_SampsonScraper
+from scrapers.counties_nc.scotland import ScotlandScraper as NC_ScotlandScraper
+from scrapers.counties_nc.stokes import StokesScraper as NC_StokesScraper
+from scrapers.counties_nc.surry import SurryScraper as NC_SurryScraper
+from scrapers.counties_nc.transylvania import TransylvaniaScraper as NC_TransylvaniaScraper
+from scrapers.counties_nc.union import UnionScraper as NC_UnionScraper
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("shamrock-leads")
+scheduler = None
+_fa_watcher = None
+
+
+def build_writers():
+    writers = []
+    if settings.ENABLE_MONGO_WRITER and settings.mongo_configured():
+        try:
+            writers.append(MongoWriter())
+            logger.info("MongoDB writer initialized")
+        except Exception as e:
+            logger.error(f"MongoDB writer failed: {e}")
+    if getattr(settings, "ENABLE_SHEETS_WRITER", False) and settings.sheets_configured():
+        try:
+            from writers.sheets_writer import SheetsWriter
+            writers.append(SheetsWriter(
+                spreadsheet_id=settings.GOOGLE_SPREADSHEET_ID,
+                credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
+            ))
+            logger.info("Sheets writer initialized")
+        except Exception as e:
+            logger.error(f"Sheets writer failed: {e}")
+    if not writers:
+        logger.warning("No writers configured!")
+    return writers
+
+
+def register_scrapers(sched):
+    """Register FL + GA + SC scrapers with the scheduler."""
+
+    # ── SWFL Core ─────────────────────────────────────────────────────────────
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=43)
+    sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
+    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=90)
+    sched.register_scraper(ManateeCountyScraper(), interval_minutes=75)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
+    sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
+
+    # ── Tampa Bay / Central FL ────────────────────────────────────────────────
+    sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
+    sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
+    sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
+    sched.register_scraper(LakeCountyScraper(), interval_minutes=90)
+    sched.register_scraper(HernandoCountyScraper(), interval_minutes=120)
+    sched.register_scraper(PolkCountyScraper(), interval_minutes=120)
+    sched.register_scraper(OsceolaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(CitrusCountyScraper(), interval_minutes=120)
+    sched.register_scraper(SumterCountyScraper(), interval_minutes=180)
+
+    # ── South FL / Metro ──────────────────────────────────────────────────────
+    sched.register_scraper(BrowardCountyScraper(), interval_minutes=60)
+    sched.register_scraper(PalmBeachCountyScraper(), interval_minutes=120)
+    sched.register_scraper(MartinCountyScraper(), interval_minutes=120)
+    sched.register_scraper(StLucieCountyScraper(), interval_minutes=90)
+    sched.register_scraper(IndianRiverCountyScraper(), interval_minutes=180)
+    sched.register_scraper(HighlandsCountyScraper(), interval_minutes=120)
+    sched.register_scraper(GladesCountyScraper(), interval_minutes=360)
+
+    # ── North Central FL ──────────────────────────────────────────────────────
+    sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
+    sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
+    sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
+    # Marion disabled — datacenter IP blocked
+    sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
+
+    # ── Panhandle / NW FL + Miami ─────────────────────────────────────────────
+    sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(MiamiDadeCountyScraper(), interval_minutes=60)
+    sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(BayCountyScraper(), interval_minutes=120)
+    # Leon disabled — target 500 errors
+
+    # ── NE FL / First Coast ───────────────────────────────────────────────────
+    sched.register_scraper(DuvalCountyScraper(), interval_minutes=90)
+    sched.register_scraper(StJohnsCountyScraper(), interval_minutes=120)
+
+    # ── North FL / Rural ──────────────────────────────────────────────────────
+    sched.register_scraper(TaylorCountyScraper(), interval_minutes=240)
+    sched.register_scraper(DixieCountyScraper(), interval_minutes=240)
+
+    # ── Phase 1 expansion ─────────────────────────────────────────────────────
+    sched.register_scraper(FlaglerCountyScraper(), interval_minutes=120)
+    sched.register_scraper(NassauCountyScraper(), interval_minutes=120)
+    sched.register_scraper(ClayCountyScraper(), interval_minutes=120)
+    sched.register_scraper(ColumbiaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(SuwanneeCountyScraper(), interval_minutes=180)
+    sched.register_scraper(SantaRosaCountyScraper(), interval_minutes=120)
+    sched.register_scraper(WaltonCountyScraper(), interval_minutes=120)
+    sched.register_scraper(JacksonCountyScraper(), interval_minutes=360)
+    sched.register_scraper(GadsdenCountyScraper(), interval_minutes=180)
+    sched.register_scraper(MonroeCountyScraper(), interval_minutes=120)
+    sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)
+    sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)
+
+    # ── Georgia ──────────────────────────────────────────────────────────────
+    sched.register_scraper(GA_BaconScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BakerScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BanksScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BarrowScraper(), interval_minutes=60)
+    sched.register_scraper(GA_BartowScraper(), interval_minutes=60)
+    sched.register_scraper(GA_BibbScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BrantleyScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BryanScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BullochScraper(), interval_minutes=120)
+    sched.register_scraper(GA_CamdenScraper(), interval_minutes=60)
+    sched.register_scraper(GA_CarrollScraper(), interval_minutes=120)
+    sched.register_scraper(GA_CatoosaScraper(), interval_minutes=60)
+    sched.register_scraper(GA_ChathamScraper(), interval_minutes=30)
+    sched.register_scraper(GA_CherokeeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_ClarkeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_CobbScraper(), interval_minutes=60)
+    sched.register_scraper(GA_ColumbiaScraper(), interval_minutes=60)
+    sched.register_scraper(GA_CowetaScraper(), interval_minutes=60)
+    sched.register_scraper(GA_CrawfordScraper(), interval_minutes=120)
+    sched.register_scraper(GA_DawsonScraper(), interval_minutes=120)
+    sched.register_scraper(GA_DecaturScraper(), interval_minutes=120)
+    sched.register_scraper(GA_DeKalbScraper(), interval_minutes=60)
+    sched.register_scraper(GA_DodgeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_DoughertyScraper(), interval_minutes=60)
+    sched.register_scraper(GA_DouglasScraper(), interval_minutes=60)
+    sched.register_scraper(GA_EcholsScraper(), interval_minutes=60)
+    sched.register_scraper(GA_EmanuelScraper(), interval_minutes=120)
+    sched.register_scraper(GA_FayetteScraper(), interval_minutes=120)
+    sched.register_scraper(GA_FloydScraper(), interval_minutes=60)
+    sched.register_scraper(GA_ForsythScraper(), interval_minutes=30)
+    sched.register_scraper(GA_FultonScraper(), interval_minutes=30)
+    sched.register_scraper(GA_GlynnScraper(), interval_minutes=60)
+    sched.register_scraper(GA_GradyScraper(), interval_minutes=120)
+    sched.register_scraper(GA_GwinnettScraper(), interval_minutes=30)
+    sched.register_scraper(GA_HabershamScraper(), interval_minutes=120)
+    sched.register_scraper(GA_HallScraper(), interval_minutes=30)
+    sched.register_scraper(GA_HancockScraper(), interval_minutes=120)
+    sched.register_scraper(GA_HaralsonScraper(), interval_minutes=120)
+    sched.register_scraper(GA_HeardScraper(), interval_minutes=120)
+    sched.register_scraper(GA_HenryScraper(), interval_minutes=60)
+    sched.register_scraper(GA_HoustonScraper(), interval_minutes=60)
+    sched.register_scraper(GA_JasperScraper(), interval_minutes=120)
+    sched.register_scraper(GA_JohnsonScraper(), interval_minutes=120)
+    sched.register_scraper(GA_JonesScraper(), interval_minutes=120)
+    sched.register_scraper(GA_LeeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_LibertyScraper(), interval_minutes=120)
+    sched.register_scraper(GA_LowndesScraper(), interval_minutes=60)
+    sched.register_scraper(GA_LumpkinScraper(), interval_minutes=120)
+    sched.register_scraper(GA_MaconScraper(), interval_minutes=60)
+    sched.register_scraper(GA_McIntoshScraper(), interval_minutes=120)
+    sched.register_scraper(GA_MillerScraper(), interval_minutes=120)
+    sched.register_scraper(GA_MurrayScraper(), interval_minutes=120)
+    sched.register_scraper(GA_MuscogeeScraper(), interval_minutes=60)
+    sched.register_scraper(GA_OconeeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_OglethorpeScraper(), interval_minutes=120)
+    sched.register_scraper(GA_PauldingScraper(), interval_minutes=60)
+    sched.register_scraper(GA_PickensScraper(), interval_minutes=120)
+    sched.register_scraper(GA_PolkScraper(), interval_minutes=120)
+    sched.register_scraper(GA_PulaskiScraper(), interval_minutes=120)
+    sched.register_scraper(GA_PutnamScraper(), interval_minutes=120)
+    sched.register_scraper(GA_RandolphScraper(), interval_minutes=120)
+    sched.register_scraper(GA_RichmondScraper(), interval_minutes=60)
+    sched.register_scraper(GA_RockdaleScraper(), interval_minutes=60)
+    sched.register_scraper(GA_SpaldingScraper(), interval_minutes=60)
+    sched.register_scraper(GA_SumterScraper(), interval_minutes=120)
+    sched.register_scraper(GA_TattnallScraper(), interval_minutes=120)
+    sched.register_scraper(GA_TaylorScraper(), interval_minutes=120)
+    sched.register_scraper(GA_ThomasScraper(), interval_minutes=120)
+    sched.register_scraper(GA_ToombsScraper(), interval_minutes=120)
+    sched.register_scraper(GA_TreutlenScraper(), interval_minutes=120)
+    sched.register_scraper(GA_TroupScraper(), interval_minutes=120)
+    sched.register_scraper(GA_TwiggsScraper(), interval_minutes=120)
+    sched.register_scraper(GA_UpsonScraper(), interval_minutes=120)
+    sched.register_scraper(GA_WaltonScraper(), interval_minutes=30)
+
+    from apscheduler.triggers.interval import IntervalTrigger
+    sched.scheduler.add_job(
+        run_eas_batch,
+        trigger=IntervalTrigger(minutes=60),
+        id="eas_batch_georgia",
+        name="EAS Batch Runner (27 GA Counties)",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+
+    # ── South Carolina ───────────────────────────────────────────────────────
+    sched.register_scraper(SC_AbbevilleScraper(), interval_minutes=120)
+    sched.register_scraper(SC_AikenScraper(), interval_minutes=60)
+    sched.register_scraper(SC_AllendaleScraper(), interval_minutes=120)
+    sched.register_scraper(SC_AndersonScraper(), interval_minutes=60)
+    sched.register_scraper(SC_BambergScraper(), interval_minutes=120)
+    sched.register_scraper(SC_BarnwellScraper(), interval_minutes=120)
+    sched.register_scraper(SC_BeaufortScraper(), interval_minutes=60)
+    sched.register_scraper(SC_BerkeleyScraper(), interval_minutes=60)
+    sched.register_scraper(SC_CalhounScraper(), interval_minutes=120)
+    sched.register_scraper(SC_CharlestonScraper(), interval_minutes=60)
+    sched.register_scraper(SC_CherokeeScraper(), interval_minutes=120)
+    sched.register_scraper(SC_ChesterScraper(), interval_minutes=120)
+    sched.register_scraper(SC_ChesterfieldScraper(), interval_minutes=120)
+    sched.register_scraper(SC_ClarendonScraper(), interval_minutes=120)
+    sched.register_scraper(SC_ColletonScraper(), interval_minutes=120)
+    sched.register_scraper(SC_DarlingtonScraper(), interval_minutes=120)
+    sched.register_scraper(SC_DillonScraper(), interval_minutes=120)
+    sched.register_scraper(SC_DorchesterScraper(), interval_minutes=60)
+    sched.register_scraper(SC_EdgefieldScraper(), interval_minutes=120)
+    sched.register_scraper(SC_FairfieldScraper(), interval_minutes=120)
+    sched.register_scraper(SC_FlorenceScraper(), interval_minutes=60)
+    sched.register_scraper(SC_GeorgetownScraper(), interval_minutes=120)
+    sched.register_scraper(SC_GreenvilleScraper(), interval_minutes=60)
+    sched.register_scraper(SC_GreenwoodScraper(), interval_minutes=120)
+    sched.register_scraper(SC_HamptonScraper(), interval_minutes=120)
+    sched.register_scraper(SC_HorryScraper(), interval_minutes=60)
+    sched.register_scraper(SC_JasperScraper(), interval_minutes=60)
+    sched.register_scraper(SC_KershawScraper(), interval_minutes=120)
+    sched.register_scraper(SC_LancasterScraper(), interval_minutes=120)
+    sched.register_scraper(SC_LaurensScraper(), interval_minutes=120)
+    sched.register_scraper(SC_LeeScraper(), interval_minutes=120)
+    sched.register_scraper(SC_LexingtonScraper(), interval_minutes=60)
+    sched.register_scraper(SC_MarionScraper(), interval_minutes=120)
+    sched.register_scraper(SC_MarlboroScraper(), interval_minutes=120)
+    sched.register_scraper(SC_McCormickScraper(), interval_minutes=120)
+    sched.register_scraper(SC_NewberryScraper(), interval_minutes=120)
+    sched.register_scraper(SC_OconeeScraper(), interval_minutes=120)
+    sched.register_scraper(SC_OrangeburgScraper(), interval_minutes=120)
+    sched.register_scraper(SC_PickensScraper(), interval_minutes=120)
+    sched.register_scraper(SC_RichlandScraper(), interval_minutes=60)
+    sched.register_scraper(SC_SaludaScraper(), interval_minutes=120)
+    sched.register_scraper(SC_SpartanburgScraper(), interval_minutes=120)
+    sched.register_scraper(SC_SumterScraper(), interval_minutes=60)
+    sched.register_scraper(SC_UnionScraper(), interval_minutes=120)
+    sched.register_scraper(SC_WilliamsburgScraper(), interval_minutes=120)
+    sched.register_scraper(SC_YorkScraper(), interval_minutes=60)
+
+    # ── North Carolina ───────────────────────────────────────────────────────
+    sched.register_scraper(NC_AlamanceScraper(), interval_minutes=60)
+    sched.register_scraper(NC_AnsonScraper(), interval_minutes=120)
+    sched.register_scraper(NC_BrunswickScraper(), interval_minutes=120)
+    sched.register_scraper(NC_CabarrusScraper(), interval_minutes=60)
+    sched.register_scraper(NC_ClevelandScraper(), interval_minutes=120)
+    sched.register_scraper(NC_DavidsonScraper(), interval_minutes=60)
+    sched.register_scraper(NC_DavieScraper(), interval_minutes=120)
+    sched.register_scraper(NC_DuplinScraper(), interval_minutes=120)
+    sched.register_scraper(NC_DurhamScraper(), interval_minutes=60)
+    sched.register_scraper(NC_EdgecombeScraper(), interval_minutes=120)
+    sched.register_scraper(NC_GastonScraper(), interval_minutes=60)
+    sched.register_scraper(NC_HarnettScraper(), interval_minutes=60)
+    sched.register_scraper(NC_HendersonScraper(), interval_minutes=120)
+    sched.register_scraper(NC_HokeScraper(), interval_minutes=120)
+    sched.register_scraper(NC_IredellScraper(), interval_minutes=60)
+    sched.register_scraper(NC_LincolnScraper(), interval_minutes=120)
+    sched.register_scraper(NC_MecklenburgScraper(), interval_minutes=60)
+    sched.register_scraper(NC_NewHanoverScraper(), interval_minutes=60)
+    sched.register_scraper(NC_PenderScraper(), interval_minutes=120)
+    sched.register_scraper(NC_PolkScraper(), interval_minutes=120)
+    sched.register_scraper(NC_RutherfordScraper(), interval_minutes=120)
+    sched.register_scraper(NC_SampsonScraper(), interval_minutes=120)
+    sched.register_scraper(NC_ScotlandScraper(), interval_minutes=120)
+    sched.register_scraper(NC_StokesScraper(), interval_minutes=120)
+    sched.register_scraper(NC_SurryScraper(), interval_minutes=120)
+    sched.register_scraper(NC_TransylvaniaScraper(), interval_minutes=120)
+    sched.register_scraper(NC_UnionScraper(), interval_minutes=60)
+
+def handle_shutdown(signum, frame):
+    logger.info("Shutdown signal received")
+    if scheduler:
+        scheduler.stop()
+    if _fa_watcher:
+        try:
+            _fa_watcher.close()
+        except Exception:
+            pass
+    sys.exit(0)
+
+
+def _run_scheduled_cleanup():
+    logger.info("🧹 Running scheduled data cleanup...")
+    try:
+        logger.info(f"🧹 Cleanup complete: {run_cleanup()}")
+    except Exception as e:
+        logger.error(f"🧹 Cleanup failed: {e}")
+
+
+def _run_first_appearance_watcher():
+    if _fa_watcher is None:
+        return
+    try:
+        stats = _fa_watcher.run()
+        if stats.get("bond_set", 0) > 0:
+            logger.info(f"🔔 FirstAppearanceWatcher: {stats['bond_set']} bond(s) set this cycle")
+    except Exception as e:
+        logger.error(f"FirstAppearanceWatcher run failed: {e}")
+
 
 def main():
     global scheduler, _fa_watcher
     logger.info("=" * 60)
-    logger.info("ShamrockLeads - Florida Arrest Intelligence Platform")
+    logger.info("ShamrockLeads - Multi-State Arrest Intelligence Platform")
     logger.info("=" * 60)
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -216,25 +557,13 @@ def main():
     scheduler.set_writers(writers)
     register_scrapers(scheduler)
 
-    # ── Build scraper registry for FirstAppearanceWatcher ─────────────────
-    # Maps county name → scraper instance so the watcher can call
-    # _fetch_single_booking() on the appropriate county scraper.
-    scraper_registry = {
-        s.county: s for s in scheduler._scrapers.values()
-    }
-
-    # ── Initialize FirstAppearanceWatcher ─────────────────────────────────
-    # Watches no-bond / disqualified records for up to 3 days post-arrest
-    # and re-alerts when bond is set at first appearance.
-    _fa_watcher = FirstAppearanceWatcher(
-        writers=writers,
-        scraper_registry=scraper_registry,
-    )
+    scraper_registry = {s.county: s for s in scheduler._scrapers.values()}
+    _fa_watcher = FirstAppearanceWatcher(writers=writers, scraper_registry=scraper_registry)
     logger.info("🔔 FirstAppearanceWatcher initialized")
 
-    # ── Register maintenance jobs ─────────────────────────────────────────
-    # Auto-purge stale data every 6 hours to keep MongoDB lean
     from apscheduler.triggers.interval import IntervalTrigger
+    from datetime import datetime, timezone, timedelta
+
     scheduler.scheduler.add_job(
         _run_scheduled_cleanup,
         trigger=IntervalTrigger(hours=6),
@@ -243,23 +572,17 @@ def main():
         replace_existing=True,
         misfire_grace_time=600,
     )
-
-    # ── First Appearance Watcher — every 30 minutes ───────────────────────
-    # Catches no-bond records that get bond set at first appearance
-    # (within 24–72 hours of arrest per Fla. R. Crim. P. 3.130).
-    # Runs 5 minutes after startup to let scrapers populate data first.
-    from datetime import datetime, timezone, timedelta
-    fa_first_run = datetime.now(timezone.utc) + timedelta(minutes=5)
     scheduler.scheduler.add_job(
         _run_first_appearance_watcher,
         trigger=IntervalTrigger(minutes=30),
         id="first_appearance_watcher",
         name="First Appearance Bond Watcher",
         replace_existing=True,
-        next_run_time=fa_first_run,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=5),
         misfire_grace_time=300,
     )
-    logger.info("🔔 FirstAppearanceWatcher scheduled (every 30 min, first run in 5 min)")
+    logger.info(f"📋 Total scrapers registered: {len(scheduler._scrapers)}")
+
     if len(sys.argv) > 1:
         county = sys.argv[1]
         logger.info(f"One-shot mode: running {county} scraper")
@@ -269,8 +592,8 @@ def main():
         else:
             logger.error(f"No scraper found for county: {county}")
         return
+
     scheduler.start()
-    # Start dashboard server on port 8088
     if DASHBOARD_AVAILABLE:
         try:
             start_dashboard_server(port=8088)
@@ -283,115 +606,7 @@ def main():
     except (KeyboardInterrupt, SystemExit):
         handle_shutdown(None, None)
 
+
 if __name__ == "__main__":
-    main()    # ── Georgia All Counties ───────────────────────────────────────────────────
-    sched.scheduler.add_job(run_eas_batch, 'interval', minutes=60, id='eas_batch', replace_existing=True)
-    sched.register_scraper(BaconScraper(), interval_minutes=120)
-    sched.register_scraper(BakerScraper(), interval_minutes=120)
-    sched.register_scraper(BanksScraper(), interval_minutes=120)
-    sched.register_scraper(BarrowScraper(), interval_minutes=60)
-    sched.register_scraper(BartowScraper(), interval_minutes=60)
-    sched.register_scraper(BibbScraper(), interval_minutes=120)
-    sched.register_scraper(BrantleyScraper(), interval_minutes=120)
-    sched.register_scraper(BryanScraper(), interval_minutes=120)
-    sched.register_scraper(BullochScraper(), interval_minutes=120)
-    sched.register_scraper(CamdenScraper(), interval_minutes=60)
-    sched.register_scraper(CarrollScraper(), interval_minutes=120)
-    sched.register_scraper(CatoosaScraper(), interval_minutes=120)
-    sched.register_scraper(ChathamScraper(), interval_minutes=120)
-    sched.register_scraper(CherokeeScraper(), interval_minutes=120)
-    sched.register_scraper(ClarkeScraper(), interval_minutes=120)
-    sched.register_scraper(CobbScraper(), interval_minutes=120)
-    sched.register_scraper(ColumbiaScraper(), interval_minutes=60)
-    sched.register_scraper(CowetaScraper(), interval_minutes=60)
-    sched.register_scraper(CrawfordScraper(), interval_minutes=120)
-    sched.register_scraper(DawsonScraper(), interval_minutes=120)
-    sched.register_scraper(DecaturScraper(), interval_minutes=120)
-    sched.register_scraper(DeKalbScraper(), interval_minutes=60)
-    sched.register_scraper(DodgeScraper(), interval_minutes=120)
-    sched.register_scraper(DoughertyScraper(), interval_minutes=60)
-    sched.register_scraper(DouglasScraper(), interval_minutes=120)
-    sched.register_scraper(EcholsScraper(), interval_minutes=60)
-    sched.register_scraper(EmanuelScraper(), interval_minutes=120)
-    sched.register_scraper(FayetteScraper(), interval_minutes=120)
-    sched.register_scraper(FloydScraper(), interval_minutes=120)
-    sched.register_scraper(ForsythScraper(), interval_minutes=60)
-    sched.register_scraper(FultonScraper(), interval_minutes=120)
-    sched.register_scraper(GlynnScraper(), interval_minutes=120)
-    sched.register_scraper(GradyScraper(), interval_minutes=120)
-    sched.register_scraper(GwinnettScraper(), interval_minutes=120)
-    sched.register_scraper(HabershamScraper(), interval_minutes=120)
-    sched.register_scraper(HallScraper(), interval_minutes=60)
-    sched.register_scraper(HancockScraper(), interval_minutes=120)
-    sched.register_scraper(HaralsonScraper(), interval_minutes=120)
-    sched.register_scraper(HeardScraper(), interval_minutes=120)
-    sched.register_scraper(HenryScraper(), interval_minutes=60)
-    sched.register_scraper(HoustonScraper(), interval_minutes=120)
-    sched.register_scraper(JasperScraper(), interval_minutes=120)
-    sched.register_scraper(JohnsonScraper(), interval_minutes=120)
-    sched.register_scraper(JonesScraper(), interval_minutes=120)
-    sched.register_scraper(LeeScraper(), interval_minutes=120)
-    sched.register_scraper(LibertyScraper(), interval_minutes=120)
-    sched.register_scraper(LowndesScraper(), interval_minutes=60)
-    sched.register_scraper(LumpkinScraper(), interval_minutes=120)
-    sched.register_scraper(MaconScraper(), interval_minutes=60)
-    sched.register_scraper(McIntoshScraper(), interval_minutes=120)
-    sched.register_scraper(MillerScraper(), interval_minutes=120)
-    sched.register_scraper(MurrayScraper(), interval_minutes=120)
-    sched.register_scraper(MuscogeeScraper(), interval_minutes=60)
-    sched.register_scraper(OconeeScraper(), interval_minutes=120)
-    sched.register_scraper(OglethorpeScraper(), interval_minutes=120)
-    sched.register_scraper(PauldingScraper(), interval_minutes=60)
-    sched.register_scraper(PickensScraper(), interval_minutes=120)
-    sched.register_scraper(PolkScraper(), interval_minutes=120)
-    sched.register_scraper(PulaskiScraper(), interval_minutes=120)
-    sched.register_scraper(PutnamScraper(), interval_minutes=120)
-    sched.register_scraper(RandolphScraper(), interval_minutes=120)
-    sched.register_scraper(RichmondScraper(), interval_minutes=120)
-    sched.register_scraper(RockdaleScraper(), interval_minutes=60)
-    sched.register_scraper(SpaldingScraper(), interval_minutes=60)
-    sched.register_scraper(SumterScraper(), interval_minutes=120)
-    sched.register_scraper(TattnallScraper(), interval_minutes=120)
-    sched.register_scraper(TaylorScraper(), interval_minutes=120)
-    sched.register_scraper(ThomasScraper(), interval_minutes=120)
-    sched.register_scraper(ToombsScraper(), interval_minutes=120)
-    sched.register_scraper(TreutlenScraper(), interval_minutes=120)
-    sched.register_scraper(TroupScraper(), interval_minutes=120)
-    sched.register_scraper(TwiggsScraper(), interval_minutes=120)
-    sched.register_scraper(UpsonScraper(), interval_minutes=120)
-    sched.register_scraper(WaltonScraper(), interval_minutes=120)
-
-    # ── South Carolina All Counties ────────────────────────────────────────────
-    sched.register_scraper(AikenScraper(), interval_minutes=60)
-    sched.register_scraper(BambergScraper(), interval_minutes=60)
-    sched.register_scraper(BeaufortScraper(), interval_minutes=60)
-    sched.register_scraper(BerkeleyScraper(), interval_minutes=60)
-    sched.register_scraper(CharlestonScraper(), interval_minutes=60)
-    sched.register_scraper(DarlingtonScraper(), interval_minutes=60)
-    sched.register_scraper(FlorenceScraper(), interval_minutes=60)
-    sched.register_scraper(GreenvilleScraper(), interval_minutes=60)
-    sched.register_scraper(HamptonScraper(), interval_minutes=60)
-    sched.register_scraper(HorryScraper(), interval_minutes=60)
-    sched.register_scraper(JasperScraper(), interval_minutes=60)
-    sched.register_scraper(MarionScraper(), interval_minutes=60)
-    sched.register_scraper(NewberryScraper(), interval_minutes=60)
-    sched.register_scraper(RichlandScraper(), interval_minutes=60)
-    sched.register_scraper(YorkScraper(), interval_minutes=60)
-    sched.register_scraper(AndersonScraper(), interval_minutes=120)
-    sched.register_scraper(CherokeeScraper(), interval_minutes=120)
-    sched.register_scraper(ChesterScraper(), interval_minutes=120)
-    sched.register_scraper(ChesterfieldScraper(), interval_minutes=120)
-    sched.register_scraper(ColletonScraper(), interval_minutes=120)
-    sched.register_scraper(DorchesterScraper(), interval_minutes=120)
-    sched.register_scraper(GreenwoodScraper(), interval_minutes=120)
-    sched.register_scraper(KershawScraper(), interval_minutes=120)
-    sched.register_scraper(LancasterScraper(), interval_minutes=60)
-    sched.register_scraper(LaurensScraper(), interval_minutes=120)
-    sched.register_scraper(LeeScraper(), interval_minutes=60)
-    sched.register_scraper(LexingtonScraper(), interval_minutes=60)
-    sched.register_scraper(OconeeScraper(), interval_minutes=120)
-    sched.register_scraper(PickensScraper(), interval_minutes=120)
-    sched.register_scraper(SumterScraper(), interval_minutes=120)
-    sched.register_scraper(UnionScraper(), interval_minutes=120)
-
+    main()
 

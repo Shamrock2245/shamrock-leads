@@ -20,6 +20,10 @@ class GwinnettScraper(BaseScraper):
     def county(self) -> str:
         return "Gwinnett"
         
+    @property
+    def state(self) -> str:
+        return "GA"
+
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
         base_url = "https://www.gwinnettcountysheriff.com/SmartWebClient/"

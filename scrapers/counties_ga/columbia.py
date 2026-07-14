@@ -10,5 +10,9 @@ class ColumbiaScraper(P2CBaseScraper):
         return "Columbia"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://columbiacountyso.policetocitizen.com/Inmates/Catalog"

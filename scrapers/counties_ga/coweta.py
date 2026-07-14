@@ -10,5 +10,9 @@ class CowetaScraper(P2CBaseScraper):
         return "Coweta"
         
     @property
+    def state(self) -> str:
+        return "GA"
+
+    @property
     def portal_url(self) -> str:
         return "https://cowetacountyjailga.org/"
