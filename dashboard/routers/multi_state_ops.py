@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 ShamrockLeads — Multi-State Operations API
 Endpoints:
-  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC)
+  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC/TN/TX/LA)
   GET /api/ops/scraper-registry       — Full registry with state + platform metadata
   GET /api/ops/arrests/multi-state    — Recent arrests across all states with filters
   GET /api/ops/county-heatmap         — Arrest volume by county (all states)
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
 # Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
-ACTIVE_STATES = ("FL", "GA", "SC", "NC")
+ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER REGISTRY — built from the actual scraper files on disk
@@ -198,7 +198,7 @@ async def get_state_summary():
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
-    # Always surface FL/GA/SC/NC even when a dir is empty (zeros).
+    # Always surface active states even when a dir is empty (zeros).
     for st in ACTIVE_STATES:
         state_counties.setdefault(st, [])
 

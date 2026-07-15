@@ -2,8 +2,8 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build).  
-> Last updated: 2026-07-14  
-> **Live registered (dashboard):** 51 FL · 74 GA · 46 SC · 27 NC = **198** — see root `STATUS.md`
+> Last updated: 2026-07-15  
+> **Live registered (dashboard):** 51 FL · 74 GA · 46 SC · 27 NC · 3 TN · 3 TX · 2 LA = **206** — see root `STATUS.md`
 
 ## Why this order
 
@@ -11,9 +11,9 @@
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
 3. **GA** — large existing Track A/B/C investment 🔄  
 4. **NC** — wave-1 **27 registered**; deepen scrapes then expand 🔄  
-5. **TN** — shared JMS vendors with SC/GA (Zuercher, Southern SW, JailTracker) 🔲  
-6. **LA → MS** — Gulf corridor overlap with FL panhandle ops 🔲  
-7. **TX** — largest county count; needs dedicated recon wave 🔲  
+5. **TN** — wave-1 **3 registered** (Davidson/Knox live) 🔄  
+6. **TX** — wave-1 **3 registered** (Bexar/Dallas live); top-25 next 🔄  
+7. **LA → MS** — wave-1 **2 LA registered**; MS scaffold 🔲  
 8. **CT** — only 8 counties; quick once bases are solid 🔲  
 
 ## Shared platform bases (leverage first)
@@ -56,11 +56,25 @@
 4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
 5. TN recon pass next → `docs/TN_RECON_RESULTS.md`
 
-### TX
-1. Prioritize top-25 population counties first (Harris, Dallas, Tarrant, Bexar, Travis…)  
-2. Expect heavy Odyssey/Tyler + custom municipal jails  
+### TN (wave-1 registered — deepen)
+1. **Davidson** ✅ DCSO Justice Integration (RecentBookings + detail bond)  
+2. **Knox** ✅ sheriff.knoxcountytn.gov letter index  
+3. **Shelby** ⏳ IML TLS — curl_cffi path  
+4. Next: Hamilton, Rutherford · registry `docs/TN_COUNTY_REGISTRY.md`
 
-### CT / LA / MS
+### TX (wave-1 registered — expand top-25)
+1. **Bexar** ✅ Central Magistrate 24h HTML  
+2. **Dallas** ✅ official jaillookup name grid  
+3. **Harris** ⏳ browser A–Z  
+4. Next: Tarrant, Travis · registry `docs/TX_COUNTY_REGISTRY.md`  
+5. Expect heavy Odyssey/Tyler + custom municipal jails  
+
+### LA (wave-1 registered — harden)
+1. **Orleans** ⏳ OPSO partial · **Lafayette** ⏳ 365Labs captcha  
+2. Registry `docs/LA_COUNTY_REGISTRY.md`  
+3. Next: East Baton Rouge, Jefferson  
+
+### CT / MS / AL
 1. Recon → registry → wrappers  
 2. CT can be completed in one session once patterns known  
 

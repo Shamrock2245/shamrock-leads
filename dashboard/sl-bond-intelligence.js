@@ -17,8 +17,11 @@ const SLBondIntel = (() => {
     GA: { name: 'Georgia',        flag: '🍑', color: '#10b981' },
     SC: { name: 'South Carolina', flag: '🌙', color: '#3b82f6' },
     NC: { name: 'North Carolina', flag: '🦅', color: '#8b5cf6' },
+    TN: { name: 'Tennessee',      flag: '🎸', color: '#ef4444' },
+    TX: { name: 'Texas',          flag: '⭐', color: '#eab308' },
+    LA: { name: 'Louisiana',      flag: '🎷', color: '#ec4899' },
   };
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC'];
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA'];
 
   function _fmt$(n) {
     if (!n || n === 0) return '—';

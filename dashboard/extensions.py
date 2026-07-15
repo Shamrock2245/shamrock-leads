@@ -151,7 +151,7 @@ POA_RECEIPT_DATA = [
     {"surety_id": "palmetto", "prefix": "PSC105", "max_bond": 105_000, "start": 2644815, "end": 2644815, "exp": None},
 ]
 
-# ── Master list of all registered scraper counties (FL + GA + SC + NC) ──
+# ── Master list of all registered scraper counties (FL + GA + SC + NC + TN + TX + LA) ──
 # Format: "County (ST)" so multi-state name collisions (Lee, Sumter, Polk…) stay unique.
 # Mongo stores bare county + separate state field — parsers strip the (ST) for queries.
 REGISTERED_COUNTIES = sorted([
@@ -357,28 +357,19 @@ REGISTERED_COUNTIES = sorted([
     "Surry (NC)",
     "Transylvania (NC)",
     "Union (NC)",
-    # ── Tennessee ──
+    # ── Tennessee (wave-1 registered scrapers) ──
     "Davidson (TN)",
+    "Knox (TN)",
     "Shelby (TN)",
-    "Statewide (TN)",
-    # ── Connecticut ──
-    "Statewide (CT)",
-    # ── Texas ──
+    # ── Texas (wave-1 registered scrapers) ──
+    "Bexar (TX)",
+    "Dallas (TX)",
     "Harris (TX)",
-    "Statewide (TX)",
-    # ── Louisiana ──
+    # ── Louisiana (wave-1 registered scrapers) ──
     "Lafayette (LA)",
     "Orleans (LA)",
-    "Statewide (LA)",
-    # ── Alabama ──
-    "Jefferson (AL)",
-    "Madison (AL)",
-    "Mobile (AL)",
-    "Statewide (AL)",
-    # ── Mississippi ──
-    "Hinds (MS)",
-    "Jackson (MS)",
-    "Statewide (MS)",
+    # ── Scaffold placeholders (no scrapers yet — keep UI-ready) ──
+    # CT / AL / MS wave-1 pending recon
 ])
 
 

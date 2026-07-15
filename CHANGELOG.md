@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.14.0] — 2026-07-15 (TN / TX / LA wave-1 scrapers)
+
+### Added — Scrapers
+- **TN wave-1:** Davidson (DCSO live ~2.8k), Knox (letter roster), Shelby (IML TLS-hardened stub).
+- **TX wave-1:** Bexar (Central Magistrate 24h), Dallas (official jaillookup grid), Harris (browser A–Z).
+- **LA wave-1:** Orleans (OPSO partial), Lafayette (365Labs captcha-aware scaffold).
+- Registries: `docs/TN_COUNTY_REGISTRY.md`, `docs/TX_COUNTY_REGISTRY.md`, `docs/LA_COUNTY_REGISTRY.md`.
+
+### Changed — Core / Dashboard
+- `main.py` registers TN/TX/LA scrapers (`tn_*`, `tx_*`, `la_*` CLI keys).
+- `REGISTERED_COUNTIES` → **206** (was 198); Multi-State Ops `ACTIVE_STATES` includes TN/TX/LA.
+- Lead Explorer + Bond Intel + Multi-State UI surface TN/TX/LA filters and colors.
+
 ## [2.13.0] — 2026-07-14 (Docs truth sync + multi-state harmony)
 
 ### Changed — Documentation

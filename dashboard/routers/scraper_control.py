@@ -113,7 +113,7 @@ async def api_run_all():
     return {
         "ok": True,
         "triggered": len(REGISTERED_COUNTIES),
-        "message": f"Run triggers queued for all {len(REGISTERED_COUNTIES)} counties (FL/GA/SC/NC).",
+        "message": f"Run triggers queued for all {len(REGISTERED_COUNTIES)} counties (FL/GA/SC/NC/TN/TX/LA).",
         "requested_at": now.isoformat(),
     }
 

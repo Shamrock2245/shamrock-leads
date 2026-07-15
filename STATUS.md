@@ -24,7 +24,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
-## Scale (authoritative — 2026-07-14)
+## Scale (authoritative — 2026-07-15)
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
@@ -32,11 +32,14 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
 | **SC** | **46** | `scrapers/counties_sc/` | All counties registered (mix live / platform / scaffold) |
 | **NC** | **27** | `scrapers/counties_nc/` | Wave-1 (Southern SW, Zuercher, P2C, Meck/Durham…) |
-| **Total** | **198** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
+| **TN** | **3** | `scrapers/counties_tn/` | Wave-1: Davidson ✅ Knox ✅ Shelby ⏳ |
+| **TX** | **3** | `scrapers/counties_tx/` | Wave-1: Bexar ✅ Dallas ✅ Harris ⏳ |
+| **LA** | **2** | `scrapers/counties_la/` | Wave-1: Orleans partial · Lafayette captcha |
+| **Total** | **206** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
 
-**Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_sc_lee`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py nc_mecklenburg` / `sc_lee`.
+**Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 
-**Scaffold packages (no counties yet):** `counties_tn/`, `counties_tx/`, `counties_ct/`, `counties_la/`, `counties_ms/`.
+**Scaffold packages (no counties yet):** `counties_ct/`, `counties_ms/`, `counties_al/`.
 
 ---
 
@@ -77,7 +80,10 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | NC wave-1 scrapers **registered** but many still need first successful production scrape | ⏳ Run via Multi-State Ops / scheduler |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
 | GA remaining counties beyond registered set | ⏳ Recon + wrappers |
-| TN / TX / CT / LA / MS | 🔲 Scaffold only — recon waves next |
+| TN wave-1 (Davidson/Knox live; Shelby TLS) | ⏳ Deepen + Hamilton/Rutherford |
+| TX wave-1 (Bexar/Dallas live; Harris browser) | ⏳ Tarrant/Travis + top-25 |
+| LA wave-1 (Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + EBR/Jefferson |
+| CT / AL / MS | 🔲 Scaffold only — recon waves next |
 | BlueBubbles production reliability (office Mac + tunnel) | ⏳ Ops (checklist D1–D2) |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | Verify on host (checklist B1) |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |

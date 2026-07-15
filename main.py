@@ -248,6 +248,21 @@ from scrapers.counties_nc.stokes import StokesScraper as NC_StokesScraper
 from scrapers.counties_nc.surry import SurryScraper as NC_SurryScraper
 from scrapers.counties_nc.transylvania import TransylvaniaScraper as NC_TransylvaniaScraper
 from scrapers.counties_nc.union import UnionScraper as NC_UnionScraper
+
+# ── Tennessee Scrapers ─────────────────────────────────────────────────────
+from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
+from scrapers.counties_tn.shelby import ShelbyScraper as TN_ShelbyScraper
+from scrapers.counties_tn.knox import KnoxScraper as TN_KnoxScraper
+
+# ── Texas Scrapers ─────────────────────────────────────────────────────────
+from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
+from scrapers.counties_tx.dallas import DallasScraper as TX_DallasScraper
+from scrapers.counties_tx.bexar import BexarScraper as TX_BexarScraper
+
+# ── Louisiana Scrapers ─────────────────────────────────────────────────────
+from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
+from scrapers.counties_la.lafayette import LafayetteScraper as LA_LafayetteScraper
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -282,7 +297,7 @@ def build_writers():
 
 
 def register_scrapers(sched):
-    """Register FL + GA + SC scrapers with the scheduler."""
+    """Register FL + GA + SC + NC + TN + TX + LA scrapers with the scheduler."""
 
     # ── SWFL Core ─────────────────────────────────────────────────────────────
     sched.register_scraper(LeeCountyScraper(), interval_minutes=43)
@@ -513,6 +528,20 @@ def register_scrapers(sched):
     sched.register_scraper(NC_SurryScraper(), interval_minutes=120)
     sched.register_scraper(NC_TransylvaniaScraper(), interval_minutes=120)
     sched.register_scraper(NC_UnionScraper(), interval_minutes=60)
+
+    # ── Tennessee (wave-1) ───────────────────────────────────────────────────
+    sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
+    sched.register_scraper(TN_ShelbyScraper(), interval_minutes=90)
+    sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
+
+    # ── Texas (wave-1) ───────────────────────────────────────────────────────
+    sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
+    sched.register_scraper(TX_DallasScraper(), interval_minutes=90)
+    sched.register_scraper(TX_BexarScraper(), interval_minutes=60)
+
+    # ── Louisiana (wave-1) ───────────────────────────────────────────────────
+    sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
+    sched.register_scraper(LA_LafayetteScraper(), interval_minutes=90)
 
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")

@@ -1,6 +1,6 @@
 /**
  * SLMultiState — Multi-State Operations Dashboard Module
- * Shows live scraper status, arrest data, and system health across FL, GA, SC, NC.
+ * Shows live scraper status, arrest data, and system health across FL, GA, SC, NC, TN, TX, LA.
  * Uses ApexCharts for charts. API: /api/ops/*
  */
 const SLMultiState = (() => {
@@ -15,19 +15,25 @@ const SLMultiState = (() => {
   let _platformChart = null;
   let _initialized = false;
 
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC'];
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA'];
   const STATE_NAMES = {
     FL: 'Florida',
     GA: 'Georgia',
     SC: 'South Carolina',
     NC: 'North Carolina',
+    TN: 'Tennessee',
+    TX: 'Texas',
+    LA: 'Louisiana',
   };
-  const STATE_EMOJI = { FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅' };
+  const STATE_EMOJI = { FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅', TN: '🎸', TX: '⭐', LA: '🎷' };
   const STATE_COLORS = {
     FL: '#00d4aa',
     GA: '#f59e0b',
     SC: '#8b5cf6',
     NC: '#3b82f6',
+    TN: '#ef4444',
+    TX: '#eab308',
+    LA: '#ec4899',
   };
 
   const PLATFORM_COLORS = {
@@ -481,7 +487,7 @@ const SLMultiState = (() => {
   }
 
   async function runAll() {
-    if (!confirm('Trigger an immediate run for ALL registered scrapers (FL/GA/SC/NC)? This will put significant load on the server.')) return;
+    if (!confirm('Trigger an immediate run for ALL registered scrapers (FL/GA/SC/NC/TN/TX/LA)? This will put significant load on the server.')) return;
     try {
       const res = await fetch('/api/scraper/run-all', { method: 'POST' });
       const data = await res.json();
