@@ -357,6 +357,28 @@ REGISTERED_COUNTIES = sorted([
     "Surry (NC)",
     "Transylvania (NC)",
     "Union (NC)",
+    # ── Tennessee ──
+    "Davidson (TN)",
+    "Shelby (TN)",
+    "Statewide (TN)",
+    # ── Connecticut ──
+    "Statewide (CT)",
+    # ── Texas ──
+    "Harris (TX)",
+    "Statewide (TX)",
+    # ── Louisiana ──
+    "Lafayette (LA)",
+    "Orleans (LA)",
+    "Statewide (LA)",
+    # ── Alabama ──
+    "Jefferson (AL)",
+    "Madison (AL)",
+    "Mobile (AL)",
+    "Statewide (AL)",
+    # ── Mississippi ──
+    "Hinds (MS)",
+    "Jackson (MS)",
+    "Statewide (MS)",
 ])
 
 
