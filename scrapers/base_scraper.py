@@ -87,6 +87,15 @@ class BaseScraper(ABC):
         self.last_error: Optional[str] = None
         self.total_runs: int = 0
         self.total_records_scraped: int = 0
+        
+        # Initialize Autonomous Proxy Engine (APE)
+        try:
+            from scrapers.proxy_engine import get_ape
+            self.ape = get_ape()
+            logger.info(f"✅ APE initialized for {self.county} scraper")
+        except ImportError:
+            self.ape = None
+            logger.warning(f"APE not available for {self.county} scraper")
 
     @classmethod
     def _get_browser_options(cls):
@@ -473,9 +482,60 @@ class BaseScraper(ABC):
             return True
         return False
 
+    # ── Autonomous Proxy Engine (APE) Helpers ────────────────────────────────────
+    
+    def get_proxy(self, prefer_residential: bool = True) -> Optional[str]:
+        """
+        Get proxy from APE with automatic failover.
+        
+        Args:
+            prefer_residential: Prefer residential proxies (Warren/S5W2C)
+        
+        Returns:
+            Proxy URL or None if all sources fail
+        """
+        if not self.ape:
+            return None
+        return self.ape.get_next_proxy(prefer_residential=prefer_residential)
+    
+    def get_sticky_proxy(self, session_id: str) -> Optional[str]:
+        """
+        Get proxy with sticky session (same IP for multi-step flows).
+        
+        Args:
+            session_id: Session identifier
+        
+        Returns:
+            Proxy URL with sticky routing
+        """
+        if not self.ape:
+            return None
+        return self.ape.get_sticky_proxy(session_id)
+    
+    def record_proxy_success(self, proxy: str, response_time_ms: float = 0.0):
+        """
+        Record successful proxy use in APE metrics.
+        
+        Args:
+            proxy: Proxy URL
+            response_time_ms: Response time in milliseconds
+        """
+        if self.ape and proxy:
+            self.ape.record_success(proxy, response_time_ms=response_time_ms)
+    
+    def record_proxy_failure(self, proxy: str):
+        """
+        Record failed proxy use in APE metrics.
+        
+        Args:
+            proxy: Proxy URL
+        """
+        if self.ape and proxy:
+            self.ape.record_failure(proxy)
+    
     @property
     def state(self) -> str:
-        """Two-letter state code. Override for non-FL scrapers (GA, SC, etc.)."""
+        """Two-letter state code. Override for non-FL scrapers (GA, SC, etc)."""
         return "FL"
 
     @property
