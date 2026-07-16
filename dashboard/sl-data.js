@@ -184,19 +184,60 @@ async function loadDashboard() {
         </tr>`;
       }).join('') : '<tr><td colspan="7" class="loading">No bond-ready defendants</td></tr>';
 
-      // Custody by county
+      // Custody by county — with state color badge
+      const STATE_COLORS_CMD = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
       const cbc = cmd.custody_by_county || [];
-      document.getElementById('custodyCountyList').innerHTML = cbc.map(c =>
-        `<div class="county-row"><span class="county-name">${c.county}</span><span style="color:var(--success);font-size:12px;font-weight:600">$${fmt(c.total_bond)}</span><span class="county-count">${c.count} in custody</span></div>`
-      ).join('') || '<div class="loading">No data</div>';
+      document.getElementById('custodyCountyList').innerHTML = cbc.length ? cbc.map(c => {
+        const st = (c.state || 'FL').toUpperCase();
+        const stColor = STATE_COLORS_CMD[st] || '#64748b';
+        return `<div class="county-row">
+          <span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;margin-right:5px">${st}</span>
+          <span class="county-name">${c.county}</span>
+          <span style="color:var(--success);font-size:12px;font-weight:600">$${fmt(c.total_bond)}</span>
+          <span class="county-count">${c.count} in custody</span>
+        </div>`;
+      }).join('') : '<div class="loading">No in-custody defendants</div>';
 
-      // Recent activity
+      // Recent activity — with state badge and charge preview
       const ra = cmd.recent_activity || [];
-      document.getElementById('recentActivity').innerHTML = ra.map(l => {
+      document.getElementById('cmdRecentActivity').innerHTML = ra.length ? ra.map(l => {
         const sc2 = (l.lead_status||'').toLowerCase();
         const dot = sc2==='hot'?'🔥':sc2==='warm'?'🟡':'⚪';
-        return `<div class="county-row"><span class="county-name" style="font-size:12px">${dot} ${l.full_name||'?'}</span><span style="color:var(--accent);font-size:12px;font-weight:700">$${(l.bond_amount||0).toLocaleString()}</span><span class="county-count">${l.county||'—'} · ${timeAgo(l.scraped_at)}</span></div>`;
-      }).join('') || '<div class="loading">No recent activity</div>';
+        const st2 = (l.state || 'FL').toUpperCase();
+        const stColor2 = STATE_COLORS_CMD[st2] || '#64748b';
+        const charge = (l.charges||'').length > 38 ? (l.charges||'').slice(0,35)+'…' : (l.charges||'—');
+        return `<div class="county-row" style="flex-wrap:wrap;gap:2px">
+          <span style="background:${stColor2}22;color:${stColor2};border:1px solid ${stColor2}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700">${st2}</span>
+          <span class="county-name" style="font-size:12px">${dot} ${l.full_name||'?'}</span>
+          <span style="color:var(--accent);font-size:12px;font-weight:700">$${(l.bond_amount||0).toLocaleString()}</span>
+          <span class="county-count" style="width:100%;padding-left:4px;font-size:11px;color:var(--muted)">${l.county||'—'} · ${charge} · ${timeAgo(l.scraped_at)}</span>
+        </div>`;
+      }).join('') : '<div class="loading">No recent activity</div>';
+
+      // State breakdown strip
+      const sb = cmd.state_breakdown || {};
+      const STATE_META_CMD = {
+        FL: { name: 'Florida',        emoji: '🌴', color: '#00d4aa' },
+        GA: { name: 'Georgia',        emoji: '🍑', color: '#f59e0b' },
+        SC: { name: 'South Carolina', emoji: '🌙', color: '#8b5cf6' },
+        NC: { name: 'North Carolina', emoji: '🦅', color: '#3b82f6' },
+      };
+      ['FL','GA','SC','NC'].forEach(st => {
+        const el = document.getElementById(`cmdState${st}`);
+        if (!el) return;
+        const d = sb[st] || {};
+        const meta = STATE_META_CMD[st];
+        el.classList.remove('cmd-state-chip-skeleton');
+        el.style.setProperty('--chip-color', meta.color);
+        el.innerHTML = `
+          <span class="cmd-chip-flag">${meta.emoji}</span>
+          <span class="cmd-chip-abbr" style="color:${meta.color}">${st}</span>
+          <span class="cmd-chip-stat">${(d.total||0).toLocaleString()} <span class="cmd-chip-lbl">arrests</span></span>
+          <span class="cmd-chip-stat">${(d.last_24h||0).toLocaleString()} <span class="cmd-chip-lbl">today</span></span>
+          <span class="cmd-chip-stat" style="color:#ef4444">🔥 ${(d.hot_leads||0).toLocaleString()} <span class="cmd-chip-lbl">hot</span></span>
+          <span class="cmd-chip-stat" style="color:${meta.color}">$${fmt(d.pipeline||0)} <span class="cmd-chip-lbl">pipeline</span></span>
+        `;
+      });
     }
 
     // Hot lead audio alert

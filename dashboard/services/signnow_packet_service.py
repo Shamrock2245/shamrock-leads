@@ -266,17 +266,17 @@ class SignNowPacketService:
             timeout=30,
         )
         doc_resp.raise_for_status()
-        
+
         # Extract available text field names
         available_fields = set()
         for f in doc_resp.json().get("fields", []):
             name = f.get("json_attributes", {}).get("name")
             if name:
                 available_fields.add(name)
-                
+
         # 2. Filter doc_prefill_fields
         valid_fields = [f for f in fields if f.get("field_name") in available_fields]
-        
+
         if not valid_fields:
             return
 
@@ -372,7 +372,7 @@ class SignNowPacketService:
         """
         POST /v2/document-groups/{group_id}/embedded-invites then
         POST /v2/document-groups/embedded-invites/{link_id}/link
-        
+
         Args:
             signers: List of dicts like:
             [
@@ -389,7 +389,7 @@ class SignNowPacketService:
             json=invite_payload,
             timeout=30,
         )
-        
+
         if resp.status_code == 409:
             get_resp = await client.get(
                 f"{self.base_url}/v2/document-groups/{group_id}/embedded-invites",
@@ -422,7 +422,6 @@ class SignNowPacketService:
         )
         link_resp.raise_for_status()
         return link_resp.json().get("data", {}).get("link", "")
-
 
     @staticmethod
     def _build_prefill_fields(intake_doc: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -861,7 +860,7 @@ class SignNowPacketService:
             signer_email=signer_email,
             signer_name=signer_name
         )
-        
+
         # Log to db
         from extensions import get_db
         db = get_db()
@@ -906,7 +905,7 @@ class SignNowPacketService:
             signer_name=signer_name,
             poa_number=poa_number
         )
-        
+
         # Log to db
         from extensions import get_db
         db = get_db()
@@ -995,7 +994,7 @@ class SignNowPacketService:
             1,
             len(intake_doc.get("indemnitors", [intake_doc.get("indemnitor", {})])),
         )
-        
+
         # Calculate number of charges (comma-separated string or list)
         charges_data = intake_doc.get("charges") or intake_doc.get("defendant", {}).get("charges", "")
         if isinstance(charges_data, list):
@@ -1037,7 +1036,7 @@ class SignNowPacketService:
                         "[signnow] Copied template %s -> doc %s (%s)",
                         item["template_id"], doc_id, item["label"],
                     )
-                    
+
                     # For per-charge rules, inject the specific charge into the prefill fields if possible
                     # This relies on the 'charges' field string being parsable
                     doc_prefill_fields = list(prefill_fields)
@@ -1049,7 +1048,7 @@ class SignNowPacketService:
                                 charges_list = charges_data
                             elif isinstance(charges_data, str):
                                 charges_list = [c.strip() for c in charges_data.split(",") if c.strip()]
-                            
+
                             # Get the specific charge for this copy_index (1-based)
                             charge_idx = item["copy_index"] - 1
                             if charge_idx < len(charges_list):
@@ -1088,7 +1087,7 @@ class SignNowPacketService:
                         client, document_ids, group_name
                     )
                     logger.info("[signnow] Document group created: %s", group_id)
-                    
+
                     # Apply white-label branding if configured
                     import os
                     brand_id = os.getenv("SIGNNOW_BRAND_ID")
@@ -1116,7 +1115,7 @@ class SignNowPacketService:
             # Step 6: Create embedded invite
             signing_link = ""
             invite_id = ""
-            
+
             # Determine routing config
             final_routing_config = routing_config
             if not final_routing_config and signer_email:
@@ -1125,7 +1124,7 @@ class SignNowPacketService:
                     defendant_email = intake_doc.get("defendant", {}).get("email", "")
                     if not defendant_email:
                         defendant_email = f"defendant_{intake_id}@placeholder.shamrockbailbonds.biz"
-                        
+
                     final_routing_config = [
                         {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"},
                         {"email": defendant_email, "role_name": "Signer 2", "order": 2, "auth_method": "none"},
@@ -1192,7 +1191,7 @@ class SignNowPacketService:
         Uses /document/fieldextract to automatically convert text tags into interactive fields.
         """
         await self._get_token()
-        
+
         async with httpx.AsyncClient(timeout=60) as client:
             # 1. Upload via fieldextract
             # Note: We must use multipart/form-data for file uploads
@@ -1208,18 +1207,18 @@ class SignNowPacketService:
             doc_id = resp.json().get("id")
             if not doc_id:
                 raise RuntimeError("Failed to get doc_id from fieldextract")
-            
+
             logger.info(f"[signnow] Uploaded stitched PDF with text tags to {doc_id}")
-            
+
             # 2. Setup routing / embedded invite
             signing_link = ""
             invite_id = ""
-            
+
             if not routing_config:
                 routing_config = [
                     {"email": signer_email, "role_name": "Signer 1", "order": 1, "auth_method": "none"}
                 ]
-            
+
             try:
                 # We do not need a group for a single stitched document
                 signing_link = await self._get_embedded_link(
@@ -1233,7 +1232,7 @@ class SignNowPacketService:
                     exc.response.status_code,
                     exc.response.text[:200],
                 )
-                
+
         return {
             "invite_id": invite_id,
             "signing_link": signing_link,
@@ -1251,10 +1250,10 @@ class SignNowPacketService:
             "Authorization": f"Bearer {self.api_token}",
             "Accept": "application/pdf"
         }
-        
+
         # We need type='merged' query parameter
         params = {"type": "merged"}
-        
+
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.get(url, headers=headers, params=params)
             r.raise_for_status()

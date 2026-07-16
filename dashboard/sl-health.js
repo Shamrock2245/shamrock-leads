@@ -93,13 +93,7 @@ const SLHealth = (() => {
       else if (_filter === 'stale') rows = rows.filter(r => ['stale','warning','offline'].includes(r.status));
       else rows = rows.filter(r => r.status === _filter);
     }
-    if (_search) {
-      rows = rows.filter(r =>
-        (r.county || '').toLowerCase().includes(_search)
-        || (r.state || '').toLowerCase().includes(_search)
-        || (r.county_bare || '').toLowerCase().includes(_search)
-      );
-    }
+    if (_search) rows = rows.filter(r => (r.county||'').toLowerCase().includes(_search));
     rows.sort((a, b) => {
       let av = a[_sortKey], bv = b[_sortKey];
       if (_sortKey === 'status') { av = _statusCfg(av).order; bv = _statusCfg(bv).order; }
@@ -125,12 +119,11 @@ const SLHealth = (() => {
     const disabled = _data.filter(r => r.status === 'disabled' || r.enabled === false).length;
     const totalRecords = _data.reduce((s,r) => s + (r.total_records||0), 0);
     const totalHot = _data.reduce((s,r) => s + (r.hot_leads||0), 0);
-    const records24h = _data.reduce((s,r) => s + (r.records_24h||0), 0);
     kpiEl.innerHTML = `
       <div class="stat-card" onclick="SLHealth.setFilter('all',this)" style="cursor:pointer">
         <div class="stat-label">Total Registered</div>
         <div class="stat-value">${total}</div>
-        <div class="stat-sub">${records24h.toLocaleString()} arrests / 24h</div>
+        <div class="stat-sub">counties in fleet</div>
       </div>
       <div class="stat-card" style="border-color:var(--success,#00c896);cursor:pointer" onclick="SLHealth.setFilter('ok',this)">
         <div class="stat-label">🟢 Active</div>
@@ -180,30 +173,22 @@ const SLHealth = (() => {
       body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">No counties match the current filter.</td></tr>`;
       return;
     }
-    const stateColors = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6', TN: '#ef4444', TX: '#eab308', LA: '#ec4899' };
+    const STATE_COLORS_H = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
     body.innerHTML = rows.map(r => {
       const cfg = _statusCfg(r.status);
       const lastRun = _fmtRelative(r.last_run || r.latest_record);
       const hasError = r.status === 'error' && r.error;
       const isNeverRun = r.status === 'never_run';
       const isDisabled = r.enabled === false || r.status === 'disabled';
-      const st = (r.state || '').toUpperCase();
-      const stColor = stateColors[st] || '#64748b';
-      const countyLabel = r.county || '—';
-      // Escape for onclick string attributes
-      const countyJs = countyLabel.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      const lastRunRecords = r.records_last_run != null ? r.records_last_run : null;
+      const st = (r.state || 'FL').toUpperCase();
+      const stColor = STATE_COLORS_H[st] || '#64748b';
+      const statePill = `<span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:5px">${st}</span>`;
       return `
         <tr class="${hasError ? 'row-error' : ''}" style="${isDisabled ? 'opacity:0.6' : ''}">
-          <td>
-            ${countyLabel !== '—' ? `<span class="county-badge" data-county="${countyLabel}">${countyLabel}</span>` : '—'}
-            ${st ? `<span style="margin-left:6px;background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700">${st}</span>` : ''}
-            ${(r.records_24h || 0) > 0 ? `<div style="font-size:10px;color:var(--success,#00c896);margin-top:2px">+${r.records_24h} / 24h</div>` : ''}
-          </td>
+          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}">${r.county}</span>${statePill}`:'—'}</td>
           <td>
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
-            ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.error||'').replace(/"/g,'&quot;')}">${r.error}</div>` : ''}
-            ${lastRunRecords != null && r.status !== 'never_run' ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px">last run: ${lastRunRecords} rec</div>` : ''}
+            ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}
           </td>
           <td>${_fmtNum(r.total_records)}</td>
           <td style="color:var(--danger)">${_fmtNum(r.hot_leads)}</td>
@@ -212,14 +197,14 @@ const SLHealth = (() => {
           <td>${r.run_count || '—'}</td>
           <td>
             <div style="display:flex;gap:4px;flex-wrap:wrap">
-              ${!isDisabled ? `<button class="btn btn-xs" onclick="SLHealth.runNow('${countyJs}')" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
-              ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError('${countyJs}')" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
-              <button class="btn btn-xs" onclick="SLHealth.showDrill('${countyJs}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
-              <button class="btn btn-xs" onclick="SLHealth.healthCheck('${countyJs}')" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>
-              <button class="btn btn-xs" onclick="SLHealth.viewLogs('${countyJs}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View recent run logs">📋 Logs</button>
+              ${!isDisabled ? `<button class="btn btn-xs" onclick="SLHealth.runNow('${r.county}')" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
+              ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError('${r.county}')" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
+              <button class="btn btn-xs" onclick="SLHealth.showDrill('${r.county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
+              <button class="btn btn-xs" onclick="SLHealth.healthCheck('${r.county}')" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>
+              <button class="btn btn-xs" onclick="SLHealth.viewLogs('${r.county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View recent run logs">📋 Logs</button>
               ${!isDisabled
-                ? `<button class="btn btn-xs" onclick="SLHealth.disableScraper('${countyJs}')" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:3px 8px;font-size:11px" title="Pause this scraper">⏸ Pause</button>`
-                : `<button class="btn btn-xs" onclick="SLHealth.enableScraper('${countyJs}')" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:3px 8px;font-size:11px" title="Re-enable this scraper">▶ Enable</button>`
+                ? `<button class="btn btn-xs" onclick="SLHealth.disableScraper('${r.county}')" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:3px 8px;font-size:11px" title="Pause this scraper">⏸ Pause</button>`
+                : `<button class="btn btn-xs" onclick="SLHealth.enableScraper('${r.county}')" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:3px 8px;font-size:11px" title="Re-enable this scraper">▶ Enable</button>`
               }
             </div>
           </td>

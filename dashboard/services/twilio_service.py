@@ -116,7 +116,7 @@ class TwilioService:
                 }
                 if booking_number:
                     audit_doc["booking_number"] = booking_number
-                
+
                 await audit_events.insert_one(audit_doc)
             except Exception as e:
                 logger.error(f"[twilio] Failed to log outbound SMS: {e}")

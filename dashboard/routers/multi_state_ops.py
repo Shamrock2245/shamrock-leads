@@ -2,14 +2,13 @@ from __future__ import annotations
 """
 ShamrockLeads — Multi-State Operations API
 Endpoints:
-  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC/TN/TX/LA)
+  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC)
   GET /api/ops/scraper-registry       — Full registry with state + platform metadata
   GET /api/ops/arrests/multi-state    — Recent arrests across all states with filters
   GET /api/ops/county-heatmap         — Arrest volume by county (all states)
   GET /api/ops/platform-breakdown     — Scraper platform distribution
   GET /api/ops/live-feed              — Last 50 arrests across all states (real-time feed)
 """
-import json
 import os
 import re
 import logging
@@ -17,24 +16,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse
 
-from dashboard.extensions import (
-    get_collection,
-    get_db,
-    index_scraper_status_docs,
-    resolve_scraper_status,
-)
+from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
 # Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
-ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
+ACTIVE_STATES = ("FL", "GA", "SC", "NC")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER REGISTRY — built from the actual scraper files on disk
 # ─────────────────────────────────────────────────────────────────────────────
+
+
 def _build_registry() -> list[dict]:
     """Dynamically build the full scraper registry from the scrapers/ directory."""
     base = os.path.normpath(os.path.join(os.path.dirname(__file__), "../../scrapers"))
@@ -141,32 +136,29 @@ async def get_scraper_registry(state: str = ""):
     if state:
         registry = [r for r in registry if r["state"].upper() == state.upper()]
 
-    # Enrich with last-run data — multi-key index (bare / labeled / scraper_id)
+    # Enrich with last-run data from MongoDB (keyed by bare county; also try scraper_id)
     scraper_status = get_collection("scraper_status")
-    status_docs = []
+    status_by_county: dict = {}
+    status_by_id: dict = {}
     async for doc in scraper_status.find({}, {"_id": 0}):
-        status_docs.append(doc)
-    status_index = index_scraper_status_docs(status_docs)
+        c = doc.get("county", "")
+        if c:
+            status_by_county[c] = doc
+        sid = doc.get("scraper_id") or doc.get("job_id")
+        if sid:
+            status_by_id[sid] = doc
 
     result = []
     for r in registry:
-        status = resolve_scraper_status(
-            status_index, r.get("county", ""), r.get("state")
+        status = (
+            status_by_id.get(r.get("scraper_id", ""))
+            or status_by_county.get(r["county"], {})
         )
-        if not status and r.get("scraper_id"):
-            status = status_index.get(r["scraper_id"], {})
         last_run = status.get("last_run_at") or status.get("last_run")
         last_run_iso = last_run.isoformat() if hasattr(last_run, "isoformat") else last_run
-        raw_status = (status.get("status") or "never_run").lower()
-        if raw_status in ("ok", "success", "healthy"):
-            norm_status = "ok"
-        elif raw_status in ("error", "failed", "fail"):
-            norm_status = "error"
-        else:
-            norm_status = raw_status if status else "never_run"
         result.append({
             **r,
-            "status": norm_status,
+            "status": status.get("status", "never_run"),
             "last_run": last_run,
             "last_run_iso": last_run_iso,
             "records_last_run": status.get("records_last_run", status.get("records", 0)),
@@ -206,15 +198,9 @@ async def get_state_summary():
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
-    # Always surface active states even when a dir is empty (zeros).
+    # Always surface FL/GA/SC/NC even when a dir is empty (zeros).
     for st in ACTIVE_STATES:
         state_counties.setdefault(st, [])
-
-    # Load scraper_status once (shared multi-key index for all states)
-    status_docs = []
-    async for doc in scraper_status.find({}, {"_id": 0}):
-        status_docs.append(doc)
-    status_index = index_scraper_status_docs(status_docs)
 
     result = {}
     for state, counties in state_counties.items():
@@ -242,25 +228,49 @@ async def get_state_summary():
         })
         total_arrests = await arrests.count_documents(state_match)
 
-        # Scraper health — resolve bare + labeled keys per registry county
+        # Scraper health
         active = 0
         errors = 0
         never_run = 0
-        for county_name in counties:
-            doc = resolve_scraper_status(status_index, county_name, state)
-            if not doc:
-                never_run += 1
-                continue
-            s = (doc.get("status") or "never_run").lower()
-            if s in ("ok", "healthy", "success"):
-                active += 1
-            elif s in ("error", "offline", "failed"):
-                errors += 1
-            else:
-                never_run += 1
+        if counties:
+            async for doc in scraper_status.find(
+                {"county": {"$in": counties}}, {"_id": 0, "status": 1}
+            ):
+                s = doc.get("status", "never_run")
+                if s in ("ok", "healthy"):
+                    active += 1
+                elif s in ("error", "offline"):
+                    errors += 1
+                else:
+                    never_run += 1
         accounted = active + errors + never_run
         if total_counties > accounted:
             never_run += total_counties - accounted
+
+        # Bond + lead stats for this state
+        bond_stats: dict = {"avg_bond": 0.0, "max_bond": 0.0, "total_bond": 0.0}
+        hot_leads = 0
+        warm_leads = 0
+        async for r in arrests.aggregate([
+            {"$match": {**state_match, "bond_amount": {"$gt": 0}}},
+            {"$group": {
+                "_id": None,
+                "avg_bond": {"$avg": "$bond_amount"},
+                "max_bond": {"$max": "$bond_amount"},
+                "total_bond": {"$sum": "$bond_amount"},
+                "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
+                "warm": {"$sum": {"$cond": [
+                    {"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]},
+                    1, 0]}},
+            }},
+        ]):
+            bond_stats = {
+                "avg_bond": round(r.get("avg_bond") or 0, 2),
+                "max_bond": round(r.get("max_bond") or 0, 2),
+                "total_bond": round(r.get("total_bond") or 0, 2),
+            }
+            hot_leads = r.get("hot", 0)
+            warm_leads = r.get("warm", 0)
 
         result[state] = {
             "state": state,
@@ -271,6 +281,9 @@ async def get_state_summary():
             "arrests_24h": arrests_24h,
             "arrests_7d": arrests_7d,
             "total_arrests": total_arrests,
+            "hot_leads": hot_leads,
+            "warm_leads": warm_leads,
+            **bond_stats,
         }
 
     return {

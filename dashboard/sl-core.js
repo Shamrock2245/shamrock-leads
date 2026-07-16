@@ -126,7 +126,9 @@ function _addActivity(icon, text, type = 'info') {
 }
 
 function _renderActivityFeed() {
-  const el = document.getElementById('recentActivity');
+  // SSE-driven feed targets the global activity element; Command Center uses
+  // #cmdRecentActivity (populated by loadDashboard) to avoid overwrite collision.
+  const el = document.getElementById('sseActivityFeed') || document.getElementById('recentActivity');
   if (!el) return;
   if (SL_STATE.activityFeed.length === 0) {
     el.innerHTML = '<div class="activity-empty">No recent activity</div>';

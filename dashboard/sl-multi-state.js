@@ -277,6 +277,11 @@ const SLMultiState = (() => {
               <div class="ms-metric-lbl">Total</div>
             </div>
           </div>
+          <div class="ms-state-card-footer">
+            <span class="ms-state-card-footer-stat">🔥 <strong style="color:#ef4444">${_fmtNum(d.hot_leads)||'0'}</strong> hot</span>
+            <span class="ms-state-card-footer-stat">🟡 <strong style="color:#f59e0b">${_fmtNum(d.warm_leads)||'0'}</strong> warm</span>
+            ${d.avg_bond ? `<span class="ms-state-card-footer-stat">💰 <strong style="color:#10b981">$${Number(d.avg_bond).toLocaleString(undefined,{maximumFractionDigits:0})}</strong> avg bond</span>` : ''}
+          </div>
         </div>
       `;
     }).join('');
