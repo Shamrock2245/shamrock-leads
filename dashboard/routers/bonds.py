@@ -7,6 +7,7 @@ Endpoints: /api/write-bond, /api/active-bonds (CRUD), /api/appearance-bond-pdf
 
 import json as json_lib
 import os
+import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
@@ -18,7 +19,6 @@ from dashboard.services.risk_engine import compute_risk_score
 bonds_bp = APIRouter(prefix="/api", tags=["bonds"])
 import asyncio
 import logging
-import os
 import traceback
 logger = logging.getLogger(__name__)
 
@@ -492,12 +492,13 @@ async def api_write_bond(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bonds_bp.get("/active-bonds")
-async def api_active_bonds_list():
+async def api_active_bonds_list(limit: int = 200):
     """List all active bonds with risk scores, check-in status, and FTA intelligence."""
     active_bonds = get_collection("active_bonds")
     try:
-        cursor = active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(100)
-        bonds = await cursor.to_list(length=100)
+        lim = max(1, min(int(limit or 200), 500))
+        cursor = active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(lim)
+        bonds = await cursor.to_list(length=lim)
 
         # ── Bulk-enrich FTA intelligence from arrests for bonds missing it ─────
         needs_fta = [b["booking_number"] for b in bonds
@@ -530,6 +531,229 @@ async def api_active_bonds_list():
         return {"success": True, "bonds": bonds, "count": len(bonds)}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e), "bonds": []}, status_code=500)
+
+
+def _norm_phone(raw: str) -> str:
+    digits = "".join(c for c in str(raw or "") if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _norm_name(raw: str) -> str:
+    return " ".join(str(raw or "").upper().split())
+
+
+def _extract_parties(bond: dict) -> list[dict]:
+    """Normalize defendant + indemnitor fields from a bond document."""
+    parties = []
+    dname = (bond.get("defendant_name") or "").strip()
+    dphone = _norm_phone(bond.get("defendant_phone") or "")
+    if dname or dphone:
+        parties.append({"role": "defendant", "name": dname, "phone": dphone})
+    ind = bond.get("indemnitor") if isinstance(bond.get("indemnitor"), dict) else {}
+    iname = (bond.get("indemnitor_name") or ind.get("name") or "").strip()
+    iphone = _norm_phone(bond.get("indemnitor_phone") or ind.get("phone") or "")
+    if iname or iphone:
+        parties.append({
+            "role": "indemnitor",
+            "name": iname,
+            "phone": iphone,
+            "relationship": bond.get("indemnitor_relationship") or ind.get("relationship") or "",
+        })
+    for extra in bond.get("indemnitors") or []:
+        if not isinstance(extra, dict):
+            continue
+        en = (extra.get("name") or "").strip()
+        ep = _norm_phone(extra.get("phone") or "")
+        if en or ep:
+            parties.append({
+                "role": "indemnitor",
+                "name": en,
+                "phone": ep,
+                "relationship": extra.get("relationship") or "",
+            })
+    return parties
+
+
+@bonds_bp.get("/active-bonds/by-person")
+async def api_bonds_by_person(
+    name: str = "",
+    phone: str = "",
+    role: str = "any",
+    limit: int = 50,
+):
+    """Recall all bonds where a defendant or indemnitor matches name and/or phone."""
+    active_bonds = get_collection("active_bonds")
+    name_q = _norm_name(name)
+    phone_q = _norm_phone(phone)
+    if not name_q and not phone_q:
+        return JSONResponse(
+            {"success": False, "error": "Provide name and/or phone"},
+            status_code=400,
+        )
+
+    lim = max(1, min(int(limit or 50), 200))
+    or_clauses = []
+    if name.strip():
+        or_clauses.extend([
+            {"defendant_name": {"$regex": re.escape(name.strip()), "$options": "i"}},
+            {"indemnitor_name": {"$regex": re.escape(name.strip()), "$options": "i"}},
+            {"indemnitor.name": {"$regex": re.escape(name.strip()), "$options": "i"}},
+        ])
+    if phone_q:
+        or_clauses.extend([
+            {"indemnitor_phone": {"$regex": phone_q}},
+            {"indemnitor.phone": {"$regex": phone_q}},
+            {"defendant_phone": {"$regex": phone_q}},
+        ])
+
+    try:
+        cursor = active_bonds.find({"$or": or_clauses}, {"_id": 0}).sort("created_at", -1).limit(lim)
+        bonds = await cursor.to_list(length=lim)
+        if role in ("defendant", "indemnitor") and name_q:
+            filtered = []
+            for b in bonds:
+                dname = _norm_name(b.get("defendant_name"))
+                iname = _norm_name(
+                    b.get("indemnitor_name") or (b.get("indemnitor") or {}).get("name")
+                )
+                if role == "defendant" and name_q in dname:
+                    filtered.append(b)
+                elif role == "indemnitor" and name_q in iname:
+                    filtered.append(b)
+            bonds = filtered
+        for b in bonds:
+            for k in ("created_at", "updated_at", "last_checkin", "last_check_in"):
+                if hasattr(b.get(k), "isoformat"):
+                    b[k] = b[k].isoformat()
+        return {
+            "success": True,
+            "query": {"name": name, "phone": phone, "role": role},
+            "count": len(bonds),
+            "bonds": bonds,
+        }
+    except Exception as e:
+        logger.exception("by-person error: %s", e)
+        return JSONResponse({"success": False, "error": str(e), "bonds": []}, status_code=500)
+
+
+@bonds_bp.get("/active-bonds/relationship-graph")
+async def api_relationship_graph(seed_booking: str = "", limit: int = 100):
+    """Who-knows-who graph from active_bonds party data (shared bond / shared phone)."""
+    active_bonds = get_collection("active_bonds")
+    lim = max(1, min(int(limit or 100), 300))
+    try:
+        if seed_booking:
+            seed = await active_bonds.find_one({"booking_number": seed_booking}, {"_id": 0})
+            if not seed:
+                return JSONResponse(
+                    {"success": False, "error": "Seed bond not found"},
+                    status_code=404,
+                )
+            phones, names = set(), set()
+            for p in _extract_parties(seed):
+                if p.get("phone"):
+                    phones.add(p["phone"])
+                if p.get("name"):
+                    names.add(p["name"])
+            or_clauses = []
+            for ph in phones:
+                or_clauses.append({"indemnitor_phone": {"$regex": ph}})
+                or_clauses.append({"indemnitor.phone": {"$regex": ph}})
+            for nm in names:
+                token = nm.split(",")[0].strip()[:24]
+                if len(token) >= 3:
+                    or_clauses.append(
+                        {"defendant_name": {"$regex": re.escape(token), "$options": "i"}}
+                    )
+                    or_clauses.append(
+                        {"indemnitor_name": {"$regex": re.escape(token), "$options": "i"}}
+                    )
+            query = {"$or": or_clauses} if or_clauses else {"booking_number": seed_booking}
+            bonds = await active_bonds.find(query, {"_id": 0}).limit(lim).to_list(lim)
+            if not any(b.get("booking_number") == seed_booking for b in bonds):
+                bonds.insert(0, seed)
+        else:
+            bonds = await (
+                active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(lim).to_list(lim)
+            )
+
+        nodes: dict = {}
+        edges: list = []
+        edge_keys: set = set()
+        phone_index: dict = {}
+
+        def node_id(role: str, name: str, phone: str) -> str:
+            if phone:
+                return f"p:{phone}"
+            return f"n:{_norm_name(name)}:{role[0]}"
+
+        def add_node(role: str, name: str, phone: str, booking: str):
+            if not name and not phone:
+                return None
+            nid = node_id(role, name or "UNKNOWN", phone or "")
+            if nid not in nodes:
+                nodes[nid] = {
+                    "id": nid,
+                    "name": name or "(unknown)",
+                    "phone": phone or "",
+                    "roles": set(),
+                    "bookings": set(),
+                }
+            nodes[nid]["roles"].add(role)
+            nodes[nid]["bookings"].add(booking)
+            return nid
+
+        def add_edge(a: str, b: str, kind: str, booking: str):
+            if not a or not b or a == b:
+                return
+            key = "|".join(sorted([a, b])) + f"|{kind}|{booking}"
+            if key in edge_keys:
+                return
+            edge_keys.add(key)
+            edges.append({
+                "source": a, "target": b, "type": kind, "booking_number": booking,
+            })
+
+        for b in bonds:
+            booking = b.get("booking_number") or ""
+            party_ids = []
+            for p in _extract_parties(b):
+                nid = add_node(p["role"], p["name"], p["phone"], booking)
+                if nid:
+                    party_ids.append(nid)
+                    if p["phone"]:
+                        phone_index.setdefault(p["phone"], []).append(nid)
+            for i, a in enumerate(party_ids):
+                for c in party_ids[i + 1:]:
+                    add_edge(a, c, "same_bond", booking)
+
+        for ph, nids in phone_index.items():
+            unique = list(dict.fromkeys(nids))
+            for i, a in enumerate(unique):
+                for c in unique[i + 1:]:
+                    add_edge(a, c, "shared_phone", "")
+
+        out_nodes = [{
+            "id": n["id"],
+            "name": n["name"],
+            "phone": n["phone"],
+            "roles": sorted(n["roles"]),
+            "bond_count": len(n["bookings"]),
+            "bookings": sorted(n["bookings"])[:20],
+        } for n in nodes.values()]
+
+        return {
+            "success": True,
+            "seed_booking": seed_booking or None,
+            "node_count": len(out_nodes),
+            "edge_count": len(edges),
+            "nodes": out_nodes,
+            "edges": edges,
+            "bond_count": len(bonds),
+        }
+    except Exception as e:
+        logger.exception("relationship-graph error: %s", e)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
 @bonds_bp.post("/active-bonds")
@@ -947,12 +1171,25 @@ async def api_active_bond_edit(request: Request, booking_number: str):
         "defendant_name", "county", "facility", "bond_amount", "premium",
         "insurance_company", "poa_number", "case_number", "check_in_required",
         "check_in_frequency_days", "indemnitor_name", "indemnitor_phone",
-        "indemnitor_email", "agent_name", "notes", "court_date",
-        "court_location", "charges",
+        "indemnitor_email", "indemnitor_relationship", "agent_name", "notes",
+        "court_date", "court_location", "charges",
     ]
     updates = {k: data[k] for k in EDITABLE if k in data}
     if not updates:
         return JSONResponse({"success": False, "error": "No editable fields provided"}, status_code=400)
+    # Keep nested indemnitor{} in sync for UI consumers that read bond.indemnitor
+    if any(k.startswith("indemnitor_") for k in updates):
+        existing = await active_bonds.find_one({"booking_number": booking_number}, {"indemnitor": 1})
+        indem = dict((existing or {}).get("indemnitor") or {})
+        if "indemnitor_name" in updates:
+            indem["name"] = updates["indemnitor_name"]
+        if "indemnitor_phone" in updates:
+            indem["phone"] = updates["indemnitor_phone"]
+        if "indemnitor_email" in updates:
+            indem["email"] = updates["indemnitor_email"]
+        if "indemnitor_relationship" in updates:
+            indem["relationship"] = updates["indemnitor_relationship"]
+        updates["indemnitor"] = indem
     updates["updated_at"] = datetime.now(timezone.utc)
     try:
         result = await active_bonds.update_one(

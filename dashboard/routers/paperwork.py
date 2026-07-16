@@ -12,6 +12,7 @@ Generates, delivers, and tracks all bail bond paperwork:
   - Power of Attorney (POA)
 
 Endpoints:
+  GET  /api/paperwork/config                        — Dashboard Paperwork Config tab (TEMPLATE_MAP + DOC_RULES)
   POST /api/paperwork/generate/<intake_id>          — Generate full packet for an intake
   POST /api/paperwork/generate/bond/<intake_id>     — Generate appearance bond PDFs only
   GET  /api/paperwork/<packet_id>                   — Get packet status + download links
@@ -75,6 +76,75 @@ async def _load_intake(intake_id: str) -> Optional[dict]:
 async def _load_packet(packet_id: str) -> Optional[dict]:
     col = get_collection("paperwork_packets")
     return await col.find_one({"packet_id": packet_id}, {"_id": 0})
+
+
+@paperwork_bp.get("/paperwork/config")
+async def paperwork_config():
+    """Return TEMPLATE_MAP + DOC_RULES for the Paperwork Config dashboard tab.
+
+    Shapes data for the frontend:
+      template_map.osi / .palmetto  → { key: { label, template_id, rule } }
+      doc_rules                     → raw DOC_RULES dict
+    """
+    try:
+        from dashboard.services.signnow_packet_service import SignNowPacketService
+
+        svc = SignNowPacketService
+        doc_rules = getattr(svc, "DOC_RULES", {}) or {}
+        tmpl = getattr(svc, "TEMPLATE_MAP", {}) or {}
+
+        osi: dict = {}
+        palmetto: dict = {}
+        for key, template_id in tmpl.items():
+            base_key = key.replace("-palmetto", "")
+            rule_meta = doc_rules.get(base_key, {}) or {}
+            entry = {
+                "label": rule_meta.get("label") or base_key.replace("-", " ").title(),
+                "template_id": template_id or "",
+                "rule": rule_meta.get("rule", "static"),
+                "configured": bool(template_id),
+            }
+            if key.endswith("-palmetto"):
+                palmetto[base_key] = entry
+            else:
+                osi[key] = entry
+                # Shared keys also appear under Palmetto unless overridden
+                if base_key not in palmetto:
+                    palmetto[base_key] = {
+                        **entry,
+                        "label": f"{entry['label']} (shared)",
+                    }
+
+        # Apply explicit Palmetto overrides from TEMPLATE_MAP
+        for key, template_id in tmpl.items():
+            if not key.endswith("-palmetto"):
+                continue
+            base_key = key.replace("-palmetto", "")
+            rule_meta = doc_rules.get(base_key, {}) or {}
+            palmetto[base_key] = {
+                "label": rule_meta.get("label") or base_key.replace("-", " ").title(),
+                "template_id": template_id or "(uses shared)",
+                "rule": rule_meta.get("rule", "static"),
+                "configured": bool(template_id),
+            }
+
+        return {
+            "success": True,
+            "template_map": {"osi": osi, "palmetto": palmetto},
+            "doc_rules": doc_rules,
+            "counts": {
+                "osi": len(osi),
+                "palmetto": len(palmetto),
+                "rules": len(doc_rules),
+                "configured_osi": sum(1 for v in osi.values() if v.get("configured")),
+                "configured_palmetto": sum(
+                    1 for v in palmetto.values() if v.get("configured") and v.get("template_id") not in ("", "(uses shared)")
+                ),
+            },
+        }
+    except Exception as exc:
+        logger.exception("paperwork/config error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 def _build_bond_data(intake: dict) -> dict:

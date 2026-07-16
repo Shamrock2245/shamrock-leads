@@ -364,6 +364,7 @@ function openEditDrawer(bookingNumber) {
   set('abEditIndemName',     bond.indemnitor?.name || bond.indemnitor_name || '');
   set('abEditIndemPhone',    bond.indemnitor?.phone || bond.indemnitor_phone || '');
   set('abEditIndemEmail',    bond.indemnitor?.email || bond.indemnitor_email || '');
+  set('abEditIndemRel',      bond.indemnitor?.relationship || bond.indemnitor_relationship || '');
   set('abEditAgentName',     bond.agent_name);
   set('abEditNotes',         bond.notes);
   set('abEditCIFreq',        bond.check_in_frequency_days || 30);
@@ -386,6 +387,8 @@ function openEditDrawer(bookingNumber) {
   _loadCompliancePanel(bookingNumber);
   // Load renewal history for this bond
   _loadRenewalHistory(bookingNumber);
+  // Load related cases (same defendant / indemnitor)
+  if (window.SLRelationships) SLRelationships.loadRelatedIntoPanel(bond);
 }
 
 function closeEditDrawer() {
@@ -408,6 +411,7 @@ async function saveEditDrawer() {
     court_date: get('abEditCourtDate'), court_location: get('abEditCourtLocation'),
     charges: get('abEditCharges'), indemnitor_name: get('abEditIndemName'),
     indemnitor_phone: get('abEditIndemPhone'), indemnitor_email: get('abEditIndemEmail'),
+    indemnitor_relationship: get('abEditIndemRel'),
     agent_name: get('abEditAgentName'), notes: get('abEditNotes'),
     check_in_required: document.getElementById('abEditCIRequired')?.checked,
     check_in_frequency_days: getNum('abEditCIFreq'),
@@ -479,11 +483,23 @@ function _buildEditDrawer() {
         ${_ef('abEditCourtLocation','text','Court Location','e.g. Lee County Courthouse')}
         ${_ef('abEditAgentName','text','Agent Name','e.g. Brendan')}
       `)}
-      ${_es('Indemnitor', `
+      ${_es('Indemnitor (linked to this case)', `
         ${_ef('abEditIndemName','text','Name','Full name')}
         ${_ef('abEditIndemPhone','tel','Phone','+12395550000')}
         ${_ef('abEditIndemEmail','email','Email','email@example.com')}
+        ${_ef('abEditIndemRel','text','Relationship','e.g. Spouse, Mother, Friend')}
+        <div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#8b5cf6;color:#fff" onclick="SLRelationships&&SLRelationships.findFromEdit('indemnitor')">🔗 All bonds for this indemnitor</button>
+          <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#6366f1;color:#fff" onclick="SLRelationships&&SLRelationships.openGraph(window._abEditBookingNumber)">🕸️ Case relationship map</button>
+        </div>
       `)}
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Related Cases (same people)</div>
+        <div id="abRelatedCasesPanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:12px;min-height:40px;font-size:12px;color:var(--muted)">Open drawer to load related cases…</div>
+        <div style="margin-top:8px">
+          <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px" onclick="SLRelationships&&SLRelationships.findFromEdit('defendant')">🔗 All bonds for this defendant</button>
+        </div>
+      </div>
       ${_es('Check-In', `
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abEditCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
         ${_ef('abEditCIFreq','number','Frequency (days)','30')}

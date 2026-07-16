@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 ShamrockLeads — Multi-State Operations API
 Endpoints:
-  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC)
+  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC/TN/TX/LA)
   GET /api/ops/scraper-registry       — Full registry with state + platform metadata
   GET /api/ops/arrests/multi-state    — Recent arrests across all states with filters
   GET /api/ops/county-heatmap         — Arrest volume by county (all states)
@@ -17,13 +17,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from dashboard.extensions import get_collection
+from dashboard.extensions import (
+    get_collection,
+    index_scraper_status_docs,
+    resolve_scraper_status,
+)
 
 logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
 # Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
-ACTIVE_STATES = ("FL", "GA", "SC", "NC")
+ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER REGISTRY — built from the actual scraper files on disk
@@ -136,24 +140,21 @@ async def get_scraper_registry(state: str = ""):
     if state:
         registry = [r for r in registry if r["state"].upper() == state.upper()]
 
-    # Enrich with last-run data from MongoDB (keyed by bare county; also try scraper_id)
+    # Enrich with last-run data — multi-key index (bare / labeled / scraper_id)
+    # Restored after Manus pass regressed same-name multi-state join (Lee FL ≠ Lee SC).
     scraper_status = get_collection("scraper_status")
-    status_by_county: dict = {}
-    status_by_id: dict = {}
+    status_docs = []
     async for doc in scraper_status.find({}, {"_id": 0}):
-        c = doc.get("county", "")
-        if c:
-            status_by_county[c] = doc
-        sid = doc.get("scraper_id") or doc.get("job_id")
-        if sid:
-            status_by_id[sid] = doc
+        status_docs.append(doc)
+    status_index = index_scraper_status_docs(status_docs)
 
     result = []
     for r in registry:
-        status = (
-            status_by_id.get(r.get("scraper_id", ""))
-            or status_by_county.get(r["county"], {})
-        )
+        status = resolve_scraper_status(
+            status_index, r.get("county", ""), r.get("state")
+        ) or {}
+        if not status and r.get("scraper_id"):
+            status = status_index.get(r["scraper_id"], {}) or {}
         last_run = status.get("last_run_at") or status.get("last_run")
         last_run_iso = last_run.isoformat() if hasattr(last_run, "isoformat") else last_run
         result.append({
