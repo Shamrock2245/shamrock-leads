@@ -288,9 +288,10 @@ class TennesseeTnCISScraperV2(BaseScraper):
 ## Deployment Checklist
 
 - [x] **Warren Hub**: Deployed on Hetzner VPS `178.156.179.237` (ports 7000 nodes / 8000 proxy / 9000 admin)
-- [ ] **Warren Nodes**: Enroll personal devices (home PC, laptop, RPi) — required before `WARREN_ENABLED=true`
-- [ ] **S5W2C**: Install APK on Android phone (optional mobile exits)
-- [x] **Environment Variables**: Documented in `.env.example` / local `.env`
+- [x] **Warren Nodes**: `mac-office` enrolled (launchd) — residential exit verified via hub
+- [ ] **More nodes**: laptop / RPi / iPhone-hotspot Mac / Android Termux (see `docs/GROK_CLI_TRANSITION_PROMPT.md`)
+- [ ] **S5W2C**: Install APK on Android phone (optional dedicated cellular SOCKS5)
+- [x] **Environment Variables**: Documented in `.env.example`; prod `WARREN_ENABLED=true` when nodes online
 - [x] **APE Module**: `scrapers/proxy_engine.py` + `stealth_utils.py` + `BaseScraper` helpers
 - [x] **Example scraper**: `scrapers/counties/tennessee_tncis_v2_ape.py`
 - [x] **Testing**: `PYTHONPATH=. python3 tests/test_ape_integration.py` (29 tests)
