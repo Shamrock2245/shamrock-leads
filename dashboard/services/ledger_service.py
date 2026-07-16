@@ -1,28 +1,22 @@
 """
-ShamrockLeads — Ledger Service
-================================
-Immutable double-entry ledger for bond financial tracking.
-
-Rules:
-  - Entries are NEVER deleted or updated (immutable audit trail)
-  - Dedup key for SwipeSimple imports: stripe_swipe_ref (Transaction ID)
-  - Balances are rounded to 2dp to avoid IEEE-754 floating-point drift
-  - All timestamps stored as timezone-aware UTC datetimes
+ShamrockLeads — Unified Financial Ledger Service
+Handles all ledger entries, SwipeSimple CSV imports, and balance calculations.
+Uses integer cents for internal calculations to prevent floating point inaccuracies.
 """
+
+import logging
 import csv
 import io
-import logging
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List
-
+from typing import List, Dict, Any, Optional
 from dashboard.extensions import get_db
-from dashboard.models.ledger import LedgerEntry
 
 logger = logging.getLogger(__name__)
 
-# Columns we expect from a SwipeSimple CSV export.
-_SS_REQUIRED_COLS = {"Transaction ID", "Amount", "Status", "Date"}
+# Standard date formats for SwipeSimple parsing
 _SS_DATE_FORMATS = [
+    "%m/%d/%Y %I:%M %p",
     "%m/%d/%Y %H:%M",
     "%m/%d/%Y %H:%M:%S",
     "%Y-%m-%d %H:%M:%S",
@@ -30,190 +24,209 @@ _SS_DATE_FORMATS = [
     "%m/%d/%Y",
 ]
 
-
 class LedgerService:
-    """Service to handle immutable ledger entries and calculate balances."""
+    """Service for managing the unified financial ledger."""
 
     @staticmethod
-    async def add_entry(entry_data: Dict[str, Any]) -> str:
-        """Adds a new immutable entry to the ledger."""
-        db = get_db()
-        entry = LedgerEntry(**entry_data)
-        doc = entry.dict()
-        # Ensure timestamp is timezone-aware
-        if isinstance(doc.get("timestamp"), datetime) and doc["timestamp"].tzinfo is None:
-            doc["timestamp"] = doc["timestamp"].replace(tzinfo=timezone.utc)
-        await db.financial_ledger.insert_one(doc)
-        return doc["transaction_id"]
+    def to_cents(amount: float) -> int:
+        """Convert float dollar amount to integer cents."""
+        return int(round(float(amount) * 100))
 
     @staticmethod
-    async def get_balance(booking_number: str) -> float:
-        """Calculates the total outstanding balance for a given booking number.
+    def from_cents(cents: int) -> float:
+        """Convert integer cents back to float dollar amount."""
+        return float(cents) / 100.0
 
-        Uses MongoDB $group aggregation. Rounds to 2 decimal places to
-        eliminate IEEE-754 floating-point drift. Returns 0.0 on any error.
+    @classmethod
+    async def add_entry(cls, data: Dict[str, Any]) -> str:
+        """
+        Add an entry to the financial ledger.
+        Ensures amount is stored as integer cents for precision.
         """
         db = get_db()
-        try:
-            # Check if collection exists
-            collections = await db.list_collection_names()
-            if "financial_ledger" not in collections:
-                return 0.0
+        
+        # Convert amount to cents for storage if not already provided as cents
+        amount_raw = data.get("amount", 0)
+        if isinstance(amount_raw, float) or (isinstance(amount_raw, str) and "." in amount_raw):
+            amount_cents = cls.to_cents(float(amount_raw))
+        else:
+            amount_cents = int(amount_raw)
+        
+        # Ensure timestamp is a datetime object or ISO string
+        ts = data.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                ts = datetime.now(timezone.utc)
+        elif not ts:
+            ts = datetime.now(timezone.utc)
+            
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
 
-            pipeline = [
-                {"$match": {"booking_number": booking_number}},
-                {
-                    "$group": {
-                        "_id": "$booking_number",
-                        # Use $round in mongo 4.2+ to handle IEEE-754 drift at DB level
-                        "total_balance": {"$sum": {"$ifNull": ["$amount", 0.0]}},
-                    }
-                },
-            ]
-            result = await db.financial_ledger.aggregate(pipeline).to_list(1)
-            if result:
-                raw = result[0].get("total_balance", 0.0) or 0.0
-                return round(float(raw), 2)
-            return 0.0
-        except Exception as exc:
-            logger.error("LedgerService.get_balance error for %s: %s", booking_number, exc)
-            return 0.0
+        entry = {
+            "booking_number": data.get("booking_number", "").strip().upper(),
+            "type": data.get("type", "payment"),  # payment, fee, premium, refund
+            "amount": amount_cents,  # Stored as integer cents
+            "category": data.get("category", "premium"),
+            "timestamp": ts,
+            "actor": data.get("actor", "System"),
+            "notes": data.get("notes", ""),
+            "stripe_swipe_ref": data.get("stripe_swipe_ref", ""),
+            "created_at": datetime.now(timezone.utc),
+        }
+        
+        # Deduplicate using stripe_swipe_ref if present
+        if entry["stripe_swipe_ref"]:
+            existing = await db.financial_ledger.find_one({"stripe_swipe_ref": entry["stripe_swipe_ref"]})
+            if existing:
+                logger.info(f"Ledger: Skipping duplicate entry {entry['stripe_swipe_ref']}")
+                return str(existing.get("transaction_id") or existing.get("_id"))
 
-    @staticmethod
-    async def get_ledger_history(booking_number: str) -> List[Dict[str, Any]]:
+        # Generate a transaction ID if not present
+        if "transaction_id" not in entry:
+            import uuid
+            entry["transaction_id"] = f"TXN-{uuid.uuid4().hex[:12].upper()}"
+
+        await db.financial_ledger.insert_one(entry)
+        return entry["transaction_id"]
+
+    @classmethod
+    async def get_balance(cls, booking_number: str) -> float:
+        """Calculate current balance for a booking using integer aggregation."""
+        db = get_db()
+        
+        pipeline = [
+            {"$match": {"booking_number": booking_number.strip().upper()}},
+            {"$group": {"_id": "$booking_number", "balance_cents": {"$sum": "$amount"}}}
+        ]
+        
+        results = await db.financial_ledger.aggregate(pipeline).to_list(1)
+        if not results:
+            return 0.0
+            
+        return cls.from_cents(results[0]["balance_cents"])
+
+    @classmethod
+    async def get_ledger_history(cls, booking_number: str) -> List[Dict[str, Any]]:
         """Retrieves the full ledger history for a booking number, newest first."""
         db = get_db()
-        try:
-            cursor = (
-                db.financial_ledger
-                .find({"booking_number": booking_number}, {"_id": 0})
-                .sort("timestamp", -1)
-            )
-            return await cursor.to_list(None)
-        except Exception as exc:
-            logger.error("LedgerService.get_ledger_history error for %s: %s", booking_number, exc)
-            return []
+        cursor = (
+            db.financial_ledger
+            .find({"booking_number": booking_number.strip().upper()}, {"_id": 0})
+            .sort("timestamp", -1)
+        )
+        history = await cursor.to_list(None)
+        # Convert cents back to dollars for UI consumption
+        for entry in history:
+            entry["amount_dollars"] = cls.from_cents(entry["amount"])
+        return history
 
-    @staticmethod
-    async def import_swipesimple_csv(csv_content: str, actor: str) -> Dict[str, Any]:
-        """Imports payment records from a SwipeSimple CSV string.
-
-        Robust against:
-          - Missing / renamed columns (logs warning, attempts fallback)
-          - Non-approved transactions (skipped, not errored)
-          - Duplicate Transaction IDs (idempotent)
-          - Unparseable amounts or dates (logged per-row, processing continues)
-          - Empty booking reference (tries 'Notes'/'Description' field as fallback)
+    @classmethod
+    async def import_swipesimple_csv(cls, csv_text: str, actor: str = "CSV Import") -> Dict[str, Any]:
         """
-        db = get_db()
-        reader = csv.DictReader(io.StringIO(csv_content))
-
-        # Validate column presence up-front
-        if reader.fieldnames:
-            missing = _SS_REQUIRED_COLS - set(reader.fieldnames)
-            if missing:
-                logger.warning(
-                    "SwipeSimple CSV is missing expected columns: %s — "
-                    "import will attempt best-effort parsing.",
-                    missing,
-                )
-                # If it's completely unparseable (e.g. all required cols missing), abort early
-                if len(missing) == len(_SS_REQUIRED_COLS):
-                    return {"imported": 0, "errors": ["CSV format unrecognised: all required columns missing."]}
-        else:
-            return {"imported": 0, "errors": ["CSV appears empty or has no header row."]}
-
-        success_count = 0
-        errors: List[str] = []
-
-        for row_num, row in enumerate(reader, start=2):  # Header is line 1
+        Robustly parse SwipeSimple CSV and import into ledger.
+        Handles various column name variations and ensures idempotency.
+        """
+        imported = 0
+        skipped = 0
+        errors = []
+        
+        # Strip preamble if present (find true header row)
+        lines = csv_text.splitlines()
+        header_idx = 0
+        for idx, line in enumerate(lines):
+            line_lower = line.lower()
+            if "amount" in line_lower or "transaction id" in line_lower or "total" in line_lower:
+                header_idx = idx
+                break
+        
+        clean_csv = "\n".join(lines[header_idx:])
+        reader = csv.DictReader(io.StringIO(clean_csv))
+        
+        for i, row in enumerate(reader):
+            row_num = i + header_idx + 2
             try:
-                transaction_id = (row.get("Transaction ID") or "").strip()
-                if not transaction_id:
-                    errors.append(f"Row {row_num}: Missing Transaction ID — skipped.")
-                    continue
-
-                # ── Amount ────────────────────────────────────────────────
-                raw_amount = (row.get("Amount") or "0").replace("$", "").replace(",", "").strip()
+                # Normalize keys (strip whitespace, handle case for flexible matching)
+                row_clean = {str(k).strip().lower(): v for k, v in row.items() if k}
+                
+                # Flexible column matching for Amount
+                amount_str = row_clean.get("amount") or row_clean.get("total") or row_clean.get("net amount") or "0"
+                amount_str = re.sub(r"[$,\s]", "", str(amount_str))
                 try:
-                    amount = float(raw_amount) if raw_amount else 0.0
+                    amount = float(amount_str)
                 except ValueError:
-                    errors.append(
-                        f"Row {row_num}: Unparseable amount '{raw_amount}' — skipped."
-                    )
+                    errors.append(f"Row {row_num}: Invalid amount '{amount_str}'")
+                    continue
+                
+                if amount <= 0:
+                    skipped += 1
+                    continue
+                
+                # Flexible column matching for Transaction ID
+                txn_id = str(row_clean.get("transaction id") or row_clean.get("id") or row_clean.get("transaction #") or "").strip()
+                if not txn_id:
+                    errors.append(f"Row {row_num}: Missing Transaction ID")
                     continue
 
-                # ── Status ────────────────────────────────────────────────
-                status = (row.get("Status") or "").strip().lower()
-                if status not in ("approved", "completed", "success"):
-                    errors.append(
-                        f"Row {row_num}: Skipping transaction {transaction_id} "
-                        f"with status '{status}'."
-                    )
+                # Status check
+                status = str(row_clean.get("status") or row_clean.get("result") or "completed").strip().lower()
+                if status not in ("approved", "completed", "settled", "success", "captured"):
+                    skipped += 1
                     continue
-
-                # ── Booking number ────────────────────────────────────────
-                booking_number = (row.get("Reference") or "").strip()
-                if not booking_number:
-                    notes = row.get("Notes") or row.get("Description") or ""
-                    lower_notes = notes.lower()
-                    for prefix in ("booking:", "booking #", "bk:"):
-                        if prefix in lower_notes:
-                            after = lower_notes.split(prefix, 1)[1]
-                            booking_number = after.split()[0].strip().upper()
+                
+                # Date parsing
+                date_str = str(row_clean.get("date") or row_clean.get("created") or "").strip()
+                time_str = str(row_clean.get("time") or "").strip()
+                full_date_str = f"{date_str} {time_str}".strip()
+                
+                timestamp = datetime.now(timezone.utc)
+                if date_str:
+                    for fmt in _SS_DATE_FORMATS:
+                        try:
+                            timestamp = datetime.strptime(full_date_str if " " in full_date_str else date_str, fmt)
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
                             break
+                        except ValueError:
+                            continue
+
+                # Booking Number / Reference
+                booking_number = str(row_clean.get("reference") or row_clean.get("booking #") or "").strip().upper()
                 if not booking_number:
-                    errors.append(
-                        f"Row {row_num}: Could not determine booking number "
-                        f"for transaction {transaction_id} — skipped."
-                    )
-                    continue
+                    # Fallback: check notes/description for keywords
+                    notes_text = str(row_clean.get("description") or row_clean.get("notes") or row_clean.get("memo") or "").lower()
+                    for prefix in ("booking:", "booking #", "bk:", "ref:"):
+                        if prefix in notes_text:
+                            after = notes_text.split(prefix, 1)[1].strip()
+                            booking_number = after.split()[0].upper()
+                            break
 
-                # ── Duplicate check ───────────────────────────────────────
-                existing = await db.financial_ledger.find_one(
-                    {"stripe_swipe_ref": transaction_id}
-                )
-                if existing:
-                    errors.append(
-                        f"Row {row_num}: Transaction {transaction_id} already imported — skipped."
-                    )
-                    continue
+                # Customer Info for notes
+                cust = str(row_clean.get("customer name") or row_clean.get("name") or "").strip()
+                desc = str(row_clean.get("description") or row_clean.get("memo") or "").strip()
+                notes = f"SwipeSimple Import | Customer: {cust} | {desc}".strip(" | ")
 
-                # ── Timestamp ─────────────────────────────────────────────
-                date_str = (row.get("Date") or "").strip()
-                timestamp: datetime = datetime.now(timezone.utc)
-                for fmt in _SS_DATE_FORMATS:
-                    try:
-                        parsed = datetime.strptime(date_str, fmt)
-                        timestamp = parsed.replace(tzinfo=timezone.utc)
-                        break
-                    except ValueError:
-                        continue
-                else:
-                    if date_str:
-                        logger.warning(
-                            "Row %d: Could not parse date '%s' — using now().",
-                            row_num,
-                            date_str,
-                        )
-
-                customer = (row.get("Customer Name") or "").strip()
-
-                entry_data = {
+                # Add to ledger (payments reduce balance, so amount is negative)
+                await cls.add_entry({
                     "booking_number": booking_number,
                     "type": "payment",
-                    "amount": -round(amount, 2),  # Payments reduce the balance
+                    "amount": -amount,
                     "category": "premium",
                     "timestamp": timestamp,
                     "actor": actor,
-                    "stripe_swipe_ref": transaction_id,
-                    "notes": f"SwipeSimple Import. Customer: {customer}",
-                }
-                await LedgerService.add_entry(entry_data)
-                success_count += 1
-
-            except Exception as exc:
-                errors.append(f"Row {row_num}: Unexpected error — {exc}")
-                logger.exception("SwipeSimple import error at row %d", row_num)
-
-        return {"imported": success_count, "errors": errors}
+                    "stripe_swipe_ref": txn_id,
+                    "notes": notes
+                })
+                imported += 1
+                
+            except Exception as e:
+                errors.append(f"Row {row_num}: {str(e)}")
+                logger.exception("Error importing SwipeSimple row %d", row_num)
+                
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "errors": len(errors),
+            "error_details": errors[:10]
+        }

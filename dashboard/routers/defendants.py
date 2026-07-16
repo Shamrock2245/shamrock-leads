@@ -1,7 +1,7 @@
 from __future__ import annotations
 """Defendants Router — FastAPI port of api/defendants.py (9 endpoints)"""
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.deps import get_collection, get_db
@@ -16,6 +16,22 @@ router = APIRouter(prefix="/api", tags=["defendants"])
 
 def _get_svc() -> DefendantNormalizationService:
     return DefendantNormalizationService(get_db())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PII-Safe Logging Helper
+# ═══════════════════════════════════════════════════════════════════════════════
+def log_safe_error(message: str, data: dict, exc: Exception):
+    """
+    Logs an error without leaking PII (Name, DOB, Address).
+    Only logs UUIDs, Booking Numbers, and Counties.
+    """
+    safe_data = {
+        "defendant_id": data.get("defendant_id"),
+        "booking_number": data.get("booking_number"),
+        "county": data.get("county")
+    }
+    logger.error(f"{message} | Context: {safe_data} | Error: {type(exc).__name__}: {str(exc)}")
 
 
 @router.get("/defendants")
@@ -162,7 +178,6 @@ async def get_defendant_timeline(
     PII note: defendant_id is a UUID — safe to log.
     """
     from dashboard.routers.lifecycle_timeline import get_lifecycle
-    from datetime import timezone
 
     svc = _get_svc()
     arrests = await svc.get_defendant_arrests(defendant_id)
@@ -186,7 +201,9 @@ async def get_defendant_timeline(
         if not ts:
             return datetime.min.replace(tzinfo=timezone.utc)
         try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if isinstance(ts, datetime):
+                return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         except Exception:
             return datetime.min.replace(tzinfo=timezone.utc)
 
@@ -347,7 +364,6 @@ async def update_defendant_custom_fields(defendant_id: str, request: Request):
             return JSONResponse({"error": "custom_fields must be a dictionary"}, 400)
 
         defendants_col = get_collection("defendants")
-        from datetime import datetime, timezone
         result = await defendants_col.update_one(
             {"defendant_id": defendant_id},
             {"$set": {

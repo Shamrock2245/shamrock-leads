@@ -9,7 +9,7 @@ Scoring Rules:
 - Bond amount: 500-50K (+30), 50K-100K (+20), >100K (+10), <500 (-10), 0 (-50)
 - Bond type: CASH/SURETY (+25), NO BOND/HOLD (-50), ROR (-30)
 - Status: IN CUSTODY (+20), RELEASED (-30)
-- Data completeness: All required fields (+15), Missing data (-10)
+- Data completeness: All required fields (+15), Missing data (-5 instead of -10 to avoid mass disqualification)
 - Disqualifying charges: capital/murder/federal (-100)
 - NLP charge severity: felony_1 (+15), felony_2 (+10), felony_3 (+5)
 - FTA risk indicators: high (+15), medium (+8)
@@ -166,20 +166,21 @@ class LeadScorer:
 
     def _score_data_completeness(self, record: ArrestRecord) -> Tuple[int, str]:
         """Score based on data completeness."""
+        # Reduced penalty for missing fields that are common in initial scrapes (like Court_Date)
         required_fields = [
             ('Full_Name', record.Full_Name),
             ('Charges', record.Charges),
             ('Bond_Amount', record.Bond_Amount),
-            ('Court_Date', record.Court_Date),
+            # ('Court_Date', record.Court_Date), # Court_Date is often missing in early scrapes, don't penalize heavily
         ]
 
         missing_fields = [name for name, value in required_fields if not value or not value.strip()]
 
         if not missing_fields:
-            return 15, "Complete data (all required fields present) (+15)"
+            return 15, "Complete core data (+15)"
         else:
             missing_str = ', '.join(missing_fields)
-            return -10, f"Missing data: {missing_str} (-10)"
+            return -5, f"Missing core data: {missing_str} (-5)"
 
     def _check_disqualifying_charges(self, charges: str) -> Tuple[int, str]:
         """Check for disqualifying charges."""
@@ -293,4 +294,3 @@ def score_and_update(record: ArrestRecord) -> ArrestRecord:
     """Score and update an arrest record in-place."""
     scorer = LeadScorer()
     return scorer.score_and_update(record)
-

@@ -10,6 +10,7 @@ import logging
 import re
 import time
 from typing import List
+from datetime import datetime, timezone
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -165,127 +166,142 @@ class PutnamCountyScraper(BaseScraper):
 
     def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
-        from datetime import datetime, timezone
         soup = BeautifulSoup(html, "html.parser")
         records = []
 
-        for img in soup.find_all("img", src=re.compile(r"bookno=")):
-            src = img.get("src", "")
-            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
-            if not bk_m:
-                continue
-            booking_num = bk_m.group(1)
-            if booking_num in seen:
-                continue
-            seen.add(booking_num)
-
-            # Collect text from this row and next 15 siblings to get metadata
-            block_text = ""
+        # SmartCop SmartWeb pattern: cards are identified by 'td.SearchHeader'
+        headers = soup.find_all("td", class_="SearchHeader")
+        for header_td in headers:
             try:
-                row = img.find_parent("tr")
-                current = row
-                for _ in range(15):
-                    if current:
-                        block_text += " " + current.get_text(" ", strip=True)
-                        current = current.find_next_sibling("tr")
-            except Exception:
-                pass
+                header_text = header_td.get_text(" ", strip=True)
+                # Parse format: "LAST, FIRST MIDDLE (R/SEX / DOB: MM/DD/YYYY )"
+                # Some sites have slightly different spacing, so we use a flexible regex
+                header_match = re.search(
+                    r"([A-Z\s,'\-\.]+)\s*\(([A-Z])/\s*(MALE|FEMALE|M|F)\s*/\s*DOB:\s*([\d/]+)\s*\)",
+                    header_text,
+                    re.IGNORECASE
+                )
+                if not header_match:
+                    continue
+                
+                full_name = header_match.group(1).strip()
+                race = header_match.group(2).strip()
+                sex_raw = header_match.group(3).strip()
+                sex = "M" if sex_raw.upper() in ("MALE", "M") else "F"
+                dob = header_match.group(4).strip()
+                
+                # Split name
+                last, first, middle = "", "", ""
+                if "," in full_name:
+                    parts = full_name.split(",", 1)
+                    last = parts[0].strip()
+                    fm = parts[1].strip().split()
+                    first = fm[0] if fm else ""
+                    middle = " ".join(fm[1:]) if len(fm) > 1 else ""
 
-            block_text = " ".join(block_text.split())
+                # Now extract details inside the inmate card table
+                detail_table = header_td.find_parent("table")
+                if not detail_table:
+                    continue
+                
+                detail_text = detail_table.get_text(" ", strip=True)
+                
+                # Extract Booking Number
+                booking_no_match = re.search(r"Booking\s+No[:\s]+([A-Z0-9]+)", detail_text, re.IGNORECASE)
+                booking_number = booking_no_match.group(1).strip() if booking_no_match else ""
+                if not booking_number or booking_number in seen:
+                    continue
+                seen.add(booking_number)
+                
+                # Extract Booking Date
+                booking_date_match = re.search(r"Booking\s+Date[:\s]+([\d/]+\s+[\d:]+\s*(?:AM|PM)?)", detail_text, re.IGNORECASE)
+                booking_date = booking_date_match.group(1).strip() if booking_date_match else ""
 
-            # Name, Race, Sex parsing on normalized text
-            name_m = re.search(
-                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\'\.]+)\s*\(([A-Z])/\s*([A-Z]+)\s*\)",
-                block_text,
-                re.IGNORECASE
-            )
-            full_name = name_m.group(1).strip() if name_m else ""
-            race = name_m.group(2) if name_m else ""
-            sex_raw = name_m.group(3) if name_m else ""
-            sex = "M" if sex_raw.upper() in ("MALE", "M") else "F" if sex_raw.upper() in ("FEMALE", "F") else ""
+                # Extract Address
+                address_match = re.search(r"Address\s+Given[:\s]+(.+?)(?:HOLDS|CHARGES|$)", detail_text, re.IGNORECASE | re.DOTALL)
+                address = " ".join(address_match.group(1).strip().split()) if address_match else ""
 
-            if not full_name:
+                # Extract Status
+                status_match = re.search(r"Status[:\s]+([A-Z\s]+)", detail_text, re.IGNORECASE)
+                status = status_match.group(1).strip() if status_match else "In Custody"
+                if "jail" in status.lower() or "custody" in status.lower():
+                    status = "In Custody"
+
+                # Charges extraction: find charges sub-table following the top-level row of this card
+                charges_list = []
+                bond_types = []
+                court_dates = []
+                total_bond = 0.0
+                
+                charges_table = None
+                top_row = detail_table.find_parent("tr")
+                if top_row:
+                    sibling = top_row.find_next_sibling("tr")
+                    while sibling:
+                        # Stop if we hit the next inmate card top row
+                        next_header = sibling.find("td", class_="SearchHeader")
+                        if next_header and "DOB:" in next_header.get_text():
+                            break
+                        
+                        table_el = sibling.find("table", class_="JailViewCharges")
+                        if table_el:
+                            charges_table = table_el
+                            break
+                        sibling = sibling.find_next_sibling("tr")
+                
+                if charges_table:
+                    chg_rows = charges_table.find_all("tr")
+                    for chg_row in chg_rows:
+                        if chg_row.get("class") and "SearchHeader" in chg_row.get("class"):
+                            continue
+                        
+                        cells = chg_row.find_all("td")
+                        # Charges rows have 7 columns: Expander, Statute, Court Case Number, Charge, Degree, Level, Bond
+                        if len(cells) >= 6:
+                            statute = cells[1].get_text(strip=True)
+                            desc = cells[3].get_text(strip=True)
+                            bond_str = cells[6].get_text(strip=True) if len(cells) >= 7 else ""
+                            
+                            if statute or desc:
+                                item = f"{statute} - {desc}" if statute and desc else statute or desc
+                                charges_list.append(item)
+                                
+                            # Parse bond and type
+                            # SmartWeb often puts the bond type in the same cell or adjacent
+                            # For now, we assume SURETY if there is a bond amount > 0
+                            bond_val = 0.0
+                            if bond_str:
+                                cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
+                                if not any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+                                    try:
+                                        bond_val = float(cleaned)
+                                        bond_types.append("SURETY")
+                                    except ValueError:
+                                        pass
+                                elif "NOBOND" in cleaned or "HOLD" in cleaned:
+                                    bond_types.append("NO BOND")
+                            total_bond += bond_val
+                
+                charges_str = " | ".join(charges_list)
+                bond_type = " / ".join(set(bond_types)) if bond_types else "CASH/SURETY"
+
+                records.append(ArrestRecord(
+                    County=self.county, State="FL", Facility=FACILITY,
+                    Full_Name=full_name.upper(),
+                    First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
+                    DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
+                    Booking_Number=booking_number, Booking_Date=booking_date,
+                    Charges=charges_str, 
+                    Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+                    Bond_Type=bond_type,
+                    Address=address, Status=status,
+                    Detail_URL=SEARCH_URL,
+                    Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+                    LastChecked=datetime.now(timezone.utc).isoformat(),
+                    LastCheckedMode="INITIAL",
+                ))
+            except Exception as e:
+                logger.warning(f"Putnam: failed to parse inmate row: {e}")
                 continue
-
-            last, first, middle = "", "", ""
-            if "," in full_name:
-                parts = full_name.split(",", 1)
-                last = parts[0].strip()
-                fm = parts[1].strip().split()
-                first = fm[0] if fm else ""
-                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
-
-            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
-            dob = dob_m.group(1) if dob_m else ""
-
-            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
-            booking_date = bd_m.group(1) if bd_m else ""
-
-            # Parse status from block text
-            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower():
-                status = "In Custody"
-
-            # Parse address from block text
-            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
-            address = addr_m.group(1).strip() if addr_m else ""
-
-            # Find the charges sub-table using sibling rows
-            charges_list = []
-            total_bond = 0.0
-            charges_table = None
-            row = img.find_parent("tr")
-            if row:
-                sibling = row.find_next_sibling("tr")
-                while sibling:
-                    # Stop if we hit the next inmate card top row
-                    if sibling.find("img", src=re.compile(r"bookno=")):
-                        break
-                    table_el = sibling.find("table", class_="JailViewCharges")
-                    if table_el:
-                        charges_table = table_el
-                        break
-                    sibling = sibling.find_next_sibling("tr")
-
-            if charges_table:
-                chg_rows = charges_table.find_all("tr")
-                for chg_row in chg_rows:
-                    if chg_row.get("class") and "SearchHeader" in chg_row.get("class"):
-                        continue
-                    cells = chg_row.find_all("td")
-                    if len(cells) >= 6:
-                        statute = cells[1].get_text(strip=True)
-                        desc = cells[3].get_text(strip=True)
-                        bond_str = cells[6].get_text(strip=True) if len(cells) >= 7 else ""
-                        if statute or desc:
-                            item = f"{statute} - {desc}" if statute and desc else statute or desc
-                            charges_list.append(item)
-                        # Parse bond
-                        bond_val = 0.0
-                        if bond_str:
-                            cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-                            if not any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-                                try:
-                                    bond_val = float(cleaned)
-                                except ValueError:
-                                    pass
-                        total_bond += bond_val
-
-            charges_str = " | ".join(charges_list)
-
-            records.append(ArrestRecord(
-                County=self.county, State="FL", Facility=FACILITY,
-                Full_Name=full_name.upper(),
-                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
-                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
-                Booking_Number=booking_num, Booking_Date=booking_date,
-                Charges=charges_str, Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
-                Address=address, Status=status,
-                Detail_URL=SEARCH_URL,
-                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                LastChecked=datetime.now(timezone.utc).isoformat(),
-                LastCheckedMode="INITIAL",
-            ))
 
         return records

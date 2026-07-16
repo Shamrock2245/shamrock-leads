@@ -1,12 +1,13 @@
 """
 ShamrockLeads — Background Automation Engine (cron.py)
 Replaces Node-RED cron scheduler.
+Optimized for high-concurrency with bulk MongoDB operations.
 """
 
 import sys
 import logging
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # Add root to sys.path
@@ -18,6 +19,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from config.settings import settings
 import httpx
+from dashboard.extensions import get_collection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
 logger = logging.getLogger("shamrock-cron")
@@ -35,6 +37,52 @@ async def hit_internal_endpoint(method: str, path: str, json_data: dict = None):
             return res.json()
     except Exception as e:
         logger.error(f"Failed to trigger {method} {path}: {e}")
+
+async def run_bulk_maintenance():
+    """
+    Perform system-wide maintenance using bulk MongoDB operations.
+    - Mark overdue tasks
+    - Purge old logs
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        
+        # 1. Bulk Mark Overdue Tasks
+        tasks_col = get_collection("tasks")
+        result = await tasks_col.update_many(
+            {
+                "status": {"$in": ["pending", "active"]},
+                "due_date": {"$lt": now_iso}
+            },
+            {
+                "$set": {
+                    "status": "overdue",
+                    "updated_at": now_iso
+                },
+                "$push": {
+                    "history": {
+                        "action": "status_change",
+                        "from": "auto-cron",
+                        "to": "overdue",
+                        "timestamp": now_iso,
+                        "notes": "Automatically marked overdue by system maintenance"
+                    }
+                }
+            }
+        )
+        if result.modified_count > 0:
+            logger.info(f"Maintenance: Marked {result.modified_count} tasks as overdue.")
+
+        # 2. Bulk Purge Old Logs (older than 30 days)
+        logs_col = get_collection("app_logs")
+        cutoff = (now - timedelta(days=30)).isoformat()
+        res_logs = await logs_col.delete_many({"timestamp": {"$lt": cutoff}})
+        if res_logs.deleted_count > 0:
+            logger.info(f"Maintenance: Purged {res_logs.deleted_count} old log entries.")
+
+    except Exception as e:
+        logger.error(f"Maintenance: Bulk maintenance cycle failed: {e}")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Daily Jobs (CronTrigger)
@@ -82,6 +130,15 @@ def register_daily_jobs():
         trigger=CronTrigger(hour=18, minute=0, timezone="America/New_York"),
         id="daily_revenue_snapshot",
         name="Revenue Snapshot",
+        replace_existing=True
+    )
+
+    # 2:00 AM ET - Bulk Maintenance
+    scheduler.add_job(
+        run_bulk_maintenance,
+        trigger=CronTrigger(hour=2, minute=0, timezone="America/New_York"),
+        id="daily_maintenance",
+        name="Bulk System Maintenance",
         replace_existing=True
     )
 
