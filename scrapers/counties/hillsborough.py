@@ -38,7 +38,6 @@ BASE_URL = "https://webapps.hcso.tampa.fl.us/arrestinquiry"
 LOGIN_URL = f"{BASE_URL}/Account/Login"
 SEARCH_URL = f"{BASE_URL}/"
 RECAPTCHA_SITEKEY = "6LcK1HopAAAAAEZgVeXqiN2_4zp6cQwRRXfc3uKJ"
-SOCKS_PROXY = "socks5://172.18.0.1:1080"
 DAYS_BACK = 90
 MAX_PAGES = 20
 COOKIE_FILE = "/tmp/hcso_cookies.json"
@@ -66,21 +65,34 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.warning("HCSO_EMAIL / HCSO_PASSWORD not set")
             return []
 
+        proxy_url = None
+        proxy_source = "none"
+        client = None
         try:
-            # Create HTTP client with SOCKS5 proxy
-            client = httpx.Client(
-                headers=HEADERS,
-                follow_redirects=True,
-                timeout=30.0,
-                proxy=SOCKS_PROXY,
-                verify=True,
-            )
+            from scrapers.socks_proxy import resolve_residential_proxy
+
+            # APE/Warren → office SOCKS → direct residential (when host is home ISP)
+            proxy_url, proxy_source = resolve_residential_proxy(self)
+            logger.info("[Hillsborough] proxy source=%s", proxy_source)
+
+            client_kwargs = {
+                "headers": HEADERS,
+                "follow_redirects": True,
+                "timeout": 30.0,
+                "verify": True,
+            }
+            if proxy_url:
+                client_kwargs["proxy"] = proxy_url
+            client = httpx.Client(**client_kwargs)
+            t0 = time.time()
 
             # Step 1: Try cookie login
             if not self._try_cookie_login(client):
                 # Step 2: Fresh login
                 if not self._login(client, hcso_email, hcso_password):
                     logger.error("[Hillsborough] Login failed")
+                    if proxy_source == "ape":
+                        self.record_proxy_failure(proxy_url)
                     return []
                 self._save_cookies(client)
 
@@ -127,17 +139,28 @@ class HillsboroughCountyScraper(BaseScraper):
                 current_html = next_html
                 page_num += 1
 
-            logger.info(f"Hillsborough: {len(all_records)} unique records total")
+            logger.info(
+                f"Hillsborough: {len(all_records)} unique records total "
+                f"(proxy={proxy_source})"
+            )
+            if all_records and proxy_source == "ape":
+                self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
             return all_records
 
         except Exception as e:
             logger.error(f"Hillsborough fatal: {e}")
-            raise
-        finally:
             try:
-                client.close()
+                if proxy_source == "ape":
+                    self.record_proxy_failure(proxy_url)
             except Exception:
                 pass
+            raise
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     # ── Login ──────────────────────────────────────────────────────────
     def _login(self, client: httpx.Client, email: str, password: str) -> bool:

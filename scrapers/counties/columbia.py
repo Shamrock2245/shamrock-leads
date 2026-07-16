@@ -87,13 +87,8 @@ class ColumbiaCountyScraper(BaseScraper):
             raise
 
         soup2 = BeautifulSoup(resp2.text, "html.parser")
-        initial_records = self._parse_page(soup2)
-        
-        for r in initial_records:
-            if r.Booking_Number not in seen_bookings:
-                seen_bookings.add(r.Booking_Number)
-                all_records.append(r)
-                
+        initial_records = self._parse_page(soup2, seen_bookings)
+        all_records.extend(initial_records)
         logger.info(f"Columbia: Initial search returned {len(initial_records)} records.")
 
         # Step 3: Loop calling Jail.aspx/AddMoreResults to get subsequent records
@@ -142,16 +137,12 @@ class ColumbiaCountyScraper(BaseScraper):
                     break
                     
                 soup_more = BeautifulSoup(html_snippet, "html.parser")
-                more_records = self._parse_page(soup_more)
-                
-                new_count = 0
-                for r in more_records:
-                    if r.Booking_Number not in seen_bookings:
-                        seen_bookings.add(r.Booking_Number)
-                        all_records.append(r)
-                        new_count += 1
-                        
-                logger.info(f"Columbia: Page {page_idx+1} loaded {len(more_records)} records ({new_count} new).")
+                more_records = self._parse_page(soup_more, seen_bookings)
+                all_records.extend(more_records)
+                logger.info(
+                    f"Columbia: Page {page_idx+1} loaded {len(more_records)} new records "
+                    f"(total {len(all_records)})."
+                )
                 records_loaded += results_returned
                 
                 # Check if we hit the end
@@ -170,140 +161,19 @@ class ColumbiaCountyScraper(BaseScraper):
         logger.info(f"Columbia County Scrape Complete: {len(all_records)} total records")
         return all_records
 
-    def _parse_page(self, soup) -> List[ArrestRecord]:
-        records = []
-        
-        # Uniquely locate each inmate card header cell
-        headers = soup.find_all("td", class_="SearchHeader")
-        for header_td in headers:
-            try:
-                header_text = header_td.get_text(" ", strip=True)
-                # Parse format: "LAST, FIRST MIDDLE (R/SEX / DOB: MM/DD/YYYY )"
-                header_match = re.search(
-                    r"([A-Z\s,'\-\.]+)\s*\(([A-Z])/\s*(MALE|FEMALE|M|F)\s*/\s*DOB:\s*([\d/]+)\s*\)",
-                    header_text,
-                    re.IGNORECASE
-                )
-                if not header_match:
-                    continue
-                
-                full_name = header_match.group(1).strip()
-                race = header_match.group(2).strip()
-                sex_raw = header_match.group(3).strip()
-                sex = "M" if sex_raw.upper() in ("MALE", "M") else "F"
-                dob = header_match.group(4).strip()
-                
-                first_name, middle_name, last_name = self._parse_name(full_name)
+    def _parse_page(self, soup, seen: set = None) -> List[ArrestRecord]:
+        """Delegate to shared SmartWeb card parser (ENLARGE PHOTO safe)."""
+        from scrapers.smartweb_card_parser import parse_smartweb_cards
 
-                # Now extract details inside the inmate card table
-                detail_table = header_td.find_parent("table")
-                if not detail_table:
-                    continue
-                
-                detail_text = detail_table.get_text(" ", strip=True)
-                
-                booking_no_match = re.search(r"Booking\s+No[:\s]+([A-Z0-9]+)", detail_text, re.IGNORECASE)
-                booking_number = booking_no_match.group(1).strip() if booking_no_match else ""
-                if not booking_number:
-                    continue
-                
-                booking_date_match = re.search(r"Booking\s+Date[:\s]+([\d/]+\s+[\d:]+\s*(?:AM|PM)?)", detail_text, re.IGNORECASE)
-                booking_date = booking_date_match.group(1).strip() if booking_date_match else ""
-
-                address_match = re.search(r"Address\s+Given[:\s]+(.+?)(?:HOLDS|CHARGES|$)", detail_text, re.IGNORECASE | re.DOTALL)
-                address = " ".join(address_match.group(1).strip().split()) if address_match else ""
-
-                # Charges extraction: find charges sub-table following the top-level row of this card
-                charges_list = []
-                total_bond = 0.0
-                
-                charges_table = None
-                top_row = detail_table.find_parent("tr")
-                if top_row:
-                    sibling = top_row.find_next_sibling("tr")
-                    while sibling:
-                        # Stop if we hit the next inmate card top row
-                        next_header = sibling.find("td", class_="SearchHeader")
-                        if next_header and "DOB:" in next_header.get_text():
-                            break
-                        
-                        table_el = sibling.find("table", class_="JailViewCharges")
-                        if table_el:
-                            charges_table = table_el
-                            break
-                        sibling = sibling.find_next_sibling("tr")
-                
-                if charges_table:
-                    chg_rows = charges_table.find_all("tr")
-                    for chg_row in chg_rows:
-                        if chg_row.get("class") and "SearchHeader" in chg_row.get("class"):
-                            continue
-                        
-                        cells = chg_row.find_all("td")
-                        # Charges rows have 7 columns: Expander, Statute, Court Case Number, Charge, Degree, Level, Bond
-                        if len(cells) >= 6:
-                            statute = cells[1].get_text(strip=True)
-                            desc = cells[3].get_text(strip=True)
-                            bond_str = cells[6].get_text(strip=True) if len(cells) >= 7 else ""
-                            
-                            if statute or desc:
-                                item = f"{statute} - {desc}" if statute and desc else statute or desc
-                                charges_list.append(item)
-                                
-                            # Parse bond
-                            bond_val = self._parse_bond_val(bond_str)
-                            total_bond += bond_val
-                
-                charges_str = " | ".join(charges_list)
-
-                records.append(ArrestRecord(
-                    County=self.county,
-                    Booking_Number=booking_number,
-                    Full_Name=full_name,
-                    First_Name=first_name,
-                    Middle_Name=middle_name,
-                    Last_Name=last_name,
-                    DOB=dob,
-                    Booking_Date=booking_date,
-                    Charges=charges_str,
-                    Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
-                    Status="In Custody",
-                    Detail_URL=SEARCH_URL,
-                    Facility=FACILITY,
-                    Race=race,
-                    Sex=sex,
-                    Address=address,
-                    LastCheckedMode="INITIAL"
-                ))
-            except Exception as re_err:
-                logger.warning(f"Columbia: failed to parse inmate row: {re_err}")
-                continue
-                
-        return records
-
-    @staticmethod
-    def _parse_name(name_str: str):
-        if not name_str:
-            return "", "", ""
-        name_str = " ".join(name_str.strip().split())
-        if "," in name_str:
-            parts = name_str.split(",", 1)
-            last = parts[0].strip()
-            fm = parts[1].strip().split()
-            first = fm[0] if fm else ""
-            middle = " ".join(fm[1:]) if len(fm) > 1 else ""
-            return first, middle, last
-        parts = name_str.split()
-        return parts[0], "", parts[-1] if len(parts) >= 2 else ""
-
-    @staticmethod
-    def _parse_bond_val(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+        if seen is None:
+            seen = set()
+        html = str(soup)
+        return parse_smartweb_cards(
+            html,
+            county=self.county,
+            facility=FACILITY,
+            detail_url=SEARCH_URL,
+            seen=seen,
+            state="FL",
+            log_prefix="Columbia",
+        )

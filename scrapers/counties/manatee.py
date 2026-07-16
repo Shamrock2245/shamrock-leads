@@ -1,20 +1,20 @@
 """
-Manatee County Arrest Scraper — Revize CMS Roster Table via SOCKS Proxy
+Manatee County Arrest Scraper — Revize CMS Roster via residential proxy
 ========================================================================
 Source: Manatee County Sheriff's Office
 URL: https://manatee-sheriff.revize.com/bookings
-Method: Playwright + SOCKS5 proxy (office iMac residential IP)
+Method: Patchright/Playwright + APE residential (Warren) with office SOCKS fallback
 
 Extracts data directly from the roster table — detail pages are blocked
-by Cloudflare. The roster table contains: Booking #, Last Name, First Name,
-Middle, Charge, Arrest Date, Released Date for all current inmates.
+by Cloudflare. Requires true US residential egress (see scrapers/cf_browser.py).
 
 HISTORY:
 - v1–v3: Various CF bypass attempts (DrissionPage, Obscura, JailTracker)
-- v4 (current): Roster table extraction via SOCKS proxy. Fast, reliable, no detail pages.
+- v4: Roster table extraction via office SOCKS tunnel
+- v5: APE-first residential proxy + SOCKS fallback
+- v6 (current): Exit-IP preflight + Patchright + sticky Warren session
 """
 import logging
-import re
 import time
 from datetime import datetime
 from typing import List, Optional
@@ -36,42 +36,42 @@ class ManateeCountyScraper(BaseScraper):
         return "Manatee"
 
     def scrape(self) -> List[ArrestRecord]:
-        from playwright.sync_api import sync_playwright
-        from scrapers.socks_proxy import require_socks_or_raise
-
-        socks = require_socks_or_raise()
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            proxy={"server": socks},
-            args=["--disable-blink-features=AutomationControlled"],
+        from scrapers.socks_proxy import resolve_residential_proxy
+        from scrapers.cf_browser import (
+            launch_cf_browser,
+            new_stealth_context,
+            wait_past_cloudflare,
         )
 
+        proxy_url, proxy_source = resolve_residential_proxy(
+            self, sticky_session="fl-manatee"
+        )
+        logger.info("[Manatee] proxy source=%s", proxy_source)
+
+        pw = browser = None
+        t0 = time.time()
         try:
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
+            pw, browser, engine = launch_cf_browser(
+                proxy_url,
+                label="Manatee",
+                verify_residential=(proxy_source != "direct"),
             )
+            context = new_stealth_context(browser)
             page = context.new_page()
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            """)
 
             records = []
             seen_bookings = set()
 
             for pg in range(1, MAX_PAGES + 1):
                 url = BOOKINGS_URL if pg == 1 else f"{BOOKINGS_URL}?page={pg}"
-                logger.info(f"[Manatee] Roster page {pg}")
+                logger.info(f"[Manatee] Roster page {pg} (engine={engine})")
 
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                if not self._wait_past_cloudflare(page, label=f"page {pg}"):
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                if not wait_past_cloudflare(page, label=f"Manatee page {pg}", max_wait=45):
+                    if proxy_source == "ape" and not records:
+                        self.record_proxy_failure(proxy_url)
                     break
 
-                # Extract rows from the FIRST table (structured headers)
                 rows = page.evaluate("""() => {
                     const table = document.querySelector('table');
                     if (!table) return [];
@@ -89,7 +89,7 @@ class ManateeCountyScraper(BaseScraper):
 
                 new_count = 0
                 for row in rows:
-                    # Manatee columns: Booking #, Last Name, First Name, Middle, Charge, Arrest Date, Released Date
+                    # Booking #, Last Name, First Name, Middle, Charge, Arrest Date, Released
                     if len(row) < 5:
                         continue
 
@@ -112,16 +112,16 @@ class ManateeCountyScraper(BaseScraper):
 
                     arrest_date = self._parse_date(arrest_date_raw)
 
-                    # Parse custody status
                     if "in custody" in release_raw.lower():
                         custody = "In Custody"
-                    elif release_raw and release_raw.upper() not in ["", "N/A"]:
+                    elif release_raw and release_raw.upper() not in ("", "N/A"):
                         custody = "Released"
                     else:
                         custody = "In Custody"
 
                     records.append(ArrestRecord(
                         County="Manatee",
+                        State="FL",
                         Booking_Number=booking_num,
                         Full_Name=full_name,
                         First_Name=first_name,
@@ -135,51 +135,41 @@ class ManateeCountyScraper(BaseScraper):
                         Detail_URL=f"{BASE_URL}/bookings/{booking_num}",
                     ))
 
-                logger.info(f"[Manatee] Page {pg}: +{new_count} records (total: {len(records)})")
+                logger.info(
+                    f"[Manatee] Page {pg}: +{new_count} records (total: {len(records)})"
+                )
                 if new_count == 0:
                     break
 
-                time.sleep(3)  # Polite delay — CF rate-limits aggressive paging
+                time.sleep(3)
 
-            logger.info(f"[Manatee] Scraped {len(records)} records from roster table 🧦")
+            logger.info(
+                f"[Manatee] Scraped {len(records)} records "
+                f"(proxy={proxy_source}, engine={engine})"
+            )
+            if records and proxy_source == "ape":
+                self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
             return records
 
         except Exception as e:
             logger.error(f"[Manatee] Fatal error: {e}")
+            if proxy_source == "ape":
+                try:
+                    self.record_proxy_failure(proxy_url)
+                except Exception:
+                    pass
             raise
         finally:
-            try:
-                browser.close()
-            except Exception:
-                pass
-            try:
-                pw.stop()
-            except Exception:
-                pass
-
-    @staticmethod
-    @staticmethod
-    def _wait_past_cloudflare(page, label: str = "", max_wait: int = 25) -> bool:
-        """Wait for CF challenge to clear; return False if still blocked."""
-        deadline = time.time() + max_wait
-        while time.time() < deadline:
-            title = (page.title() or "").lower()
-            if "just a moment" not in title and "attention" not in title and "blocked" not in title:
+            if browser is not None:
                 try:
-                    if page.query_selector("table tbody tr"):
-                        return True
+                    browser.close()
                 except Exception:
                     pass
-                time.sleep(1.5)
+            if pw is not None:
                 try:
-                    if page.query_selector("table"):
-                        return True
+                    pw.stop()
                 except Exception:
                     pass
-                return True
-            time.sleep(1.5)
-        logger.error(f"[Manatee] Cloudflare still blocked on {label or 'page'}")
-        return False
 
     @staticmethod
     def _parse_date(text: str) -> Optional[str]:

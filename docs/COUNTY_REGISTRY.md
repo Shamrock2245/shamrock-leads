@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-04-28 | **Active Scrapers:** 49 | **Scheduled Counties:** 49 | **Disabled:** 1 (Marion — commented out in main.py)
+> **Last Updated:** 2026-07-16 | **Active Scrapers:** ~51 | **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers. See plan: FL APE + SmartWeb quality first.
 
 ---
 
@@ -20,10 +20,10 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 1 | **Lee** | curl_cffi GET — sheriffleefl.org | `lee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
-| 3 | **Charlotte** | Playwright + SOCKS — Revize CMS table (CF) | `charlotte.py` | ⚠️ Needs residential SOCKS | 90 min | 2026-07-10 |
-| 4 | **Manatee** | Playwright + SOCKS — Revize CMS table (CF) | `manatee.py` | ⚠️ Needs residential SOCKS | 75 min | 2026-07-10 |
-| 5 | **Sarasota** | Playwright + SOCKS — Revize dropdown+details | `sarasota.py` | ⚠️ Needs residential SOCKS | 90 min | 2026-07-10 |
-| 6 | **DeSoto** | JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-04-27 |
+| 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize + CF; **exit-IP preflight** | `charlotte.py` | ⚠️ Needs **US residential** exit (not Datacamp/VPN) | 90 min | 2026-07-16 |
+| 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |
+| 5 | **Sarasota** | Same + detail pages | `sarasota.py` | ⚠️ Needs **US residential** exit | 90 min | 2026-07-16 |
+| 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
 ---
@@ -31,7 +31,7 @@
 ## Tier 2 — Tampa Bay / I-4 Corridor (8 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 8 | **Hillsborough** | New World HTML | `hillsborough.py` | ✅ Active | 90 min | 2026-04-27 |
+| 8 | **Hillsborough** | httpx + reCAPTCHA + **APE/SOCKS** (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-16 |
 | 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
@@ -126,7 +126,7 @@
 ### High Priority — Miami-Dade (Largest County in FL)
 | # | County | JMS / Method | Status | Notes |
 |---|--------|-------------|--------|-------|
-| 51 | **Miami-Dade** | DevExpress ASP.NET + reCAPTCHA v2 | 🔴 Blocked | URL: `https://www.miamidade.gov/Apps/mdcr/inmateSearch/` — reCAPTCHA on every search. **Alternative**: ArcGIS Open Data dataset `c2275711ced240c6bc4e998ee1910e85` at `gis-mdc.opendata.arcgis.com` (updated daily). Recommend polling ArcGIS dataset for daily bookings. |
+| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Path exists | Prefer ArcGIS open data over reCAPTCHA portal. Validate prod scrape. Portal search still reCAPTCHA-blocked. |
 
 ### Needs Recon (16 Counties)
 | # | County | Status | Notes |

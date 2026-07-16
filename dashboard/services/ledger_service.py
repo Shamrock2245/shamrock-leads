@@ -28,13 +28,21 @@ class LedgerService:
     """Service for managing the unified financial ledger."""
 
     @staticmethod
-    def to_cents(amount: float) -> int:
-        """Convert float dollar amount to integer cents."""
-        return int(round(float(amount) * 100))
+    def to_cents(amount) -> int:
+        """Convert a dollar amount to integer cents (banker's-safe via Decimal)."""
+        from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+        if amount is None:
+            return 0
+        try:
+            d = Decimal(str(amount).strip().replace(",", "").replace("$", ""))
+        except (InvalidOperation, ValueError, TypeError):
+            return 0
+        # Store signed cents; ROUND_HALF_UP matches common ledger expectations
+        return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     @staticmethod
     def from_cents(cents: int) -> float:
-        """Convert integer cents back to float dollar amount."""
+        """Convert integer cents back to float dollar amount for UI only."""
         return float(cents) / 100.0
 
     @classmethod
@@ -45,12 +53,14 @@ class LedgerService:
         """
         db = get_db()
         
-        # Convert amount to cents for storage if not already provided as cents
+        # Always normalize to integer cents — never store floats for aggregation
         amount_raw = data.get("amount", 0)
-        if isinstance(amount_raw, float) or (isinstance(amount_raw, str) and "." in amount_raw):
-            amount_cents = cls.to_cents(float(amount_raw))
-        else:
+        if data.get("amount_is_cents") or (
+            isinstance(amount_raw, int) and not isinstance(amount_raw, bool)
+        ):
             amount_cents = int(amount_raw)
+        else:
+            amount_cents = cls.to_cents(amount_raw)
         
         # Ensure timestamp is a datetime object or ISO string
         ts = data.get("timestamp")
@@ -151,72 +161,132 @@ class LedgerService:
                 # Normalize keys (strip whitespace, handle case for flexible matching)
                 row_clean = {str(k).strip().lower(): v for k, v in row.items() if k}
                 
-                # Flexible column matching for Amount
-                amount_str = row_clean.get("amount") or row_clean.get("total") or row_clean.get("net amount") or "0"
+                # Flexible column matching for Amount (SwipeSimple renames often)
+                amount_str = (
+                    row_clean.get("amount")
+                    or row_clean.get("total")
+                    or row_clean.get("net amount")
+                    or row_clean.get("transaction amount")
+                    or row_clean.get("payment amount")
+                    or row_clean.get("gross amount")
+                    or "0"
+                )
                 amount_str = re.sub(r"[$,\s]", "", str(amount_str))
-                try:
-                    amount = float(amount_str)
-                except ValueError:
+                amount_cents = cls.to_cents(amount_str)
+                if amount_cents == 0 and amount_str not in ("0", "0.0", "0.00", ""):
                     errors.append(f"Row {row_num}: Invalid amount '{amount_str}'")
                     continue
-                
-                if amount <= 0:
+
+                if amount_cents <= 0:
                     skipped += 1
                     continue
-                
+
                 # Flexible column matching for Transaction ID
-                txn_id = str(row_clean.get("transaction id") or row_clean.get("id") or row_clean.get("transaction #") or "").strip()
+                txn_id = str(
+                    row_clean.get("transaction id")
+                    or row_clean.get("transaction_id")
+                    or row_clean.get("txn id")
+                    or row_clean.get("txn_id")
+                    or row_clean.get("payment id")
+                    or row_clean.get("id")
+                    or row_clean.get("transaction #")
+                    or row_clean.get("confirmation")
+                    or ""
+                ).strip()
                 if not txn_id:
                     errors.append(f"Row {row_num}: Missing Transaction ID")
                     continue
 
-                # Status check
-                status = str(row_clean.get("status") or row_clean.get("result") or "completed").strip().lower()
-                if status not in ("approved", "completed", "settled", "success", "captured"):
+                # Status check — skip declined / refunded / voided
+                status = str(
+                    row_clean.get("status")
+                    or row_clean.get("result")
+                    or row_clean.get("payment status")
+                    or row_clean.get("transaction status")
+                    or "completed"
+                ).strip().lower()
+                if status not in (
+                    "approved", "completed", "settled", "success", "captured",
+                    "paid", "successful", "ok", "",
+                ):
                     skipped += 1
                     continue
-                
+
                 # Date parsing
-                date_str = str(row_clean.get("date") or row_clean.get("created") or "").strip()
+                date_str = str(
+                    row_clean.get("date")
+                    or row_clean.get("created")
+                    or row_clean.get("transaction date")
+                    or row_clean.get("payment date")
+                    or row_clean.get("created at")
+                    or ""
+                ).strip()
                 time_str = str(row_clean.get("time") or "").strip()
                 full_date_str = f"{date_str} {time_str}".strip()
-                
+
                 timestamp = datetime.now(timezone.utc)
                 if date_str:
                     for fmt in _SS_DATE_FORMATS:
                         try:
-                            timestamp = datetime.strptime(full_date_str if " " in full_date_str else date_str, fmt)
+                            timestamp = datetime.strptime(
+                                full_date_str if " " in full_date_str else date_str, fmt
+                            )
                             timestamp = timestamp.replace(tzinfo=timezone.utc)
                             break
                         except ValueError:
                             continue
 
                 # Booking Number / Reference
-                booking_number = str(row_clean.get("reference") or row_clean.get("booking #") or "").strip().upper()
+                booking_number = str(
+                    row_clean.get("reference")
+                    or row_clean.get("booking #")
+                    or row_clean.get("booking number")
+                    or row_clean.get("booking_number")
+                    or row_clean.get("order id")
+                    or row_clean.get("invoice")
+                    or ""
+                ).strip().upper()
                 if not booking_number:
                     # Fallback: check notes/description for keywords
-                    notes_text = str(row_clean.get("description") or row_clean.get("notes") or row_clean.get("memo") or "").lower()
-                    for prefix in ("booking:", "booking #", "bk:", "ref:"):
+                    notes_text = str(
+                        row_clean.get("description")
+                        or row_clean.get("notes")
+                        or row_clean.get("memo")
+                        or row_clean.get("comment")
+                        or ""
+                    ).lower()
+                    for prefix in ("booking:", "booking #", "booking number", "bk:", "ref:"):
                         if prefix in notes_text:
                             after = notes_text.split(prefix, 1)[1].strip()
-                            booking_number = after.split()[0].upper()
+                            booking_number = after.split()[0].upper().rstrip(",.;")
                             break
 
-                # Customer Info for notes
-                cust = str(row_clean.get("customer name") or row_clean.get("name") or "").strip()
-                desc = str(row_clean.get("description") or row_clean.get("memo") or "").strip()
+                # Customer Info for notes (no raw PII beyond what CSV already holds)
+                cust = str(
+                    row_clean.get("customer name")
+                    or row_clean.get("cardholder name")
+                    or row_clean.get("name")
+                    or ""
+                ).strip()
+                desc = str(
+                    row_clean.get("description")
+                    or row_clean.get("memo")
+                    or row_clean.get("comment")
+                    or ""
+                ).strip()
                 notes = f"SwipeSimple Import | Customer: {cust} | {desc}".strip(" | ")
 
-                # Add to ledger (payments reduce balance, so amount is negative)
+                # Payments reduce balance — store negative integer cents
                 await cls.add_entry({
                     "booking_number": booking_number,
                     "type": "payment",
-                    "amount": -amount,
+                    "amount": -amount_cents,
+                    "amount_is_cents": True,
                     "category": "premium",
                     "timestamp": timestamp,
                     "actor": actor,
                     "stripe_swipe_ref": txn_id,
-                    "notes": notes
+                    "notes": notes,
                 })
                 imported += 1
                 

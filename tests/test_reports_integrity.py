@@ -135,11 +135,16 @@ def test_agent_normalization():
 # ════════════════════════════════════════════════════════
 # TEST 3: POA Expiration Field Wire-up
 # ════════════════════════════════════════════════════════
+def _routers_path(*parts: str) -> str:
+    """Resolve a path under dashboard/routers (migrated from dashboard/api)."""
+    return os.path.join(os.path.dirname(__file__), "..", "dashboard", "routers", *parts)
+
+
 def test_poa_expiration():
     print("\n🔹 TEST 3: POA Expiration Field Wire-up")
     
     # Read poa.py and verify the expiration field is in add, list, and filter
-    poa_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "poa.py")
+    poa_path = _routers_path("poa.py")
     with open(poa_path, "r") as f:
         poa_code = f.read()
     
@@ -155,7 +160,7 @@ def test_poa_expiration():
     assert_not_in("\"assigned_to_agent\": \"Brendan\"", poa_code, "No legacy short agent name")
     
     # Read reports.py and verify expired-powers query uses expiration
-    reports_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "reports.py")
+    reports_path = _routers_path("reports.py")
     with open(reports_path, "r") as f:
         reports_code = f.read()
     
@@ -169,7 +174,7 @@ def test_poa_expiration():
 def test_voided_vs_expired():
     print("\n🔹 TEST 4: Voided vs Expired POA Distinction")
     
-    reports_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "reports.py")
+    reports_path = _routers_path("reports.py")
     with open(reports_path, "r") as f:
         reports_code = f.read()
     
@@ -196,7 +201,7 @@ def test_voided_vs_expired():
 def test_response_keys():
     print("\n🔹 TEST 5: Report API Response Keys Match Frontend")
     
-    reports_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "reports.py")
+    reports_path = _routers_path("reports.py")
     with open(reports_path, "r") as f:
         reports_code = f.read()
     
@@ -228,11 +233,8 @@ def test_response_keys():
 def test_surety_split():
     print("\n🔹 TEST 6: Surety Split Calculations")
     
-    # Import the calculation function directly
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dashboard", "api"))
-    
     # Read reports.py to extract SURETY_RATES and the calculation logic
-    reports_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "reports.py")
+    reports_path = _routers_path("reports.py")
     with open(reports_path, "r") as f:
         reports_code = f.read()
     
@@ -257,7 +259,7 @@ def test_agent_defaults():
     print("\n🔹 TEST 7: Agent Name Defaults Consistency")
     
     # Check bonds.py for consistent defaults
-    bonds_path = os.path.join(os.path.dirname(__file__), "..", "dashboard", "api", "bonds.py")
+    bonds_path = _routers_path("bonds.py")
     with open(bonds_path, "r") as f:
         bonds_code = f.read()
     

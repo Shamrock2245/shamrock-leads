@@ -1,10 +1,10 @@
 """
-Sarasota County Arrest Scraper — Revize CMS via SOCKS Proxy
-============================================================
+Sarasota County Arrest Scraper — Revize CMS via residential proxy
+=================================================================
 Source: Sarasota County Sheriff's Office
 URL:    https://cms.revize.com/revize/apps/sarasota/index.php
         (embedded in https://www.sarasotasheriff.org/arrest-reports/index.php)
-Method: Playwright + SOCKS5 proxy (office iMac residential IP)
+Method: Playwright + APE residential (Warren) with office SOCKS fallback
 
 TWO-PHASE STRATEGY:
   Phase 1 — Navigate to the Revize CMS main page, expand the "SELECT AN INMATE"
@@ -13,12 +13,12 @@ TWO-PHASE STRATEGY:
             bond amounts, booking dates, demographics, and case numbers.
 
 The Revize CMS domain (cms.revize.com) is behind Cloudflare Turnstile.
-The SOCKS5 proxy routes traffic through the office iMac's residential IP,
-which passes Turnstile automatically (same proven pattern as Charlotte/Manatee).
+Residential egress (APE/Warren or office SOCKS) passes Turnstile when healthy.
 
 HISTORY:
 - v1: JailTracker Blazor WASM — dead (global 400 error on all JailTracker counties)
-- v2 (current): Revize CMS via Playwright + SOCKS5 — full data: charges, bonds, demographics
+- v2: Revize CMS via Playwright + office SOCKS
+- v3 (current): APE-first residential proxy + SOCKS fallback
 """
 import logging
 import re
@@ -50,44 +50,37 @@ class SarasotaCountyScraper(BaseScraper):
         return "Sarasota"
 
     def scrape(self) -> List[ArrestRecord]:
-        from playwright.sync_api import sync_playwright
-        from scrapers.socks_proxy import require_socks_or_raise
-
-        socks = require_socks_or_raise()
-        pw = sync_playwright().start()
-        browser = pw.chromium.launch(
-            headless=True,
-            proxy={"server": socks},
-            args=["--disable-blink-features=AutomationControlled"],
+        from scrapers.socks_proxy import resolve_residential_proxy
+        from scrapers.cf_browser import (
+            launch_cf_browser,
+            new_stealth_context,
+            wait_past_cloudflare,
         )
 
+        proxy_url, proxy_source = resolve_residential_proxy(
+            self, sticky_session="fl-sarasota"
+        )
+        logger.info("[Sarasota] proxy source=%s", proxy_source)
+
+        pw = browser = None
+        t0 = time.time()
         try:
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
+            pw, browser, engine = launch_cf_browser(
+                proxy_url,
+                label="Sarasota",
+                verify_residential=(proxy_source != "direct"),
             )
+            context = new_stealth_context(browser)
             page = context.new_page()
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            """)
 
             # ── Phase 1: Load Main Page + Extract Roster ──
-            logger.info("[Sarasota] Phase 1: Loading Revize CMS main page")
+            logger.info("[Sarasota] Phase 1: Loading Revize CMS (engine=%s)", engine)
             page.goto(MAIN_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
-            time.sleep(CF_WAIT_S)  # Let Cloudflare Turnstile auto-solve
-
-            # Check for Cloudflare block
-            title = (page.title() or "").lower()
-            if "just a moment" in title or "attention" in title:
-                logger.warning("[Sarasota] Cloudflare challenge detected, waiting longer...")
-                time.sleep(10)
-                title = (page.title() or "").lower()
-                if "just a moment" in title:
-                    logger.error("[Sarasota] Cloudflare blocked — cannot proceed")
-                    return []
+            if not wait_past_cloudflare(page, label="Sarasota main", max_wait=45):
+                logger.error("[Sarasota] Cloudflare blocked — cannot proceed")
+                if proxy_source == "ape":
+                    self.record_proxy_failure(proxy_url)
+                return []
 
             # Wait for the inmate dropdown to appear
             try:
@@ -157,21 +150,35 @@ class SarasotaCountyScraper(BaseScraper):
                     )
                     continue
 
-            logger.info(f"[Sarasota] Scraped {len(records)} records from {len(inmates)} inmates 🧦")
+            logger.info(
+                f"[Sarasota] Scraped {len(records)} records from {len(inmates)} inmates "
+                f"(proxy={proxy_source}, engine={engine})"
+            )
+            if records and proxy_source == "ape":
+                self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
+            elif not records and proxy_source == "ape":
+                self.record_proxy_failure(proxy_url)
             return records
 
         except Exception as e:
             logger.error(f"[Sarasota] Fatal error: {e}")
+            if proxy_source == "ape":
+                try:
+                    self.record_proxy_failure(proxy_url)
+                except Exception:
+                    pass
             raise
         finally:
-            try:
-                browser.close()
-            except Exception:
-                pass
-            try:
-                pw.stop()
-            except Exception:
-                pass
+            if browser is not None:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+            if pw is not None:
+                try:
+                    pw.stop()
+                except Exception:
+                    pass
 
     # ── Roster Entry Parser ──
     @staticmethod
