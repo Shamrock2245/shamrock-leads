@@ -19,7 +19,12 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-from dashboard.extensions import get_collection, get_db
+from dashboard.extensions import (
+    get_collection,
+    get_db,
+    index_scraper_status_docs,
+    resolve_scraper_status,
+)
 
 logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
@@ -136,29 +141,32 @@ async def get_scraper_registry(state: str = ""):
     if state:
         registry = [r for r in registry if r["state"].upper() == state.upper()]
 
-    # Enrich with last-run data from MongoDB (keyed by bare county; also try scraper_id)
+    # Enrich with last-run data — multi-key index (bare / labeled / scraper_id)
     scraper_status = get_collection("scraper_status")
-    status_by_county: dict = {}
-    status_by_id: dict = {}
+    status_docs = []
     async for doc in scraper_status.find({}, {"_id": 0}):
-        c = doc.get("county", "")
-        if c:
-            status_by_county[c] = doc
-        sid = doc.get("scraper_id") or doc.get("job_id")
-        if sid:
-            status_by_id[sid] = doc
+        status_docs.append(doc)
+    status_index = index_scraper_status_docs(status_docs)
 
     result = []
     for r in registry:
-        status = (
-            status_by_id.get(r.get("scraper_id", ""))
-            or status_by_county.get(r["county"], {})
+        status = resolve_scraper_status(
+            status_index, r.get("county", ""), r.get("state")
         )
+        if not status and r.get("scraper_id"):
+            status = status_index.get(r["scraper_id"], {})
         last_run = status.get("last_run_at") or status.get("last_run")
         last_run_iso = last_run.isoformat() if hasattr(last_run, "isoformat") else last_run
+        raw_status = (status.get("status") or "never_run").lower()
+        if raw_status in ("ok", "success", "healthy"):
+            norm_status = "ok"
+        elif raw_status in ("error", "failed", "fail"):
+            norm_status = "error"
+        else:
+            norm_status = raw_status if status else "never_run"
         result.append({
             **r,
-            "status": status.get("status", "never_run"),
+            "status": norm_status,
             "last_run": last_run,
             "last_run_iso": last_run_iso,
             "records_last_run": status.get("records_last_run", status.get("records", 0)),
@@ -202,6 +210,12 @@ async def get_state_summary():
     for st in ACTIVE_STATES:
         state_counties.setdefault(st, [])
 
+    # Load scraper_status once (shared multi-key index for all states)
+    status_docs = []
+    async for doc in scraper_status.find({}, {"_id": 0}):
+        status_docs.append(doc)
+    status_index = index_scraper_status_docs(status_docs)
+
     result = {}
     for state, counties in state_counties.items():
         total_counties = len(counties)
@@ -228,21 +242,22 @@ async def get_state_summary():
         })
         total_arrests = await arrests.count_documents(state_match)
 
-        # Scraper health
+        # Scraper health — resolve bare + labeled keys per registry county
         active = 0
         errors = 0
         never_run = 0
-        if counties:
-            async for doc in scraper_status.find(
-                {"county": {"$in": counties}}, {"_id": 0, "status": 1}
-            ):
-                s = doc.get("status", "never_run")
-                if s in ("ok", "healthy"):
-                    active += 1
-                elif s in ("error", "offline"):
-                    errors += 1
-                else:
-                    never_run += 1
+        for county_name in counties:
+            doc = resolve_scraper_status(status_index, county_name, state)
+            if not doc:
+                never_run += 1
+                continue
+            s = (doc.get("status") or "never_run").lower()
+            if s in ("ok", "healthy", "success"):
+                active += 1
+            elif s in ("error", "offline", "failed"):
+                errors += 1
+            else:
+                never_run += 1
         accounted = active + errors + never_run
         if total_counties > accounted:
             never_run += total_counties - accounted

@@ -1,11 +1,12 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-14  
+> **Last verified:** 2026-07-16  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
 > **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`  
-> **Multi-state plan:** `docs/MULTI_STATE_SCRAPER_ROADMAP.md`
+> **Multi-state plan:** `docs/MULTI_STATE_SCRAPER_ROADMAP.md`  
+> **Proxy stack:** `docs/APE_INTEGRATION_GUIDE.md` · `docs/SELF_HOSTED_PROXY_ARCHITECTURE.md`
 
 ---
 
@@ -53,7 +54,10 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
 | **Multi-State Ops** tab + `/api/ops/*` (registry, state KPIs, live feed) | ✅ · **4 states** |
 | **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
-| Lead Explorer **state** column + filter (FL/GA/SC/NC) | ✅ July 14 |
+| Lead Explorer **state** column + filter (FL/GA/SC/NC/TN/TX/LA) | ✅ July 16 |
+| Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ July 16 |
+| Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ July 16 |
+| **Autonomous Proxy Engine (APE)** Warren + S5W2C + Stormsia | ✅ code · hub live |
 | Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ July 2026 |
 | Omnibar → CRM search | ✅ |
 | Mongo index script expanded for CRM collections | ✅ |

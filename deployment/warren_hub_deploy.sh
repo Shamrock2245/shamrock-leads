@@ -1,56 +1,127 @@
 #!/bin/bash
 # Warren Proxy Hub Deployment Script
-# Deploys Warren hub on Hetzner VPS (5.161.126.32)
-# 
-# Usage: ./warren_hub_deploy.sh [VERSION]
-# Example: ./warren_hub_deploy.sh v0.4.11
+# Deploys Warren hub on Shamrock Hetzner VPS (production: 178.156.179.237).
+#
+# Usage (run ON the VPS as root, or via SSH):
+#   ./warren_hub_deploy.sh [VERSION]
+# Example:
+#   ./warren_hub_deploy.sh v0.4.11
+#
+# Official release assets are version-stamped tarballs:
+#   warren-v0.4.11-linux-x86_64.tar.gz
+#
+# Ports:
+#   7000 — nodes dial in (TLS)
+#   8000 — client proxy (HTTP CONNECT / SOCKS5)
+#   9000 — admin dashboard (keep firewalled or tunnel)
 
-set -e
+set -euo pipefail
 
 WARREN_VERSION="${1:-v0.4.11}"
-HETZNER_VPS="5.161.126.32"
-WARREN_USER="warren"
-WARREN_HOME="/opt/warren"
-WARREN_PORT="8000"
-WARREN_ADMIN_PORT="8080"
+PUBLIC_HOST="${WARREN_PUBLIC_HOST:-178.156.179.237}"
+WARREN_HOME="${WARREN_HOME:-/opt/warren}"
+WARREN_USER="${WARREN_USER:-warren}"
+NODE_PORT="${WARREN_NODE_PORT:-7000}"
+PROXY_PORT="${WARREN_PROXY_PORT:-8000}"
+ADMIN_PORT="${WARREN_ADMIN_PORT:-9000}"
+STATE_DIR="${WARREN_HOME}/data"
+SECRETS_FILE="$WARREN_HOME/hub.env"
+
+PROXY_USER="${WARREN_PROXY_USER:-warren}"
+PROXY_PASS="${WARREN_PROXY_PASS:-}"
+ADMIN_TOKEN="${WARREN_ADMIN_TOKEN:-}"
+ENROLL_TOKEN="${WARREN_ENROLL_TOKEN:-}"
 
 echo "🚀 Warren Proxy Hub Deployment"
 echo "================================"
-echo "Version: $WARREN_VERSION"
-echo "VPS: $HETZNER_VPS"
-echo "Hub Port: $WARREN_PORT"
-echo "Admin Port: $WARREN_ADMIN_PORT"
+echo "Version:      $WARREN_VERSION"
+echo "Public host:  $PUBLIC_HOST"
+echo "Node listen:  0.0.0.0:$NODE_PORT  (devices dial in)"
+echo "Proxy listen: 0.0.0.0:$PROXY_PORT (clients connect)"
+echo "Admin listen: 0.0.0.0:$ADMIN_PORT"
 echo ""
 
-# Step 1: Download Warren binary
-echo "📥 Downloading Warren binary..."
-BINARY_URL="https://github.com/doedja/warren/releases/download/${WARREN_VERSION}/warren-x86_64-unknown-linux-gnu"
-BINARY_PATH="/tmp/warren-hub"
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64)  ASSET_ARCH="linux-x86_64" ;;
+    aarch64|arm64) ASSET_ARCH="linux-arm64" ;;
+    *) echo "❌ Unsupported architecture: $ARCH"; exit 1 ;;
+esac
 
-if ! curl -fL "$BINARY_URL" -o "$BINARY_PATH"; then
-    echo "❌ Failed to download Warren binary"
-    exit 1
+echo "📥 Downloading Warren ${WARREN_VERSION} (${ASSET_ARCH})..."
+ARCHIVE_URL="https://github.com/doedja/warren/releases/download/${WARREN_VERSION}/warren-${WARREN_VERSION}-${ASSET_ARCH}.tar.gz"
+SUM_URL="https://github.com/doedja/warren/releases/download/${WARREN_VERSION}/warren-${WARREN_VERSION}-${ASSET_ARCH}.sha256"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+curl -fL "$ARCHIVE_URL" -o "$TMP_DIR/warren.tar.gz"
+
+if curl -fL "$SUM_URL" -o "$TMP_DIR/warren.sha256" 2>/dev/null; then
+    EXPECTED="$(awk '{print $1}' "$TMP_DIR/warren.sha256")"
+    ACTUAL="$(sha256sum "$TMP_DIR/warren.tar.gz" | awk '{print $1}')"
+    if [[ -n "$EXPECTED" && "$EXPECTED" != "$ACTUAL" ]]; then
+        echo "❌ Checksum mismatch (expected $EXPECTED, got $ACTUAL)"
+        exit 1
+    fi
+    echo "✅ Checksum verified"
 fi
 
+tar -xzf "$TMP_DIR/warren.tar.gz" -C "$TMP_DIR"
+BINARY_PATH="$(find "$TMP_DIR" -type f -name warren | head -1)"
+if [[ -z "$BINARY_PATH" ]]; then
+    echo "❌ warren binary not found in archive"
+    exit 1
+fi
 chmod +x "$BINARY_PATH"
-echo "✅ Warren binary downloaded"
+echo "✅ Warren binary extracted"
 
-# Step 2: Create warren user and directories
 echo "📁 Setting up directories..."
 if ! id "$WARREN_USER" &>/dev/null; then
-    sudo useradd -r -s /bin/bash -d "$WARREN_HOME" "$WARREN_USER"
+    useradd -r -s /usr/sbin/nologin -d "$WARREN_HOME" "$WARREN_USER" 2>/dev/null || \
+    useradd -r -s /bin/false -d "$WARREN_HOME" "$WARREN_USER"
     echo "✅ Created warren user"
 fi
 
-sudo mkdir -p "$WARREN_HOME"
-sudo chown "$WARREN_USER:$WARREN_USER" "$WARREN_HOME"
-sudo cp "$BINARY_PATH" "$WARREN_HOME/warren"
-sudo chown "$WARREN_USER:$WARREN_USER" "$WARREN_HOME/warren"
-echo "✅ Directories configured"
+mkdir -p "$WARREN_HOME" "$STATE_DIR"
+cp "$BINARY_PATH" "$WARREN_HOME/warren"
+chmod 755 "$WARREN_HOME/warren"
 
-# Step 3: Create systemd service
+# Preserve existing secrets across re-deploys
+if [[ -f "$SECRETS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SECRETS_FILE"
+    PROXY_USER="${WARREN_PROXY_USER:-$PROXY_USER}"
+    PROXY_PASS="${WARREN_PROXY_PASS:-$PROXY_PASS}"
+    ADMIN_TOKEN="${WARREN_ADMIN_TOKEN:-$ADMIN_TOKEN}"
+    ENROLL_TOKEN="${WARREN_ENROLL_TOKEN:-$ENROLL_TOKEN}"
+    PUBLIC_HOST="${WARREN_PUBLIC_HOST:-$PUBLIC_HOST}"
+    echo "✅ Loaded existing secrets from $SECRETS_FILE"
+fi
+
+if [[ -z "${PROXY_PASS:-}" ]]; then
+    PROXY_PASS="$(openssl rand -hex 24)"
+fi
+if [[ -z "${ADMIN_TOKEN:-}" ]]; then
+    ADMIN_TOKEN="$(openssl rand -hex 24)"
+fi
+if [[ -z "${ENROLL_TOKEN:-}" ]]; then
+    ENROLL_TOKEN="$(openssl rand -hex 16)"
+fi
+
+cat > "$SECRETS_FILE" <<EOF
+# Generated by warren_hub_deploy.sh — mode 600, do not commit
+WARREN_PROXY_USER=$PROXY_USER
+WARREN_PROXY_PASS=$PROXY_PASS
+WARREN_ADMIN_TOKEN=$ADMIN_TOKEN
+WARREN_ENROLL_TOKEN=$ENROLL_TOKEN
+WARREN_PUBLIC_HOST=$PUBLIC_HOST
+EOF
+chown -R "$WARREN_USER:$WARREN_USER" "$WARREN_HOME"
+chmod 600 "$SECRETS_FILE"
+echo "✅ Secrets written to $SECRETS_FILE"
+
 echo "⚙️  Creating systemd service..."
-sudo tee /etc/systemd/system/warren.service > /dev/null <<EOF
+cat > /etc/systemd/system/warren.service <<EOF
 [Unit]
 Description=Warren Residential Proxy Hub
 Documentation=https://github.com/doedja/warren
@@ -60,66 +131,71 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$WARREN_USER
-WorkingDirectory=$WARREN_HOME
+Group=$WARREN_USER
+WorkingDirectory=$STATE_DIR
+EnvironmentFile=$SECRETS_FILE
 ExecStart=$WARREN_HOME/warren hub \\
-  --listen 0.0.0.0:$WARREN_PORT \\
-  --admin 0.0.0.0:$WARREN_ADMIN_PORT
+  --public-node-addr \${WARREN_PUBLIC_HOST}:$NODE_PORT \\
+  --public-proxy-addr \${WARREN_PUBLIC_HOST}:$PROXY_PORT \\
+  --listen 0.0.0.0:$NODE_PORT \\
+  --proxy-listen 0.0.0.0:$PROXY_PORT \\
+  --admin-listen 0.0.0.0:$ADMIN_PORT \\
+  --admin-token \${WARREN_ADMIN_TOKEN} \\
+  --proxy-user \${WARREN_PROXY_USER} \\
+  --proxy-pass \${WARREN_PROXY_PASS} \\
+  --enroll-token \${WARREN_ENROLL_TOKEN} \\
+  --db $STATE_DIR/warren.db \\
+  --tls-cert-dir $STATE_DIR
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=warren
-
-# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=$WARREN_HOME
+ReadWritePaths=$WARREN_HOME $STATE_DIR
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl daemon-reload
-echo "✅ Systemd service created"
-
-# Step 4: Enable and start service
+systemctl daemon-reload
 echo "🔄 Starting Warren hub..."
-sudo systemctl enable warren
-sudo systemctl start warren
-
-# Wait for service to start
+systemctl enable warren
+systemctl restart warren
 sleep 3
 
-if sudo systemctl is-active --quiet warren; then
+if systemctl is-active --quiet warren; then
     echo "✅ Warren hub started successfully"
 else
     echo "❌ Warren hub failed to start"
-    sudo systemctl status warren
+    systemctl status warren --no-pager || true
+    journalctl -u warren -n 40 --no-pager || true
     exit 1
 fi
 
-# Step 5: Configure firewall
-echo "🔐 Configuring firewall..."
-if command -v ufw &> /dev/null; then
-    sudo ufw allow $WARREN_PORT/tcp
-    sudo ufw allow $WARREN_ADMIN_PORT/tcp
-    echo "✅ Firewall rules added"
+if command -v ufw &>/dev/null; then
+    ufw allow "${NODE_PORT}/tcp" comment "warren-nodes" || true
+    ufw allow "${PROXY_PORT}/tcp" comment "warren-proxy" || true
 fi
 
-# Step 6: Verify deployment
 echo ""
 echo "✅ Warren Hub Deployment Complete!"
 echo ""
 echo "📊 Hub Information:"
-echo "  Proxy Endpoint: http://warren:PASSWORD@$HETZNER_VPS:$WARREN_PORT"
-echo "  Admin Dashboard: http://$HETZNER_VPS:$WARREN_ADMIN_PORT"
-echo "  Service Status: $(sudo systemctl is-active warren)"
+echo "  Public node addr: ${PUBLIC_HOST}:${NODE_PORT}"
+echo "  Proxy endpoint:   http://${PROXY_USER}:****@${PUBLIC_HOST}:${PROXY_PORT}"
+echo "  Admin dashboard:  http://${PUBLIC_HOST}:${ADMIN_PORT}"
+echo "  Secrets file:     $SECRETS_FILE"
+echo "  Service status:   $(systemctl is-active warren)"
 echo ""
 echo "📝 Next Steps:"
-echo "  1. Generate a strong password for warren user"
-echo "  2. Enroll devices as warren nodes"
-echo "  3. Configure ShamrockLeads to use warren proxy"
+echo "  1. Copy WARREN_PROXY_PASS from $SECRETS_FILE into Shamrock .env as WARREN_PASSWORD"
+echo "  2. Enroll a residential node (from a home device):"
+echo "       journalctl -u warren -n 20   # grab join code"
+echo "       ./warren_node_enroll.sh --join <JOIN_CODE> --name home-pc --install-service"
+echo "  3. Set WARREN_ENABLED=true WARREN_HUB_URL=${PUBLIC_HOST}:${PROXY_PORT}"
 echo ""
-echo "🔗 Documentation: https://github.com/doedja/warren"
+echo "🔗 https://github.com/doedja/warren · docs/APE_INTEGRATION_GUIDE.md"

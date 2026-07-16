@@ -30,10 +30,13 @@ try:
 except ImportError:
     _hybrid_available = False
 
+# Dashboard import is optional and must never break scraper unit tests or CLI
+# one-shots when FastAPI/Starlette versions disagree with local deps.
 try:
     from dashboard.server import update_scraper_status
     _dashboard_available = True
-except ImportError:
+except Exception:
+    update_scraper_status = None  # type: ignore[assignment]
     _dashboard_available = False
 
 try:
@@ -55,7 +58,7 @@ except ImportError:
 try:
     from dashboard.services.error_tracker import ErrorTracker
     _error_tracker = ErrorTracker()
-except ImportError:
+except Exception:
     _error_tracker = None
 
 logger = logging.getLogger(__name__)
@@ -750,6 +753,8 @@ class BaseScraper(ABC):
                             disqualified=disqualified,
                             duration=elapsed,
                             status="ok",
+                            state=getattr(self, "state", None) or "FL",
+                            scraper_id=getattr(self, "scraper_id", None),
                         )
                     except Exception as _e:
                         logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {_e}")
@@ -797,6 +802,8 @@ class BaseScraper(ABC):
                         _writer.upsert_scraper_status(
                             county=self.county, records=0, hot=0, warm=0,
                             duration=elapsed, status="error", error=str(e),
+                            state=getattr(self, "state", None) or "FL",
+                            scraper_id=getattr(self, "scraper_id", None),
                         )
                     except Exception:
                         pass

@@ -48,8 +48,7 @@ class ProxyValidationResult:
     def age_seconds(self) -> float:
         """Age of validation result in seconds."""
         return (datetime.now() - self.test_timestamp).total_seconds()
-    
-    @property
+
     def is_stale(self, ttl_seconds: int = 3600) -> bool:
         """Check if result is stale (older than TTL)."""
         return self.age_seconds > ttl_seconds

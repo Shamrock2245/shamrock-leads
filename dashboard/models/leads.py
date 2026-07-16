@@ -14,7 +14,7 @@ class LeadsQueryModel(BaseModel):
     days: Optional[int] = Field(default=None, description="Number of recent days to filter by scraped_at")
     min_bond: Optional[float] = Field(default=None, description="Minimum bond amount")
     search: Optional[str] = Field(default="", description="Regex search query across names, charges, booking, or case numbers")
-    sort: Optional[str] = Field(default="lead_score", description="Field to sort by")
+    sort: Optional[str] = Field(default="scraped_at", description="Field to sort by (default scraped_at for live view)")
     order: Optional[str] = Field(default="desc", description="Sort direction: asc or desc")
     page: int = Field(default=1, ge=1, description="Page number for pagination")
     limit: int = Field(default=50, ge=1, le=200, description="Items per page")

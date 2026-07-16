@@ -57,15 +57,19 @@ Request → Warren (residential) → S5W2C (mobile) → Stormsia (free) → Fail
 Create `.env` file in project root:
 
 ```bash
-# Warren Configuration
-WARREN_HUB_URL=5.161.126.32:8000
-WARREN_PASSWORD=your-secure-password
+# Warren Configuration (hub on production Hetzner VPS)
+WARREN_HUB_URL=178.156.179.237:8000
+WARREN_PROXY_USER=warren
+WARREN_PASSWORD=          # from /opt/warren/hub.env on VPS (WARREN_PROXY_PASS)
+WARREN_ENABLED=false      # set true only after at least one residential node is enrolled
 
-# S5W2C Configuration
-S5W2C_PHONE_IP=192.168.1.100
+# S5W2C Configuration (Android phone on same LAN as the scraper)
+S5W2C_PHONE_IP=
 S5W2C_PORT=1080
+S5W2C_ENABLED=false
 
-# Stormsia Configuration
+# Stormsia Configuration (free public fallback — always on by default)
+STORMSIA_ENABLED=true
 STORMSIA_CACHE_TTL=1800  # 30 minutes
 
 # Scraper Configuration
@@ -283,14 +287,15 @@ class TennesseeTnCISScraperV2(BaseScraper):
 
 ## Deployment Checklist
 
-- [ ] **Warren Hub**: Deployed on Hetzner VPS (5.161.126.32:8000)
-- [ ] **Warren Nodes**: Enrolled 4-5 personal devices
-- [ ] **S5W2C**: Installed on Android phone, connected to WiFi
-- [ ] **Environment Variables**: Configured in `.env`
-- [ ] **APE Module**: Integrated into `stealth_utils.py`
-- [ ] **Scrapers**: Updated to use `get_ape()`
-- [ ] **Testing**: Validated proxy rotation with test scraper
-- [ ] **Monitoring**: Set up metrics dashboard
+- [x] **Warren Hub**: Deployed on Hetzner VPS `178.156.179.237` (ports 7000 nodes / 8000 proxy / 9000 admin)
+- [ ] **Warren Nodes**: Enroll personal devices (home PC, laptop, RPi) — required before `WARREN_ENABLED=true`
+- [ ] **S5W2C**: Install APK on Android phone (optional mobile exits)
+- [x] **Environment Variables**: Documented in `.env.example` / local `.env`
+- [x] **APE Module**: `scrapers/proxy_engine.py` + `stealth_utils.py` + `BaseScraper` helpers
+- [x] **Example scraper**: `scrapers/counties/tennessee_tncis_v2_ape.py`
+- [x] **Testing**: `PYTHONPATH=. python3 tests/test_ape_integration.py` (29 tests)
+- [ ] **Scraper fleet**: Adapt remaining state scrapers to `get_proxy()` / success-failure recording
+- [ ] **Monitoring**: Surface `ape.get_metrics()` on dashboard (optional)
 
 ---
 
@@ -299,17 +304,20 @@ class TennesseeTnCISScraperV2(BaseScraper):
 ### Warren Hub Not Responding
 
 ```bash
-# SSH into Hetzner VPS
-ssh -i .shamrock_deploy_key root@5.161.126.32
+# SSH into production Hetzner VPS
+ssh -i ~/.ssh/id_ed25519 root@178.156.179.237
 
 # Check service status
-sudo systemctl status warren
+systemctl status warren
 
-# View logs
-sudo journalctl -u warren -f
+# View logs (join code + enroll token printed on start)
+journalctl -u warren -n 50 --no-pager
 
 # Restart service
-sudo systemctl restart warren
+systemctl restart warren
+
+# Secrets (proxy password, admin token)
+sudo cat /opt/warren/hub.env
 ```
 
 ### S5W2C Not Available

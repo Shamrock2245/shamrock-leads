@@ -45,9 +45,10 @@ Device 5 (VPS)      ─┘
 ### Deployment Strategy for ShamrockLeads
 
 **Phase 1: Hub Setup**
-- Deploy Warren hub on Hetzner VPS (5.161.126.32)
-- Exposes single proxy endpoint on port 8000
-- Dashboard on port 8080 (admin-only)
+- Deploy Warren hub on Hetzner VPS (`178.156.179.237`) via `deployment/warren_hub_deploy.sh`
+- Nodes dial in on port **7000** (TLS)
+- Client proxy endpoint on port **8000**
+- Admin dashboard on port **9000** (token-auth; prefer tunnel, not public)
 
 **Phase 2: Device Enrollment**
 - Install Warren binary on each personal device:
@@ -58,17 +59,17 @@ Device 5 (VPS)      ─┘
 
 **Phase 3: Routing Configuration**
 ```bash
-# Route all traffic through pool
-curl -x http://warren:PASSWORD@HUB:8000 https://api.ipify.org
+# Route all traffic through pool (production hub)
+curl -x http://warren:PASSWORD@178.156.179.237:8000 https://api.ipify.org
 
 # Route through specific device (e.g., home PC)
-curl -x http://warren+home-pc:PASSWORD@HUB:8000 https://api.ipify.org
+curl -x http://warren+home-pc:PASSWORD@178.156.179.237:8000 https://api.ipify.org
 
 # Route by region (if device location matches)
-curl -x http://warren-region-US:PASSWORD@HUB:8000 https://api.ipify.org
+curl -x http://warren-region-US:PASSWORD@178.156.179.237:8000 https://api.ipify.org
 
 # Sticky session (keep same IP for multi-step flows)
-curl -x http://warren-session-abc123:PASSWORD@HUB:8000 https://api.ipify.org
+curl -x http://warren-session-abc123:PASSWORD@178.156.179.237:8000 https://api.ipify.org
 ```
 
 ### Integration with ShamrockLeads
@@ -303,8 +304,8 @@ class AutonomousProxyEngine:
     
     def __init__(self):
         self.warren_manager = WarrenProxyManager(
-            hub_url="5.161.126.32:8000",
-            password=os.getenv("WARREN_PASSWORD")
+            hub_url=os.getenv("WARREN_HUB_URL", "178.156.179.237:8000"),
+            password=os.getenv("WARREN_PASSWORD", ""),
         )
         self.s5w2c_manager = S5W2CProxyManager(
             phone_ip=os.getenv("S5W2C_PHONE_IP", "192.168.1.100")
@@ -373,48 +374,27 @@ class AutonomousProxyEngine:
 ### Hetzner VPS Setup (Warren Hub)
 
 ```bash
-# SSH into Hetzner VPS
-ssh -i .shamrock_deploy_key root@5.161.126.32
+# SSH into production Hetzner VPS
+ssh -i ~/.ssh/id_ed25519 root@178.156.179.237
 
-# Download Warren hub binary
-wget https://github.com/doedja/warren/releases/download/v0.4.11/warren-x86_64-unknown-linux-gnu
-chmod +x warren-x86_64-unknown-linux-gnu
+# Preferred: use the repo deploy script (correct asset names + systemd unit)
+cd /opt/shamrock-leads   # or scp deployment/warren_hub_deploy.sh
+bash deployment/warren_hub_deploy.sh v0.4.11
 
-# Run hub on port 8000
-./warren-x86_64-unknown-linux-gnu hub --listen 0.0.0.0:8000 --admin 0.0.0.0:8080
-
-# (Optional) Run as systemd service
-sudo tee /etc/systemd/system/warren.service > /dev/null <<EOF
-[Unit]
-Description=Warren Proxy Hub
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/root/warren-x86_64-unknown-linux-gnu hub --listen 0.0.0.0:8000 --admin 0.0.0.0:8080
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl enable warren
-sudo systemctl start warren
+systemctl status warren
+journalctl -u warren -n 30 --no-pager   # join code printed here
 ```
 
 ### Device Enrollment (Warren Nodes)
 
 ```bash
-# On each device (PC, laptop, RPi)
-wget https://github.com/doedja/warren/releases/download/v0.4.11/warren-x86_64-unknown-linux-gnu
-chmod +x warren-x86_64-unknown-linux-gnu
+# On each personal device (PC, laptop, RPi) — grab join code from hub logs:
+#   journalctl -u warren -n 20 | grep 'join a device'
+cd /path/to/shamrock-leads/deployment
+./warren_node_enroll.sh --join warren1.XXXX --name home-pc --install-service
 
-# Enroll with hub
-./warren-x86_64-unknown-linux-gnu node \
-  --hub wss://5.161.126.32:8000 \
-  --name "home-pc" \
-  --token "shamrock-residential"
+# Manual equivalent:
+#   warren node run --join warren1.XXXX --name home-pc
 ```
 
 ### S5W2C Setup (Android)
@@ -429,11 +409,15 @@ chmod +x warren-x86_64-unknown-linux-gnu
 ### Environment Variables
 
 ```bash
-# .env or docker-compose.yml
-WARREN_HUB_URL=http://5.161.126.32:8000
-WARREN_PASSWORD=your-secure-password
-S5W2C_PHONE_IP=192.168.1.100
-S5W2C_PHONE_PORT=1080
+# .env (see also .env.example)
+WARREN_HUB_URL=178.156.179.237:8000
+WARREN_PROXY_USER=warren
+WARREN_PASSWORD=          # WARREN_PROXY_PASS from /opt/warren/hub.env
+WARREN_ENABLED=false      # true only after residential nodes are online
+S5W2C_PHONE_IP=
+S5W2C_PORT=1080
+S5W2C_ENABLED=false
+STORMSIA_ENABLED=true
 STORMSIA_CACHE_TTL=1800  # 30 minutes
 ```
 
@@ -514,4 +498,4 @@ class ProxyHealthChecker:
 **Prepared by:** Manus AI Agent  
 **Project:** shamrock-leads  
 **Date:** 2026-07  
-**Status:** Ready for Implementation
+**Status:** Hub live on `178.156.179.237` (2026-07-16). Nodes + scraper fleet integration remaining.

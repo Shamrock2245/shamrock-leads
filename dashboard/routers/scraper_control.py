@@ -23,8 +23,10 @@ from fastapi.responses import JSONResponse
 from dashboard.extensions import (
     get_collection,
     REGISTERED_COUNTIES,
+    index_scraper_status_docs,
     parse_registered_county,
     registered_county_to_trigger_key,
+    resolve_scraper_status,
 )
 
 scraper_control_bp = APIRouter(prefix="/api", tags=["scraper_control"])
@@ -132,27 +134,44 @@ async def api_scheduler_status():
     triggers = get_collection("scraper_triggers")
     scraper_config_col = get_collection("scraper_config")
 
-    status_map = {}
+    status_docs = []
     async for doc in scraper_status_col.find({}, {"_id": 0}):
-        county = doc.get("county")
-        if county:
-            status_map[county] = doc
+        status_docs.append(doc)
+    status_index = index_scraper_status_docs(status_docs)
 
     config_map = {}
     async for doc in scraper_config_col.find({}, {"_id": 0}):
         county = doc.get("county")
         if county:
             config_map[county] = doc
+            if doc.get("county_label"):
+                config_map[doc["county_label"]] = doc
 
     pending_triggers = []
     async for doc in triggers.find({"status": "pending"}, {"_id": 0}):
         pending_triggers.append(doc.get("county"))
 
     total_registered = len(REGISTERED_COUNTIES)
-    active = sum(1 for c in REGISTERED_COUNTIES if status_map.get(c, {}).get("status") == "ok")
-    errors = sum(1 for c in REGISTERED_COUNTIES if status_map.get(c, {}).get("status") == "error")
-    never_run = sum(1 for c in REGISTERED_COUNTIES if c not in status_map)
-    disabled = sum(1 for c in REGISTERED_COUNTIES if config_map.get(c, {}).get("enabled") is False)
+    active = 0
+    errors = 0
+    never_run = 0
+    disabled = 0
+    for label in REGISTERED_COUNTIES:
+        bare, st = parse_registered_county(label)
+        live = resolve_scraper_status(status_index, bare, st)
+        cfg = config_map.get(label) or config_map.get(bare) or {}
+        if cfg.get("enabled") is False:
+            disabled += 1
+        if not live:
+            never_run += 1
+            continue
+        s = (live.get("status") or "").lower()
+        if s in ("ok", "healthy", "success"):
+            active += 1
+        elif s in ("error", "failed", "fail"):
+            errors += 1
+        else:
+            never_run += 1
 
     return {
         "total_registered": total_registered,

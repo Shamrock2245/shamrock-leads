@@ -236,18 +236,52 @@ class MongoWriter:
         status: str = "ok",
         error: str = None,
         run_count_increment: int = 1,
+        state: str = None,
+        scraper_id: str = None,
     ):
         """
         Upsert the latest scraper run state into the scraper_status collection.
-        One document per county — always reflects the most recent run.
-        The dashboard /api/status endpoint reads from this collection.
+
+        Identity is multi-state aware:
+        - ``county`` stored as bare name (``Lee``) for legacy readers
+        - ``county_label`` as ``Lee (FL)`` and ``state`` for dashboard joins
+        - ``scraper_id`` when provided (``scraper_lee`` / ``scraper_ga_lee``)
+
+        Prefer matching on county_label when present so Lee FL ≠ Lee SC.
         """
+        import re
+
         now = datetime.now(timezone.utc)
+        bare = re.sub(r"\s*\([A-Za-z]{2}\)\s*$", "", (county or "").strip()).strip()
+        st_match = re.search(r"\(([A-Za-z]{2})\)\s*$", (county or "").strip())
+        st = (state or (st_match.group(1) if st_match else None) or "FL").upper()
+        label = f"{bare} ({st})" if bare else county
+
+        # Prefer state-aware identity; fall back to bare county for older docs
+        filter_q: dict
+        if bare:
+            filter_q = {
+                "$or": [
+                    {"county_label": label},
+                    {"county": label},
+                    # Bare match only when state agrees or state not set (legacy)
+                    {"county": bare, "state": st},
+                    {"county": bare, "state": {"$exists": False}},
+                    {"county": bare, "state": None},
+                    {"county": bare, "state": ""},
+                ]
+            }
+        else:
+            filter_q = {"county": county}
+
         self.scraper_status.update_one(
-            {"county": county},
+            filter_q,
             {
                 "$set": {
-                    "county": county,
+                    "county": bare or county,
+                    "county_label": label,
+                    "state": st,
+                    "scraper_id": scraper_id,
                     "last_run": now,
                     "last_run_iso": now.isoformat(),
                     "records": records,

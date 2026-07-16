@@ -276,6 +276,7 @@
     <!-- Presets -->
     <div class="preset-bar">
       <button class="preset-btn" onclick="SL.applyPreset('swfl')"><span class="emoji">☘️</span> SWFL Core</button>
+      <button class="preset-btn" onclick="SL.applyPreset('fl')"><span class="emoji">🌴</span> All Florida</button>
       <button class="preset-btn" onclick="SL.applyPreset('all')"><span class="emoji">🌍</span> All Counties</button>
       <button class="preset-btn" onclick="SL.applyPreset('none')"><span class="emoji">✕</span> Clear</button>
     </div>
@@ -376,7 +377,7 @@
             <th data-sort="bond_amount" onclick="SL.sortBy('bond_amount')">Bond</th>
             <th data-sort="lead_score" onclick="SL.sortBy('lead_score')">Score</th>
             <th>Status</th>
-            <th data-sort="arrest_date" onclick="SL.sortBy('arrest_date')">Arrest Date</th>
+            <th data-sort="scraped_at" onclick="SL.sortBy('scraped_at')" title="Sort by last scrape time">Arrest / Scraped</th>
             <th>Court Date</th>
             <th>Source</th>
           </tr>
@@ -3208,22 +3209,22 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/sl-core.js?v=5"></script>
+<script src="/sl-core.js?v=6"></script>
 <script src="/sl-rearrest.js?v=4"></script>
-<script src="/sl-data.js?v=5"></script>
+<script src="/sl-data.js?v=6"></script>
 <!-- Tabulator v6 JS -->
 <script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
 <!-- ApexCharts -->
 <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
 <!-- Vanilla Calendar Pro -->
 <script src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
-<script src="/sl-features.js?v=5"></script>
+<script src="/sl-features.js?v=6"></script>
 <script src="/sl-active-bonds.js?v=5"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-tracking.js?v=4"></script>
 <script src="/sl-geo-intelligence.js?v=1"></script>
 <script src="/sl-intake.js?v=4"></script>
-<script src="/sl-health.js?v=4"></script>
+<script src="/sl-health.js?v=5"></script>
 <script src="/sl-service-control.js?v=1"></script>
 <script src="/sl-prospective.js?v=4"></script>
 <script src="/sl-defendant-lifecycle.js?v=4"></script>

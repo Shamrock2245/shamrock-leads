@@ -4,7 +4,7 @@
 */
 window.SL_STATE = {
   counties: [], selectedCounties: [], days: 0, custody: '', status: '',
-  stateCode: '', minBond: 0, search: '', sort: 'arrest_date', order: 'desc',
+  stateCode: '', minBond: 0, search: '', sort: 'scraped_at', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
   defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defBond: 0, defPage: 1, defLimit: 48,
   scraperData: {}, mongoData: {}, prevHotCount: -1,
@@ -22,6 +22,7 @@ window.SL_STATE = {
 const API = location.origin;
 const PRESETS = {
   swfl: ['Lee (FL)','Collier (FL)','Charlotte (FL)','DeSoto (FL)','Hendry (FL)','Sarasota (FL)','Manatee (FL)'],
+  fl: null, // filled dynamically from SL_STATE.counties with (FL)
   all: [], none: []
 };
 let searchTimer = null;
@@ -59,7 +60,8 @@ function switchTab(btn) {
     _updateBadgeEl(badgeMap[tabId], 0);
   }
 
-  if (tabId === 'tabLeads' && SL_STATE.leads.length === 0) applyFilters();
+  // Always refresh Lead Explorer on tab visit so it mirrors live scrapes
+  if (tabId === 'tabLeads') applyFilters();
   if (tabId === 'tabDefendants') loadDefendants();
   if (tabId === 'tabHealth') renderHealth();
   if (tabId === 'tabAnalytics') { if (typeof SLAnalytics !== 'undefined') SLAnalytics.load(); }
@@ -574,7 +576,13 @@ function filterCountyOptions(q) {
 }
 function applyPreset(name) {
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-  SL_STATE.selectedCounties = name === 'all' || name === 'none' ? [] : [...PRESETS[name]];
+  if (name === 'all' || name === 'none') {
+    SL_STATE.selectedCounties = [];
+  } else if (name === 'fl') {
+    SL_STATE.selectedCounties = (SL_STATE.counties || []).filter(c => /\(FL\)$/i.test(c));
+  } else {
+    SL_STATE.selectedCounties = [...(PRESETS[name] || [])];
+  }
   event.target.closest('.preset-btn').classList.add('active');
   buildCountyOptions(SL_STATE.counties); applyFilters();
 }

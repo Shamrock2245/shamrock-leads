@@ -1,12 +1,29 @@
 /* ShamrockLeads — Data Fetch, Render, Command Center */
 
+function _relTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const mins = Math.round((Date.now() - d) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 // ── Lead Explorer Fetch ──
 async function applyFilters() {
   SL_STATE.custody = document.getElementById('custodyFilter')?.value || '';
   SL_STATE.status = document.getElementById('statusFilter')?.value || '';
   SL_STATE.stateCode = document.getElementById('stateFilter')?.value || '';
   SL_STATE.limit = parseInt(document.getElementById('limitSelect')?.value || 50);
-  const p = new URLSearchParams({ page: SL_STATE.page, limit: SL_STATE.limit, sort: SL_STATE.sort, order: SL_STATE.order });
+  const p = new URLSearchParams({
+    page: SL_STATE.page,
+    limit: SL_STATE.limit,
+    sort: SL_STATE.sort || 'scraped_at',
+    order: SL_STATE.order || 'desc',
+  });
   if (SL_STATE.selectedCounties.length) p.set('county', SL_STATE.selectedCounties.join(','));
   if (SL_STATE.stateCode) p.set('state', SL_STATE.stateCode);
   if (SL_STATE.days) p.set('days', SL_STATE.days);
@@ -20,16 +37,30 @@ async function applyFilters() {
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('application/json')) { console.warn('[Leads] non-JSON response'); return; }
     const d = await r.json();
+    if (d.error) { console.warn('[Leads] API error', d.error); return; }
     SL_STATE.leads = d.leads || []; SL_STATE.total = d.total || 0; SL_STATE.pages = d.pages || 1;
-    if (d.counties && SL_STATE.counties.length === 0) buildCountyOptions(d.counties);
-    document.getElementById('leadsBadge').textContent = SL_STATE.total.toLocaleString();
-    document.getElementById('resultsMeta').textContent = `${SL_STATE.total.toLocaleString()} results · Page ${SL_STATE.page}/${SL_STATE.pages}`;
+    // Always refresh county options when server returns a fuller list
+    if (d.counties && d.counties.length) {
+      if (SL_STATE.counties.length !== d.counties.length) buildCountyOptions(d.counties);
+      else SL_STATE.counties = d.counties;
+    }
+    const badge = document.getElementById('leadsBadge');
+    if (badge) badge.textContent = SL_STATE.total.toLocaleString();
+    const activity = d.activity || {};
+    const fresh = activity.scraped_last_hour != null
+      ? ` · ${activity.scraped_last_hour.toLocaleString()} scraped last hour`
+      : '';
+    const meta = document.getElementById('resultsMeta');
+    if (meta) {
+      meta.textContent = `${SL_STATE.total.toLocaleString()} results · Page ${SL_STATE.page}/${SL_STATE.pages}${fresh}`;
+    }
     renderLeads(); renderPills(); renderPagination();
   } catch(e) { console.error('applyFilters error:', e); }
 }
 
 function renderLeads() {
   const tb = document.getElementById('leadsBody');
+  if (!tb) return;
   if (!SL_STATE.leads.length) { tb.innerHTML = '<tr><td colspan="10" class="loading">No leads match current filters</td></tr>'; return; }
   const stateColors = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6', TN: '#ef4444', TX: '#eab308', LA: '#ec4899' };
   tb.innerHTML = SL_STATE.leads.map(l => {
@@ -37,24 +68,27 @@ function renderLeads() {
     const bc = bond >= 10000 ? 'bond-high' : bond >= 2500 ? 'bond-mid' : 'bond-low';
     const sc = (l.lead_status||'').toLowerCase();
     const scoreCls = sc === 'hot' ? 'score-hot' : sc === 'warm' ? 'score-warm' : sc === 'disqualified' ? 'score-disq' : 'score-cold';
+    const statusLabel = sc === 'initial' || sc === 'scrape' ? 'Unscored' : (l.lead_status || '');
     const charges = (l.charges||'').length > 50 ? (l.charges||'').slice(0,47)+'…' : (l.charges||'—');
     const custVal = (l.status||'').trim();
     const custLower = custVal.toLowerCase();
     const custClass = custLower.includes('custody') ? 'custody' : custLower.includes('release') || custLower.includes('bonded') ? 'released' : custLower.includes('not in') ? 'released' : 'other';
-    const bkEsc = (l.booking_number||'').replace(/"/g,'&quot;');
+    const bkEsc = String(l.booking_number||'').replace(/"/g,'&quot;');
     const custDropdown = `<select class="def-status-badge ${custClass}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEsc}',this.value,this)"><option value="" ${!custVal?'selected':''}>${custVal||'—'}</option><option value="In Custody" ${'In Custody'===custVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===custVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===custVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===custVal?'selected':''}>Bonded Out</option></select>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
     const st = (l.state || 'FL').toUpperCase();
     const stColor = stateColors[st] || '#64748b';
+    const scrapedRel = _relTime(l.scraped_at);
+    const arrestDisp = fmtDate(l.arrest_date || l.booking_date);
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
       <td><span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
       <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
-      <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></td>
+      <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${statusLabel}</span></td>
       <td>${custDropdown}</td>
-      <td>${fmtDate(l.arrest_date || l.booking_date)}</td>
+      <td>${arrestDisp}<br><span style="color:var(--muted);font-size:10px" title="${l.scraped_at||''}">${scrapedRel ? 'scraped '+scrapedRel : ''}</span></td>
       <td class="${courtCls}">${l.court_date || '—'}</td>
       <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : '—'}</td>
     </tr>`;
@@ -209,4 +243,18 @@ async function loadDashboard() {
   } else {
     _scheduleKpiRefresh();
   }
+})();
+
+/* ══════════════════════════════════════════════════════════════════
+   LEAD EXPLORER AUTO-REFRESH (every 45s while tab is active)
+   Keeps the grid aligned with live scraper writes.
+   ══════════════════════════════════════════════════════════════════ */
+(function startLeadsAutoRefresh() {
+  const LEADS_REFRESH_MS = 45_000;
+  setInterval(() => {
+    const tab = document.getElementById('tabLeads');
+    if (tab && tab.classList.contains('active') && typeof applyFilters === 'function') {
+      applyFilters();
+    }
+  }, LEADS_REFRESH_MS);
 })();

@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.15.0] — 2026-07-16 (APE + Lead Explorer / scraper-status harmony)
+
+### Added — Autonomous Proxy Engine (APE)
+- `scrapers/proxy_engine.py` — Warren residential, S5W2C mobile, Stormsia free fallback with health gating.
+- `scrapers/proxy_validator.py` — proxy validation helpers.
+- `deployment/warren_hub_deploy.sh` / `warren_node_enroll.sh` — real Warren v0.4.x tarball assets + correct CLI.
+- `docs/APE_INTEGRATION_GUIDE.md`, `docs/SELF_HOSTED_PROXY_ARCHITECTURE.md` — production VPS `178.156.179.237`.
+- `.env.example` APE vars (`WARREN_*`, `S5W2C_*`, `STORMSIA_*`).
+- `tests/test_ape_integration.py` — 29 unit tests (Warren/S5W2C/Stormsia/BaseScraper).
+
+### Fixed — Dashboard reflects live scrapers
+- `/api/status` + `/api/scraper-health` join bare Mongo keys (`Lee`) to `County (ST)` labels without cross-state collisions.
+- Multi-State Ops KPIs use the same multi-key status index (FL/GA/SC/NC/TN/TX/LA).
+- Lead Explorer defaults to `scraped_at` desc, shows scrape freshness, auto-refreshes, county options as labels.
+- `MongoWriter.upsert_scraper_status` stores `state` + `county_label` + `scraper_id` (BaseScraper passes them).
+
 ## [2.14.0] — 2026-07-15 (TN / TX / LA wave-1 scrapers)
 
 ### Added — Scrapers

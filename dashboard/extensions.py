@@ -373,6 +373,10 @@ REGISTERED_COUNTIES = sorted([
 ])
 
 
+# States we actively scrape / surface in the dashboard
+ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
+
+
 def parse_registered_county(label: str) -> tuple[str, str | None]:
     """Split ``Lee (FL)`` → ``("Lee", "FL")``; bare names keep state None."""
     raw = (label or "").strip()
@@ -380,6 +384,15 @@ def parse_registered_county(label: str) -> tuple[str, str | None]:
     if m:
         return m.group(1).strip(), m.group(2).upper()
     return raw, None
+
+
+def county_label(name: str, state: str | None = None) -> str:
+    """Normalize to ``County (ST)`` for UI / registry keys."""
+    bare, st = parse_registered_county(name or "")
+    st = (st or state or "FL").upper()
+    if not bare:
+        return ""
+    return f"{bare} ({st})"
 
 
 def registered_county_to_trigger_key(label: str) -> str:
@@ -392,6 +405,104 @@ def registered_county_to_trigger_key(label: str) -> str:
     if not st or st == "FL":
         return slug
     return f"{st.lower()}_{slug}"
+
+
+def index_scraper_status_docs(docs: list[dict]) -> dict[str, dict]:
+    """Index scraper_status docs under bare, labeled, and trigger-key forms.
+
+    Writers historically stored bare county names (``Lee``). Multi-state needs
+    ``Lee (FL)`` labels. Lookups try every known key so dashboards stay accurate.
+    """
+    by_key: dict[str, dict] = {}
+    for doc in docs:
+        if not doc:
+            continue
+        county_raw = (doc.get("county") or "").strip()
+        if not county_raw:
+            continue
+        bare, st_from_label = parse_registered_county(county_raw)
+        st = (doc.get("state") or st_from_label or "").upper() or None
+        keys = {county_raw, bare}
+        if st:
+            keys.add(county_label(bare, st))
+            keys.add(registered_county_to_trigger_key(county_label(bare, st)))
+        sid = doc.get("scraper_id") or doc.get("job_id")
+        if sid:
+            keys.add(str(sid))
+        for k in keys:
+            if not k:
+                continue
+            # Prefer more recently updated docs when keys collide
+            existing = by_key.get(k)
+            if existing is None:
+                by_key[k] = doc
+                continue
+            ex_ts = existing.get("last_run") or existing.get("updated_at")
+            new_ts = doc.get("last_run") or doc.get("updated_at")
+            if new_ts and (not ex_ts or new_ts >= ex_ts):
+                by_key[k] = doc
+    return by_key
+
+
+def _registered_states_for_bare(bare: str) -> list[str]:
+    """Which state codes have this bare county name in REGISTERED_COUNTIES."""
+    target = (bare or "").strip().lower()
+    if not target:
+        return []
+    out = []
+    for label in REGISTERED_COUNTIES:
+        name, st = parse_registered_county(label)
+        if name.lower() == target and st:
+            out.append(st)
+    return out
+
+
+def resolve_scraper_status(
+    index: dict[str, dict],
+    county_name: str,
+    state: str | None = None,
+) -> dict:
+    """Resolve a scraper_status doc for a county (+ optional state).
+
+    Matching order:
+    1. Labeled key ``County (ST)`` / trigger key (preferred, multi-state safe)
+    2. Bare key when name is unique across the registry (e.g. Cobb → GA only)
+    3. Bare key for FL / unknown state (legacy Florida writers)
+    """
+    bare, st_from_label = parse_registered_county(county_name)
+    st = (state or st_from_label or "").upper() or None
+    candidates: list[str] = []
+    if st:
+        label = county_label(bare, st)
+        candidates.append(label)
+        candidates.append(registered_county_to_trigger_key(label))
+
+    states_for_name = _registered_states_for_bare(bare)
+    unique_name = len(states_for_name) <= 1
+    allow_bare = (not st) or st == "FL" or unique_name
+    if allow_bare:
+        candidates.append(county_name)
+        candidates.append(bare)
+
+    seen: set[str] = set()
+    for key in candidates:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        doc = index.get(key)
+        if not doc:
+            continue
+        doc_st = (doc.get("state") or "").upper()
+        if not doc_st:
+            _, parsed = parse_registered_county(doc.get("county") or "")
+            doc_st = (parsed or "").upper()
+        if st and doc_st and doc_st != st:
+            continue
+        # Shared names (Lee): never attach unlabeled bare docs to non-FL
+        if st and st != "FL" and not doc_st and not unique_name:
+            continue
+        return doc
+    return {}
 
 
 
