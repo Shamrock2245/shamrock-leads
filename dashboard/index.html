@@ -35,7 +35,7 @@
 <div class="header">
   <div class="header-left">
     <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="header-logo" style="height:36px;margin-right:10px;vertical-align:middle">
-    <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC · NC · TN · TX · LA</small></h1>
+    <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC · NC · TN · TX · LA · CT · AL · MS</small></h1>
   </div>
 </div><!-- /header -->
 <!-- ═══ NOTIFICATION CENTER PANEL ═══ -->
@@ -88,7 +88,7 @@
       <button class="sidebar-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">⚡</span> Command Center</button>
       <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔍</span> Lead Explorer <span class="badge" id="leadsBadge">—</span></button>
       <button class="sidebar-btn" data-tab="tabDefendants" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">👥</span> Defendants</button>
-      <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">4 STATES</span></button>
+      <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">10 STATES</span></button>
       <button class="sidebar-btn" data-tab="tabBondIntel" onclick="SL.switchTab(this);SLBondIntel.load()" style="border-left:3px solid #10b981"><span class="sidebar-btn-icon">💰</span> Bond Intelligence <span class="badge" id="bondIntelBadge" style="background:#10b981;color:#000;font-size:9px">LIVE</span></button>
       <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
 
@@ -319,6 +319,9 @@
         <option value="TN">🎸 Tennessee</option>
         <option value="TX">⭐ Texas</option>
         <option value="LA">🎷 Louisiana</option>
+        <option value="CT">⚓ Connecticut</option>
+        <option value="AL">🌻 Alabama</option>
+        <option value="MS">🎶 Mississippi</option>
       </select>
 
       <select id="custodyFilter" onchange="SL.applyFilters()">
@@ -844,6 +847,12 @@
       <button class="bond-state-btn" data-state="GA" onclick="SLBondIntel.setState('GA')">🍑 Georgia</button>
       <button class="bond-state-btn" data-state="SC" onclick="SLBondIntel.setState('SC')">🌙 South Carolina</button>
       <button class="bond-state-btn" data-state="NC" onclick="SLBondIntel.setState('NC')">🦅 North Carolina</button>
+      <button class="bond-state-btn" data-state="TN" onclick="SLBondIntel.setState('TN')">🎸 Tennessee</button>
+      <button class="bond-state-btn" data-state="TX" onclick="SLBondIntel.setState('TX')">⭐ Texas</button>
+      <button class="bond-state-btn" data-state="LA" onclick="SLBondIntel.setState('LA')">🎷 Louisiana</button>
+      <button class="bond-state-btn" data-state="CT" onclick="SLBondIntel.setState('CT')">⚓ Connecticut</button>
+      <button class="bond-state-btn" data-state="AL" onclick="SLBondIntel.setState('AL')">🌻 Alabama</button>
+      <button class="bond-state-btn" data-state="MS" onclick="SLBondIntel.setState('MS')">🎶 Mississippi</button>
       <span style="margin-left:12px;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Window:</span>
       <button class="bond-days-btn" data-days="7" onclick="SLBondIntel.setDays(7)">7d</button>
       <button class="bond-days-btn active" data-days="30" onclick="SLBondIntel.setDays(30)">30d</button>
@@ -948,6 +957,12 @@
         <button class="health-filter-btn" data-filter="state:GA" onclick="SLHealth.setFilter('state:GA',this)" style="border-color:#f59e0b;color:#f59e0b">GA</button>
         <button class="health-filter-btn" data-filter="state:SC" onclick="SLHealth.setFilter('state:SC',this)" style="border-color:#8b5cf6;color:#8b5cf6">SC</button>
         <button class="health-filter-btn" data-filter="state:NC" onclick="SLHealth.setFilter('state:NC',this)" style="border-color:#3b82f6;color:#3b82f6">NC</button>
+        <button class="health-filter-btn" data-filter="state:TN" onclick="SLHealth.setFilter('state:TN',this)" style="border-color:#ef4444;color:#ef4444">TN</button>
+        <button class="health-filter-btn" data-filter="state:TX" onclick="SLHealth.setFilter('state:TX',this)" style="border-color:#eab308;color:#eab308">TX</button>
+        <button class="health-filter-btn" data-filter="state:LA" onclick="SLHealth.setFilter('state:LA',this)" style="border-color:#ec4899;color:#ec4899">LA</button>
+        <button class="health-filter-btn" data-filter="state:CT" onclick="SLHealth.setFilter('state:CT',this)" style="border-color:#06b6d4;color:#06b6d4">CT</button>
+        <button class="health-filter-btn" data-filter="state:AL" onclick="SLHealth.setFilter('state:AL',this)" style="border-color:#f97316;color:#f97316">AL</button>
+        <button class="health-filter-btn" data-filter="state:MS" onclick="SLHealth.setFilter('state:MS',this)" style="border-color:#84cc16;color:#84cc16">MS</button>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <input type="text" id="healthSearch" placeholder="Search county..." style="width:160px;padding:6px 10px;background:var(--input-bg,#1a1a2e);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px" oninput="SLHealth.search(this.value)">
           <button class="btn" onclick="SLHealth.runAll()" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px;font-size:13px">&#x26A1; Run All</button>
@@ -4112,16 +4127,23 @@
   <div class="header-banner">
     <div class="header-title">
       <h1>🤖 Automations Engine</h1>
-      <div class="header-subtitle">Manage native background tasks, agent crons, and event triggers.</div>
+      <div class="header-subtitle">41 automations — Python cron loops, Node-RED flows, and event triggers. All wired.</div>
     </div>
     <div class="header-actions">
+      <div id="nrStatusBar" class="nr-status-bar">
+        <span class="nr-status-dot nr-online"></span>
+        <span>Node-RED</span>
+        <span class="nr-status-label">Connected</span>
+        <span class="nr-status-count">22 flows</span>
+      </div>
       <button class="btn btn-primary" onclick="SLAutomations.load()">Refresh Status</button>
     </div>
   </div>
-  <div class="content-wrapper" style="max-width: 1200px; margin: 0 auto; padding-top: 20px;">
-    <div id="automationsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;">
-      <div style="text-align:center; padding: 40px; color: var(--muted); grid-column: 1 / -1;">
-        Loading automations...
+  <div class="content-wrapper" style="max-width: 1600px; margin: 0 auto; padding-top: 20px;">
+    <div id="automationsGrid" class="auto-grid">
+      <div class="auto-loading-state">
+        <div class="auto-skeleton"></div><div class="auto-skeleton"></div>
+        <div class="auto-skeleton"></div><div class="auto-skeleton"></div>
       </div>
     </div>
   </div>

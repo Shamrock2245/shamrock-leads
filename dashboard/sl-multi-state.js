@@ -1,6 +1,6 @@
 /**
  * SLMultiState — Multi-State Operations Dashboard Module
- * Shows live scraper status, arrest data, and system health across FL, GA, SC, NC, TN, TX, LA.
+ * Shows live scraper status, arrest data, and system health across FL, GA, SC, NC, TN, TX, LA, CT, AL, MS.
  * Uses ApexCharts for charts. API: /api/ops/*
  */
 const SLMultiState = (() => {
@@ -15,7 +15,8 @@ const SLMultiState = (() => {
   let _platformChart = null;
   let _initialized = false;
 
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA'];
+  // STATE_ORDER controls card layout order. Live states first, scaffolded states at end.
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'CT', 'AL', 'MS'];
   const STATE_NAMES = {
     FL: 'Florida',
     GA: 'Georgia',
@@ -24,8 +25,15 @@ const SLMultiState = (() => {
     TN: 'Tennessee',
     TX: 'Texas',
     LA: 'Louisiana',
+    CT: 'Connecticut',
+    AL: 'Alabama',
+    MS: 'Mississippi',
   };
-  const STATE_EMOJI = { FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅', TN: '🎸', TX: '⭐', LA: '🎷' };
+  const STATE_EMOJI = {
+    FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅',
+    TN: '🎸', TX: '⭐',  LA: '🎷', CT: '⚓',
+    AL: '🌻', MS: '🎶',
+  };
   const STATE_COLORS = {
     FL: '#00d4aa',
     GA: '#f59e0b',
@@ -34,7 +42,12 @@ const SLMultiState = (() => {
     TN: '#ef4444',
     TX: '#eab308',
     LA: '#ec4899',
+    CT: '#06b6d4',
+    AL: '#f97316',
+    MS: '#84cc16',
   };
+  // States that are scaffolded (no live data yet) — shown with a dimmed card style.
+  const SCAFFOLDED_STATES = new Set(['CT', 'AL', 'MS']);
 
   const PLATFORM_COLORS = {
     'JailTracker':   '#ef4444',
@@ -116,7 +129,7 @@ const SLMultiState = (() => {
           <span class="ms-title-icon">🌎</span>
           <div>
             <h2 class="ms-title-text">Multi-State Operations</h2>
-            <p class="ms-title-sub">Live scraper network across Florida, Georgia, South Carolina &amp; North Carolina</p>
+            <p class="ms-title-sub">Live scraper network across Florida, Georgia, South Carolina &amp; North Carolina &mdash; expanding to Tennessee, Texas, Louisiana, Connecticut, Alabama &amp; Mississippi</p>
           </div>
         </div>
         <div class="ms-header-actions">
@@ -173,10 +186,16 @@ const SLMultiState = (() => {
             <input id="msSearch" type="text" class="ms-search" placeholder="Search county…" oninput="SLMultiState.setSearch(this.value)">
             <select id="msStateFilter" class="ms-select" onchange="SLMultiState.setStateFilter(this.value)">
               <option value="ALL">All States</option>
-              <option value="FL">Florida</option>
-              <option value="GA">Georgia</option>
-              <option value="SC">South Carolina</option>
-              <option value="NC">North Carolina</option>
+              <option value="FL">🌴 Florida</option>
+              <option value="GA">🍑 Georgia</option>
+              <option value="SC">🌙 South Carolina</option>
+              <option value="NC">🦅 North Carolina</option>
+              <option value="TN">🎸 Tennessee</option>
+              <option value="TX">⭐ Texas</option>
+              <option value="LA">🎷 Louisiana</option>
+              <option value="CT">⚓ Connecticut</option>
+              <option value="AL">🌻 Alabama</option>
+              <option value="MS">🎶 Mississippi</option>
             </select>
             <select class="ms-select" onchange="SLMultiState.setStatusFilter(this.value)">
               <option value="">All Status</option>
@@ -230,11 +249,16 @@ const SLMultiState = (() => {
     container.innerHTML = STATE_ORDER.map(s => {
       const d = states[s] || {};
       const color = STATE_COLORS[s] || '#64748b';
+      const isScaffolded = SCAFFOLDED_STATES.has(s);
       const healthPct = d.total_counties > 0
         ? Math.round((d.active_scrapers / d.total_counties) * 100)
-        : 0;
+        : (isScaffolded ? 0 : 0);
+      const scaffoldBadge = isScaffolded
+        ? `<div class="ms-scaffolded-badge">🚧 In Development</div>`
+        : '';
       return `
-        <div class="ms-state-card" style="--state-color:${color}" onclick="SLMultiState.setStateFilter('${s}')" title="Filter registry to ${STATE_NAMES[s]}">
+        <div class="ms-state-card${isScaffolded ? ' ms-state-card--scaffolded' : ''}" style="--state-color:${color}" onclick="SLMultiState.setStateFilter('${s}')" title="${isScaffolded ? STATE_NAMES[s] + ' — Scrapers in development' : 'Filter registry to ' + STATE_NAMES[s]}">
+          ${scaffoldBadge}
           <div class="ms-state-card-header">
             <span class="ms-state-emoji">${STATE_EMOJI[s] || '📍'}</span>
             <div>

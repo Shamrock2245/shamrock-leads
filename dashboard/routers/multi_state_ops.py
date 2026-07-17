@@ -2,7 +2,7 @@ from __future__ import annotations
 """
 ShamrockLeads — Multi-State Operations API
 Endpoints:
-  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC/TN/TX/LA)
+  GET /api/ops/state-summary          — KPIs per state (FL/GA/SC/NC/TN/TX/LA/CT/AL/MS)
   GET /api/ops/scraper-registry       — Full registry with state + platform metadata
   GET /api/ops/arrests/multi-state    — Recent arrests across all states with filters
   GET /api/ops/county-heatmap         — Arrest volume by county (all states)
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
 # Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
-ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
+# AL/CT/MS: cross-state scrapers live in counties/ (FL dir) and dedicated counties_XX dirs.
+ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "CT", "AL", "MS")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER REGISTRY — built from the actual scraper files on disk
@@ -42,12 +43,25 @@ def _build_registry() -> list[dict]:
         "GA": os.path.join(base, "counties_ga"),
         "SC": os.path.join(base, "counties_sc"),
         "NC": os.path.join(base, "counties_nc"),
-        # Scaffolded packages (appear when scrapers are added):
+        # Dedicated state packages:
         "TN": os.path.join(base, "counties_tn"),
         "TX": os.path.join(base, "counties_tx"),
-        "CT": os.path.join(base, "counties_ct"),
         "LA": os.path.join(base, "counties_la"),
+        # Scaffolded packages (appear when scrapers are added):
+        "CT": os.path.join(base, "counties_ct"),
+        "AL": os.path.join(base, "counties_al"),
         "MS": os.path.join(base, "counties_ms"),
+    }
+    # Cross-state scrapers that live in the FL counties/ dir but cover other states.
+    # Keyed by filename → (state, display_county, platform_hint)
+    cross_state_overrides: dict[str, tuple[str, str, str]] = {
+        "alabama_mississippi.py":   ("AL",  "Alabama Multi-County",    "Custom HTML"),
+        "connecticut_judicial.py":  ("CT",  "Connecticut Statewide",   "Custom HTML"),
+        "louisiana_lavine.py":      ("LA",  "Louisiana LAVINE",        "Custom HTML"),
+        "tennessee_tncis.py":       ("TN",  "Tennessee TnCIS",         "Custom HTML"),
+        "tennessee_tncis_v2.py":    ("TN",  "Tennessee TnCIS v2",      "Custom HTML"),
+        "tennessee_tncis_v2_ape.py": ("TN",  "Tennessee TnCIS v2 APE",  "Custom HTML"),
+        "texas_odyssey.py":         ("TX",  "Texas Odyssey",           "Tyler Odyssey"),
     }
     platform_map = {
         "jailtracker_base": "JailTracker",
@@ -66,12 +80,33 @@ def _build_registry() -> list[dict]:
         "base_scraper": "Custom HTML",
     }
     registry = []
+    # Track filenames already claimed by cross-state overrides so the FL loop skips them.
+    _cross_state_fnames = set(cross_state_overrides.keys())
+    # Inject cross-state scrapers under their correct state first.
+    fl_dir = os.path.normpath(state_dirs["FL"])
+    for fname, (cs_state, cs_county, cs_platform) in cross_state_overrides.items():
+        fpath = os.path.join(fl_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+        county_slug = cs_county.lower().replace(" ", "_").replace("-", "_")
+        registry.append({
+            "county": cs_county,
+            "state": cs_state,
+            "platform": cs_platform,
+            "file": fname,
+            "scraper_id": f"scraper_{cs_state.lower()}_{county_slug}",
+            "trigger_key": f"{cs_state.lower()}_{county_slug}",
+            "label": f"{cs_county} ({cs_state})",
+        })
     for state, dirpath in state_dirs.items():
         dirpath = os.path.normpath(dirpath)
         if not os.path.exists(dirpath):
             continue
         for fname in sorted(os.listdir(dirpath)):
             if not fname.endswith(".py") or fname in ("__init__.py", "eas_batch_runner.py"):
+                continue
+            # Skip cross-state files already injected above (only in FL dir).
+            if state == "FL" and fname in _cross_state_fnames:
                 continue
             fpath = os.path.join(dirpath, fname)
             try:
@@ -199,7 +234,7 @@ async def get_state_summary():
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
-    # Always surface FL/GA/SC/NC even when a dir is empty (zeros).
+    # Always surface all ACTIVE_STATES even when a dir is empty (zeros).
     for st in ACTIVE_STATES:
         state_counties.setdefault(st, [])
 

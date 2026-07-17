@@ -1,5 +1,5 @@
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Request
 """
 ShamrockLeads — Automation & Service Control API
 ==================================================
@@ -56,6 +56,14 @@ ALL_SERVICE_KEYS = {
     "geo_intelligence", "findmy_geofence",
     # Content
     "blog_publisher", "wix_sync",
+    # Utilitarian (Node-RED orchestrated)
+    "daily_ops_digest", "scraper_health_webhook", "fta_alert_relay", "bond_status_sync",
+    # Node-RED only flows (surfaced for visibility)
+    "nr_social_autopilot", "nr_court_clerk", "nr_the_closer", "nr_morning_briefing",
+    "nr_bounty_hunter", "nr_watchdog", "nr_gas_scheduler", "nr_intake_pipeline",
+    "nr_revenue_snapshot", "nr_the_scout", "nr_staff_performance", "nr_weather_posting",
+    "nr_review_harvester", "nr_payment_reminders", "nr_no_show_escalation",
+    "nr_whatsapp_campaigns", "nr_signnow_tracker", "nr_bond_renewal",
 }
 
 # Service metadata for frontend rendering
@@ -83,6 +91,30 @@ SERVICE_META = {
     "findmy_geofence":     {"name": "FindMy Geofence",    "icon": "🔍", "category": "geo",      "desc": "Lee County boundary breach detection"},
     "blog_publisher":      {"name": "Blog Publisher",      "icon": "✍️", "category": "content",  "desc": "Auto-publish scheduled posts to Wix Blog"},
     "wix_sync":            {"name": "Wix CMS Sync",         "icon": "🔗", "category": "content",  "desc": "Sync MongoDB → Wix CMS (IntakeQueue, Cases, CRM)"},
+    # Utilitarian automations (Node-RED orchestrated, trigger FastAPI backend)
+    "daily_ops_digest":       {"name": "Daily Ops Digest",       "icon": "📰", "category": "monitor",  "desc": "7:30 AM ET: arrest counts, state breakdown, fleet health → Slack #ops-daily"},
+    "scraper_health_webhook": {"name": "Scraper Health Webhook",  "icon": "🚨", "category": "monitor",  "desc": "Every 15 min: diff error state; alert new failures → Slack #scraper-alerts"},
+    "fta_alert_relay":        {"name": "FTA Alert Relay",         "icon": "🎯", "category": "monitor",  "desc": "Every 30 min: trigger re-arrest detection; relay FTA hits → Slack #fta-alerts"},
+    "bond_status_sync":       {"name": "Bond Status Sync",        "icon": "🔄", "category": "lifecycle", "desc": "Every 4 hrs: trigger SignNow poller then Wix sync in sequence"},
+    # Node-RED only flows (read-only visibility — no Python loop, NR is the runtime)
+    "nr_social_autopilot":    {"name": "Social Auto-Pilot",       "icon": "📱", "category": "content",  "desc": "[Node-RED] Scheduled social posts via Postiz"},
+    "nr_court_clerk":         {"name": "The Court Clerk",         "icon": "⚖️", "category": "intel",    "desc": "[Node-RED] Court date polling & calendar sync"},
+    "nr_the_closer":          {"name": "The Closer",              "icon": "🤝", "category": "revenue",  "desc": "[Node-RED] Follow-up sequence for warm leads"},
+    "nr_morning_briefing":    {"name": "Morning Briefing",        "icon": "☀️", "category": "monitor",  "desc": "[Node-RED] 7 AM briefing digest to Slack"},
+    "nr_bounty_hunter":       {"name": "The Bounty Hunter",       "icon": "🔍", "category": "geo",      "desc": "[Node-RED] Fugitive monitoring & Slack alerts"},
+    "nr_watchdog":            {"name": "Watchdog",                "icon": "🐕", "category": "monitor",  "desc": "[Node-RED] Every 5 min system health watchdog"},
+    "nr_gas_scheduler":       {"name": "GAS Scheduler",           "icon": "⏰", "category": "other",    "desc": "[Node-RED] Google Apps Script cron dispatcher"},
+    "nr_intake_pipeline":     {"name": "Intake Pipeline",         "icon": "📥", "category": "lifecycle", "desc": "[Node-RED] Intake form webhook → MongoDB"},
+    "nr_revenue_snapshot":    {"name": "Revenue Snapshot",        "icon": "💰", "category": "revenue",  "desc": "[Node-RED] Daily revenue metrics snapshot"},
+    "nr_the_scout":           {"name": "The Scout",               "icon": "🥂", "category": "intel",    "desc": "[Node-RED] New arrest feed monitor"},
+    "nr_staff_performance":   {"name": "Staff Performance",       "icon": "📊", "category": "monitor",  "desc": "[Node-RED] Agent KPI tracker"},
+    "nr_weather_posting":     {"name": "Weather Posting",         "icon": "⛅", "category": "content",  "desc": "[Node-RED] Weather-triggered social content"},
+    "nr_review_harvester":    {"name": "Review Harvester",        "icon": "⭐", "category": "content",  "desc": "[Node-RED] Google/Yelp review aggregator"},
+    "nr_payment_reminders":   {"name": "Payment Reminders",       "icon": "💳", "category": "revenue",  "desc": "[Node-RED] Overdue payment SMS/iMessage reminders"},
+    "nr_no_show_escalation":  {"name": "No-Show Escalation",      "icon": "⚠️", "category": "lifecycle", "desc": "[Node-RED] Court no-show detection & escalation"},
+    "nr_whatsapp_campaigns":  {"name": "WhatsApp Campaigns",      "icon": "💬", "category": "revenue",  "desc": "[Node-RED] WhatsApp outreach campaigns"},
+    "nr_signnow_tracker":     {"name": "SignNow Tracker",         "icon": "✍️", "category": "lifecycle", "desc": "[Node-RED] SignNow packet status tracker"},
+    "nr_bond_renewal":        {"name": "Bond Renewal Reminders",  "icon": "🔔", "category": "lifecycle", "desc": "[Node-RED] Bond renewal date reminders"},
 }
 
 
@@ -267,13 +299,22 @@ async def get_status():
                 except Exception:
                     last_run_at = None
 
+            # Classify runtime type for frontend badge rendering
+            _nr_only = key.startswith("nr_")
+            _nr_orchestrated = key in {
+                "daily_ops_digest", "scraper_health_webhook",
+                "fta_alert_relay", "bond_status_sync",
+            }
+
             status[key] = {
                 "enabled": section.get("enabled", False),
                 "interval_seconds": section.get("interval_seconds", 0),
                 "last_run_at": last_run_at,
                 "last_result": last_run.get("result") if last_run else None,
                 "last_error": last_run.get("error") if last_run else None,
-                "has_trigger": key in TRIGGER_EVENTS,
+                "has_trigger": key in TRIGGER_EVENTS and not _nr_only,
+                "nr_only": _nr_only,
+                "nr_orchestrated": _nr_orchestrated,
                 # Metadata
                 "name": meta.get("name", key),
                 "icon": meta.get("icon", "⚙️"),
@@ -281,11 +322,14 @@ async def get_status():
                 "description": meta.get("desc", ""),
             }
 
+        nr_count = sum(1 for k in ALL_SERVICE_KEYS if k.startswith("nr_"))
         return {
             "success": True,
             "status": status,
             "config": cfg,
             "service_count": len(ALL_SERVICE_KEYS),
+            "nr_online": True,   # Node-RED health check can update this via webhook
+            "nr_flow_count": nr_count + 4,  # NR-only + 4 utilitarian flows
         }
     except Exception as exc:
         logger.error("[automation-api] get_status error: %s", exc)
