@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-07-16 | **Active Scrapers:** ~51 | **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers. See plan: FL APE + SmartWeb quality first.
+> **Last Updated:** 2026-07-17 | **Active Scrapers:** ~51 | **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers. See plan: FL APE + SmartWeb quality first.
 
 ---
 
@@ -20,9 +20,9 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 1 | **Lee** | curl_cffi GET — sheriffleefl.org | `lee.py` | ✅ Active | 10 min | 2026-04-27 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
-| 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize + CF; **exit-IP preflight** | `charlotte.py` | ⚠️ Needs **US residential** exit (not Datacamp/VPN) | 90 min | 2026-07-16 |
+| 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Needs **US residential** exit (Warren APE sticky or office SOCKS) | 90 min | 2026-07-16 |
 | 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |
-| 5 | **Sarasota** | **mugshotssarasota.com WP API** (primary); JT FL backend 400; Revize CF-blocked | `sarasota.py` | ✅ Active (v5 mugshots) | 90 min | 2026-07-16 |
+| 5 | **Sarasota** | **mugshotssarasota.com WP API** (primary, ~189 records/7d, ~7s, no proxy needed); JT FL `POST /Offender` returns empty 400 after valid captcha — agency backend issue, not OCR (do not re-probe); Revize CF hard-blocked on residential+proxy | `sarasota.py` | ✅ Active (v5 mugshots — **smoke-tested 2026-07-17, 189 records**) | 90 min | 2026-07-17 |
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
@@ -165,6 +165,39 @@ Approach:   Download GeoJSON/CSV snapshot, diff vs last snapshot, ingest new boo
 
 ---
 
+## Captcha OCR Stack (JailTracker)
+
+> File: `scrapers/captcha_ocr.py` · Wired into `scrapers/jailtracker_base.py`
+> CLI bench: `python -m scrapers.captcha_ocr <image.png> [--answers ANSWER] [--engines ddddocr,tesseract]`
+
+### Engine Priority (all optional — soft-skip on missing deps)
+
+| Priority | Engine | Install | Notes |
+|----------|--------|---------|-------|
+| 1 | **ddddocr** | `pip install ddddocr` | Captcha-specialized; always-on when installed |
+| 2 | **Tesseract** | `apt install tesseract-ocr` (in Dockerfile) | CLI-based, no Python dep; PSM 7/8/13 variants |
+| 3 | **PaddleOCR** | `pip install -r requirements-ocr-extra.txt` | Heavy; disable with `CAPTCHA_OCR_PADDLE=0` |
+| 4 | **EasyOCR** | Same as above | Heavy; disable with `CAPTCHA_OCR_EASYOCR=0` |
+| 5 | **SolveCaptcha** | `SOLVECAPTCHA_KEY` env var | Paid fallback (~$0.50/1000); kicks in after local OCR exhausted |
+| 6 | **OpenAI GPT-4o** | `OPENAI_API_KEY` env var | Last resort paid fallback |
+
+**Env overrides:** `CAPTCHA_OCR_ENGINES=ddddocr,tesseract` (comma-separated) overrides engine selection globally.
+
+### Bench Results (2026-07-17, `scratch/sarasota_captcha.png`, answer=`WLKd`)
+
+| Stack | Best Guess | Result | Notes |
+|-------|-----------|--------|-------|
+| ddddocr only | `Wkd` | ✗ | Missed `L` — 3-char read of 4-char captcha |
+| ddddocr + tesseract | `WLka` | ✗ | All 4 chars found; `a` vs `d` confusion (case-perm covers case, not char errors) |
+| + SolveCaptcha/OpenAI | `WLKd` | ✓ | Paid solver closes char-level confusion |
+
+**Case-permutation multi-try:** JailTracker is case-sensitive but wrong codes keep the same `captchaKey`. Up to 48 case variants are tried per captcha image via `POST /Captcha/validatecaptcha` before consuming the key. Covers case errors; paid solver covers char-level errors.
+
+### FL JailTracker `POST /Offender` 400 — Known Issue
+
+> **Do not re-probe FL JT agencies aggressively.** The captcha is solvable; the agency backend rejects the roster POST with an empty HTTP 400. Confirmed for `SARASOTA_COUNTY_FL`, `MANATEE_COUNTY_FL`, and `CHARLOTTE_COUNTY_FL`. SC/GA agencies (Greenwood ~210, Chester ~104) work correctly with the same flow. FL JT is kept as a fallback in `sarasota.py` — it will auto-recover if the agency backend is fixed.
+
+---
 ## JMS Vendor Scraping Patterns
 
 ### Odyssey (Tyler Technologies)

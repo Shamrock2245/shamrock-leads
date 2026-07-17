@@ -89,9 +89,16 @@ const SLHealth = (() => {
   function _getFiltered() {
     let rows = [..._data];
     if (_filter !== 'all') {
-      if (_filter === 'ok') rows = rows.filter(r => r.status === 'ok' || r.status === 'healthy');
-      else if (_filter === 'stale') rows = rows.filter(r => ['stale','warning','offline'].includes(r.status));
-      else rows = rows.filter(r => r.status === _filter);
+      if (_filter.startsWith('state:')) {
+        const st = _filter.slice(6).toUpperCase();
+        rows = rows.filter(r => (r.state || 'FL').toUpperCase() === st);
+      } else if (_filter === 'ok') {
+        rows = rows.filter(r => r.status === 'ok' || r.status === 'healthy');
+      } else if (_filter === 'stale') {
+        rows = rows.filter(r => ['stale','warning','offline'].includes(r.status));
+      } else {
+        rows = rows.filter(r => r.status === _filter);
+      }
     }
     if (_search) rows = rows.filter(r => (r.county||'').toLowerCase().includes(_search));
     rows.sort((a, b) => {
@@ -106,7 +113,29 @@ const SLHealth = (() => {
     return rows;
   }
 
-  function _render() { _renderKpis(); _renderTable(); }
+  function _render() { _renderKpis(); _renderStateBreakdown(); _renderTable(); }
+
+  function _renderStateBreakdown() {
+    const el = document.getElementById('healthStateBreakdown');
+    if (!el) return;
+    const STATE_COLORS_H = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
+    const states = ['FL', 'GA', 'SC', 'NC'];
+    const chips = states.map(st => {
+      const stRows = _data.filter(r => (r.state || 'FL').toUpperCase() === st);
+      if (!stRows.length) return '';
+      const active = stRows.filter(r => r.status === 'ok' || r.status === 'healthy').length;
+      const total = stRows.length;
+      const records = stRows.reduce((s, r) => s + (r.total_records || 0), 0);
+      const hot = stRows.reduce((s, r) => s + (r.hot_leads || 0), 0);
+      const color = STATE_COLORS_H[st] || '#64748b';
+      return `<div class="health-state-chip" onclick="SLHealth.setFilter('state:${st}',null)" style="cursor:pointer;padding:10px 16px;border-radius:10px;border:1px solid ${color}33;background:${color}11;display:flex;flex-direction:column;gap:4px;min-width:120px;transition:background .2s" onmouseover="this.style.background='${color}22'" onmouseout="this.style.background='${color}11'">
+        <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:.08em">${st}</div>
+        <div style="font-size:20px;font-weight:800;color:var(--text)">${active}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/${total}</span></div>
+        <div style="font-size:11px;color:var(--text-muted)">${records.toLocaleString()} records &middot; ${hot} hot</div>
+      </div>`;
+    }).filter(Boolean).join('');
+    el.innerHTML = chips || '<span style="color:var(--text-muted);font-size:12px">No state data yet</span>';
+  }
 
   function _renderKpis() {
     const kpiEl = document.getElementById('healthKpis');
@@ -185,7 +214,8 @@ const SLHealth = (() => {
       const statePill = `<span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:5px">${st}</span>`;
       return `
         <tr class="${hasError ? 'row-error' : ''}" style="${isDisabled ? 'opacity:0.6' : ''}">
-          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}">${r.county}</span>${statePill}`:'—'}</td>
+          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}">${r.county}</span>`:'—'}</td>
+          <td>${statePill}</td>
           <td>
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
             ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}

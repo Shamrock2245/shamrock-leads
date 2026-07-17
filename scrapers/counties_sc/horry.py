@@ -5,7 +5,6 @@ import hashlib
 import logging
 import re
 import time
-from datetime import timezone
 from typing import List
 
 import requests

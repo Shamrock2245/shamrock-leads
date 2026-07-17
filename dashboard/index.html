@@ -904,9 +904,10 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabHealth">
   <div class="container">
-    <!-- KPI Row -->
+        <!-- KPI Row -->
     <div class="stats-grid" id="healthKpis"></div>
-
+    <!-- State Breakdown Strip -->
+    <div id="healthStateBreakdown" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
     <!-- MongoDB Atlas Storage Widget -->
     <div class="panel" id="dbStorageWidget" style="padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:10px;flex:0 0 auto">
@@ -941,6 +942,12 @@
         <button class="health-filter-btn" data-filter="error" onclick="SLHealth.setFilter('error',this)">&#x274C; Errors</button>
         <button class="health-filter-btn" data-filter="never_run" onclick="SLHealth.setFilter('never_run',this)">&#x23F3; Never Run</button>
         <button class="health-filter-btn" data-filter="stale" onclick="SLHealth.setFilter('stale',this)">&#x26A0;&#xFE0F; Stale</button>
+        <span style="width:1px;height:20px;background:var(--border);margin:0 4px"></span>
+        <span style="font-weight:600;color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em">State:</span>
+        <button class="health-filter-btn" data-filter="state:FL" onclick="SLHealth.setFilter('state:FL',this)" style="border-color:#00d4aa;color:#00d4aa">FL</button>
+        <button class="health-filter-btn" data-filter="state:GA" onclick="SLHealth.setFilter('state:GA',this)" style="border-color:#f59e0b;color:#f59e0b">GA</button>
+        <button class="health-filter-btn" data-filter="state:SC" onclick="SLHealth.setFilter('state:SC',this)" style="border-color:#8b5cf6;color:#8b5cf6">SC</button>
+        <button class="health-filter-btn" data-filter="state:NC" onclick="SLHealth.setFilter('state:NC',this)" style="border-color:#3b82f6;color:#3b82f6">NC</button>
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
           <input type="text" id="healthSearch" placeholder="Search county..." style="width:160px;padding:6px 10px;background:var(--input-bg,#1a1a2e);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px" oninput="SLHealth.search(this.value)">
           <button class="btn" onclick="SLHealth.runAll()" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px;font-size:13px">&#x26A1; Run All</button>
@@ -960,6 +967,7 @@
           <thead>
             <tr>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('county')">County &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('state')">State &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('status')">Status &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('total_records')">Records &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('hot_leads')">Hot &#x21D5;</th>

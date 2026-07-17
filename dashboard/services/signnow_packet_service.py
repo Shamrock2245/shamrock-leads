@@ -84,7 +84,7 @@ class SignNowPacketService:
         "faq-cosigners-palmetto":        "",  # Handled by shared
         "faq-defendants-palmetto":       "",  # Handled by shared
         "indemnity-agreement-palmetto":  "2359c0fdf9ea47ee8129d4426e698ece0112a85c",
-        "defendant-application-palmetto":"9c6f62509e03453a8d212bd67c88eccf65e65958",
+        "defendant-application-palmetto": "9c6f62509e03453a8d212bd67c88eccf65e65958",
         "master-waiver-palmetto":        "",  # Handled by shared
         "ssa-release-palmetto":          "",  # Handled by shared
         "surety-terms-palmetto":         "c897c72df2674beaa0ad9c8bbf1f5856e150d553",

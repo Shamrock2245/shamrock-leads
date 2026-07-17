@@ -158,6 +158,7 @@ def preprocess_variants(image_bytes: bytes) -> List[Tuple[str, bytes]]:
         (max(gray.width * 3, 120), max(gray.height * 3, 48)), _LANCZOS
     )
     add("gray_3x", g2)
+    add("gray_3x_sharp", g2.filter(ImageFilter.SHARPEN))
 
     # Yellow channel
     y_img = Image.fromarray(yellow, mode="L")
@@ -169,6 +170,9 @@ def preprocess_variants(image_bytes: bytes) -> List[Tuple[str, bytes]]:
     thr = y3.point(lambda x: 255 if x > 70 else 0)
     add("yellow_3x_thr", thr)
     add("yellow_3x_bw", ImageOps.invert(thr))  # black text on white
+    # Soft threshold — preserves thin strokes that hard threshold drops
+    thr_soft = y3.point(lambda x: 255 if x > 40 else 0)
+    add("yellow_3x_bw_soft", ImageOps.invert(thr_soft))
 
     # Binary mask (text white on black / black on white)
     m_img = Image.fromarray(mask, mode="L")
@@ -450,6 +454,12 @@ def solve_captcha_image(
         max_variants: cap preprocess variants (speed)
         label: log prefix
     """
+    # Respect CAPTCHA_OCR_ENGINES env var when engines not explicitly passed
+    if engines is None:
+        _env_engines = os.getenv("CAPTCHA_OCR_ENGINES", "").strip()
+        if _env_engines:
+            engines = [e.strip() for e in _env_engines.split(",") if e.strip()]
+
     b64 = image_b64.split(",", 1)[1] if "," in image_b64 else image_b64
     try:
         raw = base64.b64decode(b64)
@@ -462,12 +472,14 @@ def solve_captcha_image(
     preferred = (
         "raw",
         "yellow_3x_bw",
+        "yellow_3x_bw_soft",  # soft threshold — catches thin strokes
         "bw_3x_pad",
         "bw_3x",
         "yellow_3x_thr",
         "mask_3x",
         "invert_3x",
         "gray_3x",
+        "gray_3x_sharp",
         "gray_ac_sharp",
         "yellow",
         "bw_3x_dil",
@@ -558,3 +570,86 @@ def available_engines() -> Dict[str, bool]:
     except Exception:
         pass
     return out
+
+
+def solve_captcha_file(
+    path: str,
+    *,
+    engines=None,
+    label: str = "",
+) -> "CaptchaOCRResult":
+    """Load a PNG/JPG file and run the OCR ensemble.
+
+    Respects ``CAPTCHA_OCR_ENGINES`` env var (comma-separated engine names)
+    when ``engines`` is not explicitly passed.
+
+    Example::
+
+        result = solve_captcha_file("scratch/sarasota_captcha.png")
+        print(result.best, result.candidates)
+    """
+    import base64 as _b64
+    with open(path, "rb") as fh:
+        b64 = _b64.b64encode(fh.read()).decode()
+    if engines is None:
+        env_engines = os.getenv("CAPTCHA_OCR_ENGINES", "").strip()
+        if env_engines:
+            engines = [e.strip() for e in env_engines.split(",") if e.strip()]
+    return solve_captcha_image(b64, engines=engines, label=label or path)
+
+
+def bench(image_paths, *, known_answers=None) -> None:
+    """Run the OCR ensemble against a list of captcha image files and print a
+    summary table.  Pass ``known_answers`` (same length) to compute accuracy.
+
+    Usage::
+
+        python -m scrapers.captcha_ocr scratch/sarasota_captcha.png
+        python -m scrapers.captcha_ocr img1.png img2.png --answers WLKd Xb9z
+    """
+    correct = 0
+    for i, path in enumerate(image_paths):
+        result = solve_captcha_file(path, label=f"bench[{i}]")
+        ans = (known_answers[i] if known_answers and i < len(known_answers) else None)
+        match = (result.best.lower() == ans.lower()) if ans else None
+        if match:
+            correct += 1
+        status = ""
+        if match is True:
+            status = "CORRECT"
+        elif match is False:
+            status = f"WRONG (expected {ans!r})"
+        print(
+            f"[{i + 1}/{len(image_paths)}] {path}\n"
+            f"  best={result.best!r}  candidates={result.candidates[:6]}\n"
+            f"  engines={result.engines_used}  seeds={result.all_seeds()[:4]}"
+            + (f"  [{status}]" if status else "")
+        )
+    if known_answers:
+        total = min(len(image_paths), len(known_answers))
+        pct = 100 * correct / total if total else 0
+        print(f"\nAccuracy: {correct}/{total} = {pct:.1f}%")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    _parser = argparse.ArgumentParser(
+        description="Bench-test the captcha OCR ensemble against one or more image files."
+    )
+    _parser.add_argument("images", nargs="+", help="PNG/JPG captcha image paths")
+    _parser.add_argument(
+        "--answers", nargs="*", default=None,
+        help="Known correct answers (same order as images) for accuracy scoring",
+    )
+    _parser.add_argument(
+        "--engines", default=None,
+        help="Comma-separated engine list: ddddocr,tesseract,paddleocr,easyocr",
+    )
+    _args = _parser.parse_args()
+
+    if _args.engines:
+        os.environ["CAPTCHA_OCR_ENGINES"] = _args.engines
+
+    print("Available engines:", available_engines())
+    bench(_args.images, known_answers=_args.answers)
