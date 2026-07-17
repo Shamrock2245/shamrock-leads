@@ -42,11 +42,13 @@ function _abFtaBadge(b) {
 
 /* ── State ────────────────────────────────────────────────────────── */
 let _abBonds = [];
+window._abBonds = _abBonds;
 let _abFilter = 'all';
-window._abFilter = _abFilter;   // expose for sl-active-bonds-ext.js
+window._abFilter = _abFilter;
 let _abCheckinBooking = '';
 let _abCheckinName = '';
 let _abEditingBooking = null;
+window._abEditingBooking = _abEditingBooking;
 
 /* ══════════════════════════════════════════════════════════════════
    LOAD & RENDER
@@ -231,6 +233,8 @@ function renderActiveBondsTable() {
     const bkSafe = (b.booking_number || '').replace(/'/g, "\\'");
     const nameSafe = (b.defendant_name || '').replace(/'/g, "\\'");
     const factorsSafe = encodeURIComponent(JSON.stringify(b.risk_factors || {}));
+    const bookingUrl = b.booking_page_url || b.detail_url || '';
+    const bookingLink = bookingUrl ? `<br><a href="${bookingUrl}" target="_blank" style="font-size:9px;color:var(--accent);text-decoration:none">🔗 Booking Page</a>` : '';
 
     /* Feature A: Court Date Countdown — polished with full-date tooltip + location */
     let courtCountdown = '—';
@@ -271,7 +275,7 @@ function renderActiveBondsTable() {
     return `<tr class="${overdue ? 'row-alert' : ''}" style="${overdue ? 'background:rgba(239,68,68,0.05)' : ''}">
       <td>
         <div style="font-weight:600">${escHtml(b.defendant_name || '—')}${alertBadge}</div>
-        <div style="font-size:11px;color:var(--muted)">${escHtml(b.booking_number || '—')}</div>
+        <div style="font-size:11px;color:var(--muted)">${escHtml(b.booking_number || '—')}${bookingLink}</div>
       </td>
       <td>${b.county&&b.county!=='—'?`<span class="county-badge" data-county="${escHtml(b.county)}">${escHtml(b.county)}</span>`:'—'}</td>
       <td><strong>$${(b.bond_amount || 0).toLocaleString()}</strong></td>
@@ -300,7 +304,7 @@ function renderActiveBondsTable() {
       </td>
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="openEditDrawer('${bkSafe}')">✏️ Edit</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="window.openEditDrawer('${bkSafe}')">✏️ Edit</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g,'&quot;')})" title="Send SignNow packet (${ins.includes('PALM')||ins.includes('PSC')?'Palmetto':'OSI'} templates)">📝 Docs</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
@@ -344,14 +348,20 @@ function filterActiveBonds(status) {
 /* ══════════════════════════════════════════════════════════════════
    EDIT DRAWER
    ══════════════════════════════════════════════════════════════════ */
-function openEditDrawer(bookingNumber) {
+window.openEditDrawer = function(bookingNumber) {
   const bond = _abBonds.find(b => b.booking_number === bookingNumber);
   if (!bond) { toast('Bond not found', 'error'); return; }
   _abEditingBooking = bookingNumber;
-  if (!document.getElementById('abEditDrawer')) _buildEditDrawer();
+  window._abEditingBooking = bookingNumber;
+  if (!document.getElementById('abEditDrawer')) window._buildEditDrawer();
 
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
   set('abEditDefName',       bond.defendant_name);
+  set('abEditDefPhone',      bond.defendant_phone);
+  set('abEditDefAddress',    bond.defendant_address);
+  set('abEditDefDob',        bond.defendant_dob);
+  set('abEditDefEmail',      bond.defendant_email);
+  set('abEditBookingUrl',    bond.booking_page_url);
   set('abEditCounty',        bond.county);
   set('abEditFacility',      bond.facility);
   set('abEditBondAmount',    bond.bond_amount);
@@ -365,6 +375,10 @@ function openEditDrawer(bookingNumber) {
   set('abEditIndemPhone',    bond.indemnitor?.phone || bond.indemnitor_phone || '');
   set('abEditIndemEmail',    bond.indemnitor?.email || bond.indemnitor_email || '');
   set('abEditIndemRel',      bond.indemnitor?.relationship || bond.indemnitor_relationship || '');
+  set('abEditRef1Name',      bond.ref1_name);
+  set('abEditRef1Phone',     bond.ref1_phone);
+  set('abEditRef2Name',      bond.ref2_name);
+  set('abEditRef2Phone',     bond.ref2_phone);
   set('abEditAgentName',     bond.agent_name);
   set('abEditNotes',         bond.notes);
   set('abEditCIFreq',        bond.check_in_frequency_days || 30);
@@ -381,8 +395,11 @@ function openEditDrawer(bookingNumber) {
   if (hdr) hdr.textContent = `✏️ Edit Bond — ${bond.defendant_name || bookingNumber}`;
 
   window._abEditBookingNumber = bookingNumber;
-  document.getElementById('abEditDrawer').classList.add('open');
-  document.getElementById('abEditOverlay').classList.add('show');
+  window._abEditingBooking = bookingNumber;
+  const drawer = document.getElementById('abEditDrawer');
+  const overlay = document.getElementById('abEditOverlay');
+  if (drawer) drawer.classList.add('open');
+  if (overlay) overlay.classList.add('show');
   // Load compliance data for this defendant
   _loadCompliancePanel(bookingNumber);
   // Load renewal history for this bond
@@ -391,28 +408,75 @@ function openEditDrawer(bookingNumber) {
   if (window.SLRelationships) SLRelationships.loadRelatedIntoPanel(bond);
 }
 
-function closeEditDrawer() {
+window.closeEditDrawer = function() {
   document.getElementById('abEditDrawer')?.classList.remove('open');
   document.getElementById('abEditOverlay')?.classList.remove('show');
   _abEditingBooking = null;
 }
 
-async function saveEditDrawer() {
-  if (!_abEditingBooking) return;
+window.copyBondToClipboard = function() {
+  const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const text = `
+DEFENDANT: ${get('abEditDefName')}
+PHONE: ${get('abEditDefPhone')}
+DOB: ${get('abEditDefDob')}
+ADDRESS: ${get('abEditDefAddress')}
+BOOKING #: ${window._abEditingBooking}
+COUNTY: ${get('abEditCounty')}
+CHARGES: ${get('abEditCharges')}
+
+BOND AMOUNT: $${get('abEditBondAmount')}
+PREMIUM: $${get('abEditPremium')}
+POA: ${get('abEditPOA')}
+CASE #: ${get('abEditCaseNum')}
+COURT: ${get('abEditCourtDate')} @ ${get('abEditCourtLocation')}
+
+INDEMNITOR: ${get('abEditIndemName')}
+INDEMNITOR PHONE: ${get('abEditIndemPhone')}
+  `.trim();
+
+  navigator.clipboard.writeText(text).then(() => {
+    toast('📋 Case info copied to clipboard', 'success');
+  }).catch(err => {
+    console.error('Clipboard error:', err);
+    toast('Failed to copy', 'error');
+  });
+};
+
+window.saveEditDrawer = async function() {
+  const booking = window._abEditingBooking;
+  if (!booking) return;
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const getNum = id => { const v = get(id); return v !== '' ? parseFloat(v) : undefined; };
 
   const payload = {};
   const fields = {
-    defendant_name: get('abEditDefName'), county: get('abEditCounty'),
-    facility: get('abEditFacility'), bond_amount: getNum('abEditBondAmount'),
-    premium: getNum('abEditPremium'), insurance_company: get('abEditInsurance'),
-    poa_number: get('abEditPOA'), case_number: get('abEditCaseNum'),
-    court_date: get('abEditCourtDate'), court_location: get('abEditCourtLocation'),
-    charges: get('abEditCharges'), indemnitor_name: get('abEditIndemName'),
-    indemnitor_phone: get('abEditIndemPhone'), indemnitor_email: get('abEditIndemEmail'),
+    defendant_name: get('abEditDefName'),
+    defendant_phone: get('abEditDefPhone'),
+    defendant_address: get('abEditDefAddress'),
+    defendant_dob: get('abEditDefDob'),
+    defendant_email: get('abEditDefEmail'),
+    booking_page_url: get('abEditBookingUrl'),
+    county: get('abEditCounty'),
+    facility: get('abEditFacility'),
+    bond_amount: getNum('abEditBondAmount'),
+    premium: getNum('abEditPremium'),
+    insurance_company: get('abEditInsurance'),
+    poa_number: get('abEditPOA'),
+    case_number: get('abEditCaseNum'),
+    court_date: get('abEditCourtDate'),
+    court_location: get('abEditCourtLocation'),
+    charges: get('abEditCharges'),
+    indemnitor_name: get('abEditIndemName'),
+    indemnitor_phone: get('abEditIndemPhone'),
+    indemnitor_email: get('abEditIndemEmail'),
     indemnitor_relationship: get('abEditIndemRel'),
-    agent_name: get('abEditAgentName'), notes: get('abEditNotes'),
+    ref1_name: get('abEditRef1Name'),
+    ref1_phone: get('abEditRef1Phone'),
+    ref2_name: get('abEditRef2Name'),
+    ref2_phone: get('abEditRef2Phone'),
+    agent_name: get('abEditAgentName'),
+    notes: get('abEditNotes'),
     check_in_required: document.getElementById('abEditCIRequired')?.checked,
     check_in_frequency_days: getNum('abEditCIFreq'),
     agent: 'Dashboard',
@@ -423,7 +487,7 @@ async function saveEditDrawer() {
   if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
 
   try {
-    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(_abEditingBooking)}/edit`, {
+    const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(booking)}/edit`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -451,11 +515,11 @@ function _es(title, fields) {
   return `<div style="margin-bottom:20px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">${title}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${fields}</div></div>`;
 }
 
-function _buildEditDrawer() {
+window._buildEditDrawer = function() {
   const overlay = document.createElement('div');
   overlay.id = 'abEditOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:none;cursor:pointer';
-  overlay.onclick = closeEditDrawer;
+  overlay.onclick = window.closeEditDrawer;
   document.body.appendChild(overlay);
 
   const drawer = document.createElement('div');
@@ -463,12 +527,20 @@ function _buildEditDrawer() {
   drawer.style.cssText = 'position:fixed;top:0;right:-520px;width:500px;height:100vh;background:var(--bg);border-left:1px solid var(--border);z-index:1001;transition:right .3s ease;overflow-y:auto;display:flex;flex-direction:column';
   drawer.innerHTML = `
     <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel)">
-      <h3 id="abEditDrawerTitle" style="margin:0;font-size:16px">✏️ Edit Bond</h3>
-      <button onclick="closeEditDrawer()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <h3 id="abEditDrawerTitle" style="margin:0;font-size:16px">✏️ Edit Bond</h3>
+        <button onclick="window.copyBondToClipboard()" title="Copy Case Info to Clipboard" style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);color:#3b82f6;border-radius:6px;padding:4px 8px;font-size:11px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px">📋 Copy Info</button>
+      </div>
+      <button onclick="window.closeEditDrawer()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px 24px">
       ${_es('Defendant', `
         ${_ef('abEditDefName','text','Full Name','Last, First Middle')}
+        ${_ef('abEditDefPhone','tel','Phone','+12395550000')}
+        ${_ef('abEditDefDob','text','Date of Birth','MM/DD/YYYY')}
+        ${_ef('abEditDefEmail','email','Email Address','defendant@example.com')}
+        ${_ef('abEditDefAddress','text','Address','Street, City, State, Zip')}
+        ${_ef('abEditBookingUrl','text','Sheriff Booking Link','https://...')}
         ${_ef('abEditCounty','text','County','e.g. Lee')}
         ${_ef('abEditFacility','text','Facility','e.g. Lee County Jail')}
         <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Charges<textarea id="abEditCharges" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:60px;resize:vertical"></textarea></label>
@@ -477,11 +549,6 @@ function _buildEditDrawer() {
         ${_ef('abEditBondAmount','number','Bond Amount ($)','')}
         ${_ef('abEditPremium','number','Premium ($)','')}
         <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Insurance<select id="abEditInsurance" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"><option value="OSI">🛡️ OSI</option><option value="PALMETTO">🌴 Palmetto</option></select></label>
-        ${_ef('abEditPOA','text','POA Number','e.g. PSC2 2644680')}
-        ${_ef('abEditCaseNum','text','Case Number','e.g. 24-CF-001234')}
-        ${_ef('abEditCourtDate','date','Court Date','')}
-        ${_ef('abEditCourtLocation','text','Court Location','e.g. Lee County Courthouse')}
-        ${_ef('abEditAgentName','text','Agent Name','e.g. Brendan')}
       `)}
       ${_es('Indemnitor (linked to this case)', `
         ${_ef('abEditIndemName','text','Name','Full name')}
@@ -493,6 +560,26 @@ function _buildEditDrawer() {
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#6366f1;color:#fff" onclick="SLRelationships&&SLRelationships.openGraph(window._abEditBookingNumber)">🕸️ Case relationship map</button>
         </div>
       `)}
+      ${_es('References', `
+        ${_ef('abEditRef1Name','text','Ref 1 Name','Full name')}
+        ${_ef('abEditRef1Phone','tel','Ref 1 Phone','+12395550000')}
+        ${_ef('abEditRef2Name','text','Ref 2 Name','Full name')}
+        ${_ef('abEditRef2Phone','tel','Ref 2 Phone','+12395550000')}
+      `)}
+      ${_es('System Details', `
+        ${_ef('abEditPOA','text','POA Number','e.g. PSC2 2644680')}
+        ${_ef('abEditCaseNum','text','Case Number','e.g. 24-CF-001234')}
+        ${_ef('abEditCourtDate','date','Court Date','')}
+        ${_ef('abEditCourtLocation','text','Court Location','e.g. Lee County Courthouse')}
+        ${_ef('abEditAgentName','text','Agent Name','e.g. Brendan')}
+      `)}
+      ${_es('Notes', `
+        <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Internal Notes<textarea id="abEditNotes" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:80px;resize:vertical" placeholder="Internal notes…"></textarea></label>
+      `)}
+      ${_es('Check-In Settings', `
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abEditCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
+        ${_ef('abEditCIFreq','number','Frequency (days)','30')}
+      `)}
       <div style="margin-bottom:20px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Related Cases (same people)</div>
         <div id="abRelatedCasesPanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:12px;min-height:40px;font-size:12px;color:var(--muted)">Open drawer to load related cases…</div>
@@ -500,13 +587,7 @@ function _buildEditDrawer() {
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px" onclick="SLRelationships&&SLRelationships.findFromEdit('defendant')">🔗 All bonds for this defendant</button>
         </div>
       </div>
-      ${_es('Check-In', `
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abEditCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
-        ${_ef('abEditCIFreq','number','Frequency (days)','30')}
-      `)}
-      ${_es('Notes', `
-        <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Internal Notes<textarea id="abEditNotes" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:80px;resize:vertical" placeholder="Internal notes…"></textarea></label>
-      `)}
+
       <div style="margin-bottom:20px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Compliance Status</div>
         <div id="abCompliancePanel" style="background:var(--surface,var(--panel));border:1px solid var(--border);border-radius:8px;padding:14px;min-height:60px">
@@ -521,9 +602,9 @@ function _buildEditDrawer() {
       </div>
     </div>
     <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel)">
-      <button onclick="closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
+      <button onclick="window.closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
       <button onclick="openRenewBondModal(window._abEditBookingNumber||'','')" style="padding:8px 16px;background:#f59e0b;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">🔄 Renew Bond</button>
-      <button id="abEditSaveBtn" onclick="saveEditDrawer()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">💾 Save Changes</button>
+      <button id="abEditSaveBtn" onclick="window.saveEditDrawer()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">💾 Save Changes</button>
     </div>`;
   document.body.appendChild(drawer);
 
@@ -535,28 +616,35 @@ function _buildEditDrawer() {
 /* ══════════════════════════════════════════════════════════════════
    ADD BOND MODAL
    ══════════════════════════════════════════════════════════════════ */
-function openAddBondModal() {
-  if (!document.getElementById('abAddBondModal')) _buildAddBondModal();
-  const modal = document.getElementById('abAddBondModal');
-  modal.querySelectorAll('input,select,textarea').forEach(el => {
-    if (el.type === 'checkbox') el.checked = false;
-    else if (el.tagName === 'SELECT') el.selectedIndex = 0;
-    else el.value = '';
-  });
-  const agentEl = document.getElementById('abAddAgent');
-  if (agentEl) agentEl.value = 'Brendan';
-  const freqEl = document.getElementById('abAddCIFreq');
-  if (freqEl) freqEl.value = '30';
-  modal.classList.add('active');
-  modal.style.display = 'flex';
+window.openAddBondModal = function() {
+  if (window.SLRecordBond && typeof window.SLRecordBond.open === 'function') {
+    window.SLRecordBond.open();
+  } else {
+    // Fallback to legacy modal if Record Bond isn't available
+    if (!document.getElementById('abAddBondModal')) window._buildAddBondModal();
+    const modal = document.getElementById('abAddBondModal');
+    if (modal) {
+      modal.querySelectorAll('input,select,textarea').forEach(el => {
+        if (el.type === 'checkbox') el.checked = false;
+        else if (el.tagName === 'SELECT') el.selectedIndex = 0;
+        else el.value = '';
+      });
+      const agentEl = document.getElementById('abAddAgent');
+      if (agentEl) agentEl.value = 'Brendan';
+      const freqEl = document.getElementById('abAddCIFreq');
+      if (freqEl) freqEl.value = '30';
+      modal.classList.add('active');
+      modal.style.display = 'flex';
+    }
+  }
 }
 
-function closeAddBondModal() {
+window.closeAddBondModal = function() {
   const m = document.getElementById('abAddBondModal');
   if (m) { m.classList.remove('active'); m.style.display = 'none'; }
 }
 
-async function submitAddBond() {
+window.submitAddBond = async function() {
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const booking = get('abAddBooking');
   const defName = get('abAddDefName');
@@ -564,15 +652,29 @@ async function submitAddBond() {
   if (!defName)  { toast('Defendant name is required', 'error'); return; }
 
   const payload = {
-    booking_number: booking, defendant_name: defName,
-    county: get('abAddCounty'), facility: get('abAddFacility'),
+    booking_number: booking,
+    defendant_name: defName,
+    defendant_phone: get('abAddDefPhone'),
+    defendant_dob: get('abAddDefDob'),
+    defendant_address: get('abAddDefAddress'),
+    booking_page_url: get('abAddBookingUrl'),
+    county: get('abAddCounty'),
+    facility: get('abAddFacility'),
     bond_amount: parseFloat(get('abAddBondAmount')) || 0,
     premium: parseFloat(get('abAddPremium')) || 0,
     insurance_company: get('abAddInsurance') || 'OSI',
-    poa_number: get('abAddPOA'), case_number: get('abAddCaseNum'),
-    court_date: get('abAddCourtDate'), court_location: get('abAddCourtLocation'),
-    charges: get('abAddCharges'), indemnitor_name: get('abAddIndemName'),
-    indemnitor_phone: get('abAddIndemPhone'), indemnitor_email: get('abAddIndemEmail'),
+    poa_number: get('abAddPOA'),
+    case_number: get('abAddCaseNum'),
+    court_date: get('abAddCourtDate'),
+    court_location: get('abAddCourtLocation'),
+    charges: get('abAddCharges'),
+    indemnitor_name: get('abAddIndemName'),
+    indemnitor_phone: get('abAddIndemPhone'),
+    indemnitor_email: get('abAddIndemEmail'),
+    ref1_name: get('abAddRef1Name'),
+    ref1_phone: get('abAddRef1Phone'),
+    ref2_name: get('abAddRef2Name'),
+    ref2_phone: get('abAddRef2Phone'),
     agent_name: get('abAddAgent'),
     check_in_required: document.getElementById('abAddCIRequired')?.checked || false,
     check_in_frequency_days: parseInt(get('abAddCIFreq')) || 30,
@@ -603,7 +705,7 @@ async function submitAddBond() {
   }
 }
 
-function _buildAddBondModal() {
+window._buildAddBondModal = function() {
   const modal = document.createElement('div');
   modal.id = 'abAddBondModal';
   modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1002;align-items:center;justify-content:center';
@@ -611,12 +713,20 @@ function _buildAddBondModal() {
     <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(680px,95vw);max-height:90vh;overflow-y:auto;display:flex;flex-direction:column">
       <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel);border-radius:12px 12px 0 0">
         <h3 style="margin:0;font-size:16px">➕ Add Active Bond</h3>
-        <button onclick="closeAddBondModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
+        <button onclick="window.closeAddBondModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div style="padding:20px 24px;overflow-y:auto">
         ${_es('Defendant', `
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Booking # <span style="color:var(--danger)">*</span><input id="abAddBooking" type="text" placeholder="e.g. 2024-00012345" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></label>
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Full Name <span style="color:var(--danger)">*</span><input id="abAddDefName" type="text" placeholder="Last, First Middle" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></label>
+          ${_ef('abAddDefPhone','tel','Phone','+12395550000')}
+          ${_ef('abAddDefDob','text','DOB','MM/DD/YYYY')}
+          ${_ef('abAddDefAddress','text','Address','Street, City, State, Zip')}
+          ${_ef('abAddBookingUrl','text','Sheriff Booking Link','https://...')}
+          ${_ef('abAddRef1Name','text','Ref 1 Name','Full name')}
+          ${_ef('abAddRef1Phone','tel','Ref 1 Phone','+12395550000')}
+          ${_ef('abAddRef2Name','text','Ref 2 Name','Full name')}
+          ${_ef('abAddRef2Phone','tel','Ref 2 Phone','+12395550000')}
           ${_ef('abAddCounty','text','County','e.g. Lee')}
           ${_ef('abAddFacility','text','Facility','e.g. Lee County Jail')}
           <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Charges<textarea id="abAddCharges" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:60px;resize:vertical" placeholder="Charge descriptions"></textarea></label>
@@ -636,17 +746,23 @@ function _buildAddBondModal() {
           ${_ef('abAddIndemPhone','tel','Phone','+12395550000')}
           ${_ef('abAddIndemEmail','email','Email','email@example.com')}
         `)}
+        ${_es('References', `
+          ${_ef('abAddRef1Name','text','Ref 1 Name','Full name')}
+          ${_ef('abAddRef1Phone','tel','Ref 1 Phone','+12395550000')}
+          ${_ef('abAddRef2Name','text','Ref 2 Name','Full name')}
+          ${_ef('abAddRef2Phone','tel','Ref 2 Phone','+12395550000')}
+        `)}
         ${_es('Check-In', `
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abAddCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
           ${_ef('abAddCIFreq','number','Frequency (days)','30')}
         `)}
       </div>
       <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel);border-radius:0 0 12px 12px">
-        <button onclick="closeAddBondModal()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
-        <button id="abAddSubmitBtn" onclick="submitAddBond()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">✅ Add Bond</button>
+        <button onclick="window.closeAddBondModal()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
+        <button id="abAddSubmitBtn" onclick="window.submitAddBond()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">✅ Add Bond</button>
       </div>
     </div>`;
-  modal.addEventListener('click', e => { if (e.target === modal) closeAddBondModal(); });
+  modal.addEventListener('click', e => { if (e.target === modal) window.closeAddBondModal(); });
   document.body.appendChild(modal);
 }
 
@@ -2089,6 +2205,18 @@ async function _loadRenewalHistory(bookingNumber) {
 
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center">Could not load renewal history</div>`;
+  }
+}
+
+function openBondFromActiveBond(bond) {
+  if (window.SLRecordBond && typeof window.SLRecordBond.open === 'function') {
+    // Map fields for Record Bond modal if needed
+    const data = { ...bond };
+    if (!data.defendant_name && data.Defendant_Name) data.defendant_name = data.Defendant_Name;
+    if (!data.booking_number && data.Booking_Number) data.booking_number = data.Booking_Number;
+    window.SLRecordBond.open(data);
+  } else {
+    toast('Record Bond module not loaded', 'error');
   }
 }
 

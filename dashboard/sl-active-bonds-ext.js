@@ -163,7 +163,7 @@
           + '<td>' + lastCI + overdueLabel + '</td>'
           + '<td><span class="status-badge ' + sCls + '">' + (b.status || 'active') + '</span></td>'
           + '<td><div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">'
-          + '<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="openEditDrawer(\'' + bkSafe + '\')">✏️ Edit</button>'
+          + '<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="window.openEditDrawer(\'' + bkSafe + '\')">✏️ Edit</button>'
           + '<button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal(\'' + bkSafe + '\',\'' + nameSafe + '\')">📍 Check-In</button>'
           + '<button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory(\'' + bkSafe + '\',\'' + nameSafe + '\')">🗺️ History</button>'
           + '<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking(\'' + bkSafe + '\')">📡 Track</button>'
@@ -315,9 +315,9 @@
     toggleHasIndemFilter: toggleHasIndemFilter,
     detectDuplicatePhones: detectDuplicatePhones,
     openIndemInDefendants: openIndemInDefendants,
-    openAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) { m.classList.add('active'); m.style.display = 'flex'; } },
+    openAddModal: function () { if (typeof window.openAddBondModal === 'function') window.openAddBondModal(); else { var m = document.getElementById('abAddBondModal'); if (m) { m.classList.add('active'); m.style.display = 'flex'; } } },
     closeAddModal: function () { var m = document.getElementById('abAddBondModal'); if (m) { m.classList.remove('active'); m.style.display = 'none'; } },
-    closeEditDrawer: function () { if (typeof closeEditDrawer === 'function') closeEditDrawer(); },
+    closeEditDrawer: function () { if (typeof window.closeEditDrawer === 'function') window.closeEditDrawer(); },
   });
 
   /* ── Install override after DOM ready ────────────────────────── */

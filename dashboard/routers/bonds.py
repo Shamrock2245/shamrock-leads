@@ -768,6 +768,10 @@ async def api_active_bonds_create(request: Request):
     doc = {
         "booking_number": booking_number,
         "defendant_name": data.get("defendant_name", ""),
+        "defendant_phone": data.get("defendant_phone", ""),
+        "defendant_address": data.get("defendant_address", ""),
+        "defendant_dob": data.get("defendant_dob", ""),
+        "booking_page_url": data.get("booking_page_url", ""),
         "county": data.get("county", ""),
         "facility": data.get("facility", ""),
         "bond_amount": data.get("bond_amount", 0),
@@ -784,6 +788,25 @@ async def api_active_bonds_create(request: Request):
         "indemnitor_name": data.get("indemnitor_name", ""),
         "indemnitor_phone": data.get("indemnitor_phone", ""),
         "indemnitor_email": data.get("indemnitor_email", ""),
+        "indemnitor_relationship": data.get("indemnitor_relationship", ""),
+        "ref1_name": data.get("ref1_name", ""),
+        "ref1_phone": data.get("ref1_phone", ""),
+        "ref2_name": data.get("ref2_name", ""),
+        "ref2_phone": data.get("ref2_phone", ""),
+        "dob": data.get("defendant_dob", ""),
+        "address": data.get("defendant_address", ""),
+        "detail_url": data.get("booking_page_url", ""),
+        "email": data.get("defendant_email", ""),
+        "indemnitor": {
+            "name": data.get("indemnitor_name", ""),
+            "phone": data.get("indemnitor_phone", ""),
+            "email": data.get("indemnitor_email", ""),
+            "relationship": data.get("indemnitor_relationship", ""),
+            "ref1Name": data.get("ref1_name", ""),
+            "ref1Phone": data.get("ref1_phone", ""),
+            "ref2Name": data.get("ref2_name", ""),
+            "ref2Phone": data.get("ref2_phone", ""),
+        },
         "fta_risk_score": data.get("fta_risk_score"),
         "fta_risk_level": data.get("fta_risk_level", ""),
         "fta_risk_confidence": data.get("fta_risk_confidence"),
@@ -1168,17 +1191,30 @@ async def api_active_bond_edit(request: Request, booking_number: str):
     active_bonds = get_collection("active_bonds")
     data = await request.json() or {}
     EDITABLE = [
-        "defendant_name", "county", "facility", "bond_amount", "premium",
+        "defendant_name", "defendant_phone", "defendant_address", "defendant_dob",
+        "defendant_email", "county", "facility", "bond_amount", "premium",
         "insurance_company", "poa_number", "case_number", "check_in_required",
         "check_in_frequency_days", "indemnitor_name", "indemnitor_phone",
         "indemnitor_email", "indemnitor_relationship", "agent_name", "notes",
-        "court_date", "court_location", "charges",
+        "court_date", "court_location", "charges", "booking_page_url",
+        "ref1_name", "ref1_phone", "ref2_name", "ref2_phone",
     ]
     updates = {k: data[k] for k in EDITABLE if k in data}
     if not updates:
         return JSONResponse({"success": False, "error": "No editable fields provided"}, status_code=400)
-    # Keep nested indemnitor{} in sync for UI consumers that read bond.indemnitor
-    if any(k.startswith("indemnitor_") for k in updates):
+
+    # ── Compatibility Aliases (Defendant) ──
+    if "defendant_dob" in updates and updates["defendant_dob"]:
+        updates["dob"] = updates["defendant_dob"]
+    if "defendant_address" in updates and updates["defendant_address"]:
+        updates["address"] = updates["defendant_address"]
+    if "defendant_email" in updates and updates["defendant_email"]:
+        updates["email"] = updates["defendant_email"]
+    if "booking_page_url" in updates and updates["booking_page_url"]:
+        updates["detail_url"] = updates["booking_page_url"]
+
+    # ── Keep nested indemnitor{} in sync for UI consumers that read bond.indemnitor ──
+    if any(k.startswith("indemnitor_") or k.startswith("ref") for k in updates):
         existing = await active_bonds.find_one({"booking_number": booking_number}, {"indemnitor": 1})
         indem = dict((existing or {}).get("indemnitor") or {})
         if "indemnitor_name" in updates:
@@ -1189,6 +1225,15 @@ async def api_active_bond_edit(request: Request, booking_number: str):
             indem["email"] = updates["indemnitor_email"]
         if "indemnitor_relationship" in updates:
             indem["relationship"] = updates["indemnitor_relationship"]
+
+        # Sync references into nested indemnitor object for paperwork compatibility
+        for i in (1, 2):
+            name_k, phone_k = f"ref{i}_name", f"ref{i}_phone"
+            if name_k in updates:
+                indem[f"ref{i}Name"] = updates[name_k]
+            if phone_k in updates:
+                indem[f"ref{i}Phone"] = updates[phone_k]
+
         updates["indemnitor"] = indem
     updates["updated_at"] = datetime.now(timezone.utc)
     try:

@@ -4,7 +4,7 @@
    Features: defendant search, URL auto-population, NLP risk scoring
    ═══════════════════════════════════════════════════════════ */
 
-const SLRecordBond = (() => {
+window.SLRecordBond = (() => {
   const API = window.API || '';
   const $ = id => document.getElementById(id);
   const money = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
@@ -98,6 +98,10 @@ const SLRecordBond = (() => {
     // Auto-fill ALL form fields from the selected arrest record
     // This works regardless of which county scraped the data
     $('rbDefendantName').value = arrest.full_name || '';
+    $('rbDefendantPhone').value = arrest.phone || arrest.defendant_phone || '';
+    $('rbDefendantAddress').value = arrest.address || arrest.defendant_address || '';
+    $('rbDefendantDob').value = arrest.dob || arrest.date_of_birth || '';
+    $('rbBookingUrl').value = arrest.source_url || arrest.detail_url || '';
     $('rbBookingNumber').value = arrest.booking_number || '';
     $('rbCounty').value = arrest.county || '';
     $('rbFacility').value = arrest.facility || arrest.jail_facility || '';
@@ -179,6 +183,15 @@ const SLRecordBond = (() => {
     $('rbIndemnitorPhone').value = data.indemnitor_phone || '';
     $('rbIndemnitorEmail').value = data.indemnitor_email || '';
     $('rbIndemnitorRelationship').value = data.indemnitor_relationship || '';
+    $('rbDefendantPhone').value = data.defendant_phone || '';
+    $('rbDefendantDob').value = data.defendant_dob || data.dob || '';
+    $('rbDefendantEmail').value = data.defendant_email || data.email || '';
+    $('rbDefendantAddress').value = data.defendant_address || data.address || '';
+    $('rbBookingUrl').value = data.booking_page_url || data.detail_url || '';
+    $('rbRef1Name').value = data.ref1_name || (data.indemnitor && data.indemnitor.ref1Name) || '';
+    $('rbRef1Phone').value = data.ref1_phone || (data.indemnitor && data.indemnitor.ref1Phone) || '';
+    $('rbRef2Name').value = data.ref2_name || (data.indemnitor && data.indemnitor.ref2Name) || '';
+    $('rbRef2Phone').value = data.ref2_phone || (data.indemnitor && data.indemnitor.ref2Phone) || '';
     $('rbPaymentMethod').value = data.payment_method || 'cash';
     $('rbAgentName').value = data.agent_name || "Brendan O'Neal";
     $('rbNotes').value = data.notes || '';
@@ -261,6 +274,11 @@ const SLRecordBond = (() => {
 
     const payload = {
       defendant_name: $('rbDefendantName')?.value || '',
+      defendant_phone: $('rbDefendantPhone')?.value || '',
+      defendant_address: $('rbDefendantAddress')?.value || '',
+      defendant_dob: $('rbDefendantDob')?.value || '',
+      defendant_email: $('rbDefendantEmail')?.value || '',
+      booking_page_url: $('rbBookingUrl')?.value || '',
       booking_number: $('rbBookingNumber')?.value || '',
       county: $('rbCounty')?.value || '',
       facility: $('rbFacility')?.value || '',
@@ -278,6 +296,10 @@ const SLRecordBond = (() => {
       indemnitor_phone: $('rbIndemnitorPhone')?.value || '',
       indemnitor_email: $('rbIndemnitorEmail')?.value || '',
       indemnitor_relationship: $('rbIndemnitorRelationship')?.value || '',
+      ref1_name: $('rbRef1Name')?.value || '',
+      ref1_phone: $('rbRef1Phone')?.value || '',
+      ref2_name: $('rbRef2Name')?.value || '',
+      ref2_phone: $('rbRef2Phone')?.value || '',
       payment_method: $('rbPaymentMethod')?.value || 'cash',
       agent_name: $('rbAgentName')?.value || "Brendan O'Neal",
       notes: $('rbNotes')?.value || '',
@@ -371,6 +393,8 @@ const SLRecordBond = (() => {
         const data = d.data;
         // Auto-fill form fields from the ingested data
         if (data.full_name) $('rbDefendantName').value = data.full_name;
+        if (data.date_of_birth) $('rbDefendantDob').value = data.date_of_birth;
+        if (data.source_url) $('rbBookingUrl').value = data.source_url;
         if (data.booking_number) $('rbBookingNumber').value = data.booking_number;
         if (data.county) $('rbCounty').value = data.county;
         if (data.facility) $('rbFacility').value = data.facility;
