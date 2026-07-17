@@ -1,0 +1,18 @@
+# Optional heavy OCR engines for scrapers/captcha_ocr.py
+# NOT installed in the slim Docker image (volume / image size).
+# On a roomy host or GPU box:
+#   pip install -r requirements-ocr-extra.txt
+#
+# Then set (default is already "try if installed"):
+#   CAPTCHA_OCR_PADDLE=1
+#   CAPTCHA_OCR_EASYOCR=1
+#
+# Stack (see scrapers/captcha_ocr.py):
+#   ddddocr + tesseract (core) → PaddleOCR → EasyOCR → vote
+#   paid: SOLVECAPTCHA_KEY → OPENAI_API_KEY
+
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0
+easyocr>=1.7.0
+# Surya (document layout OCR) — not used for JailTracker captchas:
+#   pip install surya-ocr

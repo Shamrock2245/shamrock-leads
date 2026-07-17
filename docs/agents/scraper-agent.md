@@ -147,12 +147,13 @@ Dashboard updates
 |----------|-------|
 | File | `scrapers/counties/sarasota.py` |
 | Class | `SarasotaCountyScraper` |
-| JMS Vendor | Odyssey via Revize |
-| Base URL | `https://cms.revize.com/revize/apps/sarasota/` |
-| Method | Date-based person search + PIN detail lookup |
+| Primary | mugshotssarasota.com WP REST API (live bookings, 7d lookback) |
+| Fallback A | JailTracker `SARASOTA_COUNTY_FL` (captcha OK; FL Offender POST 400 as of Jul 2026) |
+| Fallback B | Revize `cms.revize.com/revize/apps/sarasota/` (Cloudflare hard-block) |
+| Method | WP JSON parse (name, booking#, charges, bond, mugshot, city) |
 | Auth | None |
-| Interval | 60 min |
-| Notes | Two-phase: date search → PIN-based detail fetch. Uses `personSearch.php` and `pinSearch.php`. |
+| Interval | 90 min |
+| Notes | v5 (2026-07-16): official JT/Revize both broken; third-party mirror is working source. |
 
 ---
 

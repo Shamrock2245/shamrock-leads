@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     chromium-driver \
     fonts-liberation \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     libnss3 \
     libxss1 \
     libasound2 \

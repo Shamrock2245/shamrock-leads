@@ -1,55 +1,343 @@
 """
-Sarasota County Arrest Scraper — Revize CMS via residential proxy
-=================================================================
-Source: Sarasota County Sheriff's Office
-URL:    https://cms.revize.com/revize/apps/sarasota/index.php
-        (embedded in https://www.sarasotasheriff.org/arrest-reports/index.php)
-Method: Playwright + APE residential (Warren) with office SOCKS fallback
+Sarasota County Arrest Scraper
+==============================
+Primary:  mugshotssarasota.com WordPress API
+          Third-party mirror of Sarasota County Jail bookings (live daily posts).
+          Official sources are currently unusable (see below).
 
-TWO-PHASE STRATEGY:
-  Phase 1 — Navigate to the Revize CMS main page, expand the "SELECT AN INMATE"
-            dropdown, and extract the full roster list (name, DOB, detail URL).
-  Phase 2 — Visit each detail page (viewInmate.php?id=XXX) to extract charges,
-            bond amounts, booking dates, demographics, and case numbers.
+Fallback A: JailTracker Blazor WASM (omsweb.public-safety-cloud.com)
+            SARASOTA_COUNTY_FL — captcha solvable, but FL Offender POST returns
+            HTTP 400 after valid captcha (agency backend issue, Jul 2026).
+            Kept so we recover automatically if JailTracker FL is fixed.
 
-The Revize CMS domain (cms.revize.com) is behind Cloudflare Turnstile.
-Residential egress (APE/Warren or office SOCKS) passes Turnstile when healthy.
+Fallback B: Revize CMS (cms.revize.com iframe on sarasotasheriff.org)
+            Hard-blocked by Cloudflare WAF on residential + proxy exits.
 
 HISTORY:
-- v1: JailTracker Blazor WASM — dead (global 400 error on all JailTracker counties)
+- v1: JailTracker Blazor — abandoned after global 400s
 - v2: Revize CMS via Playwright + office SOCKS
-- v3 (current): APE-first residential proxy + SOCKS fallback
+- v3: APE residential + Patchright for Revize
+- v4: JailTracker primary again (site live); Revize fallback
+- v5 (current): mugshotssarasota.com primary (working); JT + Revize fallbacks
 """
+from __future__ import annotations
+
 import logging
 import re
 import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from html import unescape
+from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.jailtracker_base import JailTrackerBaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-# ── Revize CMS URLs ──
+# ── JailTracker ──
+JT_COUNTY_ID = "SARASOTA_COUNTY_FL"
+FACILITY = "Sarasota County Jail"
+
+# ── mugshotssarasota.com (primary working source) ──
+MUGSHOTS_API = "https://mugshotssarasota.com/wp-json/wp/v2/posts"
+MUGSHOTS_CATEGORY = 2  # "Sarasota County Jail Arrest Booking Inquiry"
+MUGSHOTS_LOOKBACK_DAYS = 7
+MUGSHOTS_MAX_PAGES = 8
+MUGSHOTS_PER_PAGE = 50
+
+# ── Revize CMS (last-resort fallback) ──
 REVIZE_BASE = "https://cms.revize.com/revize/apps/sarasota"
 MAIN_URL = f"{REVIZE_BASE}/index.php"
-DETAIL_URL_TPL = f"{REVIZE_BASE}/viewInmate.php?id={{inmate_id}}"
-
-# ── Proxy & Limits ──
-DETAIL_DELAY_S = 1.0          # Polite delay between detail page visits
-MAX_INMATES = 1500             # Safety cap (typical population ~600-800)
-CF_WAIT_S = 8                  # Wait for Cloudflare Turnstile to auto-solve
-PAGE_LOAD_TIMEOUT = 30000      # 30s page load timeout
+DETAIL_DELAY_S = 1.0
+MAX_INMATES = 1500
+PAGE_LOAD_TIMEOUT = 60000
 
 
-class SarasotaCountyScraper(BaseScraper):
+class SarasotaCountyScraper(JailTrackerBaseScraper):
+    """Sarasota FL — mugshots primary, JailTracker + Revize fallbacks."""
+
+    county_jt_id = JT_COUNTY_ID
+    facility_name = FACILITY
 
     @property
     def county(self) -> str:
         return "Sarasota"
 
+    @property
+    def state(self) -> str:
+        return "FL"
+
     def scrape(self) -> List[ArrestRecord]:
+        # ── Path A: mugshotssarasota.com (working official mirror) ──
+        try:
+            logger.info("[Sarasota] Attempting mugshotssarasota.com path…")
+            records = self._scrape_mugshots()
+            if records:
+                logger.info(
+                    "[Sarasota] Mugshots success: %d records", len(records)
+                )
+                return records
+            logger.warning("[Sarasota] Mugshots returned 0 records")
+        except Exception as e:
+            logger.warning("[Sarasota] Mugshots failed (%s)", e)
+
+        # ── Path B: JailTracker (may 400 on FL agencies) ──
+        try:
+            logger.info("[Sarasota] Attempting JailTracker path…")
+            records = super().scrape()
+            if records:
+                logger.info(
+                    "[Sarasota] JailTracker success: %d records", len(records)
+                )
+                for r in records:
+                    if not getattr(r, "State", None):
+                        r.State = "FL"
+                    if not getattr(r, "Facility", None):
+                        r.Facility = FACILITY
+                return records
+            logger.warning(
+                "[Sarasota] JailTracker returned 0 records — trying Revize fallback"
+            )
+        except Exception as e:
+            logger.warning(
+                "[Sarasota] JailTracker failed (%s) — trying Revize fallback", e
+            )
+
+        # ── Path C: Revize CMS (residential browser) ──
+        return self._scrape_revize()
+
+    # ──────────────────────────────────────────────────────────────
+    # Path A: mugshotssarasota.com WordPress REST API
+    # ──────────────────────────────────────────────────────────────
+    def _scrape_mugshots(self) -> List[ArrestRecord]:
+        import httpx
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MUGSHOTS_LOOKBACK_DAYS)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+        }
+        records: List[ArrestRecord] = []
+        seen_bookings: set = set()
+
+        with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
+            for page in range(1, MUGSHOTS_MAX_PAGES + 1):
+                params = {
+                    "per_page": MUGSHOTS_PER_PAGE,
+                    "page": page,
+                    "categories": MUGSHOTS_CATEGORY,
+                    "orderby": "date",
+                    "order": "desc",
+                    "_fields": (
+                        "id,date,title,link,slug,"
+                        "yoast_head_json,jetpack_featured_media_url"
+                    ),
+                }
+                resp = client.get(MUGSHOTS_API, params=params)
+                if resp.status_code == 400:
+                    # WP returns 400 when page is out of range
+                    break
+                resp.raise_for_status()
+                posts = resp.json()
+                if not isinstance(posts, list) or not posts:
+                    break
+
+                page_had_recent = False
+                for post in posts:
+                    post_date = self._parse_iso_date(post.get("date") or "")
+                    if post_date and post_date < cutoff.replace(tzinfo=None):
+                        continue
+                    page_had_recent = True
+                    rec = self._parse_mugshots_post(post)
+                    if not rec:
+                        continue
+                    key = rec.Booking_Number or rec.Detail_URL
+                    if key in seen_bookings:
+                        continue
+                    seen_bookings.add(key)
+                    records.append(rec)
+
+                logger.info(
+                    "[Sarasota] Mugshots page %d: +posts, total records=%d",
+                    page,
+                    len(records),
+                )
+                if not page_had_recent:
+                    break
+                # Respect the API lightly
+                time.sleep(0.25)
+
+        logger.info(
+            "[Sarasota] Mugshots scraped %d records (lookback=%dd)",
+            len(records),
+            MUGSHOTS_LOOKBACK_DAYS,
+        )
+        return records
+
+    def _parse_mugshots_post(self, post: dict) -> Optional[ArrestRecord]:
+        """Parse a WP post into ArrestRecord using yoast SEO fields + image URL."""
+        try:
+            title = unescape((post.get("title") or {}).get("rendered") or "").strip()
+            # "JARON MOSS booked for No Bond" → name
+            full_name = re.sub(
+                r"\s+booked\s+for\s+.*$", "", title, flags=re.I
+            ).strip()
+            if not full_name or len(full_name) < 3:
+                return None
+
+            yoast = post.get("yoast_head_json") or {}
+            desc = (
+                yoast.get("description")
+                or yoast.get("og_description")
+                or ""
+            )
+            img = post.get("jetpack_featured_media_url") or ""
+            if not img:
+                og_imgs = yoast.get("og_image") or []
+                if og_imgs and isinstance(og_imgs[0], dict):
+                    img = og_imgs[0].get("url") or ""
+
+            # Booking number from mugshot filename: NAME-202600006744-s13.jpg
+            booking = ""
+            bm = re.search(r"-(\d{10,})(?:-s\d+)?\.(?:jpg|jpeg|png|webp)", img, re.I)
+            if bm:
+                booking = bm.group(1)
+            if not booking:
+                bm = re.search(r"(\d{10,})", img)
+                if bm:
+                    booking = bm.group(1)
+            if not booking:
+                booking = f"MS-{post.get('id', '')}"
+
+            # "NAME - age44 arrested on 20260716 for CHARGE:. Bail $500.00."
+            age = ""
+            arrest_date = ""
+            charges = ""
+            bond_raw = ""
+            m = re.search(r"age\s*(\d+)", desc, re.I)
+            if m:
+                age = m.group(1)
+            m = re.search(r"arrested on (\d{8})", desc, re.I)
+            if m:
+                d = m.group(1)
+                arrest_date = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+            m = re.search(
+                r"for\s+(.+?)\.?\s*Bail\s+(.+?)\.?\s*$", desc, re.I | re.S
+            )
+            if m:
+                charges = m.group(1).strip(" .:")
+                bond_raw = m.group(2).strip(" .")
+            else:
+                # Title fallback: "NAME booked for $500.00" / "booked for No Bond"
+                m = re.search(r"booked\s+for\s+(.+)$", title, re.I)
+                if m:
+                    bond_raw = m.group(1).strip()
+
+            if not arrest_date:
+                arrest_date = self._parse_iso_date_str(post.get("date") or "") or ""
+
+            bond_amount, bond_type = self._split_bond(bond_raw)
+            first, middle, last = self._split_name(full_name)
+            # City from slug: jaron-moss-of-sarasota → sarasota
+            city = ""
+            slug = post.get("slug") or ""
+            cm = re.search(r"-of-([a-z0-9-]+)/?$", slug)
+            if cm:
+                city = cm.group(1).replace("-", " ").title()
+
+            detail_url = post.get("link") or ""
+            status = "In Custody"
+
+            return ArrestRecord(
+                County="Sarasota",
+                State="FL",
+                Booking_Number=booking,
+                Full_Name=f"{last}, {first}".strip(", ") if last else full_name,
+                First_Name=first,
+                Middle_Name=middle,
+                Last_Name=last,
+                Age_At_Arrest=age,
+                Arrest_Date=arrest_date,
+                Booking_Date=arrest_date,
+                Status=status,
+                Facility=FACILITY,
+                City=city,
+                Mugshot_URL=img,
+                Charges=charges,
+                Bond_Amount=bond_amount,
+                Bond_Type=bond_type,
+                Detail_URL=detail_url,
+                LastCheckedMode="INITIAL",
+            )
+        except Exception as e:
+            logger.warning("[Sarasota] mugshots parse error: %s", e)
+            return None
+
+    @staticmethod
+    def _split_name(full: str) -> tuple:
+        """Parse 'FIRST MIDDLE LAST' or 'LAST, FIRST' into parts."""
+        full = (full or "").strip()
+        if not full:
+            return "", "", ""
+        if "," in full:
+            parts = full.split(",", 1)
+            last = parts[0].strip()
+            rest = parts[1].strip().split()
+            first = rest[0] if rest else ""
+            middle = " ".join(rest[1:]) if len(rest) > 1 else ""
+            return first, middle, last
+        tokens = full.split()
+        if len(tokens) == 1:
+            return tokens[0], "", ""
+        if len(tokens) == 2:
+            return tokens[0], "", tokens[1]
+        return tokens[0], " ".join(tokens[1:-1]), tokens[-1]
+
+    @staticmethod
+    def _split_bond(raw: str) -> tuple:
+        """Return (bond_amount_str, bond_type)."""
+        raw = (raw or "").strip()
+        if not raw:
+            return "0", ""
+        upper = raw.upper().replace("$", "").strip()
+        if "NO BOND" in upper or upper in ("NOBOND", "NONE", "HOLD"):
+            return "0", "No Bond"
+        if "ROR" in upper or "RELEASE" in upper:
+            return "0", raw
+        cleaned = re.sub(r"[$,\s]", "", raw)
+        m = re.search(r"([\d]+(?:\.\d+)?)", cleaned)
+        if m:
+            try:
+                val = float(m.group(1))
+                return (str(int(val)) if val == int(val) else str(val)), "Surety"
+            except ValueError:
+                pass
+        return "0", raw
+
+    @staticmethod
+    def _parse_iso_date(s: str) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            # 2026-07-16T18:26:03
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_iso_date_str(s: str) -> Optional[str]:
+        dt = SarasotaCountyScraper._parse_iso_date(s)
+        return dt.strftime("%Y-%m-%d") if dt else None
+
+    # ──────────────────────────────────────────────────────────────
+    # Path C: Revize (last resort — usually CF-blocked)
+    # ──────────────────────────────────────────────────────────────
+    def _scrape_revize(self) -> List[ArrestRecord]:
         from scrapers.socks_proxy import resolve_residential_proxy
         from scrapers.cf_browser import (
             launch_cf_browser,
@@ -58,10 +346,23 @@ class SarasotaCountyScraper(BaseScraper):
         )
 
         proxy_url, proxy_source = resolve_residential_proxy(
-            self, sticky_session="fl-sarasota"
+            self, sticky_session="fl-sarasota-revize"
         )
-        logger.info("[Sarasota] proxy source=%s", proxy_source)
+        if proxy_source == "ape":
+            try:
+                from scrapers.cf_browser import check_exit_ip
 
+                direct = check_exit_ip(None, timeout=10, retries=1)
+                if direct.get("residential_likely"):
+                    logger.info(
+                        "[Sarasota] Using DIRECT residential for Revize "
+                        "(avoids proxy WAF brand)"
+                    )
+                    proxy_url, proxy_source = None, "direct"
+            except Exception:
+                pass
+
+        logger.info("[Sarasota] Revize path proxy_source=%s", proxy_source)
         pw = browser = None
         t0 = time.time()
         try:
@@ -73,96 +374,101 @@ class SarasotaCountyScraper(BaseScraper):
             context = new_stealth_context(browser)
             page = context.new_page()
 
-            # ── Phase 1: Load Main Page + Extract Roster ──
-            logger.info("[Sarasota] Phase 1: Loading Revize CMS (engine=%s)", engine)
-            page.goto(MAIN_URL, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
-            if not wait_past_cloudflare(page, label="Sarasota main", max_wait=45):
-                logger.error("[Sarasota] Cloudflare blocked — cannot proceed")
-                if proxy_source == "ape":
+            entry_urls = [
+                "https://www.sarasotasheriff.org/arrest-reports/index.php",
+                MAIN_URL,
+            ]
+            roster: list = []
+            for entry in entry_urls:
+                logger.info(
+                    "[Sarasota] Phase 1: Loading %s (engine=%s)", entry, engine
+                )
+                page.goto(
+                    entry, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT
+                )
+                if not wait_past_cloudflare(
+                    page, label=f"Sarasota {entry[-40:]}", max_wait=50
+                ):
+                    title = (page.title() or "").lower()
+                    if "blocked" in title or "attention required" in title:
+                        logger.error("[Sarasota] Cloudflare hard-block on %s", entry)
+                        continue
+                    logger.warning("[Sarasota] CF not cleared on %s", entry)
+                    continue
+
+                roster = self._collect_roster_links(page)
+                if not roster:
+                    for frame in page.frames:
+                        if "revize" in (frame.url or "").lower() or "viewInmate" in (
+                            frame.url or ""
+                        ):
+                            try:
+                                roster = self._collect_roster_links(frame)
+                                if roster:
+                                    page = frame  # type: ignore
+                                    break
+                            except Exception:
+                                continue
+                if roster:
+                    break
+
+            if not roster:
+                logger.error(
+                    "[Sarasota] No inmate links found (Revize CF-blocked). "
+                    "Mugshots + JailTracker also empty."
+                )
+                if proxy_source == "ape" and proxy_url:
                     self.record_proxy_failure(proxy_url)
                 return []
 
-            # Wait for the inmate dropdown to appear
-            try:
-                page.wait_for_selector(
-                    "button.dropdown-toggle, .dropdown-menu a[href*='viewInmate']",
-                    timeout=15000
-                )
-            except Exception:
-                logger.warning("[Sarasota] Dropdown not found yet, trying to click it")
+            logger.info("[Sarasota] Found %d inmates in roster", len(roster))
 
-            # Click the "SELECT AN INMATE" button to expand dropdown
-            dropdown_btn = page.query_selector("button.dropdown-toggle")
-            if dropdown_btn:
-                dropdown_btn.click()
-                time.sleep(2)
-                logger.info("[Sarasota] Expanded inmate dropdown")
-            else:
-                logger.warning("[Sarasota] No dropdown button found — trying direct extraction")
-
-            # Extract all inmate links from the dropdown
-            roster = page.evaluate("""() => {
-                const links = document.querySelectorAll('a[href*="viewInmate.php"]');
-                return Array.from(links).map(a => ({
-                    text: a.textContent.trim(),
-                    href: a.href,
-                }));
-            }""")
-
-            if not roster:
-                logger.error("[Sarasota] No inmate links found in dropdown")
-                return []
-
-            logger.info(f"[Sarasota] Found {len(roster)} inmates in roster dropdown")
-
-            # Parse roster entries: "LASTNAME,FIRSTNAME MIDDLE - MM/DD/YYYY"
             inmates: List[Dict[str, str]] = []
             for entry in roster[:MAX_INMATES]:
                 parsed = self._parse_roster_entry(entry["text"], entry["href"])
                 if parsed:
                     inmates.append(parsed)
+            logger.info("[Sarasota] Parsed %d roster entries", len(inmates))
 
-            logger.info(f"[Sarasota] Parsed {len(inmates)} valid roster entries")
-
-            # ── Phase 2: Visit Detail Pages ──
-            logger.info("[Sarasota] Phase 2: Visiting detail pages for full data")
             records: List[ArrestRecord] = []
-            seen_bookings = set()
-
+            seen_bookings: set = set()
             for i, inmate in enumerate(inmates):
                 try:
                     detail_records = self._extract_detail(
                         page, inmate, seen_bookings
                     )
                     records.extend(detail_records)
-
                     if (i + 1) % 50 == 0:
                         logger.info(
-                            f"[Sarasota] Progress: {i + 1}/{len(inmates)} inmates, "
-                            f"{len(records)} records"
+                            "[Sarasota] Progress: %d/%d inmates, %d records",
+                            i + 1,
+                            len(inmates),
+                            len(records),
                         )
-
                     time.sleep(DETAIL_DELAY_S)
-
                 except Exception as e:
                     logger.warning(
-                        f"[Sarasota] Error on inmate {inmate.get('name', '?')}: {e}"
+                        "[Sarasota] Error on inmate %s: %s",
+                        inmate.get("name", "?"),
+                        e,
                     )
                     continue
 
             logger.info(
-                f"[Sarasota] Scraped {len(records)} records from {len(inmates)} inmates "
-                f"(proxy={proxy_source}, engine={engine})"
+                "[Sarasota] Revize scraped %d records from %d inmates "
+                "(proxy=%s, engine=%s)",
+                len(records),
+                len(inmates),
+                proxy_source,
+                engine,
             )
-            if records and proxy_source == "ape":
+            if records and proxy_source == "ape" and proxy_url:
                 self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
-            elif not records and proxy_source == "ape":
-                self.record_proxy_failure(proxy_url)
             return records
 
         except Exception as e:
-            logger.error(f"[Sarasota] Fatal error: {e}")
-            if proxy_source == "ape":
+            logger.error("[Sarasota] Revize fatal: %s", e)
+            if proxy_source == "ape" and proxy_url:
                 try:
                     self.record_proxy_failure(proxy_url)
                 except Exception:
@@ -180,44 +486,55 @@ class SarasotaCountyScraper(BaseScraper):
                 except Exception:
                     pass
 
-    # ── Roster Entry Parser ──
+    @staticmethod
+    def _collect_roster_links(page) -> list:
+        try:
+            btn = page.query_selector(
+                "button.dropdown-toggle, .dropdown-toggle, [data-toggle='dropdown']"
+            )
+            if btn:
+                try:
+                    btn.click()
+                    page.wait_for_timeout(1500)
+                except Exception:
+                    pass
+            return (
+                page.evaluate(
+                    """() => {
+                    const links = document.querySelectorAll('a[href*="viewInmate"]');
+                    return Array.from(links).map(a => ({
+                        text: (a.textContent || '').trim(),
+                        href: a.href,
+                    })).filter(x => x.href);
+                }"""
+                )
+                or []
+            )
+        except Exception:
+            return []
+
     @staticmethod
     def _parse_roster_entry(text: str, href: str) -> Optional[Dict[str, str]]:
-        """
-        Parse a roster dropdown entry.
-        Format: "LASTNAME,FIRSTNAME MIDDLE - MM/DD/YYYY"
-        URL:    https://cms.revize.com/revize/apps/sarasota/viewInmate.php?id=0201029792
-        """
         if not text or "viewInmate" not in href:
             return None
-
-        # Extract inmate ID from URL
-        id_match = re.search(r'id=(\d+)', href)
+        id_match = re.search(r"id=(\d+)", href)
         if not id_match:
             return None
         inmate_id = id_match.group(1)
-
-        # Split name and DOB: "LASTNAME,FIRSTNAME MIDDLE - MM/DD/YYYY"
         parts = text.rsplit(" - ", 1)
         name_part = parts[0].strip()
         dob_part = parts[1].strip() if len(parts) > 1 else ""
-
-        # Parse name: "LASTNAME,FIRSTNAME MIDDLE"
         name_pieces = name_part.split(",", 1)
         last_name = name_pieces[0].strip()
         rest = name_pieces[1].strip() if len(name_pieces) > 1 else ""
-
-        first_name = ""
-        middle_name = ""
+        first_name = middle_name = ""
         if rest:
-            name_tokens = rest.split()
-            first_name = name_tokens[0] if name_tokens else ""
-            middle_name = " ".join(name_tokens[1:]) if len(name_tokens) > 1 else ""
-
+            tokens = rest.split()
+            first_name = tokens[0] if tokens else ""
+            middle_name = " ".join(tokens[1:]) if len(tokens) > 1 else ""
         full_name = f"{last_name}, {first_name}"
         if middle_name:
             full_name = f"{last_name}, {first_name} {middle_name}"
-
         return {
             "inmate_id": inmate_id,
             "name": name_part,
@@ -229,55 +546,28 @@ class SarasotaCountyScraper(BaseScraper):
             "detail_url": href,
         }
 
-    # ── Detail Page Extractor ──
     def _extract_detail(
-        self,
-        page: Any,
-        inmate: Dict[str, str],
-        seen_bookings: set,
+        self, page: Any, inmate: Dict[str, str], seen_bookings: set
     ) -> List[ArrestRecord]:
-        """
-        Navigate to a detail page and extract full arrest data.
-
-        Detail page structure (viewInmate.php?id=XXX):
-          Personal Information:
-            - PIN (same as inmate_id)
-            - Date of Birth
-            - Race, Sex
-            - Location (cell/unit)
-          Criminal Charges Information (table):
-            - Booking Number | Offense Description | Counts | Arraign Date
-            - Bond Amount | Bond Type | Intake Date/Time | Court Case Number
-            - Release Date/Time | Hold
-        """
         detail_url = inmate["detail_url"]
         inmate_id = inmate["inmate_id"]
-
         try:
-            page.goto(detail_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT)
-            time.sleep(1.5)
-
-            # Check for Cloudflare
+            page.goto(
+                detail_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT
+            )
+            page.wait_for_timeout(1500)
             title = (page.title() or "").lower()
-            if "just a moment" in title:
-                logger.warning(f"[Sarasota] CF challenge on detail page {inmate_id}")
-                time.sleep(CF_WAIT_S)
+            if "just a moment" in title or "attention required" in title:
+                page.wait_for_timeout(8000)
                 title = (page.title() or "").lower()
-                if "just a moment" in title:
+                if "just a moment" in title or "blocked" in title:
                     return []
 
-            # Extract all data from the page
-            data = page.evaluate("""() => {
-                const result = {
-                    personal: {},
-                    charges: [],
-                };
-
-                // Get all text nodes
-                const allText = document.body.innerText || "";
+            data = page.evaluate(
+                """() => {
+                const result = { personal: {}, charges: [] };
+                const allText = document.body ? document.body.innerText : '';
                 const lines = allText.split('\\n').map(l => l.trim()).filter(Boolean);
-
-                // Extract personal info fields
                 const personalFields = ['PIN:', 'Date of Birth:', 'Race:', 'Sex:', 'Location:'];
                 for (let i = 0; i < lines.length; i++) {
                     for (const field of personalFields) {
@@ -286,11 +576,6 @@ class SarasotaCountyScraper(BaseScraper):
                         }
                     }
                 }
-
-                // Extract charges from the table structure
-                // The table has headers: Booking Number, Offense Description, Counts,
-                // Arraign Date, Bond Amount, Bond Type, Intake Date/Time,
-                // Court Case Number, Release Date/Time, Hold
                 const tables = document.querySelectorAll('table');
                 for (const table of tables) {
                     const rows = table.querySelectorAll('tr');
@@ -312,54 +597,24 @@ class SarasotaCountyScraper(BaseScraper):
                         }
                     }
                 }
-
-                // Fallback: if no table found, try parsing from text structure
-                if (result.charges.length === 0) {
-                    // Look for booking number pattern (10+ digits)
-                    const bookingPattern = /\\b(\\d{12,})\\b/g;
-                    let match;
-                    while ((match = bookingPattern.exec(allText)) !== null) {
-                        result.charges.push({
-                            booking_number: match[1],
-                            offense: '',
-                            counts: '',
-                            arraign_date: '',
-                            bond_amount: '',
-                            bond_type: '',
-                            intake_datetime: '',
-                            case_number: '',
-                            release_datetime: '',
-                            hold: '',
-                        });
-                    }
-                }
-
                 return result;
-            }""")
-
+            }"""
+            )
             if not data:
                 return []
 
             personal = data.get("personal", {})
             charges_list = data.get("charges", [])
-
-            # Get demographic data from personal info
             race = personal.get("Race", "")
             sex = personal.get("Sex", "")
             pin = personal.get("PIN", inmate_id)
-
             records: List[ArrestRecord] = []
 
             if charges_list:
-                # Group charges by booking number to create one record per booking
                 bookings: Dict[str, List[Dict]] = {}
                 for charge in charges_list:
-                    bn = charge.get("booking_number", "").strip()
-                    if not bn:
-                        bn = pin  # Fallback to PIN
-                    if bn not in bookings:
-                        bookings[bn] = []
-                    bookings[bn].append(charge)
+                    bn = charge.get("booking_number", "").strip() or pin
+                    bookings.setdefault(bn, []).append(charge)
 
                 for booking_num, charges in bookings.items():
                     dedup_key = f"Sarasota:{booking_num}"
@@ -367,174 +622,141 @@ class SarasotaCountyScraper(BaseScraper):
                         continue
                     seen_bookings.add(dedup_key)
 
-                    # Combine charges
                     charge_descriptions = []
                     total_bond = 0.0
-                    bond_type = ""
-                    intake_datetime = ""
-                    case_number = ""
-                    arraign_date = ""
+                    bond_type = intake_datetime = case_number = arraign_date = ""
                     release_datetime = ""
                     has_hold = False
-
                     for c in charges:
                         offense = c.get("offense", "").strip()
                         if offense:
                             charge_descriptions.append(offense)
-
-                        # Parse bond amount
-                        bond_str = c.get("bond_amount", "")
-                        bond_val = self._parse_bond_amount(bond_str)
+                        bond_val = self._parse_bond_amount(c.get("bond_amount", ""))
                         if bond_val is not None:
                             total_bond += bond_val
-
-                        # Get bond type (use first non-empty)
                         bt = c.get("bond_type", "").strip()
                         if bt and not bond_type:
                             bond_type = bt
-
-                        # Get intake datetime (use first non-empty)
                         idt = c.get("intake_datetime", "").strip()
                         if idt and not intake_datetime:
                             intake_datetime = idt
-
-                        # Get case number (use first non-empty)
                         cn = c.get("case_number", "").strip()
                         if cn and not case_number:
                             case_number = cn
-
-                        # Get arraign date (use first non-empty)
                         ad = c.get("arraign_date", "").strip()
                         if ad and not arraign_date:
                             arraign_date = ad
-
-                        # Get release date (use first non-empty)
                         rd = c.get("release_datetime", "").strip()
                         if rd and not release_datetime:
                             release_datetime = rd
-
                         if c.get("hold", "").strip().upper() == "Y":
                             has_hold = True
 
-                    # Determine status
-                    status = "In Custody"
-                    if release_datetime:
-                        status = "Released"
-
-                    # Parse dates
+                    status = "Released" if release_datetime else "In Custody"
                     booking_date, booking_time = self._parse_datetime(intake_datetime)
-                    arrest_date = booking_date or self._parse_date(arraign_date)
-                    release_date_str = self._parse_datetime(release_datetime)[0] if release_datetime else ""
-
-                    # Check for "No Bond" in charges
                     if "No Bond" in str(charges) or has_hold:
                         bond_type = bond_type or "No Bond"
 
-                    records.append(ArrestRecord(
-                        County="Sarasota",
-                        Booking_Number=booking_num,
-                        Person_ID=pin,
-                        Full_Name=inmate["full_name"],
-                        First_Name=inmate["first_name"],
-                        Middle_Name=inmate["middle_name"],
-                        Last_Name=inmate["last_name"],
-                        DOB=self._parse_date(inmate["dob"]) or "",
-                        Arrest_Date=arrest_date or "",
-                        Arrest_Time="",
-                        Booking_Date=booking_date or "",
-                        Booking_Time=booking_time or "",
-                        Status=status,
-                        Release_Date=release_date_str or "",
-                        Facility="Sarasota County Jail",
-                        Race=race,
-                        Sex=sex,
-                        Charges=" | ".join(charge_descriptions),
-                        Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-                        Bond_Type=bond_type,
-                        Case_Number=case_number,
-                        Court_Date=self._parse_date(arraign_date) or "",
-                        Detail_URL=detail_url,
-                    ))
+                    records.append(
+                        ArrestRecord(
+                            County="Sarasota",
+                            State="FL",
+                            Booking_Number=booking_num,
+                            Person_ID=pin,
+                            Full_Name=inmate["full_name"],
+                            First_Name=inmate["first_name"],
+                            Middle_Name=inmate["middle_name"],
+                            Last_Name=inmate["last_name"],
+                            DOB=self._parse_date(inmate["dob"]) or "",
+                            Arrest_Date=booking_date
+                            or self._parse_date(arraign_date)
+                            or "",
+                            Booking_Date=booking_date or "",
+                            Booking_Time=booking_time or "",
+                            Status=status,
+                            Release_Date=self._parse_datetime(release_datetime)[0]
+                            if release_datetime
+                            else "",
+                            Facility=FACILITY,
+                            Race=race,
+                            Sex=sex,
+                            Charges=" | ".join(charge_descriptions),
+                            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
+                            Bond_Type=bond_type,
+                            Case_Number=case_number,
+                            Court_Date=self._parse_date(arraign_date) or "",
+                            Detail_URL=detail_url,
+                        )
+                    )
             else:
-                # No charges found — create a minimal record from roster data
                 dedup_key = f"Sarasota:{pin}"
                 if dedup_key not in seen_bookings:
                     seen_bookings.add(dedup_key)
-                    records.append(ArrestRecord(
-                        County="Sarasota",
-                        Booking_Number=pin,
-                        Person_ID=pin,
-                        Full_Name=inmate["full_name"],
-                        First_Name=inmate["first_name"],
-                        Middle_Name=inmate["middle_name"],
-                        Last_Name=inmate["last_name"],
-                        DOB=self._parse_date(inmate["dob"]) or "",
-                        Status="In Custody",
-                        Facility="Sarasota County Jail",
-                        Race=race,
-                        Sex=sex,
-                        Detail_URL=detail_url,
-                    ))
-
+                    records.append(
+                        ArrestRecord(
+                            County="Sarasota",
+                            State="FL",
+                            Booking_Number=pin,
+                            Person_ID=pin,
+                            Full_Name=inmate["full_name"],
+                            First_Name=inmate["first_name"],
+                            Middle_Name=inmate["middle_name"],
+                            Last_Name=inmate["last_name"],
+                            DOB=self._parse_date(inmate["dob"]) or "",
+                            Status="In Custody",
+                            Facility=FACILITY,
+                            Race=race,
+                            Sex=sex,
+                            Detail_URL=detail_url,
+                        )
+                    )
             return records
-
         except Exception as e:
-            logger.warning(f"[Sarasota] Failed to extract detail for {inmate_id}: {e}")
+            logger.warning("[Sarasota] detail extract %s: %s", inmate_id, e)
             return []
 
-    # ── Utilities ──
     @staticmethod
-    def _parse_bond_amount(text: str) -> Optional[float]:
-        """Parse bond amount from strings like '$2,500.00', 'No Bond Available'."""
-        if not text:
+    def _parse_bond_amount(s: str) -> Optional[float]:
+        if not s:
             return None
-        text = text.strip()
-        if "no bond" in text.lower() or "n/a" in text.lower():
-            return 0.0
-        # Remove $ and commas
-        clean = re.sub(r'[,$]', '', text)
+        cleaned = re.sub(r"[$,\s]", "", s.strip().upper())
+        if not cleaned or cleaned in ("NOBOND", "NONE", "N/A", "HOLD", "-"):
+            return 0.0 if cleaned in ("NOBOND", "HOLD") else None
+        m = re.search(r"([\d]+(?:\.\d+)?)", cleaned)
+        if not m:
+            return None
         try:
-            return float(clean)
-        except (ValueError, TypeError):
+            return float(m.group(1))
+        except ValueError:
             return None
 
     @staticmethod
     def _parse_date(text: str) -> Optional[str]:
-        """Parse date from various formats to YYYY-MM-DD."""
         if not text:
             return None
-        text = text.strip()
-        for fmt in ["%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%m/%d/%y", "%m-%d-%y"]:
+        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%m/%d/%y", "%m-%d-%y"):
             try:
-                return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+                return datetime.strptime(text.strip(), fmt).strftime("%Y-%m-%d")
             except ValueError:
                 continue
-        return text if text else None
+        return None
 
     @staticmethod
-    def _parse_datetime(text: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Parse datetime string like '2025-11-20 06:50:47.000' into (date, time).
-        Returns (YYYY-MM-DD, HH:MM) or (None, None).
-        """
-        if not text or not text.strip():
+    def _parse_datetime(text: str):
+        if not text:
             return None, None
         text = text.strip()
-
-        # Try ISO-like: "2025-11-20 06:50:47.000"
-        for fmt in ["%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
+        for fmt in (
+            "%m/%d/%Y %I:%M %p",
+            "%m/%d/%Y %H:%M",
+            "%m-%d-%Y %I:%M %p",
+            "%Y-%m-%d %H:%M:%S",
+            "%m/%d/%Y",
+        ):
             try:
                 dt = datetime.strptime(text, fmt)
                 return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
             except ValueError:
                 continue
-
-        # Try US format: "11/20/2025 06:50"
-        for fmt in ["%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y"]:
-            try:
-                dt = datetime.strptime(text, fmt)
-                return dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
-            except ValueError:
-                continue
-
-        return None, None
+        d = SarasotaCountyScraper._parse_date(text)
+        return d, None

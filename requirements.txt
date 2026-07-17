@@ -33,7 +33,15 @@ beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
 patchright>=1.50.0  # Charlotte County — Cloudflare Turnstile bypass (also run: patchright install chromium)
 playwright>=1.48.0  # Obscura CDP connection for CF-protected counties (Charlotte, Manatee)
-ddddocr>=1.4.0      # Free local CAPTCHA OCR for JailTracker 4-char image CAPTCHAs (Hendry, etc.)
+# CAPTCHA OCR stack (see scrapers/captcha_ocr.py)
+# Core (light, always install):
+ddddocr>=1.4.0      # Captcha-specialized local OCR (JailTracker, etc.)
+Pillow>=10.0.0      # Preprocess variants for captcha_ocr
+# System: install tesseract-ocr binary (Dockerfile + brew) — used via CLI, no Python pkg
+# Optional heavy engines (do NOT add to slim Docker image unless volume allows):
+#   pip install 'paddlepaddle>=2.6.0' 'paddleocr>=2.7.0'   # production-grade
+#   pip install 'easyocr>=1.7.0'                            # PyTorch OCR
+# Surya is for document layout OCR, not tiny captchas — skip for this stack.
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.15.0

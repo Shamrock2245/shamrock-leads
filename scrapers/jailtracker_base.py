@@ -16,10 +16,14 @@ Counties using JailTracker (omsweb.public-safety-cloud.com):
 
 NO Cloudflare protection — direct access from VPS datacenter IP.
 
-CAPTCHA solving priority (cost cascade — cheapest first):
-  1. ddddocr (FREE, local OCR — good on simple alphanumeric CAPTCHAs)
-  2. SolveCaptcha API (if SOLVECAPTCHA_KEY set — ~$0.50/1000, most reliable)
-  3. OpenAI GPT-4o vision (expensive fallback — ~60% accuracy on distorted text)
+CAPTCHA solving priority (open-source first, paid last):
+  1. scrapers.captcha_ocr ensemble (FREE):
+       preprocess → ddddocr → Tesseract → PaddleOCR → EasyOCR → vote
+  2. SolveCaptcha API (if SOLVECAPTCHA_KEY set — ~$0.50/1000)
+  3. OpenAI GPT-4o vision (expensive fallback)
+
+  After OCR, API multi-try of case permutations (JailTracker is case-sensitive;
+  wrong codes keep the same captchaKey).
 """
 
 import base64
@@ -158,19 +162,52 @@ class JailTrackerBaseScraper(BaseScraper):
             except Exception:
                 pass
 
+    @staticmethod
+    def _case_permutations(answer: str, limit: int = 32) -> list:
+        """Generate case variants. JailTracker is case-sensitive; OCR often wrong-cases."""
+        import itertools
+
+        answer = re.sub(r"[^A-Za-z0-9]", "", answer or "")
+        if not answer:
+            return []
+        seen: list = []
+        for cand in (answer, answer.upper(), answer.lower(), answer.swapcase()):
+            if cand and cand not in seen:
+                seen.append(cand)
+        # Full 2^n permutations for short codes (typically 3–5 chars)
+        if 3 <= len(answer) <= 5:
+            for bits in itertools.product([0, 1], repeat=len(answer)):
+                out = "".join(
+                    ch.upper() if b else ch.lower() for ch, b in zip(answer, bits)
+                )
+                if out not in seen:
+                    seen.append(out)
+                if len(seen) >= limit:
+                    break
+        return seen[:limit]
+
     def _solve_captcha(self, page, api_data: dict) -> bool:
-        """Solve the 4-character image CAPTCHA with smart cost cascade.
-        
-        ddddocr (free) gets first 2 attempts. If both fail, remaining attempts
-        skip ddddocr and use SolveCaptcha (cheap) → OpenAI (expensive).
+        """Solve JailTracker image CAPTCHA via OCR + API case multi-try.
+
+        Strategy (validated Jul 2026):
+          1. OCR image (ddddocr → SolveCaptcha → OpenAI)
+          2. POST /Captcha/validatecaptcha for each case permutation of the OCR
+             result against the SAME captchaKey (wrong answers do NOT rotate the
+             captcha — only a match consumes it)
+          3. On match, immediately POST /Offender/{agency} with the returned
+             captchaKey to pull the roster (works for SC/GA agencies; some FL
+             agencies currently return HTTP 400 after a valid captcha)
+
+        UI click is only used as a last-resort path when API multi-try fails.
         """
         ddddocr_failures = 0
-        max_ddddocr_tries = 2  # Give free solver 2 shots before paying
+        max_ddddocr_tries = min(6, MAX_CAPTCHA_ATTEMPTS)
+        validate_url = f"{JT_BASE}/Captcha/validatecaptcha"
+        offender_url = f"{JT_BASE}/Offender/{self.county_jt_id}"
 
         for attempt in range(1, MAX_CAPTCHA_ATTEMPTS + 1):
             logger.info(f"[{self.county}] CAPTCHA attempt {attempt}/{MAX_CAPTCHA_ATTEMPTS}")
 
-            # Wait for captcha image to appear in API data
             captcha_data = {}
             for _ in range(8):
                 captcha_data = api_data.get("captcha/getnewcaptchaclient", {})
@@ -179,202 +216,202 @@ class JailTrackerBaseScraper(BaseScraper):
                 time.sleep(1)
 
             captcha_image_b64 = captcha_data.get("captchaImage", "")
+            captcha_key = captcha_data.get("captchaKey")
 
             if not captcha_image_b64:
-                # Try getting it from the DOM
                 captcha_img = page.query_selector("img[src*='data:image']")
                 if captcha_img:
                     captcha_image_b64 = captcha_img.get_attribute("src") or ""
 
-            if not captcha_image_b64:
-                logger.warning(f"[{self.county}] No captcha image found, clicking Get New Code")
+            if not captcha_image_b64 or not captcha_key:
+                logger.warning(f"[{self.county}] No captcha image/key, clicking Get New Code")
                 self._click_new_code(page, api_data)
                 continue
 
-            # Extract base64 data
-            b64_part = captcha_image_b64.split(",")[1] if "," in captcha_image_b64 else captcha_image_b64
+            b64_part = (
+                captcha_image_b64.split(",")[1]
+                if "," in captcha_image_b64
+                else captcha_image_b64
+            )
 
-            # Smart cost cascade: try free solver first, fall through to paid after failures
+            # ── Open-source ensemble first (ddddocr + tesseract + paddle + easyocr)
             answer = ""
-            used_ddddocr = False
+            used_local_ocr = False
+            ocr_seeds: list = []
             if ddddocr_failures < max_ddddocr_tries:
-                answer = self._ocr_captcha_ddddocr(b64_part)
-                if answer:
-                    used_ddddocr = True
+                try:
+                    from scrapers.captcha_ocr import solve_captcha_image
+
+                    ocr_result = solve_captcha_image(
+                        b64_part, label=self.county
+                    )
+                    ocr_seeds = ocr_result.all_seeds()
+                    if ocr_result.best:
+                        answer = ocr_result.best
+                        used_local_ocr = True
+                except Exception as e:
+                    logger.warning(
+                        f"[{self.county}] captcha_ocr ensemble error: {e}"
+                    )
+                    # Legacy single-engine fallback
+                    answer = self._ocr_captcha_ddddocr(b64_part)
+                    if answer:
+                        used_local_ocr = True
+                        ocr_seeds = [answer]
             else:
-                logger.info(f"[{self.county}] ddddocr failed {ddddocr_failures}x, using paid solver")
+                logger.info(
+                    f"[{self.county}] local OCR failed {ddddocr_failures}x, using paid solver"
+                )
 
             if not answer:
                 answer = (
                     self._ocr_captcha_solvecaptcha(b64_part)
                     or self._ocr_captcha_openai(b64_part)
                 )
+                if answer:
+                    ocr_seeds = [answer]
 
-            if not answer or len(answer) != 4:
-                logger.warning(f"[{self.county}] OCR returned '{answer}' (bad length), retrying")
+            if not answer:
+                logger.warning(f"[{self.county}] OCR returned empty, retrying")
                 self._click_new_code(page, api_data)
                 continue
 
-            logger.info(f"[{self.county}] CAPTCHA answer: {answer!r}")
+            answer = re.sub(r"[^A-Za-z0-9]", "", answer.strip())
+            if len(answer) < 3 or len(answer) > 6:
+                logger.warning(
+                    f"[{self.county}] OCR returned '{answer}' (len={len(answer)}), retrying"
+                )
+                self._click_new_code(page, api_data)
+                continue
 
-            # Fill in the captcha
-            captcha_input = page.query_selector("#captchaCode")
-            if captcha_input:
-                captcha_input.fill(answer)
-            else:
-                page.fill("input", answer)
-
-            # Clear stale validate data before clicking
-            api_data.pop("Captcha/validatecaptcha", None)
-
-            # ── Register offender POST capture BEFORE clicking Validate ──
-            # Blazor sends the POST immediately after validate succeeds,
-            # so we must be listening before the click.
-            captured_resp = [None]
-
-            def _capture_offender(resp):
-                """Lightweight: stores Response ref only, no body() call."""
-                url = resp.url
-                if (
-                    f"Offender/{self.county_jt_id}" in url
-                    and "/AgencyOptions" not in url
-                    and resp.request.method == "POST"
-                ):
-                    # Only capture POST responses with a real captchaKey
-                    post_body = resp.request.post_data or ""
-                    if '"captchaKey":null' not in post_body and '"captchaKey"' in post_body:
-                        captured_resp[0] = resp
-                        logger.info(
-                            f"[{self.county}] 📡 Caught offender POST response: "
-                            f"status={resp.status} ct={resp.headers.get('content-type', '?')}"
-                        )
-
-            page.on("response", _capture_offender)
-
-            # Click Validate
-            validate_btn = page.query_selector("button:has-text('Validate')")
-            if validate_btn:
-                validate_btn.click()
-
-            # Wait for the validate response to arrive (up to 12s)
-            # IMPORTANT: Use page.wait_for_timeout() instead of time.sleep()
-            # because Playwright sync API only dispatches event callbacks
-            # (like on_response) during Playwright method calls, not during
-            # Python's time.sleep().
-            validate_result = None
-            for _ in range(24):
-                page.wait_for_timeout(500)  # Processes Playwright events!
-                validate_result = api_data.get("Captcha/validatecaptcha")
-                if validate_result is not None:
-                    break
-
-            logger.info(f"[{self.county}] Validate response: {validate_result}")
-
-            # ── Primary check: did the server confirm the CAPTCHA? ──
-            captcha_matched = (
-                isinstance(validate_result, dict)
-                and validate_result.get("captchaMatched") is True
+            # Expand case perms across ALL OCR seeds (ensemble may disagree on case)
+            candidates: list = []
+            for seed in (ocr_seeds or [answer]):
+                for cand in self._case_permutations(seed, limit=24):
+                    if cand not in candidates:
+                        candidates.append(cand)
+            # Cap total tries per captcha image
+            candidates = candidates[:48]
+            logger.info(
+                f"[{self.county}] CAPTCHA OCR={answer!r} seeds={ocr_seeds[:5]!r} "
+                f"→ {len(candidates)} case candidates"
             )
 
-            if not captcha_matched:
-                # Wrong answer — server explicitly said no
-                if used_ddddocr:
+            # ── API multi-try: wrong codes keep same key; match returns new key ──
+            matched_code = None
+            roster_token = None
+            for cand in candidates:
+                try:
+                    result = page.evaluate(
+                        """async ([url, captchaKey, cand]) => {
+                            const r = await fetch(url, {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json; charset=utf-8'},
+                                body: JSON.stringify({
+                                    captchaKey, captchaImage: null, userCode: cand
+                                }),
+                                credentials: 'include',
+                            });
+                            try { return await r.json(); }
+                            catch (e) { return {error: String(e), status: r.status}; }
+                        }""",
+                        [validate_url, captcha_key, cand],
+                    )
+                except Exception as e:
+                    logger.debug("[%s] validate fetch error: %s", self.county, e)
+                    continue
+
+                if isinstance(result, dict) and result.get("captchaMatched") is True:
+                    matched_code = cand
+                    roster_token = result.get("captchaKey")
+                    logger.info(f"[{self.county}] CAPTCHA matched via API: {cand!r} ✅")
+                    break
+
+            if not matched_code or not roster_token:
+                if used_local_ocr:
                     ddddocr_failures += 1
-                    logger.warning(f"[{self.county}] CAPTCHA incorrect (ddddocr miss #{ddddocr_failures}), retrying...")
+                    logger.warning(
+                        f"[{self.county}] CAPTCHA incorrect "
+                        f"(local OCR miss #{ddddocr_failures}), retrying..."
+                    )
                 else:
                     logger.warning(f"[{self.county}] CAPTCHA incorrect, retrying...")
-                # Wait for Blazor to process and show retry UI
-                time.sleep(3)
-                retry = page.query_selector("text=Click Here to Try Again")
-                if retry:
-                    retry.click()
-                    time.sleep(2)
-                    api_data.pop("captcha/getnewcaptchaclient", None)
-                else:
-                    self._click_new_code(page, api_data)
-                continue
-
-            # CAPTCHA matched! The response might already be captured.
-            logger.info(f"[{self.county}] CAPTCHA matched! ✅ Checking for captured response...")
-
-            # If not captured yet, wait a bit more for Blazor to process
-            if not captured_resp[0]:
-                logger.info(f"[{self.county}] Response not yet captured, waiting...")
-                page.wait_for_timeout(5000)
-
-            # Remove the temporary listener
-            page.remove_listener("response", _capture_offender)
-
-            # Now read the body from the main thread (safe — not in callback)
-            if captured_resp[0]:
-                try:
-                    resp_obj = captured_resp[0]
-                    raw_body = resp_obj.body()
-                    resp_ct = resp_obj.headers.get("content-type", "UNKNOWN")
-                    logger.info(
-                        f"[{self.county}] 📡 Response body: {len(raw_body)} bytes "
-                        f"(status={resp_obj.status}, ct={resp_ct})"
-                    )
-
-                    if raw_body and len(raw_body) > 2:
-                        data = json.loads(raw_body)
-                        if isinstance(data, dict) and "offenders" in data:
-                            n = len(data["offenders"])
-                            api_data[f"Offender/{self.county_jt_id}/roster"] = data
-                            logger.info(f"[{self.county}] 🎯 CAPTURED {n} offenders! ✅")
-                            return True
-                        elif isinstance(data, list):
-                            api_data[f"Offender/{self.county_jt_id}/roster"] = {"offenders": data}
-                            logger.info(f"[{self.county}] 🎯 CAPTURED {len(data)} offenders (list)! ✅")
-                            return True
-                        else:
-                            logger.warning(f"[{self.county}] 📡 Response JSON structure: {str(data)[:500]}")
-                    else:
-                        logger.warning(f"[{self.county}] 📡 Empty response body (0 bytes)")
-
-                except (json.JSONDecodeError, ValueError) as je:
-                    logger.warning(f"[{self.county}] 📡 Response body not JSON: {je}")
-                    try:
-                        logger.warning(f"[{self.county}] 📡 Raw body preview: {raw_body[:300]}")
-                    except Exception:
-                        pass
-
-                except Exception as body_err:
-                    logger.warning(f"[{self.county}] 📡 Failed to read response body: {body_err}")
-
-            else:
-                logger.warning(f"[{self.county}] ⚠️ No offender POST response captured")
-
-            # If we got here, we didn't capture data. Check page state.
-            current_keys = [k for k in api_data.keys() if k != 'captcha/getnewcaptchaclient']
-            logger.info(f"[{self.county}] Post-validate API keys: {current_keys}")
-
-            page_text = page.evaluate("() => document.body?.innerText || ''")
-
-            # Blazor crash — navigate to fresh session and retry
-            if "unhandled error" in page_text.lower() or "error has occurred" in page_text.lower():
-                logger.info(f"[{self.county}] Blazor crash after valid CAPTCHA — navigating to fresh session...")
-                api_data.clear()
-                fresh_session = f"shamrock_{int(time.time())}"
-                fresh_url = f"{JT_BASE}/(S({fresh_session}))/jailtracker/index/{self.county_jt_id}"
-                page.goto(fresh_url, wait_until="networkidle", timeout=45000)
-                time.sleep(CAPTCHA_WAIT_S)
-                page_text2 = page.evaluate("() => document.body?.innerText || ''")
-                if "captcha" not in page_text2.lower() and "validate" not in page_text2.lower():
-                    logger.info(f"[{self.county}] CAPTCHA bypassed on fresh session! ✅")
-                    return True
-                logger.info(f"[{self.county}] Fresh session loaded, new CAPTCHA ready")
-                continue
-
-            # Still on captcha page (shouldn't happen after match=true)
-            if "validate" in page_text.lower() and "captcha" in page_text.lower():
-                logger.warning(f"[{self.county}] Still on captcha page despite match=true, retrying...")
                 self._click_new_code(page, api_data)
                 continue
 
-            # Case 3: Success — CAPTCHA matched and page moved past captcha
-            logger.info(f"[{self.county}] CAPTCHA solved! ✅")
-            return True
+            # ── Pull roster with the one-time token from validate ──
+            try:
+                roster_result = page.evaluate(
+                    """async ([url, token]) => {
+                        const r = await fetch(url, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json; charset=utf-8'},
+                            body: JSON.stringify({
+                                captchaKey: token, captchaImage: null, userCode: ''
+                            }),
+                            credentials: 'include',
+                        });
+                        const text = await r.text();
+                        let data = null;
+                        try { data = JSON.parse(text); } catch (e) {}
+                        return {
+                            status: r.status,
+                            len: text.length,
+                            data,
+                            preview: text.slice(0, 200),
+                        };
+                    }""",
+                    [offender_url, roster_token],
+                )
+            except Exception as e:
+                logger.warning(f"[{self.county}] Offender fetch error: {e}")
+                roster_result = None
+
+            if isinstance(roster_result, dict):
+                status = roster_result.get("status")
+                data = roster_result.get("data")
+                if status == 200 and isinstance(data, dict):
+                    offenders = data.get("offenders") or []
+                    if offenders:
+                        api_data[f"Offender/{self.county_jt_id}/roster"] = data
+                        logger.info(
+                            f"[{self.county}] 🎯 CAPTURED {len(offenders)} offenders via API! ✅"
+                        )
+                        return True
+                    logger.warning(
+                        f"[{self.county}] Captcha OK but roster empty "
+                        f"(captchaRequired={data.get('captchaRequired')})"
+                    )
+                elif status == 400:
+                    # Observed for SARASOTA/Manatee/Charlotte FL agencies (Jul 2026):
+                    # validate succeeds, Offender POST returns empty 400.
+                    logger.error(
+                        f"[{self.county}] Offender POST 400 after valid captcha — "
+                        f"agency backend rejects roster (FL JailTracker issue). "
+                        f"preview={roster_result.get('preview')!r}"
+                    )
+                    return False
+                else:
+                    logger.warning(
+                        f"[{self.county}] Unexpected offender response: "
+                        f"status={status} len={roster_result.get('len')}"
+                    )
+
+            # Soft fallback: fill UI with matched code (may already be consumed)
+            try:
+                page.fill("#captchaCode", matched_code)
+                btn = page.query_selector("button:has-text('Validate')")
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(3000)
+                    for key, val in list(api_data.items()):
+                        if isinstance(val, dict) and val.get("offenders"):
+                            api_data[f"Offender/{self.county_jt_id}/roster"] = val
+                            return True
+            except Exception:
+                pass
+
+            self._click_new_code(page, api_data)
 
         return False
 
@@ -397,16 +434,46 @@ class JailTrackerBaseScraper(BaseScraper):
         try:
             ocr = ddddocr.DdddOcr(show_ad=False)
             image_bytes = base64.b64decode(image_b64)
-            answer = ocr.classification(image_bytes)
-            # Clean: only keep alphanumeric chars
-            answer = re.sub(r"[^a-zA-Z0-9]", "", answer)
-            if len(answer) >= 4:
-                answer = answer[:4]
-                logger.info(f"[{self.county}] ddddocr answered: {answer!r} (FREE)")
+            # Try raw + simple preprocessing variants; pick first plausible length
+            candidates = [image_bytes]
+            try:
+                import io
+                from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+                base_img = Image.open(io.BytesIO(image_bytes)).convert("L")
+                for im in (
+                    ImageOps.autocontrast(base_img),
+                    ImageOps.autocontrast(base_img).filter(ImageFilter.SHARPEN),
+                    ImageEnhance.Contrast(ImageOps.autocontrast(base_img)).enhance(2.0),
+                    ImageOps.autocontrast(base_img).resize(
+                        (max(base_img.width * 2, 80), max(base_img.height * 2, 40))
+                    ),
+                ):
+                    buf = io.BytesIO()
+                    im.save(buf, format="PNG")
+                    candidates.append(buf.getvalue())
+            except Exception:
+                pass
+
+            answers = []
+            for blob in candidates:
+                try:
+                    ans = ocr.classification(blob)
+                    ans = re.sub(r"[^a-zA-Z0-9]", "", ans or "")
+                    if 3 <= len(ans) <= 6 and ans not in answers:
+                        answers.append(ans)
+                except Exception:
+                    continue
+            answer = answers[0] if answers else ""
+            if 3 <= len(answer) <= 6:
+                logger.info(
+                    f"[{self.county}] ddddocr answered: {answer!r} "
+                    f"(FREE; alts={answers[1:4]!r})"
+                )
                 return answer
-            else:
-                logger.warning(f"[{self.county}] ddddocr returned '{answer}' (too short), falling through")
-                return ""
+            logger.warning(
+                f"[{self.county}] ddddocr returned '{answer}' (unusable length), falling through"
+            )
+            return ""
         except Exception as e:
             logger.warning(f"[{self.county}] ddddocr error: {e}")
             return ""
@@ -428,8 +495,8 @@ class JailTrackerBaseScraper(BaseScraper):
                     "method": "base64",
                     "body": image_b64,
                     "json": "1",
-                    "min_len": "4",
-                    "max_len": "4",
+                    "min_len": "3",
+                    "max_len": "6",
                     "regsense": "1",  # Case-sensitive
                     "numeric": "0",   # Letters + digits
                 },
@@ -458,7 +525,9 @@ class JailTrackerBaseScraper(BaseScraper):
                 result_data = result_resp.json()
                 if result_data.get("status") == 1:
                     answer = result_data["request"]
-                    answer = re.sub(r"[^a-zA-Z0-9]", "", answer)[:4]
+                    answer = re.sub(r"[^a-zA-Z0-9]", "", answer)
+                    if len(answer) > 6:
+                        answer = answer[:6]
                     logger.info(f"[{self.county}] SolveCaptcha answered: {answer!r}")
                     return answer
                 elif "CAPCHA_NOT_READY" in str(result_data.get("request", "")):
@@ -474,7 +543,7 @@ class JailTrackerBaseScraper(BaseScraper):
             return ""
 
     def _ocr_captcha_openai(self, image_b64: str) -> str:
-        """Use OpenAI GPT-4o vision to read 4-char captcha (fallback)."""
+        """Use OpenAI GPT-4o vision to read 3–6 char captcha (paid fallback)."""
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             logger.warning(f"[{self.county}] OPENAI_API_KEY not set, cannot solve captcha")
@@ -497,32 +566,33 @@ class JailTrackerBaseScraper(BaseScraper):
                                 {
                                     "type": "text",
                                     "text": (
-                                        "This is a CAPTCHA image containing exactly 4 characters. "
-                                        "The characters may be uppercase letters, lowercase letters, or digits. "
-                                        "They may be distorted, rotated, or have noise/lines through them. "
-                                        "Reply with ONLY the 4 characters you see. No explanation. No quotes. "
-                                        "Example valid responses: Ab3K, xY9m, H2dR"
+                                        "This is a CAPTCHA image with 3–6 alphanumeric characters. "
+                                        "Preserve UPPERCASE vs lowercase carefully — it is case-sensitive. "
+                                        "Often yellow/orange letters on a dark blue background. "
+                                        "Reply with ONLY the characters. No spaces, quotes, or explanation. "
+                                        "Examples: Ab3K, xY9m, H2dR, ycpT"
                                     ),
                                 },
                                 {
                                     "type": "image_url",
                                     "image_url": {
-                                        "url": f"data:image/gif;base64,{image_b64}",
+                                        "url": f"data:image/png;base64,{image_b64}",
                                     },
                                 },
                             ],
                         }
                     ],
-                    "max_tokens": 10,
+                    "max_tokens": 16,
                     "temperature": 0,
                 },
                 timeout=15,
             )
             resp.raise_for_status()
             answer = resp.json()["choices"][0]["message"]["content"].strip()
-            # Clean: only keep alphanumeric chars
             answer = re.sub(r"[^a-zA-Z0-9]", "", answer)
-            return answer[:4]  # Ensure max 4 chars
+            if 3 <= len(answer) <= 6:
+                return answer
+            return answer[:6]
         except Exception as e:
             logger.warning(f"[{self.county}] OpenAI captcha OCR error: {e}")
             return ""

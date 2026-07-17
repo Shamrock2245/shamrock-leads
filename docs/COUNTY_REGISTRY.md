@@ -22,7 +22,7 @@
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
 | 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize + CF; **exit-IP preflight** | `charlotte.py` | ⚠️ Needs **US residential** exit (not Datacamp/VPN) | 90 min | 2026-07-16 |
 | 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |
-| 5 | **Sarasota** | Same + detail pages | `sarasota.py` | ⚠️ Needs **US residential** exit | 90 min | 2026-07-16 |
+| 5 | **Sarasota** | **mugshotssarasota.com WP API** (primary); JT FL backend 400; Revize CF-blocked | `sarasota.py` | ✅ Active (v5 mugshots) | 90 min | 2026-07-16 |
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
