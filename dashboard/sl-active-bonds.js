@@ -769,7 +769,7 @@ window._buildAddBondModal = function() {
 /* ══════════════════════════════════════════════════════════════════
    LOCATION HISTORY MODAL
    ══════════════════════════════════════════════════════════════════ */
-async function showLocationHistory(bookingNumber, defName) {
+window.showLocationHistory = async function(bookingNumber, defName) {
   const bond = _abBonds.find(b => b.booking_number === bookingNumber);
   let pings = bond?.location_history || [];
   try {
@@ -825,7 +825,7 @@ async function showLocationHistory(bookingNumber, defName) {
    ══════════════════════════════════════════════════════════════════ */
 let _abCheckinPortalUrl = '';
 
-function openCheckinModal(booking, name) {
+window.openCheckinModal = function(booking, name) {
   _abCheckinBooking = booking;
   _abCheckinName = name;
   _abCheckinPortalUrl = '';
@@ -1068,7 +1068,7 @@ function showRiskBreakdown(bookingNumber, defName, risk, factorsEncoded) {
 /* ══════════════════════════════════════════════════════════════════
    MANUAL ALERT
    ══════════════════════════════════════════════════════════════════ */
-async function addManualAlert(booking, name) {
+window.addManualAlert = async function(booking, name) {
   const message = prompt(`Add alert for ${name}:\nDescribe the issue (e.g. "FTA - warrant issued", "Missed court date"):`);
   if (!message) return;
   const severity = confirm('Is this HIGH severity? (OK = High, Cancel = Medium)') ? 'high' : 'medium';
@@ -1116,7 +1116,7 @@ async function updateBondStatus(booking, newStatus) {
 /* ══════════════════════════════════════════════════════════════════
    CROSS-TAB: OPEN IN TRACKING
    ══════════════════════════════════════════════════════════════════ */
-function openInTracking(bookingNumber) {
+window.openInTracking = function(bookingNumber) {
   const trackTab = document.querySelector('[data-tab="tabTracking"]') ||
                    Array.from(document.querySelectorAll('.tab-btn')).find(b => b.textContent.includes('Tracking'));
   if (trackTab) trackTab.click();
@@ -1130,7 +1130,7 @@ function openInTracking(bookingNumber) {
 /* ══════════════════════════════════════════════════════════════════
    EXONERATE
    ══════════════════════════════════════════════════════════════════ */
-async function exonerateFromActiveBonds(bookingNumber, defName) {
+window.exonerateFromActiveBonds = async function(bookingNumber, defName) {
   const note = prompt(
     `✅ Exonerate bond for ${defName}?\n\n` +
     'This will:\n  • Stop all location tracking immediately\n  • Cancel all pending GPS capture links\n  • Cancel all pending court reminders\n\n' +
@@ -1320,7 +1320,7 @@ if (document.readyState === 'loading') {
  * Send SwipeSimple payment link to indemnitor via iMessage.
  * Falls back to copying the link if BB is offline.
  */
-async function sendPaymentLink(bookingNumber, defendantName, phone) {
+window.sendPaymentLink = async function(bookingNumber, defendantName, phone) {
   const paymentLink = window._SWIPESIMPLE_LINK || 'https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd';
   const cleanPhone = (phone || '').replace(/\D/g, '');
 
@@ -1358,7 +1358,7 @@ async function sendPaymentLink(bookingNumber, defendantName, phone) {
  * If the iMessage tab is available, switches to it and pre-fills the compose area.
  * Otherwise falls back to sms: link.
  */
-function sendBondImessage(bookingNumber, defendantName, phone) {
+window.sendBondImessage = function(bookingNumber, defendantName, phone) {
   const cleanPhone = (phone || '').replace(/\D/g, '');
   if (!cleanPhone || cleanPhone.length < 10) {
     toast('No valid phone number on file for this bond', 'error');
@@ -2034,7 +2034,7 @@ async function _loadCompliancePanel(bookingNumber) {
    BOND RENEWAL / RE-WRITE MODAL
    Captira-style: update court date, reason, optional new POA/bond amount
    ══════════════════════════════════════════════════════════════════ */
-function openRenewBondModal(bookingNumber, defendantName) {
+window.openRenewBondModal = function(bookingNumber, defendantName) {
   const bn = bookingNumber || window._abEditBookingNumber || '';
   if (!bn) { toast('No booking number — open from a bond row', 'error'); return; }
 
@@ -2220,7 +2220,7 @@ function openBondFromActiveBond(bond) {
   }
 }
 
-async function fileBondToDrive(bookingNumber) {
+window.fileBondToDrive = async function(bookingNumber) {
   toast('Fetching document from SignNow and uploading to Drive...', 'info');
   try {
     const r = await fetch(`${API}/api/file-to-drive/${encodeURIComponent(bookingNumber)}`, {
