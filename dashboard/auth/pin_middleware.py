@@ -39,7 +39,7 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
 # Paths that bypass auth entirely
 OPEN_PATHS = frozenset({
-    "/login", "/health", "/api/stats",
+    "/login", "/health", "/health/live", "/api/stats",
     "/docs", "/redoc", "/openapi.json",
     "/manifest.json", "/favicon.ico",
 })

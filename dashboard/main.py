@@ -148,6 +148,12 @@ async def health():
         return JSONResponse({"status": "degraded", "engine": "fastapi"}, status_code=503)
 
 
+@app.get("/health/live", tags=["infra"])
+async def health_live():
+    """Liveness check — verifies the FastAPI process is serving requests."""
+    return {"status": "ok", "engine": "fastapi"}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Static File Serving (SPA fallback)
 # ═══════════════════════════════════════════════════════════════════════════════

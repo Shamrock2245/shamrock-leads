@@ -159,7 +159,7 @@ services:
       - osint-worker
       - traccar                         # In-stack GPS (portal check-ins + continuous client)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:5050/health/live"]
       interval: 30s
       timeout: 10s
       retries: 3
