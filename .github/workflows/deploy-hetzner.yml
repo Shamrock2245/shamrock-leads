@@ -161,7 +161,7 @@ jobs:
 
             echo ""
             echo "🏥 Health Check:"
-            HEALTH_URL="http://localhost:8088/api/stats"
+            HEALTH_URL="http://localhost:8088/health/live"
             SUCCESS=false
             for i in {1..6}; do
               if curl -sf "$HEALTH_URL" > /dev/null; then
@@ -176,6 +176,8 @@ jobs:
               echo " ✅ Dashboard healthy (port 8088)"
             else
               echo " ⚠️ Dashboard health check failed after 30s"
+              docker logs shamrock-dashboard --tail 80 2>&1 || true
+              exit 1
             fi
 
             echo ""

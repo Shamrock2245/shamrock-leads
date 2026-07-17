@@ -702,8 +702,6 @@ CRON_REGISTRY: List[CronDef] = [
 
 async def _ensure_all_indexes():
     """Create all MongoDB indexes on startup."""
-    from dashboard.extensions import get_db
-    db = get_db()
     warnings = []
 
     async def _idx(collection_name: str, keys, **kwargs):
@@ -720,6 +718,9 @@ async def _ensure_all_indexes():
                 warnings.append(f"{collection_name}.{idx_name}: {e}")
 
     try:
+        from dashboard.extensions import get_db
+        db = get_db()
+
         # Defendants
         await _idx("defendants", [("identity_key", 1)], unique=True, name="idx_identity_key_unique", background=True)
         await _idx("defendants", [("defendant_id", 1)], unique=True, name="idx_defendant_id_unique", background=True)
@@ -822,7 +823,10 @@ async def _ensure_all_indexes():
 
 async def _startup_tasks():
     """One-time startup tasks (webhooks, inbox poller, indexes)."""
-    await _ensure_all_indexes()
+    try:
+        await _ensure_all_indexes()
+    except Exception as e:
+        logger.warning("Startup index setup skipped: %s", e)
 
     # BB webhook auto-registration
     vps_url = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
@@ -859,7 +863,11 @@ async def _startup_tasks():
 
 async def start_all_crons() -> List[asyncio.Task]:
     """Launch all background crons + one-time startup tasks. Returns task handles."""
-    await _startup_tasks()
+    try:
+        await _startup_tasks()
+    except Exception as e:
+        logger.warning("Startup tasks failed; continuing with cron launch: %s", e)
+
     tasks = []
     for cron in CRON_REGISTRY:
         task = asyncio.create_task(_cron_runner(cron), name=f"cron_{cron.name}")

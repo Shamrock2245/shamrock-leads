@@ -297,6 +297,11 @@ class TestEndToEndScenarios(unittest.TestCase):
                 "stormsia_enabled": True,
             }
         )
+        ape.stormsia_manager.proxy_cache["socks5"] = [
+            "socks5://127.0.0.1:9050",
+            "socks5://127.0.0.1:9051",
+        ]
+        ape.stormsia_manager.cache_timestamp["socks5"] = datetime.now()
         proxy = ape.get_next_proxy(prefer_residential=True)
         self.assertIsNotNone(proxy)
         self.assertTrue(proxy.startswith(("socks5://", "socks4://", "http://")))
