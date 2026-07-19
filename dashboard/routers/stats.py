@@ -263,15 +263,28 @@ async def api_command_center():
 async def api_leads(
     query: LeadsQueryModel = Depends(),
 ):
+    """Filterable, sortable leads list.
+
+    Frontend (sl-data.js) defaults sort to ``scraped_at`` and expects an
+    ``activity.scraped_last_hour`` field for the results meta line.
+    """
     arrests = get_collection("arrests")
     try:
         mongo_query = _build_leads_query(query)
+        # Align with frontend default (scraped_at) and LeadsQueryModel default.
         sort_map = {
-            "lead_score": "lead_score", "bond_amount": "bond_amount",
-            "booking_date": "booking_date", "full_name": "full_name",
-            "county": "county", "arrest_date": "arrest_date", "created_at": "created_at",
+            "scraped_at": "scraped_at",
+            "lead_score": "lead_score",
+            "bond_amount": "bond_amount",
+            "booking_date": "booking_date",
+            "full_name": "full_name",
+            "county": "county",
+            "arrest_date": "arrest_date",
+            "created_at": "created_at",
+            "state": "state",
+            "lead_status": "lead_status",
         }
-        mongo_sort = sort_map.get(query.sort, "lead_score")
+        mongo_sort = sort_map.get(query.sort or "scraped_at", "scraped_at")
         sort_order = -1 if query.order == "desc" else 1
         skip = (query.page - 1) * query.limit
         projection = {
@@ -289,16 +302,30 @@ async def api_leads(
             leads_list.append(serialize_doc(doc))
         db_counties = await arrests.distinct("county")
         counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
+
+        # Real-time activity for frontend meta (sl-data.js resultsMeta line).
+        # scraped_at may be stored as datetime or ISO string — match both.
+        hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        scraped_last_hour = await arrests.count_documents({
+            "$or": [
+                {"scraped_at": {"$gte": hour_ago}},
+                {"scraped_at": {"$gte": hour_ago.isoformat()}},
+            ]
+        })
+
         return {
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,
             "pages": max(1, (total + query.limit - 1) // query.limit),
             "counties": counties_list,
+            "activity": {
+                "scraped_last_hour": scraped_last_hour,
+            },
             "query": {
                 "status": query.status,
                 "county": query.county,
                 "state": getattr(query, "state", "") or "",
                 "search": query.search,
-                "sort": query.sort,
+                "sort": query.sort or "scraped_at",
                 "order": query.order,
             },
         }
@@ -314,17 +341,25 @@ async def api_leads_export(
     try:
         mongo_query = _build_leads_query(query)
         sort_map = {
-            "lead_score": "lead_score", "bond_amount": "bond_amount",
-            "booking_date": "booking_date", "full_name": "full_name",
-            "county": "county", "arrest_date": "arrest_date",
+            "scraped_at": "scraped_at",
+            "lead_score": "lead_score",
+            "bond_amount": "bond_amount",
+            "booking_date": "booking_date",
+            "full_name": "full_name",
+            "county": "county",
+            "arrest_date": "arrest_date",
+            "created_at": "created_at",
+            "state": "state",
+            "lead_status": "lead_status",
         }
-        mongo_sort = sort_map.get(query.sort, "lead_score")
+        mongo_sort = sort_map.get(query.sort or "scraped_at", "scraped_at")
         sort_order = -1 if query.order == "desc" else 1
         columns = [
-            "full_name", "county", "charges", "bond_amount", "bond_type",
+            "full_name", "county", "state", "charges", "bond_amount", "bond_type",
             "lead_score", "lead_status", "status", "booking_number",
             "arrest_date", "booking_date", "court_date", "court_location",
             "case_number", "dob", "sex", "race", "address", "facility", "detail_url",
+            "scraped_at",
         ]
 
         cursor = arrests.find(mongo_query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)

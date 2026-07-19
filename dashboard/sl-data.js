@@ -31,13 +31,30 @@ async function applyFilters() {
   if (SL_STATE.status) p.set('status', SL_STATE.status);
   if (SL_STATE.minBond) p.set('min_bond', SL_STATE.minBond);
   if (SL_STATE.search) p.set('search', SL_STATE.search);
+  const meta = document.getElementById('resultsMeta');
+  const tb = document.getElementById('leadsBody');
   try {
     const r = await fetch(`${API}/api/leads?${p}`);
-    if (!r.ok) { console.warn('[Leads] HTTP', r.status); return; }
+    if (!r.ok) {
+      console.warn('[Leads] HTTP', r.status);
+      if (meta) meta.textContent = `Leads API error (HTTP ${r.status})`;
+      if (tb) tb.innerHTML = `<tr><td colspan="10" class="loading">Failed to load leads (HTTP ${r.status}). Check dashboard connectivity.</td></tr>`;
+      return;
+    }
     const ct = r.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) { console.warn('[Leads] non-JSON response'); return; }
+    if (!ct.includes('application/json')) {
+      console.warn('[Leads] non-JSON response');
+      if (meta) meta.textContent = 'Leads API returned non-JSON (proxy/auth?)';
+      if (tb) tb.innerHTML = '<tr><td colspan="10" class="loading">Leads API returned non-JSON. Is the dashboard proxy healthy?</td></tr>';
+      return;
+    }
     const d = await r.json();
-    if (d.error) { console.warn('[Leads] API error', d.error); return; }
+    if (d.error) {
+      console.warn('[Leads] API error', d.error);
+      if (meta) meta.textContent = `Leads error: ${d.error}`;
+      if (tb) tb.innerHTML = `<tr><td colspan="10" class="loading">API error: ${String(d.error).slice(0, 120)}</td></tr>`;
+      return;
+    }
     SL_STATE.leads = d.leads || []; SL_STATE.total = d.total || 0; SL_STATE.pages = d.pages || 1;
     // Always refresh county options when server returns a fuller list
     if (d.counties && d.counties.length) {
@@ -50,12 +67,15 @@ async function applyFilters() {
     const fresh = activity.scraped_last_hour != null
       ? ` · ${activity.scraped_last_hour.toLocaleString()} scraped last hour`
       : '';
-    const meta = document.getElementById('resultsMeta');
     if (meta) {
       meta.textContent = `${SL_STATE.total.toLocaleString()} results · Page ${SL_STATE.page}/${SL_STATE.pages}${fresh}`;
     }
     renderLeads(); renderPills(); renderPagination();
-  } catch(e) { console.error('applyFilters error:', e); }
+  } catch(e) {
+    console.error('applyFilters error:', e);
+    if (meta) meta.textContent = 'Leads network error';
+    if (tb) tb.innerHTML = '<tr><td colspan="10" class="loading">Network error loading leads. Check connection and try Refresh.</td></tr>';
+  }
 }
 
 function renderLeads() {

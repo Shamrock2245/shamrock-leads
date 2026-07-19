@@ -403,21 +403,28 @@ def api_leads_compat():
     try:
         query, status_filter, county_filter, search = _build_leads_query()
 
-        sort_field = request.args.get("sort", "lead_score").strip()
+        # Align with frontend default (scraped_at) and FastAPI stats router.
+        sort_field = request.args.get("sort", "scraped_at").strip() or "scraped_at"
         sort_order = -1 if request.args.get("order", "desc").strip() == "desc" else 1
         sort_map = {
-            "lead_score": "lead_score", "bond_amount": "bond_amount",
-            "booking_date": "booking_date", "full_name": "full_name",
-            "county": "county", "arrest_date": "arrest_date",
+            "scraped_at": "scraped_at",
+            "lead_score": "lead_score",
+            "bond_amount": "bond_amount",
+            "booking_date": "booking_date",
+            "full_name": "full_name",
+            "county": "county",
+            "arrest_date": "arrest_date",
             "created_at": "created_at",
+            "state": "state",
+            "lead_status": "lead_status",
         }
-        mongo_sort = sort_map.get(sort_field, "lead_score")
+        mongo_sort = sort_map.get(sort_field, "scraped_at")
         page = max(1, int(request.args.get("page", 1)))
         limit = min(200, max(1, int(request.args.get("limit", 50))))
         skip = (page - 1) * limit
         projection = {
             "_id": 0, "full_name": 1, "first_name": 1, "last_name": 1,
-            "booking_number": 1, "county": 1, "charges": 1, "bond_amount": 1,
+            "booking_number": 1, "county": 1, "state": 1, "charges": 1, "bond_amount": 1,
             "bond_type": 1, "lead_score": 1, "lead_status": 1, "status": 1,
             "arrest_date": 1, "booking_date": 1, "court_date": 1,
             "court_location": 1, "case_number": 1, "dob": 1, "sex": 1,
@@ -434,6 +441,14 @@ def api_leads_compat():
             leads_list.append(doc)
         db_counties = arrests.distinct("county")
         counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
+        # scraped_at may be datetime or ISO string — match both for activity meta.
+        hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        scraped_last_hour = arrests.count_documents({
+            "$or": [
+                {"scraped_at": {"$gte": hour_ago}},
+                {"scraped_at": {"$gte": hour_ago.isoformat()}},
+            ]
+        })
         return jsonify({
             "leads": leads_list,
             "total": total_matching,
@@ -441,6 +456,9 @@ def api_leads_compat():
             "limit": limit,
             "pages": max(1, (total_matching + limit - 1) // limit),
             "counties": counties_list,
+            "activity": {
+                "scraped_last_hour": scraped_last_hour,
+            },
             "query": {
                 "status": status_filter, "county": county_filter,
                 "search": search, "sort": sort_field,
@@ -456,22 +474,29 @@ def api_leads_export():
     """CSV export of current filtered leads."""
     try:
         query, _, _, _ = _build_leads_query()
-        sort_field = request.args.get("sort", "lead_score").strip()
+        sort_field = request.args.get("sort", "scraped_at").strip() or "scraped_at"
         sort_order = -1 if request.args.get("order", "desc").strip() == "desc" else 1
         sort_map = {
-            "lead_score": "lead_score", "bond_amount": "bond_amount",
-            "booking_date": "booking_date", "full_name": "full_name",
-            "county": "county", "arrest_date": "arrest_date",
+            "scraped_at": "scraped_at",
+            "lead_score": "lead_score",
+            "bond_amount": "bond_amount",
+            "booking_date": "booking_date",
+            "full_name": "full_name",
+            "county": "county",
+            "arrest_date": "arrest_date",
+            "created_at": "created_at",
+            "state": "state",
+            "lead_status": "lead_status",
         }
-        mongo_sort = sort_map.get(sort_field, "lead_score")
+        mongo_sort = sort_map.get(sort_field, "scraped_at")
         cursor = arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_order).limit(5000)
 
         columns = [
-            "full_name", "county", "charges", "bond_amount", "bond_type",
+            "full_name", "county", "state", "charges", "bond_amount", "bond_type",
             "lead_score", "lead_status", "status", "booking_number",
             "arrest_date", "booking_date", "court_date", "court_location",
             "case_number", "dob", "sex", "race", "address", "facility",
-            "detail_url",
+            "detail_url", "scraped_at",
         ]
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=columns, extrasaction="ignore")

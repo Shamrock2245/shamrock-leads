@@ -56,6 +56,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
 | Lead Explorer **state** column + filter (FL/GA/SC/NC/TN/TX/LA) | ✅ July 16 |
 | Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ July 16 |
+| Lead Explorer API: `sort_map` includes `scraped_at` + `activity.scraped_last_hour` | ✅ July 19 |
 | Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ July 16 |
 | **Autonomous Proxy Engine (APE)** Warren + S5W2C + Stormsia | ✅ code · hub live |
 | Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ July 2026 |
