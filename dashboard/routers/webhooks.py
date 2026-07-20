@@ -707,6 +707,20 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     try:
         intake_id, intake_doc = await _normalize_intake(data, source="wix_webhook")
         logger.info("[wix_intake_webhook] Intake %s created from Wix webhook", intake_id)
+
+        # Real-time dashboard event — sl-core.js listens for 'new_intake'
+        try:
+            from dashboard.routers.events import publish_event
+            await publish_event("new_intake", {
+                "intake_id": intake_id,
+                "defendant_name": (intake_doc or {}).get("defendant_name", ""),
+                "county": (intake_doc or {}).get("county", ""),
+                "booking_number": (intake_doc or {}).get("booking_number", ""),
+                "source": "wix_webhook",
+            })
+        except Exception:
+            pass
+
         return JSONResponse(status_code=201, content={"success": True, "intake_id": intake_id})
     except Exception as exc:
         logger.exception("[wix_intake_webhook] Intake normalization failed")

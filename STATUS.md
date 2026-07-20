@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-16  
+> **Last verified:** 2026-07-20  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  

@@ -130,6 +130,20 @@ class FTAAlertService:
 
             await self.db["fta_alerts"].insert_one(fta_record)
 
+            # Real-time dashboard event — sl-core.js listens for 'bond_fta_detected'
+            try:
+                from dashboard.routers.events import publish_event
+                await publish_event("bond_fta_detected", {
+                    "booking_number": booking_number,
+                    "defendant_name": bond.get("defendant_name", ""),
+                    "county": bond.get("county", ""),
+                    "bond_amount": bond.get("bond_amount", 0),
+                    "court_date": str(court_date_raw),
+                    "hours_past_court": round(hours_past, 1),
+                })
+            except Exception:
+                pass
+
             # Level 1: Notify agent
             sent = await self._escalate_level1(bond, fta_record, hours_past)
             if sent:

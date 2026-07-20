@@ -246,6 +246,29 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "📨 Webhook: inbound from %s → intent=%s responded=%s",
             sender_phone[-4:], agent_result.get("intent"), agent_result.get("responded")
         )
+
+        # Real-time dashboard events — sl-core.js + SLProspective listen for
+        # 'message_received' (inbox refresh) and 'new_reply' (prospect badge +
+        # hot alert). A matched inbound on an active prospective bond is a reply.
+        try:
+            from dashboard.routers.events import publish_event
+            _evt_payload = {
+                "phone_last4": sender_phone[-4:] if sender_phone else "",
+                "phone": sender_phone,
+                "booking_number": bond.get("booking_number", ""),
+                "defendant_name": bond.get("defendant_name", ""),
+                "message": msg_text[:120],
+                "preview": msg_text[:80],
+                "intent": _intent,
+                "category": _category,
+                "responded": agent_result.get("responded", False),
+                "matched": True,
+            }
+            await publish_event("message_received", _evt_payload)
+            await publish_event("new_reply", _evt_payload)
+        except Exception:
+            pass
+
         return {"processed": True, "matched": True, "agent_result": agent_result}
 
     else:
@@ -263,6 +286,21 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "source": "webhook",
         })
         logger.info("❓ Webhook: unmatched inbound from %s: %s", sender_phone[-4:], msg_text[:50])
+
+        # Real-time dashboard event — unmatched inbound still surfaces in the
+        # inbox so staff can triage new numbers (frontend 'message_received').
+        try:
+            from dashboard.routers.events import publish_event
+            await publish_event("message_received", {
+                "phone_last4": sender_phone[-4:] if sender_phone else "",
+                "phone": sender_phone,
+                "preview": msg_text[:80],
+                "category": "general",
+                "matched": False,
+            })
+        except Exception:
+            pass
+
         return {"processed": True, "matched": False}
 
 

@@ -374,12 +374,27 @@ class CourtReminderService:
                         )
                         sent_count += 1
                         logger.info(
-                            "[reminder] Sent %s %s to %s (%s)",
+                            "[reminder] Sent %s %s to ...%s (%s)",
                             reminder.get("reminder_type", "court"),
                             reminder["touch"],
-                            reminder["phone"],
+                            str(reminder["phone"])[-4:],
                             reminder.get("recipient_role", "unknown"),
                         )
+
+                        # Real-time dashboard event — sl-core.js listens for
+                        # 'court_reminder_sent' (activity feed entry).
+                        try:
+                            from dashboard.routers.events import publish_event
+                            await publish_event("court_reminder_sent", {
+                                "booking_number": reminder.get("booking_number", ""),
+                                "defendant_name": reminder.get("defendant_name", ""),
+                                "touch": reminder.get("touch", ""),
+                                "reminder_type": reminder.get("reminder_type", "court"),
+                                "recipient_role": reminder.get("recipient_role", ""),
+                                "court_date": reminder.get("court_date", ""),
+                            })
+                        except Exception:
+                            pass
                     else:
                         raise Exception(result.get("error", "BB send failed"))
 
@@ -394,9 +409,9 @@ class CourtReminderService:
                     )
                     failed_count += 1
                     logger.error(
-                        "[reminder] Failed %s to %s: %s",
+                        "[reminder] Failed %s to ...%s: %s",
                         reminder["touch"],
-                        reminder["phone"],
+                        str(reminder["phone"])[-4:],
                         e,
                     )
 

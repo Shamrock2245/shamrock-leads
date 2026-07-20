@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.16.1] — 2026-07-20 (SSE publisher coverage — dead listeners wired)
+
+### Fixed — Frontend SSE listeners with no backend publisher
+The dashboard subscribed to several named events that no backend code ever published,
+leaving those real-time flows dark even after the 2.16.0 named-dispatch fix:
+- **`message_received` + `new_reply`** — published from `bb_webhook_receiver.py` on inbound
+  BlueBubbles messages (matched replies fire both; unmatched inbound fires
+  `message_received` for triage). Live iMessage inbox refresh + prospect badge now work.
+- **`bond_written`** — published from `bonds.py` on `/bonds/record` (retro entry) and on
+  successful `/write-bond` GAS forwarding.
+- **`new_intake`** — published from the Wix intake webhook after `_normalize_intake`.
+- **`rearrest_detected`** — published from `rearrest_detector.py` per new alert.
+- **`court_reminder_sent`** — published from `court_reminder_service.py` per delivered
+  reminder.
+- **`bond_fta_detected`** — published from `fta_alert_service.py` per new FTA.
+- `tests/test_sse_publisher_coverage.py` — contract test failing the build if any frontend
+  listener ever loses its backend publisher again (documented exemptions for the scraper
+  webhook relay and the `payment_confirmed` legacy alias).
+
+### Fixed — PII + misc
+- Court reminder logs and the bond-recorded log line now mask phone numbers (last-4).
+- `bond_lifecycle.py` deprecated naive `datetime.utcnow()` → timezone-aware UTC.
+- `STATUS.md` last-verified refreshed.
+
+---
+
 ## [2.16.0] — 2026-07-20 (Ecosystem data-flow hardening)
 
 ### Fixed — Critical scraper crashes (38 GA/SC counties)

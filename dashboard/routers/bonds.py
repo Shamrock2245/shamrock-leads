@@ -290,10 +290,26 @@ async def api_record_bond(request: Request):
     except Exception as exc:
         logger.warning("[record-bond] Arrest update error: %s", exc)
 
+    from dashboard.routers.helpers import mask_phone
     logger.info(
         "☘️ BOND RECORDED — %s | Booking: %s | County: %s | Bond: $%.2f | Premium: $%.2f | Surety: %s | POA: %s | Indemnitor: %s (%s)",
-        defendant_name, booking_number, county, bond_amount, premium, surety.upper(), poa_number, indemnitor_name, indemnitor_phone
+        defendant_name, booking_number, county, bond_amount, premium, surety.upper(), poa_number, indemnitor_name, mask_phone(indemnitor_phone)
     )
+
+    # Real-time dashboard event — sl-core.js listens for 'bond_written'
+    try:
+        from dashboard.routers.events import publish_event
+        await publish_event("bond_written", {
+            "booking_number": booking_number,
+            "defendant_name": defendant_name,
+            "county": county,
+            "bond_amount": bond_amount,
+            "premium": premium,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+        })
+    except Exception:
+        pass
 
     return {
         "success": True,
@@ -458,6 +474,21 @@ async def api_write_bond(request: Request):
                 if resp.status_code < 400:
                     content_type = resp.headers.get("content-type", "")
                     gas_resp = resp.json() if "application/json" in content_type else resp.text[:200]
+
+                    # Real-time dashboard event — sl-core.js listens for 'bond_written'
+                    try:
+                        from dashboard.routers.events import publish_event
+                        await publish_event("bond_written", {
+                            "booking_number": booking.get("booking_number", ""),
+                            "defendant_name": defendant.get("full_name", ""),
+                            "county": booking.get("county", ""),
+                            "bond_amount": bond.get("amount", 0),
+                            "premium": bond.get("premium", 0),
+                            "surety": insurer.upper(),
+                        })
+                    except Exception:
+                        pass
+
                     return {
                         "success": True,
                         "message": f"Packet sent to GAS for {defendant.get('full_name')}",

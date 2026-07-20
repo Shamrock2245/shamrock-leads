@@ -440,7 +440,7 @@ async def file_to_drive(request: Request, identifier: str):
                     "drive_folder_id": def_folder_id,
                     "surety_id": surety_id,
                     "status": "filed",
-                    "filed_at": datetime.datetime.utcnow().isoformat()
+                    "filed_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
                 }}
             )
             logger.info("[file-to-drive] Filed %s (%s) → Drive: %s", defendant_name, surety_label, link)

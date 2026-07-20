@@ -213,6 +213,23 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
             alert["_id"] = str(alert.get("_id", ""))
             detected.append(alert)
 
+            # Real-time dashboard event — sl-core.js + SLRearrest listen for
+            # 'rearrest_detected' (toast, activity feed, panel refresh).
+            try:
+                from dashboard.routers.events import publish_event
+                await publish_event("rearrest_detected", {
+                    "full_name": arrest_name,
+                    "booking_number": arrest_booking,
+                    "county": arrest.get("county", ""),
+                    "state": arrest.get("state", ""),
+                    "charges": charges_str[:200],
+                    "original_poa": bond.get("poa_number", ""),
+                    "original_bond_amount": bond.get("bond_amount", 0),
+                    "confidence": confidence,
+                })
+            except Exception:
+                pass
+
             # Create notification
             try:
                 from dashboard.routers.notifications import create_notification
