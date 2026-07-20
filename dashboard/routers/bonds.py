@@ -1355,7 +1355,8 @@ async def api_active_bond_release(request: Request, booking_number: str):
             "channel": walkout_result.get("channel"),
             "phone": indemnitor_phone,
         }
-        logger.info("[release] Walk-out msg to %s: %s", indemnitor_phone, walkout_result.get("success"))
+        from dashboard.routers.helpers import mask_phone
+        logger.info("[release] Walk-out msg to %s: %s", mask_phone(indemnitor_phone), walkout_result.get("success"))
 
     # 3. Phase 2 SignNow packet + send link via BlueBubbles
     if data.get("send_signing_link", True):
@@ -1414,7 +1415,8 @@ async def api_active_bond_release(request: Request, booking_number: str):
                 sign_result = await send_message_universal(indemnitor_phone, sign_msg)
                 results["phase2_signing"]["bb_sent"] = sign_result.get("success")
                 results["phase2_signing"]["bb_channel"] = sign_result.get("channel")
-                logger.info("[release] Phase 2 link sent to %s: %s", indemnitor_phone, sign_result.get("success"))
+                from dashboard.routers.helpers import mask_phone
+                logger.info("[release] Phase 2 link sent to %s: %s", mask_phone(indemnitor_phone), sign_result.get("success"))
 
             await active_bonds.update_one(
                 {"booking_number": booking_number},

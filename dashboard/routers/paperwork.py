@@ -453,7 +453,8 @@ async def deliver_packet(request: Request, packet_id: str):
             {"$set": {"paperwork_status": "delivered", "updated_at": now}},
         )
 
-        logger.info("[paperwork] Packet %s delivered to %s", packet_id, phone)
+        from dashboard.routers.helpers import mask_phone
+        logger.info("[paperwork] Packet %s delivered to %s", packet_id, mask_phone(phone))
         return {
             "success": result.get("success", False),
             "packet_id": packet_id,

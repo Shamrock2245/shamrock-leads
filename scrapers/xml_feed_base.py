@@ -115,6 +115,7 @@ class XMLFeedBaseScraper(BaseScraper):
                     
                 record = ArrestRecord(
                     County=self.county,
+                    State=(getattr(self, "state", None) or "FL"),
                     Full_Name=full_name,
                     First_Name=first_name,
                     Last_Name=last_name,

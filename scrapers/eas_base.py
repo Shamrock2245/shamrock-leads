@@ -102,6 +102,7 @@ class EASBaseScraper(BaseScraper):
                 # Create record
                 record = ArrestRecord(
                     County=self.county,
+                    State=(getattr(self, "state", None) or "FL"),
                     Full_Name=name_raw,
                     First_Name=first_name,
                     Last_Name=last_name,

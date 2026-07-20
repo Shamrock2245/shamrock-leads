@@ -139,15 +139,19 @@ class InteropWebBaseScraper(BaseScraper):
                         except ValueError:
                             pass
                 
+                full_name = f"{last_name}, {first_name}".strip().rstrip(",").strip()
                 record = ArrestRecord(
-                    county=self.county,
-                    booking_number=booking_number,
-                    first_name=first_name,
-                    last_name=last_name,
-                    booking_date=booking_date,
-                    charges=charges,
-                    bond_amount=bond_amount,
-                    source_url=detail_link or self.portal_url
+                    County=self.county,
+                    State=(getattr(self, "state", None) or "FL"),
+                    Booking_Number=booking_number,
+                    Full_Name=full_name,
+                    First_Name=first_name,
+                    Last_Name=last_name,
+                    Booking_Date=booking_date,
+                    Charges=charges,
+                    Bond_Amount=str(bond_amount) if bond_amount is not None else "0",
+                    Status="In Custody",
+                    Detail_URL=detail_link or self.portal_url,
                 )
                 records.append(record)
                 

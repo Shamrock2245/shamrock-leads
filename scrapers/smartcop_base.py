@@ -93,15 +93,19 @@ class SmartCOPBaseScraper(BaseScraper):
                 
                 charges = " | ".join([t for t in texts[3:] if t and len(t) > 3])
                 
+                full_name = f"{last_name}, {first_name}".strip().rstrip(",").strip()
                 record = ArrestRecord(
-                    county=self.county,
-                    booking_number=booking_number,
-                    first_name=first_name,
-                    last_name=last_name,
-                    booking_date=booking_date,
-                    charges=charges,
-                    bond_amount=None,
-                    source_url=self.portal_url
+                    County=self.county,
+                    State=(getattr(self, "state", None) or "FL"),
+                    Booking_Number=booking_number,
+                    Full_Name=full_name,
+                    First_Name=first_name,
+                    Last_Name=last_name,
+                    Booking_Date=booking_date,
+                    Charges=charges,
+                    Bond_Amount="0",
+                    Status="In Custody",
+                    Detail_URL=self.portal_url,
                 )
                 records.append(record)
                 

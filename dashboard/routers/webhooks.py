@@ -386,8 +386,7 @@ async def signnow_webhook(request: Request):
             except Exception as e:
                 logger.warning(f"[signnow_webhook] Auto-transition to active failed for {booking_number_for_sm}: {e}")
 
-    # ── Step 9: Publish SSE event ─────────────────────────────────────────────
-    from dashboard.routers.events import publish_event
+    # ── Step 9: Publish SSE event (publish_event imported at handler top) ────
     await publish_event('document_signed', {
         "document_id": doc_id,
         "packet_id": packet_id,

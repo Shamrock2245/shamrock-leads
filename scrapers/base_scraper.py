@@ -90,6 +90,14 @@ class BaseScraper(ABC):
         self.last_error: Optional[str] = None
         self.total_runs: int = 0
         self.total_records_scraped: int = 0
+
+        # Namespaced per-scraper logger — subclasses and base classes can safely
+        # call self.logger.* (previously interopweb/smartcop bases crashed with
+        # AttributeError because no logger attribute existed).
+        try:
+            self.logger = logging.getLogger(f"scrapers.{self.county.lower().replace(' ', '_')}")
+        except Exception:
+            self.logger = logger
         
         # Initialize Autonomous Proxy Engine (APE)
         try:
@@ -696,6 +704,29 @@ class BaseScraper(ABC):
                 combined_stats["qualified_records"] = hot_count
                 combined_stats["total_records"] = len(records)
 
+            # ── Step 3a: Broadcast genuinely NEW arrests to the dashboard SSE feed ──
+            # Previously only the Lee scraper pushed real-time events; all 200+
+            # scrapers now emit uniformly so multi-state activity is live.
+            try:
+                new_indexes = None
+                for _res in combined_stats["writer_results"]:
+                    if isinstance(_res, dict) and _res.get("new_record_indexes") is not None:
+                        new_indexes = _res["new_record_indexes"]
+                        break
+                if new_indexes is None:
+                    # Fallback heuristic: records booked/arrested today
+                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    new_records = [
+                        r for r in records
+                        if (r.Arrest_Date or r.Booking_Date or "").startswith(today_str)
+                    ]
+                else:
+                    new_records = [records[i] for i in new_indexes if 0 <= i < len(records)]
+                if new_records:
+                    self._broadcast_scraper_events(new_records)
+            except Exception as broadcast_err:
+                logger.debug(f"⚠️ {self.county}: SSE broadcast skipped: {broadcast_err}")
+
             # ── Step 3b: Check for repeat offenders ──
             try:
                 from writers.rearrest_checker import RearrestChecker
@@ -784,6 +815,18 @@ class BaseScraper(ABC):
             except Exception:
                 pass
 
+            # Real-time dashboard alert (SSE) — frontend listens for 'scraper_error'
+            try:
+                self._post_dashboard_event("scraper_error", {
+                    "county": self.county,
+                    "state": (getattr(self, "state", None) or "FL"),
+                    "county_label": f"{self.county} ({(getattr(self, 'state', None) or 'FL')})",
+                    "scraper_id": getattr(self, "scraper_id", None),
+                    "error": str(e)[:300],
+                })
+            except Exception:
+                pass
+
 
             # Update dashboard with error status (in-memory Flask, legacy)
             if _dashboard_available:
@@ -815,6 +858,67 @@ class BaseScraper(ABC):
                 "elapsed_seconds": round(elapsed, 1),
                 "error": str(e),
             }
+
+    # ── Real-time dashboard event relay ────────────────────────────────────────
+
+    def _post_dashboard_event(self, event_type: str, payload: dict) -> None:
+        """POST a domain event to the dashboard's scraper-event webhook.
+
+        The webhook (dashboard/routers/webhooks.py) republishes to the SSE
+        stream so the Command Center receives live toasts / activity items.
+        Fails silently — never let a UI notification break the scrape.
+        """
+        api_key = os.getenv("GAS_API_KEY", "")
+        if not api_key:
+            return
+        webhook_url = (
+            os.getenv("DASHBOARD_INTERNAL_URL", "http://127.0.0.1:5050")
+            + "/api/webhooks/scraper-event"
+        )
+        try:
+            import requests as _rq
+            _rq.post(
+                webhook_url,
+                json={"event_type": event_type, "payload": payload},
+                headers={"X-Api-Key": api_key},
+                timeout=2,
+            )
+        except Exception as exc:
+            logger.debug(f"⚠️ {self.county}: dashboard event relay failed: {exc}")
+
+    def _broadcast_scraper_events(self, new_records: list) -> None:
+        """Emit new_arrest (and hot_lead) SSE events for genuinely new records.
+
+        Called from run() after writers persist. Caps volume so a first-run
+        backfill of hundreds of records doesn't flood the activity feed.
+        """
+        st = (getattr(self, "state", None) or "FL")
+        for record in new_records[:5]:
+            self._post_dashboard_event("new_arrest", {
+                "county": self.county,
+                "state": st,
+                "county_label": f"{self.county} ({st})",
+                "full_name": record.Full_Name,
+                "booking_number": record.Booking_Number,
+                "charges": record.Charges,
+                "bond_amount": record.Bond_Amount,
+                "mugshot_url": record.Mugshot_URL,
+                "lead_status": record.Lead_Status,
+                "lead_score": record.Lead_Score,
+            })
+        # Hot leads get their own event type (frontend badge + toast)
+        hot = [r for r in new_records if r.Lead_Status == "Hot"]
+        for record in hot[:3]:
+            self._post_dashboard_event("hot_lead", {
+                "county": self.county,
+                "state": st,
+                "county_label": f"{self.county} ({st})",
+                "full_name": record.Full_Name,
+                "booking_number": record.Booking_Number,
+                "charges": record.Charges,
+                "bond_amount": record.Bond_Amount,
+                "lead_score": record.Lead_Score,
+            })
 
     def health_check(self) -> dict:
         """Return scraper health status."""

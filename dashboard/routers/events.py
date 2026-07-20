@@ -39,12 +39,18 @@ async def publish_event(event_type: str, data: dict) -> None:
     Call from any router:
         from dashboard.routers.events import publish_event
         await publish_event("document_signed", {"packet_id": "..."})
+
+    Each queue item is an (event_type, json_payload) tuple so the generator
+    can emit a NAMED SSE event (``event: document_signed``). The frontend
+    subscribes with ``es.addEventListener('document_signed', ...)`` — named
+    listeners only fire when the SSE event field matches, so publishing
+    everything as ``event: message`` silently dropped all real-time updates.
     """
-    msg = json.dumps({"type": event_type, **data})
+    payload = json.dumps({"type": event_type, **data})
     dead: set[asyncio.Queue] = set()
     for q in _subscribers:
         try:
-            q.put_nowait(msg)
+            q.put_nowait((event_type, payload))
         except asyncio.QueueFull:
             dead.add(q)
         except Exception:
@@ -63,11 +69,23 @@ async def _event_generator(queue: asyncio.Queue) -> AsyncGenerator[dict, None]:
     try:
         while True:
             try:
-                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield {"event": "message", "data": msg}
+                item = await asyncio.wait_for(queue.get(), timeout=30.0)
+                # Named event dispatch — (event_type, payload) tuples; tolerate
+                # legacy plain-string items published before a hot-reload.
+                if isinstance(item, tuple) and len(item) == 2:
+                    event_name, payload = item
+                else:
+                    payload = item
+                    try:
+                        event_name = json.loads(payload).get("type", "message")
+                    except Exception:
+                        event_name = "message"
+                yield {"event": event_name or "message", "data": payload}
             except asyncio.TimeoutError:
-                # Send periodic heartbeat to keep proxies/nginx from closing idle connections
-                yield {"event": "ping", "data": "{}"}
+                # Send periodic heartbeat to keep proxies/nginx from closing
+                # idle connections. Emit BOTH names: sl-core.js listens for
+                # 'heartbeat'; 'ping' kept for any legacy consumers.
+                yield {"event": "heartbeat", "data": "{}"}
     except asyncio.CancelledError:
         pass
     finally:

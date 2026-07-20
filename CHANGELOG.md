@@ -5,6 +5,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.16.0] — 2026-07-20 (Ecosystem data-flow hardening)
+
+### Fixed — Critical scraper crashes (38 GA/SC counties)
+- `scrapers/interopweb_base.py` + `scrapers/smartcop_base.py` built `ArrestRecord` with
+  lowercase kwargs the dataclass rejects (`TypeError`), silently zeroing out ~35 InteropWeb
+  GA counties and 3 SmartCOP counties every run. Now use canonical PascalCase schema with
+  `Full_Name`, `Status`, `Detail_URL`, and stringified `Bond_Amount`.
+- `BaseScraper.__init__` now provides `self.logger` — both bases called `self.logger.*`
+  which raised `AttributeError` even inside their own error handlers.
+- `tests/test_platform_base_parsers.py` — raw-HTML payload regression tests for both bases.
+
+### Fixed — Real-time SSE layer was silently dead
+- `dashboard/routers/events.py` published every domain event as generic SSE `event: message`,
+  but `sl-core.js` subscribes with named listeners (`addEventListener('new_arrest')` …) which
+  only fire on a matching event name — so no toasts/badges/activity ever reached the UI.
+  Events now dispatch under their domain name; keep-alive renamed `ping` → `heartbeat` to
+  match the frontend listener. `tests/test_sse_named_events.py` locks the contract.
+
+### Changed — Uniform scraper → dashboard event flow
+- Promoted Lee County's private webhook broadcast into `BaseScraper.run()`:
+  every scraper now emits `new_arrest` / `hot_lead` SSE events for genuinely NEW records
+  (writer-confirmed upserts, capped per run) and `scraper_error` on failure, with `state` +
+  `county_label` for multi-state display. Removed the Lee-only `_broadcast_new_arrests`.
+- `MongoWriter.write_records` returns `new_record_indexes` so only fresh bookings broadcast.
+
+### Changed — State-aware idempotency (Idempotent Writes axiom)
+- Arrests natural key is now `(state, county, booking_number)` — the legacy
+  `(county, booking_number)` unique index let Lee (GA)/Lee (SC) records collide with
+  Lee (FL). Legacy index dropped automatically; docs missing `state` backfilled to FL.
+- `scraper_status` unique index now `(state, county)` — the bare-county unique index threw
+  `DuplicateKeyError` for GA/SC counties sharing an FL name, dropping their status writes.
+- State propagation fixed in `eas_base` (30 GA counties defaulted to FL), `jailtracker_base`
+  (hardcoded FL for SC Chester/Greenwood + GA Dawson/Pickens), `socrata_base`,
+  `xml_feed_base`, and `counties_ga/eas_batch_runner` (`state="GA"`).
+- `tests/test_state_aware_dedup.py` locks filter shape, FL default, and upsert reporting.
+
+### Fixed — Router registration observability
+- `dashboard/routers/__init__.py` records import failures in `FAILED_ROUTER_MODULES` and
+  logs CRITICAL (a failed module silently removes its whole endpoint group from the API).
+- `/health` returns 503 `degraded` with the failed-module map — previously `geo`, `tracking`,
+  and `wix_cms` could vanish without any signal (missing `aiohttp`/`python-multipart` deps).
+- Missing `JSONResponse` imports fixed in `geo.py`, `tracking.py`, `wix_cms.py` (error paths
+  crashed with `NameError` instead of returning their intended 4xx/5xx JSON).
+
+### Fixed — SOC II / PII logging + misc
+- New `mask_phone()` helper (`dashboard/routers/helpers.py`); full phone numbers no longer
+  written to logs in `bonds.py` (release flow), `paperwork.py` (packet delivery), and
+  `bb_client.py` (9 log sites now last-4-digits only).
+- `accounting.py` SwipeSimple→ledger mirror used a fragile `locals()` probe for
+  `booking_number` that could bind an unrelated variable — now uses the txn document value.
+- Removed duplicate `publish_event` import in `webhooks.py` (F811).
+
 ## [2.15.0] — 2026-07-16 (APE + Lead Explorer / scraper-status harmony)
 
 ### Added — Autonomous Proxy Engine (APE)

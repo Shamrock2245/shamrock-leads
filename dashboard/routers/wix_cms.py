@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse
 """
 Wix CMS API Blueprint — Dashboard Integration
 ===============================================

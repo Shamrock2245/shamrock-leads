@@ -25,6 +25,15 @@ from bson import ObjectId
 logger = logging.getLogger(__name__)
 
 
+def _mask(phone) -> str:
+    """PII-safe phone for logs — last 4 digits only (SOC II)."""
+    if not phone:
+        return "(none)"
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    return f"...{digits[-4:]}" if len(digits) >= 4 else "...****"
+
+
+
 def get_bb_client(phone: Optional[str] = None):
     """
     Return a BlueBubblesClient instance for the given phone number.
@@ -48,7 +57,7 @@ def get_bb_client(phone: Optional[str] = None):
             server = next(iter(BB_SERVERS.values()), None)
 
         if not server:
-            logger.warning("[bb_client] No BlueBubbles server configured for phone=%s", phone)
+            logger.warning("[bb_client] No BlueBubbles server configured for phone=%s", _mask(phone))
             return None
 
         url = server.get("url", "")
@@ -86,7 +95,7 @@ async def check_imessage(phone: str) -> bool:
         result = await bb.check_imessage_availability(phone)
         return result.get("success", False) and result.get("data", {}).get("available", False)
     except Exception as exc:
-        logger.error("[bb_client] check_imessage error for %s: %s", phone, exc)
+        logger.error("[bb_client] check_imessage error for %s: %s", _mask(phone), exc)
         return False
 
 
@@ -99,7 +108,7 @@ async def _send_message_direct(phone: str, message: str) -> dict:
     try:
         return await bb.send_text(chat_guid, message)
     except Exception as exc:
-        logger.error("[bb_client] _send_message_direct error to %s: %s", phone, exc)
+        logger.error("[bb_client] _send_message_direct error to %s: %s", _mask(phone), exc)
         return {"success": False, "error": str(exc)}
 
 
@@ -112,7 +121,7 @@ async def _send_attachment_direct(phone: str, message: str, file_path: str) -> d
     try:
         return await bb.send_attachment_url(chat_guid, file_path, message=message)
     except Exception as exc:
-        logger.error("[bb_client] _send_attachment_direct error to %s: %s", phone, exc)
+        logger.error("[bb_client] _send_attachment_direct error to %s: %s", _mask(phone), exc)
         return {"success": False, "error": str(exc)}
 
 
@@ -171,7 +180,7 @@ async def send_message_universal(
     
     bb = get_bb_client(phone)
     if not bb:
-        logger.error("[bb_client] No BB server configured for %s", phone)
+        logger.error("[bb_client] No BB server configured for %s", _mask(phone))
         # Leave it in the queue to retry in case server gets configured/restored later
         return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": "no_bb_server"}
 
@@ -196,10 +205,10 @@ async def send_message_universal(
             )
             return {"success": True, "channel": channel, "data": result.get("data")}
         else:
-            logger.warning("[bb_client] Direct BB send failed for %s, remains queued (Queue ID: %s): %s", phone, queue_id, result.get("error"))
+            logger.warning("[bb_client] Direct BB send failed for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, result.get("error"))
             return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": result.get("error")}
     except Exception as exc:
-        logger.error("[bb_client] Direct BB send exception for %s, remains queued (Queue ID: %s): %s", phone, queue_id, exc)
+        logger.error("[bb_client] Direct BB send exception for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, exc)
         return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": str(exc)}
 
 
@@ -238,8 +247,8 @@ async def send_imessage_with_attachment(
             )
             return {"success": True, "channel": "imessage", "data": result.get("data")}
         else:
-            logger.warning("[bb_client] Direct attachment send failed for %s, remains queued (Queue ID: %s): %s", phone, queue_id, result.get("error"))
+            logger.warning("[bb_client] Direct attachment send failed for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, result.get("error"))
             return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": result.get("error")}
     except Exception as exc:
-        logger.error("[bb_client] Direct attachment send exception for %s, remains queued (Queue ID: %s): %s", phone, queue_id, exc)
+        logger.error("[bb_client] Direct attachment send exception for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, exc)
         return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": str(exc)}

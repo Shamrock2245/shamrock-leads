@@ -53,11 +53,30 @@ class MongoWriter:
 
     def _ensure_indexes(self):
         """Create indexes for fast dedup lookups and queries."""
-        # Compound unique index for deduplication
+        # Compound unique index for deduplication — STATE-AWARE (July 2026).
+        # Multi-state expansion introduced county-name collisions (Lee FL/GA/SC,
+        # Sumter FL/GA/SC, …). The legacy (county, booking_number) unique key
+        # could let a GA Lee record overwrite an FL Lee record with the same
+        # booking number, so the natural key is now (state, county, booking_number).
+        try:
+            self.arrests.drop_index("dedup_county_booking")
+            logger.info("♻️ Dropped legacy dedup_county_booking index (state-aware replacement)")
+        except Exception:
+            pass  # Already dropped or never existed
+        try:
+            # Backfill: legacy docs written before `state` was mandatory default
+            # to FL (the only state in production before the 2026 expansion),
+            # so the new unique key never sees a null component.
+            self.arrests.update_many(
+                {"$or": [{"state": {"$exists": False}}, {"state": None}, {"state": ""}]},
+                {"$set": {"state": "FL"}},
+            )
+        except Exception as backfill_err:
+            logger.warning(f"⚠️ arrests.state backfill skipped: {backfill_err}")
         self.arrests.create_index(
-            [("county", ASCENDING), ("booking_number", ASCENDING)],
+            [("state", ASCENDING), ("county", ASCENDING), ("booking_number", ASCENDING)],
             unique=True,
-            name="dedup_county_booking",
+            name="dedup_state_county_booking",
         )
         # Query indexes
         self.arrests.create_index([("county", ASCENDING)], name="idx_county")
@@ -76,11 +95,26 @@ class MongoWriter:
             name="dedup_lead",
         )
 
-        # Scraper status index
+        # Scraper status index — STATE-AWARE (July 2026). A unique index on the
+        # bare county name raised DuplicateKeyError when GA/SC counties sharing
+        # an FL county name (Lee, Sumter, …) tried to upsert their run status,
+        # silently dropping their status writes.
+        try:
+            self.scraper_status.drop_index("idx_scraper_status_county")
+            logger.info("♻️ Dropped legacy idx_scraper_status_county index (state-aware replacement)")
+        except Exception:
+            pass
+        try:
+            self.scraper_status.update_many(
+                {"$or": [{"state": {"$exists": False}}, {"state": None}, {"state": ""}]},
+                {"$set": {"state": "FL"}},
+            )
+        except Exception as backfill_err:
+            logger.warning(f"⚠️ scraper_status.state backfill skipped: {backfill_err}")
         self.scraper_status.create_index(
-            [("county", ASCENDING)],
+            [("state", ASCENDING), ("county", ASCENDING)],
             unique=True,
-            name="idx_scraper_status_county",
+            name="idx_scraper_status_state_county",
         )
 
         # FTA intelligence fields (populated by hybrid_scorer via base_scraper)
@@ -137,7 +171,12 @@ class MongoWriter:
 
             operations.append(
                 UpdateOne(
-                    {"county": record.County, "booking_number": record.Booking_Number},
+                    {
+                        # State-aware natural key — Lee (FL) ≠ Lee (GA) ≠ Lee (SC)
+                        "state": (record.State or "FL"),
+                        "county": record.County,
+                        "booking_number": record.Booking_Number,
+                    },
                     {
                         "$set": doc,
                         "$setOnInsert": {
@@ -150,10 +189,22 @@ class MongoWriter:
 
         result = self.arrests.bulk_write(operations, ordered=False)
 
+        # Which input records were genuinely NEW (upserted, not just refreshed)?
+        # bulk_api_result["upserted"] is a list of {"index": <op idx>, "_id": ...}
+        # and operations map 1:1 to `records`, so op index == record index.
+        # BaseScraper uses this to broadcast only new arrests to the SSE feed.
+        try:
+            new_record_indexes = [
+                u["index"] for u in result.bulk_api_result.get("upserted", [])
+            ]
+        except Exception:
+            new_record_indexes = []
+
         stats = {
             "total_records": len(records),
             "new_records": result.upserted_count,
             "updated_records": result.modified_count,
+            "new_record_indexes": new_record_indexes,
             "sheet_name": county,
         }
 

@@ -57,7 +57,11 @@ class DynamicEASScraper(EASBaseScraper):
     @property
     def county(self) -> str:
         return self._county
-        
+
+    @property
+    def state(self) -> str:
+        return "GA"
+
     @property
     def eas_slug(self) -> str:
         return self._slug

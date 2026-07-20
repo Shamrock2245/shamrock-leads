@@ -1,5 +1,6 @@
 from __future__ import annotations
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 """
 Geo-Link Blueprint — Silent Location Capture
 Generates one-time tracking tokens embedded in outbound texts.

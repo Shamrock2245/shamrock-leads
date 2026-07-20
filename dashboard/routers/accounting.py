@@ -328,7 +328,9 @@ async def api_import_swipesimple(request: Request):
             try:
                 from dashboard.services.ledger_service import LedgerService
                 await LedgerService.add_entry({
-                    "booking_number": booking_number if "booking_number" in locals() else "",
+                    # Same identity as txn_doc — empty until staff manually attributes
+                    # (the previous locals() probe could bind an unrelated variable)
+                    "booking_number": txn_doc["booking_number"],
                     "type": "payment",
                     "amount": -amount,  # payments reduce balance
                     "category": "premium",

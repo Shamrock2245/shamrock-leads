@@ -113,49 +113,15 @@ class LeeCountyScraper(BaseScraper):
                 logger.info("⏭️ Skipping enrichment (low time budget)")
                 final = normalized
     
-            # Convert to ArrestRecord instances
+            # Convert to ArrestRecord instances.
+            # NOTE (July 2026): the per-county webhook broadcast was promoted to
+            # BaseScraper.run() (_broadcast_scraper_events) so ALL counties emit
+            # real-time new_arrest / hot_lead events — not just Lee. The local
+            # _broadcast_new_arrests override was removed to avoid double events.
             records = [self._to_arrest_record(n) for n in final]
-            
-            # Broadcast webhook for new arrests
-            self._broadcast_new_arrests(records)
-            
             return records
         finally:
             self._cleanup()
-
-    def _broadcast_new_arrests(self, records: List[ArrestRecord]):
-        """Emit webhook for newly found arrests today."""
-        webhook_url = os.getenv("DASHBOARD_INTERNAL_URL", "http://127.0.0.1:5050") + "/api/webhooks/scraper-event"
-        api_key = os.getenv("GAS_API_KEY", "")
-        if not api_key:
-            return
-            
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        
-        # Only broadcast arrests from today to avoid spamming
-        new_today = [r for r in records if r.Arrest_Date.startswith(today_str)]
-        
-        for record in new_today[:5]: # Cap at 5
-            try:
-                payload = {
-                    "event_type": "new_arrest",
-                    "payload": {
-                        "county": self.county,
-                        "full_name": record.Full_Name,
-                        "booking_number": record.Booking_Number,
-                        "charges": record.Charges,
-                        "bond_amount": record.Bond_Amount,
-                        "mugshot_url": record.Mugshot_URL
-                    }
-                }
-                requests.post(
-                    webhook_url, 
-                    json=payload, 
-                    headers={"X-Api-Key": api_key},
-                    timeout=2
-                )
-            except Exception as e:
-                logger.debug(f"Failed to broadcast webhook: {e}")
         
     def _execute_scrape(self):
         pass # implemented in scrape

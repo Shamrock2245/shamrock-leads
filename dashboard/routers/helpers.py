@@ -20,6 +20,17 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R * c
 
 
+def mask_phone(phone: str | None) -> str:
+    """PII-safe phone representation for logs — keep only the last 4 digits.
+
+    SOC II logging rule: never write a full phone number to application logs.
+    """
+    if not phone:
+        return "(none)"
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    return f"...{digits[-4:]}" if len(digits) >= 4 else "...****"
+
+
 def serialize_doc(doc: dict) -> dict:
     """Convert values to JSON-safe types.
 

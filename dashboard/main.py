@@ -139,11 +139,19 @@ init_routers(app)
 # ── Health Check ──
 @app.get("/health", tags=["infra"])
 async def health():
-    """Health check — verifies MongoDB connectivity."""
+    """Health check — verifies MongoDB connectivity + full router registration."""
+    from dashboard.routers import FAILED_ROUTER_MODULES
     try:
         arrests = get_collection("arrests")
         total = await arrests.estimated_document_count()
-        return {"status": "ok", "engine": "fastapi", "total_arrests": total}
+        body = {"status": "ok", "engine": "fastapi", "total_arrests": total}
+        if FAILED_ROUTER_MODULES:
+            # A failed router module silently removes its endpoint group —
+            # degrade health so ops sees the gap instead of a green check.
+            body["status"] = "degraded"
+            body["failed_router_modules"] = FAILED_ROUTER_MODULES
+            return JSONResponse(body, status_code=503)
+        return body
     except Exception:
         return JSONResponse({"status": "degraded", "engine": "fastapi"}, status_code=503)
 
