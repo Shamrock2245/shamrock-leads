@@ -368,13 +368,20 @@ REGISTERED_COUNTIES = sorted([
     # ── Louisiana (wave-1 registered scrapers) ──
     "Lafayette (LA)",
     "Orleans (LA)",
-    # ── Scaffold placeholders (no scrapers yet — keep UI-ready) ──
-    # CT / AL / MS wave-1 pending recon
+    # ── Alabama (wave-1 registered scrapers) ──
+    "Jefferson (AL)",
+    "Madison (AL)",
+    "Mobile (AL)",
+    # ── Connecticut (wave-1 registered scrapers) ──
+    "Statewide (CT)",
+    # ── Mississippi (wave-1 registered scrapers) ──
+    "Hinds (MS)",
+    "Jackson (MS)",
 ])
 
 
 # States we actively scrape / surface in the dashboard
-ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA")
+ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "AL", "CT", "MS")
 
 
 def parse_registered_county(label: str) -> tuple[str, str | None]:
