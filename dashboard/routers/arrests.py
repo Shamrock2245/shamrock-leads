@@ -2,7 +2,11 @@
 from datetime import datetime
 from fastapi import APIRouter, Query
 from dashboard.deps import get_collection
-from dashboard.extensions import REGISTERED_COUNTIES
+from dashboard.extensions import (
+    REGISTERED_COUNTIES,
+    county_label,
+    parse_registered_county,
+)
 from dashboard.routers.helpers import serialize_doc
 
 router = APIRouter(prefix="/api", tags=["arrests"])
@@ -12,21 +16,60 @@ router = APIRouter(prefix="/api", tags=["arrests"])
 async def api_counties():
     arrests = get_collection("arrests")
     pipeline = [
-        {"$group": {"_id": "$county", "total": {"$sum": 1}, "latest": {"$max": "$scraped_at"}}},
-        {"$sort": {"_id": 1}},
+        {"$group": {
+            "_id": {
+                "county": "$county",
+                "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
+            },
+            "total": {"$sum": 1},
+            "latest": {"$max": "$scraped_at"},
+        }},
+        {"$sort": {"_id.county": 1}},
     ]
-    county_data = {}
+    # Key by County (ST) so bare Mongo names map onto registry labels
+    county_data: dict[str, dict] = {}
     async for row in arrests.aggregate(pipeline):
-        county_data[row["_id"]] = row
+        grp = row.get("_id") or {}
+        bare_raw = (grp.get("county") or "").strip()
+        if not bare_raw:
+            continue
+        bare, st_from_label = parse_registered_county(bare_raw)
+        st = (grp.get("state") or st_from_label or "FL").upper()
+        label = county_label(bare, st)
+        existing = county_data.get(label)
+        if existing:
+            existing["total"] = existing.get("total", 0) + row.get("total", 0)
+            # Keep the newer latest if both present
+            if row.get("latest") and (
+                not existing.get("latest") or row["latest"] > existing["latest"]
+            ):
+                existing["latest"] = row["latest"]
+        else:
+            county_data[label] = {
+                "total": row.get("total", 0),
+                "latest": row.get("latest"),
+            }
+
     result = []
+    seen: set[str] = set()
     for name in REGISTERED_COUNTIES:
         d = county_data.get(name, {})
-        result.append({"county": name, "total": d.get("total", 0),
-                        "latest": d.get("latest"), "active": d.get("total", 0) > 0})
-    for name, d in county_data.items():
-        if name not in REGISTERED_COUNTIES:
-            result.append({"county": name, "total": d.get("total", 0),
-                            "latest": d.get("latest"), "active": True})
+        seen.add(name)
+        result.append({
+            "county": name,
+            "total": d.get("total", 0),
+            "latest": d.get("latest"),
+            "active": d.get("total", 0) > 0,
+        })
+    for name, d in sorted(county_data.items()):
+        if name in seen:
+            continue
+        result.append({
+            "county": name,
+            "total": d.get("total", 0),
+            "latest": d.get("latest"),
+            "active": True,
+        })
     return {"counties": result}
 
 

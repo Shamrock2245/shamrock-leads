@@ -8,7 +8,14 @@ from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
 from dashboard.deps import get_collection
-from dashboard.extensions import REGISTERED_COUNTIES
+from dashboard.extensions import (
+    REGISTERED_COUNTIES,
+    county_label,
+    index_scraper_status_docs,
+    merge_county_list_for_ui,
+    parse_registered_county,
+    resolve_scraper_status,
+)
 from dashboard.routers.helpers import serialize_doc, async_csv_streamer
 from dashboard.models.leads import LeadsQueryModel
 
@@ -86,48 +93,101 @@ async def api_status():
     scraper_status_col = get_collection("scraper_status")
     arrests = get_collection("arrests")
     try:
-        scrapers = {}
+        status_docs = []
         async for doc in scraper_status_col.find({}, {"_id": 0}):
-            county = doc.get("county")
-            if not county:
+            status_docs.append(doc)
+        status_index = index_scraper_status_docs(status_docs)
+
+        # Arrest counts keyed by County (ST) so Lee FL ≠ Lee GA
+        arrest_by_label: dict[str, dict] = {}
+        async for r in arrests.aggregate([
+            {"$group": {
+                "_id": {
+                    "county": "$county",
+                    "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
+                },
+                "records": {"$sum": 1},
+                "latest": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
+                "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
+                "warm": {"$sum": {"$cond": [
+                    {"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]},
+                    1, 0,
+                ]}},
+            }},
+        ]):
+            grp = r.get("_id") or {}
+            bare_raw = (grp.get("county") or "").strip()
+            if not bare_raw:
                 continue
-            lr = doc.get("last_run")
-            scrapers[county] = {
-                "last_run": lr.isoformat() if isinstance(lr, datetime) else str(lr or ""),
-                "records": doc.get("records", 0), "hot_leads": doc.get("hot_leads", 0),
-                "warm_leads": doc.get("warm_leads", 0), "cold_leads": doc.get("cold_leads", 0),
-                "disqualified": doc.get("disqualified", 0),
-                "duration_seconds": doc.get("duration_seconds", 0),
-                "status": doc.get("status", "ok"), "error": doc.get("error"),
-                "run_count": doc.get("run_count", 1),
-                "total_records": doc.get("records", 0), "source": "live",
-            }
-        pipeline = [
-            {"$group": {"_id": "$county", "records": {"$sum": 1},
-                        "latest": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
-                        "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
-                        "warm": {"$sum": {"$cond": [{"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]}, 1, 0]}}}},
-        ]
-        async for r in arrests.aggregate(pipeline):
-            county = r["_id"]
-            if not county or county in scrapers:
-                continue
-            lt = r.get("latest")
-            scrapers[county] = {
-                "last_run": lt.isoformat() if isinstance(lt, datetime) else str(lt or ""),
-                "records": r["records"], "hot_leads": r["hot"], "warm_leads": r["warm"],
-                "cold_leads": 0, "disqualified": 0, "duration_seconds": 0,
-                "status": "ok", "error": None, "run_count": 1,
-                "total_records": r["records"], "source": "arrests_aggregate",
-            }
-        for county in REGISTERED_COUNTIES:
-            if county not in scrapers:
-                scrapers[county] = {
+            bare, st_from_label = parse_registered_county(bare_raw)
+            st = (grp.get("state") or st_from_label or "FL").upper()
+            label = county_label(bare, st)
+            arrest_by_label[label] = r
+
+        scrapers: dict[str, dict] = {}
+        for label in REGISTERED_COUNTIES:
+            bare, st = parse_registered_county(label)
+            live = resolve_scraper_status(status_index, bare, st)
+            arrest = arrest_by_label.get(label, {})
+            if live:
+                lr = live.get("last_run")
+                scrapers[label] = {
+                    "last_run": lr.isoformat() if isinstance(lr, datetime) else str(lr or ""),
+                    "records": live.get("records", 0) or arrest.get("records", 0),
+                    "hot_leads": live.get("hot_leads", 0) or arrest.get("hot", 0),
+                    "warm_leads": live.get("warm_leads", 0) or arrest.get("warm", 0),
+                    "cold_leads": live.get("cold_leads", 0),
+                    "disqualified": live.get("disqualified", 0),
+                    "duration_seconds": live.get("duration_seconds", 0),
+                    "status": live.get("status", "ok"),
+                    "error": live.get("error"),
+                    "run_count": live.get("run_count", 1),
+                    "total_records": live.get("records", 0) or arrest.get("records", 0),
+                    "source": "live",
+                    "state": st or "FL",
+                }
+            elif arrest:
+                lt = arrest.get("latest")
+                scrapers[label] = {
+                    "last_run": lt.isoformat() if isinstance(lt, datetime) else str(lt or ""),
+                    "records": arrest["records"],
+                    "hot_leads": arrest.get("hot", 0),
+                    "warm_leads": arrest.get("warm", 0),
+                    "cold_leads": 0,
+                    "disqualified": 0,
+                    "duration_seconds": 0,
+                    "status": "ok",
+                    "error": None,
+                    "run_count": 1,
+                    "total_records": arrest["records"],
+                    "source": "arrests_aggregate",
+                    "state": st or "FL",
+                }
+            else:
+                scrapers[label] = {
                     "last_run": None, "records": 0, "hot_leads": 0, "warm_leads": 0,
                     "cold_leads": 0, "disqualified": 0, "duration_seconds": 0,
                     "status": "never_run", "error": None, "run_count": 0,
                     "total_records": 0, "source": "registered",
+                    "state": st or "FL",
                 }
+
+        # Unregistered DB counties (if any) still surface once, labeled
+        for label, arrest in arrest_by_label.items():
+            if label in scrapers:
+                continue
+            lt = arrest.get("latest")
+            scrapers[label] = {
+                "last_run": lt.isoformat() if isinstance(lt, datetime) else str(lt or ""),
+                "records": arrest["records"],
+                "hot_leads": arrest.get("hot", 0),
+                "warm_leads": arrest.get("warm", 0),
+                "cold_leads": 0, "disqualified": 0, "duration_seconds": 0,
+                "status": "ok", "error": None, "run_count": 1,
+                "total_records": arrest["records"], "source": "arrests_aggregate",
+                "state": parse_registered_county(label)[1] or "FL",
+            }
+
         return {
             "started_at": datetime.now(timezone.utc).isoformat(),
             "scrapers": scrapers,
@@ -149,12 +209,26 @@ async def api_mongo_stats():
     arrests = get_collection("arrests")
     try:
         total = await arrests.count_documents({})
+        # Seed with labeled registry keys only — never mix bare + labeled.
         by_county = {c: 0 for c in REGISTERED_COUNTIES}
         async for doc in arrests.aggregate([
-            {"$group": {"_id": "$county", "count": {"$sum": 1}}},
+            {"$group": {
+                "_id": {
+                    "county": "$county",
+                    "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
+                },
+                "count": {"$sum": 1},
+            }},
             {"$sort": {"count": -1}},
         ]):
-            by_county[doc["_id"]] = doc["count"]
+            grp = doc.get("_id") or {}
+            bare_raw = (grp.get("county") or "").strip()
+            if not bare_raw:
+                continue
+            bare, st_from_label = parse_registered_county(bare_raw)
+            st = (grp.get("state") or st_from_label or "FL").upper()
+            label = county_label(bare, st)
+            by_county[label] = by_county.get(label, 0) + doc["count"]
         hot = await arrests.count_documents({"lead_score": {"$gte": 70}})
         warm = await arrests.count_documents({"lead_score": {"$gte": 40, "$lt": 70}})
         cold = await arrests.count_documents({"lead_score": {"$gte": 20, "$lt": 40}})
@@ -301,7 +375,8 @@ async def api_leads(
         async for doc in arrests.find(mongo_query, projection).sort(mongo_sort, sort_order).skip(skip).limit(query.limit):
             leads_list.append(serialize_doc(doc))
         db_counties = await arrests.distinct("county")
-        counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
+        # De-dupe bare Mongo names (Lee) against registered labels (Lee (FL))
+        counties_list = merge_county_list_for_ui(db_counties)
 
         # Real-time activity for frontend meta (sl-data.js resultsMeta line).
         # scraped_at may be stored as datetime or ISO string — match both.
@@ -527,9 +602,54 @@ async def api_timeline():
     return {"dates": dates, "series": {c: list(series[c].values()) for c in counties}}
 
 
+def _health_status_for_row(
+    *,
+    enabled: bool,
+    live: dict,
+    last_run: datetime | None,
+    latest: datetime | None,
+    now: datetime,
+) -> tuple[str, float]:
+    """Return (status, hours_since_update) for a scraper-health row."""
+    if not enabled:
+        hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
+        return "disabled", hours
+
+    if live.get("status") == "error":
+        hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
+        return "error", hours
+
+    if last_run:
+        hours = (now - last_run).total_seconds() / 3600
+        if hours < 3:
+            return "healthy", hours
+        if hours < 6:
+            return "stale", hours
+        if hours < 24:
+            return "warning", hours
+        return "offline", hours
+
+    if latest:
+        hours = (now - latest).total_seconds() / 3600
+        if hours < 2:
+            return "healthy", hours
+        if hours < 6:
+            return "stale", hours
+        if hours < 24:
+            return "warning", hours
+        return "offline", hours
+
+    return "never_run", 999.0
+
+
 @router.get("/scraper-health")
 async def api_scraper_health():
-    """Per-county scraper health metrics — always returns all registered counties."""
+    """Per-county scraper health — one row per registered ``County (ST)`` label.
+
+    Arrests and scraper_status historically used bare county names. This
+    endpoint is registry-first so Lee (FL) never collides with Lee (GA) and
+    the UI never shows both bare ``Lee`` and labeled ``Lee (FL)``.
+    """
     try:
         scraper_status_col = get_collection("scraper_status")
         scraper_config_col = get_collection("scraper_config")
@@ -537,11 +657,14 @@ async def api_scraper_health():
         now = datetime.now(timezone.utc)
         h24_ago = now - timedelta(hours=24)
 
-        # Build base from arrests aggregate
-        results_map = {}
+        # Arrest stats keyed by County (ST)
+        results_map: dict[str, dict] = {}
         async for r in arrests.aggregate([
             {"$group": {
-                "_id": "$county",
+                "_id": {
+                    "county": "$county",
+                    "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
+                },
                 "total_records": {"$sum": 1},
                 "latest_record": {"$max": "$created_at"},
                 "latest_scrape": {"$max": "$scrape_timestamp"},
@@ -549,100 +672,106 @@ async def api_scraper_health():
                 "max_bond": {"$max": "$bond_amount"},
                 "total_bond": {"$sum": "$bond_amount"},
                 "in_custody": {"$sum": {"$cond": [
-                    {"$in": [{"$toLower": {"$ifNull": ["$custody_status", ""]}}, ["in custody", "in-custody", "incustody", "confined", "held", "booked"]]},
+                    {"$in": [
+                        {"$toLower": {"$ifNull": ["$custody_status", ""]}},
+                        ["in custody", "in-custody", "incustody", "confined", "held", "booked"],
+                    ]},
                     1, 0,
                 ]}},
                 "hot_leads": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
-                "warm_leads": {"$sum": {"$cond": [{"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]}, 1, 0]}},
+                "warm_leads": {"$sum": {"$cond": [
+                    {"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]},
+                    1, 0,
+                ]}},
             }},
         ]):
-            results_map[r["_id"]] = r
+            grp = r.get("_id") or {}
+            bare_raw = (grp.get("county") or "").strip()
+            if not bare_raw:
+                continue
+            bare, st_from_label = parse_registered_county(bare_raw)
+            st = (grp.get("state") or st_from_label or "FL").upper()
+            results_map[county_label(bare, st)] = r
 
-        counts_24h = {}
+        counts_24h: dict[str, int] = {}
         async for r in arrests.aggregate([
             {"$match": {"created_at": {"$gte": h24_ago}}},
-            {"$group": {"_id": "$county", "count_24h": {"$sum": 1}}},
+            {"$group": {
+                "_id": {
+                    "county": "$county",
+                    "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
+                },
+                "count_24h": {"$sum": 1},
+            }},
         ]):
-            counts_24h[r["_id"]] = r["count_24h"]
+            grp = r.get("_id") or {}
+            bare_raw = (grp.get("county") or "").strip()
+            if not bare_raw:
+                continue
+            bare, st_from_label = parse_registered_county(bare_raw)
+            st = (grp.get("state") or st_from_label or "FL").upper()
+            counts_24h[county_label(bare, st)] = r["count_24h"]
 
-        # Overlay live run data from scraper_status collection
-        live_status = {}
+        status_docs = []
         async for doc in scraper_status_col.find({}, {"_id": 0}):
-            county = doc.get("county")
-            if county:
-                live_status[county] = doc
+            status_docs.append(doc)
+        status_index = index_scraper_status_docs(status_docs)
 
-        # Load enabled/disabled config
-        config_map = {}
+        config_map: dict[str, dict] = {}
         async for doc in scraper_config_col.find({}, {"_id": 0}):
             county = doc.get("county")
             if county:
                 config_map[county] = doc
+                if doc.get("county_label"):
+                    config_map[doc["county_label"]] = doc
 
         out = []
-        seen = set()
+        seen_labels: set[str] = set()
 
-        # Build county → state lookup from REGISTERED_COUNTIES labels ("Lee (FL)" → "FL")
-        import re as _re
-        county_state_map: dict[str, str] = {}
-        for label in REGISTERED_COUNTIES:
-            m = _re.search(r'\(([A-Z]{2})\)$', label)
-            if m:
-                bare = label[:label.rfind('(')].strip()
-                county_state_map[bare] = m.group(1)
+        for label in sorted(REGISTERED_COUNTIES):
+            bare, st = parse_registered_county(label)
+            st = st or "FL"
+            seen_labels.add(label)
 
-        # Process counties that have arrest records
-        for county, r in sorted(results_map.items(), key=lambda x: -x[1]["total_records"]):
-            if not county:
-                continue
-            seen.add(county)
+            r = results_map.get(label, {})
+            live = resolve_scraper_status(status_index, bare, st)
+            cfg = (
+                config_map.get(label)
+                or config_map.get(bare)
+                or config_map.get(county_label(bare, st))
+                or {}
+            )
+
             latest = r.get("latest_record") or r.get("latest_scrape")
             if isinstance(latest, datetime) and latest.tzinfo is None:
                 latest = latest.replace(tzinfo=timezone.utc)
 
-            live = live_status.get(county, {})
-            cfg = config_map.get(county, {})
             last_run = live.get("last_run")
             if isinstance(last_run, datetime) and last_run.tzinfo is None:
                 last_run = last_run.replace(tzinfo=timezone.utc)
+            if not isinstance(last_run, datetime):
+                last_run = None
+            if not isinstance(latest, datetime):
+                latest = None
 
-            # Determine hours since last run, fallback to latest record age if never run
-            if isinstance(last_run, datetime):
-                hours_since_run = (now - last_run).total_seconds() / 3600
-            else:
-                hours_since_run = 999
-
-            if cfg.get("enabled") is False:
-                base_status = "disabled"
-            elif live.get("status") == "error":
-                base_status = "error"
-            elif not last_run:
-                if isinstance(latest, datetime):
-                    hours_since_latest = (now - latest).total_seconds() / 3600
-                    base_status = "healthy" if hours_since_latest < 2 else "stale" if hours_since_latest < 6 else "warning" if hours_since_latest < 24 else "offline"
-                else:
-                    base_status = "never_run"
-            else:
-                # Scraper ran successfully (status == "ok")
-                if hours_since_run < 3:
-                    base_status = "healthy"
-                elif hours_since_run < 6:
-                    base_status = "stale"
-                elif hours_since_run < 24:
-                    base_status = "warning"
-                else:
-                    base_status = "offline"
-
-            ui_hours = hours_since_run if last_run else ((now - latest).total_seconds() / 3600 if isinstance(latest, datetime) else 999)
+            enabled = cfg.get("enabled", True) is not False
+            base_status, ui_hours = _health_status_for_row(
+                enabled=enabled,
+                live=live or {},
+                last_run=last_run,
+                latest=latest,
+                now=now,
+            )
 
             out.append({
-                "county": county,
-                "state": county_state_map.get(county, live.get("state", "FL")).upper(),
-                "total_records": r["total_records"],
-                "in_custody": r["in_custody"],
-                "records_24h": counts_24h.get(county, 0),
-                "latest_record": latest.isoformat() if isinstance(latest, datetime) else str(latest or ""),
-                "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
+                "county": bare,
+                "county_label": label,
+                "state": st,
+                "total_records": r.get("total_records", 0),
+                "in_custody": r.get("in_custody", 0),
+                "records_24h": counts_24h.get(label, 0),
+                "latest_record": latest.isoformat() if latest else "",
+                "last_run": last_run.isoformat() if last_run else "",
                 "hours_since_update": round(ui_hours, 1),
                 "status": base_status,
                 "avg_bond": round(r.get("avg_bond") or 0, 2),
@@ -650,70 +779,65 @@ async def api_scraper_health():
                 "total_bond": round(r.get("total_bond") or 0, 2),
                 "hot_leads": r.get("hot_leads", 0),
                 "warm_leads": r.get("warm_leads", 0),
-                "duration_seconds": live.get("duration_seconds", 0),
-                "run_count": live.get("run_count", 0),
-                "error": live.get("error"),
-                "enabled": cfg.get("enabled", True),
+                "duration_seconds": (live or {}).get("duration_seconds", 0),
+                "run_count": (live or {}).get("run_count", 0),
+                "error": (live or {}).get("error"),
+                "enabled": enabled,
             })
 
-        # Add registered counties with no arrest records yet
-        for county in sorted(REGISTERED_COUNTIES):
-            if county in seen:
+        # Surface unregistered arrest counties once (labeled), no bare dupes
+        for label, r in sorted(
+            results_map.items(),
+            key=lambda x: -x[1].get("total_records", 0),
+        ):
+            if label in seen_labels:
                 continue
-            live = live_status.get(county, {})
-            cfg = config_map.get(county, {})
-            last_run = live.get("last_run")
+            bare, st = parse_registered_county(label)
+            st = st or "FL"
+            live = resolve_scraper_status(status_index, bare, st)
+            latest = r.get("latest_record") or r.get("latest_scrape")
+            if isinstance(latest, datetime) and latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            last_run = (live or {}).get("last_run")
             if isinstance(last_run, datetime) and last_run.tzinfo is None:
                 last_run = last_run.replace(tzinfo=timezone.utc)
-
-            hours_since_run = (now - last_run).total_seconds() / 3600 if isinstance(last_run, datetime) else 999
-
-            if cfg.get("enabled") is False:
-                run_status = "disabled"
-            elif live.get("status") == "error":
-                run_status = "error"
-            elif not last_run:
-                run_status = "never_run"
-            else:
-                if hours_since_run < 3:
-                    run_status = "healthy"
-                elif hours_since_run < 6:
-                    run_status = "stale"
-                elif hours_since_run < 24:
-                    run_status = "warning"
-                else:
-                    run_status = "offline"
-
-            # Extract bare county name from "County (ST)" label
-            import re as _re2
-            m2 = _re2.search(r'\(([A-Z]{2})\)$', county)
-            bare_county = county[:county.rfind('(')].strip() if m2 else county
-            county_st = m2.group(1) if m2 else "FL"
+            if not isinstance(last_run, datetime):
+                last_run = None
+            if not isinstance(latest, datetime):
+                latest = None
+            base_status, ui_hours = _health_status_for_row(
+                enabled=True,
+                live=live or {},
+                last_run=last_run,
+                latest=latest,
+                now=now,
+            )
             out.append({
-                "county": bare_county,
-                "state": county_st,
-                "total_records": 0,
-                "in_custody": 0,
-                "records_24h": 0,
-                "latest_record": "",
-                "last_run": last_run.isoformat() if isinstance(last_run, datetime) else str(last_run or ""),
-                "hours_since_update": round(hours_since_run, 1),
-                "status": run_status,
-                "avg_bond": 0,
-                "max_bond": 0,
-                "total_bond": 0,
-                "hot_leads": 0,
-                "warm_leads": 0,
-                "duration_seconds": live.get("duration_seconds", 0),
-                "run_count": live.get("run_count", 0),
-                "error": live.get("error"),
-                "enabled": cfg.get("enabled", True),
+                "county": bare,
+                "county_label": label,
+                "state": st,
+                "total_records": r.get("total_records", 0),
+                "in_custody": r.get("in_custody", 0),
+                "records_24h": counts_24h.get(label, 0),
+                "latest_record": latest.isoformat() if latest else "",
+                "last_run": last_run.isoformat() if last_run else "",
+                "hours_since_update": round(ui_hours, 1),
+                "status": base_status,
+                "avg_bond": round(r.get("avg_bond") or 0, 2),
+                "max_bond": round(r.get("max_bond") or 0, 2),
+                "total_bond": round(r.get("total_bond") or 0, 2),
+                "hot_leads": r.get("hot_leads", 0),
+                "warm_leads": r.get("warm_leads", 0),
+                "duration_seconds": (live or {}).get("duration_seconds", 0),
+                "run_count": (live or {}).get("run_count", 0),
+                "error": (live or {}).get("error"),
+                "enabled": True,
             })
 
         return out
     except Exception as exc:
         # PII-safe: full traceback may contain query params with names/booking numbers
-        logger.error("[stats] api_bond_intelligence error: %s", type(exc).__name__, exc_info=True)
+        logger.error("[stats] api_scraper_health error: %s", type(exc).__name__, exc_info=True)
         return {"error": "Internal server error"}
 
 

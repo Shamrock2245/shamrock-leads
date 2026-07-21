@@ -541,9 +541,36 @@ function toggleCountyDropdown() {
   document.getElementById('countyDropdown').classList.toggle('show');
   document.querySelector('.multi-select-trigger').classList.toggle('open');
 }
+/** De-dupe bare names against labeled forms: keep "Lee (FL)", drop bare "Lee" when labeled exists. */
+function dedupeCountyList(counties) {
+  const list = Array.isArray(counties) ? counties.filter(Boolean) : [];
+  const labeled = new Set();
+  const bareFromLabeled = new Set();
+  list.forEach(c => {
+    const m = String(c).match(/^(.+?)\s*\(([A-Za-z]{2})\)$/);
+    if (m) {
+      labeled.add(c);
+      bareFromLabeled.add(m[1].trim().toLowerCase());
+    }
+  });
+  const out = [];
+  const seen = new Set();
+  list.forEach(c => {
+    const s = String(c).trim();
+    if (!s || seen.has(s)) return;
+    const m = s.match(/^(.+?)\s*\(([A-Za-z]{2})\)$/);
+    if (!m && bareFromLabeled.has(s.toLowerCase())) return; // bare absorbed by labeled
+    seen.add(s);
+    out.push(s);
+  });
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
 function buildCountyOptions(counties) {
+  counties = dedupeCountyList(counties);
   SL_STATE.counties = counties;
   const el = document.getElementById('countyOptions');
+  if (!el) return;
   el.innerHTML = counties.map(c => {
     const chk = SL_STATE.selectedCounties.includes(c) ? 'checked' : '';
     return `<label class="multi-select-option ${chk?'checked':''}"><input type="checkbox" value="${c}" ${chk} onchange="toggleCounty('${c}',this.checked)">${c}</label>`;

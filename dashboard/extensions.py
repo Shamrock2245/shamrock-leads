@@ -384,6 +384,20 @@ REGISTERED_COUNTIES = sorted([
 # States we actively scrape / surface in the dashboard
 ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "AL", "CT", "MS")
 
+# SWFL core — never drop from schedule; UI must always show them as registered.
+# Lee is primary production; Sarasota is required coverage for the bond desk.
+KEY_FL_COUNTIES = (
+    "Lee",
+    "Sarasota",
+    "Collier",
+    "Charlotte",
+    "Manatee",
+    "DeSoto",
+    "Hendry",
+)
+
+KEY_FL_COUNTY_LABELS = tuple(f"{c} (FL)" for c in KEY_FL_COUNTIES)
+
 
 def parse_registered_county(label: str) -> tuple[str, str | None]:
     """Split ``Lee (FL)`` → ``("Lee", "FL")``; bare names keep state None."""
@@ -413,6 +427,59 @@ def registered_county_to_trigger_key(label: str) -> str:
     if not st or st == "FL":
         return slug
     return f"{st.lower()}_{slug}"
+
+
+def _registered_by_bare() -> dict[str, list[str]]:
+    """Map lowercased bare county name → list of ``County (ST)`` labels."""
+    by_bare: dict[str, list[str]] = {}
+    for label in REGISTERED_COUNTIES:
+        bare, _st = parse_registered_county(label)
+        if not bare:
+            continue
+        by_bare.setdefault(bare.lower(), []).append(label)
+    return by_bare
+
+
+def merge_county_list_for_ui(db_counties: list | None = None) -> list[str]:
+    """Build a de-duplicated ``County (ST)`` list for dashboard dropdowns.
+
+    Mongo historically stores bare county names (``Lee``) while the registry
+    uses multi-state labels (``Lee (FL)``). Naively unioning those lists makes
+    the UI show both. This helper:
+
+    1. Always includes every registered label
+    2. Absorbs bare DB names into matching registered labels (no bare leftover)
+    3. Labels unknown DB counties as ``County (FL)`` for legacy FL data
+    """
+    out: set[str] = set(REGISTERED_COUNTIES)
+    by_bare = _registered_by_bare()
+
+    for raw in db_counties or []:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        bare, st = parse_registered_county(text)
+        if not bare:
+            continue
+        if st:
+            out.add(county_label(bare, st))
+            continue
+        # Bare name from Mongo — if registered under any state, labels already cover it
+        if bare.lower() in by_bare:
+            continue
+        out.add(county_label(bare, "FL"))
+
+    return sorted(out)
+
+
+def normalize_county_ui_name(name: str, state: str | None = None) -> str:
+    """Normalize a free-form county string to the UI label form."""
+    bare, st = parse_registered_county(name or "")
+    if not bare:
+        return ""
+    return county_label(bare, st or state or "FL")
 
 
 def index_scraper_status_docs(docs: list[dict]) -> dict[str, dict]:

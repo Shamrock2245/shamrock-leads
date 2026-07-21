@@ -312,12 +312,13 @@ def build_writers():
 def register_scrapers(sched):
     """Register FL + GA + SC + NC + TN + TX + LA + AL + CT + MS scrapers with the scheduler."""
 
-    # ── SWFL Core ─────────────────────────────────────────────────────────────
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=43)
+    # ── SWFL Core (KEY — must stay registered; Lee + Sarasota are non-negotiable) ─
+    # Intervals kept aggressive for bond-desk coverage. Do not comment these out.
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
+    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
     sched.register_scraper(CharlotteCountyScraper(), interval_minutes=90)
     sched.register_scraper(ManateeCountyScraper(), interval_minutes=75)
-    sched.register_scraper(SarasotaCountyScraper(), interval_minutes=90)
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
@@ -600,6 +601,50 @@ def _run_first_appearance_watcher():
         logger.error(f"FirstAppearanceWatcher run failed: {e}")
 
 
+def _ensure_key_fl_counties_enabled():
+    """Force-enable SWFL core scrapers so dashboard config never leaves Lee/Sarasota paused."""
+    try:
+        from pymongo import MongoClient
+        from datetime import datetime, timezone
+        client = MongoClient(settings.MONGODB_URI, serverSelectionTimeoutMS=5000)
+        db = client[settings.MONGODB_DB_NAME]
+        col = db["scraper_config"]
+        key = ("Lee", "Sarasota", "Collier", "Charlotte", "Manatee", "DeSoto", "Hendry")
+        now = datetime.now(timezone.utc)
+        for bare in key:
+            label = f"{bare} (FL)"
+            # Re-enable any existing docs keyed by label or bare name
+            col.update_many(
+                {"$or": [{"county": label}, {"county": bare}, {"county": bare.lower()}]},
+                {"$set": {
+                    "enabled": True,
+                    "county_label": label,
+                    "state": "FL",
+                    "updated_at": now,
+                    "updated_by": "startup_key_fl",
+                    "reason": "KEY_FL_COUNTIES must remain enabled",
+                }},
+            )
+            # Canonical labeled doc for dashboard config UI
+            col.update_one(
+                {"county": label},
+                {"$set": {
+                    "county": label,
+                    "county_label": label,
+                    "state": "FL",
+                    "enabled": True,
+                    "updated_at": now,
+                    "updated_by": "startup_key_fl",
+                    "reason": "KEY_FL_COUNTIES must remain enabled",
+                }},
+                upsert=True,
+            )
+        client.close()
+        logger.info("✅ KEY FL counties forced enabled: %s", ", ".join(key))
+    except Exception as e:
+        logger.warning("⚠️ Could not force-enable KEY FL counties: %s", e)
+
+
 def main():
     global scheduler, _fa_watcher
     logger.info("=" * 60)
@@ -611,6 +656,7 @@ def main():
     scheduler = ScraperScheduler()
     scheduler.set_writers(writers)
     register_scrapers(scheduler)
+    _ensure_key_fl_counties_enabled()
 
     scraper_registry = {s.county: s for s in scheduler._scrapers.values()}
     _fa_watcher = FirstAppearanceWatcher(writers=writers, scraper_registry=scraper_registry)

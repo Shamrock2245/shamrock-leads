@@ -18,11 +18,13 @@ HISTORY:
 - v2: Revize CMS via Playwright + office SOCKS
 - v3: APE residential + Patchright for Revize
 - v4: JailTracker primary again (site live); Revize fallback
-- v5 (current): mugshotssarasota.com primary (working); JT + Revize fallbacks
+- v5: mugshotssarasota.com primary; JT + Revize fallbacks
+- v6 (current): mugshots path on APE StealthSession (curl_cffi + residential)
 """
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -110,22 +112,23 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
 
     # ──────────────────────────────────────────────────────────────
     # Path A: mugshotssarasota.com WordPress REST API
+    # Uses APE StealthSession (curl_cffi Chrome JA3 + residential failover)
     # ──────────────────────────────────────────────────────────────
     def _scrape_mugshots(self) -> List[ArrestRecord]:
-        import httpx
-
         cutoff = datetime.now(timezone.utc) - timedelta(days=MUGSHOTS_LOOKBACK_DAYS)
+        # Site headers only — TLSFingerprinter owns User-Agent
         headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-            ),
             "Accept": "application/json",
+            "Referer": "https://mugshotssarasota.com/",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
         }
         records: List[ArrestRecord] = []
         seen_bookings: set = set()
 
-        with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
+        session = self._open_stealth_session(sticky="fl-sarasota-mugshots")
+        try:
             for page in range(1, MUGSHOTS_MAX_PAGES + 1):
                 params = {
                     "per_page": MUGSHOTS_PER_PAGE,
@@ -138,11 +141,25 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
                         "yoast_head_json,jetpack_featured_media_url"
                     ),
                 }
-                resp = client.get(MUGSHOTS_API, params=params)
+                resp = self._stealth_get(
+                    session, MUGSHOTS_API, params=params, headers=headers
+                )
+                if resp is None:
+                    break
                 if resp.status_code == 400:
                     # WP returns 400 when page is out of range
                     break
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    logger.warning(
+                        "[Sarasota] Mugshots HTTP %s on page %d",
+                        resp.status_code,
+                        page,
+                    )
+                    if resp.status_code in (403, 429, 503) and hasattr(
+                        session, "rotate_proxy"
+                    ):
+                        session.rotate_proxy()
+                    break
                 posts = resp.json()
                 if not isinstance(posts, list) or not posts:
                     break
@@ -170,7 +187,9 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
                 if not page_had_recent:
                     break
                 # Respect the API lightly
-                time.sleep(0.25)
+                time.sleep(0.25 + random.uniform(0, 0.35))
+        finally:
+            self._close_stealth_session(session)
 
         logger.info(
             "[Sarasota] Mugshots scraped %d records (lookback=%dd)",
@@ -178,6 +197,75 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
             MUGSHOTS_LOOKBACK_DAYS,
         )
         return records
+
+    def _open_stealth_session(self, sticky: str):
+        """APE StealthSession preferred; plain curl_cffi Session as fallback."""
+        try:
+            from scrapers.proxy_engine import create_stealth_session
+
+            sess = create_stealth_session(
+                sticky_session_id=sticky,
+                prefer_residential=True,
+                allow_direct=True,
+                timeout=30,
+                impersonate="chrome131",
+            )
+            proxy = getattr(sess, "proxy", None) or "direct"
+            logger.info(
+                "[Sarasota] StealthSession ready (proxy=%s)",
+                (proxy[:60] if isinstance(proxy, str) else proxy),
+            )
+            return sess
+        except Exception as exc:
+            logger.warning(
+                "[Sarasota] StealthSession unavailable (%s) — curl_cffi fallback",
+                exc,
+            )
+        try:
+            from curl_cffi import requests as cffi_requests
+
+            sess = cffi_requests.Session()
+            proxy = None
+            if getattr(self, "ape", None):
+                try:
+                    proxy = self.get_proxy(prefer_residential=True)
+                except Exception:
+                    proxy = None
+            if proxy:
+                sess.proxies = {"http": proxy, "https": proxy}
+            sess._shamrock_impersonate = "chrome131"  # type: ignore[attr-defined]
+            return sess
+        except ImportError:
+            import httpx
+
+            return httpx.Client(timeout=30, follow_redirects=True)
+
+    @staticmethod
+    def _close_stealth_session(session) -> None:
+        if session is None:
+            return
+        try:
+            if hasattr(session, "close"):
+                session.close()
+        except Exception:
+            pass
+
+    def _stealth_get(self, session, url: str, *, params=None, headers=None):
+        """GET that works with StealthSession, curl_cffi Session, or httpx."""
+        # StealthSession: rotate + JA3 built-in
+        if hasattr(session, "rotate_proxy") and hasattr(session, "request"):
+            return session.get(
+                url, params=params, headers=headers, max_retries=3, timeout=30
+            )
+        # curl_cffi Session
+        if hasattr(session, "request") and hasattr(session, "proxies"):
+            kwargs = {"params": params, "headers": headers, "timeout": 30}
+            imp = getattr(session, "_shamrock_impersonate", None)
+            if imp:
+                kwargs["impersonate"] = imp
+            return session.get(url, **kwargs)
+        # httpx Client
+        return session.get(url, params=params, headers=headers)
 
     def _parse_mugshots_post(self, post: dict) -> Optional[ArrestRecord]:
         """Parse a WP post into ArrestRecord using yoast SEO fields + image URL."""

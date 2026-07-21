@@ -6,10 +6,10 @@ API: https://www.sheriffleefl.org/public-api/bookings
 Charges API: https://www.sheriffleefl.org/public-api/bookings/{id}/charges
 
 Features:
-- Paginated booking fetch with 4 API query variants
+- Paginated booking fetch with API query variants
 - Per-booking charges API enrichment (bond, court, case data)
 - Base64 mugshot detection (v8.4 fix)
-- Backfill mode for incomplete records
+- Stealth stack: APE StealthSession (curl_cffi Chrome JA3 + Warren/S5W2C/Stormsia)
 """
 
 import logging
@@ -19,10 +19,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Set, Tuple
 
-import json
 import urllib.parse
 import os
-import requests
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -34,7 +32,7 @@ BASE_URL = "https://www.sheriffleefl.org"
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
-SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Route through obscura residential proxy if set
+SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE offline
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 200
@@ -42,34 +40,42 @@ MAX_PAGES = 15                 # Reduced: 15 × 200 = 3000 records max (enough f
 MAX_ENRICH = 5                 # Conservative: 5 enrichments per run to save API quota
 DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
 DETAIL_JITTER_S = 4.0          # Increased jitter
-RETRY_LIMIT = 2                # Reduced from 4 — stop faster on 429 (save quota)
+RETRY_LIMIT = 2                # Outer retries (StealthSession also rotates proxies)
 BACKOFF_BASE_S = 5.0           # Increased from 2.0 — harder backoff on 429/503
 MAX_EXECUTION_S = 330
 CIRCUIT_BREAKER_THRESHOLD = 2  # Trip faster (was 3)
 CIRCUIT_BREAKER_COOLDOWN_S = 60  # Longer cooldown (was 45)
 VARIANT_DELAY_S = 30           # Increased from 15 — save API quota between variant attempts
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+# Site-specific only — TLSFingerprinter / StealthSession owns User-Agent
+SITE_HEADERS = {
     "Accept": "application/json, text/html, */*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.sheriffleefl.org/",
-    "DNT": "1",
-    "Connection": "keep-alive",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
 }
 
 
-
 class LeeCountyScraper(BaseScraper):
-    """Lee County (FL) arrest scraper — API-first with charges enrichment."""
+    """Lee County (FL) arrest scraper — API-first with charges enrichment.
+
+    KEY FL county — registered in main.py at 30-minute interval. Must stay on.
+    HTTP path uses APE StealthSession for TLS fingerprint + residential failover.
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Lazy StealthSession; sticky IP across pagination/enrichment
+        self._stealth = None  # None=uninit, False=unavailable, else session
 
     @property
     def county(self) -> str:
         return "Lee"
+
+    @property
+    def state(self) -> str:
+        return "FL"
 
     def scrape(self) -> List[ArrestRecord]:
         """Main scrape pipeline: fetch bookings → enrich with charges → return records."""
@@ -531,77 +537,163 @@ class LeeCountyScraper(BaseScraper):
             LastCheckedMode="INITIAL",
         )
 
-    # ── HTTP ──
+    # ── HTTP (APE StealthSession primary) ──
+
+    def _get_stealth(self):
+        """Lazy-init sticky StealthSession (curl_cffi Chrome JA3 + APE residential)."""
+        if self._stealth is False:
+            return None
+        if self._stealth is not None:
+            return self._stealth
+        try:
+            from scrapers.proxy_engine import create_stealth_session
+
+            self._stealth = create_stealth_session(
+                sticky_session_id="fl-lee-api",
+                prefer_residential=True,
+                allow_direct=True,
+                timeout=30,
+                impersonate="chrome131",
+            )
+            proxy = getattr(self._stealth, "proxy", None) or "direct"
+            logger.info("[Lee] StealthSession ready (proxy=%s)", proxy[:60] if proxy else "direct")
+            return self._stealth
+        except Exception as exc:
+            logger.warning("[Lee] StealthSession unavailable (%s) — using fallbacks", exc)
+            self._stealth = False
+            return None
 
     def _cleanup(self):
-        pass
+        if self._stealth and self._stealth is not False:
+            try:
+                self._stealth.close()
+            except Exception:
+                pass
+        self._stealth = None
 
     def _http_fetch(self, url: str, params: Dict[str, Any] = None):
-        """Fetch API using curl_cffi or Scrapfly to bypass IP blocks."""
-        import urllib.parse
-        from curl_cffi import requests as cffi_requests
-        
+        """Fetch via APE StealthSession; fall back to Scrapfly / SOCKS curl_cffi."""
         if params:
             qs = urllib.parse.urlencode(params)
             full_url = f"{url}?{qs}"
         else:
             full_url = url
-            
+
+        # ── Path 1: Stealth stack (preferred) ──
+        stealth = self._get_stealth()
+        if stealth is not None:
+            try:
+                resp = stealth.get(
+                    full_url,
+                    headers=SITE_HEADERS,
+                    max_retries=max(3, RETRY_LIMIT + 1),
+                    timeout=30,
+                )
+                if resp is not None and getattr(resp, "status_code", 0) == 200:
+                    return resp
+                code = getattr(resp, "status_code", "unknown") if resp else "none"
+                logger.warning("[Lee] StealthSession non-200: HTTP %s", code)
+                if code in (403, 429, 503) and hasattr(stealth, "rotate_proxy"):
+                    stealth.rotate_proxy()
+            except Exception as exc:
+                logger.warning("[Lee] StealthSession error: %s — trying fallbacks", exc)
+                if stealth is not False and hasattr(stealth, "rotate_proxy"):
+                    try:
+                        stealth.rotate_proxy()
+                    except Exception:
+                        pass
+
+        # ── Path 2: Scrapfly (optional env) ──
         scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")
-        
+        if scrapfly_key:
+            try:
+                from curl_cffi import requests as cffi_requests
+
+                scrapfly_url = (
+                    "https://api.scrapfly.io/scrape"
+                    f"?key={scrapfly_key}&url={urllib.parse.quote(full_url)}&asp=true"
+                )
+                resp = cffi_requests.get(
+                    scrapfly_url, impersonate="chrome131", timeout=45
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("result", {}).get("content", "{}")
+
+                    class MockScrapflyResp:
+                        def __init__(self, text):
+                            self.text = text
+                            self.status_code = 200
+
+                        def json(self):
+                            import json
+
+                            return json.loads(self.text)
+
+                    return MockScrapflyResp(content)
+            except Exception as exc:
+                logger.warning("[Lee] Scrapfly fallback failed: %s", exc)
+
+        # ── Path 3: curl_cffi + SOCKS_PROXY / APE one-shot ──
         for attempt in range(RETRY_LIMIT):
             try:
-                if scrapfly_key:
-                    scrapfly_url = f"https://api.scrapfly.io/scrape?key={scrapfly_key}&url={urllib.parse.quote(full_url)}&asp=true"
-                    resp = cffi_requests.get(scrapfly_url, impersonate="chrome110", timeout=45)
-                    
-                    if resp.status_code == 200:
-                        try:
-                            data = resp.json()
-                            content = data.get("result", {}).get("content", "{}")
-                            class MockScrapflyResp:
-                                def __init__(self, text):
-                                    self.text = text
-                                    self.status_code = 200
-                                def json(self):
-                                    import json
-                                    return json.loads(self.text)
-                            return MockScrapflyResp(content)
-                        except Exception:
-                            pass
-                else:
-                    # Fallback to curl_cffi with SOCKS proxy
-                    proxies = {"http": SOCKS_PROXY, "https": SOCKS_PROXY} if SOCKS_PROXY else None
-                    resp = cffi_requests.get(
-                        full_url, 
-                        impersonate="chrome110", 
-                        proxies=proxies,
-                        headers=HEADERS,
-                        timeout=30
-                    )
-                
-                status_code = resp.status_code
-                if status_code == 200:
+                from curl_cffi import requests as cffi_requests
+
+                proxy = None
+                if SOCKS_PROXY:
+                    proxy = SOCKS_PROXY
+                elif getattr(self, "ape", None):
+                    try:
+                        proxy = self.get_proxy(prefer_residential=True)
+                    except Exception:
+                        proxy = None
+                proxies = {"http": proxy, "https": proxy} if proxy else None
+                resp = cffi_requests.get(
+                    full_url,
+                    impersonate="chrome131",
+                    proxies=proxies,
+                    headers={
+                        **SITE_HEADERS,
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"
+                        ),
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    if proxy:
+                        self.record_proxy_success(proxy)
                     return resp
-                    
-                if status_code in (429, 500, 502, 503):
-                    sleep_s = BACKOFF_BASE_S * (2**attempt) + random.uniform(0, BACKOFF_BASE_S)
-                    logger.warning(f"⏳ HTTP {status_code} retry in {sleep_s:.1f}s")
+                if proxy and resp.status_code in (403, 429, 503):
+                    self.record_proxy_failure(proxy)
+                if resp.status_code in (429, 500, 502, 503):
+                    sleep_s = BACKOFF_BASE_S * (2 ** attempt) + random.uniform(
+                        0, BACKOFF_BASE_S
+                    )
+                    logger.warning(
+                        "[Lee] HTTP %s retry in %.1fs", resp.status_code, sleep_s
+                    )
                     time.sleep(sleep_s)
                     continue
-                    
+
                 class MockEmptyResp:
-                    status_code = status_code
-                    def json(self): return {}
+                    status_code = resp.status_code
+
+                    def json(self):
+                        return {}
+
                 return MockEmptyResp()
-                
             except Exception as e:
-                sleep_s = BACKOFF_BASE_S * (2**attempt)
+                sleep_s = BACKOFF_BASE_S * (2 ** attempt)
                 if attempt < RETRY_LIMIT - 1:
-                    logger.warning(f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {e}")
+                    logger.warning(
+                        "[Lee] HTTP error, retrying in %.1fs: %s", sleep_s, e
+                    )
                     time.sleep(sleep_s)
                 else:
-                    logger.error(f"❌ HTTP fetch failed after retries: {full_url}")
+                    logger.error("[Lee] HTTP fetch failed after retries: %s", full_url)
                     return None
         return None
 

@@ -41,9 +41,30 @@ function toggleCountyDropdown() {
   const tr = document.querySelector('.multi-select-trigger');
   dd.classList.toggle('show'); tr.classList.toggle('open');
 }
+function dedupeCountyList(counties) {
+  const list = Array.isArray(counties) ? counties.filter(Boolean) : [];
+  const bareFromLabeled = new Set();
+  list.forEach(c => {
+    const m = String(c).match(/^(.+?)\s*\(([A-Za-z]{2})\)$/);
+    if (m) bareFromLabeled.add(m[1].trim().toLowerCase());
+  });
+  const out = [];
+  const seen = new Set();
+  list.forEach(c => {
+    const s = String(c).trim();
+    if (!s || seen.has(s)) return;
+    const m = s.match(/^(.+?)\s*\(([A-Za-z]{2})\)$/);
+    if (!m && bareFromLabeled.has(s.toLowerCase())) return;
+    seen.add(s);
+    out.push(s);
+  });
+  return out.sort((a, b) => a.localeCompare(b));
+}
 function buildCountyOptions(counties) {
+  counties = dedupeCountyList(counties);
   state.counties = counties;
   const el = document.getElementById('countyOptions');
+  if (!el) return;
   el.innerHTML = counties.map(c => {
     const chk = state.selectedCounties.includes(c) ? 'checked' : '';
     return `<label class="multi-select-option ${chk ? 'checked' : ''}"><input type="checkbox" value="${c}" ${chk} onchange="SL.toggleCounty('${c}', this.checked)">${c}</label>`;

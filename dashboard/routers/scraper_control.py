@@ -23,6 +23,8 @@ from fastapi.responses import JSONResponse
 from dashboard.extensions import (
     get_collection,
     REGISTERED_COUNTIES,
+    KEY_FL_COUNTIES,
+    KEY_FL_COUNTY_LABELS,
     index_scraper_status_docs,
     parse_registered_county,
     registered_county_to_trigger_key,
@@ -212,6 +214,20 @@ async def _set_scraper_enabled(request: Request, enabled: bool):
         matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
     if not matched:
         return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
+
+    # KEY FL counties (Lee, Sarasota, SWFL core) cannot be disabled from the UI
+    bare, st = parse_registered_county(matched)
+    is_key_fl = (
+        matched in KEY_FL_COUNTY_LABELS
+        or (bare in KEY_FL_COUNTIES and (not st or st == "FL"))
+    )
+    if not enabled and is_key_fl:
+        return JSONResponse({
+            "error": f"{matched} is a KEY FL county and cannot be disabled. "
+                     "Lee and Sarasota must stay running for bond-desk coverage.",
+            "county": matched,
+            "enabled": True,
+        }, status_code=400)
 
     scraper_config_col = get_collection("scraper_config")
     now = datetime.now(timezone.utc)

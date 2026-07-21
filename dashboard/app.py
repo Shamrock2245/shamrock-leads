@@ -136,18 +136,47 @@ try:
 except Exception:
     pass
 
-# ── Master list of all registered scraper counties ──
-# This ensures the dropdown always shows all counties even before data arrives.
-REGISTERED_COUNTIES = sorted([
-    "Alachua", "Bay", "Brevard", "Broward", "Charlotte", "Citrus", "Clay",
-    "Collier", "Columbia", "DeSoto", "Dixie", "Duval", "Escambia", "Flagler",
-    "Gadsden", "Glades", "Hardee", "Hendry", "Hernando", "Highlands",
-    "Hillsborough", "Indian River", "Jackson", "Lake", "Lee", "Leon",
-    "Manatee", "Martin", "Monroe", "Nassau", "Okaloosa", "Okeechobee",
-    "Orange", "Osceola", "Palm Beach", "Pasco", "Pinellas", "Polk",
-    "Putnam", "Santa Rosa", "Sarasota", "Seminole", "St. Johns", "St. Lucie",
-    "Sumter", "Suwannee", "Taylor", "Volusia", "Walton",
-])
+# Master list lives in extensions (multi-state labels). Keep this import so
+# legacy Flask routes stay aligned with the FastAPI dashboard.
+try:
+    from dashboard.extensions import (
+        REGISTERED_COUNTIES,
+        merge_county_list_for_ui,
+        county_label,
+        parse_registered_county,
+        index_scraper_status_docs,
+        resolve_scraper_status,
+    )
+except ImportError:
+    # Fallback only if extensions cannot load (should not happen in prod)
+    REGISTERED_COUNTIES = sorted([
+        "Alachua (FL)", "Bay (FL)", "Brevard (FL)", "Broward (FL)", "Charlotte (FL)",
+        "Citrus (FL)", "Clay (FL)", "Collier (FL)", "Columbia (FL)", "DeSoto (FL)",
+        "Dixie (FL)", "Duval (FL)", "Escambia (FL)", "Flagler (FL)", "Gadsden (FL)",
+        "Glades (FL)", "Hardee (FL)", "Hendry (FL)", "Hernando (FL)", "Highlands (FL)",
+        "Hillsborough (FL)", "Indian River (FL)", "Jackson (FL)", "Lake (FL)",
+        "Lee (FL)", "Leon (FL)", "Manatee (FL)", "Martin (FL)", "Monroe (FL)",
+        "Nassau (FL)", "Okaloosa (FL)", "Okeechobee (FL)", "Orange (FL)",
+        "Osceola (FL)", "Palm Beach (FL)", "Pasco (FL)", "Pinellas (FL)", "Polk (FL)",
+        "Putnam (FL)", "Santa Rosa (FL)", "Sarasota (FL)", "Seminole (FL)",
+        "St. Johns (FL)", "St. Lucie (FL)", "Sumter (FL)", "Suwannee (FL)",
+        "Taylor (FL)", "Volusia (FL)", "Walton (FL)",
+    ])
+
+    def merge_county_list_for_ui(db_counties=None):
+        return sorted(set(REGISTERED_COUNTIES + [c for c in (db_counties or []) if c]))
+
+    def county_label(name, state=None):
+        return f"{name} ({state or 'FL'})"
+
+    def parse_registered_county(label):
+        return label, None
+
+    def index_scraper_status_docs(docs):
+        return {(d.get("county") or ""): d for d in docs if d}
+
+    def resolve_scraper_status(index, county_name, state=None):
+        return index.get(county_name) or {}
 
 
 # ── Serve Frontend ──
@@ -440,7 +469,7 @@ def api_leads_compat():
                     doc[k] = v.isoformat()
             leads_list.append(doc)
         db_counties = arrests.distinct("county")
-        counties_list = sorted(set(REGISTERED_COUNTIES + [c for c in db_counties if c]))
+        counties_list = merge_county_list_for_ui(db_counties)
         # scraped_at may be datetime or ISO string — match both for activity meta.
         hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         scraped_last_hour = arrests.count_documents({
