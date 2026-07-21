@@ -47,7 +47,13 @@ _DRUG_TRAF   = ["TRAFFICKING", "MANUFACTURE", "DISTRIBUTION",
                 "DELIVER FENTANYL"]
 
 
-def _severity_from_charges(charges_raw: str) -> int:
+def _severity_from_charges(charges_raw: str, state: str = "") -> int:
+    # Normalize CT docket labels / MS abbreviations before keyword scan
+    try:
+        from dashboard.services.legal_nlp_service import normalize_charge_text
+        charges_raw = normalize_charge_text(charges_raw or "", state=state) or charges_raw
+    except Exception:
+        pass
     try:
         from scoring.charge_classifier import classify_charge
         result = classify_charge(charges_raw)
@@ -57,12 +63,16 @@ def _severity_from_charges(charges_raw: str) -> int:
     upper = (charges_raw or "").upper()
     if any(k in upper for k in _DRUG_TRAF):
         return 20
+    if any(k in upper for k in ("CONTROLLED SUBSTANCE", "CONT. SUBST", "CONT SUBST")):
+        return 12
     if any(k in upper for k in _VIOLENT_KW):
         return 25
     if any(k in upper for k in _WEAPONS_KW):
         return 22
     if any(k in upper for k in _FLEE_KW):
         return 15
+    if "DUI" in upper or "DWI" in upper:
+        return 10
     return 5
 
 

@@ -253,6 +253,7 @@ from scrapers.counties_nc.union import UnionScraper as NC_UnionScraper
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
 from scrapers.counties_tn.shelby import ShelbyScraper as TN_ShelbyScraper
 from scrapers.counties_tn.knox import KnoxScraper as TN_KnoxScraper
+from scrapers.counties_tn.tncis import TnCISScraper as TN_TnCISScraper
 
 # ── Texas Scrapers ─────────────────────────────────────────────────────────
 from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
@@ -541,10 +542,11 @@ def register_scrapers(sched):
     sched.register_scraper(NC_TransylvaniaScraper(), interval_minutes=120)
     sched.register_scraper(NC_UnionScraper(), interval_minutes=60)
 
-    # ── Tennessee (wave-1) ───────────────────────────────────────────────────
+    # ── Tennessee (wave-1 + TnCIS statewide) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
     sched.register_scraper(TN_ShelbyScraper(), interval_minutes=90)
     sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
+    sched.register_scraper(TN_TnCISScraper(), interval_minutes=180)
 
     # ── Texas (wave-1) ───────────────────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)

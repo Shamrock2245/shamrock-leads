@@ -357,10 +357,11 @@ REGISTERED_COUNTIES = sorted([
     "Surry (NC)",
     "Transylvania (NC)",
     "Union (NC)",
-    # ── Tennessee (wave-1 registered scrapers) ──
+    # ── Tennessee (wave-1 + TnCIS statewide) ──
     "Davidson (TN)",
     "Knox (TN)",
     "Shelby (TN)",
+    "TnCIS (TN)",
     # ── Texas (wave-1 registered scrapers) ──
     "Bexar (TX)",
     "Dallas (TX)",

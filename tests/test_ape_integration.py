@@ -209,6 +209,20 @@ class TestAutonomousProxyEngine(unittest.TestCase):
         self.ape.record_failure(proxy)
         self.assertIn(proxy, self.ape.metrics)
         self.assertEqual(self.ape.metrics[proxy].failure_count, 1)
+        # Single failure must NOT mark dead (3-strike rule)
+        self.assertNotIn(proxy, self.ape.failed_proxies)
+        self.assertEqual(self.ape.metrics[proxy].consecutive_failures, 1)
+
+    def test_three_strike_marks_proxy_failed(self):
+        from scrapers.proxy_engine import PROXY_FAIL_THRESHOLD
+
+        proxy = "http://test-3strike:8080"
+        for _ in range(PROXY_FAIL_THRESHOLD):
+            self.ape.record_failure(proxy)
+        self.assertIn(proxy, self.ape.failed_proxies)
+        self.assertGreaterEqual(
+            self.ape.metrics[proxy].consecutive_failures, PROXY_FAIL_THRESHOLD
+        )
 
     def test_get_metrics(self):
         proxy = "http://test:8080"
@@ -325,11 +339,30 @@ class TestEndToEndScenarios(unittest.TestCase):
 
         metrics = ape.get_metrics()
         self.assertEqual(metrics["total_proxies_tracked"], 2)
-        self.assertEqual(metrics["failed_proxies"], 1)
+        # One failure does not mark dead under 3-strike rule
+        self.assertEqual(metrics["failed_proxies"], 0)
+        self.assertEqual(metrics["proxies"][proxy2]["failure_count"], 1)
         # Rolling average should be between samples
         avg = metrics["proxies"][proxy1]["avg_response_time_ms"]
         self.assertGreaterEqual(avg, 100.0)
         self.assertLessEqual(avg, 110.0)
+
+    def test_warren_proxy_url_override(self):
+        from scrapers.proxy_engine import WarrenProxyManager
+
+        m = WarrenProxyManager(
+            hub_url="ignored:8000",
+            password="",
+            proxy_url="socks5://127.0.0.1:1080",
+        )
+        self.assertTrue(m.is_configured)
+        self.assertEqual(m.get_proxy(), "socks5://127.0.0.1:1080")
+
+    def test_stealth_session_import(self):
+        from scrapers.proxy_engine import StealthSession, create_stealth_session
+
+        self.assertTrue(callable(create_stealth_session))
+        self.assertTrue(issubclass(StealthSession, object))
 
 
 def run_tests():

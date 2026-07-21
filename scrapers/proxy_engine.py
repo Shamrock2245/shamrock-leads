@@ -1,20 +1,23 @@
 """
-Autonomous Proxy Engine (APE) v2.0
+Autonomous Proxy Engine (APE) v2.1
 Integrates Warren, S5W2C, and Stormsia for self-hosted proxy ecosystem.
 
 Features:
-- Automatic failover (Warren → S5W2C → Stormsia)
+- Automatic failover (Warren → S5W2C → Stormsia → direct)
+- curl_cffi stealth sessions (Chrome JA3/TLS fingerprint)
+- Exponential backoff + jitter on 403/429
+- Atomic 3-strike proxy rotation (thread-safe)
+- Session cookie persistence across paginated requests
 - Config-gated sources (skip unconfigured / unreachable)
 - Health checking and proxy validation
-- Session-based sticky routing
-- Regional routing support
-- Autonomous cache management
+- Session-based sticky routing / regional routing
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import random
 import socket
 import threading
 import time
@@ -25,6 +28,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+# Consecutive failures before a proxy is marked dead (auto-recovers later).
+PROXY_FAIL_THRESHOLD = 3
+# Max retries for a single StealthSession request across proxy rotations.
+STEALTH_MAX_RETRIES = 4
 
 
 class ProxyType(Enum):
@@ -93,6 +101,7 @@ class ProxyMetrics:
     proxy_type: ProxyType
     success_count: int = 0
     failure_count: int = 0
+    consecutive_failures: int = 0
     last_used: Optional[datetime] = None
     last_failed: Optional[datetime] = None
     avg_response_time_ms: float = 0.0
@@ -107,6 +116,8 @@ class ProxyMetrics:
 
     @property
     def is_healthy(self) -> bool:
+        if self.consecutive_failures >= PROXY_FAIL_THRESHOLD:
+            return False
         if self.failure_count > 5 and self.success_rate < 0.2:
             return False
         if self.last_failed:
@@ -117,6 +128,7 @@ class ProxyMetrics:
 
     def note_success(self, response_time_ms: float = 0.0) -> None:
         self.success_count += 1
+        self.consecutive_failures = 0
         self.last_used = datetime.now()
         if response_time_ms > 0:
             self._response_samples += 1
@@ -127,25 +139,43 @@ class ProxyMetrics:
 
 
 class WarrenProxyManager:
-    """Manages Warren residential proxy pool."""
+    """Manages Warren residential proxy pool.
 
-    def __init__(self, hub_url: str, password: str, username: str = "warren"):
+    Resolution order for the proxy URL:
+      1. ``WARREN_PROXY_URL`` (full URL, e.g. ``socks5://127.0.0.1:1080``)
+      2. Built from hub_url + username + password (HTTP CONNECT on :8000)
+    """
+
+    def __init__(
+        self,
+        hub_url: str,
+        password: str,
+        username: str = "warren",
+        proxy_url: Optional[str] = None,
+    ):
         """
         Args:
             hub_url: Warren proxy listen host:port (e.g. "178.156.179.237:8000")
             password: Proxy password printed/set by the hub
             username: Proxy username (default "warren")
+            proxy_url: Optional full proxy URL override (WARREN_PROXY_URL)
         """
         self.hub_url = hub_url
         self.password = password
         self.username = username or "warren"
+        # Explicit local/tunnel URL preferred when scrapers sit behind a SOCKS tunnel
+        self.proxy_url = (
+            (proxy_url or os.getenv("WARREN_PROXY_URL") or "").strip() or None
+        )
         self.session_keys: Dict[str, str] = {}
         self._last_health_check: Optional[datetime] = None
         self._last_health_ok: bool = False
 
     @property
     def is_configured(self) -> bool:
-        """True when hub URL + non-placeholder password are present."""
+        """True when explicit proxy URL is set, or hub + non-placeholder password."""
+        if self.proxy_url:
+            return True
         if not self.hub_url or not self.password:
             return False
         placeholders = {
@@ -167,7 +197,13 @@ class WarrenProxyManager:
             and (now - self._last_health_check).total_seconds() < cache_seconds
         ):
             return self._last_health_ok
-        host, port = _parse_host_port(self.hub_url, default_port=8000)
+
+        # Prefer explicit URL host:port; fall back to hub
+        if self.proxy_url:
+            host, port = _parse_host_port(self.proxy_url, default_port=1080)
+        else:
+            host, port = _parse_host_port(self.hub_url, default_port=8000)
+
         ok = False
         try:
             with socket.create_connection((host, port), timeout=timeout):
@@ -187,6 +223,11 @@ class WarrenProxyManager:
         """Build a Warren proxy URL for the requested routing mode."""
         if not self.is_configured:
             return None
+
+        # Explicit WARREN_PROXY_URL (e.g. local SOCKS5 tunnel) — sticky modes
+        # still return the same URL; routing is handled by the tunnel/hub.
+        if self.proxy_url:
+            return self.proxy_url
 
         user = self.username
         if routing_mode == RoutingMode.STICKY_SESSION:
@@ -307,6 +348,7 @@ class AutonomousProxyEngine:
     1. Warren (residential, when configured + reachable)
     2. S5W2C (mobile data, when phone is on LAN)
     3. Stormsia (free public list)
+    4. Direct (no proxy) — only via StealthSession allow_direct=True
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -325,6 +367,7 @@ class AutonomousProxyEngine:
                 "warren_username",
                 os.getenv("WARREN_PROXY_USER", "warren"),
             ),
+            proxy_url=config.get("warren_proxy_url"),
         )
 
         self.s5w2c_manager = S5W2CProxyManager(
@@ -346,7 +389,7 @@ class AutonomousProxyEngine:
             )
         )
 
-        # WARREN_ENABLED defaults to True when password is set
+        # WARREN_ENABLED defaults to True when password/URL is configured
         self.warren_enabled = config.get(
             "warren_enabled",
             _env_bool("WARREN_ENABLED", default=self.warren_manager.is_configured),
@@ -364,6 +407,7 @@ class AutonomousProxyEngine:
         self.failed_proxies: Set[str] = set()
         self.last_rotation = datetime.now()
         self._recovery_timers: Dict[str, threading.Timer] = {}
+        self._lock = threading.RLock()
 
     def get_next_proxy(
         self, prefer_residential: bool = True, protocol: str = "socks5"
@@ -380,13 +424,14 @@ class AutonomousProxyEngine:
         else:
             chain = ["stormsia", "warren", "s5w2c"]
 
-        for source in chain:
-            proxy = self._proxy_from_source(source, protocol=protocol)
-            if proxy and proxy not in self.failed_proxies:
-                logger.debug("Using %s proxy", source)
-                return proxy
+        with self._lock:
+            for source in chain:
+                proxy = self._proxy_from_source(source, protocol=protocol)
+                if proxy and proxy not in self.failed_proxies:
+                    logger.debug("Using %s proxy", source)
+                    return proxy
 
-        logger.error("All proxy sources exhausted")
+        logger.debug("All proxy sources exhausted (caller may fall back to direct)")
         return None
 
     def _proxy_from_source(self, source: str, protocol: str = "socks5") -> Optional[str]:
@@ -436,50 +481,72 @@ class AutonomousProxyEngine:
         return self.get_next_proxy(prefer_residential=True)
 
     def mark_proxy_failed(self, proxy: str, duration_seconds: int = 300) -> None:
-        """Skip proxy for N seconds (auto-recovery)."""
+        """Skip proxy for N seconds (auto-recovery). Thread-safe."""
         if not proxy:
             return
-        self.failed_proxies.add(proxy)
+        with self._lock:
+            self.failed_proxies.add(proxy)
 
-        # Cancel existing recovery timer for this proxy
-        old = self._recovery_timers.pop(proxy, None)
-        if old is not None:
-            try:
-                old.cancel()
-            except Exception:
-                pass
+            # Cancel existing recovery timer for this proxy
+            old = self._recovery_timers.pop(proxy, None)
+            if old is not None:
+                try:
+                    old.cancel()
+                except Exception:
+                    pass
 
-        def recover() -> None:
-            self.failed_proxies.discard(proxy)
-            self._recovery_timers.pop(proxy, None)
-            logger.info("Proxy recovered: %s...", proxy[:50])
+            def recover() -> None:
+                with self._lock:
+                    self.failed_proxies.discard(proxy)
+                    self._recovery_timers.pop(proxy, None)
+                    m = self.metrics.get(proxy)
+                    if m:
+                        m.consecutive_failures = 0
+                logger.info("Proxy recovered: %s...", proxy[:50])
 
-        timer = threading.Timer(duration_seconds, recover)
-        timer.daemon = True
-        timer.start()
-        self._recovery_timers[proxy] = timer
+            timer = threading.Timer(duration_seconds, recover)
+            timer.daemon = True
+            timer.start()
+            self._recovery_timers[proxy] = timer
 
     def record_success(self, proxy: str, response_time_ms: float = 0.0) -> None:
         if not proxy:
             return
-        if proxy not in self.metrics:
-            self.metrics[proxy] = ProxyMetrics(
-                proxy=proxy, proxy_type=self._infer_type(proxy)
-            )
-        self.metrics[proxy].note_success(response_time_ms)
-        # Successful use clears failed mark
-        self.failed_proxies.discard(proxy)
+        with self._lock:
+            if proxy not in self.metrics:
+                self.metrics[proxy] = ProxyMetrics(
+                    proxy=proxy, proxy_type=self._infer_type(proxy)
+                )
+            self.metrics[proxy].note_success(response_time_ms)
+            # Successful use clears failed mark
+            self.failed_proxies.discard(proxy)
 
     def record_failure(self, proxy: str) -> None:
+        """
+        Record a failed request. Marks proxy dead only after
+        ``PROXY_FAIL_THRESHOLD`` consecutive failures (default 3).
+        """
         if not proxy:
             return
-        if proxy not in self.metrics:
-            self.metrics[proxy] = ProxyMetrics(
-                proxy=proxy, proxy_type=self._infer_type(proxy)
+        should_mark = False
+        with self._lock:
+            if proxy not in self.metrics:
+                self.metrics[proxy] = ProxyMetrics(
+                    proxy=proxy, proxy_type=self._infer_type(proxy)
+                )
+            m = self.metrics[proxy]
+            m.failure_count += 1
+            m.consecutive_failures += 1
+            m.last_failed = datetime.now()
+            if m.consecutive_failures >= PROXY_FAIL_THRESHOLD:
+                should_mark = True
+        if should_mark:
+            logger.warning(
+                "Proxy hit %d consecutive failures — rotating: %s...",
+                PROXY_FAIL_THRESHOLD,
+                proxy[:50],
             )
-        self.metrics[proxy].failure_count += 1
-        self.metrics[proxy].last_failed = datetime.now()
-        self.mark_proxy_failed(proxy)
+            self.mark_proxy_failed(proxy)
 
     def _infer_type(self, proxy: str) -> ProxyType:
         if "warren" in proxy or (
@@ -522,6 +589,223 @@ class AutonomousProxyEngine:
                 for proxy, m in self.metrics.items()
             },
         }
+
+
+# ── Stealth HTTP session (curl_cffi + APE) ───────────────────────────────────
+
+_CHROME_IMPERSONATE = (
+    "chrome131",
+    "chrome124",
+    "chrome123",
+    "chrome120",
+)
+
+
+def _backoff_sleep(attempt: int, base: float = 1.0, cap: float = 30.0) -> None:
+    """Exponential backoff with full jitter: sleep in [0, min(cap, base*2^attempt)]."""
+    delay = min(cap, base * (2 ** attempt))
+    time.sleep(random.uniform(0, delay))
+
+
+class StealthSession:
+    """
+    Thread-safe curl_cffi session with APE proxy routing.
+
+    - Impersonates Chrome TLS/JA3 fingerprint
+    - Routes via Warren → S5W2C → Stormsia → optional direct
+    - Exponential backoff + jitter on HTTP 403/429
+    - Rotates proxy after consecutive failures (via APE)
+    - Cookie jar persists for paginated multi-page scrapes
+    """
+
+    def __init__(
+        self,
+        ape: Optional[AutonomousProxyEngine] = None,
+        prefer_residential: bool = True,
+        sticky_session_id: Optional[str] = None,
+        allow_direct: bool = True,
+        timeout: int = 30,
+        impersonate: str = "chrome131",
+    ):
+        self.ape = ape or get_ape()
+        self.prefer_residential = prefer_residential
+        self.sticky_session_id = sticky_session_id
+        self.allow_direct = allow_direct
+        self.timeout = timeout
+        self.impersonate = impersonate or random.choice(_CHROME_IMPERSONATE)
+        self._lock = threading.RLock()
+        self._proxy: Optional[str] = None
+        self._session = None
+        self._init_session()
+
+    def _init_session(self) -> None:
+        try:
+            from curl_cffi import requests as cffi_requests
+        except ImportError as exc:
+            raise ImportError(
+                "curl_cffi is required for StealthSession. pip install curl_cffi"
+            ) from exc
+
+        self._session = cffi_requests.Session()
+        self._apply_proxy(self._select_proxy())
+
+    def _select_proxy(self) -> Optional[str]:
+        if self.sticky_session_id:
+            proxy = self.ape.get_sticky_proxy(self.sticky_session_id)
+            if proxy:
+                return proxy
+        return self.ape.get_next_proxy(prefer_residential=self.prefer_residential)
+
+    def _apply_proxy(self, proxy: Optional[str]) -> None:
+        self._proxy = proxy
+        if self._session is None:
+            return
+        if proxy:
+            self._session.proxies = {"http": proxy, "https": proxy}
+        else:
+            self._session.proxies = {}
+
+    def rotate_proxy(self) -> Optional[str]:
+        """Pick next healthy proxy (keeps cookies). Caller records failures."""
+        with self._lock:
+            old = self._proxy
+            new = self._select_proxy()
+            if new == old:
+                # Prefer a different source if current is exhausted/failed
+                new = self.ape.get_next_proxy(prefer_residential=self.prefer_residential)
+            if new == old and not new:
+                new = None
+            self._apply_proxy(new)
+            return new
+
+    @property
+    def proxy(self) -> Optional[str]:
+        return self._proxy
+
+    @property
+    def cookies(self):
+        """Underlying cookie jar (persists across pages/requests)."""
+        return getattr(self._session, "cookies", None)
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        max_retries: int = STEALTH_MAX_RETRIES,
+        timeout: Optional[int] = None,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Perform an HTTP request with retry / proxy rotation / backoff.
+
+        Returns a curl_cffi Response. Raises the last exception if all retries fail.
+        """
+        if self._session is None:
+            raise RuntimeError("StealthSession not initialized")
+
+        from scrapers.stealth_utils import TLSFingerprinter
+
+        last_exc: Optional[BaseException] = None
+        to = timeout if timeout is not None else self.timeout
+
+        for attempt in range(max_retries):
+            req_headers = dict(TLSFingerprinter.get_curl_cffi_headers())
+            if headers:
+                req_headers.update(headers)
+
+            try:
+                with self._lock:
+                    start = time.time()
+                    resp = self._session.request(
+                        method.upper(),
+                        url,
+                        headers=req_headers,
+                        impersonate=self.impersonate,
+                        timeout=to,
+                        **kwargs,
+                    )
+                    elapsed_ms = (time.time() - start) * 1000.0
+
+                status = getattr(resp, "status_code", 0) or 0
+
+                # Soft blocks — backoff and rotate
+                if status in (403, 429, 503):
+                    logger.warning(
+                        "StealthSession %s %s → HTTP %s (attempt %d/%d)",
+                        method.upper(),
+                        url[:80],
+                        status,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    if self._proxy:
+                        self.ape.record_failure(self._proxy)
+                    _backoff_sleep(attempt)
+                    self.rotate_proxy()
+                    # If proxies exhausted, optionally try direct
+                    if not self._proxy and self.allow_direct:
+                        self._apply_proxy(None)
+                    last_exc = RuntimeError(f"HTTP {status} from {url[:80]}")
+                    continue
+
+                if self._proxy:
+                    self.ape.record_success(self._proxy, response_time_ms=elapsed_ms)
+                return resp
+
+            except Exception as exc:
+                last_exc = exc
+                logger.debug(
+                    "StealthSession request error attempt %d: %s", attempt + 1, exc
+                )
+                if self._proxy:
+                    self.ape.record_failure(self._proxy)
+                _backoff_sleep(attempt)
+                self.rotate_proxy()
+                if not self._proxy and self.allow_direct:
+                    self._apply_proxy(None)
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"StealthSession failed after {max_retries} retries")
+
+    def get(self, url: str, **kwargs: Any):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any):
+        return self.request("POST", url, **kwargs)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._session is not None:
+                try:
+                    self._session.close()
+                except Exception:
+                    pass
+                self._session = None
+
+    def __enter__(self) -> "StealthSession":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.close()
+
+
+def create_stealth_session(
+    sticky_session_id: Optional[str] = None,
+    prefer_residential: bool = True,
+    allow_direct: bool = True,
+    **kwargs: Any,
+) -> StealthSession:
+    """Factory for a ready-to-use StealthSession bound to the global APE."""
+    return StealthSession(
+        ape=get_ape(),
+        sticky_session_id=sticky_session_id,
+        prefer_residential=prefer_residential,
+        allow_direct=allow_direct,
+        **kwargs,
+    )
 
 
 # Global APE instance

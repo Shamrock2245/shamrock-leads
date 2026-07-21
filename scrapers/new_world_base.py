@@ -53,6 +53,53 @@ class NewWorldBaseScraper(BaseScraper):
                 pass
         raise NotImplementedError("Subclasses must define base_url or portal_url")
 
+    def _open_http_session(self):
+        """
+        Prefer APE StealthSession (curl_cffi + residential failover).
+        Falls back to plain curl_cffi / requests when APE is unavailable.
+        """
+        try:
+            from scrapers.proxy_engine import create_stealth_session
+
+            sticky = f"newworld_{self.county.lower().replace(' ', '_')}"
+            return create_stealth_session(
+                sticky_session_id=sticky,
+                prefer_residential=True,
+                allow_direct=True,
+            ), True
+        except Exception as exc:
+            logger.debug("%s: StealthSession unavailable (%s) — falling back", self.county, exc)
+
+        try:
+            from curl_cffi import requests as http
+
+            sess = http.Session()
+            proxy = None
+            if getattr(self, "ape", None):
+                try:
+                    proxy = self.get_proxy(prefer_residential=True)
+                except Exception:
+                    proxy = None
+            if proxy:
+                sess.proxies = {"http": proxy, "https": proxy}
+            return sess, True  # use_impersonate
+        except ImportError:
+            import requests as http
+
+            return http.Session(), False
+
+    def _http_get(self, session, url: str, use_impersonate: bool, **kwargs):
+        """GET helper that works with StealthSession or raw sessions."""
+        # StealthSession already impersonates + times out
+        if hasattr(session, "rotate_proxy") and hasattr(session, "request"):
+            # Drop impersonate kw if present — StealthSession owns TLS fingerprint
+            kwargs.pop("impersonate", None)
+            return session.get(url, **kwargs)
+
+        if use_impersonate and "impersonate" not in kwargs:
+            kwargs["impersonate"] = "chrome131"
+        return session.get(url, **kwargs)
+
     def scrape(self) -> List[ArrestRecord]:
         try:
             from bs4 import BeautifulSoup
@@ -60,98 +107,101 @@ class NewWorldBaseScraper(BaseScraper):
             logger.error("bs4 not installed")
             return []
 
-        try:
-            from curl_cffi import requests as http
-            use_impersonate = True
-        except ImportError:
-            import requests as http
-            use_impersonate = False
-
         start = time.time()
-        session = http.Session()
+        session, use_impersonate = self._open_http_session()
         base = self.base_url.rstrip("/")
         records: List[ArrestRecord] = []
 
         inmate_links: List[Tuple[str, str]] = []
         params = {"InCustody": "True"}
 
-        for page_num in range(1, self.MAX_PAGES + 1):
-            try:
-                page_params = dict(params)
-                if page_num > 1:
-                    page_params["Page"] = str(page_num)
+        try:
+            for page_num in range(1, self.MAX_PAGES + 1):
+                try:
+                    page_params = dict(params)
+                    if page_num > 1:
+                        page_params["Page"] = str(page_num)
 
-                kwargs = {"headers": HEADERS, "timeout": 30, "params": page_params}
-                if use_impersonate:
-                    kwargs["impersonate"] = "chrome131"
-                resp = session.get(base, **kwargs)
-                if resp.status_code != 200:
-                    logger.warning(f"{self.county} NewWorld page {page_num}: HTTP {resp.status_code}")
-                    break
+                    kwargs = {"headers": HEADERS, "timeout": 30, "params": page_params}
+                    resp = self._http_get(session, base, use_impersonate, **kwargs)
+                    if resp.status_code != 200:
+                        logger.warning(
+                            f"{self.county} NewWorld page {page_num}: HTTP {resp.status_code}"
+                        )
+                        break
 
-                soup = BeautifulSoup(resp.text, "html.parser")
-                page_links: List[Tuple[str, str]] = []
-                for a_tag in soup.find_all("a", href=True):
-                    href = a_tag["href"]
-                    if "/Inmate/Detail/" in href or "/InmateInquiry/" in href and "Detail" in href:
-                        name = a_tag.get_text(strip=True)
-                        if name and name not in ("Back to Search", "Search"):
-                            full_url = href if href.startswith("http") else urljoin(base + "/", href)
-                            page_links.append((name, full_url))
-
-                if not page_links:
-                    # Fallback: parse table rows on listing page
-                    page_records = self._parse_listing_table(soup, base)
-                    if page_records:
-                        records.extend(page_records)
-                        if len(page_records) < 5:
-                            break
-                        continue
-                    break
-
-                inmate_links.extend(page_links)
-                if len(page_links) < 5:
-                    break
-            except Exception as e:
-                logger.error(f"{self.county} NewWorld page {page_num} failed: {e}")
-                break
-
-        # Dedup links
-        seen = set()
-        unique_links = []
-        for name, url in inmate_links:
-            if url not in seen:
-                seen.add(url)
-                unique_links.append((name, url))
-
-        for name, detail_url in unique_links[: self.MAX_DETAILS]:
-            try:
-                kwargs = {"headers": HEADERS, "timeout": 25}
-                if use_impersonate:
-                    kwargs["impersonate"] = "chrome131"
-                resp = session.get(detail_url, **kwargs)
-                if resp.status_code != 200:
-                    continue
-                soup = BeautifulSoup(resp.text, "html.parser")
-                rec = self._parse_detail(soup, name, detail_url)
-                if rec:
-                    records.append(rec)
-                time.sleep(0.3)
-            except Exception as e:
-                logger.debug(f"{self.county} detail parse error: {e}")
-
-        # If no detail links, try one more listing-only parse of page 1
-        if not records:
-            try:
-                kwargs = {"headers": HEADERS, "timeout": 30, "params": params}
-                if use_impersonate:
-                    kwargs["impersonate"] = "chrome131"
-                resp = session.get(base, **kwargs)
-                if resp.status_code == 200:
                     soup = BeautifulSoup(resp.text, "html.parser")
-                    records = self._parse_listing_table(soup, base)
-            except Exception as e:
-                logger.error(f"{self.county} NewWorld listing fallback failed: {e}")
+                    page_links: List[Tuple[str, str]] = []
+                    for a_tag in soup.find_all("a", href=True):
+                        href = a_tag["href"]
+                        if "/Inmate/Detail/" in href or (
+                            "/InmateInquiry/" in href and "Detail" in href
+                        ):
+                            name = a_tag.get_text(strip=True)
+                            if name and name not in ("Back to Search", "Search"):
+                                full_url = (
+                                    href
+                                    if href.startswith("http")
+                                    else urljoin(base + "/", href)
+                                )
+                                page_links.append((name, full_url))
+
+                    if not page_links:
+                        # Fallback: parse table rows on listing page
+                        page_records = self._parse_listing_table(soup, base)
+                        if page_records:
+                            records.extend(page_records)
+                            if len(page_records) < 5:
+                                break
+                            continue
+                        break
+
+                    inmate_links.extend(page_links)
+                    if len(page_links) < 5:
+                        break
+                except Exception as e:
+                    logger.error(f"{self.county} NewWorld page {page_num} failed: {e}")
+                    break
+
+            # Dedup links
+            seen = set()
+            unique_links = []
+            for name, url in inmate_links:
+                if url not in seen:
+                    seen.add(url)
+                    unique_links.append((name, url))
+
+            for name, detail_url in unique_links[: self.MAX_DETAILS]:
+                try:
+                    kwargs = {"headers": HEADERS, "timeout": 25}
+                    resp = self._http_get(session, detail_url, use_impersonate, **kwargs)
+                    if resp.status_code != 200:
+                        continue
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    rec = self._parse_detail(soup, name, detail_url)
+                    if rec:
+                        records.append(rec)
+                    time.sleep(0.3)
+                except Exception as e:
+                    logger.debug(f"{self.county} detail parse error: {e}")
+
+            # If no detail links, try one more listing-only parse of page 1
+            if not records:
+                try:
+                    kwargs = {"headers": HEADERS, "timeout": 30, "params": params}
+                    resp = self._http_get(session, base, use_impersonate, **kwargs)
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        records = self._parse_listing_table(soup, base)
+                except Exception as e:
+                    logger.error(f"{self.county} NewWorld listing fallback failed: {e}")
+        finally:
+            close = getattr(session, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
         logger.info(
             f"✅ {self.county}: NewWorld scraped {len(records)} records in {time.time() - start:.1f}s"

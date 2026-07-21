@@ -89,21 +89,127 @@ FL_CASE_RE = re.compile(
 )
 
 
-def analyze_charges(charge_text: str) -> dict:
-    """Analyze charge text for severity, classification, and risk factors."""
+# ── Multi-state charge text normalizers (CT / MS / AL) ───────────────────────
+# CT docket labels often arrive as:
+#   "DISPOSITION DOCKET - Disposition", "PRE-TRIAL DOCKET - PreTrial"
+# MS Hinds-style charges:
+#   "DUI: Third Offense", "Cont. Subst.: Possession of Sc", "Simple Assault - with weapon"
+# AL New World / ASP.NET mirrors FL/GA free-text (handled by base dictionary).
+
+CT_DOCKET_NOISE_RE = re.compile(
+    r"\b(?:"
+    r"disposition\s+docket\s*[-–—:]?\s*disposition|"
+    r"pre[-\s]?trial\s+docket\s*[-–—:]?\s*pre[-\s]?trial|"
+    r"jury\s+docket|"
+    r"daily\s+docket|"
+    r"motor\s+vehicle\s+docket"
+    r")\b",
+    re.IGNORECASE,
+)
+
+MS_ABBREV_MAP = (
+    (re.compile(r"\bcont\.?\s*subst\.?\b", re.I), "controlled substance"),
+    (re.compile(r"\bpwid\b", re.I), "possession with intent to distribute"),
+    (re.compile(r"\bpwcs\b", re.I), "possession of controlled substance"),
+    (re.compile(r"\bdwi\b", re.I), "dui"),
+    (re.compile(r"\bagg\.?\s*assault\b", re.I), "aggravated assault"),
+    (re.compile(r"\bsimple\s+assault\b", re.I), "simple battery"),
+    (re.compile(r"\bposs\.?\s+of\b", re.I), "possession of"),
+    (re.compile(r"\bfel\.?\b", re.I), "felony"),
+    (re.compile(r"\bmisd\.?\b", re.I), "misdemeanor"),
+)
+
+# Additional multi-state charge keys (same severity model as FL).
+MULTI_STATE_CHARGE_SEVERITY = {
+    "controlled substance": {"severity": "felony_3", "level": 5, "fta_weight": 0.10},
+    "possession of controlled substance": {"severity": "felony_3", "level": 5, "fta_weight": 0.10},
+    "possession with intent": {"severity": "felony_2", "level": 7, "fta_weight": 0.14},
+    "simple assault": {"severity": "misdemeanor_1", "level": 2, "fta_weight": 0.08},
+    "assault with a weapon": {"severity": "felony_2", "level": 7, "fta_weight": 0.15},
+    "assault - with weapon": {"severity": "felony_2", "level": 7, "fta_weight": 0.15},
+    "third offense": {"severity": "felony_3", "level": 5, "fta_weight": 0.12},
+    "pretrial": {"severity": "varies", "level": 3, "fta_weight": 0.08},
+    "pre-trial": {"severity": "varies", "level": 3, "fta_weight": 0.08},
+}
+
+
+def normalize_charge_text(charge_text: str, state: str = "") -> str:
+    """
+    Normalize raw charge strings from multi-state scrapers into text the
+    risk dictionary can match.
+
+    CT: strip docket-type labels that aren't charges.
+    MS: expand abbreviations (Cont. Subst., etc.) and colon-delimited forms.
+    AL: light cleanup (pipe separators already OK).
+    """
+    if not charge_text:
+        return ""
+
+    text = str(charge_text).strip()
+    st = (state or "").upper()
+
+    # CT docket noise is never a charge — drop it
+    if st == "CT" or CT_DOCKET_NOISE_RE.search(text):
+        cleaned = CT_DOCKET_NOISE_RE.sub(" ", text)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -–—:")
+        # If the whole string was docket metadata, return empty (not scorable)
+        if not cleaned or cleaned.lower() in {
+            "disposition", "pretrial", "pre-trial", "docket"
+        }:
+            return ""
+        text = cleaned
+
+    # MS: "Charge: Detail" → keep both; expand abbreviations
+    if st == "MS" or ":" in text or "Cont." in text:
+        for pattern, repl in MS_ABBREV_MAP:
+            text = pattern.sub(repl, text)
+        # "DUI: Third Offense" → "DUI Third Offense"
+        text = re.sub(r"\s*:\s*", " ", text)
+        text = re.sub(r"\s{2,}", " ", text).strip()
+
+    # AL / generic: collapse pipes for matching, keep content
+    text = text.replace("|", " ").replace("  ", " ").strip()
+    return text
+
+
+def analyze_charges(charge_text: str, state: str = "") -> dict:
+    """Analyze charge text for severity, classification, and risk factors.
+
+    Optional ``state`` enables CT/MS/AL charge-string normalization before
+    dictionary matching (see :func:`normalize_charge_text`).
+    """
     if not charge_text:
         return {"charges": [], "max_severity": "unknown", "severity_level": 0,
-                "fta_risk_score": 0.0, "risk_factors": [], "statutes": []}
+                "fta_risk_score": 0.0, "risk_factors": [], "statutes": [],
+                "normalized_text": "", "charge_count": 0}
 
-    charges_lower = charge_text.lower()
+    normalized = normalize_charge_text(charge_text, state=state)
+    if not normalized:
+        return {
+            "charges": [],
+            "max_severity": "unknown",
+            "severity_level": 0,
+            "fta_risk_score": 0.0,
+            "risk_factors": [{"keyword": "ct_docket_metadata_only", "risk_level": "low"}]
+            if (state or "").upper() == "CT" or CT_DOCKET_NOISE_RE.search(charge_text)
+            else [],
+            "statutes": [],
+            "normalized_text": "",
+            "charge_count": 0,
+        }
+
+    charges_lower = normalized.lower()
     found_charges = []
     max_level = 0
     max_severity = "unknown"
     total_fta = 0.0
     risk_factors = []
 
+    # Merge FL dictionary with multi-state aliases
+    severity_map = {**FL_CHARGE_SEVERITY, **MULTI_STATE_CHARGE_SEVERITY}
+
     # Match against known charge types
-    for charge_key, info in FL_CHARGE_SEVERITY.items():
+    for charge_key, info in severity_map.items():
         if charge_key in charges_lower:
             found_charges.append({
                 "charge": charge_key,
@@ -128,13 +234,13 @@ def analyze_charges(charge_text: str) -> dict:
 
     # Extract Florida statutes
     statutes = []
-    for m in FL_STATUTE_RE.finditer(charge_text):
+    for m in FL_STATUTE_RE.finditer(normalized):
         statutes.append({
             "chapter": m.group(1), "section": m.group(2),
             "subsection": m.group(3) or "",
             "full": m.group(0),
         })
-    for m in GENERIC_STATUTE_RE.finditer(charge_text):
+    for m in GENERIC_STATUTE_RE.finditer(normalized):
         stat = {"chapter": m.group(1), "section": m.group(2),
                 "subsection": m.group(3) or "", "full": m.group(0)}
         if stat not in statutes:
@@ -144,6 +250,15 @@ def analyze_charges(charge_text: str) -> dict:
     if any(kw in charges_lower for kw in ["domestic", "dv", "injunction"]):
         risk_factors.append({"keyword": "domestic_violence_flag", "risk_level": "medium"})
         total_fta = max(total_fta, 0.12)
+
+    # Weapon enhancement (MS "with weapon" etc.)
+    if any(kw in charges_lower for kw in ["with weapon", "with a weapon", "firearm", "gun"]):
+        risk_factors.append({"keyword": "weapon_enhancement", "risk_level": "medium"})
+        total_fta = max(total_fta, 0.12)
+        if max_level < 6:
+            max_level = max(max_level, 6)
+            if max_severity == "unknown":
+                max_severity = "felony_3"
 
     # Multiple charges multiplier
     charge_count = len(found_charges)
@@ -159,6 +274,7 @@ def analyze_charges(charge_text: str) -> dict:
         "risk_factors": risk_factors,
         "statutes": statutes,
         "charge_count": charge_count,
+        "normalized_text": normalized,
     }
 
 
