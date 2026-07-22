@@ -761,10 +761,9 @@ const SLIndemnitor = (() => {
     const lastName = ($('indFormLast')?.value || '').trim();
     const phone = ($('indFormPhone')?.value || '').trim();
 
-    // Minimal validation: need at least a name to save.
-    // Booking # and phone are helpful but not blocking — can be filled later.
+    // Minimal validation: only a name is required to save.
+    // Everything else (booking#, phone, address, etc.) can be filled in later.
     if (!firstName && !lastName) { toast('⚠️ At least a first or last name is required', 'error'); return; }
-    if (!booking && !phone) { toast('⚠️ Need a booking number or phone to link/identify this indemnitor', 'error'); return; }
 
     const body = {
       booking_number: booking,

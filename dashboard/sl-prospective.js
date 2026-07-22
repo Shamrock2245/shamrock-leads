@@ -1024,7 +1024,7 @@ window.SLProspective = (function () {
     var defName = $('alDefName') ? $('alDefName').value.trim() : '';
     var county = $('alCounty') ? $('alCounty').value : '';
     if (!defName) { toast('Defendant name is required', 'error'); return; }
-    if (!county) { toast('County is required', 'error'); return; }
+    // County is helpful but not blocking — can be filled in later during intake.
     var btn = $('alSubmitBtn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
     try {

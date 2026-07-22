@@ -1194,7 +1194,8 @@ def api_prospective_create():
         data = request.get_json(force=True)
         booking_number = (data.get("booking_number") or "").strip()
         if not booking_number:
-            return jsonify({"success": False, "error": "booking_number is required"}), 400
+            # Auto-generate a booking number for manual entries without one
+            booking_number = f"MANUAL-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
 
         # Check if already exists
         existing = prospective_bonds.find_one({"booking_number": booking_number})
@@ -1223,11 +1224,11 @@ def api_prospective_create():
             "detail_url": arrest_doc.get("detail_url", ""),
 
             # Pipeline state
-            "stage": "contacted",
+            "stage": data.get("stage", "contacted"),
             "status": "active",
 
-            # Indemnitor / Cosigner (populated later)
-            "indemnitor": {
+            # Indemnitor / Cosigner (populated later or inline)
+            "indemnitor": data.get("indemnitor") or {
                 "name": data.get("indemnitor_name", ""),
                 "phone": data.get("indemnitor_phone", ""),
                 "email": data.get("indemnitor_email", ""),
