@@ -143,6 +143,33 @@ jobs:
             docker rm -f shamrock-leads shamrock-dashboard shamrock-osint-worker 2>/dev/null || true
             docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker 2>/dev/null \
               || docker compose up -d --remove-orphans --force-recreate
+
+            # ── Postiz healthcheck fix + optional social stack refresh ──
+            # Image has no wget; compose uses node fetch. Recreate if social profile is in use.
+            if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then
+              echo ""
+              echo "📱 Refreshing Postiz (social profile)..."
+              docker compose --profile social pull postiz 2>/dev/null || true
+              docker compose --profile social up -d --force-recreate --no-deps postiz 2>/dev/null || true
+            fi
+
+            # ── frp server (BlueBubbles tunnel replacing Cloudflare/ngrok) ──
+            # Secrets live only on VPS: deployment/frp/.frp_token (+ optional .frp_dashboard_pass)
+            if [ -f deployment/frp/.frp_token ] && [ -f deployment/frp/frps.toml ]; then
+              echo ""
+              echo "🔐 Rehydrating frps.toml secrets from VPS token files..."
+              TOKEN=$(cat deployment/frp/.frp_token)
+              git show HEAD:deployment/frp/frps.toml > deployment/frp/frps.toml
+              sed -i "s/CHANGE_ME_SET_FRP_TOKEN_IN_ENV/${TOKEN}/g" deployment/frp/frps.toml
+              if [ -f deployment/frp/.frp_dashboard_pass ]; then
+                DASH=$(cat deployment/frp/.frp_dashboard_pass)
+                sed -i "s/CHANGE_ME_FRP_DASHBOARD_PASSWORD/${DASH}/g" deployment/frp/frps.toml
+              fi
+              chmod 600 deployment/frp/frps.toml
+              docker compose --profile tunnel pull frps 2>/dev/null || true
+              docker compose --profile tunnel up -d frps 2>/dev/null || true
+            fi
+
             # ── Re-apply iptables rule for SOCKS proxy (iMac tunnel) ──
             echo ""
             echo "🔌 Re-applying SOCKS proxy firewall rule..."

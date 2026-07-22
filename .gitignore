@@ -46,6 +46,10 @@ client_secret*.json
 service-account*.json
 *_credentials.json
 get_gmail_token.py
+deployment/frp/.frp_token
+deployment/frp/.frp_dashboard_pass
+deployment/frp/frps.local.toml
+deployment/frp/frps.runtime.toml
 
 # Uploads (KYC data — never commit PII)
 dashboard/uploads/
