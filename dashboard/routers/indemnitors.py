@@ -460,8 +460,25 @@ async def api_indemnitor_create(request: Request):
         }
 
         booking_number = data.get("booking_number", "").strip()
+
+        # If no booking number, save as an unlinked indemnitor for later matching
         if not booking_number:
-            return JSONResponse({"error": "booking_number required to link indemnitor to a bond"}, status_code=400)
+            indemnitors_coll = get_collection("indemnitors")
+            profile["created_at"] = now.isoformat()
+            profile["linked_bonds"] = []
+            profile["status"] = "unlinked"
+            # Dedup by phone if available
+            if phone:
+                existing = await indemnitors_coll.find_one({"phone": phone})
+                if existing:
+                    await indemnitors_coll.update_one(
+                        {"phone": phone},
+                        {"$set": {**profile, "updated_at": now.isoformat()}}
+                    )
+                    return {"success": True, "action": "updated_existing", "indemnitor_id": str(existing["_id"]), "linked": False}
+            result = await indemnitors_coll.insert_one(profile)
+            return {"success": True, "action": "created", "indemnitor_id": str(result.inserted_id), "linked": False,
+                    "message": "Indemnitor saved. Link to a bond later from the indemnitor panel."}
 
         # Find the bond (prospective or active)
         doc = await prospective_bonds.find_one({"booking_number": booking_number})
@@ -503,7 +520,32 @@ async def api_indemnitor_create(request: Request):
                 collection = prospective_bonds
                 bond_type = "prospective"
             else:
-                return JSONResponse({"error": f"Bond or Arrest {booking_number} not found"}, status_code=404)
+                # No existing bond or arrest — create a stub prospective bond
+                # so the indemnitor can be linked now and matched to a defendant later.
+                doc = {
+                    "booking_number": booking_number,
+                    "county": "",
+                    "defendant_name": "",
+                    "bond_amount": 0,
+                    "charges": [],
+                    "status": "intake_pending",
+                    "stage": "prospective",
+                    "source": "dashboard_manual",
+                    "created_at": now.isoformat(),
+                    "updated_at": now.isoformat(),
+                    "timeline": [{
+                        "timestamp": now.isoformat(),
+                        "event": "bond_started",
+                        "detail": f"Stub bond created via indemnitor intake — booking #{booking_number} not yet in system",
+                        "agent": "System"
+                    }],
+                    "indemnitors": [],
+                    "documents": {},
+                    "kyc_uploads": []
+                }
+                await prospective_bonds.insert_one(doc)
+                collection = prospective_bonds
+                bond_type = "prospective"
 
         # Multi-cosigner: migrate from single indemnitor to indemnitors array
         existing_indemnitors = doc.get("indemnitors", [])

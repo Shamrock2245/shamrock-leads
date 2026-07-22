@@ -761,9 +761,10 @@ const SLIndemnitor = (() => {
     const lastName = ($('indFormLast')?.value || '').trim();
     const phone = ($('indFormPhone')?.value || '').trim();
 
-    if (!booking) { toast('⚠️ Booking number required', 'error'); return; }
-    if (!firstName && !lastName) { toast('⚠️ Name required', 'error'); return; }
-    if (!phone) { toast('⚠️ Phone required', 'error'); return; }
+    // Minimal validation: need at least a name to save.
+    // Booking # and phone are helpful but not blocking — can be filled later.
+    if (!firstName && !lastName) { toast('⚠️ At least a first or last name is required', 'error'); return; }
+    if (!booking && !phone) { toast('⚠️ Need a booking number or phone to link/identify this indemnitor', 'error'); return; }
 
     const body = {
       booking_number: booking,
@@ -800,7 +801,9 @@ const SLIndemnitor = (() => {
       });
       const d = await r.json();
       if (!r.ok) { toast(`❌ ${d.error || 'Failed'}`, 'error'); return; }
-      toast(`✅ Indemnitor ${d.action === 'updated_existing' ? 'updated' : 'added'}: ${firstName} ${lastName}`, 'success');
+      const verb = d.action === 'updated_existing' ? 'updated' : 'saved';
+      const suffix = d.linked === false ? ' (unlinked — link to a bond later)' : '';
+      toast(`✅ Indemnitor ${verb}: ${firstName} ${lastName}${suffix}`, 'success');
       closeAddModal();
       load();  // Refresh list
     } catch(e) { toast('❌ Network error: ' + e.message, 'error'); }
