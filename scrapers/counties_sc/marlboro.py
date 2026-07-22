@@ -59,7 +59,7 @@ class MarlboroScraper(BaseScraper):
                         continue
                     name = cells[0]
                     charges = cells[1] if len(cells) > 1 else "Unknown"
-                    booking = cells[2] if len(cells) > 2 else f"MAR_{hashlib.md5(f"{name}|MARLBO".encode()).hexdigest()[:10]}"
+                    booking = cells[2] if len(cells) > 2 else f"MAR_{hashlib.md5(f'{name}|MARLBO'.encode()).hexdigest()[:10]}"
                     bond = re.sub(r"[^\d.]", "", cells[3] if len(cells) > 3 else "0") or "0"
                     records.append(
                         ArrestRecord(

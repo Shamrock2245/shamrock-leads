@@ -104,7 +104,7 @@ class MecklenburgScraper(BaseScraper):
                 name = cells[0]
                 if not name or len(name) < 2:
                     continue
-                booking = cells[1] if len(cells) > 1 else f"MECK_{hashlib.md5(f"{name}|MECKLE".encode()).hexdigest()[:10]}"
+                booking = cells[1] if len(cells) > 1 else f"MECK_{hashlib.md5(f'{name}|MECKLE'.encode()).hexdigest()[:10]}"
                 charges = "Unknown"
                 bond = "0"
                 for c in cells[2:]:

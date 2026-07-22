@@ -55,7 +55,7 @@ class DarlingtonScraper(BaseScraper):
                         name = cells[0]
                         if not name or len(name) < 2:
                             continue
-                        booking = cells[1] if len(cells) > 1 else f"DAR_{hashlib.md5(f"{name}|DARLIN".encode()).hexdigest()[:10]}"
+                        booking = cells[1] if len(cells) > 1 else f"DAR_{hashlib.md5(f'{name}|DARLIN'.encode()).hexdigest()[:10]}"
                         charges = cells[2] if len(cells) > 2 else "Unknown"
                         bond = re.sub(r"[^\d.]", "", cells[3] if len(cells) > 3 else "0") or "0"
                         records.append(ArrestRecord(

@@ -85,7 +85,7 @@ class NewberryScraper(BaseScraper):
                     continue
                 out.append(ArrestRecord(
                     County=self.county, State="SC", Full_Name=name,
-                    Booking_Number=str(cells[1] if len(cells) > 1 else f"NEW_{hashlib.md5(f"{name}|NEWBER".encode()).hexdigest()[:10]}"),
+                    Booking_Number=str(cells[1] if len(cells) > 1 else f"NEW_{hashlib.md5(f'{name}|NEWBER'.encode()).hexdigest()[:10]}"),
                     Charges=cells[2] if len(cells) > 2 else "Unknown",
                     Bond_Amount=re.sub(r"[^\d.]", "", cells[3] if len(cells) > 3 else "0") or "0",
                     Status="In Custody", Detail_URL=source,
