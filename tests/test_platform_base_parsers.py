@@ -85,6 +85,7 @@ class _SmartCopSC(SmartCOPBaseScraper):
 
 def _mock_response(html: str):
     resp = MagicMock()
+    resp.status_code = 200
     resp.text = html
     resp.raise_for_status = MagicMock()
     return resp
@@ -118,7 +119,7 @@ def test_smartcop_parses_canonical_records():
     session = MagicMock()
     session.get.return_value = _mock_response(SMARTCOP_HTML)
     session.post.return_value = _mock_response(SMARTCOP_HTML)
-    with patch("scrapers.smartcop_base.requests.Session", return_value=session):
+    with patch("curl_cffi.requests.Session", return_value=session):
         records = scraper.scrape()
 
     assert len(records) == 1
