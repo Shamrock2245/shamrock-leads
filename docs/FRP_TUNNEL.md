@@ -5,10 +5,21 @@
 | Piece | Role | Host |
 |-------|------|------|
 | **frps** | Server / control plane | Hetzner `178.156.179.237` |
-| **frpc** | Client | Office iMac (LaunchDaemon) |
+| **frpc** | Client | Office iMac (LaunchAgent `com.shamrock.frpc`) |
 | **BlueBubbles** | iMessage bridge | iMac `127.0.0.1:1234` → VPS `:12434` |
+| **SSH** | Office shell access | iMac `:22` → VPS `:12222` |
 
 Upstream: [fatedier/frp](https://github.com/fatedier/frp)
+
+### Live endpoints (after cutover)
+
+```bash
+# BlueBubbles (dashboard env)
+BLUEBUBBLES_URL_0178=http://178.156.179.237:12434
+
+# SSH to office iMac through frp
+ssh -p 12222 shamrockbailbonds@178.156.179.237
+```
 
 ---
 
@@ -22,7 +33,11 @@ docker compose --profile tunnel up -d frps
 docker compose ps frps
 # Control plane: TCP 7001  (7000 is APE Warren on this VPS)
 # BB proxy:      TCP 12434
+# SSH proxy:     TCP 12222
 # Dashboard:     http://178.156.179.237:7500  (firewall-restrict!)
+#
+# Token lives in deployment/frp/.frp_token on the VPS — copy into
+# deployment/frp/frps.toml auth.token (never commit real tokens).
 ```
 
 **Firewall:** allow inbound TCP `7001` from the office public IP if you want lock-down; allow `12434` only from the VPS itself if you put nginx TLS in front.
@@ -68,6 +83,24 @@ docker compose up -d shamrock-dashboard
 
 ## 2. Office iMac (frpc)
 
+### Preferred (user LaunchAgent — no sudo)
+
+If passwordless sudo is unavailable on the iMac:
+
+```bash
+# 1) Put matching token in frpc.toml (from VPS deployment/frp/.frp_token)
+mkdir -p ~/bin ~/Library/Application\ Support/frp ~/Library/Logs
+# download frpc 0.61.1 darwin_arm64 from GitHub → ~/bin/frpc
+# copy configured frpc.toml → ~/Library/Application Support/frp/frpc.toml (chmod 600)
+# install LaunchAgent: ~/Library/LaunchAgents/com.shamrock.frpc.plist
+#   Program: ~/bin/frpc -c ~/Library/Application Support/frp/frpc.toml
+#   KeepAlive + RunAtLoad; logs in ~/Library/Logs/frpc.{log,err}
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.shamrock.frpc.plist
+launchctl kickstart -k gui/$(id -u)/com.shamrock.frpc
+```
+
+### Optional (system LaunchDaemon — needs sudo)
+
 ```bash
 # On a Mac with the repo (or copy files)
 cp deployment/frp/frpc.bluebubbles.toml.example /tmp/frpc.toml
@@ -80,7 +113,9 @@ Ensure BlueBubbles is listening on `127.0.0.1:1234`, then:
 ```bash
 curl -sS "http://127.0.0.1:1234/api/v1/ping"
 # From VPS:
-curl -sS "http://127.0.0.1:12434/api/v1/ping"
+curl -sS "http://127.0.0.1:12434/api/v1/ping?password=$BLUEBUBBLES_PASSWORD"
+# SSH via frp:
+ssh -p 12222 shamrockbailbonds@178.156.179.237
 ```
 
 ---

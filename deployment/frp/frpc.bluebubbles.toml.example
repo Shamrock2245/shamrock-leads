@@ -16,6 +16,10 @@ loginFailExit = false
 transport.heartbeatInterval = 20
 transport.heartbeatTimeout = 90
 
+# Global log settings MUST come before [[proxies]] (frp 0.61+)
+log.to = "console"
+log.level = "info"
+
 # ── BlueBubbles API (primary line) ──────────────────────────────────────────
 # Local BB server defaults to http://127.0.0.1:1234
 # After connect, VPS reaches BB at http://178.156.179.237:12434
@@ -29,6 +33,15 @@ localIP = "127.0.0.1"
 localPort = 1234
 remotePort = 12434
 
+# ── SSH to office iMac via VPS :12222 ───────────────────────────────────────
+# ssh -p 12222 shamrockbailbonds@178.156.179.237
+[[proxies]]
+name = "imac-ssh"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 22
+remotePort = 12222
+
 # Optional second BB instance (0314) if on same machine with different port
 # [[proxies]]
 # name = "bluebubbles-0314"
@@ -36,6 +49,3 @@ remotePort = 12434
 # localIP = "127.0.0.1"
 # localPort = 1235
 # remotePort = 12435
-
-log.to = "console"
-log.level = "info"

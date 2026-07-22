@@ -29,7 +29,8 @@ webServer.password = "CHANGE_ME_FRP_DASHBOARD_PASSWORD"
 
 # Allow only the ports we explicitly map in frpc
 allowPorts = [
-  { start = 12434, end = 12435 },
+  { start = 12434, end = 12435 },  # BlueBubbles
+  { start = 12222, end = 12222 },  # Office iMac SSH
 ]
 
 log.to = "console"

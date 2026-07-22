@@ -406,6 +406,7 @@ services:
       - "7001:7001"                       # frpc control plane (7000 = APE Warren)
       - "7500:7500"                       # frps dashboard (restrict via firewall)
       - "12434:12434"                     # BlueBubbles TCP (or bind 127.0.0.1 only)
+      - "12222:12222"                     # Office iMac SSH via frpc
     networks:
       - shamrock-net
     mem_limit: 256m
