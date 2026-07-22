@@ -55,12 +55,18 @@ def _serialize(doc: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds")
 async def api_prospective_create(request: Request):
-    """Create a prospective bond from an arrest record or manual entry."""
+    """Create a prospective bond from an arrest record or manual entry.
+
+    Accepts either flat indemnitor_* fields or a nested ``indemnitor`` object
+    (what the Add Lead form sends). County and booking# are optional for walk-in
+    / phone leads — booking auto-generates as MANUAL-<ms> when omitted.
+    """
     try:
         data = await request.json() or {}
         booking_number = (data.get("booking_number") or "").strip()
         if not booking_number:
-            return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
+            # Walk-in / phone lead without a booking# yet
+            booking_number = f"MANUAL-{int(datetime.now(timezone.utc).timestamp() * 1000)}"
 
         col = get_collection("prospective_bonds")
         arrests = get_collection("arrests")
@@ -84,6 +90,25 @@ async def api_prospective_create(request: Request):
         if initial_stage not in VALID_STAGES:
             initial_stage = "contacted"
 
+        # Nested object (Add Lead form) takes precedence over flat fields
+        nested_ind = data.get("indemnitor") if isinstance(data.get("indemnitor"), dict) else {}
+        indemnitor = {
+            "name": (nested_ind.get("name") or data.get("indemnitor_name") or "").strip(),
+            "phone": (nested_ind.get("phone") or data.get("indemnitor_phone") or "").strip(),
+            "email": (nested_ind.get("email") or data.get("indemnitor_email") or "").strip(),
+            "relationship": (
+                nested_ind.get("relationship") or data.get("indemnitor_relationship") or ""
+            ).strip(),
+        }
+        # Keep multi-cosigner array in sync when an indemnitor is provided inline
+        indemnitors = [dict(indemnitor, role="primary")] if (indemnitor["name"] or indemnitor["phone"]) else []
+
+        note_text = (
+            data.get("note")
+            or data.get("initial_note")
+            or "Marked as In Progress from dashboard"
+        )
+
         doc = {
             "booking_number": booking_number,
             "defendant_name": data.get("defendant_name") or arrest_doc.get("full_name", "Unknown"),
@@ -99,19 +124,19 @@ async def api_prospective_create(request: Request):
             # Pipeline state
             "stage": initial_stage,
             "status": "active",
-            # Indemnitor / Cosigner
-            "indemnitor": {
-                "name": data.get("indemnitor_name", ""),
-                "phone": data.get("indemnitor_phone", ""),
-                "email": data.get("indemnitor_email", ""),
-                "relationship": data.get("indemnitor_relationship", ""),
-            },
+            # Indemnitor / Cosigner (nested object + array for multi-cosigner UIs)
+            "indemnitor": indemnitor,
+            "indemnitors": indemnitors,
+            "indemnitor_name": indemnitor.get("name", ""),
+            "indemnitor_phone": indemnitor.get("phone", ""),
+            "indemnitor_email": indemnitor.get("email", ""),
+            "indemnitor_relationship": indemnitor.get("relationship", ""),
             # Communication & timeline
             "communication_log": [],
             "timeline": [{
                 "timestamp": now.isoformat(),
                 "event": "created",
-                "detail": data.get("note") or "Marked as In Progress from dashboard",
+                "detail": note_text,
                 "agent": data.get("agent", "Dashboard"),
             }],
             # Closure
@@ -124,6 +149,7 @@ async def api_prospective_create(request: Request):
             "created_at": now,
             "updated_at": now,
             "created_by": data.get("agent", "Dashboard"),
+            "source": data.get("source") or ("dashboard_manual" if not arrest_doc else "arrest"),
         }
 
         await col.insert_one(doc)
@@ -369,6 +395,29 @@ async def api_prospective_officialize(booking_number: str):
             return JSONResponse({"error": "Prospective bond not found"}, status_code=404)
         if existing.get("status") == "promoted":
             return JSONResponse({"error": "Already promoted to active bond"}, status_code=409)
+
+        # Fail closed: stub / incomplete intake records must not become active bonds
+        def_name = (existing.get("defendant_name") or "").strip()
+        if not def_name or def_name.lower() in ("unknown", "(not linked)"):
+            return JSONResponse({
+                "error": "Cannot officialize: defendant name is missing. Complete defendant details first.",
+            }, status_code=400)
+        county = (existing.get("county") or "").strip()
+        if not county:
+            return JSONResponse({
+                "error": "Cannot officialize: county is missing. Complete defendant details first.",
+            }, status_code=400)
+        indem = existing.get("indemnitor") or {}
+        if not (indem.get("name") or indem.get("phone") or existing.get("indemnitor_name") or existing.get("indemnitor_phone")):
+            # Also accept multi-cosigner array
+            cosigners = existing.get("indemnitors") or []
+            has_cosigner = any(
+                (c.get("name") or c.get("phone")) for c in cosigners if isinstance(c, dict)
+            )
+            if not has_cosigner:
+                return JSONResponse({
+                    "error": "Cannot officialize: indemnitor is missing. Link an indemnitor first.",
+                }, status_code=400)
 
         now = datetime.now(timezone.utc)
         await col.update_one(

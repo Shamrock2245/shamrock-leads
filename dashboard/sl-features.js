@@ -53,11 +53,18 @@ async function loadDefendants() {
       const bkSafe = String(l.booking_number||'').replace(/'/g,"\\'");
       const bkEscD = String(l.booking_number||'').replace(/"/g,'&quot;');
       const custDrop = `<select class="def-status-badge ${stBadge}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEscD}',this.value,this)"><option value="" ${!stVal?'selected':''}>${stVal||'\u2014'}</option><option value="In Custody" ${'In Custody'===stVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===stVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===stVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===stVal?'selected':''}>Bonded Out</option></select>`;
+      const slotId = 'defIdSlots_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
       return `<div class="def-card" data-booking="${bkEscD}">
         <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
         <div class="def-body">
           <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div></div>
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
+          <div class="def-section" onclick="event.stopPropagation()">
+            <div class="def-section-title">🪪 Driver License / ID &amp; Selfie</div>
+            <div class="id-photo-slots" id="${slotId}" data-booking="${bkEscD}">
+              <div style="color:var(--muted);font-size:12px;padding:6px;grid-column:1/-1">Loading ID photos…</div>
+            </div>
+          </div>
         </div>
         <div class="def-card-footer">
           <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
@@ -73,7 +80,106 @@ async function loadDefendants() {
 
     // Defendant pagination
     document.getElementById('defPagination').innerHTML = `<button ${SL_STATE.defPage<=1?'disabled':''} onclick="goDefPage(${SL_STATE.defPage-1})">← Prev</button><span>Page ${SL_STATE.defPage} of ${pages}</span><button ${SL_STATE.defPage>=pages?'disabled':''} onclick="goDefPage(${SL_STATE.defPage+1})">Next →</button>`;
+
+    // Hydrate ID photo slots after paint
+    leads.forEach(l => {
+      if (l.booking_number && typeof window.loadDefendantIdPhotos === 'function') {
+        window.loadDefendantIdPhotos(l.booking_number);
+      } else if (l.booking_number) {
+        _loadDefIdPhotosInline(l.booking_number);
+      }
+    });
   } catch(e) { console.error('loadDefendants error:', e); }
+}
+
+// Inline fallback if defendants.js helpers are not on the page
+async function _loadDefIdPhotosInline(bookingNumber) {
+  const safe = String(bookingNumber || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const el = document.getElementById('defIdSlots_' + safe);
+  if (!el) return;
+  try {
+    const r = await fetch((window.API || '') + '/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads');
+    const d = await r.json();
+    const uploads = (r.ok && d.success !== false) ? (d.uploads || []) : [];
+    el.innerHTML = _renderDefIdSlotsInline(bookingNumber, uploads);
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px;grid-column:1/-1">Could not load ID photos</div>';
+  }
+}
+
+function _renderDefIdSlotsInline(bookingNumber, uploads) {
+  const slots = [
+    { key: 'govt_id_front', label: 'ID / DL Front', icon: '🪪' },
+    { key: 'govt_id_back', label: 'ID / DL Back', icon: '🔄' },
+    { key: 'selfie', label: 'Selfie', icon: '🤳' },
+  ];
+  const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
+  const bkSafe = String(bookingNumber || '').replace(/'/g, "\\'");
+  const api = window.API || '';
+  return slots.map(s => {
+    const matches = (uploads || []).filter(u => u.doc_type === s.key);
+    const u = matches.sort((a, b) => String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || '')))[0];
+    const src = u ? (u.url || ('/uploads/' + encodeURIComponent(u.entity_key || ('def-' + bookingNumber)) + '/' + encodeURIComponent(u.saved_as || ''))) : '';
+    const isImg = u && imgExts.includes((u.extension || '').toLowerCase());
+    const inputId = 'defSlot_' + s.key + '_' + String(bookingNumber || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `<div class="id-photo-slot ${u ? 'has-file' : ''}" onclick="event.stopPropagation()">
+      <div class="id-photo-slot-label">${s.icon} ${s.label}</div>
+      <div class="id-photo-slot-preview">
+        ${u && isImg ? `<img src="${src}" alt="${s.label}" loading="lazy">`
+          : u ? `<div class="ind-upload-pdf-icon">📄</div>`
+          : `<div class="id-photo-empty">Tap to upload</div>`}
+      </div>
+      <div class="id-photo-slot-actions">
+        <label class="id-photo-upload-btn" for="${inputId}">${u ? 'Replace' : 'Upload'}</label>
+        <input id="${inputId}" type="file" accept="image/*,.pdf,.heic" hidden
+          onchange="_uploadDefIdSlotInline('${bkSafe}','${s.key}', this.files && this.files[0])">
+        ${u ? `<button type="button" class="id-photo-del-btn" onclick="event.stopPropagation();_deleteDefIdUploadInline('${bkSafe}','${u.file_id}')">Delete</button>` : ''}
+        ${u && isImg ? `<a href="${src}" target="_blank" class="id-photo-view-btn" onclick="event.stopPropagation()">View</a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function _uploadDefIdSlotInline(bookingNumber, docType, file) {
+  if (!file || !bookingNumber) return;
+  try {
+    if (window.SL && SL.toast) SL.toast('⏳ Uploading…', 'info');
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('doc_type', docType);
+    const r = await fetch((window.API || '') + '/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads', {
+      method: 'POST', body: formData,
+    });
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      if (window.SL && SL.toast) SL.toast('❌ ' + (d.error || 'Upload failed'), 'error');
+      return;
+    }
+    if (window.SL && SL.toast) SL.toast('✅ ' + (d.doc_type_label || docType) + ' uploaded', 'success');
+    await _loadDefIdPhotosInline(bookingNumber);
+  } catch (e) {
+    if (window.SL && SL.toast) SL.toast('❌ ' + e.message, 'error');
+  }
+}
+
+async function _deleteDefIdUploadInline(bookingNumber, fileId) {
+  if (!bookingNumber || !fileId || !confirm('Delete this ID photo?')) return;
+  try {
+    const r = await fetch(
+      (window.API || '') + '/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) +
+      '/uploads/' + encodeURIComponent(fileId),
+      { method: 'DELETE' }
+    );
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      if (window.SL && SL.toast) SL.toast('❌ ' + (d.error || 'Delete failed'), 'error');
+      return;
+    }
+    if (window.SL && SL.toast) SL.toast('🗑️ Deleted', 'success');
+    await _loadDefIdPhotosInline(bookingNumber);
+  } catch (e) {
+    if (window.SL && SL.toast) SL.toast('❌ ' + e.message, 'error');
+  }
 }
 function _ftaBadgeDef(l) {
   const score = l.fta_risk_score;

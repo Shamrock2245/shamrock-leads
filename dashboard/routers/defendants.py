@@ -1,12 +1,20 @@
 from __future__ import annotations
-"""Defendants Router — FastAPI port of api/defendants.py (9 endpoints)"""
+"""Defendants Router — FastAPI port of api/defendants.py (+ identity media uploads)"""
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from dashboard.deps import get_collection, get_db
 from dashboard.services.defendant_normalizer import (
     DefendantNormalizationService, normalize_name_part, normalize_dob,
+)
+from dashboard.services.identity_media_service import (
+    ALL_DOC_TYPES,
+    ID_PHOTO_SLOTS,
+    delete_upload_file,
+    merge_id_photos_field,
+    save_upload_file,
+    slot_map_from_uploads,
 )
 from dashboard.routers.helpers import serialize_doc
 
@@ -377,3 +385,153 @@ async def update_defendant_custom_fields(defendant_id: str, request: Request):
     except Exception as exc:
         logger.exception("update_defendant_custom_fields error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Identity media — DL/ID front & back + selfie (by booking number)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def _defendant_media_target(booking_number: str):
+    """Prefer arrests, then defendants, then prospective/active bonds for storage."""
+    booking_number = (booking_number or "").strip()
+    if not booking_number:
+        return None, None, None
+
+    arrests = get_collection("arrests")
+    doc = await arrests.find_one({"booking_number": booking_number})
+    if doc:
+        return arrests, {"booking_number": booking_number}, doc
+
+    defendants = get_collection("defendants")
+    doc = await defendants.find_one({"booking_number": booking_number})
+    if not doc:
+        # Some defendant records nest booking under last_arrest
+        doc = await defendants.find_one({"last_arrest.booking_number": booking_number})
+        if doc:
+            return defendants, {"_id": doc["_id"]}, doc
+    if doc:
+        return defendants, {"_id": doc["_id"]}, doc
+
+    prospective = get_collection("prospective_bonds")
+    doc = await prospective.find_one({"booking_number": booking_number})
+    if doc:
+        return prospective, {"booking_number": booking_number}, doc
+
+    active = get_collection("active_bonds")
+    doc = await active.find_one({"booking_number": booking_number})
+    if doc:
+        return active, {"booking_number": booking_number}, doc
+
+    return None, None, None
+
+
+@router.get("/defendants/by_booking/{booking_number}/uploads")
+async def api_defendant_uploads_list(booking_number: str):
+    """List identity photos (ID front/back + selfie) for a defendant by booking #."""
+    try:
+        coll, query, doc = await _defendant_media_target(booking_number)
+        if not doc:
+            return JSONResponse({"error": "Defendant/arrest not found"}, status_code=404)
+
+        uploads = doc.get("kyc_uploads") or doc.get("id_uploads") or []
+        id_photos = doc.get("id_photos") or slot_map_from_uploads(uploads)
+        return {
+            "success": True,
+            "booking_number": booking_number,
+            "uploads": uploads,
+            "id_photos": id_photos,
+            "slots": ID_PHOTO_SLOTS,
+            "total": len(uploads),
+            "doc_types": ALL_DOC_TYPES,
+        }
+    except Exception as exc:
+        logger.exception("api_defendant_uploads_list error")
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@router.post("/defendants/by_booking/{booking_number}/uploads")
+async def api_defendant_upload(
+    booking_number: str,
+    file: UploadFile = File(...),
+    doc_type: str = Form("govt_id_front"),
+):
+    """Upload DL/ID front, back, or selfie for a defendant (keyed by booking #)."""
+    try:
+        coll, query, doc = await _defendant_media_target(booking_number)
+        if not doc:
+            return JSONResponse({"error": "Defendant/arrest not found"}, status_code=404)
+
+        if not file.filename:
+            return JSONResponse({"error": "Empty filename"}, status_code=400)
+
+        contents = await file.read()
+        if not contents:
+            return JSONResponse({"error": "Empty file"}, status_code=400)
+
+        try:
+            upload_meta = save_upload_file(
+                entity_key=f"def-{booking_number}",
+                doc_type=doc_type or "other",
+                original_filename=file.filename,
+                contents=contents,
+            )
+        except ValueError as ve:
+            return JSONResponse({"error": str(ve)}, status_code=400)
+
+        now = datetime.now(timezone.utc)
+        id_photos = merge_id_photos_field(doc.get("id_photos"), upload_meta)
+        await coll.update_one(
+            query,
+            {
+                "$push": {"kyc_uploads": upload_meta},
+                "$set": {
+                    "id_photos": id_photos,
+                    "updated_at": now.isoformat(),
+                },
+            },
+        )
+
+        return JSONResponse({
+            "success": True,
+            "file_id": upload_meta["file_id"],
+            "filename": upload_meta["saved_as"],
+            "url": upload_meta["url"],
+            "doc_type": upload_meta["doc_type"],
+            "doc_type_label": upload_meta["doc_type_label"],
+            "size_bytes": upload_meta["size_bytes"],
+            "id_photos": id_photos,
+        }, status_code=201)
+    except Exception as exc:
+        logger.exception("api_defendant_upload error")
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@router.delete("/defendants/by_booking/{booking_number}/uploads/{file_id}")
+async def api_defendant_upload_delete(booking_number: str, file_id: str):
+    """Delete a defendant identity/KYC upload."""
+    try:
+        coll, query, doc = await _defendant_media_target(booking_number)
+        if not doc:
+            return JSONResponse({"error": "Defendant/arrest not found"}, status_code=404)
+
+        uploads = doc.get("kyc_uploads") or []
+        target = next((u for u in uploads if u.get("file_id") == file_id), None)
+        if not target:
+            return JSONResponse({"error": "Upload not found"}, status_code=404)
+
+        delete_upload_file(target)
+        remaining = [u for u in uploads if u.get("file_id") != file_id]
+        id_photos = {k: v for k, v in slot_map_from_uploads(remaining).items() if v}
+
+        await coll.update_one(
+            query,
+            {"$set": {
+                "kyc_uploads": remaining,
+                "id_photos": id_photos,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        return {"success": True, "deleted": file_id}
+    except Exception as exc:
+        logger.exception("api_defendant_upload_delete error")
+        return JSONResponse({"error": str(exc)}, status_code=500)

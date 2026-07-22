@@ -174,6 +174,21 @@ async def index():
     return FileResponse(os.path.join(DASHBOARD_DIR, "index.html"))
 
 
+@app.get("/uploads/{entity_key}/{filename}", include_in_schema=False)
+async def serve_identity_upload(entity_key: str, filename: str):
+    """Serve identity media (DL/ID/selfie) from dashboard/uploads/.
+
+    Registered before the catch-all StaticFiles mount so files are reachable
+    at ``/uploads/<booking|entity>/<file>`` (matches frontend img srcs).
+    """
+    from dashboard.services.identity_media_service import resolve_upload_path
+
+    path = resolve_upload_path(entity_key, filename)
+    if path is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return FileResponse(str(path))
+
+
 # Mount static files for JS/CSS/images/etc.
 # html=True enables SPA fallback (returns index.html for unmatched paths)
 app.mount(

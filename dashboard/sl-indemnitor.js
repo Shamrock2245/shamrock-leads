@@ -38,7 +38,8 @@ const SLIndemnitor = (() => {
 
   const stageBadge = s => ({
     contacted:'📞 Contacted', negotiating:'🤝 Negotiating',
-    paperwork:'📄 Paperwork', ready:'✅ Ready', bonded:'🔒 Bonded'
+    paperwork:'📄 Paperwork', ready:'✅ Ready', bonded:'🔒 Bonded',
+    unlinked:'🔓 Unlinked'
   }[s] || s || '—');
 
   // ── Load ──
@@ -134,8 +135,10 @@ const SLIndemnitor = (() => {
       const rel = d.indemnitor_relationship || '';
       const docCount = Object.keys(d.documents||{}).length;
       const docTotal = 14;
-      const stClass = (d.stage==='bonded')?'ind-badge-bonded':'ind-badge-prospect';
-      return `<div class="ind-card" onclick="SLIndemnitor.openDetail('${d.booking_number}')">
+      const isUnlinked = d.stage === 'unlinked' || d.bond_type === 'unlinked';
+      const stClass = isUnlinked ? 'ind-badge-unlinked' : (d.stage==='bonded')?'ind-badge-bonded':'ind-badge-prospect';
+      const bkSafe = String(d.booking_number || '').replace(/'/g, "\\'");
+      return `<div class="ind-card" onclick="SLIndemnitor.openDetail('${bkSafe}')">
         <div class="ind-card-top">
           <div class="ind-card-name">${name}</div>
           <span class="ind-stage-pill ${stClass}">${stageBadge(d.stage)}</span>
@@ -145,11 +148,11 @@ const SLIndemnitor = (() => {
           ${phone ? `<span>📱 ${phone}</span>` : ''}
         </div>
         <div class="ind-card-bond">
-          <span>⚖️ ${d.defendant_name||'—'}</span>
-          <span class="ind-card-amount">${money(d.bond_amount)}</span>
+          <span>⚖️ ${isUnlinked ? 'No defendant linked yet' : (d.defendant_name||'—')}</span>
+          <span class="ind-card-amount">${isUnlinked ? '—' : money(d.bond_amount)}</span>
         </div>
         <div class="ind-card-bottom">
-          <span>${d.county||'—'} County</span>
+          <span>${isUnlinked ? 'Link booking # from detail' : ((d.county||'—') + ' County')}</span>
           <span>📄 ${docCount}/${docTotal} docs</span>
           <span>${timeAgo(d.updated_at)}</span>
         </div>
@@ -219,7 +222,20 @@ const SLIndemnitor = (() => {
       ).join('')}</select>`;
     };
 
+    const isUnlinked = d.bond_type === 'unlinked' || d.stage === 'unlinked';
+    const indId = d.indemnitor_id || (String(_currentBk || '').startsWith('UNLINKED-') ? String(_currentBk).slice('UNLINKED-'.length) : '');
+    const linkBar = isUnlinked ? `
+      <div class="ind-link-bar" style="margin-bottom:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:rgba(99,102,241,0.08)">
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#818cf8">🔓 Unlinked indemnitor — attach to a bond</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="indLinkBooking" class="ind-input" type="text" placeholder="Booking # to link" style="flex:1;min-width:160px">
+          <button class="btn btn-primary" type="button" onclick="SLIndemnitor.linkToBond('${indId.replace(/'/g, "\\'")}')">Link to Bond</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Creates/uses a pipeline record for that booking # and attaches this person as indemnitor.</div>
+      </div>` : '';
+
     $('indSubContent').innerHTML = `
+      ${linkBar}
       <!-- Hydration Sources -->
       <div class="ind-hydrate-bar">
         <span class="ind-hydrate-label">📥 Hydrate from:</span>
@@ -426,11 +442,26 @@ const SLIndemnitor = (() => {
             </div>`;
           }).join('')}
 
-          <!-- KYC Upload Section -->
+          <!-- Identity photos: DL/ID front, back, selfie -->
           <div class="ind-doc-group" style="margin-top:20px">
             <div class="ind-doc-group-header">
-              <span>📎 KYC Documents & Images</span>
-              <span class="ind-doc-counter">${uploads.length} files</span>
+              <span>🪪 Driver License / ID &amp; Selfie</span>
+              <span class="ind-doc-counter">${[
+                uploads.find(u => u.doc_type === 'govt_id_front'),
+                uploads.find(u => u.doc_type === 'govt_id_back'),
+                uploads.find(u => u.doc_type === 'selfie'),
+              ].filter(Boolean).length}/3</span>
+            </div>
+            <div class="id-photo-slots" id="indIdPhotoSlots">
+              ${renderIdPhotoSlots(uploads, 'indemnitor')}
+            </div>
+          </div>
+
+          <!-- Other KYC Upload Section -->
+          <div class="ind-doc-group" style="margin-top:20px">
+            <div class="ind-doc-group-header">
+              <span>📎 Other KYC Documents</span>
+              <span class="ind-doc-counter">${uploads.filter(u => !['govt_id_front','govt_id_back','selfie'].includes(u.doc_type)).length} files</span>
             </div>
 
             <div class="ind-upload-zone" id="indUploadZone"
@@ -447,9 +478,6 @@ const SLIndemnitor = (() => {
               </div>
               <div class="ind-upload-type-row">
                 <select id="indUploadType" style="padding:6px 10px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px">
-                  <option value="govt_id_front">Government ID (Front)</option>
-                  <option value="govt_id_back">Government ID (Back)</option>
-                  <option value="selfie">Selfie Verification</option>
                   <option value="pay_stub">Pay Stub / Income Proof</option>
                   <option value="utility_bill">Utility Bill / Address Proof</option>
                   <option value="other">Other Document</option>
@@ -457,34 +485,99 @@ const SLIndemnitor = (() => {
               </div>
             </div>
 
-            ${uploads.length > 0 ? `
-              <div class="ind-upload-gallery">
-                ${uploads.map(u => {
-                  const isImg = imgExts.includes(u.extension);
-                  const sizeKb = (u.size_bytes / 1024).toFixed(1);
-                  return `<div class="ind-upload-card">
-                    <div class="ind-upload-preview">
-                      ${isImg
-                        ? `<img src="/uploads/${_currentBk}/${u.saved_as}" alt="${u.doc_type_label}" loading="lazy">`
-                        : `<div class="ind-upload-pdf-icon">📄</div>`}
-                    </div>
-                    <div class="ind-upload-info">
-                      <span class="ind-upload-type-badge">${u.doc_type_label}</span>
-                      <span class="ind-upload-meta">${sizeKb}KB · ${u.extension.toUpperCase()}</span>
-                      <span class="ind-upload-date">${timeAgo(u.uploaded_at)}</span>
-                    </div>
-                    <div class="ind-upload-actions">
-                      ${isImg ? `<a href="/uploads/${_currentBk}/${u.saved_as}" target="_blank" class="ind-upload-action" title="View full size">🔍</a>` : ''}
-                      <button class="ind-upload-action del" onclick="SLIndemnitor.deleteUpload('${u.file_id}')" title="Delete">🗑️</button>
-                    </div>
-                  </div>`;
-                }).join('')}
-              </div>
-            ` : '<div style="padding:12px 16px;color:var(--muted);font-size:13px">No KYC documents uploaded yet. Upload government ID, pay stubs, or other verification documents above.</div>'}
+            ${(() => {
+              const other = uploads.filter(u => !['govt_id_front','govt_id_back','selfie'].includes(u.doc_type));
+              if (!other.length) {
+                return '<div style="padding:12px 16px;color:var(--muted);font-size:13px">No extra documents yet. Use the slots above for ID front/back and selfie.</div>';
+              }
+              return `<div class="ind-upload-gallery">${other.map(u => renderUploadCard(u)).join('')}</div>`;
+            })()}
           </div>
         </div>
       `;
     } catch(e) { $('indSubContent').innerHTML = '<div class="pipeline-empty">Error: '+e.message+'</div>'; }
+  }
+
+  function _uploadUrl(u) {
+    if (u.url) return u.url;
+    const key = u.entity_key || _currentBk;
+    return `/uploads/${encodeURIComponent(key)}/${encodeURIComponent(u.saved_as)}`;
+  }
+
+  function renderUploadCard(u) {
+    const imgExts = ['png','jpg','jpeg','gif','webp','heic'];
+    const isImg = imgExts.includes((u.extension || '').toLowerCase());
+    const sizeKb = ((u.size_bytes || 0) / 1024).toFixed(1);
+    const src = _uploadUrl(u);
+    return `<div class="ind-upload-card">
+      <div class="ind-upload-preview">
+        ${isImg ? `<img src="${src}" alt="${u.doc_type_label || ''}" loading="lazy">` : `<div class="ind-upload-pdf-icon">📄</div>`}
+      </div>
+      <div class="ind-upload-info">
+        <span class="ind-upload-type-badge">${u.doc_type_label || u.doc_type || 'File'}</span>
+        <span class="ind-upload-meta">${sizeKb}KB · ${(u.extension || '').toUpperCase()}</span>
+        <span class="ind-upload-date">${timeAgo(u.uploaded_at)}</span>
+      </div>
+      <div class="ind-upload-actions">
+        ${isImg ? `<a href="${src}" target="_blank" class="ind-upload-action" title="View full size">🔍</a>` : ''}
+        <button class="ind-upload-action del" onclick="SLIndemnitor.deleteUpload('${u.file_id}')" title="Delete">🗑️</button>
+      </div>
+    </div>`;
+  }
+
+  function renderIdPhotoSlots(uploads, kind) {
+    const slots = [
+      { key: 'govt_id_front', label: 'ID / DL Front', icon: '🪪' },
+      { key: 'govt_id_back', label: 'ID / DL Back', icon: '🔄' },
+      { key: 'selfie', label: 'Selfie', icon: '🤳' },
+    ];
+    const imgExts = ['png','jpg','jpeg','gif','webp','heic'];
+    return slots.map(s => {
+      // latest of this type
+      const matches = (uploads || []).filter(u => u.doc_type === s.key);
+      const u = matches.sort((a, b) => String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || '')))[0];
+      const src = u ? _uploadUrl(u) : '';
+      const isImg = u && imgExts.includes((u.extension || '').toLowerCase());
+      const inputId = `idSlot_${kind}_${s.key}`;
+      return `<div class="id-photo-slot ${u ? 'has-file' : ''}">
+        <div class="id-photo-slot-label">${s.icon} ${s.label}</div>
+        <div class="id-photo-slot-preview">
+          ${u && isImg ? `<img src="${src}" alt="${s.label}" loading="lazy">`
+            : u ? `<div class="ind-upload-pdf-icon">📄</div>`
+            : `<div class="id-photo-empty">Tap to upload</div>`}
+        </div>
+        <div class="id-photo-slot-actions">
+          <label class="id-photo-upload-btn" for="${inputId}">${u ? 'Replace' : 'Upload'}</label>
+          <input id="${inputId}" type="file" accept="image/*,.pdf,.heic" hidden
+            onchange="SLIndemnitor.uploadIdSlot('${s.key}', this.files && this.files[0])">
+          ${u ? `<button type="button" class="id-photo-del-btn" onclick="SLIndemnitor.deleteUpload('${u.file_id}')">Delete</button>` : ''}
+          ${u && isImg ? `<a href="${src}" target="_blank" class="id-photo-view-btn">View</a>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  async function uploadIdSlot(docType, file) {
+    if (!file || !_currentBk) return;
+    try {
+      toast('⏳ Uploading ' + (file.name || docType) + '…', 'info');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('doc_type', docType);
+      const r = await fetch(`${API}/api/indemnitors/${encodeURIComponent(_currentBk)}/uploads`, {
+        method: 'POST',
+        body: formData,
+      });
+      const d = await r.json();
+      if (!r.ok || d.success === false) {
+        toast(`❌ ${d.error || 'Upload failed'}`, 'error');
+        return;
+      }
+      toast(`✅ ${d.doc_type_label || docType} uploaded`, 'success');
+      renderDocumentsTab();
+    } catch (e) {
+      toast('❌ ' + e.message, 'error');
+    }
   }
 
   // ── Actions ──
@@ -831,7 +924,7 @@ const SLIndemnitor = (() => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('doc_type', docType);
+      formData.append('doc_type', docType || 'other');
 
       toast('⏳ Uploading ' + file.name + '...', 'info');
       const r = await fetch(`${API}/api/indemnitors/${encodeURIComponent(_currentBk)}/uploads`, {
@@ -865,6 +958,33 @@ const SLIndemnitor = (() => {
     } catch(e) { toast('❌ ' + e.message, 'error'); }
   }
 
+  async function linkToBond(indemnitorId) {
+    const booking = ($('indLinkBooking')?.value || '').trim();
+    if (!booking) { toast('⚠️ Enter a booking number to link', 'error'); return; }
+    if (!indemnitorId) { toast('⚠️ Missing indemnitor id', 'error'); return; }
+    try {
+      const r = await fetch(`${API}/api/indemnitors/link`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ indemnitor_id: indemnitorId, booking_number: booking, agent: 'Dashboard' }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.success === false) {
+        toast(`❌ ${d.error || 'Failed to link'}`, 'error');
+        return;
+      }
+      toast(`✅ Linked to booking ${d.booking_number || booking}`, 'success');
+      closeDetail();
+      load();
+      // Open the newly linked bond detail if we have a booking#
+      if (d.booking_number && !String(d.booking_number).startsWith('UNLINKED-')) {
+        setTimeout(() => openDetail(d.booking_number), 400);
+      }
+    } catch (e) {
+      toast('❌ Network error: ' + e.message, 'error');
+    }
+  }
+
   return {
     load, debounceSearch, openDetail, closeDetail,
     switchSubTab, saveProfile, toggleDoc,
@@ -873,9 +993,11 @@ const SLIndemnitor = (() => {
     // Add Indemnitor Modal
     openAddModal, closeAddModal, smartSearch, selectSearchResult,
     showNewForm, backToSearch, submitAddForm,
-    // KYC Uploads
-    handleFileSelect, handleDrop, deleteUpload,
+    // KYC Uploads + ID slots
+    handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,
     // View mode toggle
     toggleViewMode,
+    // Link unlinked indemnitor → bond
+    linkToBond,
   };
 })();

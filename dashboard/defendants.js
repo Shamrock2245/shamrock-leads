@@ -168,6 +168,15 @@ function renderDefCard(d){
           <div class="def-field"><div class="def-label">Case Number</div><div class="def-value mono">${val(d.case_number)}</div></div>
         </div>
       </div>
+
+      <!-- Identity photos (DL/ID front, back, selfie) -->
+      <div class="def-section" onclick="event.stopPropagation()">
+        <div class="def-section-title">🪪 Driver License / ID &amp; Selfie</div>
+        <div class="id-photo-slots" id="defIdSlots_${String(d.booking_number||'').replace(/[^a-zA-Z0-9_-]/g,'_')}"
+             data-booking="${String(d.booking_number||'').replace(/"/g,'&quot;')}">
+          <div class="id-photo-loading" style="color:var(--muted);font-size:12px;padding:8px">Loading ID photos…</div>
+        </div>
+      </div>
     </div>
 
     <!-- Footer Actions -->
@@ -198,7 +207,126 @@ async function loadDefendants(page){
   $('defResultCount').textContent=`${data.total.toLocaleString()} defendants`;
   $('defendantGrid').innerHTML=data.defendants.length?data.defendants.map(renderDefCard).join(''):'<div class="loading" style="grid-column:1/-1">No defendants match your filters</div>';
   $('defPagination').innerHTML=`<button ${data.page<=1?'disabled':''} onclick="loadDefendants(${data.page-1})">← Prev</button><span>Page ${data.page} of ${data.pages}</span><button ${data.page>=data.pages?'disabled':''} onclick="loadDefendants(${data.page+1})">Next →</button>`;
+  // Hydrate ID photo slots (async, non-blocking)
+  (data.defendants || []).forEach(d => {
+    if (d.booking_number) loadDefendantIdPhotos(d.booking_number);
+  });
 }
+
+// ── Identity media (DL front/back + selfie) ──────────────────────────────────
+
+function _defIdSlotEl(booking) {
+  const safe = String(booking || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return document.getElementById('defIdSlots_' + safe);
+}
+
+function _defUploadUrl(u) {
+  if (u && u.url) return u.url;
+  if (!u) return '';
+  const key = u.entity_key || ('def-' + (u.booking_number || ''));
+  return '/uploads/' + encodeURIComponent(key) + '/' + encodeURIComponent(u.saved_as || '');
+}
+
+async function loadDefendantIdPhotos(bookingNumber) {
+  const el = _defIdSlotEl(bookingNumber);
+  if (!el) return;
+  try {
+    const r = await fetch('/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads');
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:6px">No ID photos yet — upload below.</div>' +
+        renderDefendantIdSlots(bookingNumber, []);
+      return;
+    }
+    el.innerHTML = renderDefendantIdSlots(bookingNumber, d.uploads || []);
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:12px">Could not load ID photos</div>';
+  }
+}
+
+function renderDefendantIdSlots(bookingNumber, uploads) {
+  const slots = [
+    { key: 'govt_id_front', label: 'ID / DL Front', icon: '🪪' },
+    { key: 'govt_id_back', label: 'ID / DL Back', icon: '🔄' },
+    { key: 'selfie', label: 'Selfie', icon: '🤳' },
+  ];
+  const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic'];
+  const bkSafe = String(bookingNumber || '').replace(/'/g, "\\'");
+  return slots.map(s => {
+    const matches = (uploads || []).filter(u => u.doc_type === s.key);
+    const u = matches.sort((a, b) => String(b.uploaded_at || '').localeCompare(String(a.uploaded_at || '')))[0];
+    const src = u ? _defUploadUrl(u) : '';
+    const isImg = u && imgExts.includes((u.extension || '').toLowerCase());
+    const inputId = 'defSlot_' + s.key + '_' + String(bookingNumber || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `<div class="id-photo-slot ${u ? 'has-file' : ''}" onclick="event.stopPropagation()">
+      <div class="id-photo-slot-label">${s.icon} ${s.label}</div>
+      <div class="id-photo-slot-preview">
+        ${u && isImg ? `<img src="${src}" alt="${s.label}" loading="lazy">`
+          : u ? `<div class="ind-upload-pdf-icon">📄</div>`
+          : `<div class="id-photo-empty">Tap to upload</div>`}
+      </div>
+      <div class="id-photo-slot-actions">
+        <label class="id-photo-upload-btn" for="${inputId}" onclick="event.stopPropagation()">${u ? 'Replace' : 'Upload'}</label>
+        <input id="${inputId}" type="file" accept="image/*,.pdf,.heic" hidden
+          onchange="uploadDefendantIdSlot('${bkSafe}','${s.key}', this.files && this.files[0])">
+        ${u ? `<button type="button" class="id-photo-del-btn" onclick="event.stopPropagation();deleteDefendantIdUpload('${bkSafe}','${u.file_id}')">Delete</button>` : ''}
+        ${u && isImg ? `<a href="${src}" target="_blank" class="id-photo-view-btn" onclick="event.stopPropagation()">View</a>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function uploadDefendantIdSlot(bookingNumber, docType, file) {
+  if (!file || !bookingNumber) return;
+  try {
+    if (typeof showToast === 'function') showToast('⏳ Uploading ' + (file.name || docType) + '…', 'info');
+    else if (window.SL && SL.toast) SL.toast('⏳ Uploading…', 'info');
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('doc_type', docType);
+    const r = await fetch('/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads', {
+      method: 'POST',
+      body: formData,
+    });
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      const msg = d.error || 'Upload failed';
+      if (window.SL && SL.toast) SL.toast('❌ ' + msg, 'error');
+      else alert(msg);
+      return;
+    }
+    if (window.SL && SL.toast) SL.toast('✅ ' + (d.doc_type_label || docType) + ' uploaded', 'success');
+    await loadDefendantIdPhotos(bookingNumber);
+  } catch (e) {
+    if (window.SL && SL.toast) SL.toast('❌ ' + e.message, 'error');
+    else alert(e.message);
+  }
+}
+
+async function deleteDefendantIdUpload(bookingNumber, fileId) {
+  if (!bookingNumber || !fileId) return;
+  if (!confirm('Delete this ID photo?')) return;
+  try {
+    const r = await fetch(
+      '/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads/' + encodeURIComponent(fileId),
+      { method: 'DELETE' }
+    );
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      if (window.SL && SL.toast) SL.toast('❌ ' + (d.error || 'Delete failed'), 'error');
+      return;
+    }
+    if (window.SL && SL.toast) SL.toast('🗑️ Deleted', 'success');
+    await loadDefendantIdPhotos(bookingNumber);
+  } catch (e) {
+    if (window.SL && SL.toast) SL.toast('❌ ' + e.message, 'error');
+  }
+}
+
+// Expose for inline handlers
+window.uploadDefendantIdSlot = uploadDefendantIdSlot;
+window.deleteDefendantIdUpload = deleteDefendantIdUpload;
+window.loadDefendantIdPhotos = loadDefendantIdPhotos;
 
 
 /* ═══════════════════════════════════════════════════════

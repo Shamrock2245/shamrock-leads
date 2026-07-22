@@ -75,19 +75,17 @@ DOCUMENT_CHECKLIST = {
     ],
 }
 
+from dashboard.services.identity_media_service import (
+    ALL_DOC_TYPES as KYC_DOC_TYPES,
+    ID_PHOTO_SLOTS,
+    UPLOAD_DIR,
+    delete_upload_file,
+    merge_id_photos_field,
+    save_upload_file,
+    slot_map_from_uploads,
+)
+
 ALLOWED_UPLOAD_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "gif", "webp", "heic"}
-
-UPLOAD_DIR = Path(__file__).resolve().parent.parent / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
-
-KYC_DOC_TYPES = {
-    "govt_id_front": "Government ID (Front)",
-    "govt_id_back": "Government ID (Back)",
-    "selfie": "Selfie / Photo ID Verification",
-    "pay_stub": "Pay Stub / Proof of Income",
-    "utility_bill": "Utility Bill / Proof of Address",
-    "other": "Other Supporting Document",
-}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -144,10 +142,11 @@ async def api_indemnitors_list(
     stage: str = "",
     limit: int = Query(100, ge=1, le=500),
 ):
-    """List all indemnitors across prospective_bonds AND active_bonds."""
+    """List all indemnitors across prospective_bonds, active_bonds, and unlinked standalone records."""
     try:
         prospective_bonds = get_collection("prospective_bonds")
         active_bonds = get_collection("active_bonds")
+        indemnitors_coll = get_collection("indemnitors")
         results = []
 
         # ── Pull from prospective_bonds ──
@@ -185,6 +184,49 @@ async def api_indemnitors_list(
             if doc.get("booking_number") in seen_bookings:
                 continue
             results.extend(_extract_indemnitors(doc, "active", "bonded"))
+
+        # ── Unlinked standalone indemnitors (saved without a booking#) ──
+        # Skip stage filter — unlinked records have no pipeline stage
+        if not stage or stage in ("unlinked", "all"):
+            u_query: dict = {"status": "unlinked"}
+            if search:
+                u_query = {"$and": [
+                    {"status": "unlinked"},
+                    {"$or": [
+                        {"name": {"$regex": search, "$options": "i"}},
+                        {"firstName": {"$regex": search, "$options": "i"}},
+                        {"lastName": {"$regex": search, "$options": "i"}},
+                        {"phone": {"$regex": search, "$options": "i"}},
+                        {"email": {"$regex": search, "$options": "i"}},
+                    ]},
+                ]}
+            async for doc in indemnitors_coll.find(u_query).sort("updated_at", -1).limit(limit):
+                ind_id = str(doc.get("Indemnitor_ID") or doc.get("_id", ""))
+                ind_name = doc.get("name") or " ".join(
+                    filter(None, [doc.get("firstName", ""), doc.get("lastName", "")])
+                ) or ""
+                # Synthetic booking key so the existing openDetail(bk) path works
+                results.append({
+                    "booking_number": f"UNLINKED-{ind_id}",
+                    "defendant_name": "(not linked)",
+                    "county": "",
+                    "bond_amount": 0,
+                    "stage": "unlinked",
+                    "status": "unlinked",
+                    "bond_type": "unlinked",
+                    "indemnitor": {k: v for k, v in doc.items() if k != "_id"},
+                    "indemnitor_name": ind_name,
+                    "indemnitor_phone": doc.get("phone", ""),
+                    "indemnitor_email": doc.get("email", ""),
+                    "indemnitor_relationship": doc.get("relationship", ""),
+                    "indemnitor_role": doc.get("role", "primary"),
+                    "indemnitor_id": ind_id,
+                    "total_cosigners": 0,
+                    "source": "manual_entry",
+                    "documents": {},
+                    "created_at": _safe_dt(doc.get("created_at", "")),
+                    "updated_at": _safe_dt(doc.get("updated_at", doc.get("created_at", ""))),
+                })
 
         results.sort(key=lambda x: str(x.get("updated_at", "")), reverse=True)
 
@@ -253,6 +295,47 @@ async def api_indemnitors_by_person(
 
         await _collect(prospective_bonds, "prospective")
         await _collect(active_bonds, "active", "bonded")
+
+        # Unlinked standalone indemnitors (no bond yet)
+        indemnitors_coll = get_collection("indemnitors")
+        u_query: dict = {"status": "unlinked"}
+        if search:
+            u_query = {"$and": [
+                {"status": "unlinked"},
+                {"$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"firstName": {"$regex": search, "$options": "i"}},
+                    {"lastName": {"$regex": search, "$options": "i"}},
+                    {"phone": {"$regex": search, "$options": "i"}},
+                ]},
+            ]}
+        async for doc in indemnitors_coll.find(u_query).limit(limit):
+            ind_name = doc.get("name") or " ".join(
+                filter(None, [doc.get("firstName", ""), doc.get("lastName", "")])
+            ) or ""
+            phone = (doc.get("phone") or "").strip()
+            if not ind_name and not phone:
+                continue
+            ind_id = str(doc.get("Indemnitor_ID") or doc.get("_id", ""))
+            all_bonds.append({
+                "booking_number": f"UNLINKED-{ind_id}",
+                "defendant_name": "(not linked)",
+                "county": "",
+                "bond_amount": 0,
+                "stage": "unlinked",
+                "status": "unlinked",
+                "bond_type": "unlinked",
+                "charges": "",
+                "created_at": _safe_dt(doc.get("created_at", "")),
+                "updated_at": _safe_dt(doc.get("updated_at", doc.get("created_at", ""))),
+                "indemnitor": {k: v for k, v in doc.items() if k != "_id"},
+                "indemnitor_name": ind_name,
+                "indemnitor_phone": phone,
+                "indemnitor_email": doc.get("email", ""),
+                "indemnitor_relationship": doc.get("relationship", ""),
+                "indemnitor_role": doc.get("role", "primary"),
+                "documents": {},
+            })
 
         # Group by phone (or name if no phone)
         grouped: dict = {}
@@ -403,6 +486,44 @@ async def api_indemnitor_search_existing(q: str = ""):
                     "prior_id": str(doc.get("_id", "")),
                 })
 
+        # Search standalone unlinked indemnitors
+        indemnitors_coll = get_collection("indemnitors")
+        unlinked_query = {
+            "status": "unlinked",
+            "$or": [
+                {"name": regex},
+                {"firstName": regex},
+                {"lastName": regex},
+                {"phone": regex},
+            ],
+        }
+        async for doc in indemnitors_coll.find(unlinked_query).limit(20):
+            ind_name = doc.get("name") or " ".join(
+                filter(None, [doc.get("firstName", ""), doc.get("lastName", "")])
+            ) or ""
+            phone = doc.get("phone", "")
+            dedup_key = phone or ind_name.lower()
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
+            if ind_name or phone:
+                ind_id = str(doc.get("Indemnitor_ID") or doc.get("_id", ""))
+                results.append({
+                    "source": "unlinked_indemnitor",
+                    "name": ind_name,
+                    "first_name": doc.get("firstName", ""),
+                    "last_name": doc.get("lastName", ""),
+                    "phone": phone,
+                    "email": doc.get("email", ""),
+                    "address": doc.get("address", ""),
+                    "dob": doc.get("dob", ""),
+                    "relationship": doc.get("relationship", ""),
+                    "county": "",
+                    "booking_number": f"UNLINKED-{ind_id}",
+                    "prior_role": "indemnitor",
+                    "prior_id": ind_id,
+                })
+
         return {"success": True, "results": results[:30], "total": len(results)}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -467,18 +588,33 @@ async def api_indemnitor_create(request: Request):
             profile["created_at"] = now.isoformat()
             profile["linked_bonds"] = []
             profile["status"] = "unlinked"
-            # Dedup by phone if available
+            # Dedup by phone if available (same person re-entered)
             if phone:
-                existing = await indemnitors_coll.find_one({"phone": phone})
+                existing = await indemnitors_coll.find_one({"phone": phone, "status": "unlinked"})
                 if existing:
                     await indemnitors_coll.update_one(
-                        {"phone": phone},
-                        {"$set": {**profile, "updated_at": now.isoformat()}}
+                        {"_id": existing["_id"]},
+                        {"$set": {**profile, "updated_at": now.isoformat()}},
                     )
-                    return {"success": True, "action": "updated_existing", "indemnitor_id": str(existing["_id"]), "linked": False}
+                    ind_id = str(existing.get("Indemnitor_ID") or existing["_id"])
+                    return {
+                        "success": True,
+                        "action": "updated_existing",
+                        "indemnitor_id": ind_id,
+                        "booking_number": f"UNLINKED-{ind_id}",
+                        "linked": False,
+                    }
+            profile["Indemnitor_ID"] = str(uuid.uuid4())
             result = await indemnitors_coll.insert_one(profile)
-            return {"success": True, "action": "created", "indemnitor_id": str(result.inserted_id), "linked": False,
-                    "message": "Indemnitor saved. Link to a bond later from the indemnitor panel."}
+            ind_id = profile["Indemnitor_ID"]
+            return {
+                "success": True,
+                "action": "created",
+                "indemnitor_id": ind_id,
+                "booking_number": f"UNLINKED-{ind_id}",
+                "linked": False,
+                "message": "Indemnitor saved. Open the card and enter a Booking # to link.",
+            }
 
         # Find the bond (prospective or active)
         doc = await prospective_bonds.find_one({"booking_number": booking_number})
@@ -488,21 +624,22 @@ async def api_indemnitor_create(request: Request):
             doc = await active_bonds.find_one({"booking_number": booking_number})
             collection = active_bonds
             bond_type = "active"
-            
+
         if not doc:
             from dashboard.extensions import get_db
             db = get_db()
             arrest = await db.arrests.find_one({"booking_number": booking_number})
             if arrest:
                 # Create a new prospective bond from the arrest lead
+                # stage must be a VALID_STAGES value used by the In Progress pipeline
                 doc = {
                     "booking_number": booking_number,
                     "county": arrest.get("county", ""),
                     "defendant_name": arrest.get("full_name", ""),
-                    "bond_amount": arrest.get("total_bond_amount", 0),
+                    "bond_amount": arrest.get("total_bond_amount") or arrest.get("bond_amount", 0),
                     "charges": arrest.get("charges", []),
-                    "status": "intake_pending",
-                    "stage": "prospective",
+                    "status": "active",
+                    "stage": "contacted",
                     "source": "dashboard_manual",
                     "created_at": now.isoformat(),
                     "updated_at": now.isoformat(),
@@ -510,11 +647,11 @@ async def api_indemnitor_create(request: Request):
                         "timestamp": now.isoformat(),
                         "event": "bond_started",
                         "detail": "Started prospective bond from arrest lead via indemnitor creation",
-                        "agent": "System"
+                        "agent": "System",
                     }],
                     "indemnitors": [],
                     "documents": {},
-                    "kyc_uploads": []
+                    "kyc_uploads": [],
                 }
                 await prospective_bonds.insert_one(doc)
                 collection = prospective_bonds
@@ -528,20 +665,23 @@ async def api_indemnitor_create(request: Request):
                     "defendant_name": "",
                     "bond_amount": 0,
                     "charges": [],
-                    "status": "intake_pending",
-                    "stage": "prospective",
+                    "status": "active",
+                    "stage": "contacted",
                     "source": "dashboard_manual",
                     "created_at": now.isoformat(),
                     "updated_at": now.isoformat(),
                     "timeline": [{
                         "timestamp": now.isoformat(),
                         "event": "bond_started",
-                        "detail": f"Stub bond created via indemnitor intake — booking #{booking_number} not yet in system",
-                        "agent": "System"
+                        "detail": (
+                            f"Stub bond created via indemnitor intake — "
+                            f"booking #{booking_number} not yet in system"
+                        ),
+                        "agent": "System",
                     }],
                     "indemnitors": [],
                     "documents": {},
-                    "kyc_uploads": []
+                    "kyc_uploads": [],
                 }
                 await prospective_bonds.insert_one(doc)
                 collection = prospective_bonds
@@ -616,13 +756,117 @@ async def api_indemnitor_create(request: Request):
                 }}}
             )
 
+        # If this person existed as an unlinked standalone record, mark them linked
+        if phone:
+            indemnitors_coll = get_collection("indemnitors")
+            await indemnitors_coll.update_many(
+                {"phone": phone, "status": "unlinked"},
+                {"$set": {
+                    "status": "linked",
+                    "updated_at": now.isoformat(),
+                }, "$addToSet": {"linked_bonds": booking_number}},
+            )
+
         return {
             "success": True,
             "action": "created",
             "indemnitors": existing_indemnitors,
             "booking_number": booking_number,
             "bond_type": bond_type,
+            "linked": True,
         }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/indemnitors/link")
+async def api_indemnitor_link(request: Request):
+    """Link a previously unlinked standalone indemnitor to a booking/bond.
+
+    Body: {indemnitor_id: str, booking_number: str}
+    Reuses the create path so stub-bond + multi-cosigner logic stays centralized.
+    """
+    try:
+        data = await request.json() or {}
+        indemnitor_id = (data.get("indemnitor_id") or "").strip()
+        booking_number = (data.get("booking_number") or "").strip()
+        if not indemnitor_id:
+            return JSONResponse({"error": "indemnitor_id is required"}, status_code=400)
+        if not booking_number:
+            return JSONResponse({"error": "booking_number is required"}, status_code=400)
+        if booking_number.startswith("UNLINKED-"):
+            return JSONResponse({"error": "Provide a real booking number to link to"}, status_code=400)
+
+        indemnitors_coll = get_collection("indemnitors")
+        from bson import ObjectId
+
+        ind_doc = None
+        # Prefer Indemnitor_ID UUID, fall back to Mongo _id
+        ind_doc = await indemnitors_coll.find_one({"Indemnitor_ID": indemnitor_id})
+        if not ind_doc:
+            try:
+                ind_doc = await indemnitors_coll.find_one({"_id": ObjectId(indemnitor_id)})
+            except Exception:
+                ind_doc = None
+        if not ind_doc:
+            return JSONResponse({"error": "Unlinked indemnitor not found"}, status_code=404)
+
+        # Build create payload from stored profile + target booking
+        create_body = {
+            "booking_number": booking_number,
+            "firstName": ind_doc.get("firstName", ""),
+            "lastName": ind_doc.get("lastName", ""),
+            "name": ind_doc.get("name", ""),
+            "phone": ind_doc.get("phone", ""),
+            "email": ind_doc.get("email", ""),
+            "address": ind_doc.get("address", ""),
+            "city": ind_doc.get("city", ""),
+            "state": ind_doc.get("state", "FL"),
+            "zip": ind_doc.get("zip", ""),
+            "dob": ind_doc.get("dob", ""),
+            "ssn_last4": ind_doc.get("ssn_last4", ""),
+            "relationship": ind_doc.get("relationship", ""),
+            "employer": ind_doc.get("employer", ""),
+            "occupation": ind_doc.get("occupation", ""),
+            "dl_number": ind_doc.get("dl_number", ""),
+            "dl_state": ind_doc.get("dl_state", "FL"),
+            "role": ind_doc.get("role", "primary"),
+            "reference1_name": ind_doc.get("reference1_name", ""),
+            "reference1_phone": ind_doc.get("reference1_phone", ""),
+            "reference1_relationship": ind_doc.get("reference1_relationship", ""),
+            "reference2_name": ind_doc.get("reference2_name", ""),
+            "reference2_phone": ind_doc.get("reference2_phone", ""),
+            "reference2_relationship": ind_doc.get("reference2_relationship", ""),
+            "reference3_name": ind_doc.get("reference3_name", ""),
+            "reference3_phone": ind_doc.get("reference3_phone", ""),
+            "reference3_relationship": ind_doc.get("reference3_relationship", ""),
+            "agent": data.get("agent", "Dashboard"),
+        }
+
+        # Invoke create logic by constructing a Request-like path: call core inline
+        # by reusing the create endpoint via a synthetic internal call is heavy;
+        # instead duplicate the attach steps through a second POST-style payload.
+        class _BodyRequest:
+            async def json(self):
+                return create_body
+
+        result = await api_indemnitor_create(_BodyRequest())
+        if isinstance(result, JSONResponse):
+            return result
+
+        # Ensure the standalone record is marked linked even if phone was empty
+        now = datetime.now(timezone.utc)
+        await indemnitors_coll.update_one(
+            {"_id": ind_doc["_id"]},
+            {"$set": {
+                "status": "linked",
+                "updated_at": now.isoformat(),
+            }, "$addToSet": {"linked_bonds": booking_number}},
+        )
+        if isinstance(result, dict):
+            result["linked"] = True
+            result["indemnitor_id"] = str(ind_doc.get("Indemnitor_ID") or ind_doc["_id"])
+        return result
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -702,24 +946,42 @@ async def api_indemnitor_documents_update(booking_number: str, request: Request)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _indemnitor_upload_target(booking_number: str):
+    """Resolve bond or unlinked indemnitor document for KYC storage.
+
+    Returns (collection, query_filter, doc) or (None, None, None).
+    """
+    unlinked = await _load_unlinked_indemnitor(booking_number)
+    if unlinked is not None:
+        return get_collection("indemnitors"), {"_id": unlinked["_id"]}, unlinked
+
+    prospective_bonds = get_collection("prospective_bonds")
+    active_bonds = get_collection("active_bonds")
+    doc = await prospective_bonds.find_one({"booking_number": booking_number})
+    if doc:
+        return prospective_bonds, {"booking_number": booking_number}, doc
+    doc = await active_bonds.find_one({"booking_number": booking_number})
+    if doc:
+        return active_bonds, {"booking_number": booking_number}, doc
+    return None, None, None
+
+
 @router.get("/indemnitors/{booking_number}/uploads")
 async def api_indemnitor_uploads_list(booking_number: str):
-    """List all uploaded KYC documents for an indemnitor's bond."""
+    """List KYC uploads + structured id_photos slots for an indemnitor."""
     try:
-        prospective_bonds = get_collection("prospective_bonds")
-        active_bonds = get_collection("active_bonds")
-
-        doc = await prospective_bonds.find_one({"booking_number": booking_number})
+        coll, query, doc = await _indemnitor_upload_target(booking_number)
         if not doc:
-            doc = await active_bonds.find_one({"booking_number": booking_number})
-        if not doc:
-            return JSONResponse({"error": "Bond not found"}, status_code=404)
+            return JSONResponse({"error": "Bond or indemnitor not found"}, status_code=404)
 
         uploads = doc.get("kyc_uploads", [])
+        id_photos = doc.get("id_photos") or slot_map_from_uploads(uploads)
         return {
             "success": True,
             "booking_number": booking_number,
             "uploads": uploads,
+            "id_photos": id_photos,
+            "slots": ID_PHOTO_SLOTS,
             "total": len(uploads),
             "doc_types": KYC_DOC_TYPES,
         }
@@ -733,60 +995,51 @@ async def api_indemnitor_upload(
     file: UploadFile = File(...),
     doc_type: str = Form("other"),
 ):
-    """Upload a KYC document/image for an indemnitor's bond."""
+    """Upload DL/ID front, back, selfie, or other KYC for an indemnitor."""
     try:
-        prospective_bonds = get_collection("prospective_bonds")
-        active_bonds = get_collection("active_bonds")
+        coll, query, doc = await _indemnitor_upload_target(booking_number)
+        if not doc:
+            return JSONResponse({"error": "Bond or indemnitor not found"}, status_code=404)
 
         if not file.filename:
             return JSONResponse({"error": "Empty filename"}, status_code=400)
 
-        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-        if ext not in ALLOWED_UPLOAD_EXTENSIONS:
-            return JSONResponse({"error": f"File type .{ext} not allowed. Use: {', '.join(ALLOWED_UPLOAD_EXTENSIONS)}"}, status_code=400)
-
-        if doc_type not in KYC_DOC_TYPES:
-            doc_type = "other"
-
-        booking_dir = UPLOAD_DIR / booking_number
-        booking_dir.mkdir(exist_ok=True)
-
-        file_id = str(uuid.uuid4())[:8]
-        safe_name = f"{doc_type}_{file_id}.{ext}"
-        file_path = booking_dir / safe_name
-
         contents = await file.read()
-        file_path.write_bytes(contents)
-        file_size = file_path.stat().st_size
+        if not contents:
+            return JSONResponse({"error": "Empty file"}, status_code=400)
+
+        try:
+            upload_meta = save_upload_file(
+                entity_key=booking_number,
+                doc_type=doc_type or "other",
+                original_filename=file.filename,
+                contents=contents,
+            )
+        except ValueError as ve:
+            return JSONResponse({"error": str(ve)}, status_code=400)
 
         now = datetime.now(timezone.utc)
-        upload_meta = {
-            "file_id": file_id,
-            "filename": file.filename,
-            "saved_as": safe_name,
-            "doc_type": doc_type,
-            "doc_type_label": KYC_DOC_TYPES.get(doc_type, "Other"),
-            "extension": ext,
-            "size_bytes": file_size,
-            "uploaded_at": now.isoformat(),
-            "path": str(file_path),
-        }
-
-        for coll in [prospective_bonds, active_bonds]:
-            result = await coll.update_one(
-                {"booking_number": booking_number},
-                {"$push": {"kyc_uploads": upload_meta}, "$set": {"updated_at": now}},
-            )
-            if result.matched_count > 0:
-                break
+        id_photos = merge_id_photos_field(doc.get("id_photos"), upload_meta)
+        await coll.update_one(
+            query,
+            {
+                "$push": {"kyc_uploads": upload_meta},
+                "$set": {
+                    "id_photos": id_photos,
+                    "updated_at": now.isoformat() if isinstance(now, datetime) else now,
+                },
+            },
+        )
 
         return JSONResponse({
             "success": True,
-            "file_id": file_id,
-            "filename": safe_name,
-            "doc_type": doc_type,
-            "doc_type_label": KYC_DOC_TYPES.get(doc_type, "Other"),
-            "size_bytes": file_size,
+            "file_id": upload_meta["file_id"],
+            "filename": upload_meta["saved_as"],
+            "url": upload_meta["url"],
+            "doc_type": upload_meta["doc_type"],
+            "doc_type_label": upload_meta["doc_type_label"],
+            "size_bytes": upload_meta["size_bytes"],
+            "id_photos": id_photos,
         }, status_code=201)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -796,26 +1049,31 @@ async def api_indemnitor_upload(
 async def api_indemnitor_upload_delete(booking_number: str, file_id: str):
     """Delete a specific uploaded KYC document."""
     try:
-        prospective_bonds = get_collection("prospective_bonds")
-        active_bonds = get_collection("active_bonds")
+        coll, query, doc = await _indemnitor_upload_target(booking_number)
+        if not doc:
+            return JSONResponse({"error": "Bond or indemnitor not found"}, status_code=404)
 
-        for coll in [prospective_bonds, active_bonds]:
-            doc = await coll.find_one({"booking_number": booking_number})
-            if doc:
-                uploads = doc.get("kyc_uploads", [])
-                target = next((u for u in uploads if u.get("file_id") == file_id), None)
-                if target:
-                    file_path = Path(target.get("path", ""))
-                    if file_path.exists():
-                        file_path.unlink()
-                    await coll.update_one(
-                        {"booking_number": booking_number},
-                        {"$pull": {"kyc_uploads": {"file_id": file_id}}},
-                    )
-                    return {"success": True, "deleted": file_id}
-                break
+        uploads = doc.get("kyc_uploads", [])
+        target = next((u for u in uploads if u.get("file_id") == file_id), None)
+        if not target:
+            return JSONResponse({"error": "Upload not found"}, status_code=404)
 
-        return JSONResponse({"error": "Upload not found"}, status_code=404)
+        delete_upload_file(target)
+        remaining = [u for u in uploads if u.get("file_id") != file_id]
+        id_photos = slot_map_from_uploads(remaining)
+        # drop None slots for cleaner storage
+        id_photos_clean = {k: v for k, v in id_photos.items() if v}
+
+        now = datetime.now(timezone.utc)
+        await coll.update_one(
+            query,
+            {"$set": {
+                "kyc_uploads": remaining,
+                "id_photos": id_photos_clean,
+                "updated_at": now.isoformat(),
+            }},
+        )
+        return {"success": True, "deleted": file_id}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -921,10 +1179,52 @@ async def api_indemnitor_remove(booking_number: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _load_unlinked_indemnitor(booking_number: str):
+    """Resolve UNLINKED-<id> synthetic keys to a standalone indemnitors document."""
+    if not booking_number.startswith("UNLINKED-"):
+        return None
+    ind_id = booking_number[len("UNLINKED-"):]
+    if not ind_id:
+        return None
+    indemnitors_coll = get_collection("indemnitors")
+    from bson import ObjectId
+
+    doc = await indemnitors_coll.find_one({"Indemnitor_ID": ind_id})
+    if not doc:
+        try:
+            doc = await indemnitors_coll.find_one({"_id": ObjectId(ind_id)})
+        except Exception:
+            doc = None
+    return doc
+
+
 @router.get("/indemnitors/{booking_number}")
 async def api_indemnitor_detail(booking_number: str):
-    """Get full indemnitor profile for a booking number."""
+    """Get full indemnitor profile for a booking number (or unlinked synthetic key)."""
     try:
+        # Standalone unlinked record
+        unlinked = await _load_unlinked_indemnitor(booking_number)
+        if unlinked is not None:
+            ind = {k: v for k, v in unlinked.items() if k != "_id"}
+            ind_id = str(unlinked.get("Indemnitor_ID") or unlinked.get("_id", ""))
+            return {
+                "success": True,
+                "booking_number": booking_number,
+                "bond_type": "unlinked",
+                "defendant_name": "(not linked)",
+                "county": "",
+                "bond_amount": 0,
+                "stage": "unlinked",
+                "charges": "",
+                "surety": "osi",
+                "indemnitor": ind,
+                "indemnitors": [ind],
+                "indemnitor_id": ind_id,
+                "documents": {},
+                "communication_log": [],
+                "timeline": [],
+            }
+
         prospective_bonds = get_collection("prospective_bonds")
         active_bonds = get_collection("active_bonds")
 
@@ -966,6 +1266,39 @@ async def api_indemnitor_update(booking_number: str, request: Request):
     try:
         data = await request.json()
         now = datetime.now(timezone.utc)
+
+        # Standalone unlinked record
+        unlinked = await _load_unlinked_indemnitor(booking_number)
+        if unlinked is not None:
+            indemnitors_coll = get_collection("indemnitors")
+            updates = {}
+            for field in INDEMNITOR_FIELDS:
+                if data.get(field) is not None:
+                    updates[field] = data[field]
+            # Common FE field aliases
+            for src, dest in (
+                ("firstName", "firstName"),
+                ("lastName", "lastName"),
+                ("phone", "phone"),
+                ("email", "email"),
+                ("address", "address"),
+                ("relationship", "relationship"),
+                ("employer", "employer"),
+                ("dob", "dob"),
+                ("ssn_last4", "ssn_last4"),
+                ("dl_number", "dl_number"),
+                ("dl_state", "dl_state"),
+            ):
+                if data.get(src) is not None:
+                    updates[dest] = data[src]
+            if "firstName" in updates or "lastName" in updates:
+                fn = updates.get("firstName", unlinked.get("firstName", ""))
+                ln = updates.get("lastName", unlinked.get("lastName", ""))
+                updates["name"] = f"{fn} {ln}".strip() or updates.get("name", unlinked.get("name", ""))
+            updates["updated_at"] = now.isoformat()
+            await indemnitors_coll.update_one({"_id": unlinked["_id"]}, {"$set": updates})
+            return {"success": True, "booking_number": booking_number, "linked": False}
+
         prospective_bonds = get_collection("prospective_bonds")
         active_bonds = get_collection("active_bonds")
 

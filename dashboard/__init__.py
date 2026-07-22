@@ -1,11 +1,13 @@
 """
 ShamrockLeads Dashboard — Package Init
 
-Migration from Quart to FastAPI is COMPLETE (2026-05-19).
-The active entry point is `dashboard/main.py` (FastAPI + Uvicorn).
+FastAPI is the only server stack. Flask/Quart are not used.
+
+Active entry point: ``dashboard/main.py`` (Uvicorn).
 
 Usage:
-    uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --workers 1
+    uvicorn dashboard.main:app --host 0.0.0.0 --port 5050
+    python -m dashboard.run
 """
 
 __all__ = ["app"]

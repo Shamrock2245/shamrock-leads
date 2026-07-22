@@ -6,7 +6,7 @@ b64_dir = "/opt/shamrock-leads/_b64_staging"
 target_map = {
     "sl_data": "dashboard/sl-data.js",
     "sl_features": "dashboard/sl-features.js",
-    "sl_app": "dashboard/app.py",
+    "sl_app": "dashboard/main.py",  # FastAPI only — Flask removed
     "sl_env": ".env.example",
 }
 
