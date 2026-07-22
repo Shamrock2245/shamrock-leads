@@ -84,27 +84,28 @@ class TLSFingerprinter:
     Impersonates real browser TLS signatures (JA4 fingerprinting).
     """
     
-    # Real Chrome/Firefox TLS signatures (2026)
+    # Valid TLS signatures supported by curl_cffi 0.15+
     CHROME_SIGNATURES = [
-        "chrome126",  # Chrome 126 (current stable)
-        "chrome125",
         "chrome124",
+        "chrome120",
+        "chrome110",
+        "chrome",
     ]
     
-    FIREFOX_SIGNATURES = [
-        "firefox120",  # Firefox 120+
-        "firefox119",
+    SAFARI_SIGNATURES = [
+        "safari15_5",
+        "safari",
     ]
     
     @staticmethod
     def get_random_signature() -> str:
         """
         Get random browser signature for TLS impersonation.
-        Rotates between Chrome and Firefox to avoid pattern detection.
+        Rotates between Chrome and Safari to avoid pattern detection.
         """
-        if random.random() < 0.8:  # 80% Chrome, 20% Firefox
+        if random.random() < 0.85:  # 85% Chrome, 15% Safari
             return random.choice(TLSFingerprinter.CHROME_SIGNATURES)
-        return random.choice(TLSFingerprinter.FIREFOX_SIGNATURES)
+        return random.choice(TLSFingerprinter.SAFARI_SIGNATURES)
     
     @staticmethod
     def get_curl_cffi_headers() -> Dict[str, str]:

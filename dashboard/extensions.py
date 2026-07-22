@@ -366,6 +366,7 @@ REGISTERED_COUNTIES = sorted([
     "Bexar (TX)",
     "Dallas (TX)",
     "Harris (TX)",
+    "Tarrant (TX)",
     # ── Louisiana (wave-1 registered scrapers) ──
     "Lafayette (LA)",
     "Orleans (LA)",

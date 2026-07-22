@@ -34,6 +34,8 @@ HEADERS = {
 }
 
 
+from scrapers.stealth_utils import make_stealth_request, BehaviorSimulator
+
 class BexarScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -45,15 +47,12 @@ class BexarScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        session.verify = False
         records: List[ArrestRecord] = []
 
         try:
-            resp = session.get(PORTAL_URL, timeout=30)
-            resp.raise_for_status()
-            records = self._parse_table(resp.text)
+            resp = make_stealth_request(PORTAL_URL, method="GET", timeout=30)
+            if resp and resp.text:
+                records = self._parse_table(resp.text)
         except Exception as e:
             logger.error(f"Bexar scrape failed: {e}")
 

@@ -44,6 +44,8 @@ REQUEST_PAUSE = 0.12
 MAX_REQUESTS = 900
 
 
+from scrapers.stealth_utils import make_stealth_request, BehaviorSimulator
+
 class DallasScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -55,10 +57,6 @@ class DallasScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        session.verify = False
-
         records: List[ArrestRecord] = []
         seen: Set[str] = set()
         reqs = 0
@@ -66,13 +64,12 @@ class DallasScraper(BaseScraper):
         # Rotate last-name letter block by hour so multi-run covers the alphabet.
         hour = time.localtime().tm_hour
         letters = list(string.ascii_uppercase)
-        # 26 letters / ~8 blocks → ~4 letters per hour-block, shift by hour
         block_size = 4
         offset = (hour * block_size) % 26
         last_letters = letters[offset:] + letters[:offset]
 
         try:
-            session.get(LANDING_URL, timeout=20)
+            make_stealth_request(LANDING_URL, method="GET", timeout=20)
         except Exception as e:
             logger.warning(f"Dallas landing failed: {e}")
 
@@ -90,7 +87,6 @@ class DallasScraper(BaseScraper):
                             break
                         try:
                             batch = self._search(
-                                session,
                                 last_name=last_l,
                                 first_name=first_l,
                                 race=race,
@@ -102,7 +98,6 @@ class DallasScraper(BaseScraper):
                                 f"Dallas {last_l}/{first_l}/{race}/{sex}: {e}"
                             )
                             reqs += 1
-                            time.sleep(REQUEST_PAUSE)
                             continue
 
                         for rec in batch:
@@ -111,7 +106,6 @@ class DallasScraper(BaseScraper):
                                 continue
                             seen.add(key)
                             records.append(rec)
-                        time.sleep(REQUEST_PAUSE)
 
         logger.info(
             f"✅ Dallas (TX): {len(records)} records "
@@ -121,7 +115,6 @@ class DallasScraper(BaseScraper):
 
     def _search(
         self,
-        session: requests.Session,
         last_name: str,
         first_name: str,
         race: str,
@@ -134,8 +127,10 @@ class DallasScraper(BaseScraper):
             "sex": sex,
             "dobYear": "",
         }
-        resp = session.post(SEARCH_URL, data=data, timeout=25)
-        if resp.status_code != 200:
+        resp = make_stealth_request(
+            SEARCH_URL, method="POST", data=data, timeout=25
+        )
+        if not resp or resp.status_code != 200:
             return []
         return self._parse_results(resp.text)
 
