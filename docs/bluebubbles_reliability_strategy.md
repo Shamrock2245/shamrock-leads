@@ -29,7 +29,7 @@ Full runbook: **`docs/FRP_TUNNEL.md`**.
 
 1. **BlueBubbles Server ≥ v1.9.9** (M1 crash fixes).
 2. **Watchdog** LaunchAgent: ping `http://localhost:1234/api/v1/ping` every 5m; restart BB if down.
-3. **frpc LaunchDaemon** (`com.shamrock.frpc`) with `KeepAlive` so tunnel survives reboot/login.
+3. **frpc LaunchDaemon** (`com.shamrock.frpc`) with `KeepAlive` so tunnel survives reboot/login (connects to VPS **:7001**).
 
 ---
 
@@ -43,7 +43,7 @@ Full runbook: **`docs/FRP_TUNNEL.md`**.
 ## Cutover checklist
 
 1. `docker compose --profile tunnel up -d frps` on VPS  
-2. Install frpc on iMac with matching token  
+2. Install frpc on iMac with matching token (serverPort **7001**)  
 3. Set `BLUEBUBBLES_URL_0178=http://178.156.179.237:12434` (or HTTPS via nginx)  
 4. Restart `shamrock-dashboard`  
 5. Stop `cloudflared` / ngrok agents  

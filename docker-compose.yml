@@ -403,7 +403,7 @@ services:
       - ./deployment/frp/frps.toml:/etc/frp/frps.toml:ro
     command: ["-c", "/etc/frp/frps.toml"]
     ports:
-      - "7000:7000"                       # frpc control plane (iMac → VPS)
+      - "7001:7001"                       # frpc control plane (7000 = APE Warren)
       - "7500:7500"                       # frps dashboard (restrict via firewall)
       - "12434:12434"                     # BlueBubbles TCP (or bind 127.0.0.1 only)
     networks:

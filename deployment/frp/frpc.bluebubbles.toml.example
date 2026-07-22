@@ -5,7 +5,7 @@
 # Replace TOKEN with the same value as frps.toml auth.token on the VPS.
 
 serverAddr = "178.156.179.237"
-serverPort = 7000
+serverPort = 7001
 
 auth.method = "token"
 auth.token = "CHANGE_ME_SET_FRP_TOKEN_IN_ENV"

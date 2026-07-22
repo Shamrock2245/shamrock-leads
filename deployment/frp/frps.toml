@@ -11,7 +11,8 @@
 #     if you set proxyBindAddr (see docs/FRP_TUNNEL.md)
 
 bindAddr = "0.0.0.0"
-bindPort = 7000
+# 7000 is reserved by APE Warren hub on the Shamrock VPS — use 7001 for frps
+bindPort = 7001
 
 # Where proxy ports listen (0.0.0.0 = public; use 127.0.0.1 + nginx for TLS-only)
 proxyBindAddr = "0.0.0.0"

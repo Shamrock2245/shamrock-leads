@@ -20,12 +20,12 @@ Upstream: [fatedier/frp](https://github.com/fatedier/frp)
 # 2) Same token in iMac frpc.toml
 docker compose --profile tunnel up -d frps
 docker compose ps frps
-# Control plane: TCP 7000
+# Control plane: TCP 7001  (7000 is APE Warren on this VPS)
 # BB proxy:      TCP 12434
 # Dashboard:     http://178.156.179.237:7500  (firewall-restrict!)
 ```
 
-**Firewall:** allow inbound TCP `7000` from the office public IP if you want lock-down; allow `12434` only from the VPS itself if you put nginx TLS in front.
+**Firewall:** allow inbound TCP `7001` from the office public IP if you want lock-down; allow `12434` only from the VPS itself if you put nginx TLS in front.
 
 ### Optional TLS front (recommended)
 
@@ -106,7 +106,7 @@ curl -sS "http://127.0.0.1:12434/api/v1/ping"
 
 | Symptom | Check |
 |---------|--------|
-| frpc can't login | Token mismatch; VPS port 7000 open; `docker logs shamrock-frps` |
+| frpc can't login | Token mismatch; VPS port **7001** open; `docker logs shamrock-frps` |
 | VPS can't reach BB | frpc running; BB on 1234; `remotePort 12434` allowed in `allowPorts` |
 | Dashboard BB DNS FAILED | Still pointing at old `trycloudflare.com` URL — update `.env` |
 | Tunnel up, iMessage fail | BB password / server password mismatch; check BB Server UI |
