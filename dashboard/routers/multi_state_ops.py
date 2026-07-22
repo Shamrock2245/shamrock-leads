@@ -76,6 +76,7 @@ def _build_registry() -> list[dict]:
         "odyssey_base": "Tyler Odyssey",
         "kologik_base": "Kologik",
         "smartcop_base": "SmartCOP",
+        "smartwebclient": "SmartCOP",
         "smartweb_parser": "SmartWeb",
         "base_scraper": "Custom HTML",
     }

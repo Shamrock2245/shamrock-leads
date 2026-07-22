@@ -94,6 +94,23 @@ from scrapers.counties.gadsden import GadsdenCountyScraper
 from scrapers.counties.monroe import MonroeCountyScraper
 from scrapers.counties.okeechobee import OkeechobeeCountyScraper
 from scrapers.counties.hardee import HardeeCountyScraper
+# ── Wave 2 — Full FL Coverage (67/67) ─────────────────────────────────────
+from scrapers.counties.baker import BakerCountyScraper
+from scrapers.counties.bradford import BradfordCountyScraper
+from scrapers.counties.calhoun import CalhounCountyScraper
+from scrapers.counties.franklin import FranklinCountyScraper
+from scrapers.counties.gilchrist import GilchristCountyScraper
+from scrapers.counties.gulf import GulfCountyScraper
+from scrapers.counties.hamilton import HamiltonCountyScraper
+from scrapers.counties.holmes import HolmesCountyScraper
+from scrapers.counties.jefferson import JeffersonCountyScraper
+from scrapers.counties.lafayette import LafayetteCountyScraper
+from scrapers.counties.levy import LevyCountyScraper
+from scrapers.counties.liberty import LibertyCountyScraper
+from scrapers.counties.madison import MadisonCountyScraper
+from scrapers.counties.union import UnionCountyScraper
+from scrapers.counties.wakulla import WakullaCountyScraper
+from scrapers.counties.washington import WashingtonCountyScraper
 
 # ── Georgia Scrapers ───────────────────────────────────────────────────────
 from scrapers.counties_ga.eas_batch_runner import run_eas_batch
@@ -379,6 +396,25 @@ def register_scrapers(sched):
     sched.register_scraper(MonroeCountyScraper(), interval_minutes=120)
     sched.register_scraper(OkeechobeeCountyScraper(), interval_minutes=120)
     sched.register_scraper(HardeeCountyScraper(), interval_minutes=120)
+    # ── Wave 2 — Full FL Coverage (67/67) ─────────────────────────────────────
+    sched.register_scraper(LeonCountyScraper(), interval_minutes=90)
+    sched.register_scraper(MarionCountyScraper(), interval_minutes=90)
+    sched.register_scraper(BakerCountyScraper(), interval_minutes=180)
+    sched.register_scraper(BradfordCountyScraper(), interval_minutes=180)
+    sched.register_scraper(CalhounCountyScraper(), interval_minutes=240)
+    sched.register_scraper(FranklinCountyScraper(), interval_minutes=360)
+    sched.register_scraper(GilchristCountyScraper(), interval_minutes=240)
+    sched.register_scraper(GulfCountyScraper(), interval_minutes=240)
+    sched.register_scraper(HamiltonCountyScraper(), interval_minutes=360)
+    sched.register_scraper(HolmesCountyScraper(), interval_minutes=240)
+    sched.register_scraper(JeffersonCountyScraper(), interval_minutes=360)
+    sched.register_scraper(LafayetteCountyScraper(), interval_minutes=360)
+    sched.register_scraper(LevyCountyScraper(), interval_minutes=180)
+    sched.register_scraper(LibertyCountyScraper(), interval_minutes=360)
+    sched.register_scraper(MadisonCountyScraper(), interval_minutes=240)
+    sched.register_scraper(UnionCountyScraper(), interval_minutes=360)
+    sched.register_scraper(WakullaCountyScraper(), interval_minutes=180)
+    sched.register_scraper(WashingtonCountyScraper(), interval_minutes=180)
 
     # ── Georgia ──────────────────────────────────────────────────────────────
     sched.register_scraper(GA_BaconScraper(), interval_minutes=120)

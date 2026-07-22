@@ -1,23 +1,27 @@
 """
-Dixie County Arrest Scraper — SmartCOP ASP.NET.
-Source: Dixie County Sheriff's Office
-URL: http://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx
+Hamilton County (FL) Arrest Scraper — SmartCOP ASP.NET.
+Source: Hamilton County Sheriff's Office
+URL: https://smartcop.hamiltoncountysheriff.com/smartwebclient/Jail.aspx
 Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
 Stealth: APE proxy rotation + TLS fingerprint impersonation
+NOTE: Hamilton County is very small (~14k pop). SmartCOP portal may not exist or may
+be intermittent. Scraper fails closed with empty list if portal is unreachable.
 """
 import logging
 import re
 import time
 from typing import List
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://smartcop.dixiecountysheriff.com"
+BASE_URL = "https://smartcop.hamiltoncountysheriff.com"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
-FACILITY = "Dixie County Jail"
+FACILITY = "Hamilton County Jail"
 IMPERSONATE = "chrome131"
+
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -29,17 +33,24 @@ HEADERS = {
 }
 
 
-class DixieCountyScraper(BaseScraper):
+class HamiltonCountyScraper(BaseScraper):
+    """Hamilton County (FL) — SmartCOP ASP.NET jail roster."""
+
     @property
     def county(self) -> str:
-        return "Dixie"
+        return "Hamilton"
+
+    @property
+    def state(self) -> str:
+        return "FL"
 
     def scrape(self) -> List[ArrestRecord]:
         try:
             from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("curl_cffi/bs4 not installed"); raise
+            logger.error("curl_cffi/bs4 not installed")
+            raise
 
         proxy = self.get_proxy(prefer_residential=True) if self.ape else None
         proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -50,14 +61,13 @@ class DixieCountyScraper(BaseScraper):
                 SEARCH_URL, headers=HEADERS, timeout=30,
                 impersonate=IMPERSONATE, proxies=proxies
             )
-            time.sleep(1.5)
             if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} error")
+                raise Exception(f"{resp.status_code} loading page")
         except Exception as e:
-            logger.error(f"Dixie: failed to load page: {e}")
+            logger.warning(f"Hamilton: portal unreachable ({e}) — fail closed")
             if proxy:
                 self.record_proxy_failure(proxy)
-            raise
+            return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -80,6 +90,8 @@ class DixieCountyScraper(BaseScraper):
                 post_data[name] = value
                 break
 
+        time.sleep(1.5)
+
         try:
             resp2 = session.post(
                 SEARCH_URL, data=post_data, headers=HEADERS,
@@ -89,15 +101,15 @@ class DixieCountyScraper(BaseScraper):
                 raise Exception(f"{resp2.status_code} on POST")
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
-            logger.error(f"Dixie: POST failed ({e})")
+            logger.warning(f"Hamilton: POST failed ({e}) — fail closed")
             if proxy:
                 self.record_proxy_failure(proxy)
-            raise
+            return []
 
         records = self._parse_table(soup2)
         if proxy and records:
             self.record_proxy_success(proxy)
-        logger.info(f"Dixie: {len(records)} records")
+        logger.info(f"Hamilton: {len(records)} records")
         return records
 
     def _parse_table(self, soup) -> List[ArrestRecord]:
@@ -110,7 +122,6 @@ class DixieCountyScraper(BaseScraper):
                 if len(rows) > 1:
                     table = t
                     break
-
         if not table:
             return []
 
@@ -139,27 +150,24 @@ class DixieCountyScraper(BaseScraper):
                     href = f"{BASE_URL}/{href.lstrip('/')}"
                 detail_url = href
 
-            f, m, l = self._pn(full_name)
+            f, m, l = self._parse_name(full_name)
             bond_amount = self._parse_bond(bond_raw)
 
             records.append(ArrestRecord(
                 County=self.county,
-                Booking_Number=self._clean(booking_num),
+                State="FL",
+                Booking_Number=self._clean(booking_num) or f"{l.upper()}_{booking_date.replace('-', '').replace('/', '')}",
                 Full_Name=full_name,
                 First_Name=f,
                 Middle_Name=m,
                 Last_Name=l,
-                        DOB="",
                 Booking_Date=self._clean(booking_date),
                 Status="In Custody",
-                        Release_Date="",
                 Facility=FACILITY,
                 Charges=self._clean(charges),
                 Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
                 Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
             ))
-
         return records
 
     @staticmethod
@@ -169,7 +177,7 @@ class DixieCountyScraper(BaseScraper):
         return " ".join(str(text).strip().split())
 
     @staticmethod
-    def _pn(n):
+    def _parse_name(n):
         if not n:
             return "", "", ""
         n = " ".join(n.strip().split())
@@ -179,7 +187,7 @@ class DixieCountyScraper(BaseScraper):
             fm = p[1].strip().split()
             return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
         p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), p[-1] if len(p) >= 2 else ""
+        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
 
     @staticmethod
     def _parse_bond(bond_str):

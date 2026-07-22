@@ -47,7 +47,8 @@ const SLMultiState = (() => {
     MS: '#84cc16',
   };
   // States that are scaffolded (no live data yet) — shown with a dimmed card style.
-  const SCAFFOLDED_STATES = new Set(['CT', 'AL', 'MS']);
+  // 2026-07-22: All 10 states now have live scrapers registered. None scaffolded.
+  const SCAFFOLDED_STATES = new Set([]);
 
   const PLATFORM_COLORS = {
     'JailTracker':   '#ef4444',
@@ -129,7 +130,7 @@ const SLMultiState = (() => {
           <span class="ms-title-icon">🌎</span>
           <div>
             <h2 class="ms-title-text">Multi-State Operations</h2>
-            <p class="ms-title-sub">Live scraper network across Florida, Georgia, South Carolina &amp; North Carolina &mdash; expanding to Tennessee, Texas, Louisiana, Connecticut, Alabama &amp; Mississippi</p>
+            <p class="ms-title-sub">Live scraper network across 10 states &mdash; FL (67 counties), GA, SC, NC, TN, TX, LA, CT, AL &amp; MS</p>
           </div>
         </div>
         <div class="ms-header-actions">
@@ -516,7 +517,7 @@ const SLMultiState = (() => {
   }
 
   async function runAll() {
-    if (!confirm('Trigger an immediate run for ALL registered scrapers (FL/GA/SC/NC/TN/TX/LA)? This will put significant load on the server.')) return;
+    if (!confirm('Trigger an immediate run for ALL registered scrapers across 10 states? This will put significant load on the server.')) return;
     try {
       const res = await fetch('/api/scraper/run-all', { method: 'POST' });
       const data = await res.json();
