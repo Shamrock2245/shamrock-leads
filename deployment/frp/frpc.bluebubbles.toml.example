@@ -1,0 +1,41 @@
+# ShamrockLeads — frpc client (office iMac / BlueBubbles host)
+# Copy to: /usr/local/etc/frp/frpc.toml  (or ~/Library/Application Support/frp/frpc.toml)
+# Install:  deployment/frp/install-frpc-macos.sh
+#
+# Replace TOKEN with the same value as frps.toml auth.token on the VPS.
+
+serverAddr = "178.156.179.237"
+serverPort = 7000
+
+auth.method = "token"
+auth.token = "CHANGE_ME_SET_FRP_TOKEN_IN_ENV"
+
+loginFailExit = false
+
+# Heartbeats — survive brief Wi‑Fi blips
+transport.heartbeatInterval = 20
+transport.heartbeatTimeout = 90
+
+# ── BlueBubbles API (primary line) ──────────────────────────────────────────
+# Local BB server defaults to http://127.0.0.1:1234
+# After connect, VPS reaches BB at http://178.156.179.237:12434
+# Set on VPS .env:
+#   BLUEBUBBLES_URL_0178=http://178.156.179.237:12434
+#   BLUEBUBBLES_URL=http://178.156.179.237:12434
+[[proxies]]
+name = "bluebubbles-0178"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 1234
+remotePort = 12434
+
+# Optional second BB instance (0314) if on same machine with different port
+# [[proxies]]
+# name = "bluebubbles-0314"
+# type = "tcp"
+# localIP = "127.0.0.1"
+# localPort = 1235
+# remotePort = 12435
+
+log.to = "console"
+log.level = "info"

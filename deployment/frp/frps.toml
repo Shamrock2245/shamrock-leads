@@ -1,0 +1,36 @@
+# ShamrockLeads — frps (server on Hetzner VPS)
+# https://github.com/fatedier/frp
+#
+# Start:  docker compose --profile tunnel up -d frps
+# Token:  set FRP_TOKEN in .env then regenerate this file, OR edit token below
+#         and keep the same value in frpc.toml on the office iMac.
+#
+# Security:
+#   - frpc must present auth.token
+#   - Prefer nginx TLS in front of BlueBubbles; remote TCP can stay on 127.0.0.1
+#     if you set proxyBindAddr (see docs/FRP_TUNNEL.md)
+
+bindAddr = "0.0.0.0"
+bindPort = 7000
+
+# Where proxy ports listen (0.0.0.0 = public; use 127.0.0.1 + nginx for TLS-only)
+proxyBindAddr = "0.0.0.0"
+
+# Auth — MUST match frpc on the iMac. Rotate if ever leaked.
+auth.method = "token"
+auth.token = "CHANGE_ME_SET_FRP_TOKEN_IN_ENV"
+
+# Dashboard (optional ops UI)
+webServer.addr = "0.0.0.0"
+webServer.port = 7500
+webServer.user = "shamrock"
+webServer.password = "CHANGE_ME_FRP_DASHBOARD_PASSWORD"
+
+# Allow only the ports we explicitly map in frpc
+allowPorts = [
+  { start = 12434, end = 12435 },
+]
+
+log.to = "console"
+log.level = "info"
+log.maxDays = 7

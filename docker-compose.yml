@@ -304,8 +304,7 @@ services:
         max-file: "3"
 
   # ── Postiz: Open-Source Social Media Manager ──
-  # Self-hosted Buffer/Ayrshare alternative — $0/month
-  # 30+ platforms, OAuth management, scheduling, analytics
+  # Image: ghcr.io/gitroomhq/postiz-app (https://github.com/gitroomhq/postiz-app)
   # Starts with: docker compose --profile social up -d
   postiz:
     image: ghcr.io/gitroomhq/postiz-app:latest
@@ -368,12 +367,19 @@ services:
         condition: service_started
     networks:
       - shamrock-net
+    # Image has node but not wget — old healthcheck marked "unhealthy" forever
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:5000/api/auth/me", "||", "true"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:5000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 120s                  # Nest + Temporal workers need time
     mem_limit: 2g
     cpus: 1.5
     logging:
@@ -381,6 +387,34 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── frp server (replace Cloudflare Tunnel / ngrok for BlueBubbles) ──
+  # iMac runs frpc outbound → this frps; BlueBubbles stays on localhost:1234.
+  # Profile: docker compose --profile tunnel up -d
+  # Docs: docs/FRP_TUNNEL.md · https://github.com/fatedier/frp
+  frps:
+    image: snowdreamtech/frps:0.61.1
+    container_name: shamrock-frps
+    hostname: frps
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    volumes:
+      - ./deployment/frp/frps.toml:/etc/frp/frps.toml:ro
+    command: ["-c", "/etc/frp/frps.toml"]
+    ports:
+      - "7000:7000"                       # frpc control plane (iMac → VPS)
+      - "7500:7500"                       # frps dashboard (restrict via firewall)
+      - "12434:12434"                     # BlueBubbles TCP (or bind 127.0.0.1 only)
+    networks:
+      - shamrock-net
+    mem_limit: 256m
+    cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   # ── Temporal Workflow Engine (required by Postiz v2.12+) ──
   # Handles background scheduling, retries, and workflow orchestration
