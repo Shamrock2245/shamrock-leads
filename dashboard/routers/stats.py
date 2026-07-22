@@ -906,7 +906,7 @@ async def api_bond_intelligence(
                     1, 0,
                 ]}},
             }},
-        ]):
+        ], allowDiskUse=True):
             summary_result = doc
 
         by_state = []
@@ -921,7 +921,7 @@ async def api_bond_intelligence(
                 "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
             }},
             {"$sort": {"total_bond": -1}},
-        ]):
+        ], allowDiskUse=True):
             by_state.append({
                 "state": doc["_id"] or "Unknown",
                 "total_arrests": doc["total_arrests"],
@@ -944,7 +944,7 @@ async def api_bond_intelligence(
             }},
             {"$sort": {"total_bond": -1}},
             {"$limit": 25},
-        ]):
+        ], allowDiskUse=True):
             by_county.append({
                 "county": doc["_id"]["county"] or "Unknown",
                 "state": doc["_id"]["state"] or "Unknown",
@@ -956,56 +956,75 @@ async def api_bond_intelligence(
             })
 
         distribution = []
-        bucket_labels = {1: "$1–$499", 500: "$500–$999", 1000: "$1K–$2.4K", 2500: "$2.5K–$4.9K",
-                         5000: "$5K–$9.9K", 10000: "$10K–$24.9K", 25000: "$25K–$49.9K",
-                         50000: "$50K–$99.9K", 100000: "$100K–$499.9K", 500000: "$500K+"}
-        async for doc in arrests.aggregate([
-            {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
-            {"$bucket": {
-                "groupBy": "$bond_amount",
-                "boundaries": [1, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 500000, 9999999],
-                "default": "Other",
-                "output": {"count": {"$sum": 1}, "total": {"$sum": "$bond_amount"}},
-            }},
-        ]):
-            distribution.append({
-                "range": bucket_labels.get(doc["_id"], str(doc["_id"])),
-                "count": doc["count"],
-                "total": round(doc["total"] or 0, 2),
-            })
+        bucket_labels = {1: "$1\u2013$499", 500: "$500\u2013$999", 1000: "$1K\u2013$2.4K", 2500: "$2.5K\u2013$4.9K",
+                         5000: "$5K\u2013$9.9K", 10000: "$10K\u2013$24.9K", 25000: "$25K\u2013$49.9K",
+                         50000: "$50K\u2013$99.9K", 100000: "$100K\u2013$499.9K", 500000: "$500K+"}
+        try:
+            async for doc in arrests.aggregate([
+                {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+                {"$bucket": {
+                    "groupBy": "$bond_amount",
+                    "boundaries": [1, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 500000, 9999999],
+                    "default": "Other",
+                    "output": {"count": {"$sum": 1}, "total": {"$sum": "$bond_amount"}},
+                }},
+            ]):
+                distribution.append({
+                    "range": bucket_labels.get(doc["_id"], str(doc["_id"])),
+                    "count": doc["count"],
+                    "total": round(doc["total"] or 0, 2),
+                })
+        except Exception as dist_err:
+            logger.warning("[stats] bond-intelligence distribution aggregation failed: %s", dist_err)
 
         top_charges = []
-        async for doc in arrests.aggregate([
-            {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
-            {"$unwind": {"path": "$charges", "preserveNullAndEmptyArrays": False}},
-            {"$group": {"_id": "$charges", "count": {"$sum": 1},
-                        "total_bond": {"$sum": "$bond_amount"}, "avg_bond": {"$avg": "$bond_amount"}}},
-            {"$sort": {"total_bond": -1}},
-            {"$limit": 20},
-        ]):
-            if doc["_id"] and len(str(doc["_id"])) > 2:
-                top_charges.append({
-                    "charge": str(doc["_id"])[:80], "count": doc["count"],
-                    "total_bond": round(doc["total_bond"] or 0, 2),
-                    "avg_bond": round(doc["avg_bond"] or 0, 2),
-                })
+        try:
+            async for doc in arrests.aggregate([
+                {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+                {"$unwind": {"path": "$charges", "preserveNullAndEmptyArrays": False}},
+                {"$group": {"_id": "$charges", "count": {"$sum": 1},
+                            "total_bond": {"$sum": "$bond_amount"}, "avg_bond": {"$avg": "$bond_amount"}}},
+                {"$sort": {"total_bond": -1}},
+                {"$limit": 20},
+            ]):
+                if doc["_id"] and len(str(doc["_id"])) > 2:
+                    top_charges.append({
+                        "charge": str(doc["_id"])[:80], "count": doc["count"],
+                        "total_bond": round(doc["total_bond"] or 0, 2),
+                        "avg_bond": round(doc["avg_bond"] or 0, 2),
+                    })
+        except Exception as charges_err:
+            logger.warning("[stats] bond-intelligence top_charges aggregation failed: %s", charges_err)
 
         trend = []
-        async for doc in arrests.aggregate([
-            {"$match": match_stage},
-            {"$addFields": {"date_str": {"$dateToString": {"format": "%Y-%m-%d", "date": {
-                "$cond": [{"$eq": [{"$type": "$scraped_at"}, "date"]}, "$scraped_at",
-                          {"$toDate": {"$ifNull": ["$scraped_at", "$created_at"]}}]
-            }}}}},
-            {"$group": {"_id": "$date_str", "arrests": {"$sum": 1},
-                        "bond_total": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
-                        "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}}}},
-            {"$sort": {"_id": 1}},
-            {"$limit": 30},
-        ]):
-            trend.append({"date": doc["_id"], "arrests": doc["arrests"],
-                          "bond_total": round(doc["bond_total"] or 0, 2),
-                          "avg_bond": round(doc["avg_bond"] or 0, 2)})
+        try:
+            async for doc in arrests.aggregate([
+                {"$match": match_stage},
+                {"$addFields": {"_parsed_date": {
+                    "$cond": [
+                        {"$eq": [{"$type": "$scraped_at"}, "date"]},
+                        "$scraped_at",
+                        {"$convert": {
+                            "input": {"$ifNull": ["$scraped_at", "$created_at"]},
+                            "to": "date",
+                            "onError": None,
+                            "onNull": None,
+                        }},
+                    ]
+                }}},
+                {"$match": {"_parsed_date": {"$ne": None}}},
+                {"$addFields": {"date_str": {"$dateToString": {"format": "%Y-%m-%d", "date": "$_parsed_date"}}}},
+                {"$group": {"_id": "$date_str", "arrests": {"$sum": 1},
+                            "bond_total": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
+                            "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}}}},
+                {"$sort": {"_id": 1}},
+                {"$limit": 30},
+            ]):
+                trend.append({"date": doc["_id"], "arrests": doc["arrests"],
+                              "bond_total": round(doc["bond_total"] or 0, 2),
+                              "avg_bond": round(doc["avg_bond"] or 0, 2)})
+        except Exception as trend_err:
+            logger.warning("[stats] bond-intelligence trend aggregation failed: %s", trend_err)
 
         return {
             "summary": {

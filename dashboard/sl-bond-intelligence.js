@@ -41,8 +41,17 @@ const SLBondIntel = (() => {
         fetch(`/api/bond-intelligence?days=${_days}${_state ? '&state=' + _state : ''}`),
         fetch('/api/arrests/stats/multi-state'),
       ]);
+      if (!intelRes.ok || !multiRes.ok) {
+        const errText = !intelRes.ok
+          ? `bond-intelligence: ${intelRes.status} ${intelRes.statusText}`
+          : `multi-state: ${multiRes.status} ${multiRes.statusText}`;
+        throw new Error(errText);
+      }
       const intel = await intelRes.json();
       const multi = await multiRes.json();
+      if (intel.error || multi.error) {
+        throw new Error(intel.error || multi.error);
+      }
       _data = { intel, multi };
       _render(intel, multi);
       if (!_initialized) { _initialized = true; _startAutoRefresh(); }
