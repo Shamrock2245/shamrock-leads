@@ -180,6 +180,19 @@ async def intake_submit(request: Request):
     )
     source = _normalize_source(source_raw)
 
+    # ── Auth Gate for external Wix Portal submissions ─────────────────────────
+    if source == "wix_portal":
+        wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")
+        provided = (
+            request.headers.get("X-Wix-Webhook-Secret", "")
+            or request.headers.get("X-Api-Key", "")
+            or data.get("apiKey", "")
+            or data.get("secret", "")
+        )
+        if wix_secret and provided != wix_secret:
+            logger.warning("[intake_submit] Unauthorized wix_portal submission — invalid or missing secret")
+            return JSONResponse({"error": "Unauthorized: Invalid or missing webhook secret"}, status_code=401)
+
     indemnitor = _extract_indemnitor(data)
     defendant = _extract_defendant(data)
 
