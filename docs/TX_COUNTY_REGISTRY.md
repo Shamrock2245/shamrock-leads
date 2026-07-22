@@ -1,7 +1,7 @@
 # Texas County Scraper Registry
 
 > **Last Updated:** 2026-07-22  
-> **Registered (dashboard):** 4 wave-1 scrapers (Bexar, Dallas, Harris, Tarrant)  
+> **Registered (dashboard):** 7 scrapers — wave-1 (Bexar, Dallas, Harris, Tarrant) + wave-2 (Travis, Collin, Denton)  
 > **Package:** `scrapers/counties_tx/`  
 > **Job IDs:** `scraper_tx_<county>` · CLI: `.venv/bin/python main.py tx_tarrant`
 
@@ -26,13 +26,20 @@ All Texas scrapers use the 4-layer stealth stack:
 
 ---
 
+## Wave-2 (Registered & Operational)
+
+| County | Population | Scraper | Portal / Strategy | Status | Notes |
+|--------|-----------:|---------|------------------|--------|-------|
+| **Travis** | ~1.3M | `travis.py` | https://public.traviscountytx.gov/sip/api/v2/inmates | ✅ Live | SIPS REST API; A-Z lastName walk + detail fetch per bookingNumber; charges, bond, facility, agency |
+| **Collin** | ~1.1M | `collin.py` | https://apps.collincountytx.gov/JailInmates/ | ⚠️ WAF-gated | Incapsula WAF; requires APE residential proxy. Fallback: Odyssey on `cijspub.co.collin.tx.us` |
+| **Denton** | ~1.0M | `denton.py` | https://athena.dentonpolice.com/JailView/ | ✅ Live | Athena JailView WebMethod (`GetInmates`); city jail only; JSON API |
+
+---
+
 ## Next Targets (Top Population Priority)
 
 | County | Population | Priority | Target Portal / Strategy | Notes |
 |--------|-----------:|----------|-------------------------|-------|
-| **Travis** | ~1.3M | High | https://public.co.travis.tx.us/sips/ | SIPS portal with `verify=False` HTTP / DrissionPage fallback |
-| **Collin** | ~1.1M | High | https://cijspub.collincountytx.gov/ | DFW metro; Odyssey/Tyler public portal |
-| **Denton** | ~1.0M | Medium | https://inmatesearch.dentoncounty.gov/ | DFW metro; jTable / ASP.NET inmate lookup |
 | **Hidalgo** | ~880k | Medium | Rio Grande Valley Sheriff | South TX high-volume border county |
 | **El Paso** | ~860k | Medium | https://www.epcounty.com/sheriff/ | West TX regional hub |
 | **Fort Bend** | ~860k | Medium | Fort Bend Sheriff Portal | Houston metro expansion |
@@ -45,3 +52,6 @@ All Texas scrapers use the 4-layer stealth stack:
 - **Bexar Magistrate**: CSV jail activity reports (`edocs.bexar.org`) exist, but central magistrate HTML via `make_stealth_request` is the primary high-yield source.
 - **Tarrant Dual Endpoint**: Magistration docket (`/Home/GetDocketResults`) provides exact offense titles, while inmate search (`/Home/GetSearchResults`) enriches demographics.
 - **curl_cffi TLS Signatures**: Installed `curl_cffi` 0.15.0 supports `chrome124`, `chrome120`, `chrome110`, `chrome`, `safari15_5`. `TLSFingerprinter` is configured to rotate across these supported signatures.
+- **Travis SIPS API**: Direct JSON REST API at `public.traviscountytx.gov/sip/api/v2`. No WAF. List endpoint returns `[{id, bookingNumber, fullName, age}]`; detail returns charges array with `chargeText`, `bondAmount`, `bondType`, `chargeLevel`, `court`.
+- **Collin Incapsula**: Both `www.collincountytx.gov` and `apps.collincountytx.gov` are behind Imperva/Incapsula WAF. Requires APE residential proxy rotation to bypass. Odyssey PublicAccess on `cijspub.co.collin.tx.us` returns 503 (maintenance) as of 2026-07-22.
+- **Denton Athena**: City Police JailView at `athena.dentonpolice.com` serves a WebMethod (`GetInmates`) returning all current inmates as a JSON string in `{d: "[...]"}`. County-level Tyler/Odyssey at `justice1.dentoncounty.gov` is misconfigured (returns Public Access Error).

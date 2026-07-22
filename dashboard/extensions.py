@@ -362,11 +362,14 @@ REGISTERED_COUNTIES = sorted([
     "Knox (TN)",
     "Shelby (TN)",
     "TnCIS (TN)",
-    # ── Texas (wave-1 registered scrapers) ──
+    # ── Texas (wave-1 + wave-2 registered scrapers) ──
     "Bexar (TX)",
+    "Collin (TX)",
     "Dallas (TX)",
+    "Denton (TX)",
     "Harris (TX)",
     "Tarrant (TX)",
+    "Travis (TX)",
     # ── Louisiana (wave-1 registered scrapers) ──
     "Lafayette (LA)",
     "Orleans (LA)",

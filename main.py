@@ -277,6 +277,9 @@ from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
 from scrapers.counties_tx.dallas import DallasScraper as TX_DallasScraper
 from scrapers.counties_tx.bexar import BexarScraper as TX_BexarScraper
 from scrapers.counties_tx.tarrant import TarrantScraper as TX_TarrantScraper
+from scrapers.counties_tx.travis import TravisScraper as TX_TravisScraper
+from scrapers.counties_tx.collin import CollinScraper as TX_CollinScraper
+from scrapers.counties_tx.denton import DentonScraper as TX_DentonScraper
 
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
@@ -586,11 +589,14 @@ def register_scrapers(sched):
     sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
     sched.register_scraper(TN_TnCISScraper(), interval_minutes=180)
 
-    # ── Texas (wave-1) ───────────────────────────────────────────────────────
+    # ── Texas (wave-1 + wave-2) ────────────────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
     sched.register_scraper(TX_DallasScraper(), interval_minutes=90)
     sched.register_scraper(TX_BexarScraper(), interval_minutes=60)
     sched.register_scraper(TX_TarrantScraper(), interval_minutes=60)
+    sched.register_scraper(TX_TravisScraper(), interval_minutes=60)
+    sched.register_scraper(TX_CollinScraper(), interval_minutes=90)
+    sched.register_scraper(TX_DentonScraper(), interval_minutes=60)
 
     # ── Louisiana (wave-1) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
