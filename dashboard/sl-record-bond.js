@@ -318,6 +318,19 @@ window.SLRecordBond = (() => {
       if (btn) btn.disabled = false;
       return;
     }
+    if (!payload.bond_amount || payload.bond_amount <= 0) {
+      if (statusEl) statusEl.innerHTML = '<span class="rb-error">❌ Bond amount is required (scrapers often leave $0 until first appearance — enter the real amount)</span>';
+      if (btn) btn.disabled = false;
+      $('rbBondAmount')?.focus();
+      return;
+    }
+
+    // Mirror bond amount onto the arrest lead so Defendants / billing stay in sync
+    if (payload.booking_number && typeof window.updateBondAmount === 'function') {
+      try {
+        await window.updateBondAmount(payload.booking_number, payload.bond_amount, $('rbBondAmount'));
+      } catch (e) { /* non-fatal */ }
+    }
 
     try {
       const r = await fetch(`${API}/api/bonds/record`, {

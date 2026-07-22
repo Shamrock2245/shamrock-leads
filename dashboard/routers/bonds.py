@@ -395,6 +395,21 @@ async def api_write_bond(request: Request):
     if not booking.get("booking_number"):
         return JSONResponse({"success": False, "error": "Booking number required"}, status_code=400)
 
+    # Bond amount — scrapers often leave $0 until first appearance; staff must set real amount
+    try:
+        _bond_amt = float(bond.get("amount") or bond.get("bond_amount") or 0)
+    except (TypeError, ValueError):
+        _bond_amt = 0.0
+    if _bond_amt <= 0:
+        return JSONResponse({
+            "success": False,
+            "error": (
+                "Bond amount is $0. Set the real bond amount on the defendant record "
+                "(Defendants tab or Write Bond modal) before writing. Jail sites often "
+                "publish bond hours after booking."
+            ),
+        }, status_code=400)
+
     # Normalise surety to lowercase canonical form used by GAS template router
     surety_id = insurer.lower().strip()
     if surety_id not in ("osi", "palmetto"):

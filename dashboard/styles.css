@@ -875,6 +875,19 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .ind-sub-btn:hover:not(.active){background:var(--hover);color:var(--text-secondary)}
 .ind-sub-content{padding:22px}
 
+/* ── Defendant bond amount edit (manual override for $0 scraper gaps) ── */
+.def-bond-edit-wrap{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:120px}
+.def-bond-pill.bond-zero{background:rgba(245,158,11,.15)!important;color:#fbbf24!important;border:1px solid rgba(245,158,11,.35)}
+.def-bond-edit-row{display:flex;align-items:center;gap:4px}
+.def-bond-edit-prefix{font-size:12px;font-weight:700;color:var(--muted)}
+.def-bond-input{width:88px;padding:4px 6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;font-weight:600}
+.def-bond-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(16,185,129,.15)}
+.def-bond-save-btn{font-size:10px;font-weight:700;padding:4px 8px;border-radius:6px;border:1px solid rgba(16,185,129,.3);background:rgba(16,185,129,.12);color:#6ee7b7;cursor:pointer}
+.def-bond-save-btn:hover{background:rgba(16,185,129,.22)}
+.btn-refresh-source{background:rgba(59,130,246,.12)!important;border-color:rgba(59,130,246,.3)!important;color:#93c5fd!important}
+.btn-refresh-source:hover{background:rgba(59,130,246,.22)!important}
+.btn-refresh-source:disabled{opacity:.6;cursor:wait}
+
 /* ── Identity photo slots (DL front / back / selfie) ── */
 .id-photo-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:8px}
 @media (max-width:720px){.id-photo-slots{grid-template-columns:1fr}}

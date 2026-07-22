@@ -54,10 +54,24 @@ async function loadDefendants() {
       const bkEscD = String(l.booking_number||'').replace(/"/g,'&quot;');
       const custDrop = `<select class="def-status-badge ${stBadge}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEscD}',this.value,this)"><option value="" ${!stVal?'selected':''}>${stVal||'\u2014'}</option><option value="In Custody" ${'In Custody'===stVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===stVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===stVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===stVal?'selected':''}>Bonded Out</option></select>`;
       const slotId = 'defIdSlots_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const bondEditId = 'defBondAmt_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const bondPillLabel = bond > 0 ? ('$' + bond.toLocaleString()) : '$0 — set bond';
       return `<div class="def-card" data-booking="${bkEscD}">
-        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div><div class="def-bond-pill ${bc}">$${bond.toLocaleString()}</div></div>
+        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div>
+          <div class="def-bond-edit-wrap" onclick="event.stopPropagation()">
+            <div class="def-bond-pill ${bc} ${bond<=0?'bond-zero':''}" title="Click amount to edit — scrapers often leave $0 until first appearance">${bondPillLabel}</div>
+            <div class="def-bond-edit-row">
+              <span class="def-bond-edit-prefix">$</span>
+              <input type="number" class="def-bond-input" id="${bondEditId}" min="0" step="1" inputmode="decimal"
+                value="${bond > 0 ? bond : ''}" placeholder="0"
+                onclick="event.stopPropagation()"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();updateBondAmount('${bkEscD}',this.value,this);}">
+              <button type="button" class="def-bond-save-btn" onclick="event.stopPropagation();updateBondAmount('${bkEscD}',document.getElementById('${bondEditId}').value,document.getElementById('${bondEditId}'))" title="Save bond amount">Save</button>
+            </div>
+          </div>
+        </div>
         <div class="def-body">
-          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div></div>
+          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}" id="defScore_${bondEditId}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div></div>
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
           <div class="def-section" onclick="event.stopPropagation()">
             <div class="def-section-title">🪪 Driver License / ID &amp; Selfie</div>
@@ -67,7 +81,10 @@ async function loadDefendants() {
           </div>
         </div>
         <div class="def-card-footer">
-          <button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button>
+          <button class="btn-detail" onclick="event.stopPropagation(); if('${(l.detail_url||'').replace(/'/g,"\\'")}') window.open('${(l.detail_url||'').replace(/'/g,"\\'")}'); else toast('No source booking URL on this record','error')">🔗 Source</button>
+          <button class="btn-detail btn-refresh-source" id="btnRefresh_${bondEditId}"
+            onclick="event.stopPropagation(); refreshDefendantFromSource('${bkEscD}', this)"
+            title="Re-fetch bond/status from the county booking sheet">🔄 Update</button>
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
           <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${String(l.booking_number||'')}')">📞 Contact</button>
@@ -240,10 +257,23 @@ function openBondModal(nameOrLead, bond, county, booking) {
         <div class="wb-meta-grid">
           <div><span class="wb-meta-label">County</span>${cnty}</div>
           <div><span class="wb-meta-label">Booking #</span>${bkNum}</div>
-          <div><span class="wb-meta-label">Bond Amount</span>$${bondAmt.toLocaleString()}</div>
-          <div><span class="wb-meta-label">Est. Premium</span><strong style="color:var(--success)">$${premium.toLocaleString()}</strong></div>
-          <div><span class="wb-meta-label">Transfer Fee</span>${transferFee ? '$'+transferFee : '<span style="color:var(--success)">Waived</span>'}</div>
-          <div><span class="wb-meta-label">Total Due</span><strong>$${(premium + transferFee).toLocaleString()}</strong></div>
+          <div style="grid-column:1/-1">
+            <span class="wb-meta-label">Bond Amount (editable)</span>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap">
+              <span style="font-weight:700">$</span>
+              <input type="number" id="wbBondAmountInput" min="0" step="1" inputmode="decimal"
+                value="${bondAmt > 0 ? bondAmt : ''}" placeholder="Enter bond amount"
+                style="width:160px;padding:8px 10px;border-radius:8px;border:1px solid ${bondAmt > 0 ? 'var(--border)' : 'rgba(245,158,11,0.6)'};background:var(--bg);color:var(--text);font-size:15px;font-weight:700"
+                oninput="onWriteBondAmountChange(this.value)"
+                onchange="onWriteBondAmountChange(this.value, true)">
+              <button type="button" class="btn-export" style="font-size:11px;padding:6px 12px" onclick="saveWriteBondAmount()">💾 Save to Record</button>
+              ${bkNum ? `<button type="button" class="btn-export" style="font-size:11px;padding:6px 12px;background:rgba(59,130,246,0.15);color:#93c5fd" onclick="refreshDefendantFromSource('${bkNum.replace(/'/g,"\\'")}', this)">🔄 Update from Source</button>` : ''}
+              ${bondAmt <= 0 ? '<span style="font-size:11px;color:#fbbf24">⚠️ Scraper left $0 — set the real bond from the jail/court before billing</span>' : ''}
+            </div>
+          </div>
+          <div><span class="wb-meta-label">Est. Premium (10%)</span><strong id="wbPremiumDisplay" style="color:var(--success)">$${premium.toLocaleString()}</strong></div>
+          <div><span class="wb-meta-label">Transfer Fee</span><span id="wbTransferDisplay">${transferFee ? '$'+transferFee : '<span style="color:var(--success)">Waived</span>'}</span></div>
+          <div><span class="wb-meta-label">Total Due</span><strong id="wbTotalDueDisplay">$${(premium + transferFee).toLocaleString()}</strong></div>
         </div>
       </div>
     </div>
@@ -753,6 +783,31 @@ async function submitBond() {
   const statusEl = document.getElementById('bondSubmitStatus');
   if (statusEl) { statusEl.style.display = 'block'; statusEl.style.background = 'var(--panel)'; statusEl.textContent = 'Writing bond...'; }
 
+  // Prefer live value from the editable bond field (fixes $0 scraper gaps)
+  const wbAmtEl = document.getElementById('wbBondAmountInput');
+  if (wbAmtEl) {
+    const liveAmt = _parseBondInput(wbAmtEl.value);
+    if (Number.isFinite(liveAmt) && liveAmt >= 0) {
+      data.bond = liveAmt;
+      if (data.lead) data.lead.bond_amount = liveAmt;
+    }
+  }
+  if (!data.bond || data.bond <= 0) {
+    if (statusEl) {
+      statusEl.style.background = 'rgba(245,158,11,0.15)';
+      statusEl.style.color = '#fbbf24';
+      statusEl.textContent = '⚠️ Bond amount is $0. Enter the real bond amount above and click Save to Record before writing.';
+    }
+    toast('Set a bond amount greater than $0 before writing the bond', 'error');
+    if (wbAmtEl) wbAmtEl.focus();
+    return;
+  }
+
+  // Persist override so the Defendants list / future opens stay correct
+  if (data.booking) {
+    await updateBondAmount(data.booking, data.bond, wbAmtEl);
+  }
+
   const lead = data.lead;
   // Collect final POA values from inputs (user may have overridden)
   const finalPoaNumbers = (data.chargeList || []).map((_, i) => {
@@ -1075,6 +1130,233 @@ async function updateCustody(bookingNumber, newStatus, selectEl) {
         }
       })
       .catch(() => {}); // non-fatal
+  }
+}
+
+// ── Bond Amount Override ──
+// Scrapers often leave bond_amount = 0 until first appearance (hours later).
+// Staff can set the real amount so Write Bond / premium / billing work.
+function _parseBondInput(raw) {
+  if (raw == null || raw === '') return NaN;
+  const n = parseFloat(String(raw).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+async function updateBondAmount(bookingNumber, rawAmount, inputEl) {
+  if (!bookingNumber) { toast('Missing booking number', 'error'); return null; }
+  const amount = _parseBondInput(rawAmount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    toast('Enter a valid bond amount (0 or more)', 'error');
+    if (inputEl) inputEl.focus();
+    return null;
+  }
+  try {
+    const r = await fetch(`${API}/api/leads/update-bond-amount`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: bookingNumber,
+        bond_amount: amount,
+        changed_by: document.getElementById('outreachAgent')?.value || 'dashboard_user',
+        note: 'Manual bond amount from Defendants tab',
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      toast(d.error || 'Failed to update bond amount', 'error');
+      return null;
+    }
+    // Keep in-memory lead map fresh for Write Bond
+    if (window._leadMap && window._leadMap[bookingNumber]) {
+      window._leadMap[bookingNumber].bond_amount = amount;
+      if (d.lead_score != null) window._leadMap[bookingNumber].lead_score = d.lead_score;
+      if (d.lead_status) window._leadMap[bookingNumber].lead_status = d.lead_status;
+    }
+    if (window._bondModalData && window._bondModalData.booking === bookingNumber) {
+      window._bondModalData.bond = amount;
+      if (window._bondModalData.lead) window._bondModalData.lead.bond_amount = amount;
+    }
+    // Update card pill if present
+    const card = document.querySelector(`.def-card[data-booking="${CSS.escape ? CSS.escape(bookingNumber) : bookingNumber}"]`);
+    if (card) {
+      const pill = card.querySelector('.def-bond-pill');
+      if (pill) {
+        pill.textContent = amount > 0 ? ('$' + amount.toLocaleString()) : '$0 — set bond';
+        pill.classList.toggle('bond-zero', amount <= 0);
+        const bc = amount >= 10000 ? 'high' : amount >= 2500 ? 'mid' : 'low';
+        pill.className = 'def-bond-pill ' + bc + (amount <= 0 ? ' bond-zero' : '');
+      }
+      const scoreEl = card.querySelector('[id^="defScore_"]');
+      if (scoreEl && d.lead_score != null) {
+        scoreEl.textContent = `${d.lead_score} ${d.lead_status || ''}`.trim();
+      }
+    }
+    if (inputEl) inputEl.value = amount > 0 ? amount : '';
+    const prem = d.premium_estimate != null ? d.premium_estimate : Math.round(amount * 0.1);
+    toast(`Bond set to $${amount.toLocaleString()} (est. premium $${Number(prem).toLocaleString()})`, 'success');
+    return d;
+  } catch (e) {
+    toast('Network error updating bond amount', 'error');
+    return null;
+  }
+}
+
+function onWriteBondAmountChange(raw, persist) {
+  const amount = _parseBondInput(raw);
+  if (!Number.isFinite(amount) || amount < 0) return;
+  const data = window._bondModalData;
+  if (!data) return;
+  data.bond = amount;
+  if (data.lead) data.lead.bond_amount = amount;
+
+  const cnty = data.county || '';
+  const premium = Math.max(100, amount * 0.1);
+  const transferFee = (amount > 25000 || ['Lee', 'Charlotte'].includes(cnty)) ? 0 : 125;
+  const premEl = document.getElementById('wbPremiumDisplay');
+  const xferEl = document.getElementById('wbTransferDisplay');
+  const totEl = document.getElementById('wbTotalDueDisplay');
+  if (premEl) premEl.textContent = '$' + premium.toLocaleString();
+  if (xferEl) xferEl.innerHTML = transferFee ? ('$' + transferFee) : '<span style="color:var(--success)">Waived</span>';
+  if (totEl) totEl.textContent = '$' + (premium + transferFee).toLocaleString();
+
+  // Re-suggest POA tier when bond changes (debounced lightly via persist path)
+  if (persist && data.surety && data.chargeList) {
+    fetchPoaNumbers(data.surety, amount, data.chargeList);
+  }
+}
+
+async function saveWriteBondAmount() {
+  const data = window._bondModalData;
+  if (!data || !data.booking) {
+    toast('No booking number on this bond', 'error');
+    return;
+  }
+  const input = document.getElementById('wbBondAmountInput');
+  const raw = input ? input.value : data.bond;
+  onWriteBondAmountChange(raw, true);
+  await updateBondAmount(data.booking, raw, input);
+}
+
+// ── Refresh one defendant from county booking sheet ─────────────────────────
+function _applyBondToCard(bookingNumber, amount, score, status) {
+  if (window._leadMap && window._leadMap[bookingNumber]) {
+    window._leadMap[bookingNumber].bond_amount = amount;
+    if (score != null) window._leadMap[bookingNumber].lead_score = score;
+    if (status) window._leadMap[bookingNumber].lead_status = status;
+  }
+  const card = document.querySelector(`.def-card[data-booking="${bookingNumber}"]`);
+  if (!card) return;
+  const pill = card.querySelector('.def-bond-pill');
+  if (pill) {
+    const bc = amount >= 10000 ? 'high' : amount >= 2500 ? 'mid' : 'low';
+    pill.className = 'def-bond-pill ' + bc + (amount <= 0 ? ' bond-zero' : '');
+    pill.textContent = amount > 0 ? ('$' + Number(amount).toLocaleString()) : '$0 — set bond';
+  }
+  const inp = card.querySelector('.def-bond-input');
+  if (inp) inp.value = amount > 0 ? amount : '';
+  const scoreEl = card.querySelector('[id^="defScore_"]');
+  if (scoreEl && score != null) scoreEl.textContent = `${score} ${status || ''}`.trim();
+}
+
+async function refreshDefendantFromSource(bookingNumber, btnEl) {
+  if (!bookingNumber) { toast('Missing booking number', 'error'); return; }
+  const btn = btnEl;
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳…'; }
+  try {
+    const r = await fetch(`${API}/api/leads/refresh-from-source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: bookingNumber,
+        changed_by: document.getElementById('outreachAgent')?.value || 'dashboard_user',
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      toast(d.error || 'Refresh failed', 'error');
+      return;
+    }
+
+    // Open source booking sheet so staff can verify visually
+    if (d.detail_url) {
+      try { window.open(d.detail_url, '_blank', 'noopener'); } catch (e) { /* popup blocked */ }
+    }
+
+    const newAmt = d.new_bond_amount != null ? Number(d.new_bond_amount) : null;
+    const bondRes = d.bond_result || {};
+    if (d.immediate && d.immediate.bond_updated && newAmt != null) {
+      _applyBondToCard(bookingNumber, newAmt, bondRes.lead_score, bondRes.lead_status);
+      toast(`🔄 Updated from source: $${newAmt.toLocaleString()}`, 'success');
+    } else if (d.immediate && d.immediate.bond_found > 0) {
+      _applyBondToCard(bookingNumber, d.immediate.bond_found, null, null);
+      toast(`Source shows $${Number(d.immediate.bond_found).toLocaleString()} (already on file or saved)`, 'success');
+    } else if (d.immediate && d.immediate.error) {
+      toast(`Source page: ${d.immediate.error}. Full recheck queued.`, 'info');
+    } else {
+      toast(d.message || 'Refresh requested — waiting for scraper…', 'info');
+    }
+
+    // Poll scraper engine for full field refresh (bond type, charges, status)
+    if (d.trigger_id) {
+      _pollSourceRefresh(d.trigger_id, bookingNumber, btn, prev);
+      return; // poll restores button
+    }
+  } catch (e) {
+    toast('Network error refreshing from source', 'error');
+  } finally {
+    if (btn && !btn.dataset.polling) {
+      btn.disabled = false;
+      btn.innerHTML = prev || '🔄 Update';
+    }
+  }
+}
+
+async function _pollSourceRefresh(triggerId, bookingNumber, btn, prevLabel) {
+  if (btn) {
+    btn.dataset.polling = '1';
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Scraping…';
+  }
+  const maxAttempts = 24; // ~2 min at 5s
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(res => setTimeout(res, 5000));
+    try {
+      const r = await fetch(
+        `${API}/api/leads/refresh-from-source/status?trigger_id=${encodeURIComponent(triggerId)}&booking_number=${encodeURIComponent(bookingNumber)}`
+      );
+      const d = await r.json();
+      const st = (d.trigger && d.trigger.status) || '';
+      if (st === 'done' || st === 'error') {
+        const arrest = d.arrest || {};
+        if (arrest.bond_amount != null) {
+          _applyBondToCard(
+            bookingNumber,
+            Number(arrest.bond_amount) || 0,
+            arrest.lead_score,
+            arrest.lead_status
+          );
+        }
+        const changes = (d.rechecks || []).flatMap(x => x.changes || []);
+        if (st === 'error') {
+          toast(`Scraper recheck error: ${(d.trigger && d.trigger.error) || 'unknown'}`, 'error');
+        } else if (changes.length) {
+          const bits = changes.map(c => `${c.field}: ${c.old} → ${c.new}`).join('; ');
+          toast(`🔄 Source refresh complete: ${bits}`, 'success');
+        } else {
+          toast('🔄 Source refresh complete — no field changes', 'success');
+        }
+        break;
+      }
+      if (btn) btn.innerHTML = `⏳ ${st || 'queued'}…`;
+    } catch (e) {
+      // keep polling
+    }
+  }
+  if (btn) {
+    delete btn.dataset.polling;
+    btn.disabled = false;
+    btn.innerHTML = prevLabel || '🔄 Update';
   }
 }
 
@@ -1598,10 +1880,17 @@ window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
-  sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody,
+  sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody, updateBondAmount,
+  onWriteBondAmountChange, saveWriteBondAmount, refreshDefendantFromSource,
   triggerSignNowPhase1, triggerSignNowPhase2,
   triggerCustodyRecheck, closeRecheckBanner,
   saveCurrentView, loadSavedView, populateSavedViews };
+
+// Expose for inline handlers on defendant cards
+window.updateBondAmount = updateBondAmount;
+window.onWriteBondAmountChange = onWriteBondAmountChange;
+window.saveWriteBondAmount = saveWriteBondAmount;
+window.refreshDefendantFromSource = refreshDefendantFromSource;
 
 /**
  * openBondFromActiveBond — Opens the bond modal pre-populated from an existing active bond.
