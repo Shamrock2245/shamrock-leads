@@ -1,9 +1,9 @@
 """
 Gilchrist County (FL) Arrest Scraper — SmartCOP ASP.NET.
 Source: Gilchrist County Sheriff's Office
-URL: https://smartcop.gilchristsheriff.com/smartwebclient/Jail.aspx
-Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
-Stealth: APE proxy rotation + TLS fingerprint impersonation
+URL (legacy): https://smartcop.gilchristsheriff.com/smartwebclient/Jail.aspx
+Status 2026-07-23: host DNS does not resolve from VPS (no public SmartWEB found).
+Scraper keeps trying known host patterns; fails closed with empty/error until recon.
 """
 import logging
 import re
@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://smartcop.gilchristsheriff.com"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
+# Candidates for future recon (all currently NXDOMAIN / dead as of 2026-07-23)
+URL_CANDIDATES = [
+    SEARCH_URL,
+    "http://smartweb.gilchristsheriff.com/smartwebclient/Jail.aspx",
+    "http://smartweb.gilchristsheriff.org/smartwebclient/Jail.aspx",
+]
 FACILITY = "Gilchrist County Jail"
 IMPERSONATE = "chrome131"
 

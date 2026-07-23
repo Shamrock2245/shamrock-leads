@@ -77,6 +77,18 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 ---
 
 ## Live prod verification (2026-07-23)
+### Session follow-up (same day)
+
+| Fix | Result |
+|-----|--------|
+| Bradford URL → `smartweb.bradfordsheriff.org` + direct-first | ✅ 3 records |
+| Dixie URL → HTTPS SmartCOP + direct-first | ✅ 3 records |
+| Taylor URL → `:8989/SmartWEBClient` | ✅ 3 records |
+| SmartCOP base: direct before proxy | ✅ |
+| Defendants `normalize/batch` (Lee/Collier + 300) | ✅ **0 → 594** defendants |
+| Gilchrist | ⏳ no public DNS/host found |
+| SignNow token | checked this session (see logs) |
+
 
 | Check | Result |
 |-------|--------|

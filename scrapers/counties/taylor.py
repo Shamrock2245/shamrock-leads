@@ -1,8 +1,9 @@
 """
 Taylor County Arrest Scraper — SmartCOP ASP.NET.
 Source: Taylor County Sheriff's Office
-URL: https://smartcop.taylorsheriff.org/smartwebclient/Jail.aspx
-Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
+Public entry: http://jail.taylorsheriff.org/ → redirects to
+  http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx
+(HTTPS :443 is dead; use HTTP on port 8989.)
 """
 import logging
 import re
@@ -13,17 +14,18 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://smartcop.taylorsheriff.org"
-SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
+# Canonical portal (custom port). Entry host jail.taylorsheriff.org redirects here.
+BASE_URL = "http://smartcop.taylorsheriff.org:8989"
+SEARCH_URL = f"{BASE_URL}/SmartWEBClient/Jail.aspx"
 FACILITY = "Taylor County Jail"
 IMPERSONATE = "chrome131"
 HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": SEARCH_URL,
+    "Referer": "http://jail.taylorsheriff.org/",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Site": "cross-site",
     "Sec-Fetch-User": "?1",
 }
 
@@ -41,9 +43,19 @@ class TaylorCountyScraper(BaseScraper):
             logger.error("curl_cffi/bs4 not installed"); raise
 
         session = cffi_requests.Session()
-
+        # Direct only — CONNECT proxies rarely support custom ports like :8989
         try:
-            resp = session.get(SEARCH_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            resp = session.get(
+                SEARCH_URL, headers=HEADERS, timeout=30,
+                impersonate=IMPERSONATE, verify=False,
+            )
+            if resp.status_code != 200:
+                # Fallback via public entry host (302 → :8989)
+                resp = session.get(
+                    "http://jail.taylorsheriff.org/",
+                    headers=HEADERS, timeout=30,
+                    impersonate=IMPERSONATE, verify=False, allow_redirects=True,
+                )
             if resp.status_code != 200:
                 raise Exception(f"{resp.status_code} error")
         except Exception as e:
@@ -70,8 +82,12 @@ class TaylorCountyScraper(BaseScraper):
                 post_data[name] = value
                 break
 
+        post_url = getattr(resp, "url", None) or SEARCH_URL
         try:
-            resp2 = session.post(SEARCH_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
+            resp2 = session.post(
+                post_url, data=post_data, headers={**HEADERS, "Referer": post_url},
+                timeout=60, impersonate=IMPERSONATE, verify=False,
+            )
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} error")
             soup2 = BeautifulSoup(resp2.text, "html.parser")

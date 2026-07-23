@@ -1,20 +1,21 @@
 """
 Dixie County Arrest Scraper — SmartCOP ASP.NET.
 Source: Dixie County Sheriff's Office
-URL: http://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx
+URL: https://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx
 Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
-Stealth: APE proxy rotation + TLS fingerprint impersonation
+Stealth: Direct-first (HTTP times out; HTTPS works), then APE residential hop
 """
 import logging
 import re
 import time
-from typing import List
+from typing import List, Optional
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://smartcop.dixiecountysheriff.com"
+# Plain HTTP times out from VPS; HTTPS SmartCOP host is live.
+BASE_URL = "https://smartcop.dixiecountysheriff.com"
 SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
 FACILITY = "Dixie County Jail"
 IMPERSONATE = "chrome131"
@@ -41,25 +42,38 @@ class DixieCountyScraper(BaseScraper):
         except ImportError:
             logger.error("curl_cffi/bs4 not installed"); raise
 
-        proxy = self.get_proxy(prefer_residential=True) if self.ape else None
-        proxies = {"http": proxy, "https": proxy} if proxy else None
+        proxy_attempts: list[Optional[str]] = [None]
+        if self.ape:
+            p = self.get_proxy(prefer_residential=True)
+            if p:
+                proxy_attempts.append(p)
 
         session = cffi_requests.Session()
-        try:
-            resp = session.get(
-                SEARCH_URL, headers=HEADERS, timeout=30,
-                impersonate=IMPERSONATE, proxies=proxies
-            )
-            time.sleep(1.5)
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} error")
-        except Exception as e:
-            logger.error(f"Dixie: failed to load page: {e}")
-            if proxy:
-                self.record_proxy_failure(proxy)
-            raise
+        resp = None
+        proxy_used: Optional[str] = None
+        last_err: Optional[Exception] = None
+        for proxy in proxy_attempts:
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            try:
+                resp = session.get(
+                    SEARCH_URL, headers=HEADERS, timeout=30,
+                    impersonate=IMPERSONATE, proxies=proxies, verify=False,
+                )
+                time.sleep(1.5)
+                if resp.status_code != 200:
+                    raise Exception(f"{resp.status_code} error")
+                proxy_used = proxy
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f"Dixie GET failed (proxy={'yes' if proxy else 'direct'}): {e}")
+                if proxy:
+                    self.record_proxy_failure(proxy)
+        if resp is None:
+            raise Exception(f"Dixie: failed to load page: {last_err}")
 
         soup = BeautifulSoup(resp.text, "html.parser")
+        proxies = {"http": proxy_used, "https": proxy_used} if proxy_used else None
 
         def _get_hidden(name):
             el = soup.find("input", {"name": name})
@@ -83,20 +97,20 @@ class DixieCountyScraper(BaseScraper):
         try:
             resp2 = session.post(
                 SEARCH_URL, data=post_data, headers=HEADERS,
-                timeout=60, impersonate=IMPERSONATE, proxies=proxies
+                timeout=60, impersonate=IMPERSONATE, proxies=proxies, verify=False,
             )
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} on POST")
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
             logger.error(f"Dixie: POST failed ({e})")
-            if proxy:
-                self.record_proxy_failure(proxy)
+            if proxy_used:
+                self.record_proxy_failure(proxy_used)
             raise
 
         records = self._parse_table(soup2)
-        if proxy and records:
-            self.record_proxy_success(proxy)
+        if proxy_used and records:
+            self.record_proxy_success(proxy_used)
         logger.info(f"Dixie: {len(records)} records")
         return records
 

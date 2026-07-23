@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional  # noqa: F401 — Optional used in proxy_attempts
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -51,26 +51,47 @@ class SmartCOPBaseScraper(BaseScraper):
             # Fallback to plain requests if curl_cffi not available
             return self._scrape_fallback()
 
-        proxy = self.get_proxy(prefer_residential=True) if self.ape else None
-        proxies = {"http": proxy, "https": proxy} if proxy else None
+        # SmartCOP hosts are often LAN-ish / port-custom and break through
+        # HTTP CONNECT proxies (502). Prefer direct, then one residential hop.
+        proxy_attempts: list[Optional[str]] = [None]
+        if self.ape:
+            p = self.get_proxy(prefer_residential=True)
+            if p:
+                proxy_attempts.append(p)
+
         headers = self.get_headers()
         records = []
-
         session = cffi_requests.Session()
-        try:
-            resp = session.get(
-                self.portal_url, headers=headers, timeout=30,
-                impersonate=IMPERSONATE, proxies=proxies, verify=False
-            )
-            if resp.status_code != 200:
-                raise Exception(f"HTTP {resp.status_code}")
-        except Exception as e:
-            self.logger.warning(f"{self.county}: failed to load SmartCOP portal: {e}")
-            if proxy:
-                self.record_proxy_failure(proxy)
+        resp = None
+        proxy_used: Optional[str] = None
+        last_err: Optional[Exception] = None
+
+        for proxy in proxy_attempts:
+            proxies = {"http": proxy, "https": proxy} if proxy else None
+            try:
+                resp = session.get(
+                    self.portal_url, headers=headers, timeout=30,
+                    impersonate=IMPERSONATE, proxies=proxies, verify=False
+                )
+                if resp.status_code != 200:
+                    raise Exception(f"HTTP {resp.status_code}")
+                proxy_used = proxy
+                break
+            except Exception as e:
+                last_err = e
+                self.logger.warning(
+                    f"{self.county}: portal GET failed (proxy={'yes' if proxy else 'direct'}): {e}"
+                )
+                if proxy:
+                    self.record_proxy_failure(proxy)
+                continue
+
+        if resp is None:
+            self.logger.warning(f"{self.county}: failed to load SmartCOP portal: {last_err}")
             return records
 
         soup = BeautifulSoup(resp.text, "html.parser")
+        proxies = {"http": proxy_used, "https": proxy_used} if proxy_used else None
 
         def _hidden(name):
             el = soup.find("input", {"name": name})
@@ -106,8 +127,8 @@ class SmartCOPBaseScraper(BaseScraper):
                 table = soup.find("table", id=lambda x: x and "GridView" in x)
             except Exception as e:
                 self.logger.error(f"{self.county}: POST search failed: {e}")
-                if proxy:
-                    self.record_proxy_failure(proxy)
+                if proxy_used:
+                    self.record_proxy_failure(proxy_used)
                 return records
 
         if not table:
@@ -164,8 +185,8 @@ class SmartCOPBaseScraper(BaseScraper):
                 Detail_URL=self.portal_url,
             ))
 
-        if proxy and records:
-            self.record_proxy_success(proxy)
+        if proxy_used and records:
+            self.record_proxy_success(proxy_used)
         self.logger.info(f"{self.county}: {len(records)} records (SmartCOP stealth)")
         return records
 
