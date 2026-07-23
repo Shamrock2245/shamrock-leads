@@ -66,6 +66,7 @@ PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 
 # Active Bonds PDF generation & date parsing
 reportlab>=4.0.0
+fpdf2>=2.7.0                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
 python-dateutil>=2.8.0
 PyMuPDF>=1.24.0
 

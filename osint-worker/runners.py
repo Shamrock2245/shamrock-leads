@@ -633,18 +633,15 @@ async def run_sherlock(
     else:
         cmd = [sherlock_cmd]
 
+    timeout_s = "15" if deep else "10"
     cmd += [
         username,
         "--output", output_file,
         "--folderoutput", out_dir,
         "--json", output_file,
         "--no-color",
-        "--timeout", "15",
+        "--timeout", timeout_s,
     ]
-
-    if not deep:
-        # Sherlock doesn't have a top-sites flag, but we can limit via timeout
-        cmd += ["--timeout", "10"]
 
     log.info("Sherlock scan for %s deep=%s", _redact(username), deep)
 
