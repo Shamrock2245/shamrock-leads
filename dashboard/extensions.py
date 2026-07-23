@@ -57,10 +57,16 @@ BB_CONFIG_API_KEY = os.getenv("BB_CONFIG_API_KEY", "shamrock-bb-sync-2245")
 
 
 def init_bluebubbles():
-    """Load BlueBubbles server configs from environment variables."""
+    """Load BlueBubbles server configs from environment variables.
+
+    Mutates BB_SERVERS in place (clear + update). Do not rebind the name —
+    many modules hold ``from dashboard.extensions import BB_SERVERS`` and
+    would keep pointing at a discarded empty dict if we assigned a new object.
+    """
     import socket
-    global BB_SERVERS
-    BB_SERVERS = {}
+    from urllib.parse import urlparse
+
+    loaded: dict = {}
     for suffix, label, email in _BB_PHONES:
         # Check runtime overrides first, then env vars
         url = _BB_URL_OVERRIDES.get(suffix, "") or os.getenv(f"BLUEBUBBLES_URL_{suffix}", "").rstrip("/")
@@ -68,9 +74,9 @@ def init_bluebubbles():
         # Legacy single-server fallback for first server
         if not url and suffix == "0178":
             url = _BB_URL_OVERRIDES.get("0178", "") or os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
-            pw = os.getenv("BLUEBUBBLES_PASSWORD", "")
+            pw = pw or os.getenv("BLUEBUBBLES_PASSWORD", "")
         if url:
-            BB_SERVERS[f"239955{suffix}"] = {
+            loaded[f"239955{suffix}"] = {
                 "url": url,
                 "password": pw,
                 "label": label,
@@ -79,14 +85,18 @@ def init_bluebubbles():
             }
             # DNS resolution check at init time (helps diagnose tunnel connectivity)
             try:
-                from urllib.parse import urlparse
-                hostname = urlparse(url).hostname or ""
+                parsed = urlparse(url)
+                hostname = parsed.hostname or ""
+                port = parsed.port or (443 if (parsed.scheme or "https") == "https" else 80)
                 if hostname:
-                    resolved = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
+                    resolved = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
                     ip = resolved[0][4][0] if resolved else "unknown"
-                    print(f"  ✅ BB [{suffix}] DNS OK: {hostname} -> {ip}")
+                    print(f"  ✅ BB [{suffix}] DNS OK: {hostname}:{port} -> {ip}")
             except Exception as dns_err:
                 print(f"  ⚠️  BB [{suffix}] DNS FAILED for {url}: {dns_err}")
+
+    BB_SERVERS.clear()
+    BB_SERVERS.update(loaded)
 
 
 def update_bb_url(suffix: str, new_url: str):

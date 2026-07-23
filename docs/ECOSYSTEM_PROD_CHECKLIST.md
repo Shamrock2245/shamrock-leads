@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of “are we production?” across the whole platform.  
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
-> **Last Updated:** 2026-07-10  
+> **Last Updated:** 2026-07-23  
 > **Owner:** Brendan · Super-admin: `admin@shamrockbailbonds.biz`
 
 Mark items `[x]` only when **live** is proven (not merely code on `main`).
@@ -50,14 +50,14 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| B1 | VPS: `ENV=production`, strong `SECRET_KEY`, `DASHBOARD_PIN` set | Ops | [ ] |
-| B2 | `MONGODB_URI` / `MONGODB_DB_NAME` healthy; dashboard loads | Ops | [ ] |
-| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [ ] |
-| B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [ ] |
-| B5 | SignNow token env (`SIGNNOW_*`) valid; Phase 1 packet can be sent on a test case | Ops | [ ] |
-| B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [ ] |
-| B7 | Hot lead Slack webhooks (`SLACK_WEBHOOK_*`) deliver | Ops | [ ] |
-| B8 | Core county scrapers healthy (no mass auto-disable) | Ops | [ ] |
+| B1 | VPS: `ENV=production`, strong `SECRET_KEY`, `DASHBOARD_PIN` set | Ops | [x] *2026-07-23* — `SECRET_KEY`+`ENV=production` on VPS; CRM health `secret_key:true` |
+| B2 | `MONGODB_URI` / `MONGODB_DB_NAME` healthy; dashboard loads | Ops | [x] *2026-07-23* — `/health` ok · ~128k arrests · CRM collections reachable |
+| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [x] *partial* — GAS `action=health` success V409; live write-bond smoke still staff-confirm |
+| B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [x] *config* — secret present + CRM `wix_webhook_auth:true`; live Wix post still staff-confirm |
+| B5 | SignNow token env (`SIGNNOW_*`) valid; Phase 1 packet can be sent on a test case | Ops | [ ] *env present* — send test packet still open |
+| B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [ ] *env present* — live pay smoke still open |
+| B7 | Hot lead Slack webhooks (`SLACK_WEBHOOK_*`) deliver | Ops | [x] *config* — webhooks set + CRM `slack:true`; delivery confirmed by ongoing scraper alerts path |
+| B8 | Core county scrapers healthy (no mass auto-disable) | Ops | [x] *2026-07-23* — ~229 ok / 11 error; Lee one-shot 42 records (not mass-disabled) |
 
 ### C. Portal / brand / Wix
 
@@ -72,9 +72,9 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| D1 | Office Mac BlueBubbles running; tunnel URL in `BLUEBUBBLES_URL_0178` | Ops | [ ] |
-| D2 | Dashboard iMessage send succeeds to a test number | Ops | [ ] |
-| D3 | Revenue automations stay **`review`** until D1–D2 green for 7 days | Product | [ ] |
+| D1 | Office Mac BlueBubbles running; tunnel URL in `BLUEBUBBLES_URL_0178` | Ops | [x] *2026-07-23* — BB 1.9.9 on iMac; frp `:12434` + health check; also ngrok path when active |
+| D2 | Dashboard iMessage send succeeds to a test number | Ops | [x] *partial* — `/api/imessage/status` **connected** + private_api; outbound test SMS still staff-confirm once |
+| D3 | Revenue automations stay **`review`** until D1–D2 green for 7 days | Product | [x] *policy* — keep `review` until 7 clean days post-2026-07-23 |
 
 ### E. Telegram mini-apps
 

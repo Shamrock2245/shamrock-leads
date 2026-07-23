@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-20  
+> **Last verified:** 2026-07-23  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
@@ -76,6 +76,22 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
+## Live prod verification (2026-07-23)
+
+| Check | Result |
+|-------|--------|
+| `GET /health` | ✅ ok · ~128.6k arrests |
+| `GET /api/crm/health` | ✅ **ok** (was `degraded` — missing VPS `SECRET_KEY`) |
+| Integrations (GAS, Wix, SignNow, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
+| GAS `?action=health` | ✅ `success` · version V409 |
+| BlueBubbles frp `:12434` + `/api/imessage/status` | ✅ connected · private_api · 1.9.9 |
+| Lee one-shot scrape | ✅ 42 records (429s recovered via proxy rotation) |
+| Scraper fleet | ✅ ~229 ok · **11 error** (FL: Bay, Bradford, Dixie, Gadsden, Gilchrist, Lake, Marion, Monroe, Okeechobee, Suwannee, Taylor) |
+| Local secrets script (`--strict`) | ✅ 0 critical gaps |
+| Defendants / matches collections | ⚠️ estimated count **0** (bonds/intake still live — normalize backlog) |
+
+**Bugfix shipped:** `init_bluebubbles()` re-bound `BB_SERVERS = {}`, so every `from … import BB_SERVERS` kept an empty dict and iMessage looked “unconfigured” even with env set. Now mutates in place (`clear` + `update`). Tests: `tests/test_bb_servers_init.py`.
+
 ## Honest gaps / ops
 
 Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
@@ -89,10 +105,12 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | TX wave-1 (Bexar/Dallas live; Harris browser) | ⏳ Tarrant/Travis + top-25 |
 | LA wave-1 (Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + EBR/Jefferson |
 | CT / AL / MS | 🔲 Scaffold only — recon waves next |
-| BlueBubbles production reliability (office Mac + tunnel) | ⏳ Ops (checklist D1–D2) |
-| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | Verify on host (checklist B1) |
+| BlueBubbles production reliability (office Mac + tunnel) | ✅ Live 2026-07-23 (frp + BB 1.9.9); keep watchdog |
+| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ Set on VPS 2026-07-23 |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |
-| Gmail discharge / GCal / Drive OAuth | Env-gated (501/dry-run until configured) |
+| Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
+| FL error scrapers (11) | ⏳ proxy 502 / SSL / roster layout — see registry |
+| Defendants collection backfill | ⏳ `defendants` approx 0 despite active bonds |
 | Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
