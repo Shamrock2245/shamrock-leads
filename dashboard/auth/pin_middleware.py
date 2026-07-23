@@ -233,18 +233,28 @@ button:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,210,106,0.3
   </form>
 </div>
 <script>
-document.getElementById('f').addEventListener('submit',async e=>{
-  e.preventDefault();
-  const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      pin:document.getElementById('pin').value,
-      email:document.getElementById('email').value||''
-    })});
-  if(r.ok){window.location='/'}
-  else{const j=await r.json().catch(()=>({}));
-    document.getElementById('err').textContent=j.error||'Invalid PIN';
-    document.getElementById('pin').value=''}
-});
+(function(){
+  const q=new URLSearchParams(location.search);
+  if(q.get('reason')==='session_expired'){
+    document.getElementById('err').textContent='Session expired — enter your PIN to continue.';
+  }
+  const nextRaw=q.get('next')||'/';
+  // Only allow relative same-origin paths (no open redirects)
+  const next=(nextRaw.startsWith('/')&&!nextRaw.startsWith('//'))?nextRaw:'/';
+  document.getElementById('f').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
+      credentials:'same-origin',
+      body:JSON.stringify({
+        pin:document.getElementById('pin').value,
+        email:document.getElementById('email').value||''
+      })});
+    if(r.ok){window.location=next}
+    else{const j=await r.json().catch(()=>({}));
+      document.getElementById('err').textContent=j.error||'Invalid PIN';
+      document.getElementById('pin').value=''}
+  });
+})();
 </script></body></html>"""
 
 

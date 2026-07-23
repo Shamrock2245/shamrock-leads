@@ -27,6 +27,34 @@ const PRESETS = {
 };
 let searchTimer = null;
 
+// ── Auth-aware fetch (session cookie + 401 → re-login) ───────────────────
+// After SECRET_KEY / PIN rotation, old sl_session cookies are invalid. The SPA
+// shell can stay open while /api/* returns 401. Same-origin fetch already sends
+// cookies; we still force credentials and bounce to /login on 401.
+(function () {
+  const _nativeFetch = window.fetch.bind(window);
+  let _redirecting = false;
+  window.fetch = function (input, init) {
+    const opts = init ? { ...init } : {};
+    if (opts.credentials == null) opts.credentials = 'same-origin';
+    return _nativeFetch(input, opts).then((res) => {
+      if (res.status !== 401 || _redirecting) return res;
+      let path = '';
+      try {
+        if (typeof input === 'string') path = input;
+        else if (input && typeof input.url === 'string') path = input.url;
+      } catch (_) { /* ignore */ }
+      // Only force re-login for app API calls (not third-party / public probes)
+      if (path.includes('/api/') && !path.includes('/login') && !path.includes('/api/webhooks/')) {
+        _redirecting = true;
+        const next = encodeURIComponent(location.pathname + location.search + location.hash);
+        location.href = '/login?reason=session_expired&next=' + next;
+      }
+      return res;
+    });
+  };
+})();
+
 // ── Theme ────────────────────────────────────────────────────────────────
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

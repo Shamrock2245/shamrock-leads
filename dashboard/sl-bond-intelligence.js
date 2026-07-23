@@ -38,9 +38,13 @@ const SLBondIntel = (() => {
 
     try {
       const [intelRes, multiRes] = await Promise.all([
-        fetch(`/api/bond-intelligence?days=${_days}${_state ? '&state=' + _state : ''}`),
-        fetch('/api/arrests/stats/multi-state'),
+        fetch(`/api/bond-intelligence?days=${_days}${_state ? '&state=' + _state : ''}`, { credentials: 'same-origin' }),
+        fetch('/api/arrests/stats/multi-state', { credentials: 'same-origin' }),
       ]);
+      if (intelRes.status === 401 || multiRes.status === 401) {
+        // Global fetch wrapper redirects to /login; keep a clear in-tab message.
+        throw new Error('session expired (401) — re-enter your dashboard PIN');
+      }
       if (!intelRes.ok || !multiRes.ok) {
         const errText = !intelRes.ok
           ? `bond-intelligence: ${intelRes.status} ${intelRes.statusText}`
@@ -57,7 +61,7 @@ const SLBondIntel = (() => {
       if (!_initialized) { _initialized = true; _startAutoRefresh(); }
     } catch (err) {
       console.error('[SLBondIntel] load error:', err);
-      if (container) container.innerHTML = `<div style="color:var(--danger);padding:24px;text-align:center">Failed to load bond intelligence: ${err.message}</div>`;
+      if (container) container.innerHTML = `<div style="color:var(--danger);padding:24px;text-align:center">Failed to load bond intelligence: ${err.message}<br><a href="/login" style="color:var(--accent);margin-top:12px;display:inline-block">Sign in again →</a></div>`;
     }
   }
 
