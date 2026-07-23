@@ -37,6 +37,17 @@ Without this header, ngrok returns an HTML interstitial page instead of the API 
 
 ## iMac Setup
 
+### Network & Access
+- **Tailscale IP (Primary Remote)**: `100.102.10.86`
+- **Tailscale Device Name**: `shamrocksimac`
+- **Tailnet Domain**: `shamrockbailbonds.biz`
+- **Tailscale Remote SSH Command**: `ssh shamrockbailbonds@100.102.10.86` or `ssh shamrockbailbonds@shamrocksimac`
+- **Local LAN IP**: `10.1.10.52`
+- **Public WAN IP**: `96.79.229.158`
+- **Hostname**: `imac.shamrockbailbonds.biz`
+- **Local SSH Command**: `ssh shamrockbailbonds@10.1.10.52`
+- **Remote SSH Command (via WAN IP)**: `ssh shamrockbailbonds@96.79.229.158` (requires router port forward 22 → 10.1.10.52:22)
+
 ### Quick Start
 ```bash
 # Install ngrok
