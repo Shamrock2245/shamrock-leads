@@ -1086,27 +1086,53 @@ async def api_arrests_multistate_stats():
     now = datetime.now(timezone.utc)
     h24 = now - timedelta(hours=24)
     h168 = now - timedelta(hours=168)
+    # Valid USPS state codes — drops garbage like "32", "EE", "GE" from bad scrapes
+    _US_STATES = frozenset({
+        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN",
+        "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV",
+        "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN",
+        "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC",
+    })
+
+    def _norm_state(raw) -> str | None:
+        if raw is None:
+            return None
+        s = str(raw).strip().upper()
+        if s in _US_STATES:
+            return s
+        return None
+
     try:
         states: dict = {}
         async for doc in arrests.aggregate([{"$group": {"_id": "$state", "total": {"$sum": 1}}}]):
-            s = doc["_id"] or "Unknown"
+            s = _norm_state(doc["_id"])
+            if not s:
+                continue
             states.setdefault(s, {})["total"] = doc["total"]
         async for doc in arrests.aggregate([
             {"$match": {"$or": [{"scraped_at": {"$gte": h24.isoformat()}}, {"scraped_at": {"$gte": h24}}]}},
             {"$group": {"_id": "$state", "count": {"$sum": 1}}},
         ]):
-            states.setdefault(doc["_id"] or "Unknown", {})["last_24h"] = doc["count"]
+            s = _norm_state(doc["_id"])
+            if not s:
+                continue
+            states.setdefault(s, {})["last_24h"] = doc["count"]
         async for doc in arrests.aggregate([
             {"$match": {"$or": [{"scraped_at": {"$gte": h168.isoformat()}}, {"scraped_at": {"$gte": h168}}]}},
             {"$group": {"_id": "$state", "count": {"$sum": 1}}},
         ]):
-            states.setdefault(doc["_id"] or "Unknown", {})["last_7d"] = doc["count"]
+            s = _norm_state(doc["_id"])
+            if not s:
+                continue
+            states.setdefault(s, {})["last_7d"] = doc["count"]
         async for doc in arrests.aggregate([
             {"$match": {"bond_amount": {"$gt": 0}}},
             {"$group": {"_id": "$state", "total_bond": {"$sum": "$bond_amount"},
                         "avg_bond": {"$avg": "$bond_amount"}, "max_bond": {"$max": "$bond_amount"}}},
         ]):
-            s = doc["_id"] or "Unknown"
+            s = _norm_state(doc["_id"])
+            if not s:
+                continue
             states.setdefault(s, {}).update({
                 "total_bond": round(doc["total_bond"] or 0, 2),
                 "avg_bond": round(doc["avg_bond"] or 0, 2),
@@ -1116,7 +1142,10 @@ async def api_arrests_multistate_stats():
             {"$match": {"lead_score": {"$gte": 70}}},
             {"$group": {"_id": "$state", "hot": {"$sum": 1}}},
         ]):
-            states.setdefault(doc["_id"] or "Unknown", {})["hot_leads"] = doc["hot"]
+            s = _norm_state(doc["_id"])
+            if not s:
+                continue
+            states.setdefault(s, {})["hot_leads"] = doc["hot"]
 
         out = [{"state": s, "total": d.get("total", 0), "last_24h": d.get("last_24h", 0),
                 "last_7d": d.get("last_7d", 0), "total_bond": d.get("total_bond", 0),

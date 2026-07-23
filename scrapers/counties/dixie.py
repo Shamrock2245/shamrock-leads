@@ -90,9 +90,11 @@ class DixieCountyScraper(BaseScraper):
         for btn in soup.find_all("input", {"type": "submit"}):
             name = btn.get("name", "")
             value = btn.get("value", "")
-            if any(kw in value.lower() for kw in ["search", "view", "all", "find", "show"]):
+            if name == "btnSumit" or any(kw in value.lower() for kw in ["search", "view", "all", "find", "show", "submit"]):
                 post_data[name] = value
                 break
+        else:
+            post_data["btnSumit"] = "Submit"
 
         try:
             resp2 = session.post(
@@ -101,14 +103,22 @@ class DixieCountyScraper(BaseScraper):
             )
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} on POST")
-            soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
             logger.error(f"Dixie: POST failed ({e})")
             if proxy_used:
                 self.record_proxy_failure(proxy_used)
             raise
 
-        records = self._parse_table(soup2)
+        from scrapers.smartweb_parser import parse_smartweb_cards
+        records = parse_smartweb_cards(
+            resp2.text,
+            county=self.county,
+            state="FL",
+            facility=FACILITY,
+            detail_base=BASE_URL,
+        )
+        if not records:
+            records = self._parse_table(BeautifulSoup(resp2.text, "html.parser"))
         if proxy_used and records:
             self.record_proxy_success(proxy_used)
         logger.info(f"Dixie: {len(records)} records")

@@ -83,6 +83,14 @@ class TaylorCountyScraper(BaseScraper):
                 break
 
         post_url = getattr(resp, "url", None) or SEARCH_URL
+        # Prefer SmartWEB's btnSumit
+        if "btnSumit" not in post_data:
+            for btn in soup.find_all("input", {"type": "submit"}):
+                if btn.get("name") == "btnSumit":
+                    post_data["btnSumit"] = btn.get("value") or "Submit"
+                    break
+            else:
+                post_data["btnSumit"] = "Submit"
         try:
             resp2 = session.post(
                 post_url, data=post_data, headers={**HEADERS, "Referer": post_url},
@@ -90,12 +98,20 @@ class TaylorCountyScraper(BaseScraper):
             )
             if resp2.status_code != 200:
                 raise Exception(f"{resp2.status_code} error")
-            soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
             logger.error(f"Taylor: POST failed ({e})")
             raise
 
-        records = self._parse_table(soup2)
+        from scrapers.smartweb_parser import parse_smartweb_cards
+        records = parse_smartweb_cards(
+            resp2.text,
+            county=self.county,
+            state="FL",
+            facility=FACILITY,
+            detail_base=BASE_URL,
+        )
+        if not records:
+            records = self._parse_table(BeautifulSoup(resp2.text, "html.parser"))
         logger.info(f"Taylor: {len(records)} records")
         return records
 
