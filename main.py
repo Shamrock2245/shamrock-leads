@@ -265,12 +265,18 @@ from scrapers.counties_nc.stokes import StokesScraper as NC_StokesScraper
 from scrapers.counties_nc.surry import SurryScraper as NC_SurryScraper
 from scrapers.counties_nc.transylvania import TransylvaniaScraper as NC_TransylvaniaScraper
 from scrapers.counties_nc.union import UnionScraper as NC_UnionScraper
+from scrapers.counties_nc.wake import WakeScraper as NC_WakeScraper
+from scrapers.counties_nc.guilford import GuilfordScraper as NC_GuilfordScraper
+from scrapers.counties_nc.forsyth import ForsythScraper as NC_ForsythScraper
+from scrapers.counties_nc.cumberland import CumberlandScraper as NC_CumberlandScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
 from scrapers.counties_tn.shelby import ShelbyScraper as TN_ShelbyScraper
 from scrapers.counties_tn.knox import KnoxScraper as TN_KnoxScraper
 from scrapers.counties_tn.tncis import TnCISScraper as TN_TnCISScraper
+from scrapers.counties_tn.hamilton import HamiltonScraper as TN_HamiltonScraper
+from scrapers.counties_tn.rutherford import RutherfordScraper as TN_RutherfordScraper
 
 # ── Texas Scrapers ─────────────────────────────────────────────────────────
 from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
@@ -284,6 +290,8 @@ from scrapers.counties_tx.denton import DentonScraper as TX_DentonScraper
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
 from scrapers.counties_la.lafayette import LafayetteScraper as LA_LafayetteScraper
+from scrapers.counties_la.jefferson import JeffersonScraper as LA_JeffersonScraper
+from scrapers.counties_la.east_baton_rouge import EastBatonRougeScraper as LA_EastBatonRougeScraper
 
 # ── Alabama Scrapers ───────────────────────────────────────────────────────
 from scrapers.counties_al.jefferson import JeffersonScraper as AL_JeffersonScraper
@@ -582,12 +590,18 @@ def register_scrapers(sched):
     sched.register_scraper(NC_SurryScraper(), interval_minutes=120)
     sched.register_scraper(NC_TransylvaniaScraper(), interval_minutes=120)
     sched.register_scraper(NC_UnionScraper(), interval_minutes=60)
+    sched.register_scraper(NC_WakeScraper(), interval_minutes=60)
+    sched.register_scraper(NC_GuilfordScraper(), interval_minutes=60)
+    sched.register_scraper(NC_ForsythScraper(), interval_minutes=90)
+    sched.register_scraper(NC_CumberlandScraper(), interval_minutes=90)
 
-    # ── Tennessee (wave-1 + TnCIS statewide) ─────────────────────────────────
+    # ── Tennessee (wave-1 + TnCIS statewide + wave-2) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
     sched.register_scraper(TN_ShelbyScraper(), interval_minutes=90)
     sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
     sched.register_scraper(TN_TnCISScraper(), interval_minutes=180)
+    sched.register_scraper(TN_HamiltonScraper(), interval_minutes=60)
+    sched.register_scraper(TN_RutherfordScraper(), interval_minutes=90)
 
     # ── Texas (wave-1 + wave-2) ────────────────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
@@ -601,6 +615,8 @@ def register_scrapers(sched):
     # ── Louisiana (wave-1) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
     sched.register_scraper(LA_LafayetteScraper(), interval_minutes=90)
+    sched.register_scraper(LA_JeffersonScraper(), interval_minutes=60)
+    sched.register_scraper(LA_EastBatonRougeScraper(), interval_minutes=90)
 
     # ── Alabama (wave-1) ─────────────────────────────────────────────────────
     sched.register_scraper(AL_JeffersonScraper(), interval_minutes=120)

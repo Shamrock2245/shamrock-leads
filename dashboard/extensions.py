@@ -357,9 +357,15 @@ REGISTERED_COUNTIES = sorted([
     "Surry (NC)",
     "Transylvania (NC)",
     "Union (NC)",
-    # ── Tennessee (wave-1 + TnCIS statewide) ──
+    "Wake (NC)",
+    "Guilford (NC)",
+    "Forsyth (NC)",
+    "Cumberland (NC)",
+    # ── Tennessee (wave-1 + TnCIS statewide + wave-2) ──
     "Davidson (TN)",
+    "Hamilton (TN)",
     "Knox (TN)",
+    "Rutherford (TN)",
     "Shelby (TN)",
     "TnCIS (TN)",
     # ── Texas (wave-1 + wave-2 registered scrapers) ──
@@ -370,7 +376,9 @@ REGISTERED_COUNTIES = sorted([
     "Harris (TX)",
     "Tarrant (TX)",
     "Travis (TX)",
-    # ── Louisiana (wave-1 registered scrapers) ──
+    # ── Louisiana (wave-1 + wave-2 registered scrapers) ──
+    "East Baton Rouge (LA)",
+    "Jefferson (LA)",
     "Lafayette (LA)",
     "Orleans (LA)",
     # ── Alabama (wave-1 registered scrapers) ──
