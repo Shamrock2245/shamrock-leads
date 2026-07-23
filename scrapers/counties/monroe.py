@@ -47,10 +47,12 @@ class MonroeCountyScraper(BaseScraper):
             raise
 
         session = cffi_requests.Session()
+        # keysso.net serves an incomplete intermediate chain — same pattern as SmartCOP bases.
+        req_kw = {"timeout": 30, "impersonate": IMPERSONATE, "verify": False}
 
         # Step 1: GET intro page (disclaimer)
         try:
-            resp = session.get(INTRO_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            resp = session.get(INTRO_URL, headers=HEADERS, **req_kw)
             if resp.status_code != 200:
                 raise Exception(f"GET intro {resp.status_code}")
         except Exception as e:
@@ -71,7 +73,7 @@ class MonroeCountyScraper(BaseScraper):
         }
 
         try:
-            resp = session.post(INTRO_URL, data=disclaimer_data, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            resp = session.post(INTRO_URL, data=disclaimer_data, headers=HEADERS, **req_kw)
             if resp.status_code not in (200, 302):
                 raise Exception(f"Disclaimer POST {resp.status_code}")
         except Exception as e:
@@ -100,6 +102,7 @@ class MonroeCountyScraper(BaseScraper):
                 headers={**HEADERS, "Referer": resp.url},
                 timeout=60,
                 impersonate=IMPERSONATE,
+                verify=False,
             )
             if resp.status_code != 200:
                 raise Exception(f"Search POST {resp.status_code}")
