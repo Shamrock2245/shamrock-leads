@@ -27,9 +27,11 @@ services:
     container_name: shamrock-obscura
     hostname: obscura
     restart: unless-stopped
-    # Routes through iMac office residential IP via SSH SOCKS tunnel (port 1080)
-    # Tunnel: iMac LaunchAgent → ssh -R 0.0.0.0:1080 → VPS
+    # Routes through iMac office residential IP via Tailscale SOCKS proxy (port 1080)
+    # Primary: Tailscale mesh → shamrocksimac:1080 (via host tailscaled or ts-proxy sidecar)
+    # Legacy:  SSH -R reverse tunnel (iMac LaunchAgent → VPS:1080)
     # 172.18.0.1 = Docker bridge gateway (host IP from container perspective)
+    # With Tailscale overlay: use socks5://shamrock-ts-proxy:1080 (container-to-container)
     command: ["serve", "--port", "9222", "--host", "0.0.0.0", "--stealth", "--proxy", "socks5://172.18.0.1:1080"]
     extra_hosts:
       - "host.docker.internal:host-gateway"

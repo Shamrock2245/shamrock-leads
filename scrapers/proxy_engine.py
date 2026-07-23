@@ -415,14 +415,14 @@ class AutonomousProxyEngine:
         """
         Get next proxy with automatic failover.
 
-        When prefer_residential=True: Warren → S5W2C → Stormsia
+        When prefer_residential=True: Tailscale → Warren → S5W2C → Stormsia
         When prefer_residential=False: Stormsia first, then others
         """
         chain: List[str]
         if prefer_residential:
-            chain = ["warren", "s5w2c", "stormsia"]
+            chain = ["tailscale", "warren", "s5w2c", "stormsia"]
         else:
-            chain = ["stormsia", "warren", "s5w2c"]
+            chain = ["stormsia", "tailscale", "warren", "s5w2c"]
 
         with self._lock:
             for source in chain:
@@ -435,6 +435,18 @@ class AutonomousProxyEngine:
         return None
 
     def _proxy_from_source(self, source: str, protocol: str = "socks5") -> Optional[str]:
+        if source == "tailscale":
+            try:
+                from config.tailscale import ts_config
+                if not ts_config.enabled:
+                    return None
+                proxy_url = ts_config.imac_socks_url
+                if ts_config._tcp_probe(ts_config._resolve_imac(), ts_config.socks_port, 2.0):
+                    return proxy_url
+            except Exception:
+                pass
+            return None
+
         if source == "warren":
             if not self.warren_enabled:
                 return None

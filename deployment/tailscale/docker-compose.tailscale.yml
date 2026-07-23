@@ -1,0 +1,116 @@
+# ============================================
+# ShamrockLeads — Tailscale Sidecar (Docker Compose Override)
+#
+# Adds a Tailscale container that joins the tailnet and provides:
+#   1. MagicDNS resolution for all containers on shamrock-net
+#   2. Exit node routing (scraper traffic → iMac residential IP)
+#   3. Direct peer-to-peer access to iMac BlueBubbles (no ngrok/frp)
+#   4. Subnet router (exposes Docker network to tailnet)
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f deployment/tailscale/docker-compose.tailscale.yml up -d
+#
+# Or add to COMPOSE_FILE in .env:
+#   COMPOSE_FILE=docker-compose.yml:deployment/tailscale/docker-compose.tailscale.yml
+#
+# Prerequisites:
+#   1. Generate an auth key at https://login.tailscale.com/admin/settings/keys
+#      - Reusable: yes
+#      - Ephemeral: no (we want the node to persist)
+#      - Tags: tag:server
+#   2. Set TAILSCALE_AUTHKEY in .env
+#   3. Approve subnet routes in Tailscale admin if using subnet router
+#
+# ============================================
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: shamrock-tailscale
+    hostname: shamrock-vps
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      # Auth key — generate at https://login.tailscale.com/admin/settings/keys
+      - TS_AUTHKEY=${TAILSCALE_AUTHKEY:-}
+      # Hostname on the tailnet
+      - TS_HOSTNAME=shamrock-vps
+      # Accept DNS from tailnet (MagicDNS)
+      - TS_ACCEPT_DNS=true
+      # Advertise Docker bridge subnet so tailnet peers can reach containers
+      - TS_ROUTES=172.18.0.0/16
+      # Enable userspace networking (no kernel module needed in Docker)
+      - TS_USERSPACE=false
+      # State directory (persisted via volume)
+      - TS_STATE_DIR=/var/lib/tailscale
+      # Extra flags: enable subnet router + accept routes from other nodes
+      - TS_EXTRA_ARGS=--advertise-routes=172.18.0.0/16 --accept-routes --snat-subnet-routes=false
+    volumes:
+      # Persist Tailscale state across container restarts
+      - tailscale-state:/var/lib/tailscale
+      # Required for kernel networking
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - shamrock-net
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    mem_limit: 128m
+    cpus: 0.25
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── SOCKS5 Proxy via Tailscale (replaces SSH -R tunnel) ──
+  # Exposes a SOCKS5 proxy on port 1080 that routes through the iMac exit node
+  # This replaces the SSH reverse tunnel from iMac → VPS:1080
+  ts-proxy:
+    image: tailscale/tailscale:latest
+    container_name: shamrock-ts-proxy
+    hostname: shamrock-ts-proxy
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTHKEY:-}
+      - TS_HOSTNAME=shamrock-ts-proxy
+      - TS_STATE_DIR=/var/lib/tailscale
+      # Route ALL traffic through iMac exit node for residential IP egress
+      - TS_EXTRA_ARGS=--exit-node=${TAILSCALE_EXIT_NODE:-shamrocksimac} --exit-node-allow-lan-access
+    volumes:
+      - ts-proxy-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    networks:
+      - shamrock-net
+    # Expose SOCKS5 on the Docker network (same port as the old SSH tunnel)
+    expose:
+      - "1080"
+    ports:
+      - "127.0.0.1:1080:1080"
+    mem_limit: 128m
+    cpus: 0.25
+    depends_on:
+      - tailscale
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  tailscale-state:
+  ts-proxy-state:
+
+networks:
+  shamrock-net:
+    external: true
+    name: shamrock-leads_shamrock-net

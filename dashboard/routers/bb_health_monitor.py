@@ -95,7 +95,23 @@ async def check_server_health(suffix: str, server: dict) -> dict:
             "issues": list[str],
         }
     """
-    client = BlueBubblesClient(server["url"], server["password"], timeout=8.0)
+    # ── Tailscale failover: try direct peer-to-peer path first ──
+    url_to_use = server["url"]
+    tailscale_active = False
+    try:
+        from config.tailscale import ts_config
+        if ts_config.enabled and server.get("suffix") == "0178":
+            ts_url = ts_config.bb_url_tailscale
+            ts_client = BlueBubblesClient(ts_url, server["password"], timeout=4.0)
+            ts_result = await ts_client.server_info()
+            if ts_result.get("success"):
+                url_to_use = ts_url
+                tailscale_active = True
+                logger.debug("BB health [%s]: Tailscale direct → %s", suffix, ts_url)
+    except Exception:
+        pass  # Tailscale unavailable — fall through to configured URL
+
+    client = BlueBubblesClient(url_to_use, server["password"], timeout=8.0)
     issues = []
 
     # 1. Ping the server
@@ -112,7 +128,8 @@ async def check_server_health(suffix: str, server: dict) -> dict:
             "uptime_seconds": 0,
             "version": "unknown",
             "status": "offline",
-            "issues": ["Server unreachable — BlueBubbles may be down or ngrok tunnel offline"],
+            "tailscale_active": False,
+            "issues": ["Server unreachable — BlueBubbles may be down or tunnel offline (tried Tailscale + ngrok)"],
         }
 
     # 2. Parse server info
@@ -169,6 +186,9 @@ async def check_server_health(suffix: str, server: dict) -> dict:
         "total_messages": message_count,    # alias for renderHealth()
         "version": version,
         "status": status,
+        "tailscale_active": tailscale_active,
+        "connection_path": "tailscale" if tailscale_active else "ngrok",
+        "url_used": url_to_use,
         "issues": issues,
     }
 
