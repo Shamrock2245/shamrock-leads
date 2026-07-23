@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
-   ShamrockLeads — OSINT Intelligence Module
-   Admin-Only · Defendant & Indemnitor Deep Background Research
-   Integrates: Maigret · Blackbird · Trape
+   ShamrockLeads — OSINT Intelligence Workstation v2
+   Admin-Only · 4-Engine Platform
+   Maigret · Sherlock · Blackbird · SpiderFoot
    ═══════════════════════════════════════════════════════════════════ */
 /* global SL */
 (function () {
@@ -11,22 +11,29 @@
   const ADMIN_KEY = window.OSINT_ADMIN_KEY || '';
 
   // ── State ──────────────────────────────────────────────────────────
-  let _reports = [];
-  let _activeReport = null;
+  let _scans = [];
+  let _activeScan = null;
   let _pollTimer = null;
   let _toolStatus = null;
-  let _accountFilter = 'all';
+  let _activeTab = 'summary';
+  let _accountFilter = { source: 'all', category: 'all' };
+  let _selectedEngines = new Set(['maigret', 'sherlock']);
 
   // ── Public API ─────────────────────────────────────────────────────
   window.SLOSINT = {
     init,
     load,
     runScan,
-    openReport,
-    closeReport,
-    createTrapeSession,
-    filterAccounts,
-    copyToClipboard,
+    openScan,
+    closeScan,
+    toggleEngine,
+    switchTab,
+    exportJSON,
+    exportCSV,
+    exportPDF,
+    attachToSubject,
+    markRelevant,
+    markIrrelevant,
   };
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -49,172 +56,175 @@
   function _bindUI() {
     const scanBtn = $('osintScanBtn');
     if (scanBtn) scanBtn.addEventListener('click', runScan);
-    const trapeBtn = $('osintTrapeBtn');
-    if (trapeBtn) trapeBtn.addEventListener('click', createTrapeSession);
+
+    // Engine chips
+    document.querySelectorAll('.osint-engine-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const engine = chip.dataset.engine;
+        if (engine) toggleEngine(engine);
+      });
+    });
+
+    // Search/filter
+    const searchInput = $('osintSearchInput');
+    if (searchInput) {
+      searchInput.addEventListener('input', _debounce(() => load(), 400));
+    }
+    const sortSelect = $('osintSortSelect');
+    if (sortSelect) sortSelect.addEventListener('change', () => load());
+    const statusFilter = $('osintStatusFilter');
+    if (statusFilter) statusFilter.addEventListener('change', () => load());
   }
 
-  // ── Tool Status Check ──────────────────────────────────────────────
+  function _debounce(fn, ms) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  }
+
+  // ── Tool Status ────────────────────────────────────────────────────
   async function _checkToolStatus() {
     try {
-      const r = await fetch(`${API}/api/osint/status`, {
-        headers: headers(),
-        credentials: 'same-origin',
-      });
-      if (!r.ok) {
-        const container = $('osintToolStatus');
-        if (container) {
-          container.innerHTML = `<span class="osint-tool-pill missing" title="HTTP ${r.status}">
-            <span class="dot"></span>Status unavailable (${r.status})
-          </span>`;
-        }
-        return;
-      }
+      const r = await fetch(`${API}/api/osint/status`, { headers: headers(), credentials: 'same-origin' });
+      if (!r.ok) return;
       _toolStatus = await r.json();
       _renderToolStatus();
-      _syncScanButtonState();
     } catch (e) {
       console.warn('OSINT status check failed:', e);
     }
   }
 
   function _renderToolStatus() {
-    const container = $('osintToolStatus');
+    const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
-    const tools = [
-      { key: 'maigret',   label: 'Maigret' },
-      { key: 'blackbird', label: 'Blackbird' },
-      { key: 'trape',     label: 'Trape' },
-    ];
-    const ready = !!_toolStatus.ready_for_scans;
-    const workerOk = _toolStatus.worker_reachable !== false;
-    container.innerHTML = tools.map(t => {
-      const info = _toolStatus[t.key] || {};
-      const ok = info.available;
-      const tip = info.error || info.version || info.path || info.note || '';
-      return `<span class="osint-tool-pill ${ok ? 'ready' : 'missing'}" title="${_esc(tip)}">
-        <span class="dot"></span>${t.label}${ok && info.version ? ` · ${info.version}` : ''}
+
+    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot'];
+    container.innerHTML = engines.map(eng => {
+      const info = _toolStatus[eng] || {};
+      const available = info.available;
+      const cls = available ? 'available' : 'unavailable';
+      const version = info.version ? ` v${info.version}` : '';
+      return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}">
+        <span class="dot"></span>${eng.charAt(0).toUpperCase() + eng.slice(1)}${version}
       </span>`;
-    }).join('')
-      + `<span class="osint-tool-pill ${workerOk ? 'ready' : 'missing'}" title="${_esc(_toolStatus.worker_url || 'osint-worker')}">
-          <span class="dot"></span>Worker
-        </span>`
-      + (ready
-        ? ''
-        : `<span class="osint-tool-pill missing" title="Start osint-worker or check tools">
-            <span class="dot"></span>Scans blocked
-          </span>`);
-  }
+    }).join('');
 
-  function _syncScanButtonState() {
-    const btn = $('osintScanBtn');
-    if (!btn || !_toolStatus) return;
-    if (!_toolStatus.ready_for_scans) {
-      btn.disabled = true;
-      btn.title = 'Maigret and Blackbird are not installed on this server.';
+    // Queue info
+    const queueEl = $('osintQueueInfo');
+    if (queueEl && _toolStatus.queue) {
+      const q = _toolStatus.queue;
+      queueEl.textContent = `${q.running || 0} running · ${q.total_scans || 0} total`;
     }
   }
 
-  function _esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/"/g, '&quot;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+  // ── Engine Toggle ──────────────────────────────────────────────────
+  function toggleEngine(engine) {
+    if (_selectedEngines.has(engine)) {
+      if (_selectedEngines.size > 1) _selectedEngines.delete(engine);
+    } else {
+      _selectedEngines.add(engine);
+    }
+    _updateEngineChips();
+    _updateAdaptiveFields();
   }
 
-  // ── Load Reports ───────────────────────────────────────────────────
+  function _updateEngineChips() {
+    document.querySelectorAll('.osint-engine-chip').forEach(chip => {
+      const eng = chip.dataset.engine;
+      chip.classList.toggle('active', _selectedEngines.has(eng));
+    });
+  }
+
+  function _updateAdaptiveFields() {
+    const needsEmail = _selectedEngines.has('blackbird') || _selectedEngines.has('spiderfoot');
+    const needsPhone = _selectedEngines.has('spiderfoot');
+    const emailField = $('osintEmailField');
+    const phoneField = $('osintPhoneField');
+    if (emailField) emailField.style.display = needsEmail ? '' : 'none';
+    if (phoneField) phoneField.style.display = needsPhone ? '' : 'none';
+  }
+
+  // ── Load Scans ─────────────────────────────────────────────────────
   async function load() {
-    const list = $('osintReportList');
-    if (!list) return;
-    list.innerHTML = '<div class="osint-loading"><div class="osint-spinner"></div> Loading reports...</div>';
+    const search = $('osintSearchInput')?.value || '';
+    const sort = $('osintSortSelect')?.value || 'newest';
+    const status = $('osintStatusFilter')?.value || '';
+
+    let url = `${API}/api/osint/scans?limit=30&sort=${sort}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (status) url += `&status=${status}`;
+
     try {
-      const r = await fetch(`${API}/api/osint/reports?limit=30`, {
-        headers: headers(),
-        credentials: 'same-origin',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const d = await r.json();
-      _reports = d.reports || [];
-      _renderReportList();
+      const r = await fetch(url, { headers: headers(), credentials: 'same-origin' });
+      if (!r.ok) return;
+      const data = await r.json();
+      _scans = data.scans || [];
+      _renderScanList();
     } catch (e) {
-      list.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">⚠️</div>Could not load reports: ${_esc(e.message)}</div>`;
+      console.warn('Failed to load scans:', e);
     }
   }
 
-  function _renderReportList() {
-    const list = $('osintReportList');
-    if (!list) return;
-    if (!_reports.length) {
-      list.innerHTML = '<div class="osint-empty"><div class="osint-empty-icon">🔍</div>No intelligence reports yet.<br>Select a defendant or indemnitor and run a scan.</div>';
+  function _renderScanList() {
+    const container = $('osintScanList');
+    if (!container) return;
+
+    if (!_scans.length) {
+      container.innerHTML = `<div class="osint-empty">
+        <div class="empty-icon">🔍</div>
+        <div class="empty-text">No scans yet. Run your first OSINT scan to begin intelligence gathering.</div>
+      </div>`;
       return;
     }
-    list.innerHTML = _reports.map(r => _reportRowHTML(r)).join('');
-  }
 
-  function _reportRowHTML(r) {
-    const isDefendant = r.subject_type === 'defendant';
-    const icon = isDefendant ? '🔴' : '🟡';
-    const typeLabel = isDefendant ? 'Defendant' : 'Indemnitor';
-    const riskClass = _riskClass(r.osint_risk_score || 0);
-    const isActive = _activeReport && _activeReport._id === r._id;
+    container.innerHTML = _scans.map(scan => {
+      const id = scan._id;
+      const name = scan.full_name || 'Unknown Subject';
+      const engines = (scan.engines_requested || []).join(', ');
+      const status = scan.status || 'unknown';
+      const count = scan.total_accounts || 0;
+      const date = fmt(scan.created_at);
+      const active = _activeScan && _activeScan._id === id ? 'active' : '';
 
-    const statusLabel = r.status || 'unknown';
-    const acctLabel = (statusLabel === 'failed')
-      ? (r.error ? 'tool error' : 'failed')
-      : `${r.total_accounts_found || 0} accounts`;
-
-    return `<div class="osint-report-row ${isActive ? 'active' : ''}" onclick="SLOSINT.openReport('${r._id}')">
-      <div class="osint-report-icon ${r.subject_type}">${icon}</div>
-      <div class="osint-report-meta">
-        <div class="osint-report-name">${_esc(r.full_name || r.subject_id)}</div>
-        <div class="osint-report-sub">${typeLabel} · ${acctLabel} · ${fmt(r.scan_completed_at || r.scan_started_at)}</div>
-      </div>
-      <div class="osint-risk-gauge ${riskClass}">${r.osint_risk_score || 0}</div>
-      <span class="osint-status-badge ${statusLabel}">${statusLabel}</span>
-    </div>`;
-  }
-
-  function _riskClass(score) {
-    if (score >= 30) return 'critical';
-    if (score >= 20) return 'high';
-    if (score >= 10) return 'medium';
-    return 'low';
+      return `<div class="osint-report-row ${active}" onclick="SLOSINT.openScan('${id}')">
+        <div class="report-info">
+          <div class="report-name">${_esc(name)}</div>
+          <div class="report-meta">${_esc(engines)} · ${date}</div>
+        </div>
+        <span class="report-count">${count}</span>
+        <span class="report-status ${status}">${status}</span>
+      </div>`;
+    }).join('');
   }
 
   // ── Run Scan ───────────────────────────────────────────────────────
   async function runScan() {
-    const subjectType = $('osintSubjectType')?.value;
-    const subjectId   = $('osintSubjectId')?.value?.trim();
-    const fullName    = $('osintFullName')?.value?.trim();
-    const usernames   = ($('osintUsernames')?.value || '').split(',').map(u => u.trim()).filter(Boolean);
-    const email       = $('osintEmail')?.value?.trim();
-    const deepScan    = $('osintDeepScan')?.checked || false;
-    // Policy defaults live on worker when flags omitted; UI still sends explicit bools
-    const runMaigret  = $('osintRunMaigret')?.checked !== false;
-    const runBlackbirdExplicit = !!$('osintRunBlackbird')?.checked;
-    const secondOpinion = !!$('osintSecondOpinion')?.checked;
-    // Auto-enable blackbird for email-focused recon if user left it unchecked
-    const runBlackbird = runBlackbirdExplicit || secondOpinion || !!email;
-    const notes       = $('osintNotes')?.value?.trim();
-
-    if (!subjectId) { toast('Subject ID is required.', 'error'); return; }
-    if (!fullName && !usernames.length && !email) {
-      toast('At least one identifier is required: name, username, or email.', 'error');
-      return;
-    }
-
-    if (_toolStatus && !_toolStatus.ready_for_scans) {
-      toast(
-        _toolStatus.worker_reachable === false
-          ? 'OSINT worker is offline. Start osint-worker service.'
-          : 'OSINT tools unavailable on worker.',
-        'error'
-      );
-      return;
-    }
-
     const btn = $('osintScanBtn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">⟳</span> Scanning...'; }
+    if (!btn || btn.disabled) return;
+
+    const subjectType = $('osintSubjectType')?.value || 'defendant';
+    const subjectId = $('osintSubjectId')?.value?.trim();
+    const fullName = $('osintFullName')?.value?.trim();
+    const usernames = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+    const email = $('osintEmail')?.value?.trim() || null;
+    const phone = $('osintPhone')?.value?.trim() || null;
+    const deepScan = $('osintDeepScan')?.checked || false;
+    const secondOpinion = $('osintSecondOpinion')?.checked || false;
+    const notes = $('osintNotes')?.value?.trim() || null;
+
+    if (!subjectId) {
+      toast('Subject ID is required', 'error');
+      return;
+    }
+    if (!fullName && !usernames.length && !email && !phone) {
+      toast('At least one identifier required (name, username, email, or phone)', 'error');
+      return;
+    }
+
+    const engines = Array.from(_selectedEngines);
+
+    btn.disabled = true;
+    btn.classList.add('running');
+    btn.textContent = '⟳ Scanning...';
 
     try {
       const r = await fetch(`${API}/api/osint/scan`, {
@@ -225,341 +235,422 @@
           subject_type: subjectType,
           subject_id: subjectId,
           full_name: fullName || null,
-          usernames,
-          email: email || null,
+          usernames: usernames.length ? usernames : null,
+          email,
+          phone,
+          engines,
           deep_scan: deepScan,
-          run_maigret: runMaigret,
-          run_blackbird: runBlackbird,
           second_opinion: secondOpinion,
-          notes: notes || null,
+          notes,
         }),
       });
-      const d = await r.json().catch(() => ({}));
+
       if (!r.ok) {
-        const detail = typeof d.detail === 'string' ? d.detail
-          : (Array.isArray(d.detail) ? d.detail.map(x => x.msg || x).join('; ') : null);
-        throw new Error(detail || d.error || `Scan failed (HTTP ${r.status})`);
+        const err = await r.json().catch(() => ({}));
+        toast(err.detail || `Scan failed (${r.status})`, 'error');
+        return;
       }
 
-      toast(`Scan initiated. Report ID: ${d.report_id}`, 'success');
-      await load();
-      await openReport(d.report_id);
+      const data = await r.json();
+      toast(`Scan initiated (${engines.join(', ')})`, 'success');
+
+      // Poll for results
+      setTimeout(() => {
+        load();
+        if (data.scan_id) openScan(data.scan_id);
+      }, 1000);
     } catch (e) {
-      toast(`Scan error: ${e.message}`, 'error');
+      toast(`Network error: ${e.message}`, 'error');
     } finally {
-      if (btn) {
-        btn.disabled = !(_toolStatus && _toolStatus.ready_for_scans);
-        btn.innerHTML = '🔍 Run OSINT Scan';
-        _syncScanButtonState();
-      }
+      btn.disabled = false;
+      btn.classList.remove('running');
+      btn.textContent = '🔍 Run OSINT Scan';
     }
   }
 
-  // ── Open Report ────────────────────────────────────────────────────
-  async function openReport(reportId) {
-    // Stop any existing poll
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-
-    const panel = $('osintDetailPanel');
-    if (!panel) return;
-    panel.innerHTML = '<div class="osint-loading"><div class="osint-spinner"></div> Loading report...</div>';
-    panel.style.display = 'block';
+  // ── Open Scan Detail ───────────────────────────────────────────────
+  async function openScan(scanId) {
+    _stopPoll();
 
     try {
-      const r = await fetch(`${API}/api/osint/report/${reportId}`, {
-        headers: headers(),
-        credentials: 'same-origin',
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const report = await r.json();
-      _activeReport = report;
-      _renderReport(report);
-      _renderReportList();
-
-      if (report.status === 'running' || report.status === 'pending') {
-        _pollTimer = setInterval(() => _pollReport(reportId), 4000);
-      }
-    } catch (e) {
-      panel.innerHTML = `<div class="osint-empty"><div class="osint-empty-icon">❌</div>Failed to load report: ${_esc(e.message)}</div>`;
-    }
-  }
-
-  async function _pollReport(reportId) {
-    try {
-      const r = await fetch(`${API}/api/osint/report/${reportId}`, {
-        headers: headers(),
-        credentials: 'same-origin',
-      });
+      const r = await fetch(`${API}/api/osint/scan/${scanId}`, { headers: headers(), credentials: 'same-origin' });
       if (!r.ok) return;
-      const report = await r.json();
-      _activeReport = report;
-      _renderReport(report);
-      _renderReportList();
+      _activeScan = await r.json();
+      _renderDetail();
+      _renderScanList(); // Update active state
 
-      if (report.status !== 'running' && report.status !== 'pending') {
-        clearInterval(_pollTimer);
-        _pollTimer = null;
-        if (report.status === 'complete') {
-          const n = report.total_accounts_found || 0;
-          if (n === 0) {
-            toast('OSINT scan finished — 0 accounts found (tools ran OK).', 'info');
-          } else {
-            toast(`OSINT scan complete — ${n} accounts found.`, 'success');
-          }
-        } else if (report.status === 'partial') {
-          toast(`Partial OSINT results — ${report.total_accounts_found || 0} accounts. Check errors.`, 'error');
-        } else if (report.status === 'degraded') {
-          toast(`OSINT scan degraded (bot blocks) — ${report.total_accounts_found || 0} accounts. Treat carefully.`, 'error');
-        } else if (report.status === 'failed') {
-          toast(`OSINT scan FAILED: ${report.error || 'see report'}`, 'error');
-        }
+      // Poll if still running
+      if (['running', 'queued'].includes(_activeScan.status)) {
+        _startPoll(scanId);
       }
     } catch (e) {
-      console.warn('Poll error:', e);
+      console.warn('Failed to open scan:', e);
     }
   }
 
-  function closeReport() {
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-    _activeReport = null;
+  function closeScan() {
+    _stopPoll();
+    _activeScan = null;
     const panel = $('osintDetailPanel');
+    const empty = $('osintDetailEmpty');
     if (panel) panel.style.display = 'none';
-    _renderReportList();
+    if (empty) empty.style.display = '';
+    _renderScanList();
   }
 
-  // ── Render Report ──────────────────────────────────────────────────
-  function _renderReport(report) {
-    const panel = $('osintDetailPanel');
-    if (!panel) return;
+  function _startPoll(scanId) {
+    _pollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/api/osint/scan/${scanId}`, { headers: headers(), credentials: 'same-origin' });
+        if (!r.ok) return;
+        _activeScan = await r.json();
+        _renderDetail();
+        if (!['running', 'queued'].includes(_activeScan.status)) {
+          _stopPoll();
+          load(); // Refresh list
+        }
+      } catch (e) { /* ignore */ }
+    }, 3000);
+  }
 
-    const isRunning = report.status === 'running' || report.status === 'pending';
-    const riskClass = _riskClass(report.osint_risk_score || 0);
-    const allAccounts = [...(report.maigret_accounts || []), ...(report.blackbird_accounts || [])];
+  function _stopPoll() {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  }
+
+  // ── Render Detail ──────────────────────────────────────────────────
+  function _renderDetail() {
+    const panel = $('osintDetailPanel');
+    const empty = $('osintDetailEmpty');
+    if (!panel || !_activeScan) return;
+
+    panel.style.display = '';
+    if (empty) empty.style.display = 'none';
+
+    const scan = _activeScan;
+    const name = scan.full_name || 'Unknown Subject';
+    const status = scan.status || 'unknown';
 
     panel.innerHTML = `
-      <div class="osint-detail-panel">
-        <div class="osint-detail-header">
-          <div>
-            <div class="osint-detail-title">
-              ${report.subject_type === 'defendant' ? '🔴' : '🟡'}
-              ${report.full_name || report.subject_id}
-              <span class="osint-status-badge ${report.status}" style="margin-left:8px">${report.status}</span>
-            </div>
-            <div class="osint-detail-sub">
-              ${report.subject_type.toUpperCase()} · Scanned ${fmt(report.scan_started_at)}
-              ${report.scan_completed_at ? ` · Completed ${fmt(report.scan_completed_at)}` : ''}
-            </div>
-          </div>
-          <button class="osint-close-btn" onclick="SLOSINT.closeReport()">✕ Close</button>
-        </div>
-
-        ${isRunning ? `
-          <div style="margin-bottom:16px">
-            <div style="font-size:0.78rem;color:var(--muted);margin-bottom:6px">
-              ⟳ Scan in progress — checking ${report.run_maigret !== false ? 'Maigret + ' : ''}${report.run_blackbird !== false ? 'Blackbird' : ''}...
-            </div>
-            <div class="osint-progress-bar"><div class="osint-progress-fill"></div></div>
-          </div>` : ''}
-
-        <!-- KPI Row -->
-        <div class="osint-kpi-row">
-          <div class="osint-kpi-card" style="--accent:#ef4444">
-            <div class="osint-kpi-label">OSINT Risk Delta</div>
-            <div class="osint-kpi-value" style="color:${_riskColor(riskClass)}">+${report.osint_risk_score || 0}</div>
-            <div class="osint-kpi-sub">added to bond risk score</div>
-          </div>
-          <div class="osint-kpi-card" style="--accent:#3b82f6">
-            <div class="osint-kpi-label">Accounts Found</div>
-            <div class="osint-kpi-value">${report.total_accounts_found || 0}</div>
-            <div class="osint-kpi-sub">across all platforms</div>
-          </div>
-          <div class="osint-kpi-card" style="--accent:#8b5cf6">
-            <div class="osint-kpi-label">Maigret Hits</div>
-            <div class="osint-kpi-value">${(report.maigret_accounts || []).length}</div>
-            <div class="osint-kpi-sub">username matches</div>
-          </div>
-          <div class="osint-kpi-card" style="--accent:#f59e0b">
-            <div class="osint-kpi-label">Blackbird Hits</div>
-            <div class="osint-kpi-value">${(report.blackbird_accounts || []).length}</div>
-            <div class="osint-kpi-sub">email/username matches</div>
+      <div class="osint-detail-header">
+        <div>
+          <h3>${_esc(name)} <span class="report-status ${status}">${status}</span></h3>
+          <div style="font-size:0.68rem;color:var(--osint-muted);margin-top:2px">
+            ${(scan.engines_requested || []).join(' · ')} · ${fmt(scan.created_at)}
           </div>
         </div>
-
-        ${report.ai_summary ? `
-          <div class="osint-ai-summary">
-            <div class="osint-ai-text">${report.ai_summary}</div>
-          </div>` : ''}
-
-        ${report.error ? `
-          <div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:0.8rem;color:#ef4444">
-            ⚠️ Scan error: ${_esc(report.error)}
-          </div>` : ''}
-
-        ${(report.warnings && report.warnings.length) ? `
-          <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:0.8rem;color:#f59e0b">
-            ${(report.warnings || []).map(w => `⚡ ${_esc(w)}`).join('<br>')}
-          </div>` : ''}
-
-        ${_renderToolResults(report.tool_results || {})}
-
-        <!-- Risk Signals -->
-        ${_renderSignals(report.risk_signals || [])}
-
-        <!-- Accounts -->
-        ${_renderAccounts(allAccounts, report)}
-
-        <!-- Trape Section -->
-        ${_renderTrapeSection(report)}
-
-        ${report.notes ? `
-          <div style="margin-top:16px;padding:12px 16px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;font-size:0.78rem;color:var(--muted)">
-            📝 Notes: ${report.notes}
-          </div>` : ''}
-      </div>`;
+        <div class="osint-detail-actions">
+          <button onclick="SLOSINT.exportJSON()">JSON</button>
+          <button onclick="SLOSINT.exportCSV()">CSV</button>
+          <button onclick="SLOSINT.exportPDF()">PDF</button>
+          <button class="primary" onclick="SLOSINT.attachToSubject()">Attach</button>
+          <button onclick="SLOSINT.closeScan()">✕</button>
+        </div>
+      </div>
+      <div class="osint-detail-tabs">
+        <div class="osint-detail-tab ${_activeTab === 'summary' ? 'active' : ''}" onclick="SLOSINT.switchTab('summary')">Summary</div>
+        <div class="osint-detail-tab ${_activeTab === 'accounts' ? 'active' : ''}" onclick="SLOSINT.switchTab('accounts')">Accounts (${scan.total_accounts || 0})</div>
+        <div class="osint-detail-tab ${_activeTab === 'entities' ? 'active' : ''}" onclick="SLOSINT.switchTab('entities')">Entities (${scan.total_entities || 0})</div>
+        <div class="osint-detail-tab ${_activeTab === 'risk' ? 'active' : ''}" onclick="SLOSINT.switchTab('risk')">Risk</div>
+        <div class="osint-detail-tab ${_activeTab === 'progress' ? 'active' : ''}" onclick="SLOSINT.switchTab('progress')">Engines</div>
+      </div>
+      <div class="osint-detail-content" id="osintDetailContent">
+        ${_renderTabContent()}
+      </div>
+    `;
   }
 
-  function _riskColor(cls) {
-    return { low: '#10b981', medium: '#f59e0b', high: '#ef4444', critical: '#dc2626' }[cls] || '#f1f5f9';
+  function switchTab(tab) {
+    _activeTab = tab;
+    _renderDetail();
   }
 
-  function _renderSignals(signals) {
-    if (!signals.length) {
-      return `<div class="osint-signals-section">
-        <div class="osint-section-title">⚡ Risk Signals</div>
-        <div class="osint-empty" style="padding:16px">No risk signals detected.</div>
+  function _renderTabContent() {
+    const scan = _activeScan;
+    if (!scan) return '';
+
+    switch (_activeTab) {
+      case 'summary': return _renderSummary(scan);
+      case 'accounts': return _renderAccounts(scan);
+      case 'entities': return _renderEntities(scan);
+      case 'risk': return _renderRisk(scan);
+      case 'progress': return _renderProgress(scan);
+      default: return '';
+    }
+  }
+
+  function _renderSummary(scan) {
+    const accounts = scan.total_accounts || 0;
+    const entities = scan.total_entities || 0;
+    const risk = scan.osint_risk_score || 0;
+    const platforms = (scan.platforms_found || []).length;
+
+    let html = `<div class="osint-kpi-grid">
+      <div class="osint-kpi"><div class="kpi-value">${accounts}</div><div class="kpi-label">Accounts</div></div>
+      <div class="osint-kpi"><div class="kpi-value">${entities}</div><div class="kpi-label">Entities</div></div>
+      <div class="osint-kpi"><div class="kpi-value">${platforms}</div><div class="kpi-label">Platforms</div></div>
+      <div class="osint-kpi"><div class="kpi-value">+${risk}</div><div class="kpi-label">Risk (Advisory)</div></div>
+    </div>`;
+
+    // Engine progress
+    const progress = scan.progress || {};
+    if (Object.keys(progress).length) {
+      html += `<div class="osint-engine-progress">`;
+      for (const [engine, info] of Object.entries(progress)) {
+        const st = info.status || 'pending';
+        const count = (info.accounts_found || 0) + (info.entities_found || 0);
+        html += `<div class="osint-ep-item">
+          <span class="ep-dot ${st}"></span>
+          <span class="ep-name">${engine}</span>
+          <span class="ep-count">${count} found</span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    // AI Summary
+    if (scan.ai_summary) {
+      html += `<div style="background:rgba(163,113,247,0.08);border:1px solid rgba(163,113,247,0.2);border-radius:8px;padding:12px;margin-top:10px">
+        <div style="font-size:0.63rem;font-weight:600;color:var(--osint-purple);text-transform:uppercase;margin-bottom:6px">AI Analysis</div>
+        <div style="font-size:0.78rem;color:var(--osint-text);line-height:1.5">${_esc(scan.ai_summary)}</div>
       </div>`;
     }
-    return `<div class="osint-signals-section">
-      <div class="osint-section-title">⚡ Risk Signals (${signals.length})</div>
-      <div class="osint-signal-list">
-        ${signals.map(s => `
-          <div class="osint-signal-item ${s.severity}">
-            <span class="osint-signal-sev">${s.severity}</span>
-            <div>
-              <div class="osint-signal-detail">${s.detail}</div>
-              <div class="osint-signal-source">${s.signal_type} · via ${s.source}</div>
-            </div>
-          </div>`).join('')}
-      </div>
-    </div>`;
+
+    // Warnings
+    if (scan.warnings?.length) {
+      html += `<div style="margin-top:10px">`;
+      scan.warnings.forEach(w => {
+        html += `<div style="font-size:0.68rem;color:var(--osint-warning);padding:4px 0">⚠ ${_esc(w)}</div>`;
+      });
+      html += `</div>`;
+    }
+
+    return html;
   }
 
-  function _renderToolResults(toolResults) {
-    const keys = Object.keys(toolResults || {});
-    if (!keys.length) return '';
-    return `<div class="osint-signals-section">
-      <div class="osint-section-title">🛠 Tool Results</div>
-      <div class="osint-signal-list">
-        ${keys.map(k => {
-          const t = toolResults[k] || {};
-          const ok = !!t.ok;
-          const sev = ok ? 'low' : 'high';
-          const detail = t.error || t.warning || (ok ? `${t.accounts || 0} accounts` : 'failed');
-          return `<div class="osint-signal-item ${sev}">
-            <span class="osint-signal-sev">${ok ? 'ok' : 'fail'}</span>
-            <div>
-              <div class="osint-signal-detail"><strong>${_esc(k)}</strong> — ${_esc(detail)}</div>
-              <div class="osint-signal-source">${t.attempted === false ? 'not attempted' : 'attempted'}${t.username ? ' · ' + _esc(t.username) : ''}</div>
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-    </div>`;
-  }
-
-  function _renderAccounts(accounts, report) {
+  function _renderAccounts(scan) {
+    const accounts = scan.accounts || [];
     if (!accounts.length) {
-      const failed = report && (report.status === 'failed' || report.status === 'partial');
-      const msg = failed
-        ? 'No accounts — scan did not complete successfully. See errors above (tools missing, wrong CLI, or timeout).'
-        : 'No accounts found. Tools finished without hits — try other usernames, email, or deep scan.';
-      return `<div class="osint-accounts-section">
-        <div class="osint-section-title">🌐 Social Footprint</div>
-        <div class="osint-empty" style="padding:16px">${msg}</div>
+      return `<div class="osint-empty"><div class="empty-icon">📭</div><div class="empty-text">No accounts discovered</div></div>`;
+    }
+
+    // Toolbar
+    const sources = [...new Set(accounts.map(a => a.source))];
+    const categories = [...new Set(accounts.map(a => a.category).filter(Boolean))];
+
+    let html = `<div class="osint-accounts-toolbar">
+      <select onchange="window._osintFilterSource=this.value;SLOSINT.switchTab('accounts')">
+        <option value="all">All Sources</option>
+        ${sources.map(s => `<option value="${s}" ${_accountFilter.source === s ? 'selected' : ''}>${s}</option>`).join('')}
+      </select>
+      <select onchange="window._osintFilterCat=this.value;SLOSINT.switchTab('accounts')">
+        <option value="all">All Categories</option>
+        ${categories.map(c => `<option value="${c}" ${_accountFilter.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+      </select>
+      <span style="font-size:0.65rem;color:var(--osint-muted);margin-left:auto">${accounts.length} total</span>
+    </div>`;
+
+    // Filter
+    let filtered = accounts;
+    const srcFilter = window._osintFilterSource || 'all';
+    const catFilter = window._osintFilterCat || 'all';
+    if (srcFilter !== 'all') filtered = filtered.filter(a => a.source === srcFilter);
+    if (catFilter !== 'all') filtered = filtered.filter(a => a.category === catFilter);
+
+    html += `<div class="osint-accounts-grid">`;
+    filtered.slice(0, 100).forEach((acct, idx) => {
+      const icon = _platformIcon(acct.platform);
+      html += `<div class="osint-account-card">
+        <div class="acct-icon">${icon}</div>
+        <div class="acct-info">
+          <div class="acct-platform">${_esc(acct.platform)}</div>
+          <div class="acct-url" title="${_esc(acct.url)}">${_esc(acct.url || acct.username || '')}</div>
+        </div>
+        <span class="acct-source">${acct.source}</span>
+        <div class="acct-actions">
+          ${acct.url ? `<button onclick="window.open('${_esc(acct.url)}','_blank')" title="Open">↗</button>` : ''}
+          <button onclick="navigator.clipboard.writeText('${_esc(acct.url || '')}');window.SL?.toast?.('Copied','success')" title="Copy">📋</button>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+
+    if (filtered.length > 100) {
+      html += `<div style="text-align:center;font-size:0.68rem;color:var(--osint-muted);margin-top:8px">Showing 100 of ${filtered.length} — export for full list</div>`;
+    }
+
+    return html;
+  }
+
+  function _renderEntities(scan) {
+    const entities = scan.entities || [];
+    if (!entities.length) {
+      return `<div class="osint-empty"><div class="empty-icon">📭</div><div class="empty-text">No entities discovered. SpiderFoot returns entities like emails, phones, and addresses.</div></div>`;
+    }
+
+    let html = `<div class="osint-entity-list">`;
+    entities.forEach(ent => {
+      html += `<div class="osint-entity-row">
+        <span class="entity-type">${_esc(ent.type)}</span>
+        <span class="entity-value">${_esc(ent.value)}</span>
+        <span class="entity-source">${_esc(ent.module || ent.source)}</span>
+      </div>`;
+    });
+    html += `</div>`;
+    return html;
+  }
+
+  function _renderRisk(scan) {
+    const signals = scan.risk_signals || [];
+    const score = scan.osint_risk_score || 0;
+
+    let html = `<div class="osint-kpi-grid" style="margin-bottom:14px">
+      <div class="osint-kpi"><div class="kpi-value" style="color:${score > 20 ? 'var(--osint-danger)' : score > 10 ? 'var(--osint-warning)' : 'var(--osint-accent)'}">+${score}</div><div class="kpi-label">Risk Delta (Advisory)</div></div>
+    </div>`;
+
+    if (!signals.length) {
+      html += `<div style="font-size:0.75rem;color:var(--osint-muted)">No risk signals detected.</div>`;
+      return html;
+    }
+
+    html += `<div class="osint-signal-list">`;
+    signals.forEach(sig => {
+      const sev = sig.severity || 'medium';
+      html += `<div class="osint-signal-card ${sev}">
+        <div class="signal-header">
+          <span class="signal-severity ${sev}">${sev}</span>
+          <span class="signal-type">${_esc(sig.signal_type)}</span>
+        </div>
+        <div class="signal-detail">${_esc(sig.detail)}</div>
+      </div>`;
+    });
+    html += `</div>`;
+    return html;
+  }
+
+  function _renderProgress(scan) {
+    const progress = scan.progress || {};
+    if (!Object.keys(progress).length) {
+      return `<div style="font-size:0.75rem;color:var(--osint-muted)">No engine progress data available.</div>`;
+    }
+
+    let html = `<div style="display:flex;flex-direction:column;gap:10px">`;
+    for (const [engine, info] of Object.entries(progress)) {
+      const st = info.status || 'pending';
+      const stColor = st === 'completed' ? 'var(--osint-accent)' : st === 'failed' ? 'var(--osint-danger)' : st === 'running' ? 'var(--osint-warning)' : 'var(--osint-muted)';
+      html += `<div style="background:var(--osint-bg);border:1px solid var(--osint-border);border-radius:8px;padding:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="ep-dot ${st}" style="width:8px;height:8px;border-radius:50%;background:${stColor}"></span>
+          <span style="font-size:0.8rem;font-weight:600;color:var(--osint-text)">${engine.charAt(0).toUpperCase() + engine.slice(1)}</span>
+          <span style="font-size:0.65rem;color:${stColor};margin-left:auto;text-transform:uppercase">${st}</span>
+        </div>
+        <div style="font-size:0.68rem;color:var(--osint-muted)">
+          Accounts: ${info.accounts_found || 0} · Entities: ${info.entities_found || 0}
+          ${info.started_at ? ` · Started: ${fmt(info.started_at)}` : ''}
+          ${info.completed_at ? ` · Completed: ${fmt(info.completed_at)}` : ''}
+        </div>
+        ${info.error ? `<div style="font-size:0.65rem;color:var(--osint-danger);margin-top:4px">${_esc(info.error)}</div>` : ''}
+        ${info.warning ? `<div style="font-size:0.65rem;color:var(--osint-warning);margin-top:4px">${_esc(info.warning)}</div>` : ''}
       </div>`;
     }
-    const filtered = _accountFilter === 'all' ? accounts
-      : accounts.filter(a => a.source === _accountFilter);
-
-    return `<div class="osint-accounts-section">
-      <div class="osint-section-title">🌐 Social Footprint (${accounts.length} accounts)</div>
-      <div class="osint-accounts-filter">
-        <button class="osint-filter-btn ${_accountFilter === 'all' ? 'active' : ''}" onclick="SLOSINT.filterAccounts('all')">All (${accounts.length})</button>
-        <button class="osint-filter-btn ${_accountFilter === 'maigret' ? 'active' : ''}" onclick="SLOSINT.filterAccounts('maigret')">Maigret (${accounts.filter(a=>a.source==='maigret').length})</button>
-        <button class="osint-filter-btn ${_accountFilter === 'blackbird' ? 'active' : ''}" onclick="SLOSINT.filterAccounts('blackbird')">Blackbird (${accounts.filter(a=>a.source==='blackbird').length})</button>
-      </div>
-      <div class="osint-accounts-grid">
-        ${filtered.map(a => `
-          <a class="osint-account-card" href="${a.url || '#'}" target="_blank" rel="noopener noreferrer" title="${a.url || ''}">
-            <div class="osint-account-platform">${a.platform}</div>
-            <div class="osint-account-url">${a.url ? new URL(a.url).hostname : '—'}</div>
-            <span class="osint-account-source ${a.source}">${a.source}</span>
-          </a>`).join('')}
-      </div>
-    </div>`;
+    html += `</div>`;
+    return html;
   }
 
-  function _renderTrapeSection(report) {
-    return `<div class="osint-trape-section">
-      <div class="osint-trape-header">
-        <span class="osint-trape-title">📡 Trape — Location & Session Tracking</span>
-      </div>
-      <div class="osint-trape-warning">
-        ⚠️ <strong>Operational Use Only.</strong> Trape requires a publicly accessible server (ngrok or static IP) and the subject must visit the generated tracking URL. Use only for legitimate skip-trace operations. All sessions are audited.
-      </div>
-      <button class="osint-trape-btn" onclick="SLOSINT.createTrapeSession('${report.subject_type}', '${report.subject_id}')">
-        📡 Generate Tracking Session
-      </button>
-      <div id="osintTrapeSessionResult"></div>
-    </div>`;
+  // ── Export Actions ─────────────────────────────────────────────────
+  function exportJSON() {
+    if (!_activeScan) return;
+    _downloadFile(`${API}/api/osint/scan/${_activeScan._id}/export/json`, `osint_${_activeScan._id}.json`);
   }
 
-  // ── Filter Accounts ────────────────────────────────────────────────
-  function filterAccounts(source) {
-    _accountFilter = source;
-    if (_activeReport) _renderReport(_activeReport);
+  function exportCSV() {
+    if (!_activeScan) return;
+    _downloadFile(`${API}/api/osint/scan/${_activeScan._id}/export/csv`, `osint_${_activeScan._id}.csv`);
   }
 
-  // ── Trape Session ──────────────────────────────────────────────────
-  async function createTrapeSession(subjectType, subjectId) {
-    const lureUrl = prompt('Enter the lure URL to clone (e.g. a court notice page):');
-    if (!lureUrl) return;
+  function exportPDF() {
+    if (!_activeScan) return;
+    _downloadFile(`${API}/api/osint/scan/${_activeScan._id}/export/pdf`, `osint_report_${_activeScan._id}.pdf`);
+  }
 
+  async function _downloadFile(url, filename) {
     try {
-      const r = await fetch(`${API}/api/osint/trape/session`, {
+      const r = await fetch(url, { headers: headers(), credentials: 'same-origin' });
+      if (!r.ok) { toast('Export failed', 'error'); return; }
+      const blob = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Export downloaded', 'success');
+    } catch (e) {
+      toast(`Export error: ${e.message}`, 'error');
+    }
+  }
+
+  async function attachToSubject() {
+    if (!_activeScan) return;
+    try {
+      const r = await fetch(`${API}/api/osint/scan/${_activeScan._id}/attach`, {
         method: 'POST',
         headers: headers(),
         credentials: 'same-origin',
-        body: JSON.stringify({
-          subject_type: subjectType || $('osintSubjectType')?.value,
-          subject_id: subjectId || $('osintSubjectId')?.value?.trim(),
-          lure_url: lureUrl,
-        }),
       });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Session creation failed');
-
-      const resultEl = $('osintTrapeSessionResult');
-      if (resultEl) {
-        resultEl.innerHTML = `
-          <div class="osint-trape-session-card">
-            <strong>Session Created</strong><br>
-            Session ID: <code>${d.session_id}</code><br>
-            ${d.tracking_url ? `Tracking URL: <a href="${d.tracking_url}" target="_blank" style="color:#f59e0b">${d.tracking_url}</a>` : '<em style="color:var(--muted)">Set TRAPE_SERVER_URL env var to generate a public URL.</em>'}<br>
-            <div class="cmd">${d.trape_command}
-              <button class="osint-copy-btn" onclick="SLOSINT.copyToClipboard('${d.trape_command.replace(/'/g, "\\'")}')">📋 Copy</button>
-            </div>
-          </div>`;
-      }
-      toast('Trape session created.', 'success');
+      if (!r.ok) { toast('Attach failed', 'error'); return; }
+      const data = await r.json();
+      toast(data.success ? 'OSINT summary attached to subject record' : 'Attach failed', data.success ? 'success' : 'error');
     } catch (e) {
-      toast(`Trape error: ${e.message}`, 'error');
+      toast(`Error: ${e.message}`, 'error');
     }
   }
 
-  // ── Utility ────────────────────────────────────────────────────────
-  function copyToClipboard(text) {
-    navigator.clipboard.writeText(text).then(() => toast('Copied!', 'success'));
+  // ── Relevance Marking ──────────────────────────────────────────────
+  async function markRelevant(indices) {
+    await _updateRelevance(indices, [], 'relevant');
   }
 
+  async function markIrrelevant(indices) {
+    await _updateRelevance(indices, [], 'irrelevant');
+  }
+
+  async function _updateRelevance(accountIndices, entityIndices, relevance) {
+    if (!_activeScan) return;
+    try {
+      await fetch(`${API}/api/osint/scan/${_activeScan._id}/findings`, {
+        method: 'PATCH',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ account_indices: accountIndices, entity_indices: entityIndices, relevance }),
+      });
+      toast('Updated', 'success');
+      openScan(_activeScan._id);
+    } catch (e) {
+      toast('Update failed', 'error');
+    }
+  }
+
+  // ── Utilities ──────────────────────────────────────────────────────
+  function _esc(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  function _platformIcon(platform) {
+    const p = (platform || '').toLowerCase();
+    if (p.includes('twitter') || p.includes('x.com')) return '🐦';
+    if (p.includes('facebook')) return '📘';
+    if (p.includes('instagram')) return '📷';
+    if (p.includes('linkedin')) return '💼';
+    if (p.includes('github')) return '🐙';
+    if (p.includes('reddit')) return '🤖';
+    if (p.includes('tiktok')) return '🎵';
+    if (p.includes('youtube')) return '▶️';
+    if (p.includes('pinterest')) return '📌';
+    if (p.includes('snapchat')) return '👻';
+    if (p.includes('telegram')) return '✈️';
+    if (p.includes('discord')) return '💬';
+    return '🌐';
+  }
 })();

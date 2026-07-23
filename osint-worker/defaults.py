@@ -1,7 +1,8 @@
 """
-OSINT scan policy defaults — ShamrockLeads osint-worker
-========================================================
+OSINT scan policy defaults — ShamrockLeads osint-worker v2
+===========================================================
 Noise control and underwriting-friendly defaults.
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot
 """
 from __future__ import annotations
 
@@ -10,24 +11,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ── Timeouts ──────────────────────────────────────────────────────────────────
 MAIGRET_TIMEOUT = int(os.getenv("OSINT_MAIGRET_TIMEOUT", "180"))
+SHERLOCK_TIMEOUT = int(os.getenv("OSINT_SHERLOCK_TIMEOUT", "120"))
 BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
+SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
 
 # ── Quick vs deep site coverage ───────────────────────────────────────────────
-# Quick: small, high-signal surface (underwriting default)
 QUICK_TOP_SITES = int(os.getenv("OSINT_QUICK_TOP_SITES", "250"))
-# Deep: larger but still NOT full -a dump (noise + CAPTCHA hell)
 DEEP_TOP_SITES = int(os.getenv("OSINT_DEEP_TOP_SITES", "800"))
-# Hard cap on name-derived username guesses (explicit usernames always preferred)
 MAX_NAME_DERIVED_USERNAMES = int(os.getenv("OSINT_MAX_NAME_USERNAMES", "2"))
-# Max total usernames to try with Maigret (primary + alts)
 MAX_MAIGRET_USERNAMES = int(os.getenv("OSINT_MAX_MAIGRET_USERNAMES", "2"))
 
 # Always disable Maigret recursion / ID permutation noise
 MAIGRET_NO_RECURSION = True
 MAIGRET_NO_AUTOUPDATE = True
 
-# Degraded quality thresholds (from stderr heuristics)
+# Degraded quality thresholds
 DEGRADED_ACCESS_DENIED_RATIO = float(os.getenv("OSINT_DEGRADED_ACCESS_RATIO", "0.15"))
 DEGRADED_BOT_RATIO = float(os.getenv("OSINT_DEGRADED_BOT_RATIO", "0.10"))
 
@@ -40,18 +39,15 @@ def resolve_tool_flags(
     second_opinion: bool = False,
 ) -> Tuple[bool, bool, List[str]]:
     """
+    Legacy v1 policy resolver.
     Policy:
-      - Maigret ON by default (username footprint).
+      - Maigret ON by default.
       - Blackbird OFF by default.
-      - Blackbird ON when email is provided (email-focused recon).
-      - Blackbird ON when second_opinion=True (explicit dual-engine).
-      - Explicit run_* flags always win when provided as True/False.
-
-    Returns (want_maigret, want_blackbird, policy_notes).
+      - Blackbird ON when email is provided.
+      - Blackbird ON when second_opinion=True.
     """
     notes: List[str] = []
 
-    # Explicit flags: None means "use default policy"
     if run_maigret is None:
         want_maigret = True
         notes.append("policy: maigret default ON")
@@ -72,8 +68,6 @@ def resolve_tool_flags(
     else:
         want_blackbird = bool(run_blackbird)
         notes.append(f"policy: blackbird explicit={'on' if want_blackbird else 'off'}")
-        if second_opinion and not want_blackbird:
-            notes.append("policy: second_opinion ignored because blackbird explicitly off")
 
     if second_opinion and want_blackbird and want_maigret:
         notes.append("policy: dual-engine second-opinion scan")
@@ -87,7 +81,6 @@ def build_username_candidates(
 ) -> List[str]:
     """
     Prefer explicit usernames. Cap low-quality name-derived guesses.
-    Order: explicit first, then at most MAX_NAME_DERIVED_USERNAMES from name.
     """
     ordered: List[str] = []
     seen: set[str] = set()
@@ -99,7 +92,6 @@ def build_username_candidates(
         low = key.lower()
         if low in seen:
             return
-        # Skip pure numbers / garbage
         if key.isdigit():
             return
         seen.add(low)
@@ -113,7 +105,6 @@ def build_username_candidates(
         parts = full_name.lower().split()
         if len(parts) >= 2:
             first, last = parts[0], parts[-1]
-            # Prefer higher-quality patterns first
             candidates = [
                 f"{first}.{last}",
                 f"{first}{last}",
@@ -130,18 +121,18 @@ def build_username_candidates(
                 seen.add(low)
 
     ordered.extend(derived)
-    return ordered[: max(MAX_MAIGRET_USERNAMES + 2, 4)]  # slight headroom; runner caps further
+    return ordered[:max(MAX_MAIGRET_USERNAMES + 2, 4)]
 
 
 def maigret_site_args(deep_scan: bool) -> List[str]:
-    """CLI args for site coverage. Never enables full -a by default."""
+    """CLI args for site coverage."""
     if deep_scan:
         return ["--top-sites", str(DEEP_TOP_SITES)]
     return ["--top-sites", str(QUICK_TOP_SITES)]
 
 
 def dedupe_accounts(accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Dedupe by (source, platform lower, url host+path) then platform+url."""
+    """Dedupe by (source, platform lower, url host+path)."""
     from urllib.parse import urlparse
 
     out: List[Dict[str, Any]] = []
@@ -169,7 +160,7 @@ def dedupe_accounts(accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tuple[int, List[Dict]]:
-    """0-40 OSINT risk delta + signals (advisory only — not auto-applied to bond score)."""
+    """0-40 OSINT risk delta + signals (advisory only)."""
     import json as _json
 
     signals: List[Dict] = []
@@ -181,7 +172,7 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
         signals.append({
             "signal_type": "high_account_count",
             "severity": "high",
-            "detail": f"{total} accounts found across platforms — possible multiple identities.",
+            "detail": f"{total} accounts found — possible multiple identities.",
             "source": "osint_engine",
         })
     elif total >= 15:
@@ -234,21 +225,15 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
 
 
 def assess_maigret_quality(stderr: str, stdout: str = "") -> Dict[str, Any]:
-    """
-    Heuristic quality from Maigret console output.
-    Returns {degraded: bool, reasons: [], stats: {}}.
-    """
+    """Heuristic quality from Maigret console output."""
+    import re
     text = f"{stderr or ''}\n{stdout or ''}"
     reasons: List[str] = []
     degraded = False
 
-    # Maigret prints: Too many errors of type "Access denied" (5.17%)
-    import re
     ratios = {}
     for m in re.finditer(
-        r'Too many errors of type "([^"]+)"\s*\(([0-9.]+)%\)',
-        text,
-        re.I,
+        r'Too many errors of type "([^"]+)"\s*\(([0-9.]+)%\)', text, re.I,
     ):
         kind = m.group(1).lower()
         pct = float(m.group(2)) / 100.0
@@ -270,8 +255,4 @@ def assess_maigret_quality(stderr: str, stdout: str = "") -> Dict[str, Any]:
         degraded = True
         reasons.append(f"high bot/challenge rate ({bot:.0%})")
 
-    return {
-        "degraded": degraded,
-        "reasons": reasons,
-        "error_ratios": ratios,
-    }
+    return {"degraded": degraded, "reasons": reasons, "error_ratios": ratios}

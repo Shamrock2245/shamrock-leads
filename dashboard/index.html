@@ -4484,26 +4484,29 @@
      OSINT INTELLIGENCE — Admin Only
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabOSINT">
-  <div class="container">
+  <div class="osint-workstation">
     <!-- Header -->
     <div class="osint-header">
       <div class="osint-header-left">
-        <h2>🕵️ OSINT Intelligence</h2>
-        <p>Deep Background Research · Defendant &amp; Indemnitor Risk Profiling · Admin Only</p>
+        <h2>🕵️ OSINT Intelligence Workstation</h2>
+        <p>Multi-Engine Background Research · Defendant &amp; Indemnitor Risk Profiling · Admin Only</p>
       </div>
       <div class="osint-header-right">
         <span class="osint-admin-badge">🔒 Admin</span>
-        <div class="osint-tool-status" id="osintToolStatus"></div>
+        <div class="osint-engine-pills" id="osintEnginePills"></div>
+        <span class="osint-queue-info" id="osintQueueInfo"></span>
       </div>
     </div>
 
-    <div class="osint-two-col">
-      <!-- Left: Scan Form + Report List -->
-      <div class="osint-left-col">
-        <!-- Scan Form -->
-        <div class="osint-scan-card">
-          <div class="osint-scan-title">🔍 New Intelligence Scan</div>
-          <div class="osint-form-grid">
+    <!-- Main Grid -->
+    <div class="osint-main-grid">
+      <!-- Left Panel: Scan + List -->
+      <div class="osint-left-panel">
+        <!-- New Scan Card -->
+        <div class="osint-card">
+          <div class="osint-card-title"><span class="icon">🔍</span> New Intelligence Scan</div>
+
+          <div class="osint-form-row">
             <div class="osint-field">
               <label>Subject Type</label>
               <select id="osintSubjectType">
@@ -4512,65 +4515,92 @@
               </select>
             </div>
             <div class="osint-field">
-              <label>Subject ID (MongoDB ObjectId)</label>
-              <input type="text" id="osintSubjectId" placeholder="e.g. 64a1b2c3d4e5f6a7b8c9d0e1" />
+              <label>Subject ID</label>
+              <input type="text" id="osintSubjectId" placeholder="MongoDB ObjectId" />
             </div>
+          </div>
+
+          <div class="osint-form-row full">
             <div class="osint-field">
               <label>Full Legal Name</label>
               <input type="text" id="osintFullName" placeholder="John Michael Smith" />
             </div>
+          </div>
+
+          <div class="osint-form-row full">
             <div class="osint-field">
               <label>Known Usernames (comma-separated)</label>
               <input type="text" id="osintUsernames" placeholder="jsmith, john.smith239" />
             </div>
-            <div class="osint-field">
+          </div>
+
+          <div class="osint-form-row">
+            <div class="osint-field" id="osintEmailField">
               <label>Email Address</label>
               <input type="email" id="osintEmail" placeholder="subject@email.com" />
             </div>
-            <div class="osint-field">
-              <label>Admin Notes (internal)</label>
-              <input type="text" id="osintNotes" placeholder="Optional context for this scan..." />
+            <div class="osint-field" id="osintPhoneField" style="display:none">
+              <label>Phone Number</label>
+              <input type="tel" id="osintPhone" placeholder="+1 239-555-0100" />
             </div>
           </div>
-          <div class="osint-options-row">
-            <label class="osint-toggle" title="Default ON — username footprint via Maigret">
-              <input type="checkbox" id="osintRunMaigret" checked /> Maigret (default)
-            </label>
-            <label class="osint-toggle" title="Default OFF. Auto-runs when email is set. Or enable for second opinion.">
-              <input type="checkbox" id="osintRunBlackbird" /> Blackbird (email / 2nd opinion)
-            </label>
-            <label class="osint-toggle" title="Force Maigret + Blackbird dual-engine">
-              <input type="checkbox" id="osintSecondOpinion" /> Second opinion (both engines)
-            </label>
-            <label class="osint-toggle" title="Larger site list (~800). Still no recursion.">
-              <input type="checkbox" id="osintDeepScan" /> Deep scan (slower)
-            </label>
+
+          <!-- Engine Selection Chips -->
+          <div style="margin-bottom:8px">
+            <label style="font-size:0.63rem;font-weight:500;color:var(--osint-muted);text-transform:uppercase;letter-spacing:0.3px">Engines</label>
           </div>
-          <p style="font-size:0.72rem;color:var(--muted);margin:0 0 10px">
-            Policy: Maigret-only by default. Blackbird auto-enables when an email is provided, or when you check Second opinion.
-            Risk score is <strong>advisory only</strong> (not applied to bond risk automatically).
-          </p>
+          <div class="osint-engine-chips">
+            <div class="osint-engine-chip active" data-engine="maigret"><span class="chip-dot"></span>Maigret</div>
+            <div class="osint-engine-chip active" data-engine="sherlock"><span class="chip-dot"></span>Sherlock</div>
+            <div class="osint-engine-chip" data-engine="blackbird"><span class="chip-dot"></span>Blackbird</div>
+            <div class="osint-engine-chip" data-engine="spiderfoot"><span class="chip-dot"></span>SpiderFoot</div>
+          </div>
+
+          <div class="osint-options-row">
+            <label class="osint-toggle"><input type="checkbox" id="osintDeepScan" /> Deep scan</label>
+            <label class="osint-toggle"><input type="checkbox" id="osintSecondOpinion" /> Second opinion</label>
+          </div>
+
+          <div class="osint-form-row full">
+            <div class="osint-field">
+              <label>Notes (internal)</label>
+              <input type="text" id="osintNotes" placeholder="Optional context..." />
+            </div>
+          </div>
+
           <button class="osint-scan-btn" id="osintScanBtn">🔍 Run OSINT Scan</button>
         </div>
 
-        <!-- Report List -->
-        <div>
-          <div class="osint-reports-header">
-            <span class="osint-reports-title">📋 Intelligence Reports</span>
-            <button class="osint-filter-btn" onclick="SLOSINT.load()" style="font-size:0.65rem">↻ Refresh</button>
+        <!-- Scan History -->
+        <div class="osint-card" style="flex:1">
+          <div class="osint-card-title"><span class="icon">📋</span> Scan History</div>
+          <div class="osint-reports-toolbar">
+            <input type="text" id="osintSearchInput" placeholder="Search by name..." />
+            <select id="osintStatusFilter">
+              <option value="">All Status</option>
+              <option value="completed">Completed</option>
+              <option value="running">Running</option>
+              <option value="failed">Failed</option>
+              <option value="partial">Partial</option>
+            </select>
+            <select id="osintSortSelect">
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="accounts">Most Accounts</option>
+            </select>
           </div>
-          <div class="osint-report-list" id="osintReportList">
-            <div class="osint-empty"><div class="osint-empty-icon">🔍</div>No reports yet. Run a scan to begin.</div>
+          <div class="osint-report-list" id="osintScanList">
+            <div class="osint-empty"><div class="empty-icon">🔍</div><div class="empty-text">No scans yet. Run your first OSINT scan.</div></div>
           </div>
         </div>
       </div>
 
       <!-- Right: Detail Panel -->
-      <div class="osint-right-col">
-        <div id="osintDetailPanel" style="display:none"></div>
-        <div id="osintDetailEmpty" class="osint-empty" style="padding:60px 20px">
-          <div class="osint-empty-icon">🕵️</div>
-          Select a report from the list or run a new scan to view intelligence results.
+      <div>
+        <div class="osint-detail-panel" id="osintDetailPanel" style="display:none"></div>
+        <div id="osintDetailEmpty" class="osint-empty" style="padding:60px 20px;background:var(--osint-card);border:1px solid var(--osint-border);border-radius:10px">
+          <div class="empty-icon">🕵️</div>
+          <div class="empty-text">Select a scan from the list or run a new scan to view intelligence results.</div>
         </div>
       </div>
     </div>
