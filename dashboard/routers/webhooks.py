@@ -830,3 +830,125 @@ async def gmail_pubsub_webhook(request: Request):
         logger.exception("[gmail_webhook] Failed processing Google Pub/Sub push notification")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adobe PDF Services — job completion CALLBACK webhook
+# Docs: https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/webhook-notification
+#
+# Client must respond HTTP 200 with body: {"ack": "done"}
+# After 50 errors in 10 minutes Adobe blocks webhooks for 20 minutes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _verify_adobe_pdf_webhook(request: Request) -> bool:
+    """
+    Validate shared secret Adobe echoes back in CALLBACK headers.
+
+    We register notifiers with:
+      headers: { "x-shamrock-adobe-webhook-secret": ADOBE_PDF_WEBHOOK_SECRET }
+
+    Fail-closed if secret is configured but missing/mismatched.
+    If secret is unset: allow only when DEBUG=true (dev), else reject.
+    """
+    secret = (os.getenv("ADOBE_PDF_WEBHOOK_SECRET") or "").strip()
+    provided = (
+        request.headers.get("x-shamrock-adobe-webhook-secret")
+        or request.headers.get("X-Shamrock-Adobe-Webhook-Secret")
+        or ""
+    ).strip()
+    if not secret:
+        if os.getenv("DEBUG", "false").lower() == "true":
+            logger.warning("[adobe_pdf_webhook] ADOBE_PDF_WEBHOOK_SECRET unset — allowing in DEBUG")
+            return True
+        logger.error("[adobe_pdf_webhook] ADOBE_PDF_WEBHOOK_SECRET unset — rejecting")
+        return False
+    if not provided:
+        logger.warning("[adobe_pdf_webhook] missing secret header — rejecting")
+        return False
+    return hmac.compare_digest(secret, provided)
+
+
+@webhooks_bp.post("/webhooks/adobe-pdf-services")
+async def adobe_pdf_services_webhook(request: Request):
+    """
+    Receive Adobe PDF Services job completion CALLBACK.
+
+    Success payload:
+      { "jobID": "...", "statusResponse": { "status": "done", "asset": { downloadUri, assetID, metadata } } }
+
+    Failure payload:
+      { "jobID": "...", "statusResponse": { "status": "failed", "error": { code, message, status } } }
+
+    Must return HTTP 200 + {"ack": "done"} or Adobe treats it as error.
+    """
+    try:
+        if not _verify_adobe_pdf_webhook(request):
+            # Still return 200 ack? Adobe docs say non-200 counts as error and can ban webhooks.
+            # We intentionally return 401 so misconfigured clients are visible, but use sparingly.
+            # Prefer 200 with ack only when we processed; unauthorized should be rare after setup.
+            return JSONResponse(status_code=401, content={"ack": "rejected", "error": "unauthorized"})
+
+        raw = await request.body()
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+            try:
+                import json as _json
+                payload = _json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                payload = {"_raw": (raw[:500].decode("utf-8", errors="replace") if raw else "")}
+
+        job_id = payload.get("jobID") or payload.get("jobId") or ""
+        status_response = payload.get("statusResponse") or {}
+        status = (status_response.get("status") or "").lower()
+        now = datetime.now(timezone.utc)
+
+        # Persist for ops / async consumers
+        doc = {
+            "job_id": job_id,
+            "status": status or "unknown",
+            "status_response": status_response,
+            "received_at": now,
+            "source": "adobe_pdf_services_callback",
+        }
+        try:
+            await get_collection("adobe_pdf_jobs").update_one(
+                {"job_id": job_id or f"unknown-{now.timestamp()}"},
+                {"$set": doc, "$setOnInsert": {"created_at": now}},
+                upsert=True,
+            )
+        except Exception as db_exc:
+            logger.warning("[adobe_pdf_webhook] persist failed: %s", db_exc)
+
+        # Soft audit (no PII in asset URLs ideally — still avoid logging full downloadUri at INFO)
+        try:
+            await get_collection("audit_events").insert_one({
+                "Event_ID": f"adobe-pdf-{job_id or 'na'}-{int(now.timestamp())}",
+                "event_type": "adobe_pdf_job_callback",
+                "job_id": job_id,
+                "status": status,
+                "timestamp": now,
+                "actor": "adobe_pdf_services",
+            })
+        except Exception:
+            pass
+
+        if status == "done":
+            logger.info("[adobe_pdf_webhook] job %s done", job_id)
+        elif status == "failed":
+            err = status_response.get("error") or {}
+            logger.warning(
+                "[adobe_pdf_webhook] job %s failed code=%s msg=%s",
+                job_id, err.get("code"), (err.get("message") or "")[:200],
+            )
+        else:
+            logger.info("[adobe_pdf_webhook] job %s status=%s", job_id, status)
+
+        # Required ack per Adobe docs
+        return JSONResponse(status_code=200, content={"ack": "done"})
+
+    except Exception as exc:
+        logger.exception("[adobe_pdf_webhook] handler error")
+        # Return 200 ack when possible to avoid Adobe temporary ban after 50 errors / 10 min
+        return JSONResponse(status_code=200, content={"ack": "done", "handler_error": str(exc)[:120]})

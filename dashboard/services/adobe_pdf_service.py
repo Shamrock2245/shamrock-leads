@@ -108,6 +108,57 @@ def _sdk_available() -> bool:
         return False
 
 
+def build_notifier_config_list() -> list:
+    """
+    Adobe PDF Services CALLBACK notifiers (SDK 4.x + REST).
+
+    Docs:
+      https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/webhook-notification
+
+    Env:
+      ADOBE_PDF_WEBHOOK_URL   — full HTTPS callback URL
+        e.g. https://leads.shamrockbailbonds.biz/api/webhooks/adobe-pdf-services
+      Or build from DASHBOARD_PUBLIC_URL / DASHBOARD_BASE_URL
+      ADOBE_PDF_WEBHOOK_SECRET — shared secret sent as header x-shamrock-adobe-webhook-secret
+      ADOBE_PDF_WEBHOOKS=true  — master enable (default true when URL resolvable)
+    """
+    if os.getenv("ADOBE_PDF_WEBHOOKS", "true").lower() in ("0", "false", "no"):
+        return []
+
+    url = (os.getenv("ADOBE_PDF_WEBHOOK_URL") or "").strip()
+    if not url:
+        base = (
+            os.getenv("DASHBOARD_PUBLIC_URL")
+            or os.getenv("DASHBOARD_BASE_URL")
+            or os.getenv("PUBLIC_BASE_URL")
+            or ""
+        ).rstrip("/")
+        if base.startswith("https://"):
+            url = f"{base}/api/webhooks/adobe-pdf-services"
+    if not url.startswith("https://"):
+        # Adobe requires HTTPS callback
+        return []
+
+    secret = (os.getenv("ADOBE_PDF_WEBHOOK_SECRET") or "").strip()
+    headers = {}
+    if secret:
+        headers["x-shamrock-adobe-webhook-secret"] = secret
+
+    try:
+        from adobe.pdfservices.operation.config.notifier.notifier_config import NotifierConfig
+        from adobe.pdfservices.operation.config.notifier.notifier_type import NotifierType
+        from adobe.pdfservices.operation.config.notifier.callback_notifier_data import (
+            CallbackNotifierData,
+        )
+
+        data = CallbackNotifierData(url, headers=headers or None)
+        cfg = NotifierConfig(NotifierType.CALLBACK, data)
+        return [cfg]
+    except Exception as exc:
+        logger.warning("[adobe-pdf] notifier config unavailable: %s", exc)
+        return []
+
+
 class AdobePDFServicesClient:
     """
     Adobe PDF Services via official Python SDK (preferred).
@@ -227,7 +278,8 @@ class AdobePDFServicesClient:
         params = ImportPDFFormDataParams(json_form_fields_data=form_data)
         job = ImportPDFFormDataJob(input_asset)
         job.set_params(params)
-        location = pdf_services.submit(job)
+        notifiers = build_notifier_config_list()
+        location = pdf_services.submit(job, notify_config_list=notifiers or None)
         response = pdf_services.get_job_result(location, ImportPDFFormDataResult)
         result_asset = response.get_result().get_asset()
         return self._download_result_bytes(pdf_services, result_asset)
@@ -253,7 +305,8 @@ class AdobePDFServicesClient:
             asset = self._upload(pdf_services, part)
             params.add_asset(asset)
         job = CombinePDFJob(combine_pdf_params=params)
-        location = pdf_services.submit(job)
+        notifiers = build_notifier_config_list()
+        location = pdf_services.submit(job, notify_config_list=notifiers or None)
         response = pdf_services.get_job_result(location, CombinePDFResult)
         result_asset = response.get_result().get_asset()
         return self._download_result_bytes(pdf_services, result_asset)
@@ -268,7 +321,8 @@ class AdobePDFServicesClient:
         pdf_services = self._get_pdf_services()
         input_asset = self._upload(pdf_services, pdf_bytes)
         job = CompressPDFJob(input_asset=input_asset)
-        location = pdf_services.submit(job)
+        notifiers = build_notifier_config_list()
+        location = pdf_services.submit(job, notify_config_list=notifiers or None)
         response = pdf_services.get_job_result(location, CompressPDFResult)
         result_asset = response.get_result().get_asset()
         return self._download_result_bytes(pdf_services, result_asset)
@@ -387,7 +441,8 @@ class AdobePDFServicesClient:
                 shift_headings=bool(shift_headings),
             )
             job = AutotagPDFJob(input_asset, autotag_pdf_params=params)
-            location = pdf_services.submit(job)
+            notifiers = build_notifier_config_list()
+            location = pdf_services.submit(job, notify_config_list=notifiers or None)
             response = pdf_services.get_job_result(location, AutotagPDFResult)
             result = response.get_result()
             tagged_asset = result.get_tagged_pdf()
@@ -792,5 +847,12 @@ def adobe_status() -> Dict[str, Any]:
         "acrobat_sign": {
             "configured": sign.configured,
             "api_base": sign.base if sign.configured else None,
+        },
+        "webhooks": {
+            "enabled": bool(build_notifier_config_list()),
+            "callback_path": "/api/webhooks/adobe-pdf-services",
+            "docs": "https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/webhook-notification",
+            "ack_required": {"ack": "done"},
+            "secret_configured": bool((os.getenv("ADOBE_PDF_WEBHOOK_SECRET") or "").strip()),
         },
     }
