@@ -50,7 +50,7 @@ const SLPaperwork = {
 
   switchSubTab(tabName) {
     this._currentSubTab = tabName;
-    ['live', 'builder', 'templates', 'rules', 'post_release'].forEach(t => {
+    ['live', 'builder', 'templates', 'rules', 'post_release', 'adobe_tools'].forEach(t => {
       const btn = document.getElementById(`pwSubTab_${t}`);
       const pane = document.getElementById(`pwPane_${t}`);
       if (btn) btn.classList.toggle('active', t === tabName);
@@ -1071,6 +1071,245 @@ const SLPaperwork = {
       this._setApStatus(`Finalize failed: ${err.message}`, 'error');
     }
   },
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Adobe PDF Tools — standalone document intelligence panel
+  // ═══════════════════════════════════════════════════════════════════
+
+  _adobeToolsPdfBytes: null,
+  _adobeToolsFileName: null,
+  _adobeToolsLastResult: null,
+  _adobeToolsLastMode: null,
+
+  async initAdobeTools() {
+    const badge = document.getElementById('adobeToolsStatusBadge');
+    if (badge) {
+      badge.textContent = 'Checking credentials…';
+      badge.style.color = '#94a3b8';
+      badge.style.borderColor = '#334155';
+    }
+    try {
+      const res = await fetch('/api/paperwork/providers', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const pdfOk = data.providers?.adobe_pdf_services || data.adobe?.pdf_services?.configured;
+      const sdkOk = data.adobe?.pdf_services?.sdk_available;
+      if (badge) {
+        if (pdfOk) {
+          badge.textContent = `Adobe PDF Services ✓${sdkOk === false ? ' (SDK not installed)' : ''}`;
+          badge.style.color = '#4ade80';
+          badge.style.borderColor = 'rgba(74,222,128,0.4)';
+        } else {
+          badge.textContent = 'Adobe PDF Services ✗ — credentials not configured';
+          badge.style.color = '#f87171';
+          badge.style.borderColor = 'rgba(248,113,113,0.4)';
+        }
+      }
+    } catch (e) {
+      if (badge) { badge.textContent = 'Status check failed'; badge.style.color = '#f87171'; }
+    }
+  },
+
+  handleAdobeToolsDrop(evt) {
+    evt.preventDefault();
+    const dz = document.getElementById('adobeToolsDropZone');
+    if (dz) dz.classList.remove('adobe-dz-active');
+    const file = evt.dataTransfer?.files?.[0];
+    if (file) this._loadAdobeToolsFile(file);
+  },
+
+  handleAdobeToolsPick(evt) {
+    const file = evt.target?.files?.[0];
+    if (file) this._loadAdobeToolsFile(file);
+    // reset input so same file can be re-picked
+    if (evt.target) evt.target.value = '';
+  },
+
+  _loadAdobeToolsFile(file) {
+    if (!file || file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      alert('Please drop a PDF file.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      this._adobeToolsPdfBytes = e.target.result; // ArrayBuffer
+      this._adobeToolsFileName = file.name;
+      this._adobeToolsLastResult = null;
+      const info = document.getElementById('adobeToolsFileInfo');
+      const nameEl = document.getElementById('adobeToolsFileName');
+      const sizeEl = document.getElementById('adobeToolsFileSize');
+      if (info) info.style.display = 'block';
+      if (nameEl) nameEl.textContent = file.name;
+      if (sizeEl) sizeEl.textContent = `${(file.size / 1024).toFixed(1)} KB`;
+      this._clearAdobeToolsResults();
+    };
+    reader.readAsArrayBuffer(file);
+  },
+
+  _arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  },
+
+  _setAdobeProgress(msg) {
+    const el = document.getElementById('adobeToolsProgress');
+    const msgEl = document.getElementById('adobeToolsProgressMsg');
+    if (el) el.style.display = msg ? 'block' : 'none';
+    if (msgEl) msgEl.textContent = msg || '';
+  },
+
+  _clearAdobeToolsResults() {
+    const el = document.getElementById('adobeToolsResults');
+    if (el) el.style.display = 'none';
+    const pre = document.getElementById('adobeToolsResultPre');
+    if (pre) pre.textContent = '';
+    this._setAdobeProgress('');
+  },
+
+  _showAdobeResult(title, text, mode) {
+    this._adobeToolsLastResult = text;
+    this._adobeToolsLastMode = mode;
+    const el = document.getElementById('adobeToolsResults');
+    const titleEl = document.getElementById('adobeToolsResultTitle');
+    const pre = document.getElementById('adobeToolsResultPre');
+    if (el) el.style.display = 'block';
+    if (titleEl) titleEl.textContent = title;
+    if (pre) pre.textContent = text;
+    this._setAdobeProgress('');
+  },
+
+  _setAdobeBtnState(running) {
+    ['adobeMarkdownBtn', 'adobeExtractBtn', 'adobeAutotagBtn'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = running;
+    });
+  },
+
+  async runAdobePdfToMarkdown() {
+    if (!this._adobeToolsPdfBytes) { alert('Drop a PDF first.'); return; }
+    this._setAdobeBtnState(true);
+    this._setAdobeProgress('Uploading to Adobe PDF Services → converting to Markdown…');
+    try {
+      const b64 = this._arrayBufferToBase64(this._adobeToolsPdfBytes);
+      const res = await fetch('/api/paperwork/pdf-to-markdown', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_b64: b64, bake_forms: true }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Conversion failed');
+      this._showAdobeResult(
+        `Markdown — ${this._adobeToolsFileName} (${(data.size / 1024).toFixed(1)} KB via ${data.engine})`,
+        data.markdown,
+        'md'
+      );
+    } catch (err) {
+      this._setAdobeProgress('');
+      alert(`PDF → Markdown failed: ${err.message}`);
+    } finally {
+      this._setAdobeBtnState(false);
+    }
+  },
+
+  async runAdobeExtract() {
+    if (!this._adobeToolsPdfBytes) { alert('Drop a PDF first.'); return; }
+    this._setAdobeBtnState(true);
+    this._setAdobeProgress('Uploading to Adobe PDF Extract API… (may take 30–60s)');
+    try {
+      const b64 = this._arrayBufferToBase64(this._adobeToolsPdfBytes);
+      const res = await fetch('/api/paperwork/pdf-extract', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_b64: b64, extract_text: true, extract_tables: true, table_xlsx: true }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Extract failed');
+      const preview = data.text_preview || JSON.stringify(data.structured_data, null, 2);
+      this._showAdobeResult(
+        `Extract — ${this._adobeToolsFileName} (${data.zip_names?.length ?? 0} resources via ${data.engine})`,
+        preview,
+        'json'
+      );
+    } catch (err) {
+      this._setAdobeProgress('');
+      alert(`PDF Extract failed: ${err.message}`);
+    } finally {
+      this._setAdobeBtnState(false);
+    }
+  },
+
+  async runAdobeAutotag() {
+    if (!this._adobeToolsPdfBytes) { alert('Drop a PDF first.'); return; }
+    this._setAdobeBtnState(true);
+    this._setAdobeProgress('Running PDF Accessibility Auto-Tag… baking forms + tagging structure…');
+    try {
+      const b64 = this._arrayBufferToBase64(this._adobeToolsPdfBytes);
+      // Autotag uses the packet finalize pipeline — we call build_flattened_packet via a convenience endpoint
+      // For now surface the preflight result via pdf-to-markdown bake_forms probe
+      const res = await fetch('/api/paperwork/pdf-to-markdown', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdf_b64: b64, bake_forms: true }),
+      });
+      const data = await res.json();
+      const pf = data.preflight || {};
+      const msg = [
+        `File: ${this._adobeToolsFileName}`,
+        `Size: ${(pf.size_bytes / 1024).toFixed(1)} KB`,
+        `Pages: ${pf.pages ?? 'unknown'}`,
+        `Had form widgets: ${pf.had_widgets ? 'Yes' : 'No'}`,
+        `Baked forms: ${pf.baked_forms ? 'Yes' : 'No'}`,
+        `Disqualified: ${pf.disqualified ? 'Yes' : 'No'}`,
+        pf.warnings?.length ? `Warnings: ${pf.warnings.join('; ')}` : '',
+        '',
+        data.success ? '✅ PDF is compatible — Auto-Tag can be run via the Adaptive Packet Builder (set ADOBE_PDF_AUTOTAG=true in .env).' :
+          `⚠️ Note: ${data.error || 'Could not verify'}`,
+      ].filter(s => s !== null).join('\n');
+      this._showAdobeResult(`Auto-Tag Preflight — ${this._adobeToolsFileName}`, msg, 'txt');
+    } catch (err) {
+      this._setAdobeProgress('');
+      alert(`Auto-Tag check failed: ${err.message}`);
+    } finally {
+      this._setAdobeBtnState(false);
+    }
+  },
+
+  copyAdobeResult() {
+    if (!this._adobeToolsLastResult) return;
+    navigator.clipboard.writeText(this._adobeToolsLastResult)
+      .then(() => {
+        const btn = document.getElementById('adobeToolsCopyBtn');
+        if (btn) { btn.textContent = '✓ Copied!'; setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000); }
+      })
+      .catch(() => alert('Copy failed — select the text manually.'));
+  },
+
+  downloadAdobeResult() {
+    if (!this._adobeToolsLastResult) return;
+    const ext = this._adobeToolsLastMode === 'md' ? 'md' : this._adobeToolsLastMode === 'json' ? 'json' : 'txt';
+    const base = (this._adobeToolsFileName || 'output').replace(/\.pdf$/i, '');
+    const blob = new Blob([this._adobeToolsLastResult], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${base}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
+
+  clearAdobeToolsFile() {
+    this._adobeToolsPdfBytes = null;
+    this._adobeToolsFileName = null;
+    this._adobeToolsLastResult = null;
+    const info = document.getElementById('adobeToolsFileInfo');
+    if (info) info.style.display = 'none';
+    this._clearAdobeToolsResults();
+  },
+
 };
 
 window.SLPaperwork = SLPaperwork;

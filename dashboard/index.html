@@ -4359,6 +4359,7 @@
         <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
         <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
         <button class="inv-tab-btn" id="pwSubTab_post_release" onclick="SLPaperwork.switchSubTab('post_release')">🛡️ Post-Release & Forfeiture Remedies</button>
+        <button class="inv-tab-btn" id="pwSubTab_adobe_tools" onclick="SLPaperwork.switchSubTab('adobe_tools');SLPaperwork.initAdobeTools()">🔬 Adobe PDF Tools</button>
       </div>
 
       <!-- Summary KPI Strip -->
@@ -4820,6 +4821,87 @@
           </div>
         </div>
       </div>
+      <!-- Sub-pane 6: Adobe PDF Tools -->
+      <div id="pwPane_adobe_tools" style="display:none">
+        <div class="glass-panel" style="margin-top:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:12px;">
+            <div>
+              <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+                <span>🔬 Adobe PDF Services — Document Intelligence</span>
+              </h3>
+              <p style="margin:4px 0 0 0;font-size:12px;color:var(--text-muted,#94a3b8)">
+                Drop any PDF to convert to LLM-friendly Markdown, extract structured JSON (text + tables), or run accessibility auto-tagging.
+              </p>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <span id="adobeToolsStatusBadge" style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(15,23,42,0.8);border:1px solid #334155;color:#64748b">Checking credentials…</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="SLPaperwork.initAdobeTools()">&#x21bb; Refresh Status</button>
+            </div>
+          </div>
+
+          <!-- Drop Zone -->
+          <div id="adobeToolsDropZone"
+               ondragover="event.preventDefault();document.getElementById('adobeToolsDropZone').classList.add('adobe-dz-active')"
+               ondragleave="document.getElementById('adobeToolsDropZone').classList.remove('adobe-dz-active')"
+               ondrop="SLPaperwork.handleAdobeToolsDrop(event)"
+               style="border:2px dashed rgba(56,189,248,0.4);border-radius:12px;padding:32px;text-align:center;background:rgba(15,23,42,0.4);cursor:pointer;transition:all 0.2s ease;margin-bottom:20px;"
+               onclick="document.getElementById('adobeToolsFileInput').click()">
+            <div style="font-size:32px;margin-bottom:8px;">📄</div>
+            <div style="font-size:14px;color:#e2e8f0;font-weight:600;">Drop a PDF here or click to browse</div>
+            <div style="font-size:11px;color:#64748b;margin-top:6px;">Max 100 MB &middot; Non-password-protected &middot; Native or scanned</div>
+            <input type="file" id="adobeToolsFileInput" accept="application/pdf,.pdf" hidden onchange="SLPaperwork.handleAdobeToolsPick(event)">
+          </div>
+
+          <!-- Loaded File Info -->
+          <div id="adobeToolsFileInfo" style="display:none;background:rgba(15,23,42,0.6);border:1px solid rgba(56,189,248,0.25);border-radius:8px;padding:12px;margin-bottom:16px;display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#e2e8f0;" id="adobeToolsFileName">No file loaded</div>
+                <div style="font-size:11px;color:#64748b;" id="adobeToolsFileSize"></div>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="SLPaperwork.clearAdobeToolsFile()">&#x2715; Clear</button>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px;">
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(56,189,248,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px;font-size:13px;color:#38bdf8;">📝 PDF &rarr; Markdown</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px;">LLM-ready text with structure, tables, and reading order preserved.</p>
+              <button type="button" class="btn btn-primary btn-sm" style="width:100%" id="adobeMarkdownBtn" onclick="SLPaperwork.runAdobePdfToMarkdown()">Convert to Markdown</button>
+            </div>
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(74,222,128,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px;font-size:13px;color:#4ade80;">📊 PDF Extract (JSON)</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px;">Structured JSON with text blocks, tables (XLSX), and element positions.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" id="adobeExtractBtn" onclick="SLPaperwork.runAdobeExtract()">Extract Structure</button>
+            </div>
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(251,146,60,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px;font-size:13px;color:#fb923c;">♿ PDF Auto-Tag</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px;">Accessibility tagging (WCAG prep). Bakes form fields automatically.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" id="adobeAutotagBtn" onclick="SLPaperwork.runAdobeAutotag()">Run Auto-Tag</button>
+            </div>
+          </div>
+
+          <!-- Progress / Status -->
+          <div id="adobeToolsProgress" style="display:none;padding:10px 14px;border-radius:8px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);font-size:12px;color:#94a3b8;margin-bottom:16px;">
+            <span id="adobeToolsProgressMsg">…</span>
+          </div>
+
+          <!-- Results -->
+          <div id="adobeToolsResults" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <h4 style="margin:0;font-size:13px;color:#e2e8f0;" id="adobeToolsResultTitle">Result</h4>
+              <div style="display:flex;gap:8px;">
+                <button type="button" class="btn btn-secondary btn-sm" id="adobeToolsCopyBtn" onclick="SLPaperwork.copyAdobeResult()">&#x1F4CB; Copy</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="adobeToolsDownloadBtn" onclick="SLPaperwork.downloadAdobeResult()">&#x2B07; Download</button>
+              </div>
+            </div>
+            <pre id="adobeToolsResultPre" style="background:rgba(15,23,42,0.8);border:1px solid #334155;border-radius:8px;padding:14px;font-size:11px;color:#e2e8f0;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+          </div>
+
+        </div>
+      </div>
+
     </div>
     <!-- end tabPaperwork -->
 

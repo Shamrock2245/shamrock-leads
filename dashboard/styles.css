@@ -3095,3 +3095,11 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
 #tabSocial.active {
     display: flex !important;
 }
+
+/* ── Adobe PDF Tools — drop zone active state ── */
+.adobe-dz-active {
+  border-color: rgba(56, 189, 248, 0.9) !important;
+  background: rgba(56, 189, 248, 0.08) !important;
+  transform: scale(1.01);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
+}
