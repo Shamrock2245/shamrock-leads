@@ -69,11 +69,11 @@ class HillsboroughCountyScraper(BaseScraper):
         proxy_source = "none"
         client = None
         try:
-            from scrapers.socks_proxy import resolve_residential_proxy
-
-            # APE/Warren → office SOCKS → direct residential (when host is home ISP)
-            proxy_url, proxy_source = resolve_residential_proxy(self)
-            logger.info("[Hillsborough] proxy source=%s", proxy_source)
+            # HCSO serves plain datacenter IPs fine (no Cloudflare) — prefer
+            # DIRECT HTTP first; only fall back to residential egress if the
+            # direct probe is blocked. (APE CONNECT 502s were killing runs.)
+            proxy_url, proxy_source = self._resolve_egress()
+            logger.info("[Hillsborough] egress source=%s", proxy_source)
 
             client_kwargs = {
                 "headers": HEADERS,
@@ -163,6 +163,36 @@ class HillsboroughCountyScraper(BaseScraper):
                     pass
 
     # ── Login ──────────────────────────────────────────────────────────
+    def _resolve_egress(self):
+        """Direct HTTP first; residential proxy only as fallback.
+
+        HCSO's arrestinquiry portal is not Cloudflare-gated and answers
+        datacenter IPs, so a quick unproxied probe decides the path. This
+        avoids APE `CONNECT 502` / "Host unreachable" hard failures.
+        """
+        try:
+            probe = httpx.get(
+                SEARCH_URL, headers=HEADERS, timeout=15.0,
+                follow_redirects=True, verify=True,
+            )
+            if probe.status_code == 200 and "SearchName" in probe.text:
+                logger.info("[Hillsborough] direct probe OK — no proxy needed")
+                return None, "direct"
+            logger.info(
+                "[Hillsborough] direct probe blocked (HTTP %s) — trying proxy",
+                probe.status_code,
+            )
+        except Exception as exc:
+            logger.info("[Hillsborough] direct probe failed (%s) — trying proxy", exc)
+
+        try:
+            from scrapers.socks_proxy import resolve_residential_proxy
+
+            return resolve_residential_proxy(self, require=False)
+        except Exception as exc:
+            logger.warning("[Hillsborough] proxy resolve failed: %s — going direct", exc)
+            return None, "direct_fallback"
+
     def _login(self, client: httpx.Client, email: str, password: str) -> bool:
         logger.info("[Hillsborough] Loading login page...")
 
@@ -287,13 +317,20 @@ class HillsboroughCountyScraper(BaseScraper):
         booking_date = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y")
         logger.info(f"[Hillsborough] Search: current inmates, booking date >= {booking_date}")
 
+        # NOTE 2026-07: form drifted — sort field is now `SearchSortType`
+        # (BOOKDATE|BOOKNO|NAME radios) and `SearchDOB`/`SearchRace`/`SearchSex`
+        # were added. Keep legacy `SortOrder` for backward compat server-side.
         form_data = {
             "SearchBookingNumber": "",
             "SearchName": "",
             "SearchBookingDate": booking_date,
             "SearchReleaseDate": "",
+            "SearchDOB": "",
+            "SearchRace": "",
+            "SearchSex": "",
             "SearchCurrentInmatesOnly": "true",
             "SearchIncludeDetails": "true",
+            "SearchSortType": "BOOKDATE",
             "SortOrder": "BookDate",
             "g-recaptcha-response": recaptcha_token or "",
         }
@@ -359,8 +396,12 @@ class HillsboroughCountyScraper(BaseScraper):
             "SearchName": "",
             "SearchBookingDate": (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%m/%d/%Y"),
             "SearchReleaseDate": "",
+            "SearchDOB": "",
+            "SearchRace": "",
+            "SearchSex": "",
             "SearchCurrentInmatesOnly": "true",
             "SearchIncludeDetails": "true",
+            "SearchSortType": "BOOKDATE",
             "SortOrder": "BookDate",
             "page": str(current_page + 1),
             "g-recaptcha-response": "",

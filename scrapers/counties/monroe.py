@@ -1,199 +1,187 @@
 """
-Monroe County Arrest Scraper — Keys SO Custom ASP.NET
+Monroe County Arrest Scraper — Keys SO data API (v2)
+====================================================
 Source: Monroe County Sheriff's Office (Keys SO)
-URL: https://www.keysso.net/arrestQintro
-Method: requests POST — disclaimer acceptance + name search
-Fields: Name, Booking Date, Charges, Bond Amount, Status
+URL: https://data.keysso.net/api/arrests
+Method: HTTP GET → JSON (last ~7 days of arrest logs) → ArrestRecord
+Fields: Name, Arrest Date/Time, Charges, Bond, Mugshot, Arraignment
+
+HISTORY:
+  - v1: ASP.NET disclaimer POST + name search on www.keysso.net/arrestQintro
+        (dead 2026-07 — site rebuilt as SvelteKit SPA, "Disclaimer POST 403")
+  - v2 (current): official JSON feed consumed by the new SPA
+        (`/arrests` page → GET https://data.keysso.net/api/arrests).
+        No captcha, no proxy, no disclaimer. Returns ArrestLog1..8.json
+        buckets, one per day, ~80 records/week.
+
+Natural key: the MNI id embedded in the mugshot filename
+(e.g. MCSO78MNI183475) + arrest date; falls back to name+date hash.
 """
 
+from __future__ import annotations
+
+import hashlib
 import logging
 import re
-from typing import List
+from typing import Any, Dict, List, Optional
 
-from scrapers.base_scraper import BaseScraper
+import requests
+import urllib3
+
 from core.models import ArrestRecord
+from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-INTRO_URL = "https://www.keysso.net/arrestQintro"
-SEARCH_URL = "https://www.keysso.net/arrestQ"
+API_URL = "https://data.keysso.net/api/arrests"
+PUBLIC_PAGE = "https://www.keysso.net/arrests"
 FACILITY = "Monroe County Detention Center"
+AGENCY = "Monroe County Sheriff's Office"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": INTRO_URL,
-    "DNT": "1",
-    "Connection": "keep-alive",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Origin": "https://www.keysso.net",
+    "Referer": "https://www.keysso.net/",
 }
-IMPERSONATE = "chrome131"
+
+_MNI_RE = re.compile(r"ArrestLogs/([A-Z0-9]+?)L?\.(?:jpg|jpeg|png)", re.I)
 
 
 class MonroeCountyScraper(BaseScraper):
-    """Monroe County (FL) — Keys SO arrest query (Key West area)"""
+    """Monroe County (FL) — Keys SO official arrest-log JSON API."""
 
     @property
     def county(self) -> str:
         return "Monroe"
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cffi_requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("curl_cffi/bs4 not installed")
-            raise
+        logger.info("📡 %s: Fetching Keys SO arrest API...", self.county)
+        # keysso.net serves an incomplete intermediate chain (same as v1) —
+        # verify=False is required; suppress the noisy warning locally.
+        with urllib3.warnings.catch_warnings():
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            resp = requests.get(API_URL, headers=HEADERS, timeout=45, verify=False)
+        resp.raise_for_status()
+        data = resp.json()
 
-        session = cffi_requests.Session()
-        # keysso.net serves an incomplete intermediate chain — same pattern as SmartCOP bases.
-        req_kw = {"timeout": 30, "impersonate": IMPERSONATE, "verify": False}
+        if not isinstance(data, list):
+            logger.warning("⚠️ %s: unexpected JSON type %s", self.county, type(data))
+            return []
 
-        # Step 1: GET intro page (disclaimer)
-        try:
-            resp = session.get(INTRO_URL, headers=HEADERS, **req_kw)
-            if resp.status_code != 200:
-                raise Exception(f"GET intro {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Monroe intro GET failed: {e}")
-            raise
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        viewstate = soup.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen = soup.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val = soup.find("input", {"name": "__EVENTVALIDATION"})
-
-        # Step 2: Accept disclaimer
-        disclaimer_data = {
-            "__VIEWSTATE": viewstate["value"] if viewstate else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen["value"] if viewstate_gen else "",
-            "__EVENTVALIDATION": event_val["value"] if event_val else "",
-            "btnAgree": "I Agree",
-        }
-
-        try:
-            resp = session.post(INTRO_URL, data=disclaimer_data, headers=HEADERS, **req_kw)
-            if resp.status_code not in (200, 302):
-                raise Exception(f"Disclaimer POST {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Monroe disclaimer POST failed: {e}")
-            raise
-
-        # Step 3: Search with blank last name (all current inmates)
-        soup2 = BeautifulSoup(resp.text, "html.parser")
-        viewstate2 = soup2.find("input", {"name": "__VIEWSTATE"})
-        viewstate_gen2 = soup2.find("input", {"name": "__VIEWSTATEGENERATOR"})
-        event_val2 = soup2.find("input", {"name": "__EVENTVALIDATION"})
-
-        search_data = {
-            "__VIEWSTATE": viewstate2["value"] if viewstate2 else "",
-            "__VIEWSTATEGENERATOR": viewstate_gen2["value"] if viewstate_gen2 else "",
-            "__EVENTVALIDATION": event_val2["value"] if event_val2 else "",
-            "txtLastName": "",
-            "txtFirstName": "",
-            "btnSearch": "Search",
-        }
-
-        try:
-            resp = session.post(
-                SEARCH_URL if SEARCH_URL != INTRO_URL else resp.url,
-                data=search_data,
-                headers={**HEADERS, "Referer": resp.url},
-                timeout=60,
-                impersonate=IMPERSONATE,
-                verify=False,
-            )
-            if resp.status_code != 200:
-                raise Exception(f"Search POST {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Monroe search POST failed: {e}")
-            raise
-
-        records = self._parse(resp.text)
-        logger.info(f"Monroe: {len(records)} records")
-        return records
-
-    def _parse(self, html: str) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        records = []
-        seen = set()
-
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        for bucket in data:
+            if not isinstance(bucket, dict):
                 continue
-            header_text = rows[0].get_text(" ").lower()
-            if not any(k in header_text for k in ["name", "inmate", "booking", "arrest"]):
-                continue
-            headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(["th", "td"])]
-            col = {h: i for i, h in enumerate(headers)}
-
-            for row in rows[1:]:
-                cells = [td.get_text(strip=True) for td in row.find_all("td")]
-                if not cells:
+            arrests = (bucket.get("data") or {}).get("arrests") or []
+            for item in arrests:
+                if not isinstance(item, dict):
                     continue
-                name_idx = col.get("name", col.get("inmate name", 0))
-                full_name = cells[name_idx] if name_idx < len(cells) else cells[0]
-                if not full_name or len(full_name) < 3:
+                try:
+                    rec = self._parse_arrest(item)
+                except Exception as e:  # defensive: one bad row must not kill the run
+                    logger.warning("⚠️ %s: skip row: %s", self.county, e)
                     continue
-
-                bd_idx = None
-                for k in ["booking date", "booking", "arrest date", "date"]:
-                    if k in col:
-                        bd_idx = col[k]
-                        break
-                booking_date = cells[bd_idx] if bd_idx is not None and bd_idx < len(cells) else ""
-
-                bn_idx = None
-                for k in ["booking #", "booking no", "booking number", "id"]:
-                    if k in col:
-                        bn_idx = col[k]
-                        break
-                booking_num = cells[bn_idx] if bn_idx is not None and bn_idx < len(cells) else ""
-
-                bond_idx = None
-                for k in ["bond", "bond amount", "bail"]:
-                    if k in col:
-                        bond_idx = col[k]
-                        break
-                bond_raw = cells[bond_idx] if bond_idx is not None and bond_idx < len(cells) else "0"
-
-                charge_idx = None
-                for k in ["charge", "charges", "offense"]:
-                    if k in col:
-                        charge_idx = col[k]
-                        break
-                charges = cells[charge_idx] if charge_idx is not None and charge_idx < len(cells) else ""
-
-                key = booking_num or full_name
+                if not rec:
+                    continue
+                key = rec.get_dedup_key()
                 if key in seen:
                     continue
                 seen.add(key)
+                records.append(rec)
 
-                f, m, l = self._parse_name(full_name)
-
-                records.append(ArrestRecord(
-                    County=self.county,
-                    Booking_Number=booking_num,
-                    Full_Name=full_name,
-                    First_Name=f, Middle_Name=m, Last_Name=l,
-                        DOB="",
-                    Booking_Date=booking_date,
-                    Status="In Custody",
-                        Release_Date="",
-                    Facility=FACILITY,
-                    Charges=charges,
-                    Bond_Amount=str(self._parse_bond(bond_raw)),
-                    Detail_URL=SEARCH_URL,
-
-                    LastCheckedMode="INITIAL",
-                ))
-            if records:
-                break
-
+        logger.info("✅ %s: Parsed %s records from Keys SO API", self.county, len(records))
         return records
+
+    # ── parsing ────────────────────────────────────────────────────────────
+
+    def _parse_arrest(self, item: Dict[str, Any]) -> Optional[ArrestRecord]:
+        full_name = " ".join(str(item.get("Name") or "").split())
+        if not full_name or len(full_name) < 3:
+            return None
+
+        arrest_date = str(item.get("ArrestDate") or "").strip()
+        arrest_time = str(item.get("ArrestTime") or "").strip()
+
+        booking_num = self._natural_key(item, full_name, arrest_date)
+        first, middle, last = self._parse_name(full_name)
+
+        charges = "; ".join(
+            str(c.get("Charge") or "").strip()
+            for c in (item.get("Charges") or [])
+            if isinstance(c, dict) and c.get("Charge")
+        )
+
+        dob = str(item.get("DoB") or "").strip()
+        if dob in ("", "NA", "N/A"):
+            dob = ""
+        age = str(item.get("Age") or "").strip()
+        if age in ("", "NA", "N/A"):
+            age = ""
+        address = str(item.get("Address") or "").strip()
+        if address.lower() in ("not available", "unknown"):
+            address = ""
+
+        court_date, court_time = self._parse_arraignment(
+            str(item.get("Arraignment") or "")
+        )
+
+        return ArrestRecord(
+            County=self.county,
+            Booking_Number=booking_num,
+            Full_Name=full_name,
+            First_Name=first,
+            Middle_Name=middle,
+            Last_Name=last,
+            DOB=dob,
+            Age_At_Arrest=age,
+            Arrest_Date=arrest_date,
+            Arrest_Time=arrest_time,
+            Booking_Date=arrest_date,
+            Status="In Custody",
+            Facility=FACILITY,
+            Agency=AGENCY,
+            Race=str(item.get("Race") or "").strip(),
+            Sex=str(item.get("Sex") or "").strip(),
+            Address=address,
+            Mugshot_URL=str(item.get("mugShot") or "").strip(),
+            Charges=charges,
+            Bond_Amount=str(self._parse_bond(item.get("Bond"))),
+            Court_Date=court_date,
+            Court_Time=court_time,
+            Detail_URL=PUBLIC_PAGE,
+            LastCheckedMode="INITIAL",
+        )
+
+    @staticmethod
+    def _natural_key(item: Dict[str, Any], full_name: str, arrest_date: str) -> str:
+        """Stable id: MNI from mugshot filename, else offense/CAD no, else hash."""
+        for field in ("mugShot", "mugShotL"):
+            m = _MNI_RE.search(str(item.get(field) or ""))
+            if m:
+                return m.group(1)
+        for field in ("OffenseNo", "CADno"):
+            v = str(item.get(field) or "").strip()
+            if v:
+                return f"MONROE-{v}"
+        digest = hashlib.sha1(f"{full_name}|{arrest_date}".encode()).hexdigest()[:12]
+        return f"MONROE-{digest.upper()}"
+
+    @staticmethod
+    def _parse_arraignment(raw: str) -> tuple:
+        """'08/12/2026 at 09:00' → ('08/12/2026', '09:00')."""
+        raw = raw.strip()
+        if not raw:
+            return "", ""
+        m = re.match(r"(\d{2}/\d{2}/\d{4})(?:\s+at\s+(\d{1,2}:\d{2}))?", raw)
+        if not m:
+            return "", ""
+        return m.group(1), m.group(2) or ""
 
     @staticmethod
     def _parse_name(name: str):
@@ -215,11 +203,11 @@ class MonroeCountyScraper(BaseScraper):
         return parts[0], " ".join(parts[1:-1]), parts[-1]
 
     @staticmethod
-    def _parse_bond(bond_str: str) -> float:
-        if not bond_str:
+    def _parse_bond(bond_val) -> float:
+        if bond_val is None:
             return 0.0
-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
+        cleaned = re.sub(r"[$,\s]", "", str(bond_val).strip().upper())
+        if not cleaned or any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
             return 0.0
         try:
             return float(cleaned)
