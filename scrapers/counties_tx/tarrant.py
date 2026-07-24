@@ -198,7 +198,7 @@ class TarrantScraper(BaseScraper):
                         Race=race or None,
                         Sex=sex[:1].upper() if sex else None,
                         Charges=offense or "Inmate Booking",
-                        Bond_Amount="0",
+                        Bond_Amount="",
                         Status="In Custody",
                         Facility="Tarrant County Jail",
                         Agency=agency or "Tarrant County Sheriff's Office",

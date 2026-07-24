@@ -160,7 +160,7 @@ class BexarScraper(BaseScraper):
                     DOB=dob,
                     Race=race,
                     Charges="Unknown",  # magistrate list has no charge column
-                    Bond_Amount="0",
+                    Bond_Amount="",
                     Status="In Custody",
                     Facility="Bexar County Jail",
                     Agency="Bexar County Central Magistrate",

@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-23  
+> **Last verified:** 2026-07-24  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
@@ -25,18 +25,21 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
-## Scale (authoritative — 2026-07-15)
+## Scale (authoritative — 2026-07-24)
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **FL** | **51** | `scrapers/counties/` | OSI home market; legacy `scraper_<county>` IDs |
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
-| **SC** | **46** | `scrapers/counties_sc/` | All counties registered (mix live / platform / scaffold) |
+| **SC** | **46** | `scrapers/counties_sc/` | All counties registered |
 | **NC** | **27** | `scrapers/counties_nc/` | Wave-1 (Southern SW, Zuercher, P2C, Meck/Durham…) |
-| **TN** | **3** | `scrapers/counties_tn/` | Wave-1: Davidson ✅ Knox ✅ Shelby ⏳ |
-| **TX** | **3** | `scrapers/counties_tx/` | Wave-1: Bexar ✅ Dallas ✅ Harris ⏳ |
-| **LA** | **2** | `scrapers/counties_la/` | Wave-1: Orleans partial · Lafayette captcha |
-| **Total** | **206** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
+| **TN** | **6** | `scrapers/counties_tn/` | Davidson, Knox, Shelby, Hamilton, Rutherford, TnCIS |
+| **TX** | **12** | `scrapers/counties_tx/` | Bexar, Dallas, Harris, Tarrant, Travis, Collin, Denton, Fort Bend, Montgomery, Williamson, El Paso, Hidalgo |
+| **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
+| **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
+| **CT** | **2** | `scrapers/counties_ct/` | Statewide Criminal Dockets + CT DOC Inmate Roster |
+| **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
+| **Total** | **247** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 

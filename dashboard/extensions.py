@@ -393,14 +393,19 @@ REGISTERED_COUNTIES = sorted([
     "Rutherford (TN)",
     "Shelby (TN)",
     "TnCIS (TN)",
-    # ── Texas (wave-1 + wave-2 registered scrapers) ──
+    # ── Texas (wave-1 + wave-2 + wave-3 registered scrapers) ──
     "Bexar (TX)",
     "Collin (TX)",
     "Dallas (TX)",
     "Denton (TX)",
+    "El Paso (TX)",
+    "Fort Bend (TX)",
     "Harris (TX)",
+    "Hidalgo (TX)",
+    "Montgomery (TX)",
     "Tarrant (TX)",
     "Travis (TX)",
+    "Williamson (TX)",
     # ── Louisiana (wave-1 + wave-2 registered scrapers) ──
     "East Baton Rouge (LA)",
     "Jefferson (LA)",
@@ -410,7 +415,8 @@ REGISTERED_COUNTIES = sorted([
     "Jefferson (AL)",
     "Madison (AL)",
     "Mobile (AL)",
-    # ── Connecticut (wave-1 registered scrapers) ──
+    # ── Connecticut (wave-1 + wave-2 registered scrapers) ──
+    "CT DOC (CT)",
     "Statewide (CT)",
     # ── Mississippi (wave-1 registered scrapers) ──
     "Hinds (MS)",

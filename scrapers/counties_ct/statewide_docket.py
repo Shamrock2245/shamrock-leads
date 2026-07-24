@@ -17,7 +17,7 @@ import logging
 import time
 from typing import List, Tuple
 
-import requests
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
@@ -71,7 +71,7 @@ class CTStatewideDockerScraper(BaseScraper):
         all_records: List[ArrestRecord] = []
         seen_dockets: set = set()
 
-        session = requests.Session()
+        session = requests.Session(impersonate="chrome124")
         session.headers.update({
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -113,7 +113,7 @@ class CTStatewideDockerScraper(BaseScraper):
         """Fetch the daily docket for one court location."""
         # Step 1: GET the search page to extract ASP.NET form tokens
         try:
-            resp = session.get(SEARCH_URL, timeout=15)
+            resp = session.get(SEARCH_URL, timeout=15, verify=False)
             resp.raise_for_status()
         except Exception as exc:
             logger.error(f"CT {court_name}: GET failed: {exc}")
@@ -137,7 +137,7 @@ class CTStatewideDockerScraper(BaseScraper):
             "_ctl0:cphBody:btnSearch": "Submit",
         }
         try:
-            resp = session.post(SEARCH_URL, data=payload, timeout=30)
+            resp = session.post(SEARCH_URL, data=payload, timeout=30, verify=False)
             resp.raise_for_status()
         except Exception as exc:
             logger.error(f"CT {court_name}: POST failed: {exc}")

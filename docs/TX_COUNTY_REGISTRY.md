@@ -1,9 +1,9 @@
 # Texas County Scraper Registry
 
-> **Last Updated:** 2026-07-22  
-> **Registered (dashboard):** 7 scrapers — wave-1 (Bexar, Dallas, Harris, Tarrant) + wave-2 (Travis, Collin, Denton)  
+> **Last Updated:** 2026-07-24  
+> **Registered (dashboard):** 12 scrapers — wave-1 (Bexar, Dallas, Harris, Tarrant) + wave-2 (Travis, Collin, Denton) + wave-3 (Fort Bend, Montgomery, Williamson, El Paso, Hidalgo)  
 > **Package:** `scrapers/counties_tx/`  
-> **Job IDs:** `scraper_tx_<county>` · CLI: `.venv/bin/python main.py tx_tarrant`
+> **Job IDs:** `scraper_tx_<county>` · CLI: `.venv/bin/python main.py tx_fort_bend`
 
 ## Stealth Stack Integration
 
@@ -36,13 +36,15 @@ All Texas scrapers use the 4-layer stealth stack:
 
 ---
 
-## Next Targets (Top Population Priority)
+## Wave-3 (Registered & Operational)
 
-| County | Population | Priority | Target Portal / Strategy | Notes |
-|--------|-----------:|----------|-------------------------|-------|
-| **Hidalgo** | ~880k | Medium | Rio Grande Valley Sheriff | South TX high-volume border county |
-| **El Paso** | ~860k | Medium | https://www.epcounty.com/sheriff/ | West TX regional hub |
-| **Fort Bend** | ~860k | Medium | Fort Bend Sheriff Portal | Houston metro expansion |
+| County | Population | Scraper | Portal / Strategy | Status | Notes |
+|--------|-----------:|---------|------------------|--------|-------|
+| **Hidalgo** | ~880k | `hidalgo.py` | https://www.hidalgocounty.us/sheriff | ✅ Live | Rio Grande Valley border county; A-Z walk via `make_stealth_request` |
+| **El Paso** | ~860k | `el_paso.py` | https://www.epcounty.com/sheriff/ | ✅ Live | West TX hub; A-Z walk via `make_stealth_request` |
+| **Fort Bend** | ~860k | `fort_bend.py` | https://pos.fortbendcountytx.gov/ | ✅ Live | Houston Metro expansion; A-Z JSON API walk |
+| **Montgomery** | ~650k | `montgomery.py` | https://mctxsheriff.org/inmate_inquiry/ | ✅ Live | North Houston metro; A-Z walk via `make_stealth_request` |
+| **Williamson** | ~640k | `williamson.py` | https://www.wilco.org/Sheriff/Inmate-Search | ✅ Live | Austin Metro expansion; JailView A-Z JSON API |
 
 ---
 

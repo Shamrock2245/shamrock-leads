@@ -286,6 +286,11 @@ from scrapers.counties_tx.tarrant import TarrantScraper as TX_TarrantScraper
 from scrapers.counties_tx.travis import TravisScraper as TX_TravisScraper
 from scrapers.counties_tx.collin import CollinScraper as TX_CollinScraper
 from scrapers.counties_tx.denton import DentonScraper as TX_DentonScraper
+from scrapers.counties_tx.fort_bend import FortBendScraper as TX_FortBendScraper
+from scrapers.counties_tx.montgomery import MontgomeryScraper as TX_MontgomeryScraper
+from scrapers.counties_tx.williamson import WilliamsonScraper as TX_WilliamsonScraper
+from scrapers.counties_tx.el_paso import ElPasoScraper as TX_ElPasoScraper
+from scrapers.counties_tx.hidalgo import HidalgoScraper as TX_HidalgoScraper
 
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
@@ -300,6 +305,7 @@ from scrapers.counties_al.mobile import MobileScraper as AL_MobileScraper
 
 # ── Connecticut Scrapers ───────────────────────────────────────────────────
 from scrapers.counties_ct.statewide_docket import CTStatewideDockerScraper as CT_StatewideScraper
+from scrapers.counties_ct.ct_doc import CTDOCInmateScraper as CT_DOCScraper
 
 # ── Mississippi Scrapers ───────────────────────────────────────────────────
 from scrapers.counties_ms.hinds import HindsScraper as MS_HindsScraper
@@ -603,7 +609,7 @@ def register_scrapers(sched):
     sched.register_scraper(TN_HamiltonScraper(), interval_minutes=60)
     sched.register_scraper(TN_RutherfordScraper(), interval_minutes=90)
 
-    # ── Texas (wave-1 + wave-2) ────────────────────────────────────────────────────
+    # ── Texas (wave-1 + wave-2 + wave-3) ──────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
     sched.register_scraper(TX_DallasScraper(), interval_minutes=90)
     sched.register_scraper(TX_BexarScraper(), interval_minutes=60)
@@ -611,6 +617,11 @@ def register_scrapers(sched):
     sched.register_scraper(TX_TravisScraper(), interval_minutes=60)
     sched.register_scraper(TX_CollinScraper(), interval_minutes=90)
     sched.register_scraper(TX_DentonScraper(), interval_minutes=60)
+    sched.register_scraper(TX_FortBendScraper(), interval_minutes=90)
+    sched.register_scraper(TX_MontgomeryScraper(), interval_minutes=90)
+    sched.register_scraper(TX_WilliamsonScraper(), interval_minutes=90)
+    sched.register_scraper(TX_ElPasoScraper(), interval_minutes=90)
+    sched.register_scraper(TX_HidalgoScraper(), interval_minutes=90)
 
     # ── Louisiana (wave-1) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
@@ -623,8 +634,9 @@ def register_scrapers(sched):
     sched.register_scraper(AL_MadisonScraper(), interval_minutes=120)
     sched.register_scraper(AL_MobileScraper(), interval_minutes=120)
 
-    # ── Connecticut (wave-1) ─────────────────────────────────────────────────
+    # ── Connecticut (wave-1 + wave-2) ────────────────────────────────────────
     sched.register_scraper(CT_StatewideScraper(), interval_minutes=180)
+    sched.register_scraper(CT_DOCScraper(), interval_minutes=120)
 
     # ── Mississippi (wave-1) ─────────────────────────────────────────────────
     sched.register_scraper(MS_HindsScraper(), interval_minutes=90)
