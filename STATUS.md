@@ -77,7 +77,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 ---
 
 ## Live prod verification (2026-07-23)
-### Session follow-up (same day)
+### Session follow-up (2026-07-23)
 
 | Fix | Result |
 |-----|--------|
@@ -89,18 +89,32 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | Gilchrist | ⏳ no public DNS/host found |
 | SignNow token | checked this session (see logs) |
 
+### Session follow-up (2026-07-24 — Manus prod-hardening)
+
+| Fix | Result |
+|-----|--------|
+| Monroe v2: rewrote against `data.keysso.net/api/arrests` JSON API (old ASP.NET dead) | ✅ **80 records** (no captcha/proxy) |
+| Hillsborough: direct-first egress + form drift (SearchSortType + new fields) | ✅ **7 records** (direct HTTP, no proxy) |
+| Lake: added SolveCaptcha reCAPTCHA v2 solver (token bypass dead) | ✅ code shipped (needs `SOLVECAPTCHA_KEY` run) |
+| Marion: switched `btnSearch` → `btnRecentBookings` | ⚠️ AWS WAF blocks VPS IP intermittently |
+| Bay: UniGUI session HandleEvent returns 401 | ⏳ needs deeper UniGUI reverse-engineering |
+| Okeechobee: `/inmate-search` page is Wix shell, no public data source found | 🔴 blocked on upstream (no roster URL) |
+| Gadsden: SmartWEB iframe → `69.21.72.195` server dead (empty reply) | 🔴 blocked on upstream |
+| Gilchrist: DNS `smartcop.gilchristsheriff.com` NXDOMAIN | 🔴 blocked on upstream |
+| Suwannee: SmartCOP server 500 on any search POST (upstream crash) | 🔴 blocked on upstream |
+| Defendants `normalize/batch` × 7 runs | ✅ **594 → 3,211** defendants |
 
 | Check | Result |
 |-------|--------|
-| `GET /health` | ✅ ok · ~128.6k arrests |
-| `GET /api/crm/health` | ✅ **ok** (was `degraded` — missing VPS `SECRET_KEY`) |
+| `GET /health` | ✅ ok · ~129.6k arrests |
+| `GET /api/crm/health` | ✅ **ok** |
 | Integrations (GAS, Wix, SignNow, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
 | GAS `?action=health` | ✅ `success` · version V409 |
 | BlueBubbles frp `:12434` + `/api/imessage/status` | ✅ connected · private_api · 1.9.9 |
-| Lee one-shot scrape | ✅ 42 records (429s recovered via proxy rotation) |
-| Scraper fleet | ✅ ~229 ok · **11 error** (FL: Bay, Bradford, Dixie, Gadsden, Gilchrist, Lake, Marion, Monroe, Okeechobee, Suwannee, Taylor) |
-| Local secrets script (`--strict`) | ✅ 0 critical gaps |
-| Defendants / matches collections | ⚠️ estimated count **0** (bonds/intake still live — normalize backlog) |
+| Monroe one-shot scrape (post-deploy) | ✅ 80 records |
+| Hillsborough one-shot (post-deploy) | ✅ 7 records |
+| Scraper fleet | ✅ **233 ok · 7 error** (FL: Bay, Gadsden, Gilchrist, Lake, Marion, Okeechobee, Suwannee) |
+| Defendants collection | ✅ **3,211** (was 594) |
 
 **Bugfix shipped:** `init_bluebubbles()` re-bound `BB_SERVERS = {}`, so every `from … import BB_SERVERS` kept an empty dict and iMessage looked “unconfigured” even with env set. Now mutates in place (`clear` + `update`). Tests: `tests/test_bb_servers_init.py`.
 
@@ -121,8 +135,8 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ Set on VPS 2026-07-23 |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (11) | ⏳ proxy 502 / SSL / roster layout — see registry |
-| Defendants collection backfill | ⏳ `defendants` approx 0 despite active bonds |
+| FL error scrapers (7 remaining) | ⏳ 4 blocked upstream (Gadsden/Gilchrist/Okeechobee/Suwannee), 2 fixable (Bay UniGUI, Marion WAF), 1 needs SOLVECAPTCHA run (Lake) |
+| Defendants collection backfill | ✅ **3,211** defendants (was 594 → normalize/batch × 7) |
 | Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |

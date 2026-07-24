@@ -31,12 +31,12 @@
 ## Tier 2 — Tampa Bay / I-4 Corridor (8 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 8 | **Hillsborough** | httpx + reCAPTCHA + **APE/SOCKS** (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-16 |
+| 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
 | 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
-| 13 | **Lake** | DrissionPage — JS SPA | `lake.py` | ✅ Active | 90 min | 2026-04-27 |
+| 13 | **Lake** | curl_cffi POST + reCAPTCHA v2 (SolveCaptcha) | `lake.py` | ✅ Active (needs SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
 | 15 | **Citrus** | JailTracker | `citrus.py` | ✅ Active | 120 min | 2026-04-27 |
 
@@ -62,7 +62,7 @@
 | 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
 | 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
-| 27 | **Okeechobee** | requests GET — HTML table | `okeechobee.py` | ✅ Active | 120 min | 2026-04-27 |
+| 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
 
 ---
 
@@ -81,8 +81,8 @@
 | 31 | **Alachua** | Custom HTML | `alachua.py` | ✅ Active | 90 min | 2026-04-27 |
 | 32 | **Putnam** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `putnam.py` | ✅ Active | 180 min | 2026-05-25 |
 | 33 | **Columbia** | P2C HTML | `columbia.py` | ✅ Active | 120 min | 2026-04-27 |
-| 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | ✅ Active | 180 min | 2026-05-25 |
-| 35 | **Marion** | requests POST — jail.marionso.com | `marion.py` | 🔄 Building | — | 2026-04-27 |
+| 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | 🔴 Upstream 500 (server crash on search POST) | 180 min | 2026-07-24 |
+| 35 | **Marion** | curl_cffi POST btnRecentBookings — jail.marionso.com | `marion.py` | ⚠️ AWS WAF (VPS IP blocked intermittently) | 120 min | 2026-07-24 |
 
 > **Note:** Marion is commented out in `main.py`. Scraper file exists and needs validation before re-enabling.
 
@@ -107,7 +107,7 @@
 | 43 | **Santa Rosa** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `santa_rosa.py` | ✅ Active | 120 min | 2026-05-25 |
 | 44 | **Walton** | New World InmateInquiry GET | `walton.py` | ✅ Active | 120 min | 2026-04-27 |
 | 45 | **Jackson** | Stub — no public roster | `jackson.py` | ✅ Active | 360 min | 2026-04-27 |
-| 46 | **Gadsden** | Custom — needs recon | `gadsden.py` | ✅ Active | 180 min | 2026-04-27 |
+| 46 | **Gadsden** | SmartWEB iframe → `69.21.72.195` (server dead) | `gadsden.py` | 🔴 Upstream dead | 180 min | 2026-07-24 |
 
 ---
 
@@ -117,7 +117,7 @@
 | 47 | **Leon** | requests POST — A-Z iteration | `leon.py` | 🔴 Broken Target (500 Error) | 90 min | 2026-05-24 |
 | 48 | **Taylor** | SmartWeb ASP.NET POST | `taylor.py` | ✅ Active | 240 min | 2026-04-27 |
 | 49 | **Dixie** | Custom HTML | `dixie.py` | ✅ Active | 240 min | 2026-04-27 |
-| 50 | **Monroe** | curl_cffi POST — disclaimer bypass | `monroe.py` | ✅ Active | 120 min | 2026-04-27 |
+| 50 | **Monroe** | JSON API `data.keysso.net/api/arrests` (v2) | `monroe.py` | ✅ Active | 120 min | 2026-07-24 |
 
 ---
 
