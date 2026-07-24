@@ -7,6 +7,10 @@ const SLPaperwork = {
   _allPackets: [],
   _draggedDocKey: null,
   _activePacketId: null,
+  _casePacketKeys: [],
+  _extraUploads: [],
+  _adaptiveContext: null,
+  _adaptiveFields: null,
 
   _docCatalog: [
     { key: "master_bail_application", label: "Master Bail Application", icon: "📄", badge: "Core", desc: "Defendant & Indemnitor personal data, employment, references" },
@@ -132,6 +136,7 @@ const SLPaperwork = {
         <td>${this._esc(dt)}</td>
         <td style="text-align:right">
           <div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">
+            <button type="button" class="inv-btn" onclick="SLPaperwork.openAdaptivePacketModal({packet_id:'${this._esc(pid)}'})" style="font-size:10px;padding:2px 6px;color:#a78bfa" title="Open adaptive packet builder for this case">🎯 Packet</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.showHydrationAudit('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px" title="Audit field hydration completeness">🔍 Audit</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.openSwipeSimpleModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#38bdf8" title="SwipeSimple credit card link">💳 Card</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.openCashModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#4ade80" title="Log cash payment">💵 Cash</button>
@@ -632,6 +637,432 @@ const SLPaperwork = {
     const d = document.createElement('div');
     d.textContent = s == null ? '' : String(s);
     return d.innerHTML;
+  },
+
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * Adaptive Case Packet Builder (match → auto-fill → drag extras → flatten → send)
+   * ───────────────────────────────────────────────────────────────────────────── */
+  openAdaptivePacketModal(seed = {}) {
+    const modal = document.getElementById('pwAdaptivePacketModal');
+    if (!modal) return;
+    this._casePacketKeys = [];
+    this._extraUploads = [];
+    this._adaptiveContext = null;
+    this._adaptiveFields = null;
+    this._draggedDocKey = null;
+
+    if (seed.packet_id) {
+      const el = document.getElementById('pwApLookupId');
+      if (el) el.value = seed.packet_id;
+    }
+    if (seed.booking_number) {
+      const el = document.getElementById('pwApBooking');
+      if (el) el.value = seed.booking_number;
+    }
+    if (seed.county) {
+      const el = document.getElementById('pwApCounty');
+      if (el) el.value = seed.county;
+    }
+    if (seed.intake_id) {
+      const el = document.getElementById('pwApLookupId');
+      if (el) el.value = seed.intake_id;
+    }
+
+    this.renderAdaptivePalette();
+    this.renderCasePacketDrop();
+    this.renderExtraList();
+    this._setApStatus('', null);
+    modal.style.display = 'flex';
+    modal.classList.add('active');
+
+    // Auto-resolve if we already have an id
+    if (seed.packet_id || seed.intake_id || seed.booking_number || seed.match_id) {
+      this.loadAdaptiveContext(seed);
+    }
+  },
+
+  closeAdaptivePacketModal() {
+    const modal = document.getElementById('pwAdaptivePacketModal');
+    if (modal) {
+      modal.style.display = 'none';
+      modal.classList.remove('active');
+    }
+  },
+
+  toggleSelfIndemnitorUI() {
+    const on = document.getElementById('pwApSelfIndemnitor')?.checked;
+    const pin = document.getElementById('pwApSelfPin');
+    if (pin) pin.style.display = on ? 'inline-block' : 'none';
+    if (on) {
+      // Pre-copy defendant → indemnitor fields in UI (still requires PIN on finalize)
+      const map = [
+        ['pwApDefName', 'pwApIndName'],
+        ['pwApDefPhone', 'pwApIndPhone'],
+        ['pwApDefAddress', 'pwApIndAddress'],
+      ];
+      map.forEach(([a, b]) => {
+        const src = document.getElementById(a);
+        const dst = document.getElementById(b);
+        if (src && dst && src.value && !dst.value) dst.value = src.value;
+      });
+    }
+  },
+
+  renderAdaptivePalette() {
+    const el = document.getElementById('pwApPalette');
+    if (!el) return;
+    el.innerHTML = '';
+    this._docCatalog.forEach(doc => {
+      const card = document.createElement('div');
+      card.draggable = true;
+      card.dataset.docKey = doc.key;
+      card.style.cssText = 'background:rgba(30,41,59,.9);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:8px 10px;cursor:grab;font-size:11px';
+      card.ondragstart = (e) => this.handleDragStart(e, doc.key);
+      card.innerHTML = `<strong>${doc.icon} ${this._esc(doc.label)}</strong>
+        <div style="color:#64748b;margin-top:2px">${this._esc(doc.desc)}</div>`;
+      card.ondblclick = () => {
+        if (!this._casePacketKeys.includes(doc.key)) {
+          this._casePacketKeys.push(doc.key);
+          this.renderCasePacketDrop();
+        }
+      };
+      el.appendChild(card);
+    });
+  },
+
+  renderCasePacketDrop() {
+    const box = document.getElementById('pwApPacketDrop');
+    const count = document.getElementById('pwApPacketCount');
+    if (count) count.textContent = `(${this._casePacketKeys.length})`;
+    if (!box) return;
+    if (!this._casePacketKeys.length) {
+      box.innerHTML = `<div style="font-size:11px;color:#64748b;text-align:center;padding:24px">Drag document cards here · rules auto-seed after resolve</div>`;
+      return;
+    }
+    box.innerHTML = '';
+    this._casePacketKeys.forEach((key, idx) => {
+      const cat = this._docCatalog.find(d => d.key === key) || { label: key, icon: '📄' };
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;background:rgba(15,23,42,.85);border:1px solid rgba(56,189,248,.25);border-radius:6px;padding:6px 8px;margin-bottom:6px;font-size:12px';
+      row.innerHTML = `<span>${idx + 1}. ${cat.icon || '📄'} ${this._esc(cat.label || key)}</span>
+        <button type="button" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px" title="Remove">✕</button>`;
+      row.querySelector('button').onclick = () => {
+        this._casePacketKeys = this._casePacketKeys.filter(k => k !== key);
+        this.renderCasePacketDrop();
+      };
+      box.appendChild(row);
+    });
+  },
+
+  handleCasePacketDragOver(evt) {
+    evt.preventDefault();
+    evt.currentTarget.style.borderColor = '#38bdf8';
+  },
+
+  handleCasePacketDragLeave(evt) {
+    evt.currentTarget.style.borderColor = '';
+  },
+
+  handleCasePacketDrop(evt) {
+    evt.preventDefault();
+    evt.currentTarget.style.borderColor = '';
+    const key = evt.dataTransfer.getData('text/plain') || this._draggedDocKey;
+    if (!key) return;
+    if (!this._casePacketKeys.includes(key)) {
+      this._casePacketKeys.push(key);
+      this.renderCasePacketDrop();
+    }
+  },
+
+  renderExtraList() {
+    const el = document.getElementById('pwApExtraList');
+    if (!el) return;
+    if (!this._extraUploads.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = this._extraUploads.map((f, i) =>
+      `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+        <span>📎 ${this._esc(f.filename)} <span style="color:#64748b">(${Math.round((f.size || 0) / 1024)} KB)</span></span>
+        <button type="button" data-i="${i}" style="background:none;border:none;color:#ef4444;cursor:pointer">remove</button>
+      </div>`
+    ).join('');
+    el.querySelectorAll('button[data-i]').forEach(btn => {
+      btn.onclick = () => {
+        this._extraUploads.splice(Number(btn.dataset.i), 1);
+        this.renderExtraList();
+      };
+    });
+  },
+
+  async _readFileAsUpload(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        resolve({
+          filename: file.name,
+          content_type: file.type || 'application/pdf',
+          data_b64: String(reader.result || ''),
+          size: file.size,
+        });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  },
+
+  async handleExtraFileDrop(evt) {
+    evt.preventDefault();
+    evt.currentTarget.style.borderColor = '';
+    const files = Array.from(evt.dataTransfer?.files || []);
+    for (const f of files) {
+      if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') continue;
+      const up = await this._readFileAsUpload(f);
+      this._extraUploads.push(up);
+    }
+    this.renderExtraList();
+  },
+
+  async handleExtraFilePick(evt) {
+    const files = Array.from(evt.target.files || []);
+    for (const f of files) {
+      const up = await this._readFileAsUpload(f);
+      this._extraUploads.push(up);
+    }
+    this.renderExtraList();
+    evt.target.value = '';
+  },
+
+  _setApStatus(msg, type) {
+    const el = document.getElementById('pwApStatus');
+    if (!el) return;
+    if (!msg) {
+      el.style.display = 'none';
+      el.textContent = '';
+      return;
+    }
+    el.style.display = 'block';
+    el.textContent = msg;
+    el.style.background = type === 'error' ? 'rgba(153,27,27,.35)'
+      : type === 'success' ? 'rgba(22,101,52,.35)'
+      : 'rgba(30,58,138,.35)';
+    el.style.color = '#e2e8f0';
+    el.style.border = '1px solid rgba(255,255,255,.08)';
+  },
+
+  _lookupBody(seed = {}) {
+    const lookup = (document.getElementById('pwApLookupId')?.value || '').trim();
+    const booking = (document.getElementById('pwApBooking')?.value || seed.booking_number || '').trim();
+    const county = (document.getElementById('pwApCounty')?.value || seed.county || '').trim();
+    const body = {
+      booking_number: booking || undefined,
+      county: county || undefined,
+      self_indemnitor: !!document.getElementById('pwApSelfIndemnitor')?.checked,
+      authorization_pin: document.getElementById('pwApSelfPin')?.value || '',
+      include_payment_plan: !!document.getElementById('pwApPaymentPlan')?.checked,
+      extra_doc_keys: this._casePacketKeys.slice(),
+    };
+    if (seed.packet_id) body.packet_id = seed.packet_id;
+    if (seed.intake_id) body.intake_id = seed.intake_id;
+    if (seed.match_id) body.match_id = seed.match_id;
+    if (seed.defendant_id) body.defendant_id = seed.defendant_id;
+    if (lookup) {
+      if (lookup.startsWith('PKT-') || lookup.toLowerCase().startsWith('pkt')) body.packet_id = lookup;
+      else if (lookup.startsWith('INT-') || lookup.toLowerCase().includes('intake')) body.intake_id = lookup;
+      else if (/match/i.test(lookup) || lookup.length > 20) body.match_id = lookup;
+      else {
+        // ambiguous — try packet then intake
+        body.packet_id = lookup;
+        body.intake_id = lookup;
+        body.match_id = lookup;
+      }
+    }
+    return body;
+  },
+
+  _fillFormFromContext(ctx, fields) {
+    const def = ctx.defendant || {};
+    const ind = ctx.indemnitor || {};
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el && (v != null && v !== '')) el.value = v;
+    };
+    set('pwApDefName', def.name);
+    set('pwApDefDob', def.dob);
+    set('pwApDefPhone', def.phone);
+    set('pwApDefAddress', def.address);
+    set('pwApIndName', ind.name);
+    set('pwApIndPhone', ind.phone);
+    set('pwApIndEmail', ind.email);
+    set('pwApIndAddress', ind.address);
+    set('pwApCaseNumber', ctx.case_number);
+    set('pwApPoa', ctx.poa_number);
+    set('pwApBondAmount', ctx.bond_amount || '');
+    set('pwApBooking', ctx.booking_number);
+    set('pwApCounty', ctx.county);
+    const sur = document.getElementById('pwApSurety');
+    if (sur && ctx.surety_id) sur.value = ctx.surety_id;
+    if (ctx.self_indemnitor) {
+      const cb = document.getElementById('pwApSelfIndemnitor');
+      if (cb) cb.checked = true;
+      this.toggleSelfIndemnitorUI();
+    }
+  },
+
+  async loadAdaptiveContext(seed = {}) {
+    this._setApStatus('Resolving defendant / indemnitor match…', 'info');
+    try {
+      const res = await fetch('/api/paperwork/packet/context', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this._lookupBody(seed)),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+
+      this._adaptiveContext = data.context;
+      this._adaptiveFields = data.fields;
+      this._fillFormFromContext(data.context, data.fields);
+
+      // Seed packet from rules manifest when empty
+      if (!this._casePacketKeys.length && Array.isArray(data.manifest)) {
+        this._casePacketKeys = data.manifest
+          .map(m => m.catalog_key)
+          .filter(Boolean);
+        this.renderCasePacketDrop();
+      }
+
+      const h = data.hydration || {};
+      const badge = document.getElementById('pwApHydrationBadge');
+      if (badge) {
+        const sc = h.hydration_score ?? 0;
+        const color = sc >= 100 ? '#10b981' : sc >= 70 ? '#f59e0b' : '#ef4444';
+        badge.style.color = color;
+        badge.textContent = `Hydration: ${sc}% (${h.hydrated_count || 0}/${h.total_required || 0})`;
+      }
+      const src = document.getElementById('pwApSources');
+      if (src) {
+        const sources = (data.context?.sources || []).join(', ') || 'none';
+        const small = data.context?.is_small_bond ? ' · small-bond eligible' : '';
+        src.textContent = `Sources: ${sources}${small}`;
+      }
+
+      // Provider availability
+      const prov = document.getElementById('pwApProvider');
+      if (prov && data.providers && !data.providers.adobe) {
+        // keep adobe option but note unconfigured on send
+      }
+
+      this._setApStatus('Context loaded — review fields, adjust packet docs, then flatten & send.', 'success');
+    } catch (err) {
+      this._setApStatus(`Resolve failed: ${err.message}`, 'error');
+    }
+  },
+
+  async previewAdaptiveHydration() {
+    await this.loadAdaptiveContext();
+    const h = this._adaptiveFields ? null : null;
+    // re-fetch light audit from last context fields via finalize none is heavy; show modal audit from context response
+    try {
+      const res = await fetch('/api/paperwork/packet/context', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this._lookupBody()),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'preview failed');
+      const rows = (data.hydration?.fields || []).map(f =>
+        `${f.hydrated ? '✓' : '✗'} ${f.label}: ${f.val || '—'}`
+      ).join('\n');
+      alert(`Hydration ${data.hydration?.hydration_score}%\n\n${rows}`);
+    } catch (err) {
+      alert(`Preview failed: ${err.message}`);
+    }
+  },
+
+  _collectFieldOverrides() {
+    return {
+      defendant_name: document.getElementById('pwApDefName')?.value || '',
+      defendant_dob: document.getElementById('pwApDefDob')?.value || '',
+      defendant_phone: document.getElementById('pwApDefPhone')?.value || '',
+      defendant_address: document.getElementById('pwApDefAddress')?.value || '',
+      indemnitor_name: document.getElementById('pwApIndName')?.value || '',
+      indemnitor_phone: document.getElementById('pwApIndPhone')?.value || '',
+      indemnitor_email: document.getElementById('pwApIndEmail')?.value || '',
+      indemnitor_address: document.getElementById('pwApIndAddress')?.value || '',
+      case_number: document.getElementById('pwApCaseNumber')?.value || '',
+      booking_number: document.getElementById('pwApBooking')?.value || '',
+      poa_number: document.getElementById('pwApPoa')?.value || '',
+      bond_amount: document.getElementById('pwApBondAmount')?.value || '',
+    };
+  },
+
+  async finalizeAdaptivePacket() {
+    const selfInd = !!document.getElementById('pwApSelfIndemnitor')?.checked;
+    const pin = document.getElementById('pwApSelfPin')?.value || '';
+    if (selfInd && !pin) {
+      this._setApStatus('Self-indemnitor requires Brendan authorization PIN.', 'error');
+      return;
+    }
+    if (!this._casePacketKeys.length && !this._extraUploads.length) {
+      this._setApStatus('Add at least one catalog document or extra PDF to the packet.', 'error');
+      return;
+    }
+
+    const provider = document.getElementById('pwApProvider')?.value || 'signnow';
+    this._setApStatus('Finalizing: hydrate → flatten → send…', 'info');
+
+    const body = {
+      ...this._lookupBody(),
+      self_indemnitor: selfInd,
+      authorization_pin: pin,
+      surety_id: document.getElementById('pwApSurety')?.value || 'osi',
+      include_payment_plan: !!document.getElementById('pwApPaymentPlan')?.checked,
+      packet_doc_keys: this._casePacketKeys.slice(),
+      extra_doc_keys: this._casePacketKeys.slice(),
+      extra_uploads: this._extraUploads.map(u => ({
+        filename: u.filename,
+        content_type: u.content_type,
+        data_b64: u.data_b64,
+      })),
+      field_overrides: this._collectFieldOverrides(),
+      provider,
+      signer_email: document.getElementById('pwApIndEmail')?.value || '',
+      poa_number: document.getElementById('pwApPoa')?.value || '',
+      routing_scenario: document.getElementById('pwApPoa')?.value ? 'all-in-one' : 'phase_1',
+    };
+
+    try {
+      const res = await fetch('/api/paperwork/packet/finalize', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+
+      const link = data.signing_link ? `\nSigning link: ${data.signing_link}` : '';
+      const sn = data.send_results?.signnow;
+      const ad = data.send_results?.adobe;
+      let providerMsg = '';
+      if (sn) providerMsg += sn.success ? ' SignNow ✓' : ` SignNow ✗ (${sn.error || 'fail'})`;
+      if (ad) providerMsg += ad.success ? ' Adobe ✓' : ` Adobe ✗ (${ad.error || 'fail'})`;
+
+      this._setApStatus(
+        `Packet ${data.packet_id} finalized · hydration ${data.hydration?.hydration_score ?? '—'}% · flattened=${data.flattened}${providerMsg}`,
+        'success'
+      );
+      alert(`Packet ready: ${data.packet_id}\nStatus: ${data.status}${providerMsg}${link}`);
+      this.loadLivePackets();
+      if (data.signing_link) {
+        // keep modal open so staff can copy link
+      }
+    } catch (err) {
+      this._setApStatus(`Finalize failed: ${err.message}`, 'error');
+    }
   },
 };
 

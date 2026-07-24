@@ -1319,3 +1319,479 @@ async def generate_post_release_remedy_doc(request: Request):
     except Exception as exc:
         logger.exception("remedy-doc error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adaptive Case Packet Builder
+# Resolves match → defendant/indemnitor, assembles drag-drop manifest,
+# flattens extras, sends via SignNow (primary) or Adobe Sign (optional).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@paperwork_bp.post("/paperwork/packet/context")
+async def packet_builder_context(request: Request):
+    """Resolve adaptive case context (defendant + indemnitor + bond) for the modal."""
+    try:
+        body = (await request.json()) or {}
+        from dashboard.services.packet_builder_service import (
+            resolve_case_context,
+            build_adaptive_field_map,
+            hydration_score,
+            apply_self_indemnitor,
+            assemble_manifest,
+            SMALL_BOND_MAX,
+        )
+
+        ctx = await resolve_case_context(
+            intake_id=body.get("intake_id"),
+            match_id=body.get("match_id"),
+            defendant_id=body.get("defendant_id"),
+            booking_number=body.get("booking_number"),
+            county=body.get("county"),
+            bond_case_id=body.get("bond_case_id"),
+            packet_id=body.get("packet_id"),
+        )
+
+        self_mode = bool(body.get("self_indemnitor"))
+        if self_mode:
+            pin = body.get("authorization_pin") or body.get("pin") or ""
+            try:
+                ctx = apply_self_indemnitor(ctx, pin)
+            except PermissionError as pe:
+                return JSONResponse({"success": False, "error": str(pe)}, status_code=403)
+
+        fields = build_adaptive_field_map(ctx)
+        audit = hydration_score(fields)
+
+        # Load drag-drop rules
+        rules_col = get_collection("paperwork_rules")
+        rules_doc = await rules_col.find_one({"_id": "drag_drop_rules"}, {"_id": 0})
+        categories = (rules_doc or {}).get("categories") or DEFAULT_DOC_RULES_CATEGORIES
+
+        include_pp = bool(body.get("include_payment_plan", True))
+        extra_keys = body.get("extra_doc_keys") or []
+        manifest = assemble_manifest(
+            categories,
+            surety_id=ctx.get("surety_id") or "osi",
+            include_payment_plan=include_pp,
+            extra_catalog_keys=extra_keys,
+            self_indemnitor=bool(ctx.get("self_indemnitor")),
+        )
+
+        return {
+            "success": True,
+            "context": ctx,
+            "fields": fields,
+            "hydration": audit,
+            "categories": categories,
+            "manifest": manifest,
+            "small_bond_max": SMALL_BOND_MAX,
+            "providers": {
+                "signnow": True,
+                "adobe": bool(
+                    __import__("os").environ.get("ADOBE_SIGN_INTEGRATION_KEY")
+                    or __import__("os").environ.get("ADOBE_SIGN_ACCESS_TOKEN")
+                ),
+            },
+        }
+    except Exception as exc:
+        logger.exception("packet_builder_context error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/packet/finalize")
+async def packet_builder_finalize(request: Request):
+    """
+    Finalize a case packet:
+      - adaptive hydration from match/defendant/indemnitor
+      - optional self-indemnitor (PIN 224545)
+      - assemble docs from drag-drop rules + extra catalog keys
+      - attach extra uploaded PDFs
+      - flatten into a single PDF when possible
+      - send to SignNow and/or Adobe for signature
+    """
+    try:
+        body = (await request.json()) or {}
+        from dashboard.services.packet_builder_service import (
+            resolve_case_context,
+            build_adaptive_field_map,
+            hydration_score,
+            apply_self_indemnitor,
+            assemble_manifest,
+            decode_extra_uploads,
+            flatten_pdf_bytes,
+            send_via_adobe,
+            template_slug_for_catalog_key,
+            SMALL_BOND_MAX,
+        )
+
+        provider = (body.get("provider") or "signnow").lower().strip()
+        if provider not in ("signnow", "adobe", "both", "none"):
+            provider = "signnow"
+
+        ctx = await resolve_case_context(
+            intake_id=body.get("intake_id"),
+            match_id=body.get("match_id"),
+            defendant_id=body.get("defendant_id"),
+            booking_number=body.get("booking_number"),
+            county=body.get("county"),
+            bond_case_id=body.get("bond_case_id"),
+            packet_id=body.get("packet_id"),
+        )
+
+        if body.get("self_indemnitor"):
+            pin = body.get("authorization_pin") or body.get("pin") or ""
+            try:
+                ctx = apply_self_indemnitor(ctx, pin)
+            except PermissionError as pe:
+                return JSONResponse({"success": False, "error": str(pe)}, status_code=403)
+            # Discretionary small-bond policy note (PIN already gates)
+            if ctx.get("bond_amount") and ctx["bond_amount"] > SMALL_BOND_MAX:
+                ctx["self_indemnitor_large_bond_override"] = True
+
+        # Allow UI field overrides (staff edits after auto-fill)
+        overrides = body.get("field_overrides") or {}
+        if isinstance(overrides, dict):
+            def_ = ctx.setdefault("defendant", {})
+            ind = ctx.setdefault("indemnitor", {})
+            map_def = {
+                "defendant_name": ("defendant", "name"),
+                "defendant_dob": ("defendant", "dob"),
+                "defendant_phone": ("defendant", "phone"),
+                "defendant_email": ("defendant", "email"),
+                "defendant_address": ("defendant", "address"),
+                "indemnitor_name": ("indemnitor", "name"),
+                "indemnitor_phone": ("indemnitor", "phone"),
+                "indemnitor_email": ("indemnitor", "email"),
+                "indemnitor_address": ("indemnitor", "address"),
+                "indemnitor_dob": ("indemnitor", "dob"),
+                "case_number": (None, "case_number"),
+                "booking_number": (None, "booking_number"),
+                "poa_number": (None, "poa_number"),
+                "bond_amount": (None, "bond_amount"),
+            }
+            for k, v in overrides.items():
+                if v is None or str(v).strip() == "":
+                    continue
+                target = map_def.get(k)
+                if not target:
+                    continue
+                group, field = target
+                if group is None:
+                    if field == "bond_amount":
+                        try:
+                            ctx[field] = float(str(v).replace("$", "").replace(",", ""))
+                        except ValueError:
+                            ctx[field] = v
+                    else:
+                        ctx[field] = v
+                elif group == "defendant":
+                    def_[field] = v
+                elif group == "indemnitor":
+                    ind[field] = v
+
+        fields = build_adaptive_field_map(ctx)
+        audit = hydration_score(fields)
+
+        rules_col = get_collection("paperwork_rules")
+        rules_doc = await rules_col.find_one({"_id": "drag_drop_rules"}, {"_id": 0})
+        categories = (rules_doc or {}).get("categories") or DEFAULT_DOC_RULES_CATEGORIES
+        if isinstance(body.get("categories"), dict):
+            # Per-case overrides from the modal drop zones
+            categories = body["categories"]
+
+        extra_keys = body.get("extra_doc_keys") or body.get("packet_doc_keys") or []
+        manifest = assemble_manifest(
+            categories,
+            surety_id=ctx.get("surety_id") or body.get("surety_id") or "osi",
+            include_payment_plan=bool(body.get("include_payment_plan", True)),
+            extra_catalog_keys=extra_keys,
+            self_indemnitor=bool(ctx.get("self_indemnitor")),
+        )
+
+        extras = decode_extra_uploads(body.get("extra_uploads") or [])
+
+        now = datetime.now(timezone.utc)
+        packet_id = body.get("packet_id") or f"PKT-{uuid.uuid4().hex[:10].upper()}"
+        surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower()
+
+        # Build synthetic intake for SignNow service
+        def_ = ctx.get("defendant") or {}
+        ind = ctx.get("indemnitor") or {}
+        intake_doc = {
+            "intake_id": ctx.get("intake_id") or f"SYN-{uuid.uuid4().hex[:8]}",
+            "defendant_name": def_.get("name") or "",
+            "defendant_booking_number": ctx.get("booking_number") or "",
+            "defendant_county": ctx.get("county") or "",
+            "defendant_facility": ctx.get("facility") or "",
+            "defendant_dob": def_.get("dob") or "",
+            "case_number": ctx.get("case_number") or "",
+            "bond_amount": ctx.get("bond_amount") or 0,
+            "charges": ctx.get("charges") or "",
+            "indemnitor_name": ind.get("name") or "",
+            "indemnitor_phone": ind.get("phone") or "",
+            "indemnitor_email": ind.get("email") or "",
+            "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
+            "surety_id": surety_id,
+            "self_indemnitor": bool(ctx.get("self_indemnitor")),
+            "defendant": {
+                "name": def_.get("name"),
+                "firstName": def_.get("first_name"),
+                "lastName": def_.get("last_name"),
+                "dob": def_.get("dob"),
+                "phone": def_.get("phone"),
+                "email": def_.get("email"),
+                "address": def_.get("address"),
+                "city": def_.get("city"),
+                "state": def_.get("state"),
+                "zip": def_.get("zip"),
+                "dl": def_.get("dl"),
+                "dlState": def_.get("dl_state"),
+                "bookingNumber": ctx.get("booking_number"),
+                "county": ctx.get("county"),
+                "facility": ctx.get("facility"),
+                "charges": ctx.get("charges"),
+                "bondAmount": ctx.get("bond_amount"),
+                "caseNumber": ctx.get("case_number"),
+                "height": def_.get("height"),
+                "weight": def_.get("weight"),
+                "race": def_.get("race"),
+                "sex": def_.get("sex"),
+                "hair": def_.get("hair"),
+                "eyes": def_.get("eyes"),
+                "employer": def_.get("employer"),
+            },
+            "indemnitor": {
+                "name": ind.get("name"),
+                "firstName": ind.get("first_name"),
+                "lastName": ind.get("last_name"),
+                "dob": ind.get("dob"),
+                "phone": ind.get("phone"),
+                "email": ind.get("email"),
+                "address": ind.get("address"),
+                "city": ind.get("city"),
+                "state": ind.get("state"),
+                "zip": ind.get("zip"),
+                "dl": ind.get("dl"),
+                "dlState": ind.get("dl_state"),
+                "ssn": ind.get("ssn"),
+                "employer": ind.get("employer"),
+                "relationship": ind.get("relationship") or ("Self" if ctx.get("self_indemnitor") else ""),
+            },
+        }
+
+        # Optional local flatten of blank templates + extras (preview / Adobe)
+        flat_bytes = b""
+        flat_b64 = ""
+        try:
+            pdf_parts = []
+            # Best-effort local blank stitch when module exposes helpers
+            try:
+                from dashboard.paperwork_pdf_service import generate_full_packet
+                stitched = generate_full_packet(intake_doc, surety=surety_id)
+                if isinstance(stitched, (bytes, bytearray)) and stitched:
+                    pdf_parts.append(bytes(stitched))
+            except Exception as stitch_exc:
+                logger.debug("local stitch unavailable: %s", stitch_exc)
+            for ex in extras:
+                fname = (ex.get("filename") or "").lower()
+                ctype = (ex.get("content_type") or "").lower()
+                if fname.endswith(".pdf") or "pdf" in ctype:
+                    pdf_parts.append(ex["bytes"])
+            if pdf_parts:
+                flat_bytes = flatten_pdf_bytes(pdf_parts)
+        except Exception as flat_exc:
+            logger.warning("flatten failed: %s", flat_exc)
+
+        if flat_bytes:
+            import base64 as _b64
+            flat_b64 = _b64.b64encode(flat_bytes).decode("ascii")
+
+        send_results: dict = {}
+        signnow_result: dict = {}
+        adobe_result: dict = {}
+        status = "finalized"
+        signing_link = ""
+
+        # ── SignNow ──
+        if provider in ("signnow", "both"):
+            try:
+                from dashboard.services.signnow_packet_service import SignNowPacketService
+                svc = SignNowPacketService()
+                # custom manifest: map our assembled docs to SignNow template keys
+                custom_manifest = []
+                for d in manifest:
+                    slug = d.get("template_slug") or template_slug_for_catalog_key(d.get("catalog_key", ""))
+                    if d.get("print_only"):
+                        continue
+                    custom_manifest.append(slug)
+
+                routing = body.get("routing_scenario") or "all-in-one"
+                phase = int(body.get("phase") or (2 if routing == "all-in-one" else 1))
+                signer_email = (
+                    body.get("signer_email")
+                    or ind.get("email")
+                    or def_.get("email")
+                    or ""
+                )
+                signer_name = ind.get("name") or def_.get("name") or "Signer"
+                poa_number = ctx.get("poa_number") or body.get("poa_number") or ""
+
+                if phase == 2 and not poa_number and routing == "all-in-one":
+                    # Soft fallback to phase 1 if POA missing
+                    phase = 1
+                    routing = "phase_1"
+
+                signnow_result = await svc.create_packet(
+                    intake_doc=intake_doc,
+                    packet_id=packet_id,
+                    phase=phase,
+                    surety_id=surety_id,
+                    signer_email=signer_email,
+                    signer_name=signer_name,
+                    poa_number=poa_number or None,
+                    custom_manifest=custom_manifest or None,
+                    routing_scenario=routing,
+                )
+                signing_link = signnow_result.get("signing_link") or ""
+                status = "pending_signature"
+                send_results["signnow"] = {
+                    "success": True,
+                    "document_ids": signnow_result.get("document_ids"),
+                    "group_id": signnow_result.get("group_id"),
+                    "invite_id": signnow_result.get("invite_id"),
+                    "signing_link": signing_link,
+                }
+            except Exception as sn_exc:
+                logger.exception("SignNow finalize failed")
+                send_results["signnow"] = {"success": False, "error": str(sn_exc)}
+                if provider == "signnow":
+                    return JSONResponse(
+                        {"success": False, "error": f"SignNow failed: {sn_exc}", "packet_id": packet_id},
+                        status_code=502,
+                    )
+
+        # ── Adobe ──
+        if provider in ("adobe", "both"):
+            if not flat_bytes:
+                adobe_result = {
+                    "success": False,
+                    "error": "No flattened PDF available for Adobe (add blank templates or upload PDFs).",
+                }
+            else:
+                adobe_result = await send_via_adobe(
+                    flattened_pdf=flat_bytes,
+                    filename=f"{packet_id}.pdf",
+                    signer_email=body.get("signer_email") or ind.get("email") or "",
+                    signer_name=ind.get("name") or def_.get("name") or "Signer",
+                    agreement_name=f"Shamrock Bond Packet — {def_.get('name') or packet_id}",
+                )
+            send_results["adobe"] = adobe_result
+            if adobe_result.get("success"):
+                status = "pending_signature"
+
+        # Persist packet
+        packet_doc = {
+            "packet_id": packet_id,
+            "intake_id": intake_doc.get("intake_id"),
+            "bond_case_id": ctx.get("bond_case_id"),
+            "match_id": ctx.get("match_id"),
+            "defendant_id": ctx.get("defendant_id"),
+            "indemnitor_id": ctx.get("indemnitor_id"),
+            "packet_type": "adaptive_builder",
+            "template": surety_id,
+            "surety_id": surety_id,
+            "status": status,
+            "manifest": manifest,
+            "documents": [
+                {
+                    "doc_id": f"{packet_id}-{i:02d}",
+                    "catalog_key": d.get("catalog_key"),
+                    "template_slug": d.get("template_slug"),
+                    "label": d.get("label"),
+                    "print_only": d.get("print_only"),
+                    "status": "included",
+                }
+                for i, d in enumerate(manifest, 1)
+            ],
+            "extra_uploads": [
+                {"filename": e["filename"], "size": e["size"], "content_type": e["content_type"]}
+                for e in extras
+            ],
+            "flattened": bool(flat_bytes),
+            "flattened_size": len(flat_bytes) if flat_bytes else 0,
+            "defendant_name": def_.get("name") or "",
+            "defendant_dob": def_.get("dob") or "",
+            "defendant_address": def_.get("address") or "",
+            "indemnitor_name": ind.get("name") or "",
+            "indemnitor_phone": ind.get("phone") or "",
+            "indemnitor_email": ind.get("email") or "",
+            "indemnitor_address": ind.get("address") or "",
+            "case_number": ctx.get("case_number") or "",
+            "booking_number": ctx.get("booking_number") or "",
+            "bond_amount": ctx.get("bond_amount") or 0,
+            "premium_amount": ctx.get("premium_amount") or 0,
+            "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
+            "self_indemnitor": bool(ctx.get("self_indemnitor")),
+            "hydration_score": audit.get("hydration_score"),
+            "field_map_keys": list(fields.keys())[:80],
+            "send_results": send_results,
+            "signnow_document_ids": (signnow_result or {}).get("document_ids") or [],
+            "signnow_group_id": (signnow_result or {}).get("group_id") or "",
+            "signnow_invite_id": (signnow_result or {}).get("invite_id"),
+            "signnow_status": "sent" if (signnow_result or {}).get("document_ids") else None,
+            "adobe_agreement_id": (adobe_result or {}).get("agreement_id"),
+            "signing_link": signing_link,
+            "provider": provider,
+            "created_at": now,
+            "updated_at": now,
+            "packet_version": 1,
+            "voided": False,
+        }
+
+        packets_col = get_collection("paperwork_packets")
+        existing = await packets_col.find_one({"packet_id": packet_id})
+        if existing:
+            packet_doc["packet_version"] = int(existing.get("packet_version") or 1) + 1
+            packet_doc["created_at"] = existing.get("created_at") or now
+            await packets_col.replace_one({"packet_id": packet_id}, packet_doc)
+        else:
+            await packets_col.insert_one(packet_doc)
+
+        # Soft audit event
+        try:
+            await get_collection("audit_events").insert_one({
+                "Event_ID": str(uuid.uuid4()),
+                "event_type": "packet_finalized",
+                "packet_id": packet_id,
+                "provider": provider,
+                "self_indemnitor": bool(ctx.get("self_indemnitor")),
+                "hydration_score": audit.get("hydration_score"),
+                "actor": "packet_builder",
+                "timestamp": now,
+            })
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "packet_id": packet_id,
+            "status": status,
+            "provider": provider,
+            "hydration": audit,
+            "manifest": manifest,
+            "self_indemnitor": bool(ctx.get("self_indemnitor")),
+            "signing_link": signing_link,
+            "send_results": send_results,
+            "flattened": bool(flat_bytes),
+            "flattened_preview_b64": flat_b64[:200] + "…" if flat_b64 and len(flat_b64) > 200 else flat_b64,
+            "context_summary": {
+                "defendant_name": def_.get("name"),
+                "indemnitor_name": ind.get("name"),
+                "bond_amount": ctx.get("bond_amount"),
+                "surety_id": surety_id,
+                "match_status": ctx.get("match_status"),
+                "sources": ctx.get("sources"),
+            },
+        }
+    except Exception as exc:
+        logger.exception("packet_builder_finalize error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

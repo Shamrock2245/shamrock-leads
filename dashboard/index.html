@@ -4370,6 +4370,7 @@
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
             <h3 style="margin:0">Active Document Packets</h3>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-primary btn-sm" onclick="SLPaperwork.openAdaptivePacketModal()">🎯 Adaptive Packet Builder</button>
               <input type="text" id="pwSearchInput" placeholder="🔍 Search defendant, case#, packet..." onkeyup="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 12px;border-radius:6px;font-size:12px;width:220px;">
               <select id="pwStatusSelect" onchange="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;">
                 <option value="all">All Statuses</option>
@@ -4670,6 +4671,151 @@
           <div class="inv-modal-footer" style="display:flex;justify-content:flex-end;gap:10px">
             <button type="button" class="btn btn-secondary" onclick="SLPaperwork.closeCashModal()">Cancel</button>
             <button type="button" class="btn btn-primary" onclick="SLPaperwork.submitCashPayment()">💵 Log Cash & Issue Receipt</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Adaptive Case Packet Builder Modal -->
+      <div class="inv-modal-backdrop" id="pwAdaptivePacketModal" style="display:none;">
+        <div class="inv-modal" style="max-width:960px;max-height:92vh;overflow:auto">
+          <div class="inv-modal-header">
+            <div class="inv-modal-title">
+              <span>🎯 Adaptive Case Packet Builder</span>
+            </div>
+            <button class="inv-modal-close" onclick="SLPaperwork.closeAdaptivePacketModal()">✕</button>
+          </div>
+          <div class="inv-modal-body" style="display:flex;flex-direction:column;gap:14px">
+            <p style="margin:0;font-size:12px;color:var(--muted,#94a3b8)">
+              Auto-fills from the defendant ↔ indemnitor matching system. Drag extra docs into this case packet, authorize self-indemnitor for small bonds (PIN), then flatten &amp; send to SignNow or Adobe.
+            </p>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div>
+                <label style="font-size:11px;color:var(--muted)">Booking #</label>
+                <input type="text" id="pwApBooking" placeholder="Booking number" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--muted)">County</label>
+                <input type="text" id="pwApCounty" placeholder="Lee" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:11px;color:var(--muted)">Intake / Match / Packet ID</label>
+                <input type="text" id="pwApLookupId" placeholder="INT-… / Match / PKT-…" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px">
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="SLPaperwork.loadAdaptiveContext()">🔄 Resolve Match &amp; Auto-Fill</button>
+              <span id="pwApHydrationBadge" style="font-size:12px;padding:6px 10px;border-radius:6px;background:rgba(15,23,42,.8);border:1px solid #334155;color:#94a3b8">Hydration: —</span>
+              <span id="pwApSources" style="font-size:11px;color:#64748b;align-self:center"></span>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div style="background:rgba(15,23,42,.6);border:1px solid rgba(56,189,248,.25);border-radius:10px;padding:12px">
+                <h4 style="margin:0 0 8px;font-size:13px;color:#38bdf8">👤 Defendant</h4>
+                <label style="font-size:10px;color:#94a3b8">Full Name</label>
+                <input id="pwApDefName" style="width:100%;margin-bottom:6px;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <label style="font-size:10px;color:#94a3b8">DOB</label>
+                <input id="pwApDefDob" style="width:100%;margin-bottom:6px;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <label style="font-size:10px;color:#94a3b8">Phone</label>
+                <input id="pwApDefPhone" style="width:100%;margin-bottom:6px;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <label style="font-size:10px;color:#94a3b8">Address</label>
+                <input id="pwApDefAddress" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+              </div>
+              <div style="background:rgba(15,23,42,.6);border:1px solid rgba(74,222,128,.25);border-radius:10px;padding:12px">
+                <h4 style="margin:0 0 8px;font-size:13px;color:#4ade80">🤝 Indemnitor</h4>
+                <label style="font-size:10px;color:#94a3b8">Full Name</label>
+                <input id="pwApIndName" style="width:100%;margin-bottom:6px;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <label style="font-size:10px;color:#94a3b8">Phone / Email</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+                  <input id="pwApIndPhone" placeholder="Phone" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                  <input id="pwApIndEmail" placeholder="Email" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                </div>
+                <label style="font-size:10px;color:#94a3b8">Address</label>
+                <input id="pwApIndAddress" style="width:100%;margin-bottom:8px;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.35);border-radius:8px;padding:8px">
+                  <label style="font-size:12px;color:#fbbf24;display:flex;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="pwApSelfIndemnitor" onchange="SLPaperwork.toggleSelfIndemnitorUI()"> Defendant is also indemnitor (small bond)
+                  </label>
+                  <input type="password" id="pwApSelfPin" placeholder="Auth PIN" maxlength="12" style="width:110px;background:#0f172a;border:1px solid #854d0e;color:#fff;padding:4px 8px;border-radius:6px;font-size:12px;display:none" title="Brendan discretion PIN">
+                </div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px">
+              <div>
+                <label style="font-size:10px;color:#94a3b8">Case #</label>
+                <input id="pwApCaseNumber" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+              </div>
+              <div>
+                <label style="font-size:10px;color:#94a3b8">POA #</label>
+                <input id="pwApPoa" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+              </div>
+              <div>
+                <label style="font-size:10px;color:#94a3b8">Bond Amount ($)</label>
+                <input id="pwApBondAmount" type="number" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+              </div>
+              <div>
+                <label style="font-size:10px;color:#94a3b8">Surety</label>
+                <select id="pwApSurety" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                  <option value="osi">OSI</option>
+                  <option value="palmetto">Palmetto</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <h4 style="margin:0 0 8px;font-size:12px;color:#a78bfa">📚 Doc palette (drag into This Case Packet)</h4>
+                <div id="pwApPalette" style="max-height:180px;overflow:auto;display:flex;flex-direction:column;gap:6px;background:rgba(15,23,42,.5);border:1px solid #334155;border-radius:8px;padding:8px"></div>
+              </div>
+              <div>
+                <h4 style="margin:0 0 8px;font-size:12px;color:#38bdf8">📦 This Case Packet <span id="pwApPacketCount" style="font-weight:400;color:#64748b"></span></h4>
+                <div id="pwApPacketDrop"
+                     ondragover="SLPaperwork.handleCasePacketDragOver(event)"
+                     ondragleave="SLPaperwork.handleCasePacketDragLeave(event)"
+                     ondrop="SLPaperwork.handleCasePacketDrop(event)"
+                     style="min-height:180px;max-height:220px;overflow:auto;background:rgba(15,23,42,.5);border:2px dashed rgba(56,189,248,.4);border-radius:8px;padding:10px">
+                  <div style="font-size:11px;color:#64748b;text-align:center;padding:24px">Drag document cards here · rules auto-seed after resolve</div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h4 style="margin:0 0 8px;font-size:12px;color:#fb923c">📎 Additional documents (PDF drop / browse)</h4>
+              <div id="pwApExtraDrop"
+                   ondragover="event.preventDefault();this.style.borderColor='#fb923c'"
+                   ondragleave="this.style.borderColor=''"
+                   ondrop="SLPaperwork.handleExtraFileDrop(event)"
+                   style="border:2px dashed rgba(251,146,60,.4);border-radius:8px;padding:16px;text-align:center;background:rgba(15,23,42,.4)">
+                <div style="font-size:12px;color:#94a3b8">Drop PDFs here or
+                  <label style="color:#fb923c;cursor:pointer;text-decoration:underline">
+                    browse<input type="file" id="pwApExtraFiles" accept="application/pdf,.pdf" multiple hidden onchange="SLPaperwork.handleExtraFilePick(event)">
+                  </label>
+                </div>
+                <div id="pwApExtraList" style="margin-top:8px;font-size:11px;color:#e2e8f0;text-align:left"></div>
+              </div>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+              <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
+                <input type="checkbox" id="pwApPaymentPlan" checked> Include payment-plan docs
+              </label>
+              <label style="font-size:12px;color:#94a3b8">E-sign provider</label>
+              <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px">
+                <option value="signnow">SignNow (primary)</option>
+                <option value="adobe">Adobe Sign</option>
+                <option value="both">Both SignNow + Adobe</option>
+                <option value="none">Finalize only (no send)</option>
+              </select>
+            </div>
+            <div id="pwApStatus" style="display:none;font-size:12px;padding:10px 12px;border-radius:8px"></div>
+          </div>
+          <div class="inv-modal-footer" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <button type="button" class="btn btn-secondary" onclick="SLPaperwork.closeAdaptivePacketModal()">Cancel</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" class="btn btn-secondary" onclick="SLPaperwork.previewAdaptiveHydration()">🔍 Preview Hydration</button>
+              <button type="button" class="btn btn-primary" onclick="SLPaperwork.finalizeAdaptivePacket()">✅ Flatten &amp; Send Packet</button>
+            </div>
           </div>
         </div>
       </div>
