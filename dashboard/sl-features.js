@@ -14,7 +14,13 @@ async function loadDefendants() {
   const search = document.getElementById('defSearch')?.value || '';
   const sort = document.getElementById('defSort')?.value || SL_STATE.defSort;
   const custody = document.getElementById('defCustody')?.value || '';
-  const county = document.getElementById('defCountyFilter')?.value || '';
+  // Multi-select: prefer state array; fall back to hidden field (comma-joined)
+  const selected = (window.SL_STATE && Array.isArray(SL_STATE.defSelectedCounties))
+    ? SL_STATE.defSelectedCounties
+    : [];
+  const county = selected.length
+    ? selected.join(',')
+    : (document.getElementById('defCountyFilter')?.value || '');
   const limit = parseInt(document.getElementById('defLimit')?.value || SL_STATE.defLimit);
   const minBond = SL_STATE.defBond || 0;
   const order = (sort === 'full_name' || sort === 'county') ? 'asc' : 'desc';
@@ -1078,7 +1084,8 @@ setInterval(() => { cd--; document.getElementById('refreshMeta').textContent = `
 document.addEventListener('click', e => {
   if (!e.target.closest('.multi-select')) {
     document.getElementById('countyDropdown')?.classList.remove('show');
-    document.querySelector('.multi-select-trigger')?.classList.remove('open');
+    document.getElementById('defCountyDropdown')?.classList.remove('show');
+    document.querySelectorAll('.multi-select-trigger').forEach(t => t.classList.remove('open'));
   }
 });
 document.addEventListener('keydown', e => {
@@ -1555,10 +1562,21 @@ let _recheckPollTimer = null;
 let _recheckDiffs = {};  // booking_number → diff data
 
 async function triggerCustodyRecheck() {
-  const county = document.getElementById('defCountyFilter')?.value || '';
+  const selected = (window.SL_STATE && Array.isArray(SL_STATE.defSelectedCounties))
+    ? SL_STATE.defSelectedCounties
+    : [];
+  // Custody recheck is per-county on the backend — use first selection (or bare name from label)
+  let county = selected[0] || document.getElementById('defCountyFilter')?.value || '';
+  if (county.includes(',')) county = county.split(',')[0].trim();
+  // Strip " (FL)" label → bare county for recheck jobs that expect bare names
+  const bare = county.replace(/\s*\([A-Za-z]{2}\)$/, '').trim();
+  county = bare || county;
   if (!county) {
-    SL.toast('Select a county first to verify custody', 'error');
+    SL.toast('Select at least one county first to verify custody', 'error');
     return;
+  }
+  if (selected.length > 1) {
+    SL.toast(`Rechecking ${county} first (${selected.length} selected — run again for others)`, 'info');
   }
 
   // Update button to checking state
@@ -1877,6 +1895,8 @@ function populateSavedViews() {
 
 // ── Build SL namespace ──
 window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
+  toggleDefCountyDropdown, toggleDefCounty, filterDefCountyOptions, applyDefCountyPreset,
+  buildDefCountyOptions, updateDefCountyLabel,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,

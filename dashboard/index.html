@@ -431,9 +431,26 @@
         <option value="released">Released Only</option>
       </select>
 
-      <select id="defCountyFilter" onchange="SL.loadDefendants()">
-        <option value="">All Counties</option>
-      </select>
+      <!-- Multi-select counties (same pattern as Lead Explorer) -->
+      <div class="multi-select" id="defCountySelect" style="min-width:200px">
+        <div class="multi-select-trigger" id="defCountyTrigger" onclick="SL.toggleDefCountyDropdown()">
+          <span id="defCountyLabel">All Counties</span>
+          <span class="arrow">▼</span>
+        </div>
+        <div class="multi-select-dropdown" id="defCountyDropdown">
+          <div class="multi-select-search">
+            <input type="text" placeholder="Search counties..." oninput="SL.filterDefCountyOptions(this.value)" onclick="event.stopPropagation()">
+          </div>
+          <div class="multi-select-actions" style="display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+            <button type="button" class="preset-btn" style="padding:4px 8px;font-size:11px" onclick="event.stopPropagation();SL.applyDefCountyPreset('swfl')">SWFL</button>
+            <button type="button" class="preset-btn" style="padding:4px 8px;font-size:11px" onclick="event.stopPropagation();SL.applyDefCountyPreset('fl')">All FL</button>
+            <button type="button" class="preset-btn" style="padding:4px 8px;font-size:11px" onclick="event.stopPropagation();SL.applyDefCountyPreset('clear')">Clear</button>
+          </div>
+          <div id="defCountyOptions"></div>
+        </div>
+      </div>
+      <!-- Keep hidden single-value field for any legacy readers; updated by multi-select -->
+      <input type="hidden" id="defCountyFilter" value="">
 
       <select id="defLimit" onchange="SL.loadDefendants()">
         <option value="24">24 cards</option>

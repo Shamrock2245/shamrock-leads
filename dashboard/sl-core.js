@@ -6,7 +6,7 @@ window.SL_STATE = {
   counties: [], selectedCounties: [], days: 0, custody: '', status: '',
   stateCode: '', minBond: 0, search: '', sort: 'scraped_at', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
-  defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defBond: 0, defPage: 1, defLimit: 48,
+  defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defSelectedCounties: [], defBond: 0, defPage: 1, defLimit: 48,
   scraperData: {}, mongoData: {}, prevHotCount: -1,
   // Badge counters (incremented by SSE, reset on tab visit)
   badges: {
@@ -564,10 +564,102 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// ── County Multi-Select ───────────────────────────────────────────────────
+// ── County Multi-Select (Lead Explorer) ───────────────────────────────────
 function toggleCountyDropdown() {
-  document.getElementById('countyDropdown').classList.toggle('show');
-  document.querySelector('.multi-select-trigger').classList.toggle('open');
+  const dd = document.getElementById('countyDropdown');
+  const tr = document.querySelector('#countySelect .multi-select-trigger');
+  if (!dd) return;
+  const open = dd.classList.toggle('show');
+  if (tr) tr.classList.toggle('open', open);
+  // Close defendants multi-select if open
+  document.getElementById('defCountyDropdown')?.classList.remove('show');
+  document.getElementById('defCountyTrigger')?.classList.remove('open');
+}
+
+// ── County Multi-Select (Defendants tab) ──────────────────────────────────
+function toggleDefCountyDropdown() {
+  const dd = document.getElementById('defCountyDropdown');
+  const tr = document.getElementById('defCountyTrigger');
+  if (!dd) return;
+  const open = dd.classList.toggle('show');
+  if (tr) tr.classList.toggle('open', open);
+  document.getElementById('countyDropdown')?.classList.remove('show');
+  document.querySelector('#countySelect .multi-select-trigger')?.classList.remove('open');
+}
+
+function buildDefCountyOptions(counties) {
+  counties = dedupeCountyList(counties || SL_STATE.counties || []);
+  const el = document.getElementById('defCountyOptions');
+  if (!el) return;
+  const selected = SL_STATE.defSelectedCounties || [];
+  el.innerHTML = counties.map(c => {
+    const safe = String(c).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const chk = selected.includes(c) ? 'checked' : '';
+    return `<label class="multi-select-option ${chk ? 'checked' : ''}"><input type="checkbox" value="${c.replace(/"/g, '&quot;')}" ${chk} onchange="SL.toggleDefCounty('${safe}', this.checked)" onclick="event.stopPropagation()">${c}</label>`;
+  }).join('');
+  updateDefCountyLabel();
+}
+
+function toggleDefCounty(county, checked) {
+  if (!Array.isArray(SL_STATE.defSelectedCounties)) SL_STATE.defSelectedCounties = [];
+  if (checked && !SL_STATE.defSelectedCounties.includes(county)) {
+    SL_STATE.defSelectedCounties.push(county);
+  } else if (!checked) {
+    SL_STATE.defSelectedCounties = SL_STATE.defSelectedCounties.filter(c => c !== county);
+  }
+  SL_STATE.defPage = 1;
+  updateDefCountyLabel();
+  buildDefCountyOptions(SL_STATE.counties);
+  // Mirror into hidden field for legacy code paths
+  const hidden = document.getElementById('defCountyFilter');
+  if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
+  if (typeof loadDefendants === 'function') loadDefendants();
+}
+
+function updateDefCountyLabel() {
+  const el = document.getElementById('defCountyLabel');
+  if (!el) return;
+  const selected = SL_STATE.defSelectedCounties || [];
+  const n = selected.length;
+  if (n === 0) el.innerHTML = 'All Counties';
+  else if (n <= 2) el.innerHTML = selected.join(', ');
+  else el.innerHTML = `${n} counties <span class="multi-select-count">${n}</span>`;
+}
+
+function filterDefCountyOptions(q) {
+  const needle = (q || '').toLowerCase();
+  document.querySelectorAll('#defCountyOptions .multi-select-option').forEach(o => {
+    o.style.display = o.textContent.toLowerCase().includes(needle) ? '' : 'none';
+  });
+}
+
+function applyDefCountyPreset(name) {
+  const counties = SL_STATE.counties || [];
+  if (name === 'clear' || name === 'all' || name === 'none') {
+    SL_STATE.defSelectedCounties = [];
+  } else if (name === 'fl') {
+    SL_STATE.defSelectedCounties = counties.filter(c => /\(FL\)$/i.test(c));
+  } else if (name === 'swfl') {
+    SL_STATE.defSelectedCounties = [...(PRESETS.swfl || [])].filter(c =>
+      counties.includes(c) || counties.some(x => x.toLowerCase().startsWith(c.split(' (')[0].toLowerCase()))
+    );
+    // Prefer labeled forms present in county list
+    if (!SL_STATE.defSelectedCounties.length) {
+      const swflBare = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
+      SL_STATE.defSelectedCounties = counties.filter(c => {
+        const bare = c.replace(/\s*\([A-Za-z]{2}\)$/, '');
+        return swflBare.some(b => bare.toLowerCase() === b.toLowerCase() && (/\(FL\)$/i.test(c) || !/\([A-Za-z]{2}\)$/.test(c)));
+      });
+    }
+  } else {
+    SL_STATE.defSelectedCounties = [...(PRESETS[name] || [])];
+  }
+  SL_STATE.defPage = 1;
+  updateDefCountyLabel();
+  buildDefCountyOptions(counties);
+  const hidden = document.getElementById('defCountyFilter');
+  if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
+  if (typeof loadDefendants === 'function') loadDefendants();
 }
 /** De-dupe bare names against labeled forms: keep "Lee (FL)", drop bare "Lee" when labeled exists. */
 function dedupeCountyList(counties) {
@@ -598,17 +690,17 @@ function buildCountyOptions(counties) {
   counties = dedupeCountyList(counties);
   SL_STATE.counties = counties;
   const el = document.getElementById('countyOptions');
-  if (!el) return;
-  el.innerHTML = counties.map(c => {
-    const chk = SL_STATE.selectedCounties.includes(c) ? 'checked' : '';
-    return `<label class="multi-select-option ${chk?'checked':''}"><input type="checkbox" value="${c}" ${chk} onchange="toggleCounty('${c}',this.checked)">${c}</label>`;
-  }).join('');
-  updateCountyLabel();
-  const df = document.getElementById('defCountyFilter');
-  if (df && df.options.length <= 1) {
-    counties.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; df.appendChild(o); });
+  if (el) {
+    el.innerHTML = counties.map(c => {
+      const safe = String(c).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const chk = SL_STATE.selectedCounties.includes(c) ? 'checked' : '';
+      return `<label class="multi-select-option ${chk?'checked':''}"><input type="checkbox" value="${c.replace(/"/g, '&quot;')}" ${chk} onchange="toggleCounty('${safe}',this.checked)" onclick="event.stopPropagation()">${c}</label>`;
+    }).join('');
   }
-  // Populate calendar county filter
+  updateCountyLabel();
+  // Keep Defendants multi-select in sync (checkboxes, not single <select>)
+  buildDefCountyOptions(counties);
+  // Populate calendar county filter (single-select still OK)
   const cf = document.getElementById('calCountyFilter');
   if (cf && cf.options.length <= 1) {
     counties.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; cf.appendChild(o); });
@@ -627,7 +719,7 @@ function updateCountyLabel() {
   else el.innerHTML = `${n} counties <span class="multi-select-count">${n}</span>`;
 }
 function filterCountyOptions(q) {
-  document.querySelectorAll('.multi-select-option').forEach(o => {
+  document.querySelectorAll('#countyOptions .multi-select-option').forEach(o => {
     o.style.display = o.textContent.toLowerCase().includes(q.toLowerCase()) ? '' : 'none';
   });
 }
