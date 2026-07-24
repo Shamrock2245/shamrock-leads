@@ -821,6 +821,35 @@ async def _ensure_all_indexes():
 # Startup orchestration
 # ═══════════════════════════════════════════════════════════════════════════════
 
+async def _register_bb_webhooks_background():
+    """Register BlueBubbles webhooks without blocking FastAPI readiness.
+
+    When the iMac / Tailscale tunnel is down, ensure_webhook() can take
+    15–30s per server. That used to run inside lifespan and made
+    /health/live fail deploys even though the app was otherwise fine.
+    """
+    vps_url = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
+    if not vps_url:
+        return
+    try:
+        from dashboard.routers.bb_private_api import BlueBubblesClient
+        from dashboard.extensions import BB_SERVERS
+        from dashboard.routers.bb_webhook_receiver import BB_WEBHOOK_EVENTS
+        webhook_url = f"{vps_url}/api/webhooks/bluebubbles"
+        for suffix, server in BB_SERVERS.items():
+            try:
+                # Short timeout: fail fast if BB is unreachable at boot
+                client = BlueBubblesClient(
+                    server["url"], server["password"], timeout=5.0
+                )
+                await client.ensure_webhook(webhook_url, BB_WEBHOOK_EVENTS)
+                logger.info("BB webhook registered for %s", server["label"])
+            except Exception as e:
+                logger.warning("BB webhook failed for %s: %s", server["label"], e)
+    except Exception as e:
+        logger.warning("BB webhook setup error: %s", e)
+
+
 async def _startup_tasks():
     """One-time startup tasks (webhooks, inbox poller, indexes)."""
     try:
@@ -828,23 +857,8 @@ async def _startup_tasks():
     except Exception as e:
         logger.warning("Startup index setup skipped: %s", e)
 
-    # BB webhook auto-registration
-    vps_url = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
-    if vps_url:
-        try:
-            from dashboard.routers.bb_private_api import BlueBubblesClient
-            from dashboard.extensions import BB_SERVERS
-            from dashboard.routers.bb_webhook_receiver import BB_WEBHOOK_EVENTS
-            webhook_url = f"{vps_url}/api/webhooks/bluebubbles"
-            for suffix, server in BB_SERVERS.items():
-                try:
-                    client = BlueBubblesClient(server["url"], server["password"])
-                    await client.ensure_webhook(webhook_url, BB_WEBHOOK_EVENTS)
-                    logger.info("BB webhook registered for %s", server["label"])
-                except Exception as e:
-                    logger.warning("BB webhook failed for %s: %s", server["label"], e)
-        except Exception as e:
-            logger.warning("BB webhook setup error: %s", e)
+    # BB webhook auto-registration — background only (never block /health)
+    asyncio.ensure_future(_register_bb_webhooks_background())
 
     # Firebase BB URL sync
     try:
