@@ -1894,7 +1894,7 @@ function populateSavedViews() {
 }
 
 // ── Build SL namespace ──
-window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions, toggleCounty,
+window.SL = { toggleTheme, switchTab, toggleNavGroup, restoreNavGroups, toggleCountyDropdown, filterCountyOptions, toggleCounty,
   toggleDefCountyDropdown, toggleDefCounty, filterDefCountyOptions, applyDefCountyPreset,
   buildDefCountyOptions, updateDefCountyLabel,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
@@ -1905,6 +1905,13 @@ window.SL = { toggleTheme, switchTab, toggleCountyDropdown, filterCountyOptions,
   triggerSignNowPhase1, triggerSignNowPhase2,
   triggerCustodyRecheck, closeRecheckBanner,
   saveCurrentView, loadSavedView, populateSavedViews };
+
+// Restore collapsible sidebar groups after shell load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', restoreNavGroups);
+} else {
+  try { restoreNavGroups(); } catch (_) {}
+}
 
 // Expose for inline handlers on defendant cards
 window.updateBondAmount = updateBondAmount;

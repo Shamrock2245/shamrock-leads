@@ -63,6 +63,52 @@ function toggleTheme() {
 }
 (function(){ document.documentElement.dataset.theme = localStorage.getItem('sl-theme') || 'dark'; })();
 
+// ── Sidebar nav groups (Twenty-style collapsible folders) ─────────────────
+function toggleNavGroup(btn) {
+  if (!btn) return;
+  const group = btn.dataset.group;
+  if (!group) return;
+  const body = document.querySelector(`[data-group-body="${group}"]`);
+  const open = btn.getAttribute('aria-expanded') === 'true';
+  const next = !open;
+  btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+  if (body) {
+    if (next) body.removeAttribute('hidden');
+    else body.setAttribute('hidden', '');
+  }
+  try { localStorage.setItem('sl-nav-group-' + group, next ? '1' : '0'); } catch (_) {}
+}
+
+function restoreNavGroups() {
+  document.querySelectorAll('.sidebar-group-toggle[data-group]').forEach((btn) => {
+    const group = btn.dataset.group;
+    let saved = null;
+    try { saved = localStorage.getItem('sl-nav-group-' + group); } catch (_) {}
+    // Default: Intelligence collapsed (saved null → closed)
+    const open = saved === '1';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const body = document.querySelector(`[data-group-body="${group}"]`);
+    if (body) {
+      if (open) body.removeAttribute('hidden');
+      else body.setAttribute('hidden', '');
+    }
+  });
+}
+
+// Expand parent Intelligence group if a hidden tab becomes active
+function _ensureNavGroupVisible(tabId) {
+  const tabBtn = document.querySelector(`.sidebar-btn[data-tab="${tabId}"]`);
+  if (!tabBtn) return;
+  const body = tabBtn.closest('.sidebar-group-body');
+  if (!body || !body.hasAttribute('hidden')) return;
+  const group = body.getAttribute('data-group-body');
+  const toggle = document.querySelector(`.sidebar-group-toggle[data-group="${group}"]`);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', 'true');
+    body.removeAttribute('hidden');
+  }
+}
+
 // ── Tab Switching ─────────────────────────────────────────────────────────
 function switchTab(btn) {
   // Accept either a DOM element or a string tab ID (e.g. 'tabImessage')
@@ -75,7 +121,9 @@ function switchTab(btn) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   btn.classList.add('active');
   const tabId = btn.dataset.tab;
-  document.getElementById(tabId).classList.add('active');
+  const panel = document.getElementById(tabId);
+  if (panel) panel.classList.add('active');
+  _ensureNavGroupVisible(tabId);
 
   // Reset badge for this tab on visit
   const badgeMap = {

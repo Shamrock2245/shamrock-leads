@@ -1,23 +1,16 @@
 /**
- * sl-intake.js — ShamrockLeads Intake Queue Module
+ * sl-intake.js — Bond Desk (write the bond)
  *
- * Handles the Intake Queue tab: loading, rendering, processing, and
- * manual entry of indemnitor intake records from all sources.
+ * Primary ops surface for ShamrockLeads:
+ *   Match defendant → verify indemnitor → generate packet → promote to Active Bonds.
  *
- * Sources handled:
- *   🌐 wix_portal   — Wix/Velo indemnitor portal
- *   📱 telegram     — Telegram Mini App
- *   🚶 walk_in      — Walk-in client
- *   📞 phone_call   — Phone intake
- *   ✏️ manual_entry — Staff manual entry
- *   🔖 bookmarklet  — LCSO bookmarklet scrape
+ * Lead Pipeline (tabProspective) is optional pre-desk contact only — not the bond path.
  *
- * API endpoints consumed:
- *   GET  /api/intake/queue
- *   GET  /api/intake/stats
- *   POST /api/intake/submit
- *   POST /api/intake/<id>/process
- *   POST /api/intake/<id>/archive
+ * Sources: Wix · Telegram · Walk-In · Phone · Manual · Bookmarklet
+ *
+ * APIs:
+ *   GET  /api/intake/queue | /stats
+ *   POST /api/intake/submit | /process | /match | /promote | /archive
  */
 
 const SLIntake = (() => {
@@ -40,11 +33,119 @@ const SLIntake = (() => {
   };
 
   const STATUS_BADGES = {
-    pending:     '<span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">PENDING</span>',
-    in_progress: '<span style="background:#3b82f6;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">IN PROGRESS</span>',
+    pending:     '<span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">NEW</span>',
+    in_progress: '<span style="background:#3b82f6;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">WRITING</span>',
     archived:    '<span style="background:#6b7280;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">ARCHIVED</span>',
-    promoted:    '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">☘️ PROMOTED</span>',
+    promoted:    '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">→ ACTIVE BOND</span>',
   };
+
+  // ── Packet readiness (mirrors signnow_packet_service autofill groups) ───────
+  function _val(v) {
+    if (v == null) return '';
+    return String(v).trim();
+  }
+
+  function _computeReadiness(h) {
+    const ind = (h && h.indemnitor) || {};
+    const def = (h && h.defendant) || {};
+    const indName = [ind.firstName, ind.lastName].filter(Boolean).join(' ') || _val(h && h.indemnitor_name);
+    const defName = _val(def.name) || _val(h && h.defendant_name);
+    const booking = _val(def.bookingNumber) || _val(h && h.matched_booking_number);
+    const matched = !!(h && (h.matched_booking_number || booking));
+    const address = [ind.address, ind.city, ind.state, ind.zip].filter(Boolean).join(', ');
+
+    const checks = [
+      { id: 'defendant', label: 'Defendant name', ok: !!defName, required: true },
+      { id: 'booking', label: 'Booking # / match', ok: !!booking, required: true },
+      { id: 'county', label: 'County', ok: !!_val(def.county), required: true },
+      { id: 'bond', label: 'Bond amount', ok: !!_val(def.bondAmount) && Number(String(def.bondAmount).replace(/[$,]/g, '')) > 0, required: true },
+      { id: 'charges', label: 'Charges', ok: !!_val(def.charges), required: false },
+      { id: 'indemnitor', label: 'Indemnitor name', ok: !!indName, required: true },
+      { id: 'phone', label: 'Indemnitor phone', ok: !!_val(ind.phone), required: true },
+      { id: 'address', label: 'Indemnitor address', ok: !!_val(ind.address) || address.length > 4, required: true },
+      { id: 'relation', label: 'Relationship', ok: !!_val(ind.relationship), required: false },
+      { id: 'dob', label: 'Indemnitor DOB', ok: !!_val(ind.dob), required: false },
+      { id: 'email', label: 'Indemnitor email (SignNow)', ok: !!_val(ind.email), required: false },
+      { id: 'refs', label: 'At least 1 reference', ok: !!(_val(ind.ref1Name) || _val(ind.ref1Phone)), required: false },
+      { id: 'match', label: 'Defendant matched', ok: matched, required: true },
+    ];
+
+    const required = checks.filter(c => c.required);
+    const requiredOk = required.filter(c => c.ok).length;
+    const optionalOk = checks.filter(c => !c.required && c.ok).length;
+    const allRequired = required.every(c => c.ok);
+    const packetReady = allRequired; // hard gate for promote / soft warn for packet
+
+    // Stage index for stepper (0–4)
+    let stage = 0; // new
+    if (defName && indName) stage = 1; // people present
+    if (matched) stage = 2; // matched
+    if (packetReady && _val(ind.email)) stage = 3; // ready for packet
+    if (h && h.paperwork_status === 'signed') stage = 4;
+    if (h && (h.status === 'promoted' || h.promoted_to_booking)) stage = 5;
+
+    return { checks, requiredOk, requiredTotal: required.length, optionalOk, allRequired, packetReady, stage, booking, indName, defName };
+  }
+
+  function _renderStepper(readiness) {
+    const steps = [
+      { n: 0, label: 'Open' },
+      { n: 1, label: 'People' },
+      { n: 2, label: 'Match' },
+      { n: 3, label: 'Packet' },
+      { n: 4, label: 'Active Bond' },
+    ];
+    // Map internal stage 0–5 onto 5 UI steps (packet+signed collapse to step 3)
+    const uiStage = Math.min(readiness.stage, 4);
+    return `
+      <div class="bd-stepper" style="display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap">
+        ${steps.map((s, i) => {
+          const done = uiStage > s.n || (uiStage === 4 && s.n === 4);
+          const active = uiStage === s.n || (uiStage >= 4 && s.n === 4);
+          const bg = done || active ? 'rgba(16,185,129,0.15)' : 'var(--panel,var(--bg-card,#1e293b))';
+          const border = done || active ? '1px solid rgba(16,185,129,0.45)' : '1px solid var(--border)';
+          const color = done || active ? '#6ee7b7' : 'var(--muted)';
+          return `<div style="flex:1;min-width:72px;text-align:center;padding:8px 6px;border-radius:8px;background:${bg};border:${border}">
+            <div style="font-size:10px;font-weight:700;color:${color};letter-spacing:.04em">${i + 1}. ${s.label}</div>
+          </div>`;
+        }).join('<div style="width:8px;align-self:center;height:2px;background:var(--border);flex-shrink:0"></div>')}
+      </div>
+      <p style="margin:0 0 14px;font-size:12px;color:var(--muted);line-height:1.45">
+        <strong style="color:var(--text)">Bond Desk path:</strong>
+        Match defendant → complete cosigner fields → generate paperwork →
+        <strong style="color:#6ee7b7">Promote to Active Bonds</strong> when ready.
+        Lead Pipeline is optional contact only — not a second bond queue.
+      </p>
+    `;
+  }
+
+  function _renderChecklist(readiness) {
+    const pct = readiness.requiredTotal
+      ? Math.round((readiness.requiredOk / readiness.requiredTotal) * 100)
+      : 0;
+    const barColor = readiness.allRequired ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
+    return `
+      <div style="margin-bottom:16px;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,.15)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent)">Packet readiness</div>
+          <div style="font-size:12px;font-weight:600;color:${barColor}">${readiness.requiredOk}/${readiness.requiredTotal} required · ${pct}%</div>
+        </div>
+        <div style="height:6px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden;margin-bottom:10px">
+          <div style="height:100%;width:${pct}%;background:${barColor};border-radius:99px;transition:width .3s"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px">
+          ${readiness.checks.map(c => {
+            const icon = c.ok ? '✅' : (c.required ? '⬜' : '○');
+            const col = c.ok ? '#86efac' : (c.required ? 'var(--text)' : 'var(--muted)');
+            return `<div style="font-size:12px;color:${col}">${icon} ${c.label}${c.required && !c.ok ? ' *' : ''}</div>`;
+          }).join('')}
+        </div>
+        ${!readiness.allRequired
+          ? '<div style="margin-top:10px;font-size:11px;color:#fbbf24">Complete required items (*) before promoting to Active Bonds. You can still open Write Packet to fill gaps.</div>'
+          : '<div style="margin-top:10px;font-size:11px;color:#86efac">Required fields look good — generate packet, then Promote to Active Bonds.</div>'}
+      </div>
+    `;
+  }
 
   const RISK_COLORS = {
     low:    '#22c55e',
@@ -99,9 +200,9 @@ const SLIntake = (() => {
 
     const cards = [
       { label: 'Total', value: stats.total ?? 0, color: '#6366f1' },
-      { label: '⏳ Pending', value: byStatus.pending ?? 0, color: '#f59e0b' },
-      { label: '🔄 In Progress', value: byStatus.in_progress ?? 0, color: '#3b82f6' },
-      { label: '✅ Archived', value: byStatus.archived ?? 0, color: '#22c55e' },
+      { label: '🆕 New', value: byStatus.pending ?? 0, color: '#f59e0b' },
+      { label: '✍️ Writing', value: byStatus.in_progress ?? 0, color: '#3b82f6' },
+      { label: '→ Active', value: byStatus.promoted ?? 0, color: '#10b981' },
       { label: '🌐 Wix Portal', value: bySource.wix_portal ?? 0, color: '#8b5cf6' },
       { label: '📱 Telegram', value: (bySource.telegram ?? 0) + (bySource.telegram_mini_app ?? 0), color: '#06b6d4' },
       { label: '🚶 Walk-In', value: bySource.walk_in ?? 0, color: '#10b981' },
@@ -163,7 +264,7 @@ const SLIntake = (() => {
           <td>${riskBadge}</td>
           <td>${statusBadge}</td>
           <td style="white-space:nowrap">
-            <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px">Process</button>
+            <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Open Bond Desk workflow">Open desk</button>
             <button class="btn-sm" onclick="SLIntake.archive('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px;background:var(--muted);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;margin-left:4px">Archive</button>
           </td>
         </tr>
@@ -198,6 +299,9 @@ const SLIntake = (() => {
     const h = data.hydration || {};
     const ind = h.indemnitor || {};
     const def = h.defendant || {};
+    const readiness = _computeReadiness(h);
+    // Stash for promote gate
+    h._readiness = readiness;
 
     const field = (label, value) => `
       <div>
@@ -206,16 +310,35 @@ const SLIntake = (() => {
       </div>
     `;
 
+    const confPct = (c) => {
+      if (c == null || c === '') return '';
+      const n = Number(c);
+      if (Number.isNaN(n)) return '';
+      return (n <= 1 ? Math.round(n * 100) : Math.round(n)) + '%';
+    };
+    const matchBadge = h.matched_booking_number
+      ? `<span style="background:#065f46;color:#a7f3d0;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600">MATCHED · ${_esc(h.matched_booking_number)}${h.match_confidence != null ? ' · ' + confPct(h.match_confidence) : ''}</span>`
+      : `<span style="background:rgba(245,158,11,.15);color:#fbbf24;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600">UNMATCHED — run Match</span>`;
+
     return `
+      ${_renderStepper(readiness)}
+      ${_renderChecklist(readiness)}
+
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div style="grid-column:1/-1">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
             <span style="font-size:20px">${SOURCE_ICONS[h.source] || '📋'}</span>
             <div>
               <div style="font-weight:600">${_esc(h.source_label || h.source)}</div>
               <div style="font-size:12px;color:var(--muted)">Intake ID: ${_esc(data.intake_id)}</div>
             </div>
-            ${h.consent_given ? '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;margin-left:auto">✓ CONSENT</span>' : ''}
+            ${matchBadge}
+            ${h.consent_given ? '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px">✓ CONSENT</span>' : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+            <button type="button" class="btn-sm btn-primary" onclick="SLIntake.runMatch()" style="font-size:12px;padding:6px 12px">🔗 Match defendant</button>
+            <button type="button" class="btn-sm btn-primary" onclick="SLIntake.writeBondFromIntake()" style="font-size:12px;padding:6px 12px">📄 Write packet</button>
+            <button type="button" class="btn-sm" onclick="SLIntake.promoteToBond()" style="font-size:12px;padding:6px 12px;background:linear-gradient(135deg,#065f46,#047857);border:1px solid #10b981;color:#a7f3d0;font-weight:600">☘️ Promote → Active Bonds</button>
           </div>
           <hr style="border-color:var(--border);margin:0 0 12px">
         </div>
@@ -224,14 +347,14 @@ const SLIntake = (() => {
           <h4 style="margin:0 0 10px;font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">Defendant</h4>
         </div>
         ${field('Name', def.name)}
-        ${field('Booking #', def.bookingNumber)}
+        ${field('Booking #', def.bookingNumber || h.matched_booking_number)}
         ${field('County', def.county)}
         ${field('Facility', def.facility)}
-        ${field('Bond Amount', def.bondAmount ? '$' + Number(def.bondAmount).toLocaleString() : '')}
+        ${field('Bond Amount', def.bondAmount ? '$' + Number(String(def.bondAmount).replace(/[$,]/g, '')).toLocaleString() : '')}
         ${field('Charges', def.charges)}
 
         <div style="grid-column:1/-1;margin-top:8px">
-          <h4 style="margin:0 0 10px;font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">Indemnitor</h4>
+          <h4 style="margin:0 0 10px;font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">Indemnitor (cosigner)</h4>
         </div>
         ${field('Name', [ind.firstName, ind.middleName, ind.lastName].filter(Boolean).join(' '))}
         ${field('Relationship', ind.relationship)}
@@ -243,7 +366,7 @@ const SLIntake = (() => {
         ${field('Employer Phone', ind.employerPhone)}
 
         <div style="grid-column:1/-1;margin-top:8px">
-          <h4 style="margin:0 0 10px;font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">References</h4>
+          <h4 style="margin:0 0 10px;font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.5px">References (packet autofill)</h4>
         </div>
         ${field('Ref 1', [ind.ref1Name, ind.ref1Relation, ind.ref1Phone].filter(Boolean).join(' · '))}
         ${field('Ref 1 Address', ind.ref1Address)}
@@ -258,6 +381,54 @@ const SLIntake = (() => {
         ` : ''}
       </div>
     `;
+  }
+
+  // ── Run matching engine from Bond Desk ─────────────────────────────────────
+  async function runMatch() {
+    if (!_currentIntakeId) {
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No intake loaded', 'warn');
+      return;
+    }
+    try {
+      if (typeof SL !== 'undefined') SL.toast('🔗 Matching defendant…', 'info');
+      const res = await fetch(`/api/intake/${encodeURIComponent(_currentIntakeId)}/match`, { method: 'POST' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Match failed');
+
+      const best = data.best_match || data.match || null;
+      const conf = best && best.confidence != null ? best.confidence : data.confidence;
+      const confLabel = (c) => {
+        if (c == null || c === '') return '';
+        const n = Number(c);
+        if (Number.isNaN(n)) return '';
+        return ' (' + (n <= 1 ? Math.round(n * 100) : Math.round(n)) + '%)';
+      };
+      const booking = (best && (best.booking_number || best.Booking_Number)) || data.matched_booking_number || '';
+      const name = (best && (best.full_name || best.Full_Name || best.defendant_name)) || '';
+
+      if (booking && _currentHydration) {
+        _currentHydration.matched_booking_number = booking;
+        _currentHydration.match_confidence = conf;
+        if (_currentHydration.defendant && !_currentHydration.defendant.bookingNumber) {
+          _currentHydration.defendant.bookingNumber = booking;
+        }
+      }
+
+      if (typeof SL !== 'undefined') {
+        if (data.auto_linked || booking) {
+          SL.toast(`✅ Match${data.auto_linked ? ' (auto-linked)' : ''}: ${name || booking}${confLabel(conf)}`, 'success');
+        } else if (data.candidates && data.candidates.length) {
+          SL.toast(`⚠️ ${data.candidates.length} candidate(s) under threshold — review carefully (human gate)`, 'warn');
+        } else {
+          SL.toast('No automatic match — set booking # on intake or search Hot Leads', 'warn');
+        }
+      }
+
+      // Re-open process view with refreshed hydration from API
+      await openProcess(_currentIntakeId);
+    } catch (err) {
+      if (typeof SL !== 'undefined') SL.toast('Match error: ' + err.message, 'error');
+    }
   }
 
   // ── Write bond from current intake ────────────────────────────────────────
@@ -439,7 +610,7 @@ const SLIntake = (() => {
     }
   }
 
-  // ── Mark intake as In Progress (promote to prospective bonds pipeline) ───────
+  // ── Optional: push to Lead Pipeline (legacy contact stages — not Active Bonds) ─
   async function markAsInProgress() {
     if (!_currentIntakeId) {
       if (typeof SL !== 'undefined') SL.toast('⚠️ No intake loaded — re-open the intake first', 'warn');
@@ -449,14 +620,15 @@ const SLIntake = (() => {
     const def = h.defendant || {};
     const ind = h.indemnitor || {};
 
-    // Ask which pipeline stage to start at
+    // Lead Pipeline is pre-desk contact only. Prefer Match → Packet → Promote to Active Bond.
     const stage = prompt(
-      'Which pipeline stage should this bond start at?\n\n' +
+      'Optional: add to Lead Pipeline (contact stages only).\n' +
+      'To write the bond, stay on Bond Desk: Match → Paperwork → Promote to Active Bond.\n\n' +
       '  contacted   — Initial contact made\n' +
       '  negotiating — Actively negotiating terms\n' +
       '  paperwork   — Paperwork in progress\n' +
-      '  ready       — Ready to post\n\n' +
-      'Enter stage name (default: contacted):',
+      '  ready       — Ready for Bond Desk promote\n\n' +
+      'Enter stage (default: contacted), or Cancel to stay on Bond Desk:',
       'contacted'
     );
     if (stage === null) return; // user cancelled
@@ -490,21 +662,21 @@ const SLIntake = (() => {
       const data = await res.json();
       if (data.success) {
         if (typeof SL !== 'undefined') {
-          SL.toast('🟢 Bond moved to In Progress (' + finalStage + ')', 'success');
+          SL.toast('🟢 Added to Lead Pipeline (' + finalStage + '). Still use Bond Desk to complete paperwork → Active Bonds.', 'success');
           if (typeof SLProspective !== 'undefined') SLProspective.load();
         }
-        load(); // refresh intake queue
+        load(); // refresh Bond Desk queue
       } else if (res.status === 409) {
-        if (typeof SL !== 'undefined') SL.toast('Already in In Progress pipeline (stage: ' + (data.stage || 'unknown') + ')', 'warn');
+        if (typeof SL !== 'undefined') SL.toast('Already on Lead Pipeline (stage: ' + (data.stage || 'unknown') + ')', 'warn');
       } else {
-        throw new Error(data.error || 'Failed to mark as In Progress');
+        throw new Error(data.error || 'Failed to add to Lead Pipeline');
       }
     } catch (err) {
       if (typeof SL !== 'undefined') SL.toast('Error: ' + err.message, 'error');
     }
   }
 
-  // ── Promote intake to Active Bond (Phase 5 — atomic transition) ────────────
+  // ── Promote intake to Active Bond (only after match + people ready) ────────
   async function promoteToBond() {
     if (!_currentIntakeId) {
       if (typeof SL !== 'undefined') SL.toast('⚠️ No intake loaded — re-open the intake first', 'warn');
@@ -512,18 +684,38 @@ const SLIntake = (() => {
     }
     const h = _currentHydration || {};
     const def = h.defendant || {};
+    const readiness = h._readiness || _computeReadiness(h);
 
     // Check for a matched booking number
-    const bookingNum = def.bookingNumber || h.matched_booking_number || '';
+    const bookingNum = def.bookingNumber || h.matched_booking_number || readiness.booking || '';
     if (!bookingNum) {
-      if (typeof SL !== 'undefined') SL.toast('⚠️ No matched booking number — run Match first', 'warn');
+      if (typeof SL !== 'undefined') SL.toast('⚠️ No matched booking number — click Match defendant first', 'warn');
       return;
+    }
+
+    if (!readiness.allRequired) {
+      const missing = readiness.checks.filter(c => c.required && !c.ok).map(c => c.label).join(', ');
+      const ok = confirm(
+        'Packet readiness is incomplete:\n\n' + missing + '\n\n' +
+        'Best practice: complete cosigner/defendant fields and generate paperwork first.\n\n' +
+        'Promote to Active Bonds anyway? (creates bond + assigns POA)'
+      );
+      if (!ok) return;
+    } else {
+      const ok = confirm(
+        'Promote to Active Bonds?\n\n' +
+        'Defendant: ' + (readiness.defName || def.name || '—') + '\n' +
+        'Indemnitor: ' + (readiness.indName || '—') + '\n' +
+        'Booking: ' + bookingNum + '\n\n' +
+        'This assigns a POA and moves the case out of Bond Desk.'
+      );
+      if (!ok) return;
     }
 
     // Ask for surety selection
     const surety = prompt(
       'Select surety company:\n\n' +
-      '  osi      — O\'Shaughnahill Surety & Insurance\n' +
+      '  osi      — O\'Shaughnahill Surety & Insurance (preferred FL)\n' +
       '  palmetto — Palmetto Surety Corporation\n\n' +
       'Enter surety (default: osi):',
       'osi'
@@ -552,14 +744,22 @@ const SLIntake = (() => {
       if (data.success) {
         if (typeof SL !== 'undefined') {
           SL.toast(
-            `☘️ Bond created! ${data.defendant_name} — ${data.surety} — POA: ${data.poa_number} — $${Number(data.bond_amount).toLocaleString()}`,
-            'success',
-            6000
+            `☘️ Active bond created — ${data.defendant_name || readiness.defName} · ${String(data.surety || finalSurety).toUpperCase()} · POA ${data.poa_number} · $${Number(data.bond_amount || 0).toLocaleString()}`,
+            'success'
           );
-          // Refresh both tabs
-          if (typeof SLActiveBonds !== 'undefined') SLActiveBonds.load();
+          // Jump agent to Active Bonds
+          const abBtn = document.querySelector('.sidebar-btn[data-tab="tabActiveBonds"]');
+          if (abBtn && typeof SL.switchTab === 'function') {
+            setTimeout(() => {
+              SL.switchTab(abBtn);
+              if (typeof loadActiveBonds === 'function') loadActiveBonds();
+              else if (typeof SLActiveBonds !== 'undefined' && SLActiveBonds.load) SLActiveBonds.load();
+            }, 400);
+          } else if (typeof SLActiveBonds !== 'undefined' && SLActiveBonds.load) {
+            SLActiveBonds.load();
+          }
         }
-        load(); // refresh intake queue
+        load(); // refresh Bond Desk queue
       } else {
         throw new Error(data.error || 'Promotion failed');
       }
@@ -591,6 +791,7 @@ const SLIntake = (() => {
     load,
     openProcess,
     writeBondFromIntake,
+    runMatch,
     markAsInProgress,
     promoteToBond,
     archive,

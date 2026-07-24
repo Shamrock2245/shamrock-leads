@@ -3,33 +3,49 @@
 > The ops brain for Shamrock Bail Bonds — arrest intelligence through bond lifecycle.
 
 **URL:** `https://leads.shamrockbailbonds.biz`  
-**Stack:** FastAPI + MongoDB Atlas + Docker on Hetzner
+**Stack:** FastAPI + MongoDB Atlas + Docker on Hetzner  
+**IA design:** `docs/specs/crm-ops-ia-revamp.md` (Twenty-inspired Bond Desk first)
+
+---
+
+## Canonical ops path
+
+```
+Hot Leads → contact (iMessage / sequence) → Bond Desk (intake + match + packet)
+  → paperwork complete → Active Bonds (lifecycle Kanban)
+```
+
+**Bond Desk** (`tabIntake`) is where the bond is written.  
+**Active Bonds** is for posted cases only — after indemnitor pairing and paperwork completion.
+
+**Lead Pipeline** (`tabProspective`, formerly “Outreach”) is demoted: pre-desk contact only. Do not use it as a second home for writing bonds.
 
 ---
 
 ## CRM capability map
 
-| Module | Sidebar tab | Primary APIs | Mongo collections |
-|--------|-------------|--------------|-------------------|
-| Command Center | tabCommand | `/api/crm/overview`, stats | arrests, scraper_status |
-| Lead Explorer | tabLeads | `/api/leads`, `/api/arrests` | arrests |
-| Defendants | tabDefendants | `/api/defendants/*` | defendants, defendant_notes |
+| Module | Sidebar | Primary APIs | Mongo collections |
+|--------|---------|--------------|-------------------|
+| Today / Command | tabCommand | `/api/crm/overview`, stats | arrests, scraper_status |
+| Hot Leads | tabLeads | `/api/leads`, `/api/arrests` | arrests |
+| **Bond Desk** | **tabIntake** | `/api/intake/*`, match, SignNow | intake_queue, matches |
 | Active Bonds Kanban | tabActiveBonds | `/api/bonds/*`, bond lifecycle | active_bonds, poa_inventory |
-| Intake Queue | tabIntake | `/api/intake/*`, Wix webhook | intake_queue |
+| Court Calendar | tabCalendar | court / calendar APIs | court_reminders |
+| Defendants | tabDefendants | `/api/defendants/*` | defendants, defendant_notes |
 | Indemnitors | tabIndemnitor | `/api/indemnitors/*` | indemnitors, matches |
-| Outreach Pipeline | tabProspective | `/api/prospective/*` | prospective_bonds |
-| Matching | (match manager) | `/api/bonds/match`, `/api/match-manager/*` | matches, active_bonds |
-| Paperwork | tabPaperwork | SignNow services | paperwork_packets |
+| Lead Pipeline (legacy) | tabProspective | `/api/prospective/*`, outreach | prospective_bonds |
+| Matching | (Bond Desk + match manager) | `/api/bonds/match`, `/api/match-manager/*` | matches, active_bonds |
+| Paperwork Config | tabPaperwork | SignNow services | paperwork_packets |
 | Payments | Accounting / plans | `/api/payments/*` | payments, payment_plans |
-| Tasks | Command / tasks API | `/api/tasks/*` | tasks |
+| Tasks | Today / tasks API | `/api/tasks/*` | tasks |
 | Tracking | tabTracking | Traccar webhooks | locations |
 | iMessage | tabImessage | BlueBubbles routers | imessage_* |
-| FTA / Court | tabFTA, Calendar | court_* routers | court_reminders |
-| Compliance | Reports | `/api/compliance/*` | active_bonds, payments |
-| OSINT | tabOSINT | `/api/osint/*`, contacts | contacts |
+| FTA | tabFTA | court_* routers | court_reminders |
+| Compliance / Reports | tabReports | `/api/compliance/*` | active_bonds, payments |
+| OSINT / Intelligence | collapsed folder | `/api/osint/*`, etc. | contacts |
 | Automations | tabAutomations | automation control | automation config |
 
-### Super CRM hub (new)
+### Super CRM hub
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -45,17 +61,28 @@ Omnibar (**⌘K**) uses `/api/crm/search` with fallback to match-manager.
 ## End-to-end CRM flows
 
 ### 1. Arrest → Hot lead
-Scraper → `arrests` → LeadScorer → Slack `#leads` / `#new-arrests` → Lead Explorer
+Scraper → `arrests` → LeadScorer → Slack `#leads` / `#new-arrests` → Hot Leads
 
-### 2. Outreach → Intake
-Prospective stage work → iMessage/Twilio sequences → client opens portal magic link → Wix webhook → `intake_queue`
+### 2. Contact → Bond Desk
+iMessage / Shannon / portal magic link → Wix/Telegram webhook → `intake_queue` (Bond Desk)
 
-### 3. Match → Bond
-Intake + defendant match (human-gated) → `matches` → Active bond + POA assign → SignNow packet → payment
+### 3. Match → Paperwork → Active Bond
+Bond Desk: match (human-gated) → surety + POA → SignNow packet → payment → **promote to Active Bonds**
 
 ### 4. Active bond lifecycle
 Kanban: Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered  
 GPS tracking, court reminders, FTA alerts, rearrest detector
+
+---
+
+## Paperwork autofill (Bond Desk)
+
+Hydration source: `dashboard/services/signnow_packet_service.py` (`_build_prefill_fields`).  
+Blanks: `templates/blanks/` (OSI + Palmetto variants).
+
+Must collect before send: defendant identity & descriptors, booking/charges/court, bond $, indemnitor PII (address, DL, SSN for SSA, refs, employment, vehicle), surety, POA (phase 2), agency constants.
+
+Full field contract: `docs/specs/crm-ops-ia-revamp.md` §6.
 
 ---
 
@@ -68,7 +95,7 @@ GPS tracking, court reminders, FTA alerts, rearrest detector
 3. `ENV=production` (or `REQUIRE_DASHBOARD_PIN=true`) so empty PIN does not open the CRM
 4. `python scripts/mongo_indexes.py` after deploy
 5. `curl -s https://leads.shamrockbailbonds.biz/api/crm/health` (authenticated session or via SSH localhost)
-6. Smoke: scrape → Slack; Wix intake → queue; create bond match; open omnibar search
+6. Smoke: scrape → Slack; Wix intake → Bond Desk; create bond match; open omnibar search
 
 ### Harmony with portal + school
 
