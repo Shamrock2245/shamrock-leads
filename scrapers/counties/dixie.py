@@ -109,13 +109,13 @@ class DixieCountyScraper(BaseScraper):
                 self.record_proxy_failure(proxy_used)
             raise
 
-        from scrapers.smartweb_parser import parse_smartweb_cards
+        from scrapers.smartweb_card_parser import parse_smartweb_cards
         records = parse_smartweb_cards(
             resp2.text,
             county=self.county,
             state="FL",
             facility=FACILITY,
-            detail_base=BASE_URL,
+            detail_url=SEARCH_URL,
         )
         if not records:
             records = self._parse_table(BeautifulSoup(resp2.text, "html.parser"))

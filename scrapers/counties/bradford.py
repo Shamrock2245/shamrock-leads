@@ -121,13 +121,13 @@ class BradfordCountyScraper(BaseScraper):
                 self.record_proxy_failure(proxy_used)
             raise
 
-        from scrapers.smartweb_parser import parse_smartweb_cards
+        from scrapers.smartweb_card_parser import parse_smartweb_cards
         records = parse_smartweb_cards(
             resp2.text,
             county=self.county,
             state="FL",
             facility=FACILITY,
-            detail_base=BASE_URL,
+            detail_url=SEARCH_URL,
         )
         # Fallback if card parse yields nothing (layout regression)
         if not records:
