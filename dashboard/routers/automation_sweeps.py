@@ -759,34 +759,21 @@ async def generate_bond_report(request: Request, api_key: str = ""):
     # ── Optional reporting window: any range from 2012-01-01 → present ──
     # Accepts "start_date" / "end_date" (YYYY-MM-DD). Bad values never crash the
     # report — they are surfaced back in the response as warnings instead.
-    REPORT_EPOCH = "2012-01-01"
-    date_warnings: list[str] = []
-
-    def _parse_report_date(raw: Any, label: str) -> datetime | None:
-        if not raw:
-            return None
-        try:
-            d = datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            date_warnings.append(f"{label} {raw!r} is not a valid YYYY-MM-DD date — ignored")
-            return None
-        if d.strftime("%Y-%m-%d") < REPORT_EPOCH:
-            date_warnings.append(
-                f"{label} {raw!r} predates earliest supported record ({REPORT_EPOCH}) — clamped"
-            )
-            d = datetime(2012, 1, 1, tzinfo=timezone.utc)
-        return d
-
-    start_dt = _parse_report_date(body.get("start_date"), "start_date")
-    end_dt = _parse_report_date(body.get("end_date"), "end_date")
-    if start_dt and end_dt and start_dt > end_dt:
-        date_warnings.append("start_date after end_date — range swapped")
-        start_dt, end_dt = end_dt, start_dt
+    from dashboard.services.bond_report_xlsx import (
+        REPORT_ROW_LIMIT,
+        build_official_bond_report,
+        filename_for,
+        mongo_bond_date_filter,
+        parse_report_date_window,
+    )
+    start_dt, end_dt, date_warnings = parse_report_date_window(
+        body.get("start_date"), body.get("end_date")
+    )
+    date_filter, _ = mongo_bond_date_filter(
+        start_dt.strftime("%Y-%m-%d") if start_dt else None,
+        end_dt.strftime("%Y-%m-%d") if end_dt else None,
+    )
     try:
-        from dashboard.services.bond_report_xlsx import (
-            build_official_bond_report,
-            filename_for,
-        )
         import base64
         bonds_col = get_collection("active_bonds")
         # Active / open bonds for surety
@@ -799,25 +786,11 @@ async def generate_bond_report(request: Request, api_key: str = ""):
             }
         }
         # Date window (bond_date stored as ISO YYYY-MM-DD strings — lexicographic safe)
-        if start_dt or end_dt:
-            rng: dict[str, Any] = {}
-            if start_dt:
-                rng["$gte"] = start_dt.strftime("%Y-%m-%d")
-            if end_dt:
-                # inclusive end-of-day
-                rng["$lte"] = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-            q["bond_date"] = rng
-        # surety match flexible
-        surety_q = {
-            "$or": [
-                {"surety": {"$regex": surety, "$options": "i"}},
-                {"surety_id": {"$regex": surety, "$options": "i"}},
-                {"insurance_company": {"$regex": surety, "$options": "i"}},
-            ]
-        }
+        if date_filter:
+            q.update(date_filter)
         # If no surety fields, still include all and filter in builder.
         # Oldest bond written first — the XLSX builder re-asserts this order too.
-        docs = await bonds_col.find({**q}).sort("bond_date", 1).to_list(5000)
+        docs = await bonds_col.find({**q}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
         voids = await bonds_col.find(
             {"status": {"$in": ["void", "voided", "expired", "VOID"]}}
         ).to_list(500)

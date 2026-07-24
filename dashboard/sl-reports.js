@@ -324,8 +324,17 @@ const SLReports = (() => {
     _hideLoading();
 
     if (!data.success) {
-      $('rptTableWrap').innerHTML = `<div class="rpt-error">⚠️ ${escHtml(data.error||'Failed to load report')}</div>`;
+      const detail = data.hint ? ` — ${data.hint}` : '';
+      $('rptTableWrap').innerHTML = `<div class="rpt-error">⚠️ ${escHtml(data.error||'Failed to load report')}${escHtml(detail)}</div>`;
       return;
+    }
+
+    // Graceful date-window diagnostics from the API (clamp / swap / invalid)
+    if (Array.isArray(data.warnings) && data.warnings.length) {
+      toast(data.warnings[0], 'info');
+      if (data.warnings.length > 1) {
+        console.info('[SLReports] date window warnings:', data.warnings);
+      }
     }
 
     switch(type) {

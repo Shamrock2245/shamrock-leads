@@ -449,7 +449,8 @@ async def _run_surety_weekly_reports():
                     {"insurance_company": {"$regex": surety, "$options": "i"}},
                 ],
             }
-            docs = await bonds.find(q).sort("bond_date", -1).to_list(2000)
+            # Oldest bond first — build_official_bond_report re-sorts too
+            docs = await bonds.find(q).sort("bond_date", 1).to_list(5000)
             voids = await bonds.find({
                 "status": {"$in": ["void", "voided", "expired", "VOID"]},
                 "$or": q["$or"],
@@ -460,7 +461,7 @@ async def _run_surety_weekly_reports():
                     "status": {"$in": ["exonerated", "surrendered", "discharged"]},
                     "updated_at": {"$gte": since},
                     "$or": q["$or"],
-                }).to_list(500)
+                }).sort("bond_date", 1).to_list(2000)
             xlsx = build_official_bond_report(
                 docs, surety=surety, report_type="Weekly Bond Liability Report",
                 voids=voids, discharges=discharges,

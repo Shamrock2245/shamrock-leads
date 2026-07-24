@@ -22,6 +22,11 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
+from dashboard.services.bond_report_xlsx import (
+    REPORT_ROW_LIMIT,
+    mongo_bond_date_filter,
+    parse_report_date_window,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,28 +49,45 @@ def _utc_now() -> datetime:
 
 
 def _parse_date(s: str | None) -> datetime | None:
-    """Parse YYYY-MM-DD string to UTC datetime."""
-    if not s:
+    """Parse YYYY-MM-DD string to UTC datetime (legacy helper; clamps via window parser preferred)."""
+    start, _, _ = parse_report_date_window(s, None)
+    if start is None:
         return None
-    try:
-        return datetime.strptime(s.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    return start.replace(tzinfo=timezone.utc)
 
 
-def _date_filter(field: str = "bond_date", start_date: str | None = None, end_date: str | None = None) -> dict:
-    """Build a MongoDB date range filter from optional date strings."""
-    start = _parse_date(start_date)
-    end = _parse_date(end_date)
-    if not start and not end:
-        return {}
-    f = {}
-    if start:
-        f["$gte"] = start.isoformat()
-    if end:
-        # End of day
-        f["$lte"] = (end + timedelta(days=1)).isoformat()
-    return {field: f} if f else {}
+def _date_filter(
+    field: str = "bond_date",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    """Build a MongoDB date range filter from optional date strings.
+
+    Uses YYYY-MM-DD string bounds (matching POA execute storage) and clamps
+    to the 2012 report epoch. Invalid / pre-2012 inputs never raise.
+    """
+    filt, _warnings = mongo_bond_date_filter(start_date, end_date, field=field)
+    return filt
+
+
+def _date_filter_with_warnings(
+    field: str = "bond_date",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[dict, list[str], str | None, str | None]:
+    """Date filter plus diagnostics for API responses (2012 clamp, swaps, bad dates)."""
+    start_dt, end_dt, warnings = parse_report_date_window(start_date, end_date)
+    filt, _ = mongo_bond_date_filter(
+        start_dt.strftime("%Y-%m-%d") if start_dt else None,
+        end_dt.strftime("%Y-%m-%d") if end_dt else None,
+        field=field,
+    )
+    return (
+        filt,
+        warnings,
+        start_dt.strftime("%Y-%m-%d") if start_dt else None,
+        end_dt.strftime("%Y-%m-%d") if end_dt else None,
+    )
 
 
 def _serialize_doc(doc: dict) -> dict:
@@ -106,9 +128,13 @@ async def discharged_bonds(
         db = get_db()
         col = db["active_bonds"]
         query = {"status": {"$in": ["exonerated", "surrendered"]}}
-        query.update(_date_filter("bond_date", start_date, end_date))
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "bond_date", start_date, end_date
+        )
+        query.update(date_filt)
 
-        docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(500)
+        # Oldest bond written first (2012+ windows supported; no current-year cap)
+        docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
         for d in docs:
             _serialize_doc(d)
             # Add surety split calculation
@@ -131,10 +157,22 @@ async def discharged_bonds(
             "surrendered_count": len(surrendered),
             "total_bond_amount": round(total_bond, 2),
             "total_premium": round(total_premium, 2),
+            "sort_order": "bond_date ascending (oldest bond first)",
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/discharged error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "hint": "Date range accepts 2012-01-01 → today; bond_date should be YYYY-MM-DD.",
+            },
+            status_code=500,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,9 +197,13 @@ async def surety_liability(
                 {"surety": surety_filter},
                 {"insurance_company": {"$regex": surety_filter, "$options": "i"}},
             ]
-        query.update(_date_filter("bond_date", start_date, end_date))
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "bond_date", start_date, end_date
+        )
+        query.update(date_filt)
 
-        docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(1000)
+        # Oldest → newest; supports full 2012 → present windows (no year cap)
+        docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
 
         # Group by surety
         surety_groups = {}
@@ -234,10 +276,22 @@ async def surety_liability(
             "success": True,
             "sureties": list(surety_groups.values()),
             "grand_totals": grand,
+            "sort_order": "bond_date ascending (oldest bond first)",
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/surety-liability error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "hint": "Date range accepts 2012-01-01 → today; bond_date should be YYYY-MM-DD.",
+            },
+            status_code=500,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -330,9 +384,12 @@ async def forfeitures(
         db = get_db()
         col = db["active_bonds"]
         query = {"status": "forfeited"}
-        query.update(_date_filter("bond_date", start_date, end_date))
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "bond_date", start_date, end_date
+        )
+        query.update(date_filt)
 
-        docs = await col.find(query, {"_id": 0}).sort("bond_date", -1).to_list(500)
+        docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
         total_liability = 0.0
         for d in docs:
             _serialize_doc(d)
@@ -349,10 +406,22 @@ async def forfeitures(
             "count": len(docs),
             "total_liability": round(total_liability, 2),
             "avg_bond_amount": avg_bond,
+            "sort_order": "bond_date ascending (oldest bond first)",
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/forfeitures error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "hint": "Date range accepts 2012-01-01 → today; bond_date should be YYYY-MM-DD.",
+            },
+            status_code=500,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -368,7 +437,10 @@ async def agent_production(
         db = get_db()
         col = db["active_bonds"]
         query = {}
-        query.update(_date_filter("bond_date", start_date, end_date))
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "bond_date", start_date, end_date
+        )
+        query.update(date_filt)
 
         # Normalize legacy short names → full names so they group correctly.
         # Old records may have "Brendan" instead of "Brendan O'Neal".
@@ -477,10 +549,21 @@ async def agent_production(
             "agents": agents,
             "registered_agents": AGENTS,
             "grand_totals": grand,
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/agent-production error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "hint": "Date range accepts 2012-01-01 → today; bond_date should be YYYY-MM-DD.",
+            },
+            status_code=500,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

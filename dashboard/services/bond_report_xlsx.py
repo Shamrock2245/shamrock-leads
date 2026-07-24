@@ -171,7 +171,76 @@ def _money(n: float) -> float:
 
 
 # Earliest supported bond record date — reports may span 2012 → present.
+# Keep in sync with dashboard/sl-reports.js REPORT_EPOCH.
 REPORT_EPOCH = datetime(2012, 1, 1)
+REPORT_EPOCH_ISO = "2012-01-01"
+# All-time / multi-year windows can exceed typical UI page sizes.
+REPORT_ROW_LIMIT = 5000
+
+
+def parse_report_date_window(
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> tuple[Optional[datetime], Optional[datetime], list[str]]:
+    """Parse optional YYYY-MM-DD report bounds with graceful diagnostics.
+
+    - Invalid dates are ignored and recorded in ``warnings`` (never raises).
+    - Dates before 2012-01-01 are clamped to the report epoch.
+    - Inverted ranges (start > end) are swapped.
+    - Returns naive datetimes at midnight (date-only semantics).
+
+    Returns:
+        (start_dt | None, end_dt | None, warnings)
+    """
+    warnings: list[str] = []
+
+    def _one(raw: Any, label: str) -> Optional[datetime]:
+        if raw is None or raw == "":
+            return None
+        try:
+            d = datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d")
+        except (ValueError, TypeError):
+            warnings.append(f"{label} {raw!r} is not a valid YYYY-MM-DD date — ignored")
+            return None
+        if d < REPORT_EPOCH:
+            warnings.append(
+                f"{label} {raw!r} predates earliest supported record ({REPORT_EPOCH_ISO}) — clamped"
+            )
+            return REPORT_EPOCH
+        return d
+
+    start_dt = _one(start_date, "start_date")
+    end_dt = _one(end_date, "end_date")
+    if start_dt and end_dt and start_dt > end_dt:
+        warnings.append("start_date after end_date — range swapped")
+        start_dt, end_dt = end_dt, start_dt
+    return start_dt, end_dt, warnings
+
+
+def mongo_bond_date_filter(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    *,
+    field: str = "bond_date",
+) -> tuple[dict, list[str]]:
+    """Build a Mongo filter for date-only ``bond_date`` strings (YYYY-MM-DD).
+
+    Uses lexicographic-safe date strings (not full ISO timestamps) so values
+    stored as ``YYYY-MM-DD`` from POA execute match correctly.
+
+    Returns:
+        (mongo_filter_fragment, warnings) — fragment is ``{}`` or ``{field: {...}}``.
+    """
+    start_dt, end_dt, warnings = parse_report_date_window(start_date, end_date)
+    if not start_dt and not end_dt:
+        return {}, warnings
+    rng: dict[str, Any] = {}
+    if start_dt:
+        rng["$gte"] = start_dt.strftime("%Y-%m-%d")
+    if end_dt:
+        # Inclusive end day for date-only storage
+        rng["$lte"] = end_dt.strftime("%Y-%m-%d")
+    return {field: rng}, warnings
 
 
 def _bond_sort_key(record: dict) -> tuple:
