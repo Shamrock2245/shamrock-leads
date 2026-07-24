@@ -198,8 +198,9 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
         match,
         {"_id": 0, "poa_number": 1, "poa_full": 1, "poa_prefix": 1,
          "surety_id": 1, "max_bond_value": 1, "status": 1,
-         "bond_case_id": 1, "defendant_name": 1, "charge": 1,
-         "appearance_bond_number": 1, "used_at": 1, "expiration": 1},
+         "bond_case_id": 1, "defendant_name": 1, "defendant_first_name": 1,
+         "defendant_last_name": 1, "charge": 1, "appearance_bond_number": 1,
+         "used_at": 1, "expiration": 1, "date_executed": 1, "bond_amount": 1, "amount": 1},
     ).sort([("surety_id", 1), ("poa_prefix", 1), ("poa_number", 1)]).skip(skip).limit(limit)
 
     powers = []
@@ -207,6 +208,121 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
         powers.append(doc)
 
     return {"powers": powers, "total": total, "page": page, "pages": pages}
+
+
+def determine_surety_from_prefix(poa_prefix: str, explicit_surety: str | None = None) -> str:
+    """
+    Determine surety based on POA prefix rules:
+    - Prefix starting with OSI (e.g. OSI3, OSI6) -> osi
+    - Prefix starting with PSC or PAL (e.g. PSC2, PSC5) -> palmetto
+    - Falls back to explicit_surety or 'osi'
+    """
+    p_upper = (poa_prefix or "").strip().upper()
+    if p_upper.startswith("PSC") or p_upper.startswith("PAL"):
+        return "palmetto"
+    if p_upper.startswith("OSI"):
+        return "osi"
+    if explicit_surety and explicit_surety.lower().strip() in ("osi", "palmetto"):
+        return explicit_surety.lower().strip()
+    return "osi"
+
+
+@poa_bp.post("/poa/execute")
+async def api_poa_execute(request: Request):
+    """
+    Execute/record details for a Power of Attorney (POA) number.
+    Fields:
+    - poa_number (required)
+    - poa_prefix (optional/recommended, determines surety on first use)
+    - date_executed (optional, defaults to current date YYYY-MM-DD)
+    - amount / bond_amount (optional, float)
+    - defendant_first_name (optional)
+    - defendant_last_name (optional)
+    - charge (optional)
+    - surety_id (optional, derived from prefix if omitted)
+    """
+    poa_inventory = get_collection("poa_inventory")
+    body = (await request.json()) or {}
+
+    poa_number = str(body.get("poa_number", "")).strip()
+    if not poa_number:
+        return JSONResponse({"error": "poa_number is required"}, status_code=400)
+
+    poa_prefix = str(body.get("poa_prefix", "")).strip()
+    provided_surety = str(body.get("surety_id", "")).lower().strip()
+    surety_id = determine_surety_from_prefix(poa_prefix, provided_surety)
+
+    date_executed = str(body.get("date_executed", "")).strip()
+    if not date_executed:
+        date_executed = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        raw_amt = body.get("amount") if body.get("amount") is not None else body.get("bond_amount", 0)
+        amount = float(raw_amt or 0)
+    except (ValueError, TypeError):
+        amount = 0.0
+
+    def_first = str(body.get("defendant_first_name", "")).strip()
+    def_last = str(body.get("defendant_last_name", "")).strip()
+    def_name = str(body.get("defendant_name", "")).strip()
+    if not def_name and (def_first or def_last):
+        def_name = f"{def_first} {def_last}".strip()
+
+    charge = str(body.get("charge", "")).strip() or None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    doc = await poa_inventory.find_one({"poa_number": poa_number})
+
+    update_fields = {
+        "status": "assigned",
+        "poa_number": poa_number,
+        "surety_id": surety_id,
+        "date_executed": date_executed,
+        "executed_at": date_executed,
+        "bond_amount": amount,
+        "amount": amount,
+        "defendant_first_name": def_first,
+        "defendant_last_name": def_last,
+        "defendant_name": def_name or None,
+        "charge": charge,
+        "used_at": now_iso,
+    }
+
+    if poa_prefix:
+        update_fields["poa_prefix"] = poa_prefix
+        update_fields["poa_full"] = f"{poa_prefix} {poa_number}"
+    elif doc and doc.get("poa_prefix"):
+        update_fields["poa_full"] = f"{doc.get('poa_prefix')} {poa_number}"
+    else:
+        update_fields["poa_full"] = poa_number
+
+    if doc:
+        await poa_inventory.update_one({"_id": doc["_id"]}, {"$set": update_fields})
+    else:
+        update_fields.update({
+            "max_bond_value": amount,
+            "received_at": now_iso,
+            "book_number": f"manual_exec_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
+            "assigned_to_agent": "Brendan O'Neal",
+            "bond_case_id": f"EXEC-{poa_number}",
+        })
+        await poa_inventory.insert_one(update_fields)
+
+    return {
+        "success": True,
+        "poa_number": poa_number,
+        "poa_prefix": update_fields.get("poa_prefix", ""),
+        "poa_full": update_fields.get("poa_full", poa_number),
+        "surety_id": surety_id,
+        "date_executed": date_executed,
+        "amount": amount,
+        "defendant_name": def_name,
+        "defendant_first_name": def_first,
+        "defendant_last_name": def_last,
+        "charge": charge,
+    }
+
 
 
 @poa_bp.post("/poa/add")

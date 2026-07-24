@@ -196,25 +196,33 @@ const SLInventory = (() => {
         }
         const actions = [];
         if (p.status === 'available') {
+          actions.push(`<button class="inv-btn inv-btn-assign" onclick="event.stopPropagation();SLInventory.openExecuteModal('${p.poa_number}','${p.poa_prefix || ''}','${p.surety_id || ''}')" title="Execute power details">⚡ Execute</button>`);
           actions.push(`<button class="inv-btn inv-btn-assign" onclick="SLInventory.openAssignDialog('${p.poa_number}','${p.surety_id}','${p.poa_prefix}')" title="Assign to defendant">📌 Assign</button>`);
           actions.push(`<button class="inv-btn inv-btn-void" onclick="SLInventory.voidPower('${p.poa_number}','${p.surety_id}')" title="Void">🗑️ Void</button>`);
         } else if (p.status === 'assigned') {
+          actions.push(`<button class="inv-btn inv-btn-reassign" onclick="event.stopPropagation();SLInventory.openExecuteModal('${p.poa_number}','${p.poa_prefix || ''}','${p.surety_id || ''}')" title="Edit executed details">⚡ Edit Details</button>`);
           actions.push(`<button class="inv-btn inv-btn-reassign" onclick="SLInventory.reassignPower('${p.poa_number}','${p.surety_id}')" title="Reassign">🔄 Move</button>`);
           actions.push(`<button class="inv-btn inv-btn-void" onclick="SLInventory.voidPower('${p.poa_number}','${p.surety_id}')" title="Void">🗑️ Void</button>`);
         } else if (p.status === 'voided') {
           actions.push(`<button class="inv-btn inv-btn-restore" onclick="SLInventory.restorePower('${p.poa_number}','${p.surety_id}')" title="Restore">♻️ Restore</button>`);
         }
+
+        const caseDisplay = (p.bond_case_id || p.defendant_name || p.date_executed)
+          ? `<div style="font-weight:600">${p.defendant_name || p.bond_case_id}${p.date_executed ? ` <span style="color:#38bdf8;font-size:11px;font-weight:400">📅 ${p.date_executed}</span>` : ''}</div>${(p.amount || p.bond_amount) ? `<div style="font-size:11px;color:#34d399;font-weight:600">$${Number(p.amount || p.bond_amount).toLocaleString()}</div>` : ''}${p.charge ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px">⚖️ ${p.charge}</div>` : ''}${p.appearance_bond_number ? `<div style="font-size:11px;color:#6ee7b7;margin-top:1px">📄 Bond #${p.appearance_bond_number}</div>` : ''}`
+          : '—';
+
         return `<tr class="inv-row ${checked ? 'inv-row-selected' : ''}" onclick="SLInventory.toggleRowSelect(event,'${p.poa_number}','${p.surety_id}')">
           <td style="text-align:center"><input type="checkbox" class="inv-cb" data-key="${key}" ${checked} onclick="event.stopPropagation();SLInventory.toggleSelect('${p.poa_number}','${p.surety_id}')"></td>
-          <td><span class="inv-poa-mono">${p.poa_full || p.poa_number}</span></td>
+          <td>
+            <span class="inv-poa-mono">${p.poa_full || p.poa_number}</span>
+            <button class="inv-btn-quick-execute" onclick="event.stopPropagation();SLInventory.openExecuteModal('${p.poa_number}','${p.poa_prefix || ''}','${p.surety_id || ''}')" title="Execute / Edit Power Details" style="border:none;background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:11px;margin-left:6px;font-weight:600">✍️</button>
+          </td>
           <td><span class="inv-surety-chip ${p.surety_id === 'osi' ? 'inv-chip-osi' : 'inv-chip-palm'}">${p.surety_id === 'osi' ? '🛡️ OSI' : '🌴 PSC'}</span></td>
           <td class="inv-cell-tier">${p.poa_prefix}</td>
           <td class="inv-cell-bond">${maxBondFmt}</td>
           <td class="inv-cell-exp">${expHtml}</td>
           <td><span class="inv-status-pill ${statusCls}">${p.status}</span></td>
-          <td class="inv-cell-case">${p.bond_case_id
-            ? `<div style="font-weight:600">${p.bond_case_id}${p.defendant_name ? ` <span style="color:var(--muted);font-weight:400">· ${p.defendant_name}</span>` : ''}</div>${p.charge ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px">⚖️ ${p.charge}</div>` : ''}${p.appearance_bond_number ? `<div style="font-size:11px;color:#6ee7b7;margin-top:1px">📄 Bond #${p.appearance_bond_number}</div>` : ''}`
-            : '—'}</td>
+          <td class="inv-cell-case">${caseDisplay}</td>
           <td class="inv-cell-actions">${actions.join('')}</td>
         </tr>`;
       }).join('');
@@ -864,6 +872,109 @@ const SLInventory = (() => {
   // ── State for arrest data from search ──
   let _selectedArrestData = null;
 
+  // ── Execute Power Modal Logic ──
+  function openExecuteModal(poaNum, prefix, surety) {
+    const modal = document.getElementById('executePoaModal');
+    if (!modal) return;
+
+    const pw = _allPowers.find(p => p.poa_number === String(poaNum));
+
+    const numEl = document.getElementById('execPoaNumber'); if (numEl) numEl.value = poaNum || '';
+    const pfxEl = document.getElementById('execPoaPrefix'); if (pfxEl) pfxEl.value = prefix || pw?.poa_prefix || '';
+    const dateEl = document.getElementById('execDateExecuted'); if (dateEl) dateEl.value = pw?.date_executed || pw?.executed_at || new Date().toISOString().split('T')[0];
+    const amtEl = document.getElementById('execAmount'); if (amtEl) amtEl.value = pw?.amount || pw?.bond_amount || (pw?.max_bond_value > 0 ? pw.max_bond_value : '');
+    const firstEl = document.getElementById('execDefendantFirstName'); if (firstEl) firstEl.value = pw?.defendant_first_name || (pw?.defendant_name ? pw.defendant_name.split(' ')[0] : '');
+    const lastEl = document.getElementById('execDefendantLastName'); if (lastEl) lastEl.value = pw?.defendant_last_name || (pw?.defendant_name ? pw.defendant_name.split(' ').slice(1).join(' ') : '');
+    const chgEl = document.getElementById('execCharge'); if (chgEl) chgEl.value = pw?.charge || '';
+    const stEl = document.getElementById('execStatusMsg'); if (stEl) stEl.innerHTML = '';
+
+    onExecutePrefixInput(pfxEl ? pfxEl.value : (prefix || surety));
+
+    modal.style.display = 'flex';
+    requestAnimationFrame(() => modal.classList.add('show'));
+  }
+
+  function closeExecuteModal() {
+    const modal = document.getElementById('executePoaModal');
+    if (modal) { modal.classList.remove('show'); modal.style.display = 'none'; }
+  }
+
+  function onExecutePrefixInput(val) {
+    const badge = document.getElementById('execSuretyBadge');
+    if (!badge) return;
+    const clean = (val || '').trim().toUpperCase();
+    if (clean.startsWith('PSC') || clean.startsWith('PAL')) {
+      badge.style.background = 'rgba(245,158,11,0.15)';
+      badge.style.borderColor = 'rgba(245,158,11,0.4)';
+      badge.style.color = '#fcd34d';
+      badge.innerHTML = '<span>🌴 Counts towards Palmetto Surety Corporation (PSC)</span>';
+    } else if (clean.startsWith('OSI')) {
+      badge.style.background = 'rgba(56,189,248,0.15)';
+      badge.style.borderColor = 'rgba(56,189,248,0.4)';
+      badge.style.color = '#38bdf8';
+      badge.innerHTML = '<span>🛡️ Counts towards O\'Shaughnahill Surety (OSI)</span>';
+    } else if (clean.length > 0) {
+      badge.style.background = 'rgba(30,41,59,0.7)';
+      badge.style.borderColor = 'rgba(255,255,255,0.1)';
+      badge.style.color = '#94a3b8';
+      badge.innerHTML = `<span>🛡️ Prefix "${clean}" — Counts towards OSI by default</span>`;
+    } else {
+      badge.style.background = 'rgba(30,41,59,0.7)';
+      badge.style.borderColor = 'rgba(255,255,255,0.1)';
+      badge.style.color = '#94a3b8';
+      badge.innerHTML = '<span>🛡️ Surety: Automatic based on prefix</span>';
+    }
+  }
+
+  async function submitExecutePower() {
+    const statusMsg = document.getElementById('execStatusMsg');
+    const submitBtn = document.getElementById('execSubmitBtn');
+
+    const poaNum = document.getElementById('execPoaNumber')?.value.trim();
+    const prefix = document.getElementById('execPoaPrefix')?.value.trim();
+    const dateExecuted = document.getElementById('execDateExecuted')?.value.trim();
+    const amount = document.getElementById('execAmount')?.value.trim();
+    const defFirst = document.getElementById('execDefendantFirstName')?.value.trim();
+    const defLast = document.getElementById('execDefendantLastName')?.value.trim();
+    const charge = document.getElementById('execCharge')?.value.trim();
+
+    if (!poaNum || !dateExecuted || !amount || !defFirst || !defLast) {
+      if (statusMsg) statusMsg.innerHTML = '<span style="color:#f87171;font-size:12px">⚠️ Please fill in all required fields (Power #, Date Executed, Amount, Defendant First/Last Name)</span>';
+      return;
+    }
+
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '⌛ Executing…'; }
+    if (statusMsg) statusMsg.innerHTML = '<div class="inv-loading inv-loading-sm"><div class="btn-spinner"></div><span>Saving executed power details…</span></div>';
+
+    try {
+      const r = await fetch(`${API}/api/poa/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          poa_number: poaNum,
+          poa_prefix: prefix,
+          date_executed: dateExecuted,
+          amount: parseFloat(amount),
+          defendant_first_name: defFirst,
+          defendant_last_name: defLast,
+          charge: charge || null,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        throw new Error(d.error || 'Failed to execute power');
+      }
+      toast('success', `⚡ Power ${d.poa_full} executed for ${d.defendant_name} ($${Number(d.amount).toLocaleString()})`);
+      closeExecuteModal();
+      loadDetailView();
+      loadSummary();
+    } catch (e) {
+      if (statusMsg) statusMsg.innerHTML = `<span style="color:#f87171;font-size:12px">❌ ${e.message}</span>`;
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '⚡ Save & Execute Power'; }
+    }
+  }
+
   return {
     open, close, switchTab, loadSummary, loadDetailView,
     applyFilter, searchFilter, detailPage,
@@ -877,5 +988,8 @@ const SLInventory = (() => {
     openBulkAssignModal, closeBulkAssignModal, removeFromSelection,
     searchDefendantsForAssign, selectDefendantForAssign,
     submitBulkAssign, bulkVoid,
+    // Execute power modal
+    openExecuteModal, closeExecuteModal, onExecutePrefixInput, submitExecutePower,
   };
 })();
+

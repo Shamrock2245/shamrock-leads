@@ -3036,7 +3036,6 @@
 
 <!-- Chart.js for Revenue Analytics -->
 
-<!-- ═══ BULK ASSIGN MODAL ═══ -->
 <div class="inv-overlay" id="bulkAssignModal" style="display:none" onclick="if(event.target===this)SLInventory.closeBulkAssignModal()">
   <div class="inv-modal" style="max-width:720px">
     <div class="inv-header">
@@ -3068,6 +3067,81 @@
       <!-- Or Manual Entry -->
       <div class="ba-divider"><span>or enter manually</span></div>
       <div class="ba-manual-grid">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ EXECUTE POWER OF ATTORNEY MODAL ═══ -->
+<div class="inv-overlay" id="executePoaModal" style="display:none" onclick="if(event.target===this)SLInventory.closeExecuteModal()">
+  <div class="inv-modal" style="max-width:540px">
+    <div class="inv-header">
+      <div class="inv-header-left">
+        <span class="inv-header-icon">⚡</span>
+        <div>
+          <div class="inv-header-title">Execute Power of Attorney</div>
+          <div class="inv-header-subtitle">Record executed bond details & surety allocation</div>
+        </div>
+      </div>
+      <button class="inv-close" onclick="SLInventory.closeExecuteModal()">✕</button>
+    </div>
+    <div style="padding:20px 24px">
+      <form id="execPoaForm" onsubmit="event.preventDefault();SLInventory.submitExecutePower();">
+        <div class="ba-manual-grid" style="grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 12px;">
+          <div class="ba-field">
+            <label class="ba-label">Power # (POA Number) *</label>
+            <input type="text" id="execPoaNumber" class="ba-input" required placeholder="e.g. 100001">
+          </div>
+          <div class="ba-field">
+            <label class="ba-label">Prefix (Tier / Surety) *</label>
+            <input type="text" id="execPoaPrefix" class="ba-input" placeholder="e.g. OSI3 or PSC5" oninput="SLInventory.onExecutePrefixInput(this.value)">
+          </div>
+        </div>
+
+        <div style="margin-top: 4px; margin-bottom: 14px;">
+          <div id="execSuretyBadge" style="display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; padding:6px 12px; border-radius:6px; background:rgba(30,41,59,0.7); border:1px solid rgba(255,255,255,0.1); color:#94a3b8;">
+            <span>🛡️ Surety: Automatic based on prefix</span>
+          </div>
+        </div>
+
+        <div class="ba-manual-grid" style="grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 14px;">
+          <div class="ba-field">
+            <label class="ba-label">Date Executed *</label>
+            <input type="date" id="execDateExecuted" class="ba-input" required>
+          </div>
+          <div class="ba-field">
+            <label class="ba-label">Bond Amount ($) *</label>
+            <input type="number" id="execAmount" class="ba-input" step="0.01" min="0" placeholder="e.g. 5000" required>
+          </div>
+        </div>
+
+        <div class="ba-manual-grid" style="grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 14px;">
+          <div class="ba-field">
+            <label class="ba-label">Defendant First Name *</label>
+            <input type="text" id="execDefendantFirstName" class="ba-input" placeholder="First Name" required>
+          </div>
+          <div class="ba-field">
+            <label class="ba-label">Defendant Last Name *</label>
+            <input type="text" id="execDefendantLastName" class="ba-input" placeholder="Last Name" required>
+          </div>
+        </div>
+
+        <div class="ba-field" style="margin-bottom: 18px;">
+          <label class="ba-label">Charge <span style="color:var(--muted); font-weight:400; text-transform:none;">(Optional)</span></label>
+          <input type="text" id="execCharge" class="ba-input" placeholder="e.g. Battery / DUI (optional)">
+        </div>
+
+        <div id="execStatusMsg" style="margin-bottom:12px"></div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+          <button type="button" class="inv-bulk-btn inv-bulk-clear" onclick="SLInventory.closeExecuteModal()">Cancel</button>
+          <button type="submit" id="execSubmitBtn" class="ba-submit-btn" style="width:auto; padding:10px 20px;">⚡ Save & Execute Power</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
         <div class="ba-field">
           <label class="ba-label">Booking Number *</label>
           <input type="text" id="baBookingNumber" class="ba-input" placeholder="e.g. 2025-001234" oninput="if(this.value.length>=3){var s=document.getElementById('baIndemnitorSection');if(s)s.style.display=''}">
