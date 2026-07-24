@@ -198,12 +198,17 @@ async def surety_liability(
             g["total_buf_owed"] += split["buf_owed"]
             g["total_agent_retains"] += split["agent_retains"]
             g["bonds"].append({
-                "defendant_name": d.get("defendant_name", ""),
+                "poa_number": d.get("poa_number") or d.get("poa_full") or "",
+                "poa_prefix": d.get("poa_prefix") or "",
+                "defendant_name": d.get("defendant_name", "") or f"{d.get('defendant_first_name', '')} {d.get('defendant_last_name', '')}".strip(),
+                "defendant_first_name": d.get("defendant_first_name") or "",
+                "defendant_last_name": d.get("defendant_last_name") or "",
                 "booking_number": d.get("booking_number", ""),
                 "county": d.get("county", ""),
                 "bond_amount": ba,
-                "bond_date": d.get("bond_date", ""),
+                "bond_date": d.get("bond_date") or d.get("date_executed") or d.get("posted_date") or d.get("created_at") or "",
                 "status": d.get("status", ""),
+                "charge": d.get("charge") or "",
                 "case_number": d.get("case_number", ""),
                 "agent_name": d.get("agent_name", ""),
                 **split,

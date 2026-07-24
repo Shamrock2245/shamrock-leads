@@ -317,14 +317,13 @@ const SLReports = (() => {
   function _renderLiability(data) {
     const gt = data.grand_totals || {};
     _renderSummary([
-      { label: 'Total Bond Amount',  value: money(gt.total_bond_amount||0),  color: 'rpt-val-blue'  },
-      { label: 'Total Premium',      value: money(gt.total_premium||0),      color: 'rpt-val-green' },
-      { label: 'Surety Owed',        value: money(gt.total_surety_owed||0),  color: 'rpt-val-gold'  },
-      { label: 'BUF Collected',      value: money(gt.total_buf||0),          color: 'rpt-val-cyan'  },
+      { label: 'Total Liability',    value: money(gt.total_bond_amount||0),  color: 'rpt-val-blue'  },
+      { label: 'Premium to Collect', value: money(gt.total_premium||0),      color: 'rpt-val-green' },
+      { label: 'Surety Owed (Insurer)', value: money(gt.total_surety_owed||0), color: 'rpt-val-gold'  },
+      { label: 'BUF (5%)',           value: money(gt.total_buf_owed||gt.total_buf||0), color: 'rpt-val-cyan' },
       { label: 'Agent Retains',      value: money(gt.total_agent_retains||0),color: 'rpt-val-purple'},
       { label: 'Bond Count',         value: String(gt.total_bonds||0)                               },
     ]);
-    // Chart: bond amount by surety
     const sureties = data.sureties || [];
     if (sureties.length) {
       _renderChart(
@@ -333,18 +332,184 @@ const SLReports = (() => {
         'bar'
       );
     }
-    const headers = ['Surety','Bonds','Bond Amount','Premium','Surety Owed','BUF','Agent Retains','Avg Bond'];
+    const headers = ['Surety','Bonds','Bond Liability','Premium to Collect','Surety Owed','BUF','Agent Retains'];
     const rows = sureties.map(s => [
       `<strong>${escHtml(s.surety||'—')}</strong>`,
       s.bond_count||0,
       money(s.total_bond_amount||0),
       money(s.total_premium||0),
       money(s.total_surety_owed||0),
-      money(s.total_buf||0),
+      money(s.total_buf_owed||s.total_buf||0),
       money(s.total_agent_retains||0),
-      money(s.avg_bond_amount||0),
     ]);
     _renderTable(headers, rows);
+
+    // Render Itemized Register with Audience Toggles & Total Row
+    const wrap = $('rptTableWrap');
+    if (!wrap) return;
+
+    let itemRows = [];
+    let idx = 0;
+
+    sureties.forEach(s => {
+      (s.bonds || []).forEach(b => {
+        idx++;
+        const poa = b.poa_number || b.poa_full || '—';
+        const def = b.defendant_name || `${b.defendant_first_name || ''} ${b.defendant_last_name || ''}`.trim() || '—';
+        const dt = b.bond_date || '—';
+        const liab = Number(b.bond_amount || 0);
+        const gross = Number(b.premium || b.gross_premium || 0);
+        const suretyOwed = Number(b.surety_owed || 0);
+        const bufOwed = Number(b.buf_owed || b.buf || 0);
+        const agentRetains = Number(b.agent_retains || 0);
+
+        const suretyChipCls = (s.surety === 'OSI' || String(b.surety_id).toLowerCase() === 'osi') ? 'inv-chip-osi' : 'inv-chip-palm';
+        const suretyIcon = (s.surety === 'OSI' || String(b.surety_id).toLowerCase() === 'osi') ? '🛡️ OSI' : '🌴 PSC';
+
+        itemRows.push(`<tr class="rpt-item-row" data-idx="${idx}" data-liab="${liab}" data-gross="${gross}" data-surety="${suretyOwed}" data-buf="${bufOwed}" data-agent="${agentRetains}">
+          <td style="text-align:center"><input type="checkbox" class="rpt-row-cb" checked onchange="SLReports.recalcLiabilityTotals()"></td>
+          <td class="rpt-col-poa"><span class="mono" style="font-size:11px;font-weight:600">${escHtml(poa)}</span></td>
+          <td class="rpt-col-def"><strong>${escHtml(def)}</strong></td>
+          <td class="rpt-col-date">${escHtml(dt)}</td>
+          <td class="rpt-col-surety"><span class="inv-surety-chip ${suretyChipCls}" style="font-size:10px;padding:2px 6px">${suretyIcon}</span></td>
+          <td class="rpt-col-liab" style="text-align:right;font-weight:600">${money(liab)}</td>
+          <td class="rpt-col-gross" style="text-align:right;color:#34d399">${money(gross)}</td>
+          <td class="rpt-col-surety-owed" style="text-align:right;color:#fcd34d">${money(suretyOwed)}</td>
+          <td class="rpt-col-buf" style="text-align:right;color:#38bdf8">${money(bufOwed)}</td>
+          <td class="rpt-col-agent" style="text-align:right;color:#c084fc">${money(agentRetains)}</td>
+        </tr>`);
+      });
+    });
+
+    if (itemRows.length > 0) {
+      const itemizedHtml = `
+        <div style="margin-top:28px;border-top:1px solid rgba(255,255,255,0.1);padding-top:20px">
+          <!-- Audience / Column Customization Bar -->
+          <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 18px;margin-bottom:16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+              <div style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px">
+                <span>⚙️ Report Customization & Audience Views</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:11px;color:var(--muted)">Presets:</span>
+                <button type="button" class="inv-btn" onclick="SLReports.applyLiabilityPreset('full')" style="font-size:11px;padding:3px 8px">💼 Full Audit</button>
+                <button type="button" class="inv-btn" onclick="SLReports.applyLiabilityPreset('insurer')" style="font-size:11px;padding:3px 8px;background:rgba(56,189,248,0.15);color:#38bdf8;border-color:rgba(56,189,248,0.3)">🛡️ Insurer View</button>
+                <button type="button" class="inv-btn" onclick="SLReports.applyLiabilityPreset('summary')" style="font-size:11px;padding:3px 8px">📄 Basic View</button>
+              </div>
+            </div>
+
+            <!-- Column Checkboxes -->
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary,#cbd5e1)">
+              <span style="font-size:11px;color:var(--muted);font-weight:600">Toggle Columns:</span>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_poa" checked onchange="SLReports.toggleLiabilityCol('rpt-col-poa', this.checked)"> POA #</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_def" checked onchange="SLReports.toggleLiabilityCol('rpt-col-def', this.checked)"> Defendant</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_date" checked onchange="SLReports.toggleLiabilityCol('rpt-col-date', this.checked)"> Date</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_surety" checked onchange="SLReports.toggleLiabilityCol('rpt-col-surety', this.checked)"> Surety</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_liab" checked onchange="SLReports.toggleLiabilityCol('rpt-col-liab', this.checked)"> Liability</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_gross" checked onchange="SLReports.toggleLiabilityCol('rpt-col-gross', this.checked)"> Premium (Collect)</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_surety_owed" checked onchange="SLReports.toggleLiabilityCol('rpt-col-surety-owed', this.checked)"> Premium (Insurer)</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_buf" checked onchange="SLReports.toggleLiabilityCol('rpt-col-buf', this.checked)"> BUF (5%)</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_agent" checked onchange="SLReports.toggleLiabilityCol('rpt-col-agent', this.checked)"> Agent Retains</label>
+            </div>
+          </div>
+
+          <h4 style="margin:0 0 14px 0;font-size:14px;color:var(--text);display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span>📋 Itemized Bond Liability Register</span>
+              <span id="rptSelectedCount" style="font-size:11px;color:#34d399;font-weight:600">(${itemRows.length} of ${itemRows.length} bonds included)</span>
+            </div>
+          </h4>
+
+          <table class="rpt-table" id="rptItemizedTable">
+            <thead>
+              <tr>
+                <th style="width:36px;text-align:center"><input type="checkbox" id="rptSelectAllRows" checked onchange="SLReports.toggleAllLiabilityRows(this.checked)" title="Select / Deselect all rows"></th>
+                <th class="rpt-col-poa">POA #</th>
+                <th class="rpt-col-def">Defendant Name</th>
+                <th class="rpt-col-date">Bond Date</th>
+                <th class="rpt-col-surety">Surety</th>
+                <th class="rpt-col-liab" style="text-align:right">Bond Liability</th>
+                <th class="rpt-col-gross" style="text-align:right">Premium to Collect</th>
+                <th class="rpt-col-surety-owed" style="text-align:right">Premium to Insurer</th>
+                <th class="rpt-col-buf" style="text-align:right">BUF (5%)</th>
+                <th class="rpt-col-agent" style="text-align:right">Agent Retains</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemRows.join('')}
+              <tr style="height:14px;background:transparent"><td colspan="10" style="border:none"></td></tr>
+              <tr style="background:rgba(15,23,42,0.95);font-weight:700;border-top:2px solid #10b981;border-bottom:2px solid #10b981" id="rptTotalsRow">
+                <td colspan="5" style="text-align:right;padding:12px;color:#f8fafc;letter-spacing:0.5px">TOTALS</td>
+                <td class="rpt-col-liab" id="totCellLiab" style="text-align:right;padding:12px;color:#60a5fa">$0.00</td>
+                <td class="rpt-col-gross" id="totCellGross" style="text-align:right;padding:12px;color:#34d399">$0.00</td>
+                <td class="rpt-col-surety-owed" id="totCellSurety" style="text-align:right;padding:12px;color:#fcd34d">$0.00</td>
+                <td class="rpt-col-buf" id="totCellBuf" style="text-align:right;padding:12px;color:#38bdf8">$0.00</td>
+                <td class="rpt-col-agent" id="totCellAgent" style="text-align:right;padding:12px;color:#c084fc">$0.00</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+      wrap.innerHTML += itemizedHtml;
+      recalcLiabilityTotals();
+    }
+  }
+
+  function recalcLiabilityTotals() {
+    const rows = document.querySelectorAll('.rpt-item-row');
+    let totLiab = 0, totGross = 0, totSurety = 0, totBuf = 0, totAgent = 0;
+    let checkedCount = 0;
+
+    rows.forEach(r => {
+      const cb = r.querySelector('.rpt-row-cb');
+      if (cb && cb.checked) {
+        checkedCount++;
+        r.style.opacity = '1';
+        totLiab += parseFloat(r.dataset.liab || 0);
+        totGross += parseFloat(r.dataset.gross || 0);
+        totSurety += parseFloat(r.dataset.surety || 0);
+        totBuf += parseFloat(r.dataset.buf || 0);
+        totAgent += parseFloat(r.dataset.agent || 0);
+      } else {
+        r.style.opacity = '0.35';
+      }
+    });
+
+    const cntEl = $('rptSelectedCount');
+    if (cntEl) cntEl.textContent = `(${checkedCount} of ${rows.length} bonds included)`;
+
+    const setCell = (id, val) => { const el = $(id); if (el) el.textContent = money(val); };
+    setCell('totCellLiab', totLiab);
+    setCell('totCellGross', totGross);
+    setCell('totCellSurety', totSurety);
+    setCell('totCellBuf', totBuf);
+    setCell('totCellAgent', totAgent);
+  }
+
+  function toggleAllLiabilityRows(checked) {
+    document.querySelectorAll('.rpt-row-cb').forEach(cb => { cb.checked = checked; });
+    recalcLiabilityTotals();
+  }
+
+  function toggleLiabilityCol(clsName, show) {
+    document.querySelectorAll('.' + clsName).forEach(el => {
+      el.style.display = show ? '' : 'none';
+    });
+  }
+
+  function applyLiabilityPreset(preset) {
+    const colMap = {
+      full:    { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: true },
+      insurer: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: false },
+      summary: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: false, col_buf: false, col_agent: false },
+    }[preset] || {};
+
+    Object.entries(colMap).forEach(([id, show]) => {
+      const cb = $(id);
+      if (cb) { cb.checked = show; }
+      const clsName = id.replace('col_', 'rpt-col-').replace('_', '-');
+      toggleLiabilityCol(clsName, show);
+    });
   }
 
   function _renderAgents(data) {
@@ -614,5 +779,8 @@ const SLReports = (() => {
     load, runAll, generate, onDateChange, setPreset,
     exportCSV, exportPDF, printReport, closeResults,
     scheduleReport, closeSchedule, saveSchedule,
+    // Liability report customization & toggles
+    recalcLiabilityTotals, toggleAllLiabilityRows, toggleLiabilityCol, applyLiabilityPreset,
   };
 })();
+

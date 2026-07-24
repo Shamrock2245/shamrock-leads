@@ -98,4 +98,4 @@ def test_api_poa_execute_palmetto_optional_charge(mock_get_col, test_app):
     assert res_data["defendant_name"] == "Jane Smith"
     assert res_data["charge"] is None
 
-    mock_col.update_one.assert_called_once()
+    assert mock_col.update_one.called

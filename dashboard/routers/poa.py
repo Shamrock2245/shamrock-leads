@@ -272,6 +272,12 @@ async def api_poa_execute(request: Request):
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    gross_premium = max(100.0, amount * 0.10) if amount > 0 else 0.0
+    surety_rate = 7.50 if surety_id == "osi" else 10.00
+    surety_owed = round(gross_premium * (surety_rate / 100.0), 2)
+    buf_owed = round(gross_premium * (5.00 / 100.0), 2)
+    agent_retains = round(gross_premium - surety_owed - buf_owed, 2)
+
     doc = await poa_inventory.find_one({"poa_number": poa_number})
 
     update_fields = {
@@ -282,6 +288,10 @@ async def api_poa_execute(request: Request):
         "executed_at": date_executed,
         "bond_amount": amount,
         "amount": amount,
+        "gross_premium": gross_premium,
+        "surety_owed": surety_owed,
+        "buf_owed": buf_owed,
+        "agent_retains": agent_retains,
         "defendant_first_name": def_first,
         "defendant_last_name": def_last,
         "defendant_name": def_name or None,
@@ -309,6 +319,40 @@ async def api_poa_execute(request: Request):
         })
         await poa_inventory.insert_one(update_fields)
 
+    # Sync to active_bonds for liability reports and statement calculations
+    active_bonds = get_collection("active_bonds")
+    booking_key = f"POA-{poa_number}"
+    bond_doc = {
+        "booking_number": booking_key,
+        "poa_number": poa_number,
+        "poa_prefix": update_fields.get("poa_prefix", ""),
+        "poa_full": update_fields.get("poa_full", poa_number),
+        "surety": surety_id.upper(),
+        "surety_id": surety_id,
+        "insurance_company": "Palmetto Surety Corporation" if surety_id == "palmetto" else "O'Shaughnahill Surety & Insurance",
+        "bond_date": date_executed,
+        "posted_date": date_executed,
+        "created_at": date_executed,
+        "bond_amount": amount,
+        "amount": amount,
+        "gross_premium": gross_premium,
+        "surety_owed": surety_owed,
+        "buf_owed": buf_owed,
+        "agent_retains": agent_retains,
+        "defendant_first_name": def_first,
+        "defendant_last_name": def_last,
+        "defendant_name": def_name or None,
+        "charge": charge,
+        "status": "active",
+        "agent_name": "Brendan O'Neal",
+        "updated_at": now_iso,
+    }
+    await active_bonds.update_one(
+        {"$or": [{"poa_number": poa_number}, {"booking_number": booking_key}]},
+        {"$set": bond_doc},
+        upsert=True,
+    )
+
     return {
         "success": True,
         "poa_number": poa_number,
@@ -317,11 +361,16 @@ async def api_poa_execute(request: Request):
         "surety_id": surety_id,
         "date_executed": date_executed,
         "amount": amount,
+        "gross_premium": gross_premium,
+        "surety_owed": surety_owed,
+        "buf_owed": buf_owed,
+        "agent_retains": agent_retains,
         "defendant_name": def_name,
         "defendant_first_name": def_first,
         "defendant_last_name": def_last,
         "charge": charge,
     }
+
 
 
 

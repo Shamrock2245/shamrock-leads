@@ -975,6 +975,15 @@ const SLInventory = (() => {
     }
   }
 
+  function runLiabilityReport() {
+    close();
+    if (window.SLReports) {
+      SLReports.generate('surety-liability');
+    } else {
+      toast('info', 'Opening liability reports module…');
+    }
+  }
+
   return {
     open, close, switchTab, loadSummary, loadDetailView,
     applyFilter, searchFilter, detailPage,
@@ -988,8 +997,9 @@ const SLInventory = (() => {
     openBulkAssignModal, closeBulkAssignModal, removeFromSelection,
     searchDefendantsForAssign, selectDefendantForAssign,
     submitBulkAssign, bulkVoid,
-    // Execute power modal
+    // Execute power modal & liability report
     openExecuteModal, closeExecuteModal, onExecutePrefixInput, submitExecutePower,
+    runLiabilityReport,
   };
 })();
 
