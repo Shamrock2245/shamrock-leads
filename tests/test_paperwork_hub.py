@@ -1,5 +1,5 @@
 """
-Unit tests for Twenty CRM style Paperwork Operations Hub endpoints.
+Unit tests for Twenty CRM style Paperwork Operations Hub & Drag-and-Drop Rules endpoints.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -79,3 +79,51 @@ def test_packet_hydration_audit_endpoint(mock_get_col, test_app):
     assert data["hydration_score"] > 80.0
     assert data["hydrated_count"] >= 10
     assert len(data["fields"]) == 11
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+def test_get_doc_rules_config_endpoint(mock_get_col, test_app):
+    mock_rules_col = AsyncMock()
+    mock_get_col.return_value = mock_rules_col
+    mock_rules_col.find_one.return_value = {
+        "categories": {
+            "universal": ["master_bail_application", "indemnity_agreement"],
+            "payment_plan": ["payment_plan_agreement"],
+        },
+        "updated_at": "2026-07-24T12:30:00Z",
+    }
+
+    client = TestClient(test_app)
+    response = client.get("/api/paperwork/config/rules")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "categories" in data
+    assert "universal" in data["categories"]
+    assert len(data["categories"]["universal"]) == 2
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+def test_save_doc_rules_config_endpoint(mock_get_col, test_app):
+    mock_rules_col = AsyncMock()
+    mock_get_col.return_value = mock_rules_col
+    mock_rules_col.update_one = AsyncMock()
+
+    payload = {
+        "categories": {
+            "universal": ["master_bail_application", "indemnity_agreement", "promissory_note"],
+            "payment_plan": ["payment_plan_agreement", "credit_card_authorization"],
+            "osi_surety": ["osi_appearance_bond"],
+            "palmetto_surety": ["palmetto_power_certificate"],
+            "conditional": ["cosigner_addendum"],
+        }
+    }
+
+    client = TestClient(test_app)
+    response = client.post("/api/paperwork/config/rules", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "categories" in data
+    assert len(data["categories"]["universal"]) == 3
+    mock_rules_col.update_one.assert_called_once()

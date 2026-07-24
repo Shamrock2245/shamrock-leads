@@ -4333,6 +4333,7 @@
       <!-- Sub-navigation Tabs -->
       <div class="inv-tabs" style="margin-top:16px;">
         <button class="inv-tab-btn active" id="pwSubTab_live" onclick="SLPaperwork.switchSubTab('live')">📋 Live Document Packets</button>
+        <button class="inv-tab-btn" id="pwSubTab_builder" onclick="SLPaperwork.switchSubTab('builder')">🎯 Drag & Drop Packet Builder</button>
         <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
         <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
       </div>
@@ -4382,7 +4383,124 @@
         </div>
       </div>
 
-      <!-- Sub-pane 2: Surety Templates -->
+      <!-- Sub-pane 2: Drag & Drop Document Rules Builder -->
+      <div id="pwPane_builder" style="display:none">
+        <div class="glass-panel" style="margin-top:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:12px;">
+            <div>
+              <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+                <span>🎯 Interactive Drag & Drop Packet Builder</span>
+              </h3>
+              <p style="margin:4px 0 0 0;font-size:12px;color:var(--text-muted,#94a3b8)">
+                Drag documents into category boxes to define what each bond packet contains. Changes save directly to MongoDB.
+              </p>
+            </div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="SLPaperwork.resetDocRulesDefaults()">
+                <span>🔄 Reset Defaults</span>
+              </button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="SLPaperwork.saveDocRulesConfig()">
+                <span>💾 Save Configuration</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Toast feedback element -->
+          <div id="pwBuilderToast" style="display:none;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;font-weight:600;"></div>
+
+          <!-- Drag and Drop Workspace Grid -->
+          <div style="display:grid;grid-template-columns:280px 1fr;gap:20px;">
+            
+            <!-- Left Column: Available Document Library (Palette) -->
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 10px 0;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:#38bdf8;display:flex;justify-content:space-between;">
+                <span>📚 Document Catalog</span>
+                <span id="pwDocPaletteCount" style="font-weight:normal;opacity:0.8">0 docs</span>
+              </h4>
+              <div id="pwDocPalette" style="display:flex;flex-direction:column;gap:8px;max-height:650px;overflow-y:auto;padding-right:4px;">
+                <!-- Populated dynamically by sl-paperwork.js -->
+              </div>
+            </div>
+
+            <!-- Right Column: Category Drop Boxes Grid -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(290px, 1fr));gap:16px;">
+              
+              <!-- Category Box 1: Universal Standards -->
+              <div class="pw-drop-box" id="pwBox_universal" ondragover="SLPaperwork.handleDragOver(event)" ondragleave="SLPaperwork.handleDragLeave(event)" ondrop="SLPaperwork.handleDrop(event, 'universal')" style="background:rgba(15,23,42,0.4);border:2px dashed rgba(56,189,248,0.4);border-radius:10px;padding:14px;min-height:160px;transition:all 0.2s ease;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid rgba(56,189,248,0.2);padding-bottom:6px;">
+                  <h4 style="margin:0;font-size:14px;color:#38bdf8;display:flex;align-items:center;gap:6px;">
+                    <span>📌 Universal Standards</span>
+                  </h4>
+                  <span class="badge" id="pwCount_universal" style="background:#0284c7;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">0</span>
+                </div>
+                <p style="margin:0 0 10px 0;font-size:11px;color:#94a3b8">Included on EVERY single bond packet generated.</p>
+                <div class="pw-drop-items" id="pwItems_universal" style="display:flex;flex-direction:column;gap:6px;min-height:70px;">
+                  <!-- Drop items -->
+                </div>
+              </div>
+
+              <!-- Category Box 2: Payment Plan Packets -->
+              <div class="pw-drop-box" id="pwBox_payment_plan" ondragover="SLPaperwork.handleDragOver(event)" ondragleave="SLPaperwork.handleDragLeave(event)" ondrop="SLPaperwork.handleDrop(event, 'payment_plan')" style="background:rgba(15,23,42,0.4);border:2px dashed rgba(168,85,247,0.4);border-radius:10px;padding:14px;min-height:160px;transition:all 0.2s ease;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid rgba(168,85,247,0.2);padding-bottom:6px;">
+                  <h4 style="margin:0;font-size:14px;color:#c084fc;display:flex;align-items:center;gap:6px;">
+                    <span>💳 Payment Plan Packets</span>
+                  </h4>
+                  <span class="badge" id="pwCount_payment_plan" style="background:#9333ea;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">0</span>
+                </div>
+                <p style="margin:0 0 10px 0;font-size:11px;color:#94a3b8">Added ONLY when defendant/indemnitor finances premium on payment plan.</p>
+                <div class="pw-drop-items" id="pwItems_payment_plan" style="display:flex;flex-direction:column;gap:6px;min-height:70px;">
+                  <!-- Drop items -->
+                </div>
+              </div>
+
+              <!-- Category Box 3: OSI Surety Specific -->
+              <div class="pw-drop-box" id="pwBox_osi_surety" ondragover="SLPaperwork.handleDragOver(event)" ondragleave="SLPaperwork.handleDragLeave(event)" ondrop="SLPaperwork.handleDrop(event, 'osi_surety')" style="background:rgba(15,23,42,0.4);border:2px dashed rgba(34,197,94,0.4);border-radius:10px;padding:14px;min-height:160px;transition:all 0.2s ease;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid rgba(34,197,94,0.2);padding-bottom:6px;">
+                  <h4 style="margin:0;font-size:14px;color:#4ade80;display:flex;align-items:center;gap:6px;">
+                    <span>🏢 OSI Surety Specific</span>
+                  </h4>
+                  <span class="badge" id="pwCount_osi_surety" style="background:#16a34a;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">0</span>
+                </div>
+                <p style="margin:0 0 10px 0;font-size:11px;color:#94a3b8">Added ONLY when backing surety is O'Shaughnahill Surety & Insurance (OSI).</p>
+                <div class="pw-drop-items" id="pwItems_osi_surety" style="display:flex;flex-direction:column;gap:6px;min-height:70px;">
+                  <!-- Drop items -->
+                </div>
+              </div>
+
+              <!-- Category Box 4: Palmetto Surety Specific -->
+              <div class="pw-drop-box" id="pwBox_palmetto_surety" ondragover="SLPaperwork.handleDragOver(event)" ondragleave="SLPaperwork.handleDragLeave(event)" ondrop="SLPaperwork.handleDrop(event, 'palmetto_surety')" style="background:rgba(15,23,42,0.4);border:2px dashed rgba(251,146,60,0.4);border-radius:10px;padding:14px;min-height:160px;transition:all 0.2s ease;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid rgba(251,146,60,0.2);padding-bottom:6px;">
+                  <h4 style="margin:0;font-size:14px;color:#fb923c;display:flex;align-items:center;gap:6px;">
+                    <span>🌴 Palmetto Surety Specific</span>
+                  </h4>
+                  <span class="badge" id="pwCount_palmetto_surety" style="background:#ea580c;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">0</span>
+                </div>
+                <p style="margin:0 0 10px 0;font-size:11px;color:#94a3b8">Added ONLY when backing surety is Palmetto Surety Corporation.</p>
+                <div class="pw-drop-items" id="pwItems_palmetto_surety" style="display:flex;flex-direction:column;gap:6px;min-height:70px;">
+                  <!-- Drop items -->
+                </div>
+              </div>
+
+              <!-- Category Box 5: Conditional Add-Ons -->
+              <div class="pw-drop-box" id="pwBox_conditional" ondragover="SLPaperwork.handleDragOver(event)" ondragleave="SLPaperwork.handleDragLeave(event)" ondrop="SLPaperwork.handleDrop(event, 'conditional')" style="background:rgba(15,23,42,0.4);border:2px dashed rgba(244,63,94,0.4);border-radius:10px;padding:14px;min-height:160px;transition:all 0.2s ease;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:1px solid rgba(244,63,94,0.2);padding-bottom:6px;">
+                  <h4 style="margin:0;font-size:14px;color:#fb7185;display:flex;align-items:center;gap:6px;">
+                    <span>⚖️ Conditional / Add-On Packets</span>
+                  </h4>
+                  <span class="badge" id="pwCount_conditional" style="background:#e11d48;color:#fff;font-size:11px;padding:2px 8px;border-radius:12px;">0</span>
+                </div>
+                <p style="margin:0 0 10px 0;font-size:11px;color:#94a3b8">Added conditionally based on case flags (Co-Signer, Out-of-State, GPS).</p>
+                <div class="pw-drop-items" id="pwItems_conditional" style="display:flex;flex-direction:column;gap:6px;min-height:70px;">
+                  <!-- Drop items -->
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sub-pane 3: Surety Templates -->
       <div id="pwPane_templates" style="display:none">
         <div class="glass-panel" style="margin-top:16px;">
           <h3>OSI Documents</h3>

@@ -147,6 +147,81 @@ async def paperwork_config():
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+# Standard default drag-and-drop document rules categories
+DEFAULT_DOC_RULES_CATEGORIES = {
+    "universal": [
+        "master_bail_application",
+        "indemnity_agreement",
+        "promissory_note",
+        "disclosure_statement",
+        "premium_receipt",
+    ],
+    "payment_plan": [
+        "payment_plan_agreement",
+        "credit_card_authorization",
+        "promissory_note_schedule",
+        "wage_assignment",
+    ],
+    "osi_surety": [
+        "osi_appearance_bond",
+        "osi_premium_receipt",
+    ],
+    "palmetto_surety": [
+        "palmetto_power_certificate",
+        "palmetto_appearance_bond",
+    ],
+    "conditional": [
+        "cosigner_addendum",
+        "out_of_state_waiver",
+        "gps_checkin_consent",
+    ],
+}
+
+
+@paperwork_bp.get("/paperwork/config/rules")
+async def get_doc_rules_config():
+    """Return document category allocations for the Drag-and-Drop Document Builder."""
+    try:
+        rules_col = get_collection("paperwork_rules")
+        doc = await rules_col.find_one({"_id": "drag_drop_rules"}, {"_id": 0})
+        categories = doc.get("categories") if doc else DEFAULT_DOC_RULES_CATEGORIES
+        return {
+            "success": True,
+            "categories": categories or DEFAULT_DOC_RULES_CATEGORIES,
+            "updated_at": doc.get("updated_at") if doc else None,
+        }
+    except Exception as exc:
+        logger.exception("get_doc_rules_config error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/config/rules")
+async def save_doc_rules_config(request: Request):
+    """Save updated drag-and-drop document category allocations to MongoDB."""
+    try:
+        body = await request.json()
+        categories = body.get("categories")
+        if not isinstance(categories, dict):
+            return JSONResponse({"success": False, "error": "Invalid payload: 'categories' dict required"}, status_code=400)
+
+        rules_col = get_collection("paperwork_rules")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await rules_col.update_one(
+            {"_id": "drag_drop_rules"},
+            {"$set": {"categories": categories, "updated_at": now_iso}},
+            upsert=True,
+        )
+        return {
+            "success": True,
+            "message": "Document category rules saved successfully",
+            "categories": categories,
+            "updated_at": now_iso,
+        }
+    except Exception as exc:
+        logger.exception("save_doc_rules_config error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
 def _build_bond_data(intake: dict) -> dict:
     """
     Build the data dict expected by bond_pdf_service.generate_appearance_bonds().

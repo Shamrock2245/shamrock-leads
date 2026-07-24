@@ -1,23 +1,56 @@
 /**
  * sl-paperwork.js — Twenty CRM Style Document Operations & E-Signature Hub
+ * Includes Interactive Drag & Drop Packet Builder
  */
 const SLPaperwork = {
   _currentSubTab: 'live',
   _allPackets: [],
+  _draggedDocKey: null,
+
+  _docCatalog: [
+    { key: "master_bail_application", label: "Master Bail Application", icon: "📄", badge: "Core", desc: "Defendant & Indemnitor personal data, employment, references" },
+    { key: "indemnity_agreement", label: "Indemnity Agreement", icon: "✍️", badge: "Legal", desc: "Financial liability & indemnification contract" },
+    { key: "promissory_note", label: "Promissory Note", icon: "💵", badge: "Financial", desc: "Master debt promise and collateral backing" },
+    { key: "disclosure_statement", label: "Disclosure Statement", icon: "📋", badge: "Compliance", desc: "FL Dept of Financial Services mandatory disclosure" },
+    { key: "premium_receipt", label: "Premium Receipt", icon: "🧾", badge: "Receipt", desc: "Itemized premium payment and fee receipt" },
+    { key: "payment_plan_agreement", label: "Payment Plan Agreement", icon: "💳", badge: "Financing", desc: "Monthly/weekly premium payment schedule & rules" },
+    { key: "credit_card_authorization", label: "Credit Card Auth Form", icon: "💳", badge: "Financing", desc: "Recurring autopay and card on file consent" },
+    { key: "promissory_note_schedule", label: "Payment Installment Schedule", icon: "📅", badge: "Financing", desc: "Itemized installment dates, interest & late fee terms" },
+    { key: "wage_assignment", label: "Wage Assignment Form", icon: "💼", badge: "Financing", desc: "Voluntary payroll deduction authorization" },
+    { key: "osi_appearance_bond", label: "OSI Appearance Bond", icon: "🛡️", badge: "Surety OSI", desc: "O'Shaughnahill Surety official court bond form" },
+    { key: "osi_premium_receipt", label: "OSI Surety Receipt", icon: "🧾", badge: "Surety OSI", desc: "OSI official insurer premium split receipt" },
+    { key: "palmetto_power_certificate", label: "Palmetto Power Certificate", icon: "🌴", badge: "Surety Palmetto", desc: "Palmetto Surety official power of attorney cert" },
+    { key: "palmetto_appearance_bond", label: "Palmetto Appearance Bond", icon: "🌴", badge: "Surety Palmetto", desc: "Palmetto Surety official court bond form" },
+    { key: "cosigner_addendum", label: "Co-Signer Addendum", icon: "👥", badge: "Add-On", desc: "Additional indemnitor liability & guarantee form" },
+    { key: "out_of_state_waiver", label: "Out-of-State Waiver", icon: "✈️", badge: "Add-On", desc: "Extradition and travel consent waiver" },
+    { key: "gps_checkin_consent", label: "GPS / Check-In Consent", icon: "📍", badge: "Add-On", desc: "Automated check-in & location monitoring agreement" },
+  ],
+
+  _categories: {
+    universal: ["master_bail_application", "indemnity_agreement", "promissory_note", "disclosure_statement", "premium_receipt"],
+    payment_plan: ["payment_plan_agreement", "credit_card_authorization", "promissory_note_schedule", "wage_assignment"],
+    osi_surety: ["osi_appearance_bond", "osi_premium_receipt"],
+    palmetto_surety: ["palmetto_power_certificate", "palmetto_appearance_bond"],
+    conditional: ["cosigner_addendum", "out_of_state_waiver", "gps_checkin_consent"]
+  },
 
   async load() {
     await this.loadLivePackets();
+    await this.loadDocRulesConfig();
     await this.loadConfig();
   },
 
   switchSubTab(tabName) {
     this._currentSubTab = tabName;
-    ['live', 'templates', 'rules'].forEach(t => {
+    ['live', 'builder', 'templates', 'rules'].forEach(t => {
       const btn = document.getElementById(`pwSubTab_${t}`);
       const pane = document.getElementById(`pwPane_${t}`);
       if (btn) btn.classList.toggle('active', t === tabName);
       if (pane) pane.style.display = t === tabName ? 'block' : 'none';
     });
+    if (tabName === 'builder') {
+      this.renderBuilderWorkspace();
+    }
   },
 
   async loadLivePackets() {
@@ -134,6 +167,206 @@ const SLPaperwork = {
     this.renderLivePacketsTable(filtered);
   },
 
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * Drag & Drop Packet Builder & Category Engine
+   * ───────────────────────────────────────────────────────────────────────────── */
+  async loadDocRulesConfig() {
+    try {
+      const res = await fetch('/api/paperwork/config/rules', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.success && data.categories) {
+        this._categories = data.categories;
+        if (this._currentSubTab === 'builder') {
+          this.renderBuilderWorkspace();
+        }
+      }
+    } catch (err) {
+      console.warn("loadDocRulesConfig warning:", err);
+    }
+  },
+
+  renderBuilderWorkspace() {
+    const paletteEl = document.getElementById('pwDocPalette');
+    const paletteCount = document.getElementById('pwDocPaletteCount');
+    if (!paletteEl) return;
+
+    if (paletteCount) paletteCount.textContent = `${this._docCatalog.length} docs`;
+    paletteEl.innerHTML = '';
+
+    // Render palette catalog items
+    this._docCatalog.forEach(doc => {
+      const card = document.createElement('div');
+      card.className = 'pw-palette-card';
+      card.draggable = true;
+      card.setAttribute('ondragstart', `SLPaperwork.handleDragStart(event, '${doc.key}')`);
+      card.style.cssText = `
+        background: rgba(30, 41, 59, 0.8);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 10px 12px;
+        cursor: grab;
+        transition: all 0.15s ease;
+        user-select: none;
+      `;
+
+      card.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <strong style="font-size:12px;color:var(--text);display:flex;align-items:center;gap:6px">
+            <span>${doc.icon}</span> ${this._esc(doc.label)}
+          </strong>
+          <span style="font-size:10px;background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:4px;color:var(--muted)">${doc.badge}</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.3">${this._esc(doc.desc)}</div>
+        <div style="margin-top:6px;display:flex;justify-content:flex-end">
+          <select onchange="SLPaperwork.moveDocToCategory('${doc.key}', this.value); this.value='';" style="font-size:10px;background:rgba(15,23,42,0.8);border:1px solid #334155;color:#94a3b8;border-radius:4px;padding:2px 4px;">
+            <option value="">Move to…</option>
+            <option value="universal">📌 Universal</option>
+            <option value="payment_plan">💳 Payment Plan</option>
+            <option value="osi_surety">🏢 OSI Surety</option>
+            <option value="palmetto_surety">🌴 Palmetto Surety</option>
+            <option value="conditional">⚖️ Conditional</option>
+          </select>
+        </div>
+      `;
+      paletteEl.appendChild(card);
+    });
+
+    // Render category boxes
+    const catKeys = ['universal', 'payment_plan', 'osi_surety', 'palmetto_surety', 'conditional'];
+    catKeys.forEach(catId => {
+      const container = document.getElementById(`pwItems_${catId}`);
+      const countBadge = document.getElementById(`pwCount_${catId}`);
+      if (!container) return;
+
+      const docKeys = this._categories[catId] || [];
+      if (countBadge) countBadge.textContent = docKeys.length;
+
+      container.innerHTML = '';
+      if (docKeys.length === 0) {
+        container.innerHTML = `<div style="font-size:11px;color:rgba(148,163,184,0.5);text-align:center;padding:20px 10px;border:1px dashed rgba(255,255,255,0.05);border-radius:6px">Drag documents here</div>`;
+        return;
+      }
+
+      docKeys.forEach(dKey => {
+        const catalogDoc = this._docCatalog.find(c => c.key === dKey) || { label: dKey, icon: "📄" };
+        const itemCard = document.createElement('div');
+        itemCard.style.cssText = `
+          background: rgba(15, 23, 42, 0.8);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 6px;
+          padding: 8px 10px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-size: 12px;
+        `;
+        itemCard.innerHTML = `
+          <div style="display:flex;align-items:center;gap:6px">
+            <span>${catalogDoc.icon}</span>
+            <strong style="color:#e2e8f0;font-size:12px">${this._esc(catalogDoc.label)}</strong>
+          </div>
+          <button type="button" onclick="SLPaperwork.removeDocFromCategory('${dKey}', '${catId}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:14px;padding:0 4px;" title="Remove document">✕</button>
+        `;
+        container.appendChild(itemCard);
+      });
+    });
+  },
+
+  handleDragStart(evt, docKey) {
+    this._draggedDocKey = docKey;
+    evt.dataTransfer.setData('text/plain', docKey);
+    evt.dataTransfer.effectAllowed = 'copyMove';
+  },
+
+  handleDragOver(evt) {
+    evt.preventDefault();
+    evt.dataTransfer.dropEffect = 'copy';
+    const box = evt.currentTarget;
+    if (box) box.style.borderColor = '#38bdf8';
+  },
+
+  handleDragLeave(evt) {
+    const box = evt.currentTarget;
+    if (box) box.style.borderColor = '';
+  },
+
+  handleDrop(evt, targetCatId) {
+    evt.preventDefault();
+    const box = evt.currentTarget;
+    if (box) box.style.borderColor = '';
+
+    const docKey = evt.dataTransfer.getData('text/plain') || this._draggedDocKey;
+    if (!docKey) return;
+
+    this.moveDocToCategory(docKey, targetCatId);
+  },
+
+  moveDocToCategory(docKey, targetCatId) {
+    if (!targetCatId || !this._categories[targetCatId]) return;
+
+    // Add to target category if not already present
+    if (!this._categories[targetCatId].includes(docKey)) {
+      this._categories[targetCatId].push(docKey);
+    }
+
+    this.renderBuilderWorkspace();
+    this.showBuilderToast(`Added ${docKey.replace(/_/g, ' ')} to ${targetCatId.replace(/_/g, ' ')}`, 'info');
+  },
+
+  removeDocFromCategory(docKey, catId) {
+    if (!this._categories[catId]) return;
+    this._categories[catId] = this._categories[catId].filter(k => k !== docKey);
+    this.renderBuilderWorkspace();
+    this.showBuilderToast(`Removed from ${catId.replace(/_/g, ' ')}`, 'warning');
+  },
+
+  async saveDocRulesConfig() {
+    try {
+      const res = await fetch('/api/paperwork/config/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ categories: this._categories }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to save configuration');
+
+      this.showBuilderToast('💾 Document rules configuration saved to MongoDB!', 'success');
+    } catch (err) {
+      this.showBuilderToast(`❌ Error: ${err.message}`, 'error');
+    }
+  },
+
+  resetDocRulesDefaults() {
+    if (!confirm('Reset drag-and-drop document rules to standard Shamrock defaults?')) return;
+    this._categories = {
+      universal: ["master_bail_application", "indemnity_agreement", "promissory_note", "disclosure_statement", "premium_receipt"],
+      payment_plan: ["payment_plan_agreement", "credit_card_authorization", "promissory_note_schedule", "wage_assignment"],
+      osi_surety: ["osi_appearance_bond", "osi_premium_receipt"],
+      palmetto_surety: ["palmetto_power_certificate", "palmetto_appearance_bond"],
+      conditional: ["cosigner_addendum", "out_of_state_waiver", "gps_checkin_consent"]
+    };
+    this.renderBuilderWorkspace();
+    this.showBuilderToast('🔄 Document rules reset to defaults', 'warning');
+  },
+
+  showBuilderToast(msg, type = 'info') {
+    const el = document.getElementById('pwBuilderToast');
+    if (!el) return;
+    const bg = type === 'success' ? '#166534' : type === 'error' ? '#991b1b' : type === 'warning' ? '#854d0e' : '#1e3a8a';
+    el.style.background = bg;
+    el.style.color = '#ffffff';
+    el.style.display = 'block';
+    el.textContent = msg;
+    setTimeout(() => {
+      if (el) el.style.display = 'none';
+    }, 4000);
+  },
+
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * Standard Hydration Audit & Legacy Config
+   * ───────────────────────────────────────────────────────────────────────────── */
   async showHydrationAudit(packetId) {
     const modal = document.getElementById('pwHydrationModal');
     const body = document.getElementById('pwHydrationModalBody');
@@ -301,4 +534,3 @@ const SLPaperwork = {
 };
 
 window.SLPaperwork = SLPaperwork;
-
