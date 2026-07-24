@@ -1337,8 +1337,10 @@ async def packet_builder_context(request: Request):
             hydration_score,
             apply_self_indemnitor,
             assemble_manifest,
+            resolve_client_esign_provider,
             SMALL_BOND_MAX,
         )
+        from dashboard.services.adobe_pdf_service import adobe_status
 
         ctx = await resolve_case_context(
             intake_id=body.get("intake_id"),
@@ -1376,6 +1378,16 @@ async def packet_builder_context(request: Request):
             self_indemnitor=bool(ctx.get("self_indemnitor")),
         )
 
+        # Per-client e-sign preference (not per PDF)
+        client_provider = await resolve_client_esign_provider(
+            preferred=body.get("provider"),
+            indemnitor_id=ctx.get("indemnitor_id"),
+            defendant_id=ctx.get("defendant_id"),
+            bond_case_id=ctx.get("bond_case_id"),
+        )
+        ctx["esign_provider"] = client_provider
+        astat = adobe_status()
+
         return {
             "success": True,
             "context": ctx,
@@ -1384,13 +1396,15 @@ async def packet_builder_context(request: Request):
             "categories": categories,
             "manifest": manifest,
             "small_bond_max": SMALL_BOND_MAX,
+            "esign_provider": client_provider,
             "providers": {
                 "signnow": True,
-                "adobe": bool(
-                    __import__("os").environ.get("ADOBE_SIGN_INTEGRATION_KEY")
-                    or __import__("os").environ.get("ADOBE_SIGN_ACCESS_TOKEN")
-                ),
+                "adobe_pdf_services": astat["pdf_services"]["configured"],
+                "adobe_sign": astat["acrobat_sign"]["configured"],
+                # legacy key for UI
+                "adobe": astat["acrobat_sign"]["configured"],
             },
+            "adobe": astat,
         }
     except Exception as exc:
         logger.exception("packet_builder_context error")
@@ -1419,13 +1433,12 @@ async def packet_builder_finalize(request: Request):
             decode_extra_uploads,
             flatten_pdf_bytes,
             send_via_adobe,
+            resolve_client_esign_provider,
+            save_client_esign_provider,
             template_slug_for_catalog_key,
             SMALL_BOND_MAX,
         )
-
-        provider = (body.get("provider") or "signnow").lower().strip()
-        if provider not in ("signnow", "adobe", "both", "none"):
-            provider = "signnow"
+        from dashboard.services.adobe_pdf_service import get_adobe_pdf_client
 
         ctx = await resolve_case_context(
             intake_id=body.get("intake_id"),
@@ -1446,6 +1459,28 @@ async def packet_builder_finalize(request: Request):
             # Discretionary small-bond policy note (PIN already gates)
             if ctx.get("bond_amount") and ctx["bond_amount"] > SMALL_BOND_MAX:
                 ctx["self_indemnitor_large_bond_override"] = True
+
+        # E-sign provider is per-client (whole packet / all docs), not per PDF
+        provider = await resolve_client_esign_provider(
+            preferred=(body.get("provider") or "").lower().strip() or None,
+            indemnitor_id=ctx.get("indemnitor_id") or body.get("indemnitor_id"),
+            defendant_id=ctx.get("defendant_id") or body.get("defendant_id"),
+            bond_case_id=ctx.get("bond_case_id") or body.get("bond_case_id"),
+        )
+        if provider not in ("signnow", "adobe", "both", "none"):
+            provider = "signnow"
+
+        # Persist preference when staff explicitly chose a provider in the UI
+        if body.get("provider") and body.get("save_esign_preference", True):
+            try:
+                await save_client_esign_provider(
+                    provider=provider,
+                    indemnitor_id=ctx.get("indemnitor_id"),
+                    defendant_id=ctx.get("defendant_id"),
+                    bond_case_id=ctx.get("bond_case_id"),
+                )
+            except Exception as pref_exc:
+                logger.warning("save esign preference skipped: %s", pref_exc)
 
         # Allow UI field overrides (staff edits after auto-fill)
         overrides = body.get("field_overrides") or {}
@@ -1578,17 +1613,19 @@ async def packet_builder_finalize(request: Request):
             },
         }
 
-        # Optional local flatten of blank templates + extras (preview / Adobe)
+        # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback
         flat_bytes = b""
         flat_b64 = ""
+        adobe_pdf_meta: dict = {}
         try:
             pdf_parts = []
-            # Best-effort local blank stitch when module exposes helpers
+            part_names = []
             try:
                 from dashboard.paperwork_pdf_service import generate_full_packet
                 stitched = generate_full_packet(intake_doc, surety=surety_id)
                 if isinstance(stitched, (bytes, bytearray)) and stitched:
                     pdf_parts.append(bytes(stitched))
+                    part_names.append("core-packet.pdf")
             except Exception as stitch_exc:
                 logger.debug("local stitch unavailable: %s", stitch_exc)
             for ex in extras:
@@ -1596,10 +1633,36 @@ async def packet_builder_finalize(request: Request):
                 ctype = (ex.get("content_type") or "").lower()
                 if fname.endswith(".pdf") or "pdf" in ctype:
                     pdf_parts.append(ex["bytes"])
+                    part_names.append(ex.get("filename") or "extra.pdf")
+
             if pdf_parts:
-                flat_bytes = flatten_pdf_bytes(pdf_parts)
+                adobe_pdf = get_adobe_pdf_client()
+                if adobe_pdf.configured:
+                    built = await adobe_pdf.build_flattened_packet(
+                        pdf_parts,
+                        field_map=fields,
+                        names=part_names,
+                    )
+                    adobe_pdf_meta = {
+                        k: v for k, v in built.items() if k != "pdf_bytes"
+                    }
+                    if built.get("success") and built.get("pdf_bytes"):
+                        flat_bytes = built["pdf_bytes"]
+                    else:
+                        flat_bytes = flatten_pdf_bytes(pdf_parts)
+                        adobe_pdf_meta["fallback"] = "local_flatten"
+                        adobe_pdf_meta["adobe_error"] = built.get("error")
+                else:
+                    # Local fill+merge when Adobe PDF Services not configured
+                    filled_parts = []
+                    for part in pdf_parts:
+                        blob, _meta = await adobe_pdf.fill_and_flatten_local_first(part, fields)
+                        filled_parts.append(blob or part)
+                    flat_bytes = flatten_pdf_bytes(filled_parts)
+                    adobe_pdf_meta = {"adobe_pdf_configured": False, "engine": "local"}
         except Exception as flat_exc:
             logger.warning("flatten failed: %s", flat_exc)
+            adobe_pdf_meta = {"error": str(flat_exc)}
 
         if flat_bytes:
             import base64 as _b64
@@ -1717,6 +1780,7 @@ async def packet_builder_finalize(request: Request):
                 for e in extras
             ],
             "flattened": bool(flat_bytes),
+            "adobe_pdf_meta": adobe_pdf_meta,
             "flattened_size": len(flat_bytes) if flat_bytes else 0,
             "defendant_name": def_.get("name") or "",
             "defendant_dob": def_.get("dob") or "",
@@ -1782,6 +1846,8 @@ async def packet_builder_finalize(request: Request):
             "signing_link": signing_link,
             "send_results": send_results,
             "flattened": bool(flat_bytes),
+            "adobe_pdf_meta": adobe_pdf_meta,
+            "esign_provider": provider,
             "flattened_preview_b64": flat_b64[:200] + "…" if flat_b64 and len(flat_b64) > 200 else flat_b64,
             "context_summary": {
                 "defendant_name": def_.get("name"),
@@ -1794,4 +1860,54 @@ async def packet_builder_finalize(request: Request):
         }
     except Exception as exc:
         logger.exception("packet_builder_finalize error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.get("/paperwork/adobe/status")
+async def paperwork_adobe_status():
+    """Report Adobe PDF Services + Acrobat Sign configuration status (no secrets)."""
+    try:
+        from dashboard.services.adobe_pdf_service import adobe_status, get_adobe_pdf_client
+        status = adobe_status()
+        # Live token probe when configured
+        pdf = get_adobe_pdf_client()
+        if pdf.configured:
+            try:
+                await pdf.get_access_token()
+                status["pdf_services"]["token_ok"] = True
+            except Exception as exc:
+                status["pdf_services"]["token_ok"] = False
+                status["pdf_services"]["token_error"] = str(exc)[:200]
+        return {"success": True, **status}
+    except Exception as exc:
+        logger.exception("adobe status error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/client/esign-provider")
+async def set_client_esign_provider(request: Request):
+    """
+    Set e-sign provider for a client (indemnitor / defendant / bond).
+    Applies to the whole packet — not per PDF.
+    Body: { provider: signnow|adobe|both|none, indemnitor_id?, defendant_id?, bond_case_id? }
+    """
+    try:
+        body = (await request.json()) or {}
+        from dashboard.services.packet_builder_service import save_client_esign_provider
+        result = await save_client_esign_provider(
+            provider=body.get("provider") or "",
+            indemnitor_id=body.get("indemnitor_id"),
+            defendant_id=body.get("defendant_id"),
+            bond_case_id=body.get("bond_case_id"),
+        )
+        if not result.get("updated"):
+            return JSONResponse(
+                {"success": False, "error": "No matching client records updated (need indemnitor_id, defendant_id, or bond_case_id)"},
+                status_code=404,
+            )
+        return {"success": True, **result}
+    except ValueError as ve:
+        return JSONResponse({"success": False, "error": str(ve)}, status_code=400)
+    except Exception as exc:
+        logger.exception("set_client_esign_provider error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

@@ -673,78 +673,98 @@ async def send_via_adobe(
     agreement_name: str,
 ) -> Dict[str, Any]:
     """
-    Optional Adobe Acrobat Sign path.
+    Adobe Acrobat Sign path (e-signature) — separate from PDF Services fill/flatten.
     Requires ADOBE_SIGN_INTEGRATION_KEY (or ADOBE_SIGN_ACCESS_TOKEN).
     """
-    token = os.getenv("ADOBE_SIGN_INTEGRATION_KEY") or os.getenv("ADOBE_SIGN_ACCESS_TOKEN") or ""
-    base = (os.getenv("ADOBE_SIGN_API_BASE") or "https://api.na1.adobesign.com/api/rest/v6").rstrip("/")
-    if not token:
-        return {
-            "success": False,
-            "provider": "adobe",
-            "error": "Adobe Sign not configured (set ADOBE_SIGN_INTEGRATION_KEY).",
-        }
-    if not signer_email:
-        return {"success": False, "provider": "adobe", "error": "signer_email required for Adobe Sign"}
+    from dashboard.services.adobe_pdf_service import get_adobe_sign_client
 
-    import httpx
+    client = get_adobe_sign_client()
+    result = await client.send_for_signature(
+        pdf_bytes=flattened_pdf,
+        filename=filename,
+        signer_email=signer_email,
+        signer_name=signer_name,
+        agreement_name=agreement_name,
+    )
+    # Normalize provider label used by UI
+    if result.get("provider") == "adobe_sign":
+        result = {**result, "provider": "adobe"}
+    return result
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            # 1) Transient document upload
-            files = {
-                "File-Name": (None, filename),
-                "File": (filename, flattened_pdf, "application/pdf"),
-            }
-            up = await client.post(
-                f"{base}/transientDocuments",
-                headers=headers,
-                files=files,
-            )
-            if up.status_code >= 400:
-                return {
-                    "success": False,
-                    "provider": "adobe",
-                    "error": f"Adobe upload failed HTTP {up.status_code}: {up.text[:300]}",
-                }
-            transient_id = up.json().get("transientDocumentId")
-            if not transient_id:
-                return {"success": False, "provider": "adobe", "error": "No transientDocumentId from Adobe"}
 
-            # 2) Create agreement
-            payload = {
-                "fileInfos": [{"transientDocumentId": transient_id}],
-                "name": agreement_name or filename,
-                "participantSetsInfo": [{
-                    "order": 1,
-                    "role": "SIGNER",
-                    "memberInfos": [{"email": signer_email, "name": signer_name or "Signer"}],
-                }],
-                "signatureType": "ESIGN",
-                "state": "IN_PROCESS",
-            }
-            ag = await client.post(
-                f"{base}/agreements",
-                headers={**headers, "Content-Type": "application/json"},
-                json=payload,
-            )
-            if ag.status_code >= 400:
-                return {
-                    "success": False,
-                    "provider": "adobe",
-                    "error": f"Adobe agreement failed HTTP {ag.status_code}: {ag.text[:300]}",
-                }
-            agreement_id = ag.json().get("id") or ag.json().get("agreementId") or ""
-            return {
-                "success": True,
-                "provider": "adobe",
-                "agreement_id": agreement_id,
-                "signer_email": signer_email,
-                "status": "sent",
-            }
-    except Exception as exc:
-        logger.exception("Adobe Sign send failed")
-        return {"success": False, "provider": "adobe", "error": str(exc)}
+async def resolve_client_esign_provider(
+    *,
+    preferred: Optional[str] = None,
+    indemnitor_id: Optional[str] = None,
+    defendant_id: Optional[str] = None,
+    bond_case_id: Optional[str] = None,
+) -> str:
+    """
+    E-sign provider is chosen per client (indemnitor first, then defendant, then bond),
+    not per PDF. Values: signnow | adobe | none
+    """
+    from dashboard.extensions import get_collection
+
+    if preferred in ("signnow", "adobe", "none", "both"):
+        return preferred
+
+    async def _from_doc(col_name: str, query: dict) -> Optional[str]:
+        if not query:
+            return None
+        doc = await get_collection(col_name).find_one(query, {"_id": 0, "esign_provider": 1, "Esign_Provider": 1})
+        if not doc:
+            return None
+        p = (doc.get("esign_provider") or doc.get("Esign_Provider") or "").lower().strip()
+        return p if p in ("signnow", "adobe", "none", "both") else None
+
+    for col, q in (
+        ("indemnitors", {"$or": [{"Indemnitor_ID": indemnitor_id}, {"indemnitor_id": indemnitor_id}]} if indemnitor_id else None),
+        ("defendants", {"$or": [{"Defendant_ID": defendant_id}, {"defendant_id": defendant_id}]} if defendant_id else None),
+        ("active_bonds", {"$or": [{"Bond_Case_ID": bond_case_id}, {"bond_case_id": bond_case_id}]} if bond_case_id else None),
+    ):
+        if not q:
+            continue
+        found = await _from_doc(col, q)
+        if found:
+            return found
+    return os.getenv("DEFAULT_ESIGN_PROVIDER", "signnow").lower()
+
+
+async def save_client_esign_provider(
+    *,
+    provider: str,
+    indemnitor_id: Optional[str] = None,
+    defendant_id: Optional[str] = None,
+    bond_case_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Persist per-client e-sign preference (whole packet / all docs for that client)."""
+    from dashboard.extensions import get_collection
+
+    provider = (provider or "").lower().strip()
+    if provider not in ("signnow", "adobe", "none", "both"):
+        raise ValueError("provider must be signnow | adobe | both | none")
+
+    now = datetime.now(timezone.utc)
+    updated = []
+    if indemnitor_id:
+        r = await get_collection("indemnitors").update_one(
+            {"$or": [{"Indemnitor_ID": indemnitor_id}, {"indemnitor_id": indemnitor_id}]},
+            {"$set": {"esign_provider": provider, "esign_provider_updated_at": now}},
+        )
+        if r.matched_count:
+            updated.append("indemnitor")
+    if defendant_id:
+        r = await get_collection("defendants").update_one(
+            {"$or": [{"Defendant_ID": defendant_id}, {"defendant_id": defendant_id}]},
+            {"$set": {"esign_provider": provider, "esign_provider_updated_at": now}},
+        )
+        if r.matched_count:
+            updated.append("defendant")
+    if bond_case_id:
+        r = await get_collection("active_bonds").update_one(
+            {"$or": [{"Bond_Case_ID": bond_case_id}, {"bond_case_id": bond_case_id}]},
+            {"$set": {"esign_provider": provider, "esign_provider_updated_at": now}},
+        )
+        if r.matched_count:
+            updated.append("bond")
+    return {"provider": provider, "updated": updated}

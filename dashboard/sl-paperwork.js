@@ -948,13 +948,20 @@ const SLPaperwork = {
         src.textContent = `Sources: ${sources}${small}`;
       }
 
-      // Provider availability
+      // Per-client e-sign preference (whole packet)
       const prov = document.getElementById('pwApProvider');
-      if (prov && data.providers && !data.providers.adobe) {
-        // keep adobe option but note unconfigured on send
+      const preferred = data.esign_provider || data.context?.esign_provider;
+      if (prov && preferred) prov.value = preferred;
+
+      const pdfBadge = document.getElementById('pwApAdobePdfBadge');
+      if (pdfBadge) {
+        const pdfOk = data.providers?.adobe_pdf_services || data.adobe?.pdf_services?.configured;
+        const signOk = data.providers?.adobe_sign || data.adobe?.acrobat_sign?.configured;
+        pdfBadge.textContent = `PDF Services: ${pdfOk ? 'ready' : 'off'} · Acrobat Sign: ${signOk ? 'ready' : 'needs key'}`;
+        pdfBadge.style.color = pdfOk ? '#4ade80' : '#94a3b8';
       }
 
-      this._setApStatus('Context loaded — review fields, adjust packet docs, then flatten & send.', 'success');
+      this._setApStatus('Context loaded — review fields, pick this client’s e-sign destination, then flatten & send.', 'success');
     } catch (err) {
       this._setApStatus(`Resolve failed: ${err.message}`, 'error');
     }

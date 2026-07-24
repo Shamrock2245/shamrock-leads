@@ -4800,13 +4800,14 @@
               <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
                 <input type="checkbox" id="pwApPaymentPlan" checked> Include payment-plan docs
               </label>
-              <label style="font-size:12px;color:#94a3b8">E-sign provider</label>
-              <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px">
-                <option value="signnow">SignNow (primary)</option>
-                <option value="adobe">Adobe Sign</option>
-                <option value="both">Both SignNow + Adobe</option>
-                <option value="none">Finalize only (no send)</option>
+              <label style="font-size:12px;color:#94a3b8" title="Applies to this client’s entire packet, not each PDF">Client e-sign destination</label>
+              <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="Saved on the client — all docs in the packet use this">
+                <option value="signnow">SignNow (e-sign)</option>
+                <option value="adobe">Adobe Acrobat Sign (e-sign)</option>
+                <option value="both">Both SignNow + Adobe Sign</option>
+                <option value="none">Finalize / flatten only (no e-sign send)</option>
               </select>
+              <span id="pwApAdobePdfBadge" style="font-size:11px;color:#64748b">PDF Services: —</span>
             </div>
             <div id="pwApStatus" style="display:none;font-size:12px;padding:10px 12px;border-radius:8px"></div>
           </div>
