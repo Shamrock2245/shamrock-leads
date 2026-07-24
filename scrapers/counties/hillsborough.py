@@ -3,7 +3,7 @@ Hillsborough County Arrest Scraper — HCSO Arrest Inquiry Portal.
 ================================================================
 Source: Hillsborough County Sheriff's Office
 URL: https://webapps.hcso.tampa.fl.us/arrestinquiry/
-Method: Pure HTTP (httpx) + SOCKS5 proxy + SolveCaptcha reCAPTCHA v2
+Method: Pure HTTP (curl_cffi) + SOCKS5 proxy + SolveCaptcha reCAPTCHA v2
 
 Zero browser needed — uses direct form POST with token injection.
 Memory-safe: ~50MB vs ~500MB+ for Playwright/Chromium.
@@ -16,7 +16,7 @@ Requires env vars:
 HISTORY:
   v1: DrissionPage + reCAPTCHA checkbox click (unreliable)
   v2: Playwright + SOCKS proxy + SolveCaptcha token injection (OOM crashes)
-  v3 (current): Pure httpx + SolveCaptcha — no browser at all
+  v3 (current): curl_cffi + SolveCaptcha — no browser at all
 """
 import json
 import logging
@@ -206,7 +206,7 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.warning("[Hillsborough] proxy resolve failed: %s — going direct", exc)
             return None, "direct_fallback"
 
-    def _login(self, client: httpx.Client, email: str, password: str) -> bool:
+    def _login(self, client: cffi_requests.Session, email: str, password: str) -> bool:
         logger.info("[Hillsborough] Loading login page...")
 
         # GET login page → extract __RequestVerificationToken
@@ -251,7 +251,7 @@ class HillsboroughCountyScraper(BaseScraper):
         return False
 
     # ── Cookie Persistence ────────────────────────────────────────────
-    def _try_cookie_login(self, client: httpx.Client) -> bool:
+    def _try_cookie_login(self, client: cffi_requests.Session) -> bool:
         """Load saved cookies and check if session is still valid."""
         if not os.path.exists(COOKIE_FILE):
             return False
@@ -295,7 +295,7 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.warning(f"[Hillsborough] Cookie load error: {e}")
             return False
 
-    def _save_cookies(self, client: httpx.Client):
+    def _save_cookies(self, client: cffi_requests.Session):
         """Save session cookies for future runs."""
         try:
             cookies = {name: value for name, value in client.cookies.items()}
@@ -307,7 +307,7 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.warning(f"[Hillsborough] Cookie save error: {e}")
 
     # ── Search ─────────────────────────────────────────────────────────
-    def _perform_search(self, client: httpx.Client) -> Optional[str]:
+    def _perform_search(self, client: cffi_requests.Session) -> Optional[str]:
         """Submit search form and return results HTML."""
         logger.info("[Hillsborough] Performing search...")
 
@@ -384,7 +384,7 @@ class HillsboroughCountyScraper(BaseScraper):
         return html
 
     # ── Pagination ─────────────────────────────────────────────────────
-    def _get_next_page(self, client: httpx.Client, soup: BeautifulSoup, current_page: int) -> Optional[str]:
+    def _get_next_page(self, client: cffi_requests.Session, soup: BeautifulSoup, current_page: int) -> Optional[str]:
         """Navigate to next results page via POST (pagination is JS-based)."""
         # HCSO uses JavaScript void(0) pagination buttons with class 'btn-pager'
         # We need to POST the form again with page number

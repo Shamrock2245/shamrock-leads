@@ -12,6 +12,7 @@ from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 from scrapers.smartweb_parser import scrape_smartweb
 
+from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx"
@@ -37,16 +38,9 @@ class TaylorCountyScraper(BaseScraper):
         return "Taylor"
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            import requests
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        except ImportError:
-            logger.error("requests not installed")
-            raise
-
-        session = cffi_requests.Session()
         # Direct only — CONNECT proxies rarely support custom ports like :8989
+        session = cffi_requests.Session(impersonate=IMPERSONATE)
+        session.headers.update(STEALTH_HEADERS)
         try:
             records = scrape_smartweb(
                 base_url=SEARCH_URL,
@@ -58,8 +52,8 @@ class TaylorCountyScraper(BaseScraper):
             # Fallback via public entry host if direct port fails
             if not records:
                 entry = "http://jail.taylorsheriff.org/"
-                r = session.get(entry, timeout=20, allow_redirects=True, impersonate=IMPERSONATE)
-                final = r.url or SEARCH_URL
+                r = session.get(entry, timeout=20, allow_redirects=True, verify=False)
+                final = getattr(r, "url", None) or SEARCH_URL
                 records = scrape_smartweb(
                     base_url=final,
                     county=self.county,

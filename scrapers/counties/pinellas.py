@@ -21,6 +21,7 @@ from typing import List
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
+from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.pinellassheriff.gov"

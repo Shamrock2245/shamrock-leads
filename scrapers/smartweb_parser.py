@@ -93,8 +93,21 @@ def scrape_smartweb(
     session.headers.update(headers)
 
     # Step 1: GET page for ViewState tokens
+    # Works with stdlib requests and curl_cffi (verify=False for incomplete chains).
+    def _call(method: str, url: str, *, timeout: int = 20, data=None):
+        fn = session.get if method == "GET" else session.post
+        try:
+            if method == "GET":
+                return fn(url, timeout=timeout, verify=False)
+            return fn(url, data=data, timeout=timeout, verify=False)
+        except TypeError:
+            # Older/stdlib sessions that reject verify=
+            if method == "GET":
+                return fn(url, timeout=timeout)
+            return fn(url, data=data, timeout=timeout)
+
     try:
-        r = session.get(base_url, timeout=20)
+        r = _call("GET", base_url, timeout=20)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
     except Exception as e:
@@ -117,7 +130,7 @@ def scrape_smartweb(
     }
 
     try:
-        r2 = session.post(base_url, data=data, timeout=45)
+        r2 = _call("POST", base_url, timeout=45, data=data)
         r2.raise_for_status()
         soup2 = BeautifulSoup(r2.text, "html.parser")
     except Exception as e:

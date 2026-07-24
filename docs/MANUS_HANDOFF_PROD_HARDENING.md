@@ -1,6 +1,7 @@
 # Manus Handoff — ShamrockLeads Production Hardening (continue Grok session)
 
 > **Written:** 2026-07-24  
+> **Updated:** 2026-07-24 (post-Manus merge: stealth stack + multi-select defendants + import fixes)  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product:** `https://leads.shamrockbailbonds.biz`  
 > **Authoritative status:** root `STATUS.md` · prod checklist `docs/ECOSYSTEM_PROD_CHECKLIST.md` · agent rules `AGENTS.md`  
