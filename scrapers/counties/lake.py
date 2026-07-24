@@ -59,8 +59,10 @@ class LakeCountyScraper(BaseScraper):
         # reCAPTCHA is now enforced (2026-07). Solve via SolveCaptcha API.
         recaptcha_token = self._solve_recaptcha()
         if not recaptcha_token:
+            api_key = os.getenv("SOLVECAPTCHA_KEY", "")
+            detail = "key missing" if not api_key else "service rejected (key present)"
             raise RuntimeError(
-                "Lake: reCAPTCHA solve failed (SOLVECAPTCHA_KEY missing or service error)"
+                f"Lake: reCAPTCHA solve failed ({detail})"
             )
 
         session = cf.Session()
@@ -189,10 +191,10 @@ class LakeCountyScraper(BaseScraper):
         """Solve reCAPTCHA v2 via SolveCaptcha API. Returns token string."""
         api_key = os.getenv("SOLVECAPTCHA_KEY", "")
         if not api_key:
-            logger.warning("[Lake] No SOLVECAPTCHA_KEY set — cannot solve reCAPTCHA")
+            logger.warning("[Lake] No SOLVECAPTCHA_KEY set \u2014 cannot solve reCAPTCHA")
             return None
 
-        logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API...")
+        logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API (key len=%d)...", len(api_key))
         try:
             submit_resp = httpx.post(
                 "https://api.solvecaptcha.com/in.php",
