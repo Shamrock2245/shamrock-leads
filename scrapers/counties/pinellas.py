@@ -29,6 +29,8 @@ SEARCH_URL = f"{BASE_URL}/InmateBooking/"
 DAYS_BACK = 3  # Runs every 90 min — 3 days covers plenty of ground
 PAGE_SIZE = 100  # Request max results per page
 
+IMPERSONATE = "chrome131"
+
 # Race code expansion
 RACE_MAP = {
     "W": "White", "B": "Black", "H": "Hispanic",

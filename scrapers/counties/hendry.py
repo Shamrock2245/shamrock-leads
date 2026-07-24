@@ -29,6 +29,7 @@ OCV_INMATES_URL = "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.jso
 FACILITY = "Hendry County Jail"
 AGENCY = "Hendry County Sheriff's Office"
 COUNTY = "Hendry"
+IMPERSONATE = "chrome131"
 
 class HendryCountyScraper(BaseScraper):
     """Hendry County — official OCV inmates.json (no CAPTCHA)."""

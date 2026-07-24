@@ -25,6 +25,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.okeesheriff.org/",
 }
+IMPERSONATE = "chrome131"
+
 
 class OkeechobeeCountyScraper(BaseScraper):
     """Okeechobee County (FL) — Custom HTML inmate table"""

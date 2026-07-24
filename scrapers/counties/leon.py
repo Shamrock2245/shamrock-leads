@@ -28,6 +28,8 @@ HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": f"{BASE_URL}/About-us/Departments/Detention-Facility/Inmate-search",
 }
+IMPERSONATE = "chrome131"
+
 
 class LeonCountyScraper(BaseScraper):
     @property

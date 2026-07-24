@@ -17,6 +17,7 @@ from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 from curl_cffi import requests as cffi_requests
+IMPERSONATE = "chrome131"
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")

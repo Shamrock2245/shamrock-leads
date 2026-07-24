@@ -29,6 +29,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://gadsdensheriff.com/",
 }
+IMPERSONATE = "chrome131"
+
 
 class GadsdenCountyScraper(BaseScraper):
     """Gadsden County (FL) — Inmate lookup (Quincy area). Needs recon."""

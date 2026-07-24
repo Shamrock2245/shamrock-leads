@@ -28,6 +28,8 @@ HEADERS = {
     "Referer": SEARCH_URL,
     "Content-Type": "application/x-www-form-urlencoded",
 }
+IMPERSONATE = "chrome131"
+
 
 class StLucieCountyScraper(BaseScraper):
     @property

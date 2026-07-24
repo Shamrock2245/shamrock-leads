@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 FACILITY = "Martin County Jail"
 COUNTY = "Martin"
 API_URL = "https://api.correctionsrecordssearch.com/instances/01K343RER5XCX3V9KQA5876BE8/inmates"
+IMPERSONATE = "chrome131"
 
 class MartinCountyScraper(BaseScraper):
     @property

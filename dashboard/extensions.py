@@ -62,6 +62,12 @@ def init_bluebubbles():
     Mutates BB_SERVERS in place (clear + update). Do not rebind the name —
     many modules hold ``from dashboard.extensions import BB_SERVERS`` and
     would keep pointing at a discarded empty dict if we assigned a new object.
+
+    Preferred path for 0178 (best practice):
+      1. Runtime override
+      2. Tailscale direct (100.x iMac) when reachable
+      3. BLUEBUBBLES_URL_0178 / BLUEBUBBLES_URL env (ngrok/frp)
+      4. BLUEBUBBLES_FRP_URL last-resort
     """
     import socket
     from urllib.parse import urlparse
@@ -75,6 +81,15 @@ def init_bluebubbles():
         if not url and suffix == "0178":
             url = _BB_URL_OVERRIDES.get("0178", "") or os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
             pw = pw or os.getenv("BLUEBUBBLES_PASSWORD", "")
+        # Prefer Tailscale direct for primary BB server when mesh is up
+        if suffix == "0178" and not _BB_URL_OVERRIDES.get(suffix):
+            try:
+                from config.tailscale import ts_config
+                preferred = ts_config.get_bb_url_with_fallback(url)
+                if preferred:
+                    url = preferred.rstrip("/")
+            except Exception as ts_err:
+                print(f"  ⚠️  BB Tailscale resolve skipped: {ts_err}")
         if url:
             loaded[f"239955{suffix}"] = {
                 "url": url,

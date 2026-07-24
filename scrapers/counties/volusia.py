@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 FACILITY = "Volusia County Branch Jail"
 COUNTY = "Volusia"
 BASE_URL = "https://volusiamug.vcgov.org/"
+IMPERSONATE = "chrome131"
 
 class VolusiaCountyScraper(BaseScraper):
     @property

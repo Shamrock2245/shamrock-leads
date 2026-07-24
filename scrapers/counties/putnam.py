@@ -30,6 +30,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
 }
+IMPERSONATE = "chrome131"
+
 
 class PutnamCountyScraper(BaseScraper):
     """Putnam County (FL) — SmartCop AJAX roster"""

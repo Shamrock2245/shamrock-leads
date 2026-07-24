@@ -16,6 +16,7 @@ def test_init_bluebubbles_mutates_shared_dict(monkeypatch):
 
     monkeypatch.setenv("BLUEBUBBLES_URL_0178", "http://127.0.0.1:1234")
     monkeypatch.setenv("BLUEBUBBLES_PASSWORD_0178", "test-pw")
+    monkeypatch.setenv("TAILSCALE_ENABLED", "false")  # isolate from live mesh
     monkeypatch.delenv("BLUEBUBBLES_URL_0314", raising=False)
     monkeypatch.delenv("BLUEBUBBLES_PASSWORD_0314", raising=False)
 
@@ -40,11 +41,14 @@ def test_init_bluebubbles_clears_stale_servers(monkeypatch):
 
     monkeypatch.setenv("BLUEBUBBLES_URL_0178", "http://127.0.0.1:1234")
     monkeypatch.setenv("BLUEBUBBLES_PASSWORD_0178", "a")
+    monkeypatch.setenv("TAILSCALE_ENABLED", "false")
     init_bluebubbles()
     assert "2399550178" in BB_SERVERS
 
     monkeypatch.delenv("BLUEBUBBLES_URL_0178", raising=False)
     monkeypatch.delenv("BLUEBUBBLES_URL", raising=False)
     monkeypatch.delenv("BLUEBUBBLES_PASSWORD_0178", raising=False)
+    monkeypatch.delenv("BLUEBUBBLES_PASSWORD", raising=False)
+    monkeypatch.delenv("BLUEBUBBLES_FRP_URL", raising=False)
     init_bluebubbles()
     assert BB_SERVERS == {}

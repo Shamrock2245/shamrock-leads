@@ -30,6 +30,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
 }
+IMPERSONATE = "chrome131"
+
 
 class SuwanneeCountyScraper(BaseScraper):
     """Suwannee County (FL) — SmartCop AJAX jail roster (Live Oak)"""

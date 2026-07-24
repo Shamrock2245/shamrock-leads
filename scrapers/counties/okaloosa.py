@@ -25,6 +25,8 @@ HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": SEARCH_URL,
 }
+IMPERSONATE = "chrome131"
+
 
 class OkaloosaCountyScraper(BaseScraper):
     @property

@@ -146,9 +146,18 @@ class TailscaleConfig:
     # ── Internal Helpers ──────────────────────────────────────────────────────
 
     def _resolve_imac(self) -> str:
-        """Resolve iMac address: prefer MagicDNS hostname, fallback to IP."""
+        """Resolve iMac address: prefer MagicDNS, then configured IP.
+
+        Docker containers often cannot resolve MagicDNS (no Tailscale DNS
+        inside the bridge network) but can reach the peer 100.x address when
+        the host is on the tailnet. Prefer IP when hostname does not resolve.
+        """
         resolved = self._resolve_ts_ip(self.imac_hostname)
-        return resolved if resolved else self.imac_ip
+        if resolved:
+            return resolved
+        if self.imac_ip:
+            return self.imac_ip
+        return self.imac_hostname
 
     @staticmethod
     def _resolve_ts_ip(hostname: str) -> str:

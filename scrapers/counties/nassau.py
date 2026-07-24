@@ -26,6 +26,8 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+IMPERSONATE = "chrome131"
+
 
 MAX_PAGES = 10
 MAX_DETAILS = 200
