@@ -178,9 +178,11 @@ jobs:
             echo "   ✅ Docker → host:1080 allowed"
 
             # ── Verify ────────────────────────────────────────────
+            # Dashboard startup can take 45–90s when BlueBubbles webhook
+            # registration hits timeouts (Tailscale iMac offline, etc.).
             echo ""
             echo "⏳ Waiting for containers to stabilize..."
-            sleep 10
+            sleep 15
 
             echo ""
             echo "📊 Container Status:"
@@ -190,19 +192,19 @@ jobs:
             echo "🏥 Health Check:"
             HEALTH_URL="http://localhost:8088/health/live"
             SUCCESS=false
-            for i in {1..6}; do
-              if curl -sf "$HEALTH_URL" > /dev/null; then
+            for i in {1..18}; do
+              if curl -sf --max-time 5 "$HEALTH_URL" > /dev/null; then
                 SUCCESS=true
                 break
               fi
-              echo "   ⏳ Waiting for dashboard to respond (attempt $i/6)..."
+              echo "   ⏳ Waiting for dashboard to respond (attempt $i/18)..."
               sleep 5
             done
 
             if [ "$SUCCESS" = true ]; then
               echo " ✅ Dashboard healthy (port 8088)"
             else
-              echo " ⚠️ Dashboard health check failed after 30s"
+              echo " ⚠️ Dashboard health check failed after ~90s"
               docker logs shamrock-dashboard --tail 80 2>&1 || true
               exit 1
             fi
