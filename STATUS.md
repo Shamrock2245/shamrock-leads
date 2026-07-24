@@ -104,17 +104,28 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | Suwannee: SmartCOP server 500 on any search POST (upstream crash) | 🔴 blocked on upstream |
 | Defendants `normalize/batch` × 7 runs | ✅ **594 → 3,211** defendants |
 
+### Stage 2 hardening session (2026-07-24 cont.)
+
+| Investigation | Result |
+|---------------|--------|
+| Bay County UniGUI: IIS 401 on HandleEvent (POST blocked, anti-scraping) | 🔴 blocked — server rejects all AJAX event requests from non-browser clients |
+| Lake reCAPTCHA: `SOLVECAPTCHA_KEY` IS set (Hillsborough uses it), token solved but API rejects (server-side verify fails) | ⚠️ SolveCaptcha token rejected by LCSO API (domain/score mismatch) |
+| Marion: AWS WAF still blocking VPS IP (403) | ⚠️ needs residential proxy egress |
+| SignNow B5: `/api/paperwork/signnow/validate-templates` | ✅ **19 valid templates, 0 invalid** — token works |
+| Defendants `normalize/batch` × 5 more runs | ✅ **3,211 → 4,580** defendants (108 repeat offenders) |
+
 | Check | Result |
 |-------|--------|
-| `GET /health` | ✅ ok · ~129.6k arrests |
+| `GET /health` | ✅ ok · **130,489 arrests** |
 | `GET /api/crm/health` | ✅ **ok** |
 | Integrations (GAS, Wix, SignNow, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
 | GAS `?action=health` | ✅ `success` · version V409 |
 | BlueBubbles frp `:12434` + `/api/imessage/status` | ✅ connected · private_api · 1.9.9 |
 | Monroe one-shot scrape (post-deploy) | ✅ 80 records |
 | Hillsborough one-shot (post-deploy) | ✅ 7 records |
+| SignNow template validation | ✅ 19/19 accessible |
 | Scraper fleet | ✅ **233 ok · 7 error** (FL: Bay, Gadsden, Gilchrist, Lake, Marion, Okeechobee, Suwannee) |
-| Defendants collection | ✅ **3,211** (was 594) |
+| Defendants collection | ✅ **4,580** (was 3,211) · 3.7% coverage |
 
 **Bugfix shipped:** `init_bluebubbles()` re-bound `BB_SERVERS = {}`, so every `from … import BB_SERVERS` kept an empty dict and iMessage looked “unconfigured” even with env set. Now mutates in place (`clear` + `update`). Tests: `tests/test_bb_servers_init.py`.
 
@@ -135,8 +146,8 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ Set on VPS 2026-07-23 |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (7 remaining) | ⏳ 4 blocked upstream (Gadsden/Gilchrist/Okeechobee/Suwannee), 2 fixable (Bay UniGUI, Marion WAF), 1 needs SOLVECAPTCHA run (Lake) |
-| Defendants collection backfill | ✅ **3,211** defendants (was 594 → normalize/batch × 7) |
+| FL error scrapers (7 remaining) | ⏳ 5 blocked upstream (Bay/Gadsden/Gilchrist/Okeechobee/Suwannee), 1 WAF (Marion), 1 captcha-service (Lake) |
+| Defendants collection backfill | ✅ **4,580** defendants (3.7% of 130k arrests normalized) |
 | Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
