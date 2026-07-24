@@ -1669,6 +1669,22 @@
       </select>
       <button class="btn-primary" onclick="SLIntake.openManualEntry()" style="font-size:13px;padding:8px 14px">+ Manual Entry</button>
       <button class="btn-export" onclick="SLIntake.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
+
+      <!-- ── Pull Latest Arrests widget ── -->
+      <div id="pullArrestsWidget" style="display:flex;align-items:center;gap:6px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:4px 8px 4px 10px">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#6ee7b7;white-space:nowrap">Pull Arrests</span>
+        <select id="pullArrestsCounty"
+          style="padding:5px 8px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;min-width:140px;max-width:200px">
+          <option value="">— pick county —</option>
+        </select>
+        <button id="pullArrestsBtn"
+          onclick="SLIntake.pullLatestArrests()"
+          style="padding:5px 12px;background:linear-gradient(135deg,#10b981,#059669);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .2s"
+          title="Trigger scraper for this county and load newest arrests">
+          ⚡ Run Now
+        </button>
+        <span id="pullArrestsStatus" style="font-size:11px;color:var(--muted);white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis"></span>
+      </div>
     </div>
   </div>
 

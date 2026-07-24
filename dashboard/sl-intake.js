@@ -161,6 +161,9 @@ const SLIntake = (() => {
     const tbody = document.getElementById('intakeQueueBody');
     if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="loading">Loading…</td></tr>';
 
+    // Auto-populate Pull Arrests county dropdown (no-op if already populated)
+    _populateCountySelect();
+
     try {
       const params = new URLSearchParams({ limit: 100 });
       if (source) params.set('source', source);
@@ -768,6 +771,134 @@ const SLIntake = (() => {
     }
   }
 
+  // ── Pull Latest Arrests ────────────────────────────────────────────────────
+  // Populates the county <select> from /api/scraper/config on first Bond Desk load.
+  // pullLatestArrests() triggers the scraper via POST /api/scraper/run-now then
+  // polls for new entries every 8 s (up to 90 s) and shows a toast on completion.
+
+  let _pullPollTimer = null;
+
+  async function _populateCountySelect() {
+    const sel = document.getElementById('pullArrestsCounty');
+    if (!sel || sel.options.length > 1) return; // already populated
+
+    try {
+      const res = await fetch('/api/scraper/config');
+      const data = await res.json();
+      const counties = (data.counties || []).sort((a, b) =>
+        (a.label || a.county || '').localeCompare(b.label || b.county || ''));
+
+      counties.forEach(c => {
+        const label = c.label || c.county;
+        const opt = document.createElement('option');
+        opt.value = label;
+        opt.textContent = label;
+        if (label.toLowerCase().includes('lee') && label.includes('FL')) opt.selected = true;
+        sel.appendChild(opt);
+      });
+
+      // If nothing matched Lee (FL) pre-select, select first real option
+      if (sel.selectedIndex === 0 && sel.options.length > 1) sel.selectedIndex = 1;
+    } catch (e) {
+      console.warn('[SLIntake] Could not load county list for Pull Arrests:', e);
+    }
+  }
+
+  async function pullLatestArrests() {
+    const sel    = document.getElementById('pullArrestsCounty');
+    const btn    = document.getElementById('pullArrestsBtn');
+    const status = document.getElementById('pullArrestsStatus');
+
+    const county = sel ? sel.value.trim() : '';
+    if (!county) {
+      if (status) { status.style.color = '#f59e0b'; status.textContent = 'Pick a county first.'; }
+      return;
+    }
+
+    // Disable button + show spinner text
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Queuing…'; btn.style.opacity = '0.7'; }
+    if (status) { status.style.color = 'var(--muted)'; status.textContent = 'Triggering scraper…'; }
+
+    // Clear any existing poll
+    if (_pullPollTimer) { clearInterval(_pullPollTimer); _pullPollTimer = null; }
+
+    let baselineCount = 0;
+    let elapsedTicks  = 0;
+    const MAX_TICKS   = 12;   // 12 × 8 s = 96 s timeout
+    const POLL_MS     = 8000;
+
+    // Helper — fetch current arrest count for this county
+    async function _getCount() {
+      try {
+        const r = await fetch(`/api/counties-detail`);
+        const d = await r.json();
+        const row = (d.counties || []).find(c =>
+          (c.county || '').toLowerCase() === county.toLowerCase());
+        return row ? (row.total || 0) : 0;
+      } catch { return 0; }
+    }
+
+    // Snapshot baseline count before trigger
+    baselineCount = await _getCount();
+
+    // Fire scraper trigger
+    try {
+      const res = await fetch('/api/scraper/run-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ county }),
+      });
+      const data = await res.json();
+      if (!data.ok && !data.message) {
+        if (status) { status.style.color = '#ef4444'; status.textContent = data.error || 'Trigger failed.'; }
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
+        return;
+      }
+    } catch (e) {
+      if (status) { status.style.color = '#ef4444'; status.textContent = 'Network error — try again.'; }
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
+      return;
+    }
+
+    if (status) status.textContent = `Scraper queued — watching for new entries…`;
+
+    // Poll for new records
+    _pullPollTimer = setInterval(async () => {
+      elapsedTicks++;
+      const now = await _getCount();
+      const delta = now - baselineCount;
+
+      if (delta > 0) {
+        clearInterval(_pullPollTimer); _pullPollTimer = null;
+        if (status) {
+          status.style.color = '#10b981';
+          status.textContent = `✅ +${delta} new arrest${delta !== 1 ? 's' : ''} loaded`;
+        }
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
+        // Reload the hot-leads panel if SLData is available
+        if (window.SLData && typeof SLData.load === 'function') SLData.load();
+        // Toast
+        if (window.SL && typeof SL.toast === 'function') {
+          SL.toast(`⚡ ${delta} new arrest${delta !== 1 ? 's' : ''} pulled for ${county}`, 'success');
+        }
+        return;
+      }
+
+      if (elapsedTicks >= MAX_TICKS) {
+        clearInterval(_pullPollTimer); _pullPollTimer = null;
+        if (status) {
+          status.style.color = 'var(--muted)';
+          status.textContent = `Scraper ran — no new entries vs baseline (${baselineCount})`;
+        }
+        if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
+        return;
+      }
+
+      const secLeft = (MAX_TICKS - elapsedTicks) * (POLL_MS / 1000);
+      if (status) status.textContent = `Watching… (${secLeft}s left)`;
+    }, POLL_MS);
+  }
+
   // ── Modal close ──────────────────────────────────────────────────────────────────────────────────
   function closeModal() {
     const modal = document.getElementById('intakeModal');
@@ -800,5 +931,7 @@ const SLIntake = (() => {
     closeManualModal,
     submitManualEntry,
     closeModal,
+    pullLatestArrests,
+    initPullWidget: _populateCountySelect,
   };
 })();
