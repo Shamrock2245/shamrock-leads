@@ -4320,53 +4320,129 @@
     <div class="tab-content" id="tabPaperwork">
       <div class="header-banner glass-panel">
         <div class="header-content">
-          <h1>Paperwork Configuration</h1>
-          <p>Verify document mapping, field names, and surety templates.</p>
+          <h1>Document Operations & E-Signature Hub</h1>
+          <p>Twenty CRM Architecture — Live document packet pipeline, SignNow field hydration audit, and 1-click execution.</p>
         </div>
         <div class="header-actions">
           <button class="btn btn-primary" onclick="SLPaperwork.load()">
-            <span class="icon">🔄</span> Refresh
+            <span class="icon">🔄</span> Refresh Pipeline
           </button>
         </div>
       </div>
 
-      <div class="glass-panel" style="margin-top:20px;">
-        <h3>OSI Documents</h3>
-        <div class="table-responsive">
-          <table class="data-table" id="tablePaperworkOsi">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Label</th>
-                <th>Template ID</th>
-                <th>Rule</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+      <!-- Sub-navigation Tabs -->
+      <div class="inv-tabs" style="margin-top:16px;">
+        <button class="inv-tab-btn active" id="pwSubTab_live" onclick="SLPaperwork.switchSubTab('live')">📋 Live Document Packets</button>
+        <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
+        <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
+      </div>
+
+      <!-- Summary KPI Strip -->
+      <div id="paperworkConfigSummary" style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0;"></div>
+
+      <!-- Sub-pane 1: Live Document Packets -->
+      <div id="pwPane_live" style="display:block">
+        <div class="glass-panel" style="margin-top:10px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+            <h3 style="margin:0">Active Document Packets</h3>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <input type="text" id="pwSearchInput" placeholder="🔍 Search defendant, case#, packet..." onkeyup="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 12px;border-radius:6px;font-size:12px;width:220px;">
+              <select id="pwStatusSelect" onchange="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;">
+                <option value="all">All Statuses</option>
+                <option value="sent">Sent / Pending Signature</option>
+                <option value="signed">Signed & Completed</option>
+                <option value="draft">Draft / Hydrating</option>
+                <option value="voided">Voided</option>
+              </select>
+              <select id="pwSuretySelect" onchange="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;">
+                <option value="all">All Sureties</option>
+                <option value="osi">OSI</option>
+                <option value="palmetto">Palmetto</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="tableLivePaperworkPackets">
+              <thead>
+                <tr>
+                  <th>Packet ID</th>
+                  <th>Defendant Name</th>
+                  <th>Indemnitor</th>
+                  <th>Surety</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                  <th style="text-align:right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="7" class="loading">Loading live document packets…</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
-      <div class="glass-panel" style="margin-top:20px;">
-        <h3>Palmetto Documents</h3>
-        <div class="table-responsive">
-          <table class="data-table" id="tablePaperworkPalmetto">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Label</th>
-                <th>Template ID</th>
-                <th>Rule</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+      <!-- Sub-pane 2: Surety Templates -->
+      <div id="pwPane_templates" style="display:none">
+        <div class="glass-panel" style="margin-top:16px;">
+          <h3>OSI Documents</h3>
+          <div class="table-responsive">
+            <table class="data-table" id="tablePaperworkOsi">
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Label</th>
+                  <th>Template ID</th>
+                  <th>Rule</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="glass-panel" style="margin-top:20px;">
+          <h3>Palmetto Documents</h3>
+          <div class="table-responsive">
+            <table class="data-table" id="tablePaperworkPalmetto">
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Label</th>
+                  <th>Template ID</th>
+                  <th>Rule</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
       </div>
-      
-      <div class="glass-panel" style="margin-top:20px;">
-        <h3>Document Rules</h3>
-        <pre id="paperworkDocRules" style="background:#1a1d24; padding:15px; border-radius:8px; overflow-x:auto; font-family:monospace; color:#10b981; font-size:12px;"></pre>
+
+      <!-- Sub-pane 3: Document Rules -->
+      <div id="pwPane_rules" style="display:none">
+        <div class="glass-panel" style="margin-top:16px;">
+          <h3>Document Hydration & Rule Engine</h3>
+          <div id="paperworkDocRules"></div>
+        </div>
+      </div>
+
+      <!-- Field Hydration Audit Modal -->
+      <div class="inv-modal-backdrop" id="pwHydrationModal" style="display:none;">
+        <div class="inv-modal" style="max-width:550px">
+          <div class="inv-modal-header">
+            <div class="inv-modal-title">
+              <span>🔍 SignNow Field Hydration Audit</span>
+            </div>
+            <button class="inv-modal-close" onclick="SLPaperwork.closeHydrationModal()">✕</button>
+          </div>
+          <div class="inv-modal-body" id="pwHydrationModalBody">
+            <p>Loading hydration audit…</p>
+          </div>
+          <div class="inv-modal-footer" style="display:flex;justify-content:flex-end;gap:10px">
+            <button type="button" class="inv-btn" onclick="SLPaperwork.closeHydrationModal()">Close</button>
+          </div>
+        </div>
       </div>
     </div>
     <!-- end tabPaperwork -->

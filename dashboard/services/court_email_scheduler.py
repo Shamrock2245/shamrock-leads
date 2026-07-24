@@ -201,6 +201,121 @@ class CourtEmailScheduler:
         )
         return stats
 
+    def process_single_message(self, message_id: str) -> Dict[str, Any]:
+        """
+        Process a single court email immediately upon Webhook receipt.
+
+        Args:
+            message_id: Gmail message ID from Pub/Sub webhook notification.
+
+        Returns:
+            Dict summarizing outcome.
+        """
+        result = {
+            "message_id": message_id,
+            "processed": False,
+            "duplicate": False,
+            "event_type": None,
+            "calendar_event": False,
+            "messages_sent": 0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if self._is_duplicate(message_id):
+            result["duplicate"] = True
+            logger.info("[CourtEmailScheduler] Single msg %s skipped — duplicate", message_id)
+            return result
+
+        try:
+            from dashboard.services.gmail_reader import GmailReaderService
+            reader = GmailReaderService()
+
+            if not reader.is_configured:
+                result["error"] = "gmail_not_configured"
+                return result
+
+            email_data = reader.get_message_details(message_id)
+            if not email_data:
+                result["error"] = "message_not_found"
+                return result
+
+            from dashboard.services.court_email_processor import CourtEmailProcessor
+            parsed = CourtEmailProcessor.process_email(
+                subject=email_data["subject"],
+                body=email_data["body"],
+                sender=email_data["sender"],
+            )
+
+            event_type = parsed.get("event_type", "unknown")
+            case_number = parsed.get("case_number")
+            result["event_type"] = event_type
+
+            # Calendar event
+            if case_number and parsed.get("datetime_info"):
+                try:
+                    from dashboard.services.google_calendar_service import GoogleCalendarService
+                    cal_svc = GoogleCalendarService()
+                    event = cal_svc.create_event(parsed)
+                    if event:
+                        result["calendar_event"] = True
+                except Exception as cal_err:
+                    logger.warning("[CourtEmailScheduler] Calendar event failed: %s", cal_err)
+
+            # Slack notification
+            self._notify_slack(event_type, parsed)
+
+            # Auto-exonerate if discharge
+            if event_type == "discharge" and case_number:
+                try:
+                    exon_count = self._auto_exonerate_bond(
+                        case_number=case_number,
+                        defendant_name=parsed.get("defendant_name"),
+                        note=f"Real-time webhook discharge email: {email_data.get('subject', '')}",
+                    )
+                    result["bonds_exonerated"] = exon_count
+                except Exception as exon_err:
+                    logger.warning("[CourtEmailScheduler] Auto-exonerate failed: %s", exon_err)
+
+            # Notify contacts & schedule reminders
+            if case_number or parsed.get("defendant_name"):
+                try:
+                    sms_text = CourtEmailProcessor.generate_sms_summary(parsed)
+                    contacts = self._find_notification_contacts(
+                        parsed.get("defendant_name"),
+                        case_number,
+                    )
+                    email_stats = self._send_court_emails(parsed, contacts, event_type)
+                    result["emails_sent"] = email_stats
+
+                    if sms_text:
+                        for phone in contacts.get("phones") or []:
+                            self._send_bb_notification(phone, sms_text)
+                            result["messages_sent"] += 1
+
+                    if event_type == "courtDate" and parsed.get("datetime_info"):
+                        self._schedule_court_reminders(parsed, contacts)
+                except Exception as notify_err:
+                    logger.warning("[CourtEmailScheduler] Client notification failed: %s", notify_err)
+
+            # Log to MongoDB
+            self._log_processed_email(message_id, email_data, parsed)
+
+            # Mark as read
+            try:
+                reader.mark_as_read(message_id)
+            except Exception:
+                pass
+
+            result["processed"] = True
+            logger.info("[CourtEmailScheduler] ✅ Single msg %s processed successfully (%s)", message_id, event_type)
+
+        except Exception as e:
+            logger.error("[CourtEmailScheduler] Failed processing msg %s: %s", message_id, e)
+            result["error"] = str(e)
+
+        return result
+
+
     def _is_duplicate(self, message_id: str) -> bool:
         """Check if a Gmail message ID has already been processed."""
         if self._log_collection is None:
@@ -329,9 +444,16 @@ class CourtEmailScheduler:
 
         defendant = parsed.get("defendant_name") or "the defendant"
         case_number = parsed.get("case_number") or "N/A"
-        date_info = parsed.get("datetime_info") or {}
-        date_str = date_info.get("date_str") or "TBD"
-        time_str = date_info.get("time_str") or ""
+        datetime_val = parsed.get("datetime_info")
+        if isinstance(datetime_val, dict):
+            date_str = datetime_val.get("date_str") or "TBD"
+            time_str = datetime_val.get("time_str") or ""
+        elif isinstance(datetime_val, str):
+            date_str = datetime_val
+            time_str = ""
+        else:
+            date_str = "TBD"
+            time_str = ""
         when = f"{date_str}" + (f" at {time_str}" if time_str else "")
         location = parsed.get("location") or "See court notice"
         county = parsed.get("county") or ""
@@ -384,10 +506,9 @@ class CourtEmailScheduler:
         else:
             return 0
 
-        sent = 0
         for addr in contacts.get("emails") or []:
-            result = reader.send_email(addr, subject, body, body_html=html, reply_to="admin@shamrockbailbonds.biz")
-            if result.get("success"):
+            res = reader.send_email(addr, subject, body, body_html=html, reply_to="admin@shamrockbailbonds.biz")
+            if (isinstance(res, dict) and res.get("success")) or (isinstance(res, bool) and res) or (isinstance(res, str) and ("sent" in res.lower() or "success" in res.lower())):
                 sent += 1
         return sent
 
@@ -412,9 +533,17 @@ class CourtEmailScheduler:
             import asyncio
             from dashboard.services.court_reminder_service import CourtReminderService
 
-            date_info = parsed.get("datetime_info") or {}
-            date_str = date_info.get("date_str")
-            time_str = date_info.get("time_str") or "09:00 AM"
+            datetime_val = parsed.get("datetime_info")
+            if isinstance(datetime_val, dict):
+                date_str = datetime_val.get("date_str")
+                time_str = datetime_val.get("time_str") or "09:00 AM"
+            elif isinstance(datetime_val, str):
+                parts = datetime_val.split(" ", 1)
+                date_str = parts[0]
+                time_str = parts[1] if len(parts) > 1 else "09:00 AM"
+            else:
+                date_str = None
+                time_str = "09:00 AM"
             if not date_str:
                 return
 
@@ -471,10 +600,12 @@ class CourtEmailScheduler:
                 loop = asyncio.new_event_loop()
                 try:
                     result = loop.run_until_complete(send_message_universal(phone, message))
-                    if result.get("success"):
-                        logger.info("[CourtEmailScheduler] ✅ BB sent to ...%s", phone[-4:])
+                    is_ok = (isinstance(result, dict) and result.get("success")) or (isinstance(result, bool) and result) or (isinstance(result, str) and ("sent" in result.lower() or "success" in result.lower()))
+                    if is_ok:
+                        logger.info("[CourtEmailScheduler] ✅ BB sent to ...%s", str(phone)[-4:])
                     else:
-                        logger.warning("[CourtEmailScheduler] BB failed: %s", result.get("error"))
+                        err_msg = result.get("error") if isinstance(result, dict) else str(result)
+                        logger.warning("[CourtEmailScheduler] BB failed: %s", err_msg)
                 finally:
                     loop.close()
         except Exception as e:
@@ -485,10 +616,12 @@ class CourtEmailScheduler:
         try:
             from dashboard.services.bb_client import send_message_universal
             result = await send_message_universal(phone, message)
-            if result.get("success"):
-                logger.info("[CourtEmailScheduler] ✅ BB sent to ...%s", phone[-4:])
+            is_ok = (isinstance(result, dict) and result.get("success")) or (isinstance(result, bool) and result) or (isinstance(result, str) and ("sent" in result.lower() or "success" in result.lower()))
+            if is_ok:
+                logger.info("[CourtEmailScheduler] ✅ BB sent to ...%s", str(phone)[-4:])
             else:
-                logger.warning("[CourtEmailScheduler] BB failed: %s", result.get("error"))
+                err_msg = result.get("error") if isinstance(result, dict) else str(result)
+                logger.warning("[CourtEmailScheduler] BB failed: %s", err_msg)
         except Exception as e:
             logger.error("[CourtEmailScheduler] Async BB failed: %s", e)
 
@@ -514,8 +647,13 @@ class CourtEmailScheduler:
 
         case_number = parsed.get("case_number", "N/A")
         defendant = parsed.get("defendant_name", "Unknown")
-        date_info = parsed.get("datetime_info", {})
-        date_str = date_info.get("date_str", "TBD") if date_info else "TBD"
+        date_info = parsed.get("datetime_info")
+        if isinstance(date_info, dict):
+            date_str = date_info.get("date_str", "TBD")
+        elif isinstance(date_info, str):
+            date_str = date_info
+        else:
+            date_str = "TBD"
 
         payload = {
             "blocks": [

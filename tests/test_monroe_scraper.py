@@ -75,7 +75,7 @@ def make_scraper():
 
 class TestMonroeScraper(unittest.TestCase):
     def _scrape(self):
-        with patch("scrapers.counties.monroe.requests.get", return_value=FakeResp()):
+        with patch("scrapers.counties.monroe.cffi_requests.get", return_value=FakeResp()):
             return MonroeCountyScraper.scrape(make_scraper())
 
     def test_parses_and_dedupes(self):

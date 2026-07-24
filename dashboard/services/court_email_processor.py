@@ -269,9 +269,16 @@ class CourtEmailProcessor:
         event_type = parsed.get('event_type', 'unknown')
         case_number = parsed.get('case_number', 'N/A')
         defendant_name = parsed.get('defendant_name', 'N/A')
-        datetime_info = parsed.get('datetime_info') or {}
-        date_str = datetime_info.get('date_str', 'TBD')
-        time_str = datetime_info.get('time_str', '')
+        datetime_val = parsed.get('datetime_info')
+        if isinstance(datetime_val, dict):
+            date_str = datetime_val.get('date_str', 'TBD')
+            time_str = datetime_val.get('time_str', '')
+        elif isinstance(datetime_val, str):
+            date_str = datetime_val
+            time_str = ''
+        else:
+            date_str = 'TBD'
+            time_str = ''
         location = parsed.get('location', '')
         county = parsed.get('county', '')
         

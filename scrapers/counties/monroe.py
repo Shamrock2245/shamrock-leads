@@ -25,6 +25,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+import requests
 from curl_cffi import requests as cffi_requests
 import urllib3
 

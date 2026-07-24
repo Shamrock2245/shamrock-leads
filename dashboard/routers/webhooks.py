@@ -759,3 +759,74 @@ async def scraper_event_webhook(request: Request, api_key: str = Query(default="
     logger.info(f"[scraper_event_webhook] Published {event_type} event to SSE")
     
     return JSONResponse(status_code=200, content={"success": True})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /webhooks/gmail
+# ─────────────────────────────────────────────────────────────────────────────
+
+@webhooks_bp.post("/webhooks/gmail")
+async def gmail_pubsub_webhook(request: Request):
+    """
+    Handle Google Cloud Pub/Sub push notifications for inbound court emails.
+
+    Base64 decodes message.data, extracts historyId/messageId, and triggers
+    instant real-time parsing, Google Calendar sync, Slack alerts, and client SMS.
+    """
+    import base64
+    import json
+    from dashboard.routers.events import publish_event
+
+    try:
+        data = await request.json() or {}
+        pubsub_message = data.get("message", {})
+        if not pubsub_message:
+            return JSONResponse({"error": "Invalid Pub/Sub payload"}, status_code=400)
+
+        # Base64 decode Pub/Sub data payload
+        raw_data = pubsub_message.get("data", "")
+        decoded_bytes = base64.b64decode(raw_data) if raw_data else b"{}"
+        payload = json.loads(decoded_bytes.decode("utf-8"))
+
+        email_address = payload.get("emailAddress")
+        history_id = payload.get("historyId")
+        message_id = payload.get("messageId") or pubsub_message.get("messageId")
+
+        logger.info(
+            "[gmail_webhook] Inbound push notification for email=%s, history_id=%s, msg_id=%s",
+            email_address, history_id, message_id,
+        )
+
+        # Log event to audit_events
+        audit_events = get_collection("audit_events")
+        await audit_events.insert_one({
+            "source": "gmail_pubsub_webhook",
+            "event_type": "court_email_notification",
+            "email_address": email_address,
+            "history_id": history_id,
+            "message_id": message_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        # Trigger real-time processing
+        db = get_collection("court_email_log").database
+        from dashboard.services.court_email_scheduler import CourtEmailScheduler
+        scheduler = CourtEmailScheduler(db=db)
+
+        if message_id:
+            res = scheduler.process_single_message(message_id)
+        else:
+            res = scheduler.process_all()
+
+        # Publish SSE event for live dashboard sessions
+        await publish_event("court_email_processed", {
+            "email_address": email_address,
+            "result": res,
+        })
+
+        return JSONResponse(status_code=200, content={"success": True, "result": res})
+
+    except Exception as exc:
+        logger.exception("[gmail_webhook] Failed processing Google Pub/Sub push notification")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

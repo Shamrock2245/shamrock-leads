@@ -337,6 +337,141 @@ async def generate_packet(request: Request, intake_id: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/paperwork/all
+# Twenty CRM style: list all document packets across all cases with filters & stats
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.get("/paperwork/all")
+async def list_all_packets(
+    status: Optional[str] = None,
+    surety: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+):
+    """Return all paperwork packets across cases for Twenty CRM style document hub."""
+    try:
+        packets_col = get_collection("paperwork_packets")
+        query: dict = {}
+
+        if status and status != "all":
+            query["$or"] = [
+                {"status": status},
+                {"signnow_status": status},
+            ]
+        if surety and surety != "all":
+            query["surety_id"] = surety.lower()
+
+        if search:
+            rx = {"$regex": search, "$options": "i"}
+            query["$or"] = [
+                {"defendant_name": rx},
+                {"indemnitor_name": rx},
+                {"case_number": rx},
+                {"booking_number": rx},
+                {"packet_id": rx},
+            ]
+
+        cursor = packets_col.find(query, {"_id": 0}).sort("created_at", -1)
+        packets = await cursor.to_list(length=limit)
+
+        from datetime import date
+        for p in packets:
+            for field in ("created_at", "updated_at", "delivered_at", "signnow_sent_at", "signed_at"):
+                val = p.get(field)
+                if isinstance(val, (datetime, date)):
+                    p[field] = val.isoformat()
+
+        # Summary KPIs
+        total = await packets_col.count_documents({})
+        pending = await packets_col.count_documents({"status": {"$in": ["sent", "signnow_pending", "partially_signed"]}})
+        signed = await packets_col.count_documents({"status": {"$in": ["signed", "completed"]}})
+        filed = await packets_col.count_documents({"drive_url": {"$exists": True, "$ne": None}})
+
+        def _to_int(v):
+            try:
+                return int(v)
+            except Exception:
+                return 0
+
+        return {
+            "success": True,
+            "packets": packets,
+            "count": len(packets),
+            "summary": {
+                "total_packets": _to_int(total),
+                "pending_signature": _to_int(pending),
+                "signed_completed": _to_int(signed),
+                "filed_to_drive": _to_int(filed),
+            },
+        }
+    except Exception as exc:
+        logger.exception("list_all_packets error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/paperwork/<packet_id>/hydration-audit
+# Twenty CRM style: field hydration audit for 14-doc packet before dispatch
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.get("/paperwork/{packet_id}/hydration-audit")
+async def get_packet_hydration_audit(packet_id: str):
+    """Audit field hydration completeness for a paperwork packet."""
+    try:
+        packets_col = get_collection("paperwork_packets")
+        packet = await packets_col.find_one(
+            {"$or": [{"packet_id": packet_id}, {"booking_number": packet_id}]},
+            {"_id": 0},
+        )
+        if not packet:
+            return JSONResponse({"success": False, "error": "Packet not found"}, status_code=404)
+
+        required_fields = [
+            ("defendant_name", "Defendant Full Name"),
+            ("defendant_dob", "Defendant Date of Birth"),
+            ("defendant_address", "Defendant Address"),
+            ("indemnitor_name", "Indemnitor Full Name"),
+            ("indemnitor_phone", "Indemnitor Phone"),
+            ("indemnitor_address", "Indemnitor Address"),
+            ("case_number", "Case Number"),
+            ("booking_number", "Booking Number"),
+            ("bond_amount", "Bond Amount ($)"),
+            ("surety_id", "Surety Selection (OSI/Palmetto)"),
+            ("poa_number", "Power of Attorney (POA) Number"),
+        ]
+
+        fields_audit = []
+        hydrated_count = 0
+
+        for key, label in required_fields:
+            val = packet.get(key)
+            is_present = val is not None and str(val).strip() != "" and str(val).strip() != "None"
+            if is_present:
+                hydrated_count += 1
+            fields_audit.append({
+                "key": key,
+                "label": label,
+                "val": str(val) if is_present else None,
+                "hydrated": is_present,
+            })
+
+        score = round((hydrated_count / len(required_fields)) * 100, 1)
+
+        return {
+            "success": True,
+            "packet_id": packet.get("packet_id"),
+            "booking_number": packet.get("booking_number"),
+            "surety_id": packet.get("surety_id"),
+            "status": packet.get("status"),
+            "hydration_score": score,
+            "hydrated_count": hydrated_count,
+            "total_required": len(required_fields),
+            "fields": fields_audit,
+        }
+    except Exception as exc:
+        logger.exception("hydration_audit error for %s", packet_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/<packet_id>
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.get("/paperwork/{packet_id}")
@@ -348,9 +483,11 @@ async def get_packet(packet_id: str):
             return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
         # Serialize datetimes
+        from datetime import date
         for field in ("created_at", "updated_at"):
-            if hasattr(packet.get(field), "isoformat"):
-                packet[field] = packet[field].isoformat()
+            val = packet.get(field)
+            if isinstance(val, (datetime, date)):
+                packet[field] = val.isoformat()
 
         return packet
     except Exception as exc:
@@ -732,6 +869,142 @@ async def list_packets(intake_id: str):
         }
     except Exception as exc:
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/paperwork/all
+# Twenty CRM style: list all document packets across all cases with filters & stats
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.get("/paperwork/all")
+async def list_all_packets(
+    status: Optional[str] = None,
+    surety: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 50,
+):
+    """Return all paperwork packets across cases for Twenty CRM style document hub."""
+    try:
+        packets_col = get_collection("paperwork_packets")
+        query: dict = {}
+
+        if status and status != "all":
+            query["$or"] = [
+                {"status": status},
+                {"signnow_status": status},
+            ]
+        if surety and surety != "all":
+            query["surety_id"] = surety.lower()
+
+        if search:
+            rx = {"$regex": search, "$options": "i"}
+            query["$or"] = [
+                {"defendant_name": rx},
+                {"indemnitor_name": rx},
+                {"case_number": rx},
+                {"booking_number": rx},
+                {"packet_id": rx},
+            ]
+
+        cursor = packets_col.find(query, {"_id": 0}).sort("created_at", -1)
+        packets = await cursor.to_list(length=limit)
+
+        from datetime import date
+        for p in packets:
+            for field in ("created_at", "updated_at", "delivered_at", "signnow_sent_at", "signed_at"):
+                val = p.get(field)
+                if isinstance(val, (datetime, date)):
+                    p[field] = val.isoformat()
+
+        # Summary KPIs
+        total = await packets_col.count_documents({})
+        pending = await packets_col.count_documents({"status": {"$in": ["sent", "signnow_pending", "partially_signed"]}})
+        signed = await packets_col.count_documents({"status": {"$in": ["signed", "completed"]}})
+        filed = await packets_col.count_documents({"drive_url": {"$exists": True, "$ne": None}})
+
+        def _to_int(v):
+            try:
+                return int(v)
+            except Exception:
+                return 0
+
+        return {
+            "success": True,
+            "packets": packets,
+            "count": len(packets),
+            "summary": {
+                "total_packets": _to_int(total),
+                "pending_signature": _to_int(pending),
+                "signed_completed": _to_int(signed),
+                "filed_to_drive": _to_int(filed),
+            },
+        }
+    except Exception as exc:
+        logger.exception("list_all_packets error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/paperwork/{packet_id}/hydration-audit
+# Twenty CRM style: field hydration audit for 14-doc packet before dispatch
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.get("/paperwork/{packet_id}/hydration-audit")
+async def get_packet_hydration_audit(packet_id: str):
+    """Audit field hydration completeness for a paperwork packet."""
+    try:
+        packets_col = get_collection("paperwork_packets")
+        packet = await packets_col.find_one(
+            {"$or": [{"packet_id": packet_id}, {"booking_number": packet_id}]},
+            {"_id": 0},
+        )
+        if not packet:
+            return JSONResponse({"success": False, "error": "Packet not found"}, status_code=404)
+
+        required_fields = [
+            ("defendant_name", "Defendant Full Name"),
+            ("defendant_dob", "Defendant Date of Birth"),
+            ("defendant_address", "Defendant Address"),
+            ("indemnitor_name", "Indemnitor Full Name"),
+            ("indemnitor_phone", "Indemnitor Phone"),
+            ("indemnitor_address", "Indemnitor Address"),
+            ("case_number", "Case Number"),
+            ("booking_number", "Booking Number"),
+            ("bond_amount", "Bond Amount ($)"),
+            ("surety_id", "Surety Selection (OSI/Palmetto)"),
+            ("poa_number", "Power of Attorney (POA) Number"),
+        ]
+
+        fields_audit = []
+        hydrated_count = 0
+
+        for key, label in required_fields:
+            val = packet.get(key)
+            is_present = val is not None and str(val).strip() != "" and str(val).strip() != "None"
+            if is_present:
+                hydrated_count += 1
+            fields_audit.append({
+                "key": key,
+                "label": label,
+                "val": str(val) if is_present else None,
+                "hydrated": is_present,
+            })
+
+        score = round((hydrated_count / len(required_fields)) * 100, 1)
+
+        return {
+            "success": True,
+            "packet_id": packet.get("packet_id"),
+            "booking_number": packet.get("booking_number"),
+            "surety_id": packet.get("surety_id"),
+            "status": packet.get("status"),
+            "hydration_score": score,
+            "hydrated_count": hydrated_count,
+            "total_required": len(required_fields),
+            "fields": fields_audit,
+        }
+    except Exception as exc:
+        logger.exception("hydration_audit error for %s", packet_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

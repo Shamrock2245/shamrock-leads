@@ -174,8 +174,17 @@ class GoogleCalendarService:
           - Source email subject + sender
         """
         case_number = email_data.get('case_number')
-        datetime_info = email_data.get('datetime_info') or {}
-        date_str = datetime_info.get('date_str')
+        datetime_val = email_data.get('datetime_info')
+        if isinstance(datetime_val, dict):
+            date_str = datetime_val.get('date_str')
+            time_str = datetime_val.get('time_str') or "09:00 AM"
+        elif isinstance(datetime_val, str):
+            parts = datetime_val.split(" ", 1)
+            date_str = parts[0]
+            time_str = parts[1] if len(parts) > 1 else "09:00 AM"
+        else:
+            date_str = None
+            time_str = "09:00 AM"
         
         if not case_number or not date_str:
             logger.error("[Calendar] Cannot create event: missing case number or date")
