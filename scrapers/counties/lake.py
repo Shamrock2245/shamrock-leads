@@ -18,8 +18,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-import httpx
-
+from curl_cffi import requests as cffi_requests
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
@@ -43,6 +42,19 @@ HEADERS = {
     "Origin": BASE_URL,
 }
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class LakeCountyScraper(BaseScraper):
     @property
@@ -196,7 +208,7 @@ class LakeCountyScraper(BaseScraper):
 
         logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API (key len=%d)...", len(api_key))
         try:
-            submit_resp = httpx.post(
+            submit_resp = cffi_requests.post(
                 "https://api.solvecaptcha.com/in.php",
                 data={
                     "key": api_key,
@@ -219,7 +231,7 @@ class LakeCountyScraper(BaseScraper):
             for _ in range(36):
                 time.sleep(5)
                 try:
-                    result_resp = httpx.get(
+                    result_resp = cffi_requests.get(
                         "https://api.solvecaptcha.com/res.php",
                         params={
                             "key": api_key,

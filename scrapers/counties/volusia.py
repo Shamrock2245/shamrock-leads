@@ -9,7 +9,7 @@ import datetime
 import urllib3
 import re
 from typing import List
-import requests
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
@@ -29,7 +29,7 @@ class VolusiaCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         logger.info("Volusia: Querying inmate search...")
         
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         })
@@ -38,7 +38,7 @@ class VolusiaCountyScraper(BaseScraper):
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             
             # Step 1: GET disclaimer page
-            resp = session.get(BASE_URL, verify=False, timeout=20)
+            resp = session.get(BASE_URL, verify=False, timeout=20, impersonate=IMPERSONATE)
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch Volusia homepage: HTTP {resp.status_code}")
                 
@@ -63,7 +63,7 @@ class VolusiaCountyScraper(BaseScraper):
             }
             
             post_url = "https://volusiamug.vcgov.org/Disclaimer.aspx"
-            post_resp = session.post(post_url, data=payload, verify=False, timeout=20)
+            post_resp = session.post(post_url, data=payload, verify=False, timeout=20, impersonate=IMPERSONATE)
             if post_resp.status_code != 200:
                 raise Exception(f"Failed to submit disclaimer accept: HTTP {post_resp.status_code}")
                 
@@ -88,7 +88,7 @@ class VolusiaCountyScraper(BaseScraper):
             }
             
             recent_url = "https://volusiamug.vcgov.org/Default.aspx"
-            recent_resp = session.post(recent_url, data=recent_payload, verify=False, timeout=20)
+            recent_resp = session.post(recent_url, data=recent_payload, verify=False, timeout=20, impersonate=IMPERSONATE)
             if recent_resp.status_code != 200:
                 raise Exception(f"Failed to fetch recent bookings list: HTTP {recent_resp.status_code}")
                 
@@ -172,7 +172,7 @@ class VolusiaCountyScraper(BaseScraper):
                 # Fetch details page
                 try:
                     logger.debug(f"Volusia: Fetching details for {full_name} ({inmate_rid})")
-                    d_resp = session.get(detail_url, verify=False, timeout=15)
+                    d_resp = session.get(detail_url, verify=False, timeout=15, impersonate=IMPERSONATE)
                     if d_resp.status_code == 200:
                         d_soup = BeautifulSoup(d_resp.text, 'html.parser')
                         

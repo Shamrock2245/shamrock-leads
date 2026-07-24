@@ -48,7 +48,6 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-
 class PinellasCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -75,13 +74,13 @@ class PinellasCountyScraper(BaseScraper):
         import requests
         from bs4 import BeautifulSoup
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
         records = []
 
         # Step 1: GET to harvest ViewState tokens
         try:
-            r0 = session.get(SEARCH_URL, timeout=30)
+            r0 = session.get(SEARCH_URL, timeout=30, impersonate=IMPERSONATE, verify=False)
             r0.raise_for_status()
         except Exception as e:
             logger.error(f"Pinellas GET failed: {e}")
@@ -120,7 +119,7 @@ class PinellasCountyScraper(BaseScraper):
         }
 
         try:
-            r1 = session.post(SEARCH_URL, data=post_data, timeout=60)
+            r1 = session.post(SEARCH_URL, data=post_data, timeout=60, impersonate=IMPERSONATE, verify=False)
             r1.raise_for_status()
         except Exception as e:
             logger.error(f"Pinellas POST failed for {date_str}: {e}")

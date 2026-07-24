@@ -6,8 +6,7 @@ Method: Direct Tyler Technologies API queries
 import logging
 import datetime
 from typing import List
-import requests
-
+from curl_cffi import requests as cffi_requests
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
@@ -44,7 +43,7 @@ class MartinCountyScraper(BaseScraper):
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
             
-            resp = requests.get(API_URL, headers=headers, params=params, verify=False, timeout=30)
+            resp = cffi_requests.get(API_URL, headers=headers, params=params, verify=False, timeout=30, impersonate=IMPERSONATE)
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch roster: HTTP {resp.status_code}")
             

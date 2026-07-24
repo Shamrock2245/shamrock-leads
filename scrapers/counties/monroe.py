@@ -25,7 +25,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import requests
+from curl_cffi import requests as cffi_requests
 import urllib3
 
 from core.models import ArrestRecord
@@ -51,6 +51,19 @@ HEADERS = {
 
 _MNI_RE = re.compile(r"ArrestLogs/([A-Z0-9]+?)L?\.(?:jpg|jpeg|png)", re.I)
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class MonroeCountyScraper(BaseScraper):
     """Monroe County (FL) — Keys SO official arrest-log JSON API."""
@@ -65,7 +78,7 @@ class MonroeCountyScraper(BaseScraper):
         # verify=False is required; suppress the noisy warning locally.
         with urllib3.warnings.catch_warnings():
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            resp = requests.get(API_URL, headers=HEADERS, timeout=45, verify=False)
+            resp = cffi_requests.get(API_URL, headers=HEADERS, timeout=45, verify=False, impersonate=IMPERSONATE)
         resp.raise_for_status()
         data = resp.json()
 

@@ -19,6 +19,19 @@ BASE_URL = "https://www.sheriffcitrus.org"
 PAGE_URL = f"{BASE_URL}/public_info/recent_arrest.php"
 FACILITY = "Citrus County Detention Facility"
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class CitrusCountyScraper(BaseScraper):
     @property
@@ -110,7 +123,7 @@ class CitrusCountyScraper(BaseScraper):
 
         try:
             import requests
-            resp = requests.get(pdf_url, timeout=60, headers={
+            resp = cffi_requests.get(pdf_url, timeout=60, impersonate=IMPERSONATE, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
                 "Referer": PAGE_URL,
             })

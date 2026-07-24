@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from typing import List
-import requests
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
@@ -41,7 +41,7 @@ class PolkCountyScraper(BaseScraper):
         return "Polk"
 
     def scrape(self) -> List[ArrestRecord]:
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
         
         all_records = []
@@ -60,7 +60,7 @@ class PolkCountyScraper(BaseScraper):
             
             try:
                 # We disable SSL verification because of government intermediate certificate chain issues
-                resp = session.post(SEARCH_URL, data=payload, timeout=30, verify=False)
+                resp = session.post(SEARCH_URL, data=payload, timeout=30, verify=False, impersonate=IMPERSONATE)
                 if resp.status_code != 200:
                     logger.warning(f"Polk: SearchJail for {date_str} returned {resp.status_code}")
                     continue
@@ -145,7 +145,7 @@ class PolkCountyScraper(BaseScraper):
         # Load profile page to extract CSRF token for charges API
         token = ""
         try:
-            profile_resp = session.get(detail_url, timeout=20, verify=False)
+            profile_resp = session.get(detail_url, timeout=20, verify=False, impersonate=IMPERSONATE)
             if profile_resp.status_code == 200:
                 soup = BeautifulSoup(profile_resp.text, "html.parser")
                 token_el = soup.find("input", {"name": "__RequestVerificationToken"})
@@ -171,7 +171,7 @@ class PolkCountyScraper(BaseScraper):
                 "__RequestVerificationToken": token
             }
             try:
-                charges_resp = session.post(CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, verify=False)
+                charges_resp = session.post(CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, verify=False, impersonate=IMPERSONATE)
                 if charges_resp.status_code == 200:
                     content_type = charges_resp.headers.get("Content-Type", "")
                     if "json" in content_type.lower():

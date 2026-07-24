@@ -25,7 +25,6 @@ HEADERS = {
     "Referer": "https://www.okeesheriff.org/",
 }
 
-
 class OkeechobeeCountyScraper(BaseScraper):
     """Okeechobee County (FL) — Custom HTML inmate table"""
 
@@ -42,7 +41,7 @@ class OkeechobeeCountyScraper(BaseScraper):
             raise
 
         try:
-            resp = requests.get(ROSTER_URL, headers=HEADERS, timeout=30)
+            resp = cffi_requests.get(ROSTER_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Okeechobee: fetch failed: {e}")

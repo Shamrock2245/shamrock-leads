@@ -28,7 +28,6 @@ HEADERS = {
     "Content-Type": "application/x-www-form-urlencoded",
 }
 
-
 class StLucieCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -42,11 +41,11 @@ class StLucieCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         try:
-            resp = session.post(LIST_URL, data={"First": "", "Last": "%", "Submit": "Search"}, timeout=60)
+            resp = session.post(LIST_URL, data={"First": "", "Last": "%", "Submit": "Search"}, timeout=60, impersonate=IMPERSONATE, verify=False)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"St. Lucie: failed to fetch inmate list: {e}")

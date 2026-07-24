@@ -9,7 +9,7 @@ import datetime
 import urllib3
 import re
 from typing import List
-import requests
+from curl_cffi import requests as cffi_requests
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -19,6 +19,20 @@ logger = logging.getLogger(__name__)
 FACILITY = "Highlands County Jail"
 COUNTY = "Highlands"
 JSON_URL = "https://cdn.myocv.com/ocvapps/a26133870/inmates.json"
+
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class HighlandsCountyScraper(BaseScraper):
     @property
@@ -34,7 +48,7 @@ class HighlandsCountyScraper(BaseScraper):
         
         try:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            resp = requests.get(JSON_URL, headers=headers, verify=False, timeout=25)
+            resp = cffi_requests.get(JSON_URL, headers=headers, verify=False, timeout=25, impersonate=IMPERSONATE)
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch Highlands OCV JSON: HTTP {resp.status_code}")
                 

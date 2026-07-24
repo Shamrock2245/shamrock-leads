@@ -29,7 +29,6 @@ HEADERS = {
     "Referer": "https://gadsdensheriff.com/",
 }
 
-
 class GadsdenCountyScraper(BaseScraper):
     """Gadsden County (FL) — Inmate lookup (Quincy area). Needs recon."""
 
@@ -47,7 +46,7 @@ class GadsdenCountyScraper(BaseScraper):
 
         # Attempt HTTP GET
         try:
-            resp = requests.get(ROSTER_URL, headers=HEADERS, timeout=30)
+            resp = cffi_requests.get(ROSTER_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
             if resp.status_code == 200 and len(resp.text) > 500:
                 soup = BeautifulSoup(resp.text, "html.parser")
                 records = self._parse_html(soup)

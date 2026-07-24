@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-import httpx
+from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
@@ -51,6 +51,19 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class HillsboroughCountyScraper(BaseScraper):
 
@@ -76,14 +89,15 @@ class HillsboroughCountyScraper(BaseScraper):
             logger.info("[Hillsborough] egress source=%s", proxy_source)
 
             client_kwargs = {
+                "impersonate": IMPERSONATE,
                 "headers": HEADERS,
-                "follow_redirects": True,
+                # follow_redirects handled by curl_cffi default (True)
                 "timeout": 30.0,
                 "verify": True,
             }
             if proxy_url:
-                client_kwargs["proxy"] = proxy_url
-            client = httpx.Client(**client_kwargs)
+                client_kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+            client = cffi_requests.Session(**client_kwargs)
             t0 = time.time()
 
             # Step 1: Try cookie login
@@ -171,9 +185,8 @@ class HillsboroughCountyScraper(BaseScraper):
         avoids APE `CONNECT 502` / "Host unreachable" hard failures.
         """
         try:
-            probe = httpx.get(
-                SEARCH_URL, headers=HEADERS, timeout=15.0,
-                follow_redirects=True, verify=True,
+            probe = cffi_requests.get(
+                SEARCH_URL, headers=HEADERS, timeout=15.0, verify=True, impersonate=IMPERSONATE,
             )
             if probe.status_code == 200 and "SearchName" in probe.text:
                 logger.info("[Hillsborough] direct probe OK — no proxy needed")
@@ -434,7 +447,7 @@ class HillsboroughCountyScraper(BaseScraper):
         logger.info("[Hillsborough] Solving reCAPTCHA via SolveCaptcha API...")
         try:
             # Step 1: Submit task
-            submit_resp = httpx.post(
+            submit_resp = cffi_requests.post(
                 "https://api.solvecaptcha.com/in.php",
                 data={
                     "key": api_key,
@@ -458,7 +471,7 @@ class HillsboroughCountyScraper(BaseScraper):
             for i in range(36):
                 time.sleep(5)
                 try:
-                    result_resp = httpx.get(
+                    result_resp = cffi_requests.get(
                         "https://api.solvecaptcha.com/res.php",
                         params={
                             "key": api_key,

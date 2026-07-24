@@ -25,7 +25,6 @@ HEADERS = {
     "Referer": SEARCH_URL,
 }
 
-
 class OkaloosaCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -39,12 +38,12 @@ class OkaloosaCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         # GET to get ViewState/CSRF tokens
         try:
-            resp = session.get(SEARCH_URL, timeout=30)
+            resp = session.get(SEARCH_URL, timeout=30, impersonate=IMPERSONATE, verify=False)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Okaloosa: GET failed: {e}")
@@ -82,7 +81,7 @@ class OkaloosaCountyScraper(BaseScraper):
                 post_data[btn_name] = btn_value
 
             try:
-                resp = session.post(SEARCH_URL, data=post_data, timeout=30)
+                resp = session.post(SEARCH_URL, data=post_data, timeout=30, impersonate=IMPERSONATE, verify=False)
                 if resp.status_code == 200:
                     soup_post = BeautifulSoup(resp.text, "html.parser")
                     

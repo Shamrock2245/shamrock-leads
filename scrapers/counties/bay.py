@@ -25,7 +25,6 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-
 class BayCountyScraper(BaseScraper):
 
     @property
@@ -48,12 +47,12 @@ class BayCountyScraper(BaseScraper):
         import requests
         from bs4 import BeautifulSoup
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         # Step 1: GET the page to establish session and get _S_ID
         logger.info("[BAY] Loading inmate search page...")
-        resp = session.get(f"{BASE_URL}/", timeout=30)
+        resp = session.get(f"{BASE_URL}/", timeout=30, impersonate=IMPERSONATE, verify=False)
         resp.raise_for_status()
 
         # Extract session ID from page source

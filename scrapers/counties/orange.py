@@ -3,7 +3,7 @@ import logging
 import re
 import string
 import time
-import requests
+from curl_cffi import requests as cffi_requests
 from datetime import datetime, timezone
 from typing import List, Optional
 from scrapers.base_scraper import BaseScraper
@@ -26,6 +26,20 @@ HEADERS = {
     "Referer": f"{BASE_URL}/Inmates",
 }
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
+
 class OrangeCountyScraper(BaseScraper):
     @property
     def county(self): return "Orange"
@@ -33,7 +47,7 @@ class OrangeCountyScraper(BaseScraper):
     def roster_url(self): return f"{BASE_URL}/Inmates"
 
     def scrape(self) -> List[ArrestRecord]:
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
         all_inmates = self._fetch_all_inmates(session)
         if not all_inmates:
@@ -63,7 +77,7 @@ class OrangeCountyScraper(BaseScraper):
         all_i, seen = [], set()
         for letter in string.ascii_lowercase:
             try:
-                r = s.get(f"{INMATES_URL}/{letter}", timeout=REQUEST_TIMEOUT)
+                r = s.get(f"{INMATES_URL}/{letter}", timeout=REQUEST_TIMEOUT, impersonate=IMPERSONATE)
                 if r.status_code != 200: continue
                 for i in r.json():
                     bn = i.get("bookingNumber","").strip()
@@ -74,14 +88,14 @@ class OrangeCountyScraper(BaseScraper):
 
     def _fetch_detail(self, s, bn):
         try:
-            r = s.get(f"{DETAILS_URL}/{bn}", timeout=REQUEST_TIMEOUT)
+            r = s.get(f"{DETAILS_URL}/{bn}", timeout=REQUEST_TIMEOUT, impersonate=IMPERSONATE)
             d = r.json()
             return d[0] if isinstance(d, list) and d else None
         except: return None
 
     def _fetch_charges(self, s, bn):
         try:
-            r = s.get(f"{CHARGES_URL}/{bn}", timeout=REQUEST_TIMEOUT)
+            r = s.get(f"{CHARGES_URL}/{bn}", timeout=REQUEST_TIMEOUT, impersonate=IMPERSONATE)
             d = r.json()
             return d if isinstance(d, list) else []
         except: return []

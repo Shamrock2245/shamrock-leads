@@ -29,7 +29,6 @@ HEADERS = {
 MAX_PAGES = 10
 MAX_DETAILS = 200
 
-
 class NassauCountyScraper(BaseScraper):
     """Nassau County (FL) — New World InmateInquiry (Fernandina Beach area)"""
 
@@ -45,7 +44,7 @@ class NassauCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.verify = False
         session.headers.update(HEADERS)
         import urllib3
@@ -60,7 +59,7 @@ class NassauCountyScraper(BaseScraper):
                 if page_num > 1:
                     params["Page"] = str(page_num)
 
-                resp = session.get(BASE_URL, params=params, timeout=30)
+                resp = session.get(BASE_URL, params=params, timeout=30, impersonate=IMPERSONATE, verify=False)
                 if resp.status_code != 200:
                     logger.warning(f"Nassau page {page_num}: HTTP {resp.status_code}")
                     break
@@ -121,7 +120,7 @@ class NassauCountyScraper(BaseScraper):
 
             try:
                 detail_count += 1
-                resp = session.get(detail_url, timeout=20)
+                resp = session.get(detail_url, timeout=20, impersonate=IMPERSONATE, verify=False)
                 if resp.status_code != 200:
                     continue
 

@@ -19,8 +19,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-
+from curl_cffi import requests as cffi_requests
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
 
@@ -30,7 +29,6 @@ OCV_INMATES_URL = "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.jso
 FACILITY = "Hendry County Jail"
 AGENCY = "Hendry County Sheriff's Office"
 COUNTY = "Hendry"
-
 
 class HendryCountyScraper(BaseScraper):
     """Hendry County — official OCV inmates.json (no CAPTCHA)."""
@@ -49,7 +47,7 @@ class HendryCountyScraper(BaseScraper):
             ),
             "Accept": "application/json, text/plain, */*",
         }
-        resp = requests.get(OCV_INMATES_URL, headers=headers, timeout=45)
+        resp = cffi_requests.get(OCV_INMATES_URL, headers=headers, timeout=45, impersonate=IMPERSONATE)
         resp.raise_for_status()
         data = resp.json()
         if not isinstance(data, list):

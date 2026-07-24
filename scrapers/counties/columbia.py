@@ -37,13 +37,13 @@ class ColumbiaCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         # Step 1: Initial GET request to retrieve standard ASP.NET ViewState tokens
         try:
             logger.info(f"Columbia: Loading initial page from {SEARCH_URL}")
-            resp = session.get(SEARCH_URL, timeout=30, verify=False)
+            resp = session.get(SEARCH_URL, timeout=30, verify=False, impersonate=IMPERSONATE)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Columbia: Initial GET failed: {e}")
@@ -80,7 +80,7 @@ class ColumbiaCountyScraper(BaseScraper):
         }
 
         try:
-            resp2 = session.post(SEARCH_URL, data=post_data, timeout=30, verify=False)
+            resp2 = session.post(SEARCH_URL, data=post_data, timeout=30, verify=False, impersonate=IMPERSONATE)
             resp2.raise_for_status()
         except Exception as e:
             logger.error(f"Columbia: Wildcard POST search failed: {e}")
@@ -125,7 +125,7 @@ class ColumbiaCountyScraper(BaseScraper):
             }
 
             try:
-                resp3 = session.post(ADD_MORE_URL, json=payload, headers=json_headers, timeout=30, verify=False)
+                resp3 = session.post(ADD_MORE_URL, json=payload, headers=json_headers, timeout=30, verify=False, impersonate=IMPERSONATE)
                 resp3.raise_for_status()
                 
                 res_data = resp3.json().get("d", {})

@@ -4,9 +4,10 @@ Source: Broward Sheriff's Office
 URL: https://apps.sheriff.org/ArrestSearch/InmateDetail/{ID}
 Method: Sequential ID probing via HTTP requests (no browser needed)
 """
-import logging, os, re, json, time, urllib.request, urllib.error
+import logging, os, re, json, time
 from datetime import datetime, timezone
 from typing import List
+from curl_cffi import requests as cffi_requests
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
@@ -22,7 +23,9 @@ AGENCY_PREFIXES = {
     90: {"name": "U.S. Marshals Service", "active": True, "frontier": 902600270, "rate": 9},
 }
 ID_DENSITY = 0.45
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate"}
 STATE_DIR = os.path.join(os.path.dirname(__file__), ".state")
 
 class BrowardCountyScraper(BaseScraper):
@@ -59,11 +62,11 @@ class BrowardCountyScraper(BaseScraper):
         return all_records
 
     def _http_get(self, url):
-        req = urllib.request.Request(url, headers=HEADERS)
         try:
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                return resp.read().decode("utf-8", errors="ignore")
-        except: return ""
+            resp = cffi_requests.get(url, headers=HEADERS, timeout=12, impersonate=IMPERSONATE, verify=False)
+            return resp.text if resp.status_code == 200 else ""
+        except Exception:
+            return ""
 
     def _find_frontier(self, start_id):
         step, current = 100, start_id

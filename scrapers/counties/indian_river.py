@@ -33,7 +33,6 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-
 class IndianRiverCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -47,7 +46,7 @@ class IndianRiverCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
         session.verify = False
 
@@ -56,7 +55,7 @@ class IndianRiverCountyScraper(BaseScraper):
 
         for url in [SEARCH_URL, TODAYS_URL]:
             try:
-                resp = session.get(url, timeout=30)
+                resp = session.get(url, timeout=30, impersonate=IMPERSONATE)
                 if resp.status_code == 200 and len(resp.text) > 1000:
                     soup = BeautifulSoup(resp.text, "html.parser")
                     # Try card-based parsing first (current site layout)
@@ -255,12 +254,12 @@ class IndianRiverCountyScraper(BaseScraper):
         import requests
         from bs4 import BeautifulSoup
         
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
         session.verify = False
         
         try:
-            resp = session.get(detail_url, timeout=30)
+            resp = session.get(detail_url, timeout=30, impersonate=IMPERSONATE)
             if resp.status_code != 200 or len(resp.text) < 1000:
                 logger.warning(f"Indian River re-fetch failed for {detail_url}: HTTP {resp.status_code}")
                 return None

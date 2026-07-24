@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 SEARCH_URL = "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx"
 FACILITY = "Taylor County Jail"
 
+# ── Stealth Stack ──────────────────────────────────────────────────────────────
+IMPERSONATE = "chrome131"
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+    "DNT": "1",
+}
 
 class TaylorCountyScraper(BaseScraper):
     @property
@@ -32,7 +45,7 @@ class TaylorCountyScraper(BaseScraper):
             logger.error("requests not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         # Direct only — CONNECT proxies rarely support custom ports like :8989
         try:
             records = scrape_smartweb(
@@ -45,7 +58,7 @@ class TaylorCountyScraper(BaseScraper):
             # Fallback via public entry host if direct port fails
             if not records:
                 entry = "http://jail.taylorsheriff.org/"
-                r = session.get(entry, timeout=20, allow_redirects=True)
+                r = session.get(entry, timeout=20, allow_redirects=True, impersonate=IMPERSONATE)
                 final = r.url or SEARCH_URL
                 records = scrape_smartweb(
                     base_url=final,

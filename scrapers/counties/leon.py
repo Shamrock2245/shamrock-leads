@@ -28,7 +28,6 @@ HEADERS = {
     "Referer": f"{BASE_URL}/About-us/Departments/Detention-Facility/Inmate-search",
 }
 
-
 class LeonCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -42,12 +41,12 @@ class LeonCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         # GET the page first to extract ViewState/DNN tokens
         try:
-            resp = session.get(SEARCH_URL, timeout=30)
+            resp = session.get(SEARCH_URL, timeout=30, impersonate=IMPERSONATE, verify=False)
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"Leon: GET failed: {e}")
@@ -102,7 +101,7 @@ class LeonCountyScraper(BaseScraper):
                     post_data[submit_field[0]] = submit_field[1]
 
                 try:
-                    resp = session.post(SEARCH_URL, data=post_data, timeout=30)
+                    resp = session.post(SEARCH_URL, data=post_data, timeout=30, impersonate=IMPERSONATE, verify=False)
                     if resp.status_code == 200:
                         batch = self._parse_html(resp.text, seen)
                         records.extend(batch)
@@ -116,7 +115,7 @@ class LeonCountyScraper(BaseScraper):
             # Try empty POST to get all
             post_data = dict(hidden_fields)
             try:
-                resp = session.post(SEARCH_URL, data=post_data, timeout=30)
+                resp = session.post(SEARCH_URL, data=post_data, timeout=30, impersonate=IMPERSONATE, verify=False)
                 if resp.status_code == 200:
                     records = self._parse_html(resp.text, seen)
             except Exception as e:

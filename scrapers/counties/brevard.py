@@ -28,7 +28,6 @@ HEADERS = {
     "Referer": BASE_URL,
 }
 
-
 class BrevardCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -42,12 +41,12 @@ class BrevardCountyScraper(BaseScraper):
             logger.error("requests/bs4 not installed")
             raise
 
-        session = requests.Session()
+        session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
         # Load home page first (sets session cookies / anti-bot tokens)
         try:
-            session.get(BASE_URL, timeout=20)
+            session.get(BASE_URL, timeout=20, impersonate=IMPERSONATE, verify=False)
         except requests.RequestException:
             pass
 
@@ -72,10 +71,10 @@ class BrevardCountyScraper(BaseScraper):
         while page_num <= 25:
             try:
                 if page_num == 1:
-                    resp = session.post(SEARCH_URL, data=form_data, timeout=30)
+                    resp = session.post(SEARCH_URL, data=form_data, timeout=30, impersonate=IMPERSONATE, verify=False)
                 else:
                     form_data["SearchForm.PageNumber"] = str(page_num)
-                    resp = session.post(SEARCH_URL, data=form_data, timeout=30)
+                    resp = session.post(SEARCH_URL, data=form_data, timeout=30, impersonate=IMPERSONATE, verify=False)
                 resp.raise_for_status()
             except Exception as e:
                 logger.warning(f"Brevard page {page_num}: {e}")
@@ -240,7 +239,6 @@ class BrevardCountyScraper(BaseScraper):
 
         return records
 
-
 def _pn(n):
     if not n:
         return "", "", ""
@@ -252,7 +250,6 @@ def _pn(n):
         return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
     p = n.split()
     return p[0], (" ".join(p[1:-1]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
-
 
 def _parse_bond(bond_str):
     if not bond_str:
