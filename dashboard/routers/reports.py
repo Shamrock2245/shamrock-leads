@@ -298,7 +298,11 @@ async def surety_liability(
 # VOIDED POWERS
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/voided-powers")
-async def voided_powers(surety: str = Query(default="")):
+async def voided_powers(
+    surety: str = Query(default=""),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """POAs that were manually voided."""
     try:
         db = get_db()
@@ -307,8 +311,12 @@ async def voided_powers(surety: str = Query(default="")):
         surety_filter = surety.strip().lower()
         if surety_filter:
             query["surety_id"] = surety_filter
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "voided_at", start_date, end_date
+        )
+        query.update(date_filt)
 
-        docs = await col.find(query, {"_id": 0}).sort("voided_at", -1).to_list(500)
+        docs = await col.find(query, {"_id": 0}).sort("voided_at", -1).to_list(REPORT_ROW_LIMIT)
         for d in docs:
             _serialize_doc(d)
 
@@ -317,6 +325,9 @@ async def voided_powers(surety: str = Query(default="")):
             "powers": docs,
             "records": docs,
             "count": len(docs),
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/voided-powers error: %s", exc)
@@ -327,7 +338,11 @@ async def voided_powers(surety: str = Query(default="")):
 # EXPIRED POWERS (semi-annual expiration)
 # ─────────────────────────────────────────────────────────────────────────────
 @reports_bp.get("/reports/expired-powers")
-async def expired_powers(surety: str = Query(default="")):
+async def expired_powers(
+    surety: str = Query(default=""),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+):
     """POAs past their expiration date (semi-annual cycle)."""
     try:
         db = get_db()
@@ -341,8 +356,12 @@ async def expired_powers(surety: str = Query(default="")):
         surety_filter = surety.strip().lower()
         if surety_filter:
             query["surety_id"] = surety_filter
+        date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "expiration", start_date, end_date
+        )
+        query.update(date_filt)
 
-        docs = await col.find(query, {"_id": 0}).sort("expiration", 1).to_list(500)
+        docs = await col.find(query, {"_id": 0}).sort("expiration", 1).to_list(REPORT_ROW_LIMIT)
         for d in docs:
             _serialize_doc(d)
 
@@ -365,6 +384,9 @@ async def expired_powers(surety: str = Query(default="")):
             "expired_count": len(docs),
             "expiring_soon": upcoming,
             "expiring_soon_count": len(upcoming),
+            "start_date": resolved_start,
+            "end_date": resolved_end,
+            "warnings": date_warnings or None,
         }
     except Exception as exc:
         logger.exception("reports/expired-powers error: %s", exc)

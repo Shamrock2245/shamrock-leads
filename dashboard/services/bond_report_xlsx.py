@@ -582,6 +582,7 @@ def build_official_bond_report(
             cell = ws_dis.cell(dr, col, val)
             cell.border = thin
             cell.font = font_cell
+            cell.alignment = center if col in (1, 5, 6, 11, 12) else (right if col in (7, 8, 9, 10) else left)
             if dr % 2 == 0:
                 cell.fill = PatternFill("solid", fgColor=DISCHARGE_BG)
             if col in (7, 8, 9, 10) and isinstance(val, (int, float)):
@@ -626,6 +627,8 @@ def build_official_bond_report(
         for col, val in enumerate(vals, 1):
             cell = ws_tr.cell(tr, col, val)
             cell.border = thin
+            cell.font = font_cell
+            cell.alignment = center if col in (1, 5) else (right if col == 6 else left)
             if col == 6 and isinstance(val, (int, float)):
                 cell.number_format = '"$"#,##0.00'
             if col == 5 and isinstance(val, datetime):

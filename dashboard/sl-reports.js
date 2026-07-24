@@ -746,17 +746,23 @@ const SLReports = (() => {
 
   /* ── Export CSV ────────────────────────────────────────────────────── */
   function exportCSV() {
-    const table = document.querySelector('#rptTableWrap .rpt-table');
-    if (!table) { toast('No data to export','warning'); return; }
+    const itemized = document.querySelector('#rptItemizedTable');
+    const tables = itemized ? [itemized] : Array.from(document.querySelectorAll('#rptTableWrap .rpt-table'));
+    if (!tables.length) { toast('No data to export','warning'); return; }
     const rows = [];
-    table.querySelectorAll('tr').forEach(tr => {
-      const cells = [];
-      tr.querySelectorAll('th,td').forEach(td => {
-        let text = td.innerText.replace(/\n/g,' ').replace(/,/g,';').trim();
-        cells.push(`"${text}"`);
+    tables.forEach(table => {
+      table.querySelectorAll('tr').forEach(tr => {
+        if (tr.style.display === 'none' || tr.style.opacity === '0.35') return;
+        const cells = [];
+        tr.querySelectorAll('th,td').forEach(td => {
+          if (td.style.display === 'none' || td.querySelector('input[type="checkbox"]')) return;
+          let text = td.innerText.replace(/\n/g,' ').replace(/,/g,';').trim();
+          cells.push(`"${text}"`);
+        });
+        if (cells.length) rows.push(cells.join(','));
       });
-      rows.push(cells.join(','));
     });
+    if (!rows.length) { toast('No visible data to export','warning'); return; }
     const csv = rows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
@@ -857,6 +863,8 @@ const SLReports = (() => {
         .s-item{border:1px solid #e2e8f0;border-radius:8px;padding:12px 18px;min-width:100px;text-align:center}
         .s-val{font-size:18px;font-weight:800}
         .s-lbl{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+        input[type="checkbox"], button, .inv-btn, .rpt-row-cb, #rptSelectAllRows, th:has(input), td:has(input) { display: none !important; }
+        div[style*="background:rgba(15,23,42"] { background: none !important; border: none !important; color: #1e293b !important; padding: 0 !important; }
         @media print{body{padding:0}}
       </style></head><body>
       <h1>☘️ ${title}</h1>
