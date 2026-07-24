@@ -61,8 +61,8 @@ class MarionCountyScraper(BaseScraper):
             el = soup.find("input", {"name": name})
             return el["value"] if el and el.get("value") else ""
 
-        # Step 2: POST empty search (shows recent bookings)
-        # Confirmed field names from live form inspection: txtLname, txtFName, btnSearch
+        # Step 2: POST Recent Bookings (empty btnSearch returns 500 server error;
+        # the form has a dedicated "Recent" button that works without criteria).
         post_data = {
             "__VIEWSTATE": _get_hidden("__VIEWSTATE"),
             "__VIEWSTATEGENERATOR": _get_hidden("__VIEWSTATEGENERATOR"),
@@ -71,7 +71,7 @@ class MarionCountyScraper(BaseScraper):
             "__EVENTARGUMENT": "",
             "txtLname": "",
             "txtFName": "",
-            "btnSearch": "Search",
+            "btnRecentBookings": "Recent",
         }
 
         try:

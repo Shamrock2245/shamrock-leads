@@ -1,15 +1,24 @@
 """
-Lake County Arrest Scraper — JSON API
+Lake County Arrest Scraper — JSON API + reCAPTCHA v2
 Source: Lake County Sheriff's Office
 URL: https://www.lcso.org/inmate-search/api/inmates
-Method: curl_cffi POST — clean JSON REST API, no reCAPTCHA (token validation disabled server-side)
+Method: curl_cffi POST — JSON REST API + reCAPTCHA v2 (SolveCaptcha)
 Fields: firstname, lastname, dob, booking_number, facility + charges
-Updated: 2026-05-18 — replaced DrissionPage with direct JSON API
+
+HISTORY:
+  - v1: DrissionPage JS SPA
+  - v2: curl_cffi + token bypass (reCAPTCHA disabled server-side)
+  - v3 (current): reCAPTCHA now enforced (2026-07); uses SolveCaptcha API.
+        Requires env SOLVECAPTCHA_KEY.
 """
 import logging
+import os
 import re
+import time
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
+
+import httpx
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -19,13 +28,19 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.lcso.org"
 API_URL = f"{BASE_URL}/inmate-search/api/inmates"
 FACILITY = "Lake County Jail"
+RECAPTCHA_SITEKEY = "6Ldas6IrAAAAAAuFfoBGxbpraKxvnnrHNaLLRjKx"
+SEARCH_PAGE_URL = f"{BASE_URL}/inmate-search/"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json, text/plain, */*",
     "Content-Type": "application/json",
-    "Referer": "https://www.lcso.org/inmate-search/",
-    "Origin": "https://www.lcso.org",
+    "Referer": SEARCH_PAGE_URL,
+    "Origin": BASE_URL,
 }
 
 
@@ -41,19 +56,24 @@ class LakeCountyScraper(BaseScraper):
             logger.error("curl_cffi not installed")
             raise
 
+        # reCAPTCHA is now enforced (2026-07). Solve via SolveCaptcha API.
+        recaptcha_token = self._solve_recaptcha()
+        if not recaptcha_token:
+            raise RuntimeError(
+                "Lake: reCAPTCHA solve failed (SOLVECAPTCHA_KEY missing or service error)"
+            )
+
         session = cf.Session()
         records: List[ArrestRecord] = []
         seen: set = set()
 
-        # Search with empty name to get all recent inmates
-        # The API accepts: firstname, lastname, dob, booking_number, facility, token
         payload = {
             "firstname": "",
             "lastname": "",
             "dob": "",
             "booking_number": "",
             "facility": "",
-            "token": "bypass",  # reCAPTCHA is disabled server-side
+            "token": recaptcha_token,
         }
 
         try:
@@ -61,7 +81,7 @@ class LakeCountyScraper(BaseScraper):
                 API_URL,
                 json=payload,
                 headers=HEADERS,
-                timeout=20,
+                timeout=30,
                 impersonate="chrome131",
             )
             r.raise_for_status()
@@ -70,9 +90,14 @@ class LakeCountyScraper(BaseScraper):
             logger.error(f"Lake API error: {e}")
             raise
 
-        inmates = data if isinstance(data, list) else data.get("records", data.get("inmates", data.get("data", [])))
+        inmates = data if isinstance(data, list) else data.get(
+            "records", data.get("inmates", data.get("data", []))
+        )
         if not inmates:
-            logger.warning(f"Lake: no inmates in response. Keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+            logger.warning(
+                "Lake: no inmates in response. Keys: %s",
+                list(data.keys()) if isinstance(data, dict) else type(data),
+            )
             return records
 
         cutoff = datetime.now() - timedelta(days=7)
@@ -81,7 +106,12 @@ class LakeCountyScraper(BaseScraper):
             if not isinstance(inmate, dict):
                 continue
 
-            booking_number = str(inmate.get("booking_number") or inmate.get("bookingNumber") or inmate.get("id") or "")
+            booking_number = str(
+                inmate.get("booking_number")
+                or inmate.get("bookingNumber")
+                or inmate.get("id")
+                or ""
+            )
             if not booking_number or booking_number in seen:
                 continue
             seen.add(booking_number)
@@ -103,12 +133,18 @@ class LakeCountyScraper(BaseScraper):
             charges_raw = inmate.get("charges") or inmate.get("offenses") or []
             if isinstance(charges_raw, list):
                 charges = "; ".join(
-                    str(c.get("description") or c.get("charge") or c) for c in charges_raw if c
+                    str(c.get("description") or c.get("charge") or c)
+                    for c in charges_raw if c
                 )
             else:
                 charges = str(charges_raw)
 
-            bond_raw = inmate.get("bond_amount") or inmate.get("bondAmount") or inmate.get("total_bond") or "0"
+            bond_raw = (
+                inmate.get("bond_amount")
+                or inmate.get("bondAmount")
+                or inmate.get("total_bond")
+                or "0"
+            )
             bond_amount = re.sub(r"[$,\s]", "", str(bond_raw))
 
             # Filter by booking date if available
@@ -139,10 +175,74 @@ class LakeCountyScraper(BaseScraper):
                 Address=full_address,
                 Charges=charges,
                 Bond_Amount=bond_amount,
-                Detail_URL=f"{BASE_URL}/inmate-search/",
+                Detail_URL=SEARCH_PAGE_URL,
                 LastCheckedMode="INITIAL",
             )
             records.append(record)
 
         logger.info(f"Lake: {len(records)} records")
         return records
+
+    # ── reCAPTCHA solver ──────────────────────────────────────────────────
+
+    def _solve_recaptcha(self) -> Optional[str]:
+        """Solve reCAPTCHA v2 via SolveCaptcha API. Returns token string."""
+        api_key = os.getenv("SOLVECAPTCHA_KEY", "")
+        if not api_key:
+            logger.warning("[Lake] No SOLVECAPTCHA_KEY set — cannot solve reCAPTCHA")
+            return None
+
+        logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API...")
+        try:
+            submit_resp = httpx.post(
+                "https://api.solvecaptcha.com/in.php",
+                data={
+                    "key": api_key,
+                    "method": "userrecaptcha",
+                    "googlekey": RECAPTCHA_SITEKEY,
+                    "pageurl": SEARCH_PAGE_URL,
+                    "json": "1",
+                },
+                timeout=30,
+            )
+            submit_data = submit_resp.json()
+            if submit_data.get("status") != 1:
+                logger.error(f"[Lake] SolveCaptcha submit failed: {submit_data}")
+                return None
+
+            task_id = submit_data["request"]
+            logger.info(f"[Lake] SolveCaptcha task: {task_id}")
+
+            # Poll for result (up to 180s)
+            for _ in range(36):
+                time.sleep(5)
+                try:
+                    result_resp = httpx.get(
+                        "https://api.solvecaptcha.com/res.php",
+                        params={
+                            "key": api_key,
+                            "action": "get",
+                            "id": task_id,
+                            "json": "1",
+                        },
+                        timeout=15,
+                    )
+                    result_data = result_resp.json()
+                except Exception as e:
+                    logger.warning(f"[Lake] SolveCaptcha poll error: {e}")
+                    continue
+
+                if result_data.get("status") == 1:
+                    token = result_data["request"]
+                    logger.info("[Lake] reCAPTCHA solved ✅")
+                    return token
+                if "CAPCHA_NOT_READY" in str(result_data.get("request", "")):
+                    continue
+                logger.error(f"[Lake] SolveCaptcha error: {result_data}")
+                return None
+
+            logger.error("[Lake] SolveCaptcha timeout (180s)")
+            return None
+        except Exception as e:
+            logger.error(f"[Lake] SolveCaptcha exception: {e}")
+            return None
