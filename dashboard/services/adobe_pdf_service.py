@@ -13,6 +13,8 @@ PDF Services (fill / combine / flatten assist)
     ImportPDFFormDataJob  — fill AcroForm fields from JSON
     CombinePDFJob         — merge packet PDFs
     CompressPDFJob        — optional size polish
+    AutotagPDFJob         — PDF Accessibility Auto-Tag (optional)
+      https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/quickstarts/python/
 
 Acrobat Sign (optional, separate product)
   ADOBE_SIGN_INTEGRATION_KEY for e-signature agreements
@@ -271,6 +273,65 @@ class AdobePDFServicesClient:
         result_asset = response.get_result().get_asset()
         return self._download_result_bytes(pdf_services, result_asset)
 
+    def autotag_pdf_sync(
+        self,
+        pdf_bytes: bytes,
+        *,
+        generate_report: bool = False,
+        shift_headings: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        PDF Accessibility Auto-Tag API (official Python quickstart pattern).
+
+        https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/quickstarts/python/
+
+          autotag_pdf_job = AutotagPDFJob(input_asset)
+          location = pdf_services.submit(autotag_pdf_job)
+          result = pdf_services.get_job_result(location, AutotagPDFResult)
+          tagged = result.get_result().get_tagged_pdf()
+
+        Note: Requires Auto-Tag product profile on the Adobe credential.
+        Output is accessibility-tagged PDF (not a guarantee of full WCAG/PDF-UA).
+        """
+        if not pdf_bytes:
+            return {"success": False, "error": "empty PDF", "pdf_bytes": b""}
+
+        from adobe.pdfservices.operation.pdfjobs.jobs.autotag_pdf_job import AutotagPDFJob
+        from adobe.pdfservices.operation.pdfjobs.params.autotag_pdf.autotag_pdf_params import (
+            AutotagPDFParams,
+        )
+        from adobe.pdfservices.operation.pdfjobs.result.autotag_pdf_result import AutotagPDFResult
+
+        pdf_services = self._get_pdf_services()
+        input_asset = self._upload(pdf_services, pdf_bytes)
+        params = AutotagPDFParams(
+            generate_report=generate_report,
+            shift_headings=shift_headings,
+        )
+        job = AutotagPDFJob(input_asset, autotag_pdf_params=params)
+        location = pdf_services.submit(job)
+        response = pdf_services.get_job_result(location, AutotagPDFResult)
+        result = response.get_result()
+        tagged_asset = result.get_tagged_pdf()
+        tagged_bytes = self._download_result_bytes(pdf_services, tagged_asset)
+
+        report_bytes = b""
+        if generate_report:
+            try:
+                report_asset = result.get_report()
+                if report_asset:
+                    report_bytes = self._download_result_bytes(pdf_services, report_asset)
+            except Exception as exc:
+                logger.warning("[adobe-pdf] autotag report download skipped: %s", exc)
+
+        return {
+            "success": True,
+            "pdf_bytes": tagged_bytes,
+            "size": len(tagged_bytes),
+            "report_bytes": report_bytes,
+            "engine": "adobe_autotag",
+        }
+
     # ── Async wrappers (run sync SDK in thread to avoid blocking event loop) ──
 
     async def _to_thread(self, fn, *args, **kwargs):
@@ -285,6 +346,20 @@ class AdobePDFServicesClient:
 
     async def compress_pdf(self, pdf_bytes: bytes) -> bytes:
         return await self._to_thread(self.compress_pdf_sync, pdf_bytes)
+
+    async def autotag_pdf(
+        self,
+        pdf_bytes: bytes,
+        *,
+        generate_report: bool = False,
+        shift_headings: bool = False,
+    ) -> Dict[str, Any]:
+        return await self._to_thread(
+            self.autotag_pdf_sync,
+            pdf_bytes,
+            generate_report=generate_report,
+            shift_headings=shift_headings,
+        )
 
     def fill_local_pymupdf(self, pdf_bytes: bytes, field_map: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
         """Local AcroForm fill + bake (fallback when SDK form-import fails)."""
@@ -368,11 +443,20 @@ class AdobePDFServicesClient:
         pdf_parts: List[bytes],
         field_map: Optional[Dict[str, Any]] = None,
         names: Optional[List[str]] = None,
+        *,
+        autotag: Optional[bool] = None,
+        autotag_report: bool = False,
     ) -> Dict[str, Any]:
         """
-        Fill each part (when field_map provided), combine via SDK, optional compress.
+        Fill each part (when field_map provided), combine via SDK, optional compress,
+        optional PDF Accessibility Auto-Tag.
+
+        autotag: None → use env ADOBE_PDF_AUTOTAG (default false)
         """
         field_map = field_map or {}
+        if autotag is None:
+            autotag = os.getenv("ADOBE_PDF_AUTOTAG", "false").lower() in ("1", "true", "yes")
+
         filled_parts: List[bytes] = []
         fill_meta: List[Dict[str, Any]] = []
         for part in pdf_parts:
@@ -397,13 +481,34 @@ class AdobePDFServicesClient:
                     combine_engine = "adobe_sdk_combine"
                 except Exception as exc:
                     logger.warning("[adobe-pdf] SDK combine failed, local merge: %s", exc)
-                    combine_engine = f"local_fallback:{exc}"
                     combined = self._local_merge(filled_parts)
-                    if combine_engine.startswith("local"):
-                        combine_engine = "pymupdf_merge"
+                    combine_engine = "pymupdf_merge"
             else:
                 combined = self._local_merge(filled_parts)
                 combine_engine = "pymupdf_merge"
+
+        autotag_meta: Dict[str, Any] = {"enabled": bool(autotag)}
+        if autotag and combined and self.configured and _sdk_available():
+            try:
+                tagged = await self.autotag_pdf(
+                    combined,
+                    generate_report=autotag_report,
+                )
+                if tagged.get("success") and tagged.get("pdf_bytes"):
+                    combined = tagged["pdf_bytes"]
+                    autotag_meta.update({
+                        "applied": True,
+                        "size": tagged.get("size"),
+                        "engine": "adobe_autotag",
+                        "report_bytes_len": len(tagged.get("report_bytes") or b""),
+                    })
+                else:
+                    autotag_meta["applied"] = False
+                    autotag_meta["error"] = tagged.get("error") or "autotag returned empty"
+            except Exception as exc:
+                logger.warning("[adobe-pdf] AutotagPDFJob failed (is Auto-Tag API on this credential?): %s", exc)
+                autotag_meta["applied"] = False
+                autotag_meta["error"] = str(exc)[:300]
 
         return {
             "success": True,
@@ -412,6 +517,7 @@ class AdobePDFServicesClient:
             "parts": len(filled_parts),
             "combine_engine": combine_engine,
             "fill_meta": fill_meta,
+            "autotag": autotag_meta,
             "adobe_pdf_configured": self.configured,
             "sdk_available": _sdk_available(),
         }

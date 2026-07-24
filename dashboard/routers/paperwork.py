@@ -1638,10 +1638,18 @@ async def packet_builder_finalize(request: Request):
             if pdf_parts:
                 adobe_pdf = get_adobe_pdf_client()
                 if adobe_pdf.configured:
+                    # Auto-Tag optional (body or ADOBE_PDF_AUTOTAG env)
+                    autotag_flag = body.get("autotag")
+                    if autotag_flag is None:
+                        autotag_flag = None  # let service read env
+                    else:
+                        autotag_flag = bool(autotag_flag)
                     built = await adobe_pdf.build_flattened_packet(
                         pdf_parts,
                         field_map=fields,
                         names=part_names,
+                        autotag=autotag_flag,
+                        autotag_report=bool(body.get("autotag_report")),
                     )
                     adobe_pdf_meta = {
                         k: v for k, v in built.items() if k != "pdf_bytes"
