@@ -204,6 +204,10 @@ async def surety_liability(
 
         # Oldest → newest; supports full 2012 → present windows (no year cap)
         docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
+        if len(docs) >= REPORT_ROW_LIMIT:
+            date_warnings.append(
+                f"query hit row limit ({REPORT_ROW_LIMIT}); narrow the date range if rows look missing"
+            )
 
         # Group by surety
         surety_groups = {}

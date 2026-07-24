@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
@@ -223,10 +223,17 @@ def mongo_bond_date_filter(
     *,
     field: str = "bond_date",
 ) -> tuple[dict, list[str]]:
-    """Build a Mongo filter for date-only ``bond_date`` strings (YYYY-MM-DD).
+    """Build a Mongo filter compatible with mixed ``bond_date`` storage.
 
-    Uses lexicographic-safe date strings (not full ISO timestamps) so values
-    stored as ``YYYY-MM-DD`` from POA execute match correctly.
+    Production stores bond_date as either:
+      - ``YYYY-MM-DD`` (POA execute / match manager)
+      - full ISO timestamps (intake path: ``datetime.isoformat()``)
+
+    Bounds use date-only prefixes so both formats compare correctly under
+    lexicographic string match:
+      - start → ``$gte`` ``YYYY-MM-DD`` (includes ``YYYY-MM-DDT…`` same day)
+      - end   → ``$lt``  next calendar day (includes end-of-day ISO stamps;
+                pure ``$lte: YYYY-MM-DD`` would exclude ``YYYY-MM-DDT15:00``)
 
     Returns:
         (mongo_filter_fragment, warnings) — fragment is ``{}`` or ``{field: {...}}``.
@@ -238,8 +245,9 @@ def mongo_bond_date_filter(
     if start_dt:
         rng["$gte"] = start_dt.strftime("%Y-%m-%d")
     if end_dt:
-        # Inclusive end day for date-only storage
-        rng["$lte"] = end_dt.strftime("%Y-%m-%d")
+        # Exclusive upper bound = day after end → inclusive end day for both
+        # date-only and ISO-timestamp values.
+        rng["$lt"] = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
     return {field: rng}, warnings
 
 

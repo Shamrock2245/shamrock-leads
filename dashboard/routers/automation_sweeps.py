@@ -776,29 +776,65 @@ async def generate_bond_report(request: Request, api_key: str = ""):
     try:
         import base64
         bonds_col = get_collection("active_bonds")
-        # Active / open bonds for surety
+        # Active / open bonds for the requested surety (filter in Mongo so the
+        # REPORT_ROW_LIMIT cannot starve OSI with Palmetto rows or vice versa).
+        # Also keep legacy rows with no surety metadata — the XLSX builder treats
+        # them as the requested surety (same as pre-filter behaviour).
+        surety_match = {
+            "$or": [
+                {"surety": {"$regex": surety, "$options": "i"}},
+                {"surety_id": {"$regex": surety, "$options": "i"}},
+                {"insurance_company": {"$regex": surety, "$options": "i"}},
+                {
+                    "$and": [
+                        {"$or": [{"surety": {"$exists": False}}, {"surety": None}, {"surety": ""}]},
+                        {"$or": [
+                            {"surety_id": {"$exists": False}},
+                            {"surety_id": None},
+                            {"surety_id": ""},
+                        ]},
+                        {"$or": [
+                            {"insurance_company": {"$exists": False}},
+                            {"insurance_company": None},
+                            {"insurance_company": ""},
+                        ]},
+                    ]
+                },
+            ]
+        }
         q: dict[str, Any] = {
             "status": {
                 "$nin": [
                     "void", "voided", "expired", "exonerated", "surrendered",
                     "discharged", "forfeited", "closed", "cancelled",
                 ]
-            }
+            },
+            **surety_match,
         }
-        # Date window (bond_date stored as ISO YYYY-MM-DD strings — lexicographic safe)
+        # Date window (mixed YYYY-MM-DD + ISO timestamps — see mongo_bond_date_filter)
         if date_filter:
             q.update(date_filter)
-        # If no surety fields, still include all and filter in builder.
         # Oldest bond written first — the XLSX builder re-asserts this order too.
         docs = await bonds_col.find({**q}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
+        if len(docs) >= REPORT_ROW_LIMIT:
+            date_warnings.append(
+                f"active bond query hit row limit ({REPORT_ROW_LIMIT}); "
+                "narrow the date range if older rows look missing"
+            )
         voids = await bonds_col.find(
-            {"status": {"$in": ["void", "voided", "expired", "VOID"]}}
-        ).to_list(500)
+            {
+                "status": {"$in": ["void", "voided", "expired", "VOID"]},
+                **surety_match,
+            }
+        ).sort("bond_date", 1).to_list(500)
         discharges = []
         if include_discharges:
-            dis_q: dict[str, Any] = {"status": {"$in": ["exonerated", "surrendered", "discharged"]}}
-            if "bond_date" in q:
-                dis_q["bond_date"] = q["bond_date"]
+            dis_q: dict[str, Any] = {
+                "status": {"$in": ["exonerated", "surrendered", "discharged"]},
+                **surety_match,
+            }
+            if date_filter:
+                dis_q.update(date_filter)
             discharges = await bonds_col.find(dis_q).sort("bond_date", 1).to_list(2000)
 
         xlsx_bytes = build_official_bond_report(

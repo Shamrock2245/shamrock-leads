@@ -746,6 +746,8 @@ const SLReports = (() => {
 
   /* ── Export CSV ────────────────────────────────────────────────────── */
   function exportCSV() {
+    // Same surety ordering as print/PDF: oldest bond written first
+    resortForOutput();
     const itemized = document.querySelector('#rptItemizedTable');
     const tables = itemized ? [itemized] : Array.from(document.querySelectorAll('#rptTableWrap .rpt-table'));
     if (!tables.length) { toast('No data to export','warning'); return; }
@@ -894,10 +896,15 @@ const SLReports = (() => {
     const k = String(e.key || '').toLowerCase();
     if (k !== 's' && k !== 'p') return;
     if (!_reportsTabVisible() || !_currentReport) return;
+    // Don't steal Cmd/Ctrl+S while typing in form fields (schedule email, dates, etc.)
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) {
+      return;
+    }
     try {
       if (k === 's') {
         e.preventDefault();
-        resortForOutput();
+        // exportPDF() already re-sorts; avoid double toast/work
         toast('Report re-sorted oldest → newest — opening printable copy…', 'info');
         exportPDF();
       } else {

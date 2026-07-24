@@ -128,9 +128,13 @@ def test_parse_window_empty_ok():
 
 
 def test_mongo_bond_date_filter_uses_yyyy_mm_dd():
+    """End bound is exclusive next-day so ISO timestamps on end day still match."""
     filt, warnings = mongo_bond_date_filter("2015-01-01", "2016-12-31")
-    assert filt == {"bond_date": {"$gte": "2015-01-01", "$lte": "2016-12-31"}}
+    assert filt == {"bond_date": {"$gte": "2015-01-01", "$lt": "2017-01-01"}}
     assert warnings == []
+    # Pure $lte "2016-12-31" would exclude "2016-12-31T15:00:00" (intake ISO form)
+    assert "2016-12-31T15:00:00" < filt["bond_date"]["$lt"]
+    assert "2016-12-31" < filt["bond_date"]["$lt"]
 
 
 def test_mongo_bond_date_filter_clamp_pre_2012():
@@ -345,9 +349,10 @@ def test_surety_liability_date_clamp_and_sort_order(mock_get_db, reports_app):
     call_args = col.find.call_args
     query = call_args[0][0]
     assert query["bond_date"]["$gte"] == REPORT_EPOCH_ISO
-    assert query["bond_date"]["$lte"] == "2025-12-31"
+    # Inclusive end day → exclusive $lt next calendar day
+    assert query["bond_date"]["$lt"] == "2026-01-01"
     # No year-cap: range includes multi-year span through 2025
-    assert "2025" in query["bond_date"]["$lte"]
+    assert query["bond_date"]["$lt"] > "2025-12-31"
 
 
 @patch("dashboard.routers.reports.get_db")
