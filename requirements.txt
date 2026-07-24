@@ -90,3 +90,7 @@ SpeechRecognition>=3.10.0  # Google Speech Recognition (free, no API key)
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome via CDP)
+
+# Adobe PDF Services (official SDK — fill/combine/compress)
+# https://developer.adobe.com/document-services/docs/overview/pdf-services-api/quickstarts/python/
+pdfservices-sdk>=4.0.0
