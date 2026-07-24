@@ -1638,18 +1638,20 @@ async def packet_builder_finalize(request: Request):
             if pdf_parts:
                 adobe_pdf = get_adobe_pdf_client()
                 if adobe_pdf.configured:
-                    # Auto-Tag optional (body or ADOBE_PDF_AUTOTAG env)
-                    autotag_flag = body.get("autotag")
-                    if autotag_flag is None:
-                        autotag_flag = None  # let service read env
-                    else:
-                        autotag_flag = bool(autotag_flag)
+                    # Auto-Tag optional (howto: --report, --shift_headings)
+                    # https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/howtos/accessibility-auto-tag-api
+                    def _opt_bool(key):
+                        if key not in body:
+                            return None
+                        return bool(body.get(key))
+
                     built = await adobe_pdf.build_flattened_packet(
                         pdf_parts,
                         field_map=fields,
                         names=part_names,
-                        autotag=autotag_flag,
-                        autotag_report=bool(body.get("autotag_report")),
+                        autotag=_opt_bool("autotag"),
+                        autotag_report=_opt_bool("autotag_report"),
+                        autotag_shift_headings=_opt_bool("autotag_shift_headings"),
                     )
                     adobe_pdf_meta = {
                         k: v for k, v in built.items() if k != "pdf_bytes"

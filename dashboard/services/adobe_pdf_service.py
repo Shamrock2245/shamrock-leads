@@ -273,6 +273,71 @@ class AdobePDFServicesClient:
         result_asset = response.get_result().get_asset()
         return self._download_result_bytes(pdf_services, result_asset)
 
+    @staticmethod
+    def _preflight_for_autotag(pdf_bytes: bytes) -> Dict[str, Any]:
+        """
+        Soft preflight based on Adobe Auto-Tag API limitations:
+        https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/howtos/accessibility-auto-tag-api
+
+          - max 100 MB
+          - non-scanned up to ~200 pages (we warn at 200)
+          - fillable form fields / XFA are NOT supported → bake/flatten first
+        """
+        info: Dict[str, Any] = {
+            "size_bytes": len(pdf_bytes or b""),
+            "pages": None,
+            "had_widgets": False,
+            "baked_forms": False,
+            "disqualified": False,
+            "warnings": [],
+        }
+        if not pdf_bytes:
+            info["disqualified"] = True
+            info["warnings"].append("empty PDF")
+            return info
+        if len(pdf_bytes) > 100 * 1024 * 1024:
+            info["disqualified"] = True
+            info["warnings"].append("DISQUALIFIED_FILE_SIZE: exceeds 100 MB")
+            return info
+
+        try:
+            import fitz
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            info["pages"] = doc.page_count
+            if doc.page_count > 200:
+                info["disqualified"] = True
+                info["warnings"].append("DISQUALIFIED_PAGE_LIMIT: exceeds 200 pages")
+                doc.close()
+                return info
+
+            widget_count = 0
+            for page in doc:
+                widgets = list(page.widgets() or [])
+                widget_count += len(widgets)
+            info["had_widgets"] = widget_count > 0
+
+            # Adobe: "Files containing XFA and other fillable form elements are not supported."
+            # Bake widgets into page content before Auto-Tag.
+            if widget_count > 0:
+                try:
+                    doc.bake()
+                    info["baked_forms"] = True
+                    info["warnings"].append(
+                        f"Baked {widget_count} form widget(s) before Auto-Tag "
+                        "(fillable forms are unsupported by Auto-Tag API)."
+                    )
+                except Exception as bake_exc:
+                    info["warnings"].append(f"Could not bake form fields: {bake_exc}")
+
+            baked = doc.tobytes(deflate=True, garbage=3)
+            doc.close()
+            info["pdf_bytes"] = baked
+        except Exception as exc:
+            info["warnings"].append(f"preflight limited: {exc}")
+            info["pdf_bytes"] = pdf_bytes
+        return info
+
     def autotag_pdf_sync(
         self,
         pdf_bytes: bytes,
@@ -281,20 +346,31 @@ class AdobePDFServicesClient:
         shift_headings: bool = False,
     ) -> Dict[str, Any]:
         """
-        PDF Accessibility Auto-Tag API (official Python quickstart pattern).
+        PDF Accessibility Auto-Tag API
+        https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/howtos/accessibility-auto-tag-api
 
-        https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/quickstarts/python/
+        Options (howto CLI equivalents):
+          --report         → generate_report=True  (XLSX tagging report)
+          --shift_headings → shift_headings=True
 
-          autotag_pdf_job = AutotagPDFJob(input_asset)
-          location = pdf_services.submit(autotag_pdf_job)
-          result = pdf_services.get_job_result(location, AutotagPDFResult)
-          tagged = result.get_result().get_tagged_pdf()
+        Output:
+          - tagged PDF
+          - optional XLSX report when generate_report=True
 
-        Note: Requires Auto-Tag product profile on the Adobe credential.
-        Output is accessibility-tagged PDF (not a guarantee of full WCAG/PDF-UA).
+        Not a guarantee of full WCAG / PDF-UA compliance without remediation.
         """
         if not pdf_bytes:
             return {"success": False, "error": "empty PDF", "pdf_bytes": b""}
+
+        preflight = self._preflight_for_autotag(pdf_bytes)
+        if preflight.get("disqualified"):
+            return {
+                "success": False,
+                "error": "; ".join(preflight.get("warnings") or ["disqualified"]),
+                "pdf_bytes": b"",
+                "preflight": {k: v for k, v in preflight.items() if k != "pdf_bytes"},
+            }
+        work_pdf = preflight.get("pdf_bytes") or pdf_bytes
 
         from adobe.pdfservices.operation.pdfjobs.jobs.autotag_pdf_job import AutotagPDFJob
         from adobe.pdfservices.operation.pdfjobs.params.autotag_pdf.autotag_pdf_params import (
@@ -302,35 +378,59 @@ class AdobePDFServicesClient:
         )
         from adobe.pdfservices.operation.pdfjobs.result.autotag_pdf_result import AutotagPDFResult
 
-        pdf_services = self._get_pdf_services()
-        input_asset = self._upload(pdf_services, pdf_bytes)
-        params = AutotagPDFParams(
-            generate_report=generate_report,
-            shift_headings=shift_headings,
-        )
-        job = AutotagPDFJob(input_asset, autotag_pdf_params=params)
-        location = pdf_services.submit(job)
-        response = pdf_services.get_job_result(location, AutotagPDFResult)
-        result = response.get_result()
-        tagged_asset = result.get_tagged_pdf()
-        tagged_bytes = self._download_result_bytes(pdf_services, tagged_asset)
+        try:
+            pdf_services = self._get_pdf_services()
+            input_asset = self._upload(pdf_services, work_pdf)
+            # Parameterised path from Adobe howto samples
+            params = AutotagPDFParams(
+                generate_report=bool(generate_report),
+                shift_headings=bool(shift_headings),
+            )
+            job = AutotagPDFJob(input_asset, autotag_pdf_params=params)
+            location = pdf_services.submit(job)
+            response = pdf_services.get_job_result(location, AutotagPDFResult)
+            result = response.get_result()
+            tagged_asset = result.get_tagged_pdf()
+            tagged_bytes = self._download_result_bytes(pdf_services, tagged_asset)
 
-        report_bytes = b""
-        if generate_report:
-            try:
-                report_asset = result.get_report()
-                if report_asset:
-                    report_bytes = self._download_result_bytes(pdf_services, report_asset)
-            except Exception as exc:
-                logger.warning("[adobe-pdf] autotag report download skipped: %s", exc)
+            report_bytes = b""
+            if generate_report:
+                try:
+                    report_asset = result.get_report()
+                    if report_asset:
+                        report_bytes = self._download_result_bytes(pdf_services, report_asset)
+                except Exception as exc:
+                    logger.warning("[adobe-pdf] autotag XLSX report download skipped: %s", exc)
 
-        return {
-            "success": True,
-            "pdf_bytes": tagged_bytes,
-            "size": len(tagged_bytes),
-            "report_bytes": report_bytes,
-            "engine": "adobe_autotag",
-        }
+            return {
+                "success": True,
+                "pdf_bytes": tagged_bytes,
+                "size": len(tagged_bytes),
+                "report_bytes": report_bytes,
+                "report_content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                if report_bytes
+                else None,
+                "engine": "adobe_autotag",
+                "params": {
+                    "generate_report": bool(generate_report),
+                    "shift_headings": bool(shift_headings),
+                },
+                "preflight": {k: v for k, v in preflight.items() if k != "pdf_bytes"},
+                "limitations_note": (
+                    "Tagged output is not guaranteed WCAG/PDF-UA compliant without further remediation. "
+                    "Optimized for English; max 100MB / ~200 pages."
+                ),
+            }
+        except Exception as exc:
+            # Surface Adobe DISQUALIFIED_* style messages when present
+            msg = str(exc)
+            return {
+                "success": False,
+                "error": msg[:500],
+                "pdf_bytes": b"",
+                "engine": "adobe_autotag",
+                "preflight": {k: v for k, v in preflight.items() if k != "pdf_bytes"},
+            }
 
     # ── Async wrappers (run sync SDK in thread to avoid blocking event loop) ──
 
@@ -445,17 +545,26 @@ class AdobePDFServicesClient:
         names: Optional[List[str]] = None,
         *,
         autotag: Optional[bool] = None,
-        autotag_report: bool = False,
+        autotag_report: Optional[bool] = None,
+        autotag_shift_headings: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Fill each part (when field_map provided), combine via SDK, optional compress,
-        optional PDF Accessibility Auto-Tag.
+        optional PDF Accessibility Auto-Tag (howto params: --report, --shift_headings).
 
         autotag: None → use env ADOBE_PDF_AUTOTAG (default false)
         """
         field_map = field_map or {}
         if autotag is None:
             autotag = os.getenv("ADOBE_PDF_AUTOTAG", "false").lower() in ("1", "true", "yes")
+        if autotag_report is None:
+            autotag_report = os.getenv("ADOBE_PDF_AUTOTAG_REPORT", "false").lower() in (
+                "1", "true", "yes",
+            )
+        if autotag_shift_headings is None:
+            autotag_shift_headings = os.getenv(
+                "ADOBE_PDF_AUTOTAG_SHIFT_HEADINGS", "false"
+            ).lower() in ("1", "true", "yes")
 
         filled_parts: List[bytes] = []
         fill_meta: List[Dict[str, Any]] = []
@@ -492,7 +601,8 @@ class AdobePDFServicesClient:
             try:
                 tagged = await self.autotag_pdf(
                     combined,
-                    generate_report=autotag_report,
+                    generate_report=bool(autotag_report),
+                    shift_headings=bool(autotag_shift_headings),
                 )
                 if tagged.get("success") and tagged.get("pdf_bytes"):
                     combined = tagged["pdf_bytes"]
@@ -501,12 +611,22 @@ class AdobePDFServicesClient:
                         "size": tagged.get("size"),
                         "engine": "adobe_autotag",
                         "report_bytes_len": len(tagged.get("report_bytes") or b""),
+                        "params": tagged.get("params"),
+                        "preflight": tagged.get("preflight"),
+                        "limitations_note": tagged.get("limitations_note"),
                     })
+                    # Keep XLSX report out of return blob by default (large); expose size only
+                    if tagged.get("report_bytes"):
+                        autotag_meta["report_xlsx_available"] = True
                 else:
                     autotag_meta["applied"] = False
                     autotag_meta["error"] = tagged.get("error") or "autotag returned empty"
+                    autotag_meta["preflight"] = tagged.get("preflight")
             except Exception as exc:
-                logger.warning("[adobe-pdf] AutotagPDFJob failed (is Auto-Tag API on this credential?): %s", exc)
+                logger.warning(
+                    "[adobe-pdf] AutotagPDFJob failed (is Auto-Tag API on this credential?): %s",
+                    exc,
+                )
                 autotag_meta["applied"] = False
                 autotag_meta["error"] = str(exc)[:300]
 
