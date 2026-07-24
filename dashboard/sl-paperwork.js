@@ -1,11 +1,12 @@
 /**
  * sl-paperwork.js — Twenty CRM Style Document Operations & E-Signature Hub
- * Includes Interactive Drag & Drop Packet Builder
+ * Includes Interactive Drag & Drop Packet Builder & Post-Release Remedy Hub
  */
 const SLPaperwork = {
   _currentSubTab: 'live',
   _allPackets: [],
   _draggedDocKey: null,
+  _activePacketId: null,
 
   _docCatalog: [
     { key: "master_bail_application", label: "Master Bail Application", icon: "📄", badge: "Core", desc: "Defendant & Indemnitor personal data, employment, references" },
@@ -22,6 +23,9 @@ const SLPaperwork = {
     { key: "palmetto_power_certificate", label: "Palmetto Power Certificate", icon: "🌴", badge: "Surety Palmetto", desc: "Palmetto Surety official power of attorney cert" },
     { key: "palmetto_appearance_bond", label: "Palmetto Appearance Bond", icon: "🌴", badge: "Surety Palmetto", desc: "Palmetto Surety official court bond form" },
     { key: "cosigner_addendum", label: "Co-Signer Addendum", icon: "👥", badge: "Add-On", desc: "Additional indemnitor liability & guarantee form" },
+    { key: "additional_cosigner_addendum", label: "Multi Co-Signer Guaranty", icon: "👥", badge: "Add-On", desc: "Joint & several liability for 2nd, 3rd, or 4th co-signers" },
+    { key: "recovery_expense_addendum", label: "Fugitive Recovery Reimbursement", icon: "🎯", badge: "Recovery", desc: "Max legal recovery fees & itemized actual expenses contract" },
+    { key: "cash_premium_receipt", label: "Cash Premium Receipt", icon: "💵", badge: "Receipt", desc: "Official receipt form for cash premium transactions" },
     { key: "out_of_state_waiver", label: "Out-of-State Waiver", icon: "✈️", badge: "Add-On", desc: "Extradition and travel consent waiver" },
     { key: "gps_checkin_consent", label: "GPS / Check-In Consent", icon: "📍", badge: "Add-On", desc: "Automated check-in & location monitoring agreement" },
   ],
@@ -31,7 +35,7 @@ const SLPaperwork = {
     payment_plan: ["payment_plan_agreement", "credit_card_authorization", "promissory_note_schedule", "wage_assignment"],
     osi_surety: ["osi_appearance_bond", "osi_premium_receipt"],
     palmetto_surety: ["palmetto_power_certificate", "palmetto_appearance_bond"],
-    conditional: ["cosigner_addendum", "out_of_state_waiver", "gps_checkin_consent"]
+    conditional: ["cosigner_addendum", "additional_cosigner_addendum", "recovery_expense_addendum", "out_of_state_waiver", "gps_checkin_consent"]
   },
 
   async load() {
@@ -42,7 +46,7 @@ const SLPaperwork = {
 
   switchSubTab(tabName) {
     this._currentSubTab = tabName;
-    ['live', 'builder', 'templates', 'rules'].forEach(t => {
+    ['live', 'builder', 'templates', 'rules', 'post_release'].forEach(t => {
       const btn = document.getElementById(`pwSubTab_${t}`);
       const pane = document.getElementById(`pwPane_${t}`);
       if (btn) btn.classList.toggle('active', t === tabName);
@@ -104,6 +108,7 @@ const SLPaperwork = {
       const surety = (p.surety_id || 'osi').toUpperCase();
       const status = p.status || p.signnow_status || 'draft';
       const dt = p.created_at ? p.created_at.slice(0, 10) : '—';
+      const amt = p.premium_amount || p.bond_amount ? (p.premium_amount || (p.bond_amount * 0.1)) : 500.0;
 
       const suretyChipCls = surety === 'OSI' ? 'inv-chip-osi' : 'inv-chip-palm';
       const suretyIcon = surety === 'OSI' ? '🛡️ OSI' : '🌴 PSC';
@@ -126,10 +131,12 @@ const SLPaperwork = {
         <td>${statusBadge}</td>
         <td>${this._esc(dt)}</td>
         <td style="text-align:right">
-          <div style="display:inline-flex;gap:6px">
-            <button type="button" class="inv-btn" onclick="SLPaperwork.showHydrationAudit('${this._esc(pid)}')" style="font-size:11px;padding:3px 7px" title="Audit field hydration completeness">🔍 Audit</button>
-            ${p.drive_url ? `<a href="${this._esc(p.drive_url)}" target="_blank" class="inv-btn" style="font-size:11px;padding:3px 7px;color:#38bdf8" title="View signed PDF folder in Drive">☁️ Drive</a>` : ''}
-            ${status !== 'voided' ? `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${this._esc(pid)}')" style="font-size:11px;padding:3px 7px;color:#34d399" title="Deliver via BlueBubbles iMessage / SMS">📱 Deliver</button>` : ''}
+          <div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">
+            <button type="button" class="inv-btn" onclick="SLPaperwork.showHydrationAudit('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px" title="Audit field hydration completeness">🔍 Audit</button>
+            <button type="button" class="inv-btn" onclick="SLPaperwork.openSwipeSimpleModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#38bdf8" title="SwipeSimple credit card link">💳 Card</button>
+            <button type="button" class="inv-btn" onclick="SLPaperwork.openCashModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#4ade80" title="Log cash payment">💵 Cash</button>
+            ${p.drive_url ? `<a href="${this._esc(p.drive_url)}" target="_blank" class="inv-btn" style="font-size:10px;padding:2px 6px;color:#c084fc" title="View signed PDF folder in Drive">☁️ Drive</a>` : ''}
+            ${status !== 'voided' ? `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px;color:#34d399" title="Deliver via BlueBubbles iMessage / SMS">📱 Deliver</button>` : ''}
           </div>
         </td>
       `;
@@ -165,6 +172,101 @@ const SLPaperwork = {
     });
 
     this.renderLivePacketsTable(filtered);
+  },
+
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * SwipeSimple & Cash Payment Handlers
+   * ───────────────────────────────────────────────────────────────────────────── */
+  openSwipeSimpleModal(packetId = 'GENERAL', amount = 500.0) {
+    this._activePacketId = packetId;
+    const modal = document.getElementById('pwSwipeSimpleModal');
+    const amtEl = document.getElementById('pwSwipeSimpleAmount');
+    if (amtEl) amtEl.value = amount;
+    if (modal) { modal.style.display = 'flex'; modal.classList.add('active'); }
+  },
+
+  closeSwipeSimpleModal() {
+    const modal = document.getElementById('pwSwipeSimpleModal');
+    if (modal) { modal.style.display = 'none'; modal.classList.remove('active'); }
+  },
+
+  async sendSwipeSimpleLink() {
+    const amount = parseFloat(document.getElementById('pwSwipeSimpleAmount')?.value || '0');
+    const phone = document.getElementById('pwSwipeSimplePhone')?.value || '';
+
+    try {
+      const res = await fetch('/api/paperwork/payment/swipesimple-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ packet_id: this._activePacketId, amount, phone, deliver: true }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch SwipeSimple link');
+
+      alert(`💳 SwipeSimple payment link dispatched successfully!${data.delivered ? ` (Delivered to ${data.recipient})` : ''}`);
+      this.closeSwipeSimpleModal();
+    } catch (err) {
+      alert(`❌ Error: ${err.message}`);
+    }
+  },
+
+  openCashModal(packetId = 'GENERAL', amount = 500.0) {
+    this._activePacketId = packetId;
+    const modal = document.getElementById('pwCashModal');
+    const amtEl = document.getElementById('pwCashAmount');
+    if (amtEl) amtEl.value = amount;
+    if (modal) { modal.style.display = 'flex'; modal.classList.add('active'); }
+  },
+
+  closeCashModal() {
+    const modal = document.getElementById('pwCashModal');
+    if (modal) { modal.style.display = 'none'; modal.classList.remove('active'); }
+  },
+
+  async submitCashPayment() {
+    const amount = parseFloat(document.getElementById('pwCashAmount')?.value || '0');
+    const receivedFrom = document.getElementById('pwCashPayer')?.value || 'Indemnitor';
+    const notes = document.getElementById('pwCashNotes')?.value || '';
+
+    try {
+      const res = await fetch('/api/paperwork/payment/cash-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ packet_id: this._activePacketId, amount, received_from: receivedFrom, notes }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to log cash payment');
+
+      alert(`💵 Cash payment of $${amount.toFixed(2)} recorded! Receipt ID: ${data.receipt_id}`);
+      this.closeCashModal();
+    } catch (err) {
+      alert(`❌ Cash payment error: ${err.message}`);
+    }
+  },
+
+  /* ─────────────────────────────────────────────────────────────────────────────
+   * Post-Release & Forfeiture Remedy Document Generation
+   * ───────────────────────────────────────────────────────────────────────────── */
+  async generatePostReleaseRemedyDoc(docType) {
+    const packetId = prompt("Enter Packet ID or Case Number for this remedy document:", "LEE-2026-ACTIVE");
+    if (!packetId) return;
+
+    try {
+      const res = await fetch('/api/paperwork/post-release/remedy-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ doc_type: docType, packet_id: packetId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Remedy doc generation failed');
+
+      alert(`🛡️ ${data.message} generated successfully! Doc ID: ${data.doc_id}`);
+    } catch (err) {
+      alert(`❌ Error generating remedy document: ${err.message}`);
+    }
   },
 
   /* ─────────────────────────────────────────────────────────────────────────────
@@ -345,7 +447,7 @@ const SLPaperwork = {
       payment_plan: ["payment_plan_agreement", "credit_card_authorization", "promissory_note_schedule", "wage_assignment"],
       osi_surety: ["osi_appearance_bond", "osi_premium_receipt"],
       palmetto_surety: ["palmetto_power_certificate", "palmetto_appearance_bond"],
-      conditional: ["cosigner_addendum", "out_of_state_waiver", "gps_checkin_consent"]
+      conditional: ["cosigner_addendum", "additional_cosigner_addendum", "recovery_expense_addendum", "out_of_state_waiver", "gps_checkin_consent"]
     };
     this.renderBuilderWorkspace();
     this.showBuilderToast('🔄 Document rules reset to defaults', 'warning');

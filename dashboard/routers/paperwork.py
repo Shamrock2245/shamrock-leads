@@ -1194,3 +1194,128 @@ async def validate_signnow_templates():
         "palmetto_todos": palmetto_todos,
         "templates": results,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SwipeSimple Link, Cash Payment & Post-Release Remedy Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+@paperwork_bp.post("/paperwork/payment/swipesimple-link")
+async def generate_swipesimple_link(request: Request):
+    """Generate SwipeSimple checkout URL and optionally deliver via BlueBubbles iMessage/SMS."""
+    try:
+        body = await request.json()
+        packet_id = body.get("packet_id", "")
+        amount = body.get("amount", 0.0)
+        phone = body.get("phone", "")
+        deliver = body.get("deliver", False)
+
+        swipesimple_url = "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
+        recipient = phone or "client"
+
+        delivered = False
+        if deliver and phone:
+            try:
+                bb = get_bb_client()
+                msg = f"💳 Shamrock Bail Bonds — Pay Premium Online: {swipesimple_url}\nAmount Due: ${amount:,.2f}"
+                res = await bb.send_message(phone=phone, message=msg)
+                delivered = bool(res and res.get("success"))
+            except Exception as bb_err:
+                logger.warning("SwipeSimple iMessage delivery warning: %s", bb_err)
+
+        return {
+            "success": True,
+            "packet_id": packet_id,
+            "amount": amount,
+            "payment_link": swipesimple_url,
+            "delivered": delivered,
+            "recipient": recipient,
+        }
+    except Exception as exc:
+        logger.exception("swipesimple-link error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/payment/cash-log")
+async def log_cash_payment(request: Request):
+    """Log official cash premium payment and generate receipt record."""
+    try:
+        body = await request.json()
+        packet_id = body.get("packet_id", "")
+        amount = float(body.get("amount", 0.0))
+        received_from = body.get("received_from", "Indemnitor")
+        notes = body.get("notes", "")
+
+        tx_col = get_collection("payments")
+        receipt_id = f"CASH-{uuid.uuid4().hex[:8].upper()}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        record = {
+            "receipt_id": receipt_id,
+            "packet_id": packet_id,
+            "amount": amount,
+            "payment_method": "cash",
+            "received_from": received_from,
+            "notes": notes,
+            "status": "completed",
+            "created_at": now_iso,
+        }
+        await tx_col.insert_one(record)
+
+        return {
+            "success": True,
+            "message": f"Cash payment of ${amount:,.2f} recorded successfully",
+            "receipt_id": receipt_id,
+            "record": {k: v for k, v in record.items() if k != "_id"},
+        }
+    except Exception as exc:
+        logger.exception("cash-log error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/post-release/remedy-doc")
+async def generate_post_release_remedy_doc(request: Request):
+    """Generate post-release legal documents & forfeiture remedies."""
+    try:
+        body = await request.json()
+        doc_type = body.get("doc_type", "")
+        packet_id = body.get("packet_id", "")
+        case_number = body.get("case_number", "TBD")
+        defendant_name = body.get("defendant_name", "Unknown Defendant")
+        county = body.get("county", "Lee")
+        notes = body.get("notes", "")
+
+        remedy_col = get_collection("forfeiture_remedies")
+        doc_id = f"REMEDY-{uuid.uuid4().hex[:8].upper()}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        titles = {
+            "motion_vacate_forfeiture": "Motion to Vacate Forfeiture & Discharge Bond",
+            "affidavit_surrender": "Affidavit of Defendant Surrender & Notice of Custody",
+            "indemnitor_recovery_demand": "Formal Indemnitor Recovery Demand & Notice of Forfeiture",
+            "fugitive_recovery_warrant": "Fugitive Recovery Agent Warrant & Authorization",
+        }
+        title = titles.get(doc_type, "Post-Release Legal Pleading")
+
+        doc_record = {
+            "doc_id": doc_id,
+            "doc_type": doc_type,
+            "title": title,
+            "packet_id": packet_id,
+            "case_number": case_number,
+            "defendant_name": defendant_name,
+            "county": county,
+            "notes": notes,
+            "status": "draft_generated",
+            "created_at": now_iso,
+        }
+        await remedy_col.insert_one(doc_record)
+
+        return {
+            "success": True,
+            "message": f"Generated {title}",
+            "doc_id": doc_id,
+            "record": {k: v for k, v in doc_record.items() if k != "_id"},
+        }
+    except Exception as exc:
+        logger.exception("remedy-doc error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)

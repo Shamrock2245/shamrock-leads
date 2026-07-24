@@ -4336,6 +4336,7 @@
         <button class="inv-tab-btn" id="pwSubTab_builder" onclick="SLPaperwork.switchSubTab('builder')">🎯 Drag & Drop Packet Builder</button>
         <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
         <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
+        <button class="inv-tab-btn" id="pwSubTab_post_release" onclick="SLPaperwork.switchSubTab('post_release')">🛡️ Post-Release & Forfeiture Remedies</button>
       </div>
 
       <!-- Summary KPI Strip -->
@@ -4545,20 +4546,108 @@
         </div>
       </div>
 
-      <!-- Field Hydration Audit Modal -->
-      <div class="inv-modal-backdrop" id="pwHydrationModal" style="display:none;">
-        <div class="inv-modal" style="max-width:550px">
+      <!-- Sub-pane 5: Post-Release & Forfeiture Remedies -->
+      <div id="pwPane_post_release" style="display:none">
+        <div class="glass-panel" style="margin-top:16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:12px;">
+            <div>
+              <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+                <span>🛡️ Post-Release & Forfeiture Remedies Operations</span>
+              </h3>
+              <p style="margin:4px 0 0 0;font-size:12px;color:var(--text-muted,#94a3b8)">
+                Generate court pleadings, surrender affidavits, indemnitor recovery demands, and fugitive recovery agent authorizations.
+              </p>
+            </div>
+          </div>
+
+          <!-- 1-Click Remedy Document Generators Grid -->
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:14px;margin-bottom:20px;">
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(56,189,248,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px 0;font-size:14px;color:#38bdf8">⚖️ Motion to Vacate Forfeiture</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px 0">Formal court motion pleading to set aside forfeiture and discharge bond.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" onclick="SLPaperwork.generatePostReleaseRemedyDoc('motion_vacate_forfeiture')">Generate Motion</button>
+            </div>
+
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(34,197,94,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px 0;font-size:14px;color:#4ade80">📝 Affidavit of Surrender</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px 0">Sworn affidavit of custody surrender & jail receipt acknowledgment.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" onclick="SLPaperwork.generatePostReleaseRemedyDoc('affidavit_surrender')">Generate Affidavit</button>
+            </div>
+
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(251,146,60,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px 0;font-size:14px;color:#fb923c">📩 Indemnitor Recovery Demand</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px 0">Formal legal demand letter to indemnitors following non-appearance.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" onclick="SLPaperwork.generatePostReleaseRemedyDoc('indemnitor_recovery_demand')">Send Legal Demand</button>
+            </div>
+
+            <div style="background:rgba(15,23,42,0.6);border:1px solid rgba(244,63,94,0.3);border-radius:10px;padding:14px;">
+              <h4 style="margin:0 0 6px 0;font-size:14px;color:#fb7185">🎯 Fugitive Recovery Warrant</h4>
+              <p style="font-size:11px;color:#94a3b8;margin:0 0 10px 0">Authorization & warrant assignment for licensed recovery agents.</p>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:100%" onclick="SLPaperwork.generatePostReleaseRemedyDoc('fugitive_recovery_warrant')">Issue Agent Warrant</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SwipeSimple Credit Card Modal -->
+      <div class="inv-modal-backdrop" id="pwSwipeSimpleModal" style="display:none;">
+        <div class="inv-modal" style="max-width:500px">
           <div class="inv-modal-header">
             <div class="inv-modal-title">
-              <span>🔍 SignNow Field Hydration Audit</span>
+              <span>💳 SwipeSimple Credit Card Payment</span>
             </div>
-            <button class="inv-modal-close" onclick="SLPaperwork.closeHydrationModal()">✕</button>
+            <button class="inv-modal-close" onclick="SLPaperwork.closeSwipeSimpleModal()">✕</button>
           </div>
-          <div class="inv-modal-body" id="pwHydrationModalBody">
-            <p>Loading hydration audit…</p>
+          <div class="inv-modal-body">
+            <div style="background:rgba(15,23,42,0.8);border:1px solid rgba(56,189,248,0.3);border-radius:8px;padding:14px;margin-bottom:16px;text-align:center;">
+              <div style="font-size:12px;color:#94a3b8">Online Payment Link</div>
+              <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" style="font-family:monospace;font-size:12px;color:#38bdf8;word-break:break-all;display:block;margin:6px 0;">https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd</a>
+              <div style="font-size:11px;color:#94a3b8">Send this payment link directly to indemnitor / defendant</div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <label style="font-size:12px;color:var(--text)">Amount Due ($)</label>
+              <input type="number" id="pwSwipeSimpleAmount" placeholder="500.00" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px">
+
+              <label style="font-size:12px;color:var(--text)">Client Cell Phone (iMessage / SMS)</label>
+              <input type="text" id="pwSwipeSimplePhone" placeholder="239-555-0199" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px">
+            </div>
+          </div>
+          <div class="inv-modal-footer" style="display:flex;justify-content:space-between;gap:10px">
+            <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" class="btn btn-secondary">Open Terminal Page</a>
+            <button type="button" class="btn btn-primary" onclick="SLPaperwork.sendSwipeSimpleLink()">📱 Send Link via iMessage</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cash Payment Receipt Modal -->
+      <div class="inv-modal-backdrop" id="pwCashModal" style="display:none;">
+        <div class="inv-modal" style="max-width:480px">
+          <div class="inv-modal-header">
+            <div class="inv-modal-title">
+              <span>💵 Record Cash Premium Payment</span>
+            </div>
+            <button class="inv-modal-close" onclick="SLPaperwork.closeCashModal()">✕</button>
+          </div>
+          <div class="inv-modal-body">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div>
+                <label style="font-size:12px;color:var(--text)">Cash Amount Collected ($)</label>
+                <input type="number" id="pwCashAmount" placeholder="500.00" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px;width:100%">
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--text)">Received From (Indemnitor / Payer Name)</label>
+                <input type="text" id="pwCashPayer" placeholder="John Doe" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px;width:100%">
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--text)">Notes / Receipt Reference</label>
+                <input type="text" id="pwCashNotes" placeholder="Paid in cash at Ft. Myers office" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px;width:100%">
+              </div>
+            </div>
           </div>
           <div class="inv-modal-footer" style="display:flex;justify-content:flex-end;gap:10px">
-            <button type="button" class="inv-btn" onclick="SLPaperwork.closeHydrationModal()">Close</button>
+            <button type="button" class="btn btn-secondary" onclick="SLPaperwork.closeCashModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="SLPaperwork.submitCashPayment()">💵 Log Cash & Issue Receipt</button>
           </div>
         </div>
       </div>

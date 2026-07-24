@@ -127,3 +127,53 @@ def test_save_doc_rules_config_endpoint(mock_get_col, test_app):
     assert "categories" in data
     assert len(data["categories"]["universal"]) == 3
     mock_rules_col.update_one.assert_called_once()
+
+
+def test_swipesimple_link_endpoint(test_app):
+    client = TestClient(test_app)
+    payload = {"packet_id": "pkt_3003", "amount": 750.00, "phone": "239-555-0199", "deliver": False}
+    response = client.post("/api/paperwork/payment/swipesimple-link", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert "swipesimple.com" in data["payment_link"]
+    assert data["amount"] == 750.00
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+def test_cash_payment_log_endpoint(mock_get_col, test_app):
+    mock_tx_col = AsyncMock()
+    mock_get_col.return_value = mock_tx_col
+    mock_tx_col.insert_one = AsyncMock()
+
+    client = TestClient(test_app)
+    payload = {"packet_id": "pkt_3003", "amount": 500.00, "received_from": "Jane Doe", "notes": "Cash at office"}
+    response = client.post("/api/paperwork/payment/cash-log", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["receipt_id"].startswith("CASH-")
+    mock_tx_col.insert_one.assert_called_once()
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+def test_post_release_remedy_doc_endpoint(mock_get_col, test_app):
+    mock_remedy_col = AsyncMock()
+    mock_get_col.return_value = mock_remedy_col
+    mock_remedy_col.insert_one = AsyncMock()
+
+    client = TestClient(test_app)
+    payload = {
+        "doc_type": "motion_vacate_forfeiture",
+        "packet_id": "pkt_3003",
+        "case_number": "26-CF-009999",
+        "defendant_name": "Test Defendant",
+        "county": "Lee",
+    }
+    response = client.post("/api/paperwork/post-release/remedy-doc", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["doc_id"].startswith("REMEDY-")
+    assert "Motion to Vacate" in data["message"]
+    mock_remedy_col.insert_one.assert_called_once()
