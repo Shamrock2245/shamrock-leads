@@ -170,6 +170,61 @@ def _money(n: float) -> float:
     return round(float(n or 0), 2)
 
 
+# Earliest supported bond record date — reports may span 2012 → present.
+REPORT_EPOCH = datetime(2012, 1, 1)
+
+
+def _bond_sort_key(record: dict) -> tuple:
+    """Chronological sort key: oldest bond written first, newest last.
+
+    Records with unparseable/missing bond dates sort to the end (datetime.max)
+    so they never silently disappear — they simply trail the dated rows.
+    Ties are broken by power number, then defendant name for stable output.
+    """
+    dt = _fmt_date(
+        record.get("bond_date")
+        or record.get("date_executed")
+        or record.get("posted_date")
+        or record.get("created_at")
+    )
+    power = str(
+        record.get("power_number")
+        or record.get("poa_number")
+        or record.get("power")
+        or record.get("power_no")
+        or ""
+    )
+    name = str(record.get("defendant_name") or record.get("full_name") or record.get("name") or "")
+    if dt is not None and dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return (dt or datetime.max, power, name)
+
+
+def sort_bonds_chronologically(records: Iterable[dict]) -> list[dict]:
+    """Return records sorted oldest → newest by bond date (graceful on bad data).
+
+    Never raises: if a record is not a dict or a date cannot be parsed, the
+    record is retained and placed after all dated rows. Errors are logged
+    with counts so problems are visible without crashing report generation.
+    """
+    items = [r for r in (records or []) if isinstance(r, dict)]
+    undated = sum(
+        1 for r in items
+        if _fmt_date(r.get("bond_date") or r.get("date_executed") or r.get("posted_date") or r.get("created_at")) is None
+    )
+    if undated:
+        logger.warning(
+            "bond_report_xlsx: %d of %d record(s) missing/unparseable bond dates; "
+            "they will be listed after dated rows (booking/power refs preserved)",
+            undated, len(items),
+        )
+    try:
+        return sorted(items, key=_bond_sort_key)
+    except Exception:
+        logger.exception("bond_report_xlsx: chronological sort failed; returning original order")
+        return items
+
+
 def _style_workbook(wb, sheet_title: str = "Report"):
     Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _require_openpyxl()
     # styles applied in build functions
@@ -194,10 +249,12 @@ def build_official_bond_report(
 
     surety_key = _norm_surety(surety)
     report_date = report_date or datetime.now(timezone.utc).replace(tzinfo=None)
-    bonds = list(bonds)
-    voids = list(voids or [])
-    discharges = list(discharges or [])
-    transfers = list(transfers or [])
+    # Official surety ordering: oldest bond written in the report period first,
+    # newest last — every row keeps its own details (power #, dates, premiums).
+    bonds = sort_bonds_chronologically(bonds)
+    voids = sort_bonds_chronologically(voids)
+    discharges = sort_bonds_chronologically(discharges)
+    transfers = sort_bonds_chronologically(transfers)
 
     wb = Workbook()
     ws = wb.active

@@ -756,17 +756,41 @@ async def generate_bond_report(request: Request, api_key: str = ""):
         surety = "OSI"
     include_discharges = bool(body.get("include_discharges", True))
     store = bool(body.get("store", True))
+    # ── Optional reporting window: any range from 2012-01-01 → present ──
+    # Accepts "start_date" / "end_date" (YYYY-MM-DD). Bad values never crash the
+    # report — they are surfaced back in the response as warnings instead.
+    REPORT_EPOCH = "2012-01-01"
+    date_warnings: list[str] = []
 
+    def _parse_report_date(raw: Any, label: str) -> datetime | None:
+        if not raw:
+            return None
+        try:
+            d = datetime.strptime(str(raw).strip()[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            date_warnings.append(f"{label} {raw!r} is not a valid YYYY-MM-DD date — ignored")
+            return None
+        if d.strftime("%Y-%m-%d") < REPORT_EPOCH:
+            date_warnings.append(
+                f"{label} {raw!r} predates earliest supported record ({REPORT_EPOCH}) — clamped"
+            )
+            d = datetime(2012, 1, 1, tzinfo=timezone.utc)
+        return d
+
+    start_dt = _parse_report_date(body.get("start_date"), "start_date")
+    end_dt = _parse_report_date(body.get("end_date"), "end_date")
+    if start_dt and end_dt and start_dt > end_dt:
+        date_warnings.append("start_date after end_date — range swapped")
+        start_dt, end_dt = end_dt, start_dt
     try:
         from dashboard.services.bond_report_xlsx import (
             build_official_bond_report,
             filename_for,
         )
         import base64
-
         bonds_col = get_collection("active_bonds")
         # Active / open bonds for surety
-        q = {
+        q: dict[str, Any] = {
             "status": {
                 "$nin": [
                     "void", "voided", "expired", "exonerated", "surrendered",
@@ -774,6 +798,15 @@ async def generate_bond_report(request: Request, api_key: str = ""):
                 ]
             }
         }
+        # Date window (bond_date stored as ISO YYYY-MM-DD strings — lexicographic safe)
+        if start_dt or end_dt:
+            rng: dict[str, Any] = {}
+            if start_dt:
+                rng["$gte"] = start_dt.strftime("%Y-%m-%d")
+            if end_dt:
+                # inclusive end-of-day
+                rng["$lte"] = (end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+            q["bond_date"] = rng
         # surety match flexible
         surety_q = {
             "$or": [
@@ -782,18 +815,18 @@ async def generate_bond_report(request: Request, api_key: str = ""):
                 {"insurance_company": {"$regex": surety, "$options": "i"}},
             ]
         }
-        # If no surety fields, still include all and filter in builder
-        docs = await bonds_col.find({**q}).sort("bond_date", -1).to_list(2000)
-
+        # If no surety fields, still include all and filter in builder.
+        # Oldest bond written first — the XLSX builder re-asserts this order too.
+        docs = await bonds_col.find({**q}).sort("bond_date", 1).to_list(5000)
         voids = await bonds_col.find(
             {"status": {"$in": ["void", "voided", "expired", "VOID"]}}
         ).to_list(500)
-
         discharges = []
         if include_discharges:
-            discharges = await bonds_col.find(
-                {"status": {"$in": ["exonerated", "surrendered", "discharged"]}}
-            ).sort("updated_at", -1).to_list(500)
+            dis_q: dict[str, Any] = {"status": {"$in": ["exonerated", "surrendered", "discharged"]}}
+            if "bond_date" in q:
+                dis_q["bond_date"] = q["bond_date"]
+            discharges = await bonds_col.find(dis_q).sort("bond_date", 1).to_list(2000)
 
         xlsx_bytes = build_official_bond_report(
             docs,
@@ -803,7 +836,6 @@ async def generate_bond_report(request: Request, api_key: str = ""):
             discharges=discharges,
         )
         fname = filename_for(surety, "Bond_Report")
-
         meta = {
             "ok": True,
             "action": "bond_report",
@@ -813,6 +845,10 @@ async def generate_bond_report(request: Request, api_key: str = ""):
             "active_rows_scanned": len(docs),
             "voids": len(voids),
             "discharges": len(discharges),
+            "sort_order": "bond_date ascending (oldest bond first)",
+            "start_date": start_dt.strftime("%Y-%m-%d") if start_dt else None,
+            "end_date": end_dt.strftime("%Y-%m-%d") if end_dt else None,
+            "warnings": date_warnings or None,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -836,7 +872,25 @@ async def generate_bond_report(request: Request, api_key: str = ""):
         return meta
     except Exception as exc:
         logger.exception("[automation] bond-report failed: %s", exc)
-        return JSONResponse({"ok": False, "error": str(exc)[:400]}, status_code=500)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "context": {
+                    "surety": surety,
+                    "start_date": body.get("start_date"),
+                    "end_date": body.get("end_date"),
+                    "include_discharges": include_discharges,
+                },
+                "warnings": date_warnings or None,
+                "hint": (
+                    "Verify MongoDB connectivity and that active_bonds documents carry "
+                    "bond_date (YYYY-MM-DD). Date range accepts 2012-01-01 → today."
+                ),
+            },
+            status_code=500,
+        )
 
 
 @automation_bp.post("/discharge-report")

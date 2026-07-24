@@ -13,11 +13,42 @@ const SLReports = (() => {
   const fmtDate  = d => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
   const escHtml  = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
+  /* ── Chronological bond sort: oldest bond written first, newest last ──
+     Rows with missing/unparseable dates sort to the end (never dropped).
+     Graceful: any exception returns the original order and logs a warning. */
+  function sortBondsOldestFirst(list, dateFields) {
+    const fields = dateFields || ['bond_date','date_executed','posted_date','created_at'];
+    try {
+      const parse = b => {
+        for (const f of fields) {
+          const v = b && b[f];
+          if (v) {
+            const t = Date.parse(String(v).slice(0, 19));
+            if (!isNaN(t)) return t;
+          }
+        }
+        return Number.MAX_SAFE_INTEGER; // undated rows trail dated rows
+      };
+      return [...(list||[])].sort((a,b) => {
+        const d = parse(a) - parse(b);
+        if (d !== 0) return d;
+        const pa = String(a.poa_number||a.power_number||''), pb = String(b.poa_number||b.power_number||'');
+        return pa.localeCompare(pb);
+      });
+    } catch (e) {
+      console.warn('[SLReports] chronological sort failed — keeping original order:', e);
+      return list || [];
+    }
+  }
+
   let _currentReport = null;
   let _currentData   = null;
   let _currentPreset = 'mtd';
   let _chartInstance = null;
   let _loaded        = false;
+
+  // Earliest supported bond record — reports may span 2012 → present.
+  const REPORT_EPOCH = '2012-01-01';
 
   /* ── Date preset logic ─────────────────────────────────────────────── */
   function _presetDates(preset) {
@@ -45,9 +76,21 @@ const SLReports = (() => {
       case 'ytd': {
         start = `${now.getFullYear()}-01-01`; label = 'Year to Date'; break;
       }
+      case 'all': {
+        start = REPORT_EPOCH; label = 'All Time (Since 2012)'; break;
+      }
       default:
-        start = $('rptStartDate')?.value || ''; label = 'Custom Range'; break;
+        start = $('rptStartDate')?.value || '';
+        end   = $('rptEndDate')?.value || today;
+        label = 'Custom Range'; break;
     }
+    // Clamp any range to the supported record window (2012-01-01 → today)
+    if (start && start < REPORT_EPOCH) {
+      toast(`Start date clamped to ${REPORT_EPOCH} (earliest bond records)`, 'info');
+      start = REPORT_EPOCH;
+    }
+    if (end && end > today) end = today;
+    if (start && end && start > end) { const t = start; start = end; end = t; }
     return { start, end, label };
   }
 
@@ -351,8 +394,15 @@ const SLReports = (() => {
     let itemRows = [];
     let idx = 0;
 
-    sureties.forEach(s => {
-      (s.bonds || []).forEach(b => {
+    // Flatten all surety groups and re-sort chronologically (oldest bond first)
+    // so the register reads exactly like the official surety workbook.
+    const allBonds = [];
+    sureties.forEach(s => (s.bonds || []).forEach(b => allBonds.push({ ...b, _suretyGroup: s.surety })));
+    const orderedBonds = sortBondsOldestFirst(allBonds);
+
+    orderedBonds.forEach(b => {
+      {
+        const s = { surety: b._suretyGroup };
         idx++;
         const poa = b.poa_number || b.poa_full || '—';
         const def = b.defendant_name || `${b.defendant_first_name || ''} ${b.defendant_last_name || ''}`.trim() || '—';
@@ -378,7 +428,7 @@ const SLReports = (() => {
           <td class="rpt-col-buf" style="text-align:right;color:#38bdf8">${money(bufOwed)}</td>
           <td class="rpt-col-agent" style="text-align:right;color:#c084fc">${money(agentRetains)}</td>
         </tr>`);
-      });
+      }
     });
 
     if (itemRows.length > 0) {
@@ -557,7 +607,7 @@ const SLReports = (() => {
       { label: 'Exonerated',       value: String(data.exonerated_count||0),      color: 'rpt-val-green' },
       { label: 'Surrendered',      value: String(data.surrendered_count||0),     color: 'rpt-val-gold'  },
     ]);
-    const bonds = data.bonds || [];
+    const bonds = sortBondsOldestFirst(data.bonds || []);
     const headers = ['Defendant','County','Bond Amount','Surety','Status','Discharge Date','Agent'];
     const rows = bonds.map(b => [
       `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
@@ -577,7 +627,7 @@ const SLReports = (() => {
       { label: 'Total Exposure',    value: money(data.total_liability||0),      color: 'rpt-val-red'   },
       { label: 'Avg Bond',          value: money(data.avg_bond_amount||0),      color: 'rpt-val-gold'  },
     ]);
-    const bonds = data.bonds || [];
+    const bonds = sortBondsOldestFirst(data.bonds || []);
     const headers = ['Defendant','County','Bond Amount','Surety','Forfeiture Date','Court Date','Agent'];
     const rows = bonds.map(b => [
       `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
@@ -712,9 +762,75 @@ const SLReports = (() => {
   }
 
   /* ── Export PDF (print-based) ──────────────────────────────────────── */
+  /* ── Re-sort visible report tables oldest → newest before print/save ──
+     Walks every rendered report table, finds its date column, and reorders
+     <tr> rows chronologically in the DOM. Idempotent and graceful: tables
+     without a date column, totals rows, and undated rows are preserved in
+     place / at the end. Returns a diagnostic summary object. */
+  function resortForOutput() {
+    const summary = { tables: 0, sorted: 0, undated: 0, skipped: 0, errors: [] };
+    try {
+      const tables = document.querySelectorAll('#rptTableWrap table');
+      summary.tables = tables.length;
+      tables.forEach(table => {
+        try {
+          const ths = Array.from(table.querySelectorAll('thead th'));
+          const dateIdx = ths.findIndex(th => /date/i.test(th.textContent || ''));
+          if (dateIdx < 0) { summary.skipped++; return; }
+          const tbody = table.querySelector('tbody');
+          if (!tbody) { summary.skipped++; return; }
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          const dataRows = [], tailRows = [];
+          rows.forEach(tr => {
+            // Keep totals / spacer rows pinned to the bottom
+            if (tr.id === 'rptTotalsRow' || /\bTOTALS\b/.test(tr.textContent || '') || !tr.querySelector('td')) {
+              tailRows.push(tr);
+            } else {
+              dataRows.push(tr);
+            }
+          });
+          const keyOf = tr => {
+            const cells = tr.querySelectorAll('td');
+            const cell = cells[dateIdx];
+            const t = cell ? Date.parse(String(cell.textContent || '').trim().slice(0, 24)) : NaN;
+            if (isNaN(t)) { summary.undated++; return Number.MAX_SAFE_INTEGER; }
+            return t;
+          };
+          dataRows
+            .map(tr => ({ tr, k: keyOf(tr) }))
+            .sort((a, b) => a.k - b.k)
+            .forEach(({ tr }) => tbody.appendChild(tr));
+          tailRows.forEach(tr => tbody.appendChild(tr));
+          summary.sorted++;
+        } catch (e) {
+          summary.errors.push(String(e && e.message || e));
+        }
+      });
+      // Renumber visible Count/index cells after reorder (first cell if numeric)
+      document.querySelectorAll('#rptTableWrap table tbody').forEach(tb => {
+        let n = 0;
+        tb.querySelectorAll('tr').forEach(tr => {
+          const first = tr.querySelector('td');
+          if (first && /^\d+$/.test((first.textContent || '').trim())) first.textContent = String(++n);
+        });
+      });
+    } catch (e) {
+      summary.errors.push(String(e && e.message || e));
+      console.warn('[SLReports] resortForOutput failed:', e);
+    }
+    if (summary.errors.length) {
+      toast(`Report re-sort hit ${summary.errors.length} issue(s) — original order kept where needed. See console for details.`, 'warning');
+      console.warn('[SLReports] resort diagnostics:', summary);
+    }
+    return summary;
+  }
+
   function exportPDF() {
     const panel = $('rptResultsPanel');
     if (!panel) return;
+    // Surety requirement: bonds print oldest → newest, each row keeping its
+    // power #, bond date, and premium details.
+    resortForOutput();
     const title = $('rptResultsTitle')?.textContent || 'Report';
     const range = $('rptRangeLabel')?.textContent   || '';
     const w = window.open('','_blank','width=900,height=700');
@@ -745,6 +861,45 @@ const SLReports = (() => {
 
   /* ── Print report ──────────────────────────────────────────────────── */
   function printReport() { exportPDF(); }
+
+  /* ── Auto re-sort on print / save keystrokes ──
+     ⌘S / Ctrl+S — re-sorts the on-screen report oldest → newest and opens
+                    the printable copy (macOS "save" muscle memory covered).
+     ⌘P / Ctrl+P — re-sorts in place, then lets the native print dialog open.
+     window.onbeforeprint — safety net for menu-driven File ▸ Print. */
+  function _reportsTabVisible() {
+    const tab = $('tabReports');
+    return !!(tab && tab.offsetParent !== null);
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const k = String(e.key || '').toLowerCase();
+    if (k !== 's' && k !== 'p') return;
+    if (!_reportsTabVisible() || !_currentReport) return;
+    try {
+      if (k === 's') {
+        e.preventDefault();
+        resortForOutput();
+        toast('Report re-sorted oldest → newest — opening printable copy…', 'info');
+        exportPDF();
+      } else {
+        // Let the browser print dialog open, but sort the DOM first
+        resortForOutput();
+      }
+    } catch (err) {
+      console.error('[SLReports] print/save hotkey handler failed:', err);
+      toast('Could not auto-sort before output: ' + (err && err.message || err), 'error');
+    }
+  });
+
+  window.addEventListener('beforeprint', function () {
+    try {
+      if (_reportsTabVisible() && _currentReport) resortForOutput();
+    } catch (err) {
+      console.warn('[SLReports] beforeprint resort failed:', err);
+    }
+  });
 
   /* ── Close results panel ───────────────────────────────────────────── */
   function closeResults() {
@@ -779,6 +934,8 @@ const SLReports = (() => {
     load, runAll, generate, onDateChange, setPreset,
     exportCSV, exportPDF, printReport, closeResults,
     scheduleReport, closeSchedule, saveSchedule,
+    // Chronological output ordering (oldest bond → newest)
+    resortForOutput, sortBondsOldestFirst,
     // Liability report customization & toggles
     recalcLiabilityTotals, toggleAllLiabilityRows, toggleLiabilityCol, applyLiabilityPreset,
   };

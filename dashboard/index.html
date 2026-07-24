@@ -2323,14 +2323,15 @@
       <button class="rpt-preset-btn rpt-preset-active" data-preset="mtd" onclick="SLReports.setPreset('mtd')">MTD</button>
       <button class="rpt-preset-btn" data-preset="qtd" onclick="SLReports.setPreset('qtd')">QTD</button>
       <button class="rpt-preset-btn" data-preset="ytd" onclick="SLReports.setPreset('ytd')">YTD</button>
+      <button class="rpt-preset-btn" data-preset="all" onclick="SLReports.setPreset('all')" title="All bond records — 2012 to present">All Time</button>
       <button class="rpt-preset-btn" data-preset="custom" onclick="SLReports.setPreset('custom')">Custom</button>
     </div>
     <!-- Date range inputs (shown only for custom) -->
     <div class="rpt-date-range" id="rptDateRange" style="display:none">
       <label class="rpt-filter-label">From</label>
-      <input type="date" id="rptStartDate" class="rpt-input" onchange="SLReports.onDateChange()">
+      <input type="date" id="rptStartDate" class="rpt-input" min="2012-01-01" onchange="SLReports.onDateChange()">
       <label class="rpt-filter-label">To</label>
-      <input type="date" id="rptEndDate" class="rpt-input" onchange="SLReports.onDateChange()">
+      <input type="date" id="rptEndDate" class="rpt-input" min="2012-01-01" onchange="SLReports.onDateChange()">
     </div>
     <!-- Surety filter -->
     <div class="rpt-filter-group">
@@ -3458,7 +3459,7 @@
 <script src="/sl-calendar.js?v=4"></script>
 <script src="/sl-calendar-ext.js?v=4"></script>
 <script src="/sl-record-bond.js?v=4"></script>
-<script src="/sl-reports.js?v=4"></script>
+<script src="/sl-reports.js?v=5"></script>
 <script src="/sl-utils.js?v=4"></script>
 <script src="/sl-animations.js?v=4"></script>
 <script src="/sl-lifecycle.js?v=4"></script>
