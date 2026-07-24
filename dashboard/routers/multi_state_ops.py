@@ -58,8 +58,6 @@ def _build_registry() -> list[dict]:
         "alabama_mississippi.py":   ("AL",  "Alabama Multi-County",    "Custom HTML"),
         "connecticut_judicial.py":  ("CT",  "Connecticut Statewide",   "Custom HTML"),
         "louisiana_lavine.py":      ("LA",  "Louisiana LAVINE",        "Custom HTML"),
-        "tennessee_tncis.py":       ("TN",  "Tennessee TnCIS",         "Custom HTML"),
-        "tennessee_tncis_v2.py":    ("TN",  "Tennessee TnCIS v2",      "Custom HTML"),
         "tennessee_tncis_v2_ape.py": ("TN",  "Tennessee TnCIS v2 APE",  "Custom HTML"),
         "texas_odyssey.py":         ("TX",  "Texas Odyssey",           "Tyler Odyssey"),
     }
