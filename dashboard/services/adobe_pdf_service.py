@@ -15,6 +15,10 @@ PDF Services (fill / combine / flatten assist)
     CompressPDFJob        — optional size polish
     AutotagPDFJob         — PDF Accessibility Auto-Tag (optional)
       https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/quickstarts/python/
+    PDF → Markdown (REST /operation/pdftomarkdown — not in SDK 4.2 yet)
+      https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/pdf-to-markdown-api
+    ExtractPDFJob — structured JSON (text/tables) from PDF
+      https://developer.adobe.com/document-services/docs/overview/pdf-extract-api/
 
 Acrobat Sign (optional, separate product)
   ADOBE_SIGN_INTEGRATION_KEY for e-signature agreements
@@ -27,11 +31,15 @@ Credentials file (gitignored):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+PDF_SERVICES_BASE = "https://pdf-services.adobe.io"
+PDF_SERVICES_TOKEN_URL = "https://pdf-services.adobe.io/token"
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +523,330 @@ class AdobePDFServicesClient:
             generate_report=generate_report,
             shift_headings=shift_headings,
         )
+
+    # ── PDF → Markdown (REST — not yet in Python SDK 4.2) ─────────────────
+    # Docs: https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/pdf-to-markdown-api
+    # Endpoint confirmed: POST https://pdf-services.adobe.io/operation/pdftomarkdown
+
+    def extract_pdf_sync(
+        self,
+        pdf_bytes: bytes,
+        *,
+        extract_text: bool = True,
+        extract_tables: bool = True,
+        table_xlsx: bool = True,
+        styling_info: bool = False,
+        add_char_info: bool = False,
+        extract_figure_renditions: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        PDF Extract API (structured JSON) via official SDK ExtractPDFJob.
+
+        Docs: https://developer.adobe.com/document-services/docs/overview/pdf-extract-api/
+
+        Returns structuredData (parsed JSON), optional zip of resources (tables/figures).
+        """
+        if not pdf_bytes:
+            return {"success": False, "error": "empty PDF"}
+        if not self.configured or not _sdk_available():
+            return {"success": False, "error": "Adobe PDF Services / SDK not configured"}
+
+        from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
+        from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import (
+            ExtractPDFParams,
+        )
+        from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import (
+            ExtractElementType,
+        )
+        from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_renditions_element_type import (
+            ExtractRenditionsElementType,
+        )
+        from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.table_structure_type import (
+            TableStructureType,
+        )
+        from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
+
+        elements = []
+        if extract_text:
+            elements.append(ExtractElementType.TEXT)
+        if extract_tables:
+            elements.append(ExtractElementType.TABLES)
+        if not elements:
+            elements = [ExtractElementType.TEXT]
+
+        renditions = None
+        if extract_figure_renditions:
+            renditions = [
+                ExtractRenditionsElementType.FIGURES,
+                ExtractRenditionsElementType.TABLES,
+            ]
+
+        params = ExtractPDFParams(
+            table_structure_type=TableStructureType.XLSX if table_xlsx else TableStructureType.CSV,
+            add_char_info=bool(add_char_info),
+            styling_info=bool(styling_info),
+            elements_to_extract=elements,
+            elements_to_extract_renditions=renditions,
+        )
+
+        try:
+            pdf_services = self._get_pdf_services()
+            input_asset = self._upload(pdf_services, pdf_bytes)
+            job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=params)
+            notifiers = build_notifier_config_list()
+            location = pdf_services.submit(job, notify_config_list=notifiers or None)
+            response = pdf_services.get_job_result(location, ExtractPDFResult)
+            result = response.get_result()
+
+            structured: Any = result.get_content_json()
+            # SDK sometimes returns bytes instead of dict
+            if isinstance(structured, (bytes, bytearray)):
+                try:
+                    structured = json.loads(structured.decode("utf-8"))
+                except Exception:
+                    structured = None
+
+            zip_bytes = b""
+            zip_names: List[str] = []
+            resource = result.get_resource()
+            if resource is not None:
+                try:
+                    zip_bytes = self._download_result_bytes(pdf_services, resource)
+                    if zip_bytes[:2] == b"PK":
+                        import zipfile
+                        import io as _io
+
+                        with zipfile.ZipFile(_io.BytesIO(zip_bytes)) as zf:
+                            zip_names = zf.namelist()
+                            # Prefer structuredData.json from zip if content_json missing
+                            if structured is None and "structuredData.json" in zip_names:
+                                structured = json.loads(
+                                    zf.read("structuredData.json").decode("utf-8")
+                                )
+                except Exception as zexc:
+                    logger.warning("[adobe-pdf] extract zip parse: %s", zexc)
+
+            # Summarize text elements for quick use
+            texts: List[str] = []
+            if isinstance(structured, dict):
+                for el in structured.get("elements") or []:
+                    t = el.get("Text")
+                    if t:
+                        texts.append(str(t))
+
+            return {
+                "success": True,
+                "structured_data": structured,
+                "text_blocks": texts,
+                "text_preview": "\n".join(texts[:40]),
+                "zip_size": len(zip_bytes),
+                "zip_names": zip_names,
+                "engine": "adobe_extract_pdf",
+                "docs": "https://developer.adobe.com/document-services/docs/overview/pdf-extract-api/",
+            }
+        except Exception as exc:
+            logger.exception("extract_pdf failed")
+            return {"success": False, "error": str(exc)[:400]}
+
+    async def extract_pdf(self, pdf_bytes: bytes, **kwargs) -> Dict[str, Any]:
+        return await self._to_thread(self.extract_pdf_sync, pdf_bytes, **kwargs)
+
+    async def pdf_to_markdown(
+        self,
+        pdf_bytes: bytes,
+        *,
+        bake_forms: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Convert PDF (native or scanned) to LLM-friendly Markdown via Adobe REST API.
+
+        Limitations (Adobe docs):
+          - Unprotected / content-copy allowed
+          - No XFA / fillable forms (we bake widgets when bake_forms=True)
+          - No hidden JS/OCG, CAD/vector art may degrade quality
+
+        Returns markdown text + metadata.
+        """
+        import httpx
+        import uuid as _uuid
+
+        if not pdf_bytes:
+            return {"success": False, "error": "empty PDF", "markdown": ""}
+        if not self.configured:
+            return {"success": False, "error": "Adobe PDF Services not configured", "markdown": ""}
+
+        work = pdf_bytes
+        preflight: Dict[str, Any] = {"baked_forms": False}
+        if bake_forms:
+            pf = self._preflight_for_autotag(pdf_bytes)
+            preflight = {k: v for k, v in pf.items() if k != "pdf_bytes"}
+            if pf.get("disqualified"):
+                return {
+                    "success": False,
+                    "error": "; ".join(pf.get("warnings") or ["disqualified"]),
+                    "markdown": "",
+                    "preflight": preflight,
+                }
+            work = pf.get("pdf_bytes") or pdf_bytes
+
+        token = await self.get_access_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "x-api-key": self._client_id,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                # Upload asset (official 2-step)
+                meta = await client.post(
+                    f"{PDF_SERVICES_BASE}/assets",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={"mediaType": "application/pdf"},
+                )
+                if meta.status_code >= 400:
+                    return {
+                        "success": False,
+                        "error": f"asset URI failed HTTP {meta.status_code}: {meta.text[:200]}",
+                        "markdown": "",
+                    }
+                body = meta.json()
+                upload_uri = body.get("uploadUri")
+                asset_id = body.get("assetID") or body.get("assetId")
+                if not upload_uri or not asset_id:
+                    return {"success": False, "error": f"bad asset response: {body}", "markdown": ""}
+
+                put = await client.put(
+                    upload_uri,
+                    content=work,
+                    headers={"Content-Type": "application/pdf"},
+                )
+                if put.status_code >= 400:
+                    return {
+                        "success": False,
+                        "error": f"asset PUT failed HTTP {put.status_code}",
+                        "markdown": "",
+                    }
+
+                # Optional CALLBACK notifiers on REST submit
+                payload: Dict[str, Any] = {"assetID": asset_id}
+                notifiers = []
+                url = (os.getenv("ADOBE_PDF_WEBHOOK_URL") or "").strip()
+                if not url:
+                    base = (
+                        os.getenv("DASHBOARD_PUBLIC_URL")
+                        or os.getenv("DASHBOARD_BASE_URL")
+                        or ""
+                    ).rstrip("/")
+                    if base.startswith("https://"):
+                        url = f"{base}/api/webhooks/adobe-pdf-services"
+                secret = (os.getenv("ADOBE_PDF_WEBHOOK_SECRET") or "").strip()
+                if (
+                    os.getenv("ADOBE_PDF_WEBHOOKS", "true").lower() not in ("0", "false", "no")
+                    and url.startswith("https://")
+                ):
+                    ndata: Dict[str, Any] = {"url": url}
+                    if secret:
+                        ndata["headers"] = {"x-shamrock-adobe-webhook-secret": secret}
+                    notifiers.append({"type": "CALLBACK", "data": ndata})
+                if notifiers:
+                    payload["notifiers"] = notifiers
+
+                job = await client.post(
+                    f"{PDF_SERVICES_BASE}/operation/pdftomarkdown",
+                    headers={
+                        **headers,
+                        "Content-Type": "application/json",
+                        "x-request-id": str(_uuid.uuid4()),
+                    },
+                    json=payload,
+                )
+                if job.status_code not in (200, 201, 202):
+                    return {
+                        "success": False,
+                        "error": f"pdftomarkdown HTTP {job.status_code}: {job.text[:300]}",
+                        "markdown": "",
+                    }
+                location = job.headers.get("location") or job.headers.get("Location")
+                if not location:
+                    return {
+                        "success": False,
+                        "error": "pdftomarkdown missing Location header",
+                        "markdown": "",
+                    }
+
+                # Poll status (same pattern as other PDF Services jobs)
+                import time as _time
+
+                deadline = _time.time() + 120
+                data: Dict[str, Any] = {}
+                while _time.time() < deadline:
+                    st = await client.get(location, headers=headers)
+                    if st.status_code >= 400:
+                        return {
+                            "success": False,
+                            "error": f"status poll HTTP {st.status_code}: {st.text[:200]}",
+                            "markdown": "",
+                        }
+                    data = st.json()
+                    status = str(data.get("status") or "").lower()
+                    if status == "done":
+                        break
+                    if status == "failed":
+                        err = data.get("error") or {}
+                        return {
+                            "success": False,
+                            "error": f"{err.get('code')}: {err.get('message')}"[:400],
+                            "markdown": "",
+                            "status_response": data,
+                        }
+                    await asyncio.sleep(1.5)
+                else:
+                    return {"success": False, "error": "pdftomarkdown timed out", "markdown": ""}
+
+                asset = data.get("asset") or {}
+                download_uri = (
+                    asset.get("downloadUri")
+                    or asset.get("downloadURI")
+                    or data.get("downloadUri")
+                )
+                if not download_uri:
+                    return {
+                        "success": False,
+                        "error": f"done but no downloadUri: {list(data.keys())}",
+                        "markdown": "",
+                    }
+                dl = await client.get(download_uri)
+                if dl.status_code >= 400:
+                    return {
+                        "success": False,
+                        "error": f"download HTTP {dl.status_code}",
+                        "markdown": "",
+                    }
+                # Markdown may be text or zip in future — handle text/markdown
+                ctype = (dl.headers.get("content-type") or asset.get("metadata", {}).get("type") or "").lower()
+                content = dl.content
+                if "markdown" in ctype or "text/" in ctype or content[:1] in (b"#", b" ", b"\n") or b"\n" in content[:200]:
+                    try:
+                        markdown = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        markdown = content.decode("utf-8", errors="replace")
+                else:
+                    # binary fallback: try utf-8
+                    markdown = content.decode("utf-8", errors="replace")
+
+                return {
+                    "success": True,
+                    "markdown": markdown,
+                    "size": len(content),
+                    "content_type": ctype or "text/markdown",
+                    "asset_id": asset.get("assetID") or asset.get("assetId"),
+                    "engine": "adobe_pdf_to_markdown",
+                    "endpoint": "/operation/pdftomarkdown",
+                    "preflight": preflight,
+                    "docs": "https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/pdf-to-markdown-api",
+                }
+        except Exception as exc:
+            logger.exception("pdf_to_markdown failed")
+            return {"success": False, "error": str(exc)[:400], "markdown": ""}
 
     def fill_local_pymupdf(self, pdf_bytes: bytes, field_map: Dict[str, Any]) -> Tuple[bytes, Dict[str, Any]]:
         """Local AcroForm fill + bake (fallback when SDK form-import fails)."""

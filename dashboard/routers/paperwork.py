@@ -1921,3 +1921,143 @@ async def set_client_esign_provider(request: Request):
     except Exception as exc:
         logger.exception("set_client_esign_provider error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/pdf-to-markdown")
+async def paperwork_pdf_to_markdown(request: Request):
+    """
+    Convert a PDF to LLM-friendly Markdown via Adobe PDF Services.
+
+    Docs: https://developer.adobe.com/document-services/docs/overview/pdf-services-api/howtos/pdf-to-markdown-api
+
+    Body (one of):
+      - pdf_b64: base64 (or data URL) of PDF bytes
+      - packet_id: load flattened packet if stored (best-effort)
+      - text/plain not supported — PDF only
+
+    Optional:
+      - bake_forms: bool (default true) — bake AcroForm fields first (API rejects fillable forms)
+      - store: bool — save markdown onto paperwork_packets when packet_id given
+    """
+    try:
+        body = (await request.json()) or {}
+        from dashboard.services.adobe_pdf_service import get_adobe_pdf_client
+        import base64 as _b64
+
+        pdf_bytes = b""
+        packet_id = (body.get("packet_id") or "").strip()
+
+        raw_b64 = body.get("pdf_b64") or body.get("data_b64") or body.get("data") or ""
+        if raw_b64:
+            if isinstance(raw_b64, str) and "," in raw_b64 and raw_b64.strip().startswith("data:"):
+                raw_b64 = raw_b64.split(",", 1)[1]
+            try:
+                pdf_bytes = _b64.b64decode(raw_b64)
+            except Exception:
+                return JSONResponse({"success": False, "error": "invalid pdf_b64"}, status_code=400)
+
+        if not pdf_bytes and packet_id:
+            # Best-effort: regenerate from blank stitch if we don't store blobs
+            pkt = await get_collection("paperwork_packets").find_one(
+                {"packet_id": packet_id}, {"_id": 0}
+            )
+            if not pkt:
+                return JSONResponse({"success": False, "error": "packet not found"}, status_code=404)
+            # If prior markdown stored, return it
+            if pkt.get("markdown") and body.get("force") is not True:
+                return {
+                    "success": True,
+                    "packet_id": packet_id,
+                    "markdown": pkt.get("markdown"),
+                    "cached": True,
+                    "engine": pkt.get("markdown_engine") or "cached",
+                }
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": (
+                        "No PDF bytes available for this packet. "
+                        "Pass pdf_b64, or finalize a packet that produces a flattened PDF first."
+                    ),
+                },
+                status_code=400,
+            )
+
+        if not pdf_bytes:
+            return JSONResponse(
+                {"success": False, "error": "pdf_b64 (or regenerable packet_id) required"},
+                status_code=400,
+            )
+
+        client = get_adobe_pdf_client()
+        result = await client.pdf_to_markdown(
+            pdf_bytes,
+            bake_forms=bool(body.get("bake_forms", True)),
+        )
+        if not result.get("success"):
+            return JSONResponse(result, status_code=502)
+
+        if packet_id and body.get("store", True):
+            try:
+                await get_collection("paperwork_packets").update_one(
+                    {"packet_id": packet_id},
+                    {
+                        "$set": {
+                            "markdown": result.get("markdown"),
+                            "markdown_engine": result.get("engine"),
+                            "markdown_size": result.get("size"),
+                            "markdown_at": datetime.now(timezone.utc),
+                        }
+                    },
+                )
+            except Exception as exc:
+                logger.warning("store markdown failed: %s", exc)
+
+        return {
+            "success": True,
+            "packet_id": packet_id or None,
+            "markdown": result.get("markdown"),
+            "size": result.get("size"),
+            "engine": result.get("engine"),
+            "preflight": result.get("preflight"),
+            "docs": result.get("docs"),
+        }
+    except Exception as exc:
+        logger.exception("pdf-to-markdown error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@paperwork_bp.post("/paperwork/pdf-extract")
+async def paperwork_pdf_extract(request: Request):
+    """
+    PDF Extract API — structured JSON (text + tables).
+    https://developer.adobe.com/document-services/docs/overview/pdf-extract-api/
+    Body: { "pdf_b64": "..." }
+    """
+    try:
+        body = (await request.json()) or {}
+        from dashboard.services.adobe_pdf_service import get_adobe_pdf_client
+        import base64 as _b64
+        raw_b64 = body.get("pdf_b64") or body.get("data_b64") or body.get("data") or ""
+        if not raw_b64:
+            return JSONResponse({"success": False, "error": "pdf_b64 required"}, status_code=400)
+        if isinstance(raw_b64, str) and "," in raw_b64 and raw_b64.strip().startswith("data:"):
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            pdf_bytes = _b64.b64decode(raw_b64)
+        except Exception:
+            return JSONResponse({"success": False, "error": "invalid pdf_b64"}, status_code=400)
+        result = await get_adobe_pdf_client().extract_pdf(
+            pdf_bytes,
+            extract_text=bool(body.get("extract_text", True)),
+            extract_tables=bool(body.get("extract_tables", True)),
+            table_xlsx=bool(body.get("table_xlsx", True)),
+            styling_info=bool(body.get("styling_info", False)),
+            add_char_info=bool(body.get("add_char_info", False)),
+            extract_figure_renditions=bool(body.get("extract_figure_renditions", False)),
+        )
+        status = 200 if result.get("success") else 502
+        return JSONResponse(result, status_code=status)
+    except Exception as exc:
+        logger.exception("pdf-extract error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
