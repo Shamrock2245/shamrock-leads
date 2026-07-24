@@ -41,8 +41,9 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 OPEN_PATHS = frozenset({
     "/login", "/health", "/health/live", "/api/stats",
     "/docs", "/redoc", "/openapi.json",
-    "/manifest.json", "/favicon.ico",
+    "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
 })
+
 
 # File extensions that are always public (static assets — JS, CSS, fonts, images)
 # These must load before the session cookie exists so the login page renders.
