@@ -140,7 +140,14 @@ jobs:
             # (orphaned/stopped containers from a prior half-failed deploy).
             echo ""
             echo "🔄 Rolling restart..."
-            docker rm -f shamrock-leads shamrock-dashboard shamrock-osint-worker 2>/dev/null || true
+            # Nuke every known stack container name (and compose name-conflict leftovers
+            # like "67b52f…_shamrock-traccar") so force-recreate never hits
+            # "container name is already in use" on half-failed deploys.
+            docker ps -aq --filter "name=shamrock-" | xargs -r docker rm -f 2>/dev/null || true
+            docker rm -f \
+              shamrock-leads shamrock-dashboard shamrock-osint-worker \
+              shamrock-traccar shamrock-obscura shamrock-frps shamrock-postiz \
+              2>/dev/null || true
             docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker 2>/dev/null \
               || docker compose up -d --remove-orphans --force-recreate
 

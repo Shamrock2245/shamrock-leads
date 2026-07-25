@@ -114,6 +114,37 @@ def _status_scope_filter(scope: str | None) -> dict:
     return {"status": {"$nin": list(_CLOSED_STATUSES)}}
 
 
+def _prior_period_bounds(
+    start_iso: str | None, end_iso: str | None
+) -> tuple[str | None, str | None]:
+    """SuiteCRM / Salesforce-style equal-length prior window immediately before start."""
+    if not start_iso or not end_iso:
+        return None, None
+    try:
+        start = datetime.strptime(start_iso[:10], "%Y-%m-%d")
+        end = datetime.strptime(end_iso[:10], "%Y-%m-%d")
+    except ValueError:
+        return None, None
+    if end < start:
+        return None, None
+    days = (end - start).days + 1
+    prior_end = start - timedelta(days=1)
+    prior_start = prior_end - timedelta(days=days - 1)
+    # Never go before report epoch
+    epoch = datetime(2012, 1, 1)
+    if prior_start < epoch:
+        prior_start = epoch
+    if prior_end < epoch:
+        return None, None
+    return prior_start.strftime("%Y-%m-%d"), prior_end.strftime("%Y-%m-%d")
+
+
+def _pct_change(current: float, prior: float) -> float | None:
+    if prior == 0:
+        return None if current == 0 else 100.0
+    return round(((current - prior) / abs(prior)) * 100.0, 1)
+
+
 def _serialize_doc(doc: dict) -> dict:
     """Remove _id and convert datetimes for JSON."""
     doc.pop("_id", None)
@@ -325,10 +356,37 @@ async def surety_liability(
             "total_agent_retains": round(sum(g["total_agent_retains"] for g in surety_groups.values()), 2),
         }
 
+        # Prior-period comparison (equal-length window immediately before range)
+        comparison = None
+        p_start, p_end = _prior_period_bounds(resolved_start, resolved_end)
+        if p_start and p_end:
+            prior_q = dict(query)
+            # replace bond_date window
+            prior_filt, _ = mongo_bond_date_filter(p_start, p_end, field="bond_date")
+            prior_q.pop("bond_date", None)
+            prior_q.update(prior_filt)
+            prior_docs = await col.find(prior_q, {"_id": 0, "bond_amount": 1, "premium": 1}).to_list(
+                REPORT_ROW_LIMIT
+            )
+            prior_liab = round(sum(float(d.get("bond_amount") or 0) for d in prior_docs), 2)
+            prior_bonds = len(prior_docs)
+            prior_prem = round(sum(float(d.get("premium") or 0) for d in prior_docs), 2)
+            comparison = {
+                "prior_start": p_start,
+                "prior_end": p_end,
+                "prior_bonds": prior_bonds,
+                "prior_bond_amount": prior_liab,
+                "prior_premium": prior_prem,
+                "bonds_pct_change": _pct_change(float(grand["total_bonds"]), float(prior_bonds)),
+                "liability_pct_change": _pct_change(grand["total_bond_amount"], prior_liab),
+                "premium_pct_change": _pct_change(grand["total_premium"], prior_prem),
+            }
+
         return {
             "success": True,
             "sureties": list(surety_groups.values()),
             "grand_totals": grand,
+            "comparison": comparison,
             "sort_order": "bond_date ascending (oldest bond first)",
             "status_scope": (status_scope or "open").strip().lower(),
             "start_date": resolved_start,
