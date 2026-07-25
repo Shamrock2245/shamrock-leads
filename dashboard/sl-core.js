@@ -122,7 +122,20 @@ function switchTab(btn) {
   btn.classList.add('active');
   const tabId = btn.dataset.tab;
   const panel = document.getElementById(tabId);
-  if (panel) panel.classList.add('active');
+  if (panel) {
+    panel.classList.add('active');
+    // Scroll main page container to top so tab content is never off-screen
+    const pc = document.querySelector('.page-container');
+    if (pc) pc.scrollTop = 0;
+  } else {
+    console.warn('[switchTab] No panel found for tab id:', tabId);
+  }
+  // Close sticky overlays that can paint over other tabs (POA assign, inventory)
+  try {
+    document.querySelectorAll('.inv-overlay').forEach((el) => {
+      if (el.style.display !== 'none') el.style.display = 'none';
+    });
+  } catch (_) { /* ignore */ }
   _ensureNavGroupVisible(tabId);
 
   // Reset badge for this tab on visit

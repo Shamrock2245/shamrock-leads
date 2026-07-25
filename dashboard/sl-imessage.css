@@ -6,13 +6,26 @@
 /* ── Layout shell ─────────────────────────────────────────────────────────── */
 #tabImessage {
   padding: 0;
+  /* Fill the page-container scroll area (not 100vh — that overflows the shell) */
+  min-height: calc(100vh - 60px - 8px);
+  height: 100%;
+  display: none;
+}
+
+#tabImessage.active {
+  display: flex;
+  flex-direction: column;
 }
 
 .im-shell {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 114px); /* full viewport minus header + tab bar */
+  flex: 1 1 auto;
+  min-height: calc(100vh - 72px);
+  max-height: calc(100vh - 60px);
   overflow: hidden;
+  width: 100%;
+  background: var(--bg, #0b1220);
 }
 
 /* ── Top bar ──────────────────────────────────────────────────────────────── */

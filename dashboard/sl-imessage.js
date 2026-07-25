@@ -125,8 +125,15 @@ window.SLiMessage = (() => {
 
   /* ── Init ──────────────────────────────────────────────────────────────── */
   function init() {
+    // Ensure the iMessage panel is actually visible (defensive against layout bugs)
+    const panel = document.getElementById('tabImessage');
+    if (panel && !panel.classList.contains('active')) {
+      panel.classList.add('active');
+    }
+
     if (_state.initialized) {
       loadHealth(); loadInbox(); loadFindMy();
+      loadAutomationConfig(); loadAutoReplyConfig();
       return;
     }
     _state.initialized = true;
