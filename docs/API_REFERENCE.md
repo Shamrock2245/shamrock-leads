@@ -1,9 +1,9 @@
 # API_REFERENCE.md — ShamrockLeads REST API
 
-> **Last Updated:** 2026-05-15
+> **Last Updated:** 2026-07-25
 > **Base URL:** `https://leads.shamrockbailbonds.biz` (production) / `http://localhost:5050` (dev)
-> **Auth:** Dashboard PIN via session cookie
-> **Framework:** FastAPI with APIRouter modules
+> **Auth:** Dashboard PIN via session cookie / X-API-Key for cron & automation routes
+> **Framework:** FastAPI with 66+ APIRouter blueprint modules
 
 ---
 

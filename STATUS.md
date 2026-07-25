@@ -25,21 +25,21 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
-## Scale (authoritative — 2026-07-24)
+## Scale (authoritative — 2026-07-25)
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
-| **FL** | **51** | `scrapers/counties/` | OSI home market; legacy `scraper_<county>` IDs |
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
-| **SC** | **46** | `scrapers/counties_sc/` | All counties registered |
-| **NC** | **27** | `scrapers/counties_nc/` | Wave-1 (Southern SW, Zuercher, P2C, Meck/Durham…) |
-| **TN** | **6** | `scrapers/counties_tn/` | Davidson, Knox, Shelby, Hamilton, Rutherford, TnCIS |
+| **FL** | **51** | `scrapers/counties/` | OSI home market; legacy `scraper_<county>` IDs |
+| **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
+| **NC** | **31** | `scrapers/counties_nc/` | Southern SW, Zuercher, P2C, Meck/Durham… |
 | **TX** | **12** | `scrapers/counties_tx/` | Bexar, Dallas, Harris, Tarrant, Travis, Collin, Denton, Fort Bend, Montgomery, Williamson, El Paso, Hidalgo |
+| **TN** | **6** | `scrapers/counties_tn/` | Davidson, Knox, Shelby, Hamilton, Rutherford, TnCIS |
 | **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
 | **CT** | **2** | `scrapers/counties_ct/` | Statewide Criminal Dockets + CT DOC Inmate Roster |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **247** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
+| **Total** | **231** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 

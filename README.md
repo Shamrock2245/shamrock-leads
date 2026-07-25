@@ -1,11 +1,12 @@
 # ShamrockLeads — Multi-State Arrest Intelligence + Bond Auto-CRM
 
-> **Scrape. Score. Route. Bond.** — Real-time arrest data and bond lifecycle ops across FL · GA · SC · NC.
+> **Scrape. Score. Route. Bond.** — Real-time arrest data and bond lifecycle ops across FL · GA · SC · NC · TN · TX · LA · AL · CT · MS.
 
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-198-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-231-orange)](#county-coverage)
+[![States](https://img.shields.io/badge/States-10-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
 
@@ -19,11 +20,11 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 **Product boundary:** Bail School education is **`shamrock-bail-school`** (separate funnel). This repo does not host the student LMS.
 
-**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint** (FL, SC, NC, TN, TX, CT, LA, MS) plus **Georgia** adjacent market — with OSI primary in Florida.
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint** (FL, SC, NC, TN, TX, CT, LA, MS, AL) plus the **Georgia** market — with OSI primary in Florida.
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **198 registered county scrapers** (51 FL · 74 GA · 46 SC · 27 NC) on scheduled intervals
+1. **Scrapes** real-time booking data from **231 registered county scrapers** across 10 states (GA 74 · FL 51 · SC 46 · NC 31 · TX 12 · TN 6 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
@@ -42,7 +43,8 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 17. **Syncs** court dates to Google Calendar with Twilio SMS reminders
 18. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
 19. **Visualizes** multi-state ops via Super CRM + **Multi-State Ops** + **Bond Intelligence**
-20. **Automates** social media presence across platforms via Postiz integration
+20. **Generates** official surety bond & liability XLSX financial reports with 2012+ date ranges and auto-chronological sorting
+21. **Automates** social media presence across platforms via Postiz integration
 
 ---
 
@@ -52,7 +54,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        SCRAPER ENGINE                                │
 │                                                                      │
-│  90 County Scrapers (Python 3.12)                                    │
+│  231 County Scrapers across 10 States (Python 3.12)                   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │DrissionPage│  │ curl_cffi  │  │ requests +   │  │ Patchright │  │
 │  │ (Chromium) │  │(TLS spoof) │  │BeautifulSoup │  │ (Stealth)  │  │
@@ -84,17 +86,19 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 ┌──────────────────────────────────────────────────────────────────────┐
 │              INTELLIGENCE DASHBOARD (FastAPI, port 5050)             │
 │                                                                      │
-│  21 Tabs:                                                            │
-│  📊 Command Center  │ 🔍 Lead Explorer   │ 👤 Defendants            │
-│  📱 Outreach        │ 🏥 Scraper Health  │ 🔒 Active Bonds          │
-│  📍 Tracking        │ 📥 Intake Queue    │ 🤝 Indemnitors           │
+│  24 Operations Tabs:                                                 │
+│  📊 Command Center  │ 🔍 Lead Explorer   │ 🗺️ Multi-State Ops       │
+│  ⚡ Bond Intelligence│ 👤 Defendants      │ 📱 Outreach (Kanban)     │
+│  🏥 Scraper Health  │ 🔒 Active Bonds    │ 📍 Tracking (GPS)        │
+│  📥 Intake Queue    │ 🤝 Indemnitors     │ 📋 POA Inventory         │
 │  📈 Analytics       │ 🧠 Intelligence    │ ⚖️ Legal NLP             │
 │  📅 Calendar        │ 📄 Reports         │ 🌐 Client Portal         │
 │  💬 iMessage        │ 💰 Accounting      │ 🎯 Alpha Intel           │
 │  🚨 FTA Alerts      │ 📣 Social Media    │ 🔬 Enrichment            │
+│  🧹 Data Retention                                                   │
 │                                                                      │
 │  66 API modules  │  45 service modules  │  45 frontend JS modules   │
-│  ~34,450 LOC (frontend JS+CSS+HTML)  │  ~42,000 LOC (backend)      │
+│  ~35,000 LOC (frontend JS+CSS+HTML)  │  ~43,000 LOC (backend)      │
 └──────────────┬───────────────────────────────────────────────────────┘
                │
     ┌──────────┼──────────────┐
@@ -128,24 +132,30 @@ python main.py
 
 # Run a single county
 python main.py lee
+python main.py ga_fulton
+python main.py sc_charleston
+python main.py nc_mecklenburg
+python main.py tx_bexar
 ```
 
-**Dashboard:** `http://localhost:5050` (Docker maps external 8088 → internal 5050)
+**Dashboard:** `http://localhost:5050` (Docker maps external 8088 → internal 5050)  
 **Production:** `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy → `178.156.179.237:8088`)
 
 ---
 
 ## Intelligence Dashboard
 
-A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,600 lines of CSS across 45 JS modules:
+A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10,200 lines of CSS across 45 JS modules:
 
 | Tab | Module | Purpose |
 |-----|--------|---------| 
 | 📊 **Command Center** | `sl-core.js`, `sl-data.js` | KPI cards, bond-ready queue, county heatmap, re-arrest alerts, compliance tasks |
-| 🔍 **Lead Explorer** | `sl-features.js` | Filterable arrest grid, lead scores, export to CSV/Slack |
+| 🔍 **Lead Explorer** | `sl-features.js` | Filterable arrest grid, lead scores, state/county filters, live sort, export CSV/Slack |
+| 🗺️ **Multi-State Ops** | `sl-multi-state.js` | 10-state coverage radar, registered scrapers registry, live feed, state KPIs |
+| ⚡ **Bond Intelligence** | `sl-bond-intelligence.js` | Multi-state bond portfolio analytics, risk tiering, regional performance |
 | 👤 **Defendants** | `defendants.js`, `sl-defendant-lifecycle.js` | Card grid with lifecycle notes, contact log, DNB/DNC, bond finalize |
 | 📱 **Outreach** | `sl-prospective.js` | Kanban pipeline (Contacted → Negotiating → Paperwork → Ready), iMessage bridge |
-| 🏥 **Scraper Health** | `sl-health.js` | Fleet status, error drill-down, manual triggers, auto-recovery |
+| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 231 scrapers, error drill-down, manual triggers, auto-recovery |
 | 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated) |
 | 📍 **Tracking** | `sl-tracking.js`, `sl-geo-intelligence.js` | GPS/check-in tracking, geofencing, Traccar integration |
 | 📥 **Intake Queue** | `sl-intake.js` | Wix/Telegram intake processing, defendant matching |
@@ -155,29 +165,34 @@ A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,
 | 🧠 **Intelligence** | `sl-intelligence.js` | AI-powered insights, lead enrichment, pattern detection |
 | ⚖️ **Legal NLP** | `sl-legal-nlp.js` | Charge analysis, statute lookup, NLP classification |
 | 📅 **Calendar** | `sl-calendar.js`, `sl-calendar-ext.js` | Court date calendar with Google Calendar sync |
-| 📄 **Reports** | `sl-reports.js`, `sl-reports-ui.js` | Liability, commissions, reconciliation reports |
+| 📄 **Reports** | `sl-reports.js`, `sl-reports-ui.js` | Surety financial liability, 2012+ date ranges, chronological auto-sort |
 | 🌐 **Client Portal** | `sl-portal.js` | Client-facing portal management |
 | 💬 **iMessage** | `sl-imessage.js` | BlueBubbles control center — inbox, health, FindMy, automation |
 | 💰 **Accounting** | `sl-accounting.js` | Revenue tracking, commission splits, surety reporting |
 | 🎯 **Alpha Intel** | `sl-alpha-intel.js` | Source performance analytics, lead source ROI |
 | 🚨 **FTA Alerts** | `sl-fta.js` | Failure-to-appear detection, surrender coordination |
-| 📣 **Social Media** | `sl-social.js` | Social media command center, content pipeline |
-| 🔬 **Enrichment** | `sl-enrichment.js` | Data enrichment workflows, OSINT integration |
+| 📣 **Social Media** | `sl-social.js` | Social media command center, Postiz integration |
+| 🧹 **Data Retention** | `sl-retention.js` | Tiered purge policies for M0 512MB limits |
 
 ---
 
 ## County Coverage
 
-**198 registered scrapers** (dashboard `REGISTERED_COUNTIES`) across **FL · GA · SC · NC**, reusing shared JMS bases:
+**231 registered scrapers** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 states**, utilizing shared platform bases:
 
-| State | Registered | Path | Job ID form |
-|-------|----------:|------|-------------|
-| Florida | 51 | `scrapers/counties/` | `scraper_<county>` (legacy) |
-| Georgia | 74 | `scrapers/counties_ga/` | `scraper_ga_<county>` |
-| South Carolina | 46 | `scrapers/counties_sc/` | `scraper_sc_<county>` |
-| North Carolina | 27 (wave-1) | `scrapers/counties_nc/` | `scraper_nc_<county>` |
-
-**CLI:** `python main.py lee` · `python main.py sc_jasper` · `python main.py nc_mecklenburg`
+| State | Registered | Path | Job ID form | CLI command |
+|-------|----------:|------|-------------|-------------|
+| **Georgia** | 74 | `scrapers/counties_ga/` | `scraper_ga_<county>` | `python main.py ga_fulton` |
+| **Florida** | 51 | `scrapers/counties/` | `scraper_<county>` (legacy) | `python main.py lee` |
+| **South Carolina** | 46 | `scrapers/counties_sc/` | `scraper_sc_<county>` | `python main.py sc_charleston` |
+| **North Carolina** | 31 | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
+| **Texas** | 12 | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
+| **Tennessee** | 6 | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
+| **Louisiana** | 4 | `scrapers/counties_la/` | `scraper_la_<parish>` | `python main.py la_orleans` |
+| **Alabama** | 3 | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
+| **Connecticut** | 2 | `scrapers/counties_ct/` | `scraper_ct_<county>` | `python main.py ct_doc` |
+| **Mississippi** | 2 | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
+| **Total** | **231** | `dashboard/extensions.py` | Labels: `County (ST)` | |
 
 ### Shared Base Classes
 
@@ -191,11 +206,9 @@ A premium **21-tab operations center** with ~24,900 lines of frontend JS and ~9,
 | `JailTrackerBaseScraper` | JailTracker | FL, SC, GA |
 | `NewWorldBaseScraper` | New World InmateInquiry | FL, GA, SC |
 | `KologikBaseScraper` | Kologik Vue roster | FL (reusable) |
-| `OdysseyBaseScraper` | Tyler Odyssey family | GA stubs |
-| `SocrataBaseScraper` / `XMLFeedBaseScraper` | Open data / XML | GA |
+| `OdysseyBaseScraper` | Tyler Odyssey family | GA, TX |
 
-> **Roadmap:** Palmetto states TN → LA/MS → TX → CT after NC depth.  
-> Registries: [FL](docs/COUNTY_REGISTRY.md) · [GA](docs/GEORGIA_COUNTY_REGISTRY.md) · [SC](docs/SC_COUNTY_REGISTRY.md) · [NC](docs/NC_COUNTY_REGISTRY.md) · [Multi-state plan](docs/MULTI_STATE_SCRAPER_ROADMAP.md).
+> Registries & Docs: [FL](docs/COUNTY_REGISTRY.md) · [GA](docs/GEORGIA_COUNTY_REGISTRY.md) · [SC](docs/SC_COUNTY_REGISTRY.md) · [NC](docs/NC_COUNTY_REGISTRY.md) · [TX](docs/TX_COUNTY_REGISTRY.md) · [Multi-state roadmap](docs/MULTI_STATE_SCRAPER_ROADMAP.md).
 
 ---
 
@@ -229,14 +242,22 @@ shamrock-leads/
 ├── scrapers/
 │   ├── base_scraper.py        # Abstract base: scrape → score → write → alert
 │   ├── p2c_base.py            # P2C (Police-to-Citizen) platform base
-│   ├── smartcop_base.py       # SmartCOP platform base (19 counties)
+│   ├── smartcop_base.py       # SmartCOP platform base
 │   ├── eas_base.py            # Eagle Advantage Solutions (Georgia)
-│   ├── zuercher_base.py       # Zuercher Portal (Georgia)
-│   ├── southern_sw_base.py    # Southern Software (Georgia)
+│   ├── zuercher_base.py       # Zuercher Portal (Georgia/SC/NC)
+│   ├── southern_sw_base.py    # Southern Software (Georgia/SC/NC)
 │   ├── socrata_base.py        # Socrata Open Data (Georgia)
 │   ├── generic_adaptive.py    # Auto-detect scraper for unknown JMS
-│   ├── counties/              # Florida county scrapers (52 active)
-│   └── counties_ga/           # Georgia county scrapers (108 active)
+│   ├── counties/              # Florida county scrapers (51 active)
+│   ├── counties_ga/           # Georgia county scrapers (74 active)
+│   ├── counties_sc/           # South Carolina county scrapers (46 active)
+│   ├── counties_nc/           # North Carolina county scrapers (31 active)
+│   ├── counties_tx/           # Texas county scrapers (12 active)
+│   ├── counties_tn/           # Tennessee county scrapers (6 active)
+│   ├── counties_la/           # Louisiana parish scrapers (4 active)
+│   ├── counties_al/           # Alabama county scrapers (3 active)
+│   ├── counties_ct/           # Connecticut scrapers (2 active)
+│   └── counties_ms/           # Mississippi county scrapers (2 active)
 ├── scoring/
 │   └── lead_scorer.py         # Rule-based lead qualification (0–100)
 ├── writers/
@@ -244,11 +265,12 @@ shamrock-leads/
 │   ├── sheets_writer.py       # Google Sheets writer (legacy)
 │   └── slack_notifier.py      # Real-time Slack alerts
 ├── dashboard/                 # Super CRM FastAPI Application
+└── tests/                     # 222+ Automated Unit Tests
 ```
 
 ---
 
 ## License
 
-Proprietary — Shamrock Active Software LLC
+Proprietary — Shamrock Active Software LLC  
 *Maintained by: Brendan / Shamrock Active Software LLC | `admin@shamrockbailbonds.biz`*
