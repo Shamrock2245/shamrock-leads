@@ -312,7 +312,7 @@ async def generate_packet(request: Request):
     if not data:
         return JSONResponse({'error': 'No data provided'}, status_code=400)
 
-    from extensions import get_db
+    from dashboard.extensions import get_db
     from bson.objectid import ObjectId
     db = get_db()
     
@@ -342,17 +342,15 @@ async def generate_packet(request: Request):
     if not signer_email or not signer_name:
         return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
 
-    # In case of Phase 1, we still might just pass custom manifest to Phase 1 trigger or directly to create_packet.
     try:
         signnow_service = _get_signnow_service()
         import uuid
         packet_id = str(uuid.uuid4())
         
-        # We handle routing scenario explicitly inside create_packet now.
         res = await signnow_service.create_packet(
             intake_doc=intake_doc,
             packet_id=packet_id,
-            phase=1 if routing_scenario == 'phase1_2' else 0, # Phase 0 meaning all_in_one
+            phase=1 if routing_scenario == 'phase1_2' else 0,
             surety_id=surety_id,
             signer_email=signer_email,
             signer_name=signer_name,
@@ -362,8 +360,35 @@ async def generate_packet(request: Request):
         )
         return JSONResponse(status_code=200, content=res)
     except Exception as e:
-        logger.error(f"Error in unified packet generation: {str(e)}")
-        return JSONResponse({'error': str(e)}, status_code=500)
+        logger.error(f"SignNow packet creation failed ({str(e)}) — initiating 100% Adobe Sign fallback")
+        try:
+            from dashboard.services.packet_builder_service import send_via_adobe, flatten_pdf_bytes
+
+            from dashboard.bond_pdf_service import generate_appearance_bonds
+            pdf_bonds = generate_appearance_bonds(intake_doc, template=surety_id)
+            flat_pdf = flatten_pdf_bytes(pdf_bonds) if pdf_bonds else b""
+
+            if flat_pdf:
+                adobe_res = await send_via_adobe(
+                    flattened_pdf=flat_pdf,
+                    filename=f"Fallback_Packet_{booking_number or 'bond'}.pdf",
+                    signer_email=signer_email,
+                    signer_name=signer_name,
+                    agreement_name=f"Shamrock Bond Packet (Adobe Sign Fallback) — {signer_name}"
+                )
+                if adobe_res.get("success"):
+                    logger.info("✅ 100% Adobe Sign fallback succeeded!")
+                    return JSONResponse(status_code=200, content={
+                        "status": "success",
+                        "provider": "adobe_sign_fallback",
+                        "signing_link": adobe_res.get("signing_link") or adobe_res.get("url") or "",
+                        "agreement_id": adobe_res.get("agreement_id"),
+                        "message": "SignNow encountered an issue; packet successfully dispatched via Adobe Sign fallback."
+                    })
+        except Exception as ad_err:
+            logger.error(f"Adobe Sign fallback also failed: {str(ad_err)}")
+
+        return JSONResponse({'error': f"SignNow error ({str(e)}) and Adobe Sign fallback failed."}, status_code=500)
 
 @bond_lifecycle_bp.post("/file-to-drive/{identifier}")
 async def file_to_drive(request: Request, identifier: str):

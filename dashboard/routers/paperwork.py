@@ -1734,11 +1734,29 @@ async def packet_builder_finalize(request: Request):
                     "signing_link": signing_link,
                 }
             except Exception as sn_exc:
-                logger.exception("SignNow finalize failed")
-                send_results["signnow"] = {"success": False, "error": str(sn_exc)}
-                if provider == "signnow":
+                logger.exception("SignNow finalize failed — initiating Adobe Sign fallback")
+                send_results["signnow"] = {"success": False, "error": str(sn_exc), "fallback_triggered": True}
+                if flat_bytes:
+                    try:
+                        adobe_fallback = await send_via_adobe(
+                            flattened_pdf=flat_bytes,
+                            filename=f"{packet_id}.pdf",
+                            signer_email=body.get("signer_email") or ind.get("email") or "",
+                            signer_name=ind.get("name") or def_.get("name") or "Signer",
+                            agreement_name=f"Shamrock Bond Packet — {def_.get('name') or packet_id}",
+                        )
+                        send_results["adobe"] = adobe_fallback
+                        send_results["adobe"]["is_fallback"] = True
+                        if adobe_fallback.get("success"):
+                            status = "pending_signature"
+                            signing_link = adobe_fallback.get("signing_link") or adobe_fallback.get("url") or ""
+                            logger.info("✅ Adobe Sign fallback succeeded for packet %s", packet_id)
+                    except Exception as ad_exc:
+                        logger.exception("Adobe Sign fallback also failed")
+                        send_results["adobe"] = {"success": False, "error": str(ad_exc)}
+                if provider == "signnow" and not (send_results.get("adobe", {}).get("success")):
                     return JSONResponse(
-                        {"success": False, "error": f"SignNow failed: {sn_exc}", "packet_id": packet_id},
+                        {"success": False, "error": f"SignNow failed ({sn_exc}) and Adobe Sign fallback failed.", "packet_id": packet_id, "send_results": send_results},
                         status_code=502,
                     )
 
