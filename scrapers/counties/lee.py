@@ -407,6 +407,15 @@ class LeeCountyScraper(BaseScraper):
             court_dates.sort(key=lambda x: x[0])
             result["court_date"] = court_dates[0][0]
             result["court_time"] = court_dates[0][1]
+        else:
+            result["court_date"] = "TBN"
+
+        # Check out-of-county
+        cn_upper = result["case_number"].strip().upper()
+        if cn_upper and cn_upper != "LEE":
+            from dashboard.services.url_ingest_service import FL_COUNTIES_UPPER
+            if cn_upper in FL_COUNTIES_UPPER:
+                result["county"] = cn_upper.title()
 
         # Infer court type
         first_loc = next(iter(court_locations), "").lower()
@@ -418,6 +427,7 @@ class LeeCountyScraper(BaseScraper):
             result["court_type"] = "Federal Court"
 
         return result
+
 
     # ── Normalizer (port of normalizeArrestRecord_) ──
 
@@ -802,18 +812,31 @@ class LeeCountyScraper(BaseScraper):
         if not booking_id:
             return None
         try:
-            url = f"{BASE_URL}{CHARGES_API.format(booking_id=booking_id)}"
-            resp = self._http_fetch(url)
-            if resp is None or resp.status_code != 200:
-                logger.debug(
-                    f"Lee _fetch_single_booking: charges API returned "
-                    f"{resp.status_code if resp else 'None'} for {booking_id}"
-                )
-                return None
-            charges_json = resp.json()
-            if not isinstance(charges_json, list):
-                return None
+            # Fetch charges API
+            c_url = f"{BASE_URL}{CHARGES_API.format(booking_id=booking_id)}"
+            c_resp = self._http_fetch(c_url)
+            charges_json = c_resp.json() if c_resp and c_resp.status_code == 200 and isinstance(c_resp.json(), list) else []
             parsed = self._parse_charges(charges_json)
+
+            # Fetch booking API for name/demographics
+            b_url = f"{BASE_URL}{BOOKINGS_API}/{booking_id}"
+            b_resp = self._http_fetch(b_url)
+            b_data = b_resp.json() if b_resp and b_resp.status_code == 200 and isinstance(b_resp.json(), dict) else {}
+
+            from dashboard.services.url_ingest_service import _title_case_name
+            first = _title_case_name(str(b_data.get("givenName") or b_data.get("firstName") or ""))
+            middle = _title_case_name(str(b_data.get("middleName") or ""))
+            last = _title_case_name(str(b_data.get("surName") or b_data.get("lastName") or ""))
+            suffix = str(b_data.get("suffix") or "").strip()
+            full_name = self._build_full_name(first, middle, last, suffix)
+
+            dob_iso = self._safe(b_data.get("birthDate") or b_data.get("dob"))
+            b_iso = self._safe(b_data.get("bookingDate") or b_data.get("arrestDate"))
+            d_date, _ = self._parse_iso_datetime(dob_iso)
+            b_date, b_time = self._parse_iso_datetime(b_iso)
+
+            county_val = parsed.get("county") or self.county
+
             base = {
                 "booking_number": booking_id,
                 "detail_url": detail_url or f"{BASE_URL}{DETAIL_PAGE}?id={booking_id}",
@@ -823,18 +846,21 @@ class LeeCountyScraper(BaseScraper):
                 "bond_type": parsed.get("bond_type", ""),
                 "court_type": parsed.get("court_type", ""),
                 "case_number": parsed.get("case_number", ""),
-                "court_date": parsed.get("court_date", ""),
+                "court_date": parsed.get("court_date", "TBN"),
                 "court_time": parsed.get("court_time", ""),
                 "court_location": parsed.get("court_location", ""),
-                "full_name": "", "first_name": "", "middle_name": "", "last_name": "",
-                "dob": "", "booking_date": "", "booking_time": "", "status": "In Custody",
-                "release_date": "", "facility": "Lee County Jail",
-                "race": "", "sex": "", "height": "", "weight": "",
-                "address": "", "city": "", "state": "FL", "zip": "",
-                "mugshot_url": "", "person_id": "",
+                "full_name": full_name, "first_name": first, "middle_name": middle, "last_name": last,
+                "dob": d_date, "booking_date": b_date, "booking_time": b_time,
+                "status": "In Custody" if b_data.get("inCustody", True) else "Released",
+                "release_date": "", "facility": self._safe(b_data.get("housing") or "Lee County Jail"),
+                "race": self._safe(b_data.get("race")), "sex": self._safe(b_data.get("sex")),
+                "height": self._safe(b_data.get("height")), "weight": self._safe(b_data.get("weight")),
+                "address": self._safe(b_data.get("address")), "city": self._safe(b_data.get("city")),
+                "state": self._safe(b_data.get("state") or "FL"), "zip": self._safe(b_data.get("zip")),
+                "mugshot_url": "", "person_id": self._safe(b_data.get("permId") or b_data.get("personId")),
             }
             record = self._to_arrest_record(base)
-            record.County = self.county
+            record.County = county_val
             record.LastCheckedMode = "UPDATE"
             return record
         except Exception as e:
@@ -842,3 +868,4 @@ class LeeCountyScraper(BaseScraper):
             return None
         finally:
             self._cleanup()
+

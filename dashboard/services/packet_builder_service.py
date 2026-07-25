@@ -613,7 +613,7 @@ def assemble_manifest(
 
 
 def flatten_pdf_bytes(pdf_parts: List[bytes]) -> bytes:
-    """Merge multiple PDF blobs into a single flat PDF."""
+    """Merge multiple PDF blobs into a single flat PDF, flattening filled text fields into permanent page content."""
     if not pdf_parts:
         return b""
     try:
@@ -624,6 +624,10 @@ def flatten_pdf_bytes(pdf_parts: List[bytes]) -> bytes:
                 continue
             try:
                 src = fitz.open(stream=blob, filetype="pdf")
+                try:
+                    src.bake()
+                except Exception:
+                    pass
                 out.insert_pdf(src)
                 src.close()
             except Exception as exc:
@@ -631,6 +635,10 @@ def flatten_pdf_bytes(pdf_parts: List[bytes]) -> bytes:
         if out.page_count == 0:
             out.close()
             return pdf_parts[0]
+        try:
+            out.bake()
+        except Exception:
+            pass
         data = out.tobytes(deflate=True, garbage=3)
         out.close()
         return data

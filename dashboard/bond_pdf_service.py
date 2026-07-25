@@ -137,14 +137,14 @@ def _normalize_charges_and_amounts(charges_input, bond_amount_input) -> list[dic
     for i, chg in enumerate(valid_charges):
         amt_val = valid_amounts_from_charges[i] if i < len(valid_amounts_from_charges) else None
         if amt_val is None:
-            if i < len(amounts):
+            if len(amounts) == 1 and len(valid_charges) > 1:
+                amt_val = round(amounts[0] / len(valid_charges), 2)
+            elif i < len(amounts):
                 amt_val = amounts[i]
             elif len(amounts) == 1 and i == 0:
                 amt_val = amounts[0]
             else:
-                # If only one overall amount was specified but we have multiple charges,
-                # put the entire amount on the first charge and $0 on the rest.
-                amt_val = amounts[0] if (len(amounts) == 1 and i == 0) else 0.0
+                amt_val = 0.0
         normalized.append({
             "charge": chg,
             "amount": amt_val
@@ -388,7 +388,7 @@ def fill_osi_bond(data: dict) -> bytes:
         "BondAmountCharge1": f"${bond_amount:,.2f}",
         "DefCharge1": charge_line1,
         "DefCharge1Line2": charge_line2,
-        "CourtDate": data.get("court_date") or data.get("defendant_court_date") or "",
+        "CourtDate": data.get("court_date") or data.get("defendant_court_date") or "TBN",
         "CourtTime": data.get("court_time") or data.get("defendant_court_time") or "",
         "CaseNum": data.get("case_number") or data.get("defendant_case_number") or "",
         "Arrest/case No": booking_number,
@@ -461,9 +461,9 @@ def fill_palmetto_bond(data: dict) -> bytes:
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
     
-    court_datetime = data.get("court_date") or data.get("defendant_court_date") or ""
+    court_datetime = data.get("court_date") or data.get("defendant_court_date") or "TBN"
     court_time = data.get("court_time") or data.get("defendant_court_time") or ""
-    if court_time:
+    if court_time and court_datetime != "TBN":
         court_datetime = f"{court_datetime} {court_time}".strip()
     
     # ── Field Mapping ──

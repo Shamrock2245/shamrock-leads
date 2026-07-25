@@ -91,6 +91,11 @@ function statusBadge(status){
   return `<span class="def-status-badge other">● ${status}</span>`;
 }
 
+function escLeadAttr(obj) {
+  if (!obj) return '{}';
+  return JSON.stringify(obj).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 // ── Render a single defendant card ──
 function renderDefCard(d){
   const charges=parseCharges(d.charges, d.bond_amount, d.bond_type, d.case_number);
@@ -100,16 +105,23 @@ function renderDefCard(d){
   const isNoBond = d.bond_amount === 0 && (d.bond_type || '').toUpperCase() === 'NO BOND';
   const bondText = isNoBond ? 'No Bond' : money(d.bond_amount);
   const pillClass = isNoBond ? 'no-bond' : bondPill(d.bond_amount);
+  const courtDateDisplay = d.court_date ? val(d.court_date) : 'TBN';
+
+  // Cache in window._leadMap for instant access by booking_number
+  if (d.booking_number) {
+    if (!window._leadMap) window._leadMap = {};
+    window._leadMap[d.booking_number] = d;
+  }
 
   return `
-  <div class="def-card" data-booking="${d.booking_number||''}" onclick='openSplitView(this, ${JSON.stringify(d).replace(/'/g,"&#39;")})'>
+  <div class="def-card" data-booking="${d.booking_number||''}" data-lead="${escLeadAttr(d)}" onclick="openSplitView(this)">
     <!-- Header -->
     <div class="def-card-header">
       <div style="display:flex;gap:14px;align-items:center;flex:1;min-width:0">
         ${hasMugshot?`<img src="${d.mugshot_url}" class="mugshot" alt="" onerror="this.outerHTML='<div class=mugshot-placeholder>👤</div>'">`:'<div class="mugshot-placeholder">👤</div>'}
         <div style="min-width:0">
           <div class="def-name">${val(d.full_name)}</div>
-          <div class="def-booking">#${val(d.booking_number)} · ${val(d.county)} County</div>
+          <div class="def-booking">#${val(d.booking_number)} · <span class="def-county" data-field="county">${val(d.county)} County</span></div>
         </div>
       </div>
       <div class="def-bond-pill ${pillClass}">${bondText}</div>
@@ -154,7 +166,7 @@ function renderDefCard(d){
         <div class="def-section-title">⚖️ Charges & Bond Detail</div>
         <table class="def-charges-table">
           <thead><tr><th>Charge Description</th><th>Bond</th><th>Type</th><th>Case #</th></tr></thead>
-          <tbody>${charges.map(c=>`<tr><td style="white-space:normal">${c.charge}</td><td style="font-weight:600">${c.bond}</td><td>${c.type}</td><td class="mono" style="font-size:11px">${c.case}</td></tr>`).join('')}</tbody>
+          <tbody>${charges.map(c=>`<tr><td style="white-space:normal" class="def-charges">${c.charge}</td><td style="font-weight:600">${c.bond}</td><td>${c.type}</td><td class="mono" style="font-size:11px">${c.case}</td></tr>`).join('')}</tbody>
         </table>
       </div>
 
@@ -162,7 +174,7 @@ function renderDefCard(d){
       <div class="def-section">
         <div class="def-section-title">📅 Court Information</div>
         <div class="def-row">
-          <div class="def-field"><div class="def-label">Court Date</div><div class="def-value">${val(d.court_date)}${d.court_time?' at '+d.court_time:''}</div></div>
+          <div class="def-field"><div class="def-label">Court Date</div><div class="def-value def-court-date" data-field="court_date">${courtDateDisplay}${d.court_time?' at '+d.court_time:''}</div></div>
           <div class="def-field"><div class="def-label">Court Type</div><div class="def-value">${val(d.court_type)}</div></div>
           <div class="def-field"><div class="def-label">Court Location</div><div class="def-value">${val(d.court_location)}</div></div>
           <div class="def-field"><div class="def-label">Case Number</div><div class="def-value mono">${val(d.case_number)}</div></div>
@@ -182,11 +194,13 @@ function renderDefCard(d){
     <!-- Footer Actions -->
     <div class="def-card-footer">
       ${d.detail_url?`<a href="${d.detail_url}" target="_blank" class="btn-detail" onclick="event.stopPropagation()">🔗 Source</a>`:''}
-      <button class="btn-detail" onclick="event.stopPropagation(); if(window.openShamrockNotes) openShamrockNotes('${d.booking_number}')">📜 Timeline & Notes</button>
-      <button class="btn-contact-indem" onclick='event.stopPropagation(); SLContact.openModal("${d.booking_number||""}",${JSON.stringify(d.full_name||"")},"${(d.county||"").replace(/"/g,"&quot;")}",${d.bond_amount||0},"${d.booking_number||""}")'>📞 Contact Indem</button>
-      <button onclick='event.stopPropagation(); trackAsInProgress(${JSON.stringify(d).replace(/'/g,"&#39;")})' style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track In Progress</button>
-      <button class="btn-write-bond" onclick='event.stopPropagation(); openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'> Write Bond</button>
-      <button class="btn-record-bond" onclick='event.stopPropagation(); window.openRecordBondModal&&openRecordBondModal(${JSON.stringify(d).replace(/'/g,"&#39;")})'>☘️ Record Bond</button>
+      <button class="btn-detail" onclick="event.stopPropagation(); refreshDefendantFromSource('${d.booking_number}', this)">🔄 Update</button>
+      <button class="btn-detail" onclick="event.stopPropagation(); openEditLeadModal('${d.booking_number}')">✏️ Edit</button>
+      <button class="btn-detail" onclick="event.stopPropagation(); if(window.openShamrockNotes) openShamrockNotes('${d.booking_number}')">📜 Timeline</button>
+      <button class="btn-contact-indem" onclick="event.stopPropagation(); SLContact.openModal('${d.booking_number||""}','${(d.full_name||"").replace(/'/g,"\\\\'")}', '${(d.county||"").replace(/'/g,"\\\\'")}', ${d.bond_amount||0}, '${d.booking_number||""}')">📞 Contact</button>
+      <button onclick="event.stopPropagation(); trackAsInProgress('${d.booking_number}')" style="background:#1a4a2e;border:1px solid #16a34a;color:#86efac;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">🟢 Track</button>
+      <button class="btn-write-bond" onclick="event.stopPropagation(); openWriteBond('${d.booking_number}')">✍️ Bond</button>
+      <button class="btn-record-bond" onclick="event.stopPropagation(); window.openRecordBondModal&&openRecordBondModal('${d.booking_number}')">☘️ Record</button>
     </div>
   </div>`;
 }
@@ -355,7 +369,11 @@ function updatePremiumDisplay() {
   if (bondEl) bondEl.textContent = money(bond);
 }
 
-function openWriteBond(defendant) {
+function openWriteBond(defendantOrBk) {
+  let defendant = typeof defendantOrBk === 'string'
+    ? (window._leadMap && window._leadMap[defendantOrBk]) || { booking_number: defendantOrBk }
+    : (defendantOrBk && defendantOrBk.dataset ? JSON.parse(defendantOrBk.dataset.lead || '{}') : defendantOrBk);
+  if (!defendant) return;
   selectedDefendant = defendant;
   selectedInsurer = 'osi'; // reset to default
   const charges = parseCharges(defendant.charges, defendant.bond_amount, defendant.bond_type, defendant.case_number);
@@ -551,7 +569,11 @@ $('writeBondModal').addEventListener('click', e => { if (e.target === $('writeBo
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal() });
 
 // ── Track defendant as In Progress (prospective bond pipeline) ────────────────
-async function trackAsInProgress(defendant) {
+async function trackAsInProgress(defendantOrBk) {
+  let defendant = typeof defendantOrBk === 'string'
+    ? (window._leadMap && window._leadMap[defendantOrBk]) || { booking_number: defendantOrBk }
+    : (defendantOrBk && defendantOrBk.dataset ? JSON.parse(defendantOrBk.dataset.lead || '{}') : defendantOrBk);
+  if (!defendant) return;
   const stages = ['contacted', 'negotiating', 'paperwork', 'ready'];
   const stage = prompt(
     'Track "' + (defendant.full_name || 'Defendant') + '" in the In Progress pipeline.\n\n' +
@@ -605,12 +627,15 @@ async function trackAsInProgress(defendant) {
    ═══════════════════════════════════════════════════════ */
 let currentSplitIndex = -1;
 
-function openSplitView(cardEl, d) {
+function openSplitView(cardEl, dataObj) {
   const wrapper = document.getElementById('defSplitWrapper');
   const detailPane = document.getElementById('defDetailPane');
   
   if (!wrapper || !detailPane) return;
   
+  const d = dataObj || (cardEl && cardEl.dataset && cardEl.dataset.lead ? JSON.parse(cardEl.dataset.lead) : null) || (cardEl && cardEl.dataset && window._leadMap ? window._leadMap[cardEl.dataset.booking] : null);
+  if (!d) return;
+
   // Update active card
   document.querySelectorAll('.def-card.active-split').forEach(el => el.classList.remove('active-split'));
   if (cardEl) {
@@ -660,8 +685,8 @@ function openSplitView(cardEl, d) {
     </div>
     
     <div style="display:flex; gap:12px; margin-top:24px;">
-      <button class="sl-btn sl-btn-primary" style="flex:1" onclick='openWriteBond(${JSON.stringify(d).replace(/'/g,"&#39;")})'>Write Bond</button>
-      <button class="sl-btn sl-btn-secondary" style="flex:1" onclick="if(window.openShamrockNotes) openShamrockNotes('${d.booking_number}')">Notes</button>
+      <button class="sl-btn sl-btn-primary" style="flex:1" onclick="openWriteBond('${d.booking_number}')">Write Bond</button>
+      <button class="sl-btn sl-btn-secondary" style="flex:1" onclick="openEditLeadModal('${d.booking_number}')">✏️ Edit Details</button>
     </div>
   `;
 }

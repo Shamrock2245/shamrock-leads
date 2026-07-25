@@ -592,6 +592,8 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
     const availInTier = data.available_in_tier || 0;
     const availTotal = data.available_total || 0;
     const defaultCaseNum = (window._bondModalData && window._bondModalData.booking) ? window._bondModalData.booking : '';
+    const defaultCounty = (window._bondModalData && window._bondModalData.county) ? window._bondModalData.county : 'Lee';
+    const defaultCourtDate = (window._bondModalData && window._bondModalData.lead && window._bondModalData.lead.court_date) ? window._bondModalData.lead.court_date : 'TBN';
     const perChargeBond = count > 0 ? (bondAmt / count) : bondAmt;
 
     // Build per-charge POA & Case Number input rows
@@ -605,34 +607,43 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
       ` : '';
 
       return `
-        <div class="poa-charge-row" style="display:grid;grid-template-columns:30px 1fr 140px 180px;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
-          <span style="font-size:11px;color:var(--muted);font-weight:700">#${i+1}</span>
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:2px">${ch.length > 55 ? ch.slice(0,55)+'…' : ch}</div>
-            <div style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:10px;color:var(--muted)">Case #:</span>
-              <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${defaultCaseNum}" placeholder="Case #" style="padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:110px" />
-              ${fillDownBtn}
+        <div class="poa-charge-row" style="display:flex;flex-direction:column;gap:6px;padding:10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <span style="font-size:12px;font-weight:700;color:var(--text)">Charge #${i+1}: ${ch}</span>
+            ${fillDownBtn}
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;align-items:center">
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">County (Appearance Bond)</label>
+              <input type="text" id="countyInput_${i}" class="charge-county-input" value="${defaultCounty}" placeholder="e.g. Pinellas" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
             </div>
-          </div>
-          <div>
-            <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>
-            <input type="number" id="chargeAmtInput_${i}" class="charge-amt-input" value="${perChargeBond > 0 ? perChargeBond : ''}" placeholder="Amount" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-weight:600;width:110px" oninput="onPoaInputChange(document.getElementById('poaInput_${i}'), ${i})" />
-          </div>
-          <div>
-            <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">POA Serial # (Consecutive)</label>
-            <input
-              class="poa-input"
-              id="poaInput_${i}"
-              data-charge-idx="${i}"
-              data-poa-prefix="${poaPfx}"
-              data-poa-number="${poaNum}"
-              value="${poaFull}"
-              placeholder="${prefix} ______"
-              style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:monospace;width:160px;font-weight:700"
-              oninput="onPoaInputChange(this, ${i})"
-            />
-            <div id="poaCapBadge_${i}" style="margin-top:2px"></div>
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Court Date</label>
+              <input type="text" id="courtDateInput_${i}" class="charge-court-input" value="${defaultCourtDate}" placeholder="TBN" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+            </div>
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Case #</label>
+              <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${defaultCaseNum}" placeholder="Case #" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+            </div>
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>
+              <input type="number" id="chargeAmtInput_${i}" class="charge-amt-input" value="${perChargeBond > 0 ? perChargeBond : ''}" placeholder="Amount" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-weight:600;width:100%;box-sizing:border-box" oninput="onPoaInputChange(document.getElementById('poaInput_${i}'), ${i})" />
+            </div>
+            <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">POA Serial #</label>
+              <input
+                class="poa-input"
+                id="poaInput_${i}"
+                data-charge-idx="${i}"
+                data-poa-prefix="${poaPfx}"
+                data-poa-number="${poaNum}"
+                value="${poaFull}"
+                placeholder="${prefix} ______"
+                style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;font-family:monospace;width:100%;font-weight:700;box-sizing:border-box"
+                oninput="onPoaInputChange(this, ${i})"
+              />
+              <div id="poaCapBadge_${i}" style="margin-top:2px"></div>
+            </div>
           </div>
         </div>`;
     });
@@ -775,11 +786,16 @@ function downloadBond(chargeEncoded, idx) {
   const caseNum = (caseInp ? caseInp.value.trim() : '') || data.booking || '';
   const amtInp = document.getElementById(`chargeAmtInput_${idx - 1}`);
   const chargeAmt = amtInp ? (parseFloat(amtInp.value) || 0) : data.bond;
+  const countyInp = document.getElementById(`countyInput_${idx - 1}`);
+  const countyVal = (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee';
+  const courtDateInp = document.getElementById(`courtDateInput_${idx - 1}`);
+  const courtDateVal = (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN';
 
   const params = new URLSearchParams({
-    name: data.name, booking: data.booking, county: data.county,
+    name: data.name, booking: data.booking, county: countyVal,
     bond: chargeAmt, charge, surety, date: data.date,
     dob: data.lead.dob || '', address: data.lead.address || '',
+    court_date: courtDateVal,
     case_number: caseNum,
     poa_number: poaFull,
     copies: '2',
@@ -805,11 +821,15 @@ async function downloadAllBonds(copiesPerCharge = 2) {
       const poaInp = document.getElementById(`poaInput_${i}`);
       const caseInp = document.getElementById(`caseNumInput_${i}`);
       const amtInp = document.getElementById(`chargeAmtInput_${i}`);
+      const countyInp = document.getElementById(`countyInput_${i}`);
+      const courtDateInp = document.getElementById(`courtDateInput_${i}`);
       return {
         charge: ch,
-        poa_number: (poaInp ? poaInp.value.trim() : '') || (data.poaNumbers[i] ? data.poaNumbers[i].poa_full : ''),
+        poa_number: (poaInp ? poaInp.value.trim() : '') || (data.poaNumbers && data.poaNumbers[i] ? data.poaNumbers[i].poa_full : ''),
         case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
-        bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : data.bond
+        bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : data.bond,
+        county: (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee',
+        court_date: (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN'
       };
     })
   };
@@ -1523,7 +1543,10 @@ async function refreshDefendantFromSource(bookingNumber, btnEl) {
 
     const newAmt = d.new_bond_amount != null ? Number(d.new_bond_amount) : null;
     const bondRes = d.bond_result || {};
-    if (d.immediate && d.immediate.bond_updated && newAmt != null) {
+    if (d.updated_lead) {
+      _applyFullLeadToCard(bookingNumber, d.updated_lead);
+      toast(`🔄 Updated from source: ${d.updated_lead.full_name || ''} ($${Number(d.updated_lead.bond_amount||0).toLocaleString()})`, 'success');
+    } else if (d.immediate && d.immediate.bond_updated && newAmt != null) {
       _applyBondToCard(bookingNumber, newAmt, bondRes.lead_score, bondRes.lead_status);
       toast(`🔄 Updated from source: $${newAmt.toLocaleString()}`, 'success');
     } else if (d.immediate && d.immediate.bond_found > 0) {
@@ -2150,6 +2173,186 @@ window.onWriteBondAmountChange = onWriteBondAmountChange;
 window.saveWriteBondAmount = saveWriteBondAmount;
 window.refreshDefendantFromSource = refreshDefendantFromSource;
 
+// ── Apply Updated Lead to Cards ──
+function _applyFullLeadToCard(bookingNumber, lead) {
+  if (!bookingNumber || !lead) return;
+
+  if (window._leadMap && window._leadMap[bookingNumber]) {
+    Object.assign(window._leadMap[bookingNumber], lead);
+  }
+
+  const cards = document.querySelectorAll(`.def-card[data-booking="${bookingNumber}"]`);
+  cards.forEach(card => {
+    if (lead.full_name) {
+      const nameEl = card.querySelector('.def-name, h3, .def-card-name');
+      if (nameEl) nameEl.textContent = lead.full_name;
+    }
+    if (lead.bond_amount != null) {
+      const amount = Number(lead.bond_amount) || 0;
+      const pill = card.querySelector('.def-bond-pill');
+      if (pill) {
+        const bc = amount >= 10000 ? 'high' : amount >= 2500 ? 'mid' : 'low';
+        pill.className = 'def-bond-pill ' + bc + (amount <= 0 ? ' bond-zero' : '');
+        pill.textContent = amount > 0 ? ('$' + Number(amount).toLocaleString()) : '$0 — set bond';
+      }
+      const inp = card.querySelector('.def-bond-input');
+      if (inp) inp.value = amount > 0 ? amount : '';
+    }
+    if (lead.charges) {
+      const chargesEl = card.querySelector('.def-charges, .def-card-charges');
+      if (chargesEl) chargesEl.textContent = lead.charges;
+    }
+    if (lead.court_date) {
+      const courtEls = card.querySelectorAll('.def-court-date, [data-field="court_date"]');
+      courtEls.forEach(el => el.textContent = lead.court_date);
+    }
+    if (lead.county) {
+      const countyEls = card.querySelectorAll('.def-county, [data-field="county"]');
+      countyEls.forEach(el => el.textContent = lead.county + ' County');
+    }
+    const scoreEl = card.querySelector('[id^="defScore_"]');
+    if (scoreEl && lead.lead_score != null) {
+      scoreEl.textContent = `${lead.lead_score} ${lead.lead_status || ''}`.trim();
+    }
+  });
+}
+window._applyFullLeadToCard = _applyFullLeadToCard;
+
+// ── Edit Lead Modal ──
+function openEditLeadModal(bookingNumberOrLead) {
+  let lead = typeof bookingNumberOrLead === 'object' ? bookingNumberOrLead : (window._leadMap && window._leadMap[bookingNumberOrLead]);
+  const bk = typeof bookingNumberOrLead === 'string' ? bookingNumberOrLead : (lead ? lead.booking_number : '');
+
+  if (!lead && bk) {
+    lead = { booking_number: bk };
+  }
+  if (!lead) {
+    toast('No lead data found to edit', 'error');
+    return;
+  }
+
+  let modal = document.getElementById('editLeadModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'editLeadModal';
+    modal.className = 'modal-backdrop';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box;';
+    document.body.appendChild(modal);
+  }
+
+  const bkEsc = (lead.booking_number || '').replace(/"/g, '&quot;');
+  const nameEsc = (lead.full_name || '').replace(/"/g, '&quot;');
+  const chargesEsc = (lead.charges || '').replace(/"/g, '&quot;');
+  const bondVal = lead.bond_amount != null ? lead.bond_amount : 0;
+  const courtVal = (lead.court_date || 'TBN').replace(/"/g, '&quot;');
+  const caseVal = (lead.case_number || '').replace(/"/g, '&quot;');
+  const countyVal = (lead.county || 'Lee').replace(/"/g, '&quot;');
+  const dobVal = (lead.dob || '').replace(/"/g, '&quot;');
+
+  modal.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;width:100%;max-width:540px;padding:24px;color:#f8fafc;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5);box-sizing:border-box;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;border-bottom:1px solid #334155;padding-bottom:12px">
+        <h3 style="margin:0;font-size:18px;font-weight:700;color:#f8fafc">✏️ Edit Defendant & Lead Details</h3>
+        <button onclick="document.getElementById('editLeadModal').style.display='none'" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer">&times;</button>
+      </div>
+      <form onsubmit="saveEditLeadDetails(event, '${bkEsc}'); return false;" style="display:flex;flex-direction:column;gap:12px">
+        <div>
+          <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Booking Number</label>
+          <input type="text" value="${bkEsc}" readonly style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#94a3b8;box-sizing:border-box" />
+        </div>
+        <div>
+          <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Full Name (First, Middle, Last)</label>
+          <input type="text" id="elmFullName" value="${nameEsc}" placeholder="e.g. D'Angelo Marquis Jones" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Bond Amount ($)</label>
+            <input type="number" step="0.01" id="elmBondAmount" value="${bondVal}" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+          </div>
+          <div>
+            <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">County</label>
+            <input type="text" id="elmCounty" value="${countyVal}" placeholder="Lee, Pinellas, etc." style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Charges</label>
+          <textarea id="elmCharges" rows="2" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box">${chargesEsc}</textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <label style="font-size:12px;color:#94a3b8">Court Date</label>
+              <button type="button" onclick="document.getElementById('elmCourtDate').value='TBN'" style="background:#3b82f6;border:none;color:#fff;border-radius:4px;font-size:10px;padding:2px 6px;cursor:pointer">Set TBN</button>
+            </div>
+            <input type="text" id="elmCourtDate" value="${courtVal}" placeholder="YYYY-MM-DD or TBN" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+          </div>
+          <div>
+            <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Case Number</label>
+            <input type="text" id="elmCaseNumber" value="${caseVal}" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+          </div>
+        </div>
+        <div>
+          <label style="font-size:12px;color:#94a3b8;display:block;margin-bottom:4px">Date of Birth</label>
+          <input type="text" id="elmDob" value="${dobVal}" placeholder="YYYY-MM-DD" style="width:100%;padding:8px 12px;background:#1e293b;border:1px solid #334155;border-radius:6px;color:#f8fafc;box-sizing:border-box" />
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid #334155">
+          <button type="button" onclick="document.getElementById('editLeadModal').style.display='none'" style="padding:8px 16px;background:#334155;border:none;border-radius:6px;color:#f8fafc;cursor:pointer;font-weight:600">Cancel</button>
+          <button type="submit" id="saveEditLeadBtn" style="padding:8px 20px;background:#16a34a;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:700">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  `;
+  modal.style.display = 'flex';
+}
+
+async function saveEditLeadDetails(evt, bookingNumber) {
+  if (evt) evt.preventDefault();
+  const btn = document.getElementById('saveEditLeadBtn');
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Saving…'; }
+
+  try {
+    const payload = {
+      booking_number: bookingNumber,
+      full_name: (document.getElementById('elmFullName')?.value || '').trim(),
+      charges: (document.getElementById('elmCharges')?.value || '').trim(),
+      bond_amount: parseFloat(document.getElementById('elmBondAmount')?.value || 0),
+      county: (document.getElementById('elmCounty')?.value || '').trim(),
+      court_date: (document.getElementById('elmCourtDate')?.value || '').trim() || 'TBN',
+      case_number: (document.getElementById('elmCaseNumber')?.value || '').trim(),
+      dob: (document.getElementById('elmDob')?.value || '').trim(),
+      changed_by: document.getElementById('outreachAgent')?.value || 'dashboard_user'
+    };
+
+    const r = await fetch(`${API}/api/leads/update-lead-details`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+
+    if (!r.ok || !d.success) {
+      toast(d.error || 'Failed to update details', 'error');
+      return;
+    }
+
+    toast('✅ Defendant details updated successfully!', 'success');
+    _applyFullLeadToCard(bookingNumber, d.data || payload);
+
+    const modal = document.getElementById('editLeadModal');
+    if (modal) modal.style.display = 'none';
+
+    if (typeof loadDefendants === 'function') loadDefendants();
+  } catch (e) {
+    toast('Error updating details: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = 'Save Changes'; }
+  }
+}
+
+window.openEditLeadModal = openEditLeadModal;
+window.saveEditLeadDetails = saveEditLeadDetails;
+
+
 /**
  * openBondFromActiveBond — Opens the bond modal pre-populated from an existing active bond.
  * Automatically pre-selects the correct surety (OSI vs Palmetto) so the SignNow
@@ -2230,7 +2433,21 @@ async function triggerSignNowPacket() {
         booking_number: data.booking,
         bond_amount: data.bond,
         surety: data.surety,
-        charges: data.chargeList,
+        charges: (data.chargeList || []).map((ch, i) => {
+          const poaInp = document.getElementById(`poaInput_${i}`);
+          const caseInp = document.getElementById(`caseNumInput_${i}`);
+          const amtInp = document.getElementById(`chargeAmtInput_${i}`);
+          const countyInp = document.getElementById(`countyInput_${i}`);
+          const courtDateInp = document.getElementById(`courtDateInput_${i}`);
+          return {
+            charge: ch,
+            poa_number: (poaInp ? poaInp.value.trim() : '') || (data.poaNumbers && data.poaNumbers[i] ? data.poaNumbers[i].poa_full : ''),
+            case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
+            bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : data.bond,
+            county: (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee',
+            court_date: (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN'
+          };
+        }),
       }
     };
     
@@ -2253,3 +2470,34 @@ async function triggerSignNowPacket() {
     toast('Network error', 'error');
   }
 }
+
+async function promptAdminPinOverride(bookingNumber) {
+  const pin = prompt('🔑 Enter Admin PIN to approve posting before all paperwork is complete (logs 24-hour compliance deadline):');
+  if (!pin) return;
+
+  const reason = prompt('Reason for override / notes:', 'Admin override for immediate bond posting') || 'Admin override';
+  const approvedBy = prompt('Admin Name:', 'Admin User') || 'Admin';
+
+  try {
+    const res = await fetch(`${API}/api/bonds/admin-pin-override`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pin: pin.trim(),
+        booking_number: bookingNumber,
+        reason: reason.trim(),
+        approved_by: approvedBy.trim()
+      })
+    });
+    const d = await res.json();
+    if (!res.ok || !d.success) {
+      toast(d.error || 'Invalid Admin PIN', 'error');
+      return;
+    }
+    toast('✅ Admin PIN verified! Bond approved for posting (24-hour compliance deadline logged).', 'success');
+    if (typeof loadDefendants === 'function') loadDefendants();
+  } catch (err) {
+    toast('Error verifying PIN: ' + err.message, 'error');
+  }
+}
+window.promptAdminPinOverride = promptAdminPinOverride;

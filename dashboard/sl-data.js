@@ -109,7 +109,7 @@ function renderLeads() {
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${statusLabel}</span></td>
       <td>${custDropdown}</td>
       <td>${arrestDisp}<br><span style="color:var(--muted);font-size:10px" title="${l.scraped_at||''}">${scrapedRel ? 'scraped '+scrapedRel : ''}</span></td>
-      <td class="${courtCls}">${l.court_date || '—'}</td>
+      <td class="${courtCls}">${l.court_date || 'TBN'}</td>
       <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : '—'}</td>
     </tr>`;
   }).join('');

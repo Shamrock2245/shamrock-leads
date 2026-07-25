@@ -270,7 +270,7 @@ function renderLeads() {
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span>${fta ? '<br>'+fta : ''}</td>
       <td>${custBadge}</td>
       <td>${fmtDate(l.arrest_date || l.booking_date)}</td>
-      <td class="${courtCls}">${l.court_date || '—'}</td>
+      <td class="${courtCls}">${l.court_date || 'TBN'}</td>
       <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : ''}${leeClerkLink}</td>
     </tr>`;
   }).join('');
@@ -372,7 +372,7 @@ async function loadDefendants() {
           <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'—'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'—'}</span></div><div class="def-field"><span class="def-label">Status</span><span class="def-status-badge ${stBadge}">${l.status||'—'}</span></div><div class="def-field"><span class="def-label">Score</span><span class="def-value">${l.lead_score||0} (${l.lead_status||'—'})</span></div><div class="def-field"><span class="def-label">FTA Risk</span><span class="def-value">${ftaBadge(l)||'—'}</span></div></div></div>
           <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'—'}</div></div></div>
         </div>
-        <div class="def-card-footer"><button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button><button class="btn-contact-indem" onclick="SLContact.openModal('${(l.booking_number||'')}','${(l.full_name||'').replace(/'/g,"\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact Indem</button><button class="btn-write-bond" onclick="SL.openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write Bond</button></div>
+        <div class="def-card-footer"><button class="btn-detail" onclick="window.open('${l.detail_url||'#'}')">🔗 Source</button><button class="btn-detail" onclick="openEditLeadModal('${(l.booking_number||'')}')">✏️ Edit</button><button class="btn-contact-indem" onclick="SLContact.openModal('${(l.booking_number||'')}','${(l.full_name||'').replace(/'/g,"\\'")}',' ${l.county||''}',${bond},'${(l.booking_number||'')}')">📞 Contact Indem</button><button class="btn-write-bond" onclick="SL.openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write Bond</button></div>
       </div>`;
     }).join('') || '<div class="loading">No defendants found</div>';
   } catch(e) { console.error(e); }

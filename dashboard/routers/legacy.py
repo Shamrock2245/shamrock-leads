@@ -455,9 +455,8 @@ async def _apply_bond_amount_to_arrest(
 async def refresh_from_source(request: Request):
     """Re-fetch one defendant's booking sheet from the county website.
 
-    1. Immediate: HTTP GET ``detail_url`` and parse bond amount (fast path).
-    2. Queued: insert ``custody_recheck`` trigger (mode=single) so the scraper
-       engine runs county ``_fetch_single_booking`` for full field refresh.
+    1. Immediate: Fetch booking URL via url_ingest_service (full parser for Lee & county APIs).
+    2. Queued: insert custody_recheck trigger so scraper engine runs single-booking refresh.
 
     POST body: { "booking_number": "...", "open_source": false }
     """
@@ -468,6 +467,7 @@ async def refresh_from_source(request: Request):
 
     changed_by = (body.get("changed_by") or body.get("agent") or "dashboard_user").strip()
     now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     arrests = get_collection("arrests")
 
     doc = await arrests.find_one({"booking_number": booking_number})
@@ -479,6 +479,9 @@ async def refresh_from_source(request: Request):
 
     county = (doc.get("county") or "").strip()
     detail_url = (doc.get("detail_url") or doc.get("source_url") or "").strip()
+    if not detail_url and county.lower() == "lee":
+        detail_url = f"https://www.sheriffleefl.org/booking/?id={booking_number}"
+
     old_bond = doc.get("bond_amount")
     try:
         old_bond_f = float(old_bond or 0)
@@ -493,71 +496,76 @@ async def refresh_from_source(request: Request):
         "error": None,
     }
     bond_result = None
+    updated_lead = None
 
-    # ── Fast path: fetch booking page HTML and extract bond ─────────────────
+    # ── Fast path: fetch booking page via url_ingest_service ───────────────────
     if detail_url:
         try:
-            import httpx
-            from core.first_appearance_watcher import _extract_bond_from_html
+            from dashboard.services.url_ingest_service import ingest_url
+            res = await ingest_url(detail_url)
 
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml",
-            }
-            async with httpx.AsyncClient(
-                timeout=25.0,
-                follow_redirects=True,
-                headers=headers,
-            ) as client:
-                resp = await client.get(detail_url)
+            if res.get("success") and res.get("data"):
+                parsed_data = res["data"]
+                found_bond = float(parsed_data.get("bond_amount") or 0)
+                immediate["bond_found"] = found_bond
 
-            if resp.status_code >= 400:
-                immediate["error"] = f"Source returned HTTP {resp.status_code}"
+                update_fields = {
+                    "last_source_refresh_at": now_iso,
+                    "last_source_refresh_by": changed_by,
+                    "last_source_refresh_url": detail_url,
+                    "updated_at": now_iso,
+                }
+                if parsed_data.get("full_name"):
+                    update_fields["full_name"] = parsed_data["full_name"]
+                if parsed_data.get("first_name"):
+                    update_fields["first_name"] = parsed_data["first_name"]
+                if parsed_data.get("middle_name"):
+                    update_fields["middle_name"] = parsed_data["middle_name"]
+                if parsed_data.get("last_name"):
+                    update_fields["last_name"] = parsed_data["last_name"]
+                if parsed_data.get("charges"):
+                    update_fields["charges"] = parsed_data["charges"]
+                if found_bond >= 0:
+                    update_fields["bond_amount"] = found_bond
+                    update_fields["total_bond_amount"] = found_bond
+                if parsed_data.get("bond_type"):
+                    update_fields["bond_type"] = parsed_data["bond_type"]
+                if parsed_data.get("case_number"):
+                    update_fields["case_number"] = parsed_data["case_number"]
+                if parsed_data.get("court_date"):
+                    update_fields["court_date"] = parsed_data["court_date"]
+                if parsed_data.get("court_time"):
+                    update_fields["court_time"] = parsed_data["court_time"]
+                if parsed_data.get("court_location"):
+                    update_fields["court_location"] = parsed_data["court_location"]
+                if parsed_data.get("county"):
+                    update_fields["county"] = parsed_data["county"]
+                if parsed_data.get("status"):
+                    update_fields["status"] = parsed_data["status"]
+                    immediate["status_hint"] = parsed_data["status"]
+                if parsed_data.get("dob"):
+                    update_fields["dob"] = parsed_data["dob"]
+
+                await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
+                updated_doc = await arrests.find_one({"booking_number": booking_number})
+
+                if abs(found_bond - old_bond_f) >= 0.01:
+                    immediate["bond_updated"] = True
+
+                updated_lead = {
+                    "booking_number": booking_number,
+                    "full_name": updated_doc.get("full_name"),
+                    "charges": updated_doc.get("charges"),
+                    "bond_amount": updated_doc.get("bond_amount"),
+                    "court_date": updated_doc.get("court_date", "TBN"),
+                    "case_number": updated_doc.get("case_number"),
+                    "county": updated_doc.get("county"),
+                    "status": updated_doc.get("status"),
+                    "lead_score": updated_doc.get("lead_score"),
+                    "lead_status": updated_doc.get("lead_status"),
+                }
             else:
-                html = resp.text or ""
-                found = float(_extract_bond_from_html(html) or 0)
-                immediate["bond_found"] = found
-
-                # Light status signals from page text
-                lower = html.lower()
-                if "released" in lower and "in custody" not in lower:
-                    immediate["status_hint"] = "Released"
-                elif "in custody" in lower or "confined" in lower or "incarcerated" in lower:
-                    immediate["status_hint"] = "In Custody"
-
-                if found > 0 and abs(found - old_bond_f) >= 0.01:
-                    bond_result = await _apply_bond_amount_to_arrest(
-                        booking_number,
-                        found,
-                        changed_by=changed_by,
-                        note=f"Auto-extracted from booking sheet: {detail_url[:120]}",
-                        source="source_page_refresh",
-                    )
-                    immediate["bond_updated"] = bool(
-                        isinstance(bond_result, dict) and bond_result.get("success")
-                    )
-                elif found > 0:
-                    immediate["bond_updated"] = False  # already current
-                    bond_result = {
-                        "success": True,
-                        "old_amount": old_bond_f,
-                        "new_amount": found,
-                        "unchanged": True,
-                    }
-
-                # Touch last-checked markers
-                await arrests.update_one(
-                    {"booking_number": booking_number},
-                    {"$set": {
-                        "last_source_refresh_at": now.isoformat(),
-                        "last_source_refresh_by": changed_by,
-                        "last_source_refresh_url": detail_url,
-                    }},
-                )
+                immediate["error"] = res.get("error") or "Could not parse booking page"
         except Exception as exc:
             logger.warning("[refresh-from-source] immediate fetch failed for %s: %s", booking_number, exc)
             immediate["error"] = str(exc)[:200]
@@ -567,11 +575,12 @@ async def refresh_from_source(request: Request):
     # ── Queue full single-booking recheck via scraper engine ────────────────
     trigger_id = None
     queue_message = None
-    if county:
+    target_county = (updated_lead and updated_lead.get("county")) or county
+    if target_county:
         try:
             triggers = get_collection("scraper_triggers")
             trigger_doc = {
-                "county": county,
+                "county": target_county,
                 "type": "custody_recheck",
                 "mode": "single",
                 "booking_number": booking_number,
@@ -583,7 +592,7 @@ async def refresh_from_source(request: Request):
             ins = await triggers.insert_one(trigger_doc)
             trigger_id = str(ins.inserted_id)
             queue_message = (
-                f"Full refresh queued for {county} / {booking_number}. "
+                f"Full refresh queued for {target_county} / {booking_number}. "
                 "Scraper engine typically finishes in 30–120s."
             )
         except Exception as exc:
@@ -592,31 +601,105 @@ async def refresh_from_source(request: Request):
     else:
         queue_message = "No county on record — cannot queue county scraper"
 
-    new_amount = None
-    if isinstance(bond_result, dict) and bond_result.get("success"):
-        new_amount = bond_result.get("new_amount")
+    new_amount = (updated_lead and updated_lead.get("bond_amount")) if updated_lead else old_bond_f
 
     return {
         "success": True,
         "booking_number": booking_number,
-        "county": county,
+        "county": target_county,
         "detail_url": detail_url,
         "old_bond_amount": old_bond_f,
-        "new_bond_amount": new_amount if new_amount is not None else old_bond_f,
+        "new_bond_amount": new_amount,
         "immediate": immediate,
-        "bond_result": bond_result if isinstance(bond_result, dict) else None,
+        "updated_lead": updated_lead,
         "trigger_id": trigger_id,
         "queue_message": queue_message,
         "message": (
-            f"Bond updated to ${new_amount:,.0f} from source page"
-            if immediate.get("bond_updated") and new_amount
-            else (
-                f"Source checked — bond still ${old_bond_f:,.0f}"
-                if immediate.get("bond_found") is not None and not immediate.get("error")
-                else "Refresh requested"
-            )
+            f"Record updated from source page (${new_amount:,.0f})"
+            if updated_lead
+            else "Refresh requested"
         ),
     }
+
+
+@legacy_bp.post("/leads/update-lead-details")
+async def update_lead_details(request: Request):
+    """Manually edit/correct lead details (Name, Charges, Bond Amount, Court Date, Case #, County)."""
+    body = await request.json() or {}
+    booking_number = (body.get("booking_number") or "").strip()
+    if not booking_number:
+        return JSONResponse({"error": "booking_number is required"}, status_code=400)
+
+    changed_by = (body.get("changed_by") or body.get("agent") or "dashboard_user").strip()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    arrests = get_collection("arrests")
+    existing = await arrests.find_one({"booking_number": booking_number})
+    if not existing:
+        return JSONResponse({"error": f"No arrest record found for booking {booking_number}"}, status_code=404)
+
+    set_fields = {"updated_at": now_iso, "lead_edit_by": changed_by, "lead_edit_at": now_iso}
+
+    if "full_name" in body and body["full_name"]:
+        full_name = body["full_name"].strip()
+        set_fields["full_name"] = full_name
+        parts = full_name.split()
+        if len(parts) == 1:
+            set_fields["first_name"] = parts[0]
+        elif len(parts) >= 2:
+            set_fields["first_name"] = parts[0]
+            set_fields["last_name"] = parts[-1]
+            set_fields["middle_name"] = " ".join(parts[1:-1])
+
+    if "charges" in body and body["charges"]:
+        set_fields["charges"] = body["charges"].strip()
+
+    if "bond_amount" in body and body["bond_amount"] is not None:
+        try:
+            amt = float(str(body["bond_amount"]).replace(",", "").replace("$", ""))
+            set_fields["bond_amount"] = amt
+            set_fields["total_bond_amount"] = amt
+            set_fields["bond_override"] = True
+        except (ValueError, TypeError):
+            pass
+
+    if "court_date" in body:
+        cd = str(body["court_date"]).strip()
+        set_fields["court_date"] = cd if cd else "TBN"
+
+    if "case_number" in body:
+        set_fields["case_number"] = str(body["case_number"]).strip()
+
+    if "county" in body and body["county"]:
+        set_fields["county"] = str(body["county"]).strip()
+
+    if "bond_type" in body and body["bond_type"]:
+        set_fields["bond_type"] = str(body["bond_type"]).strip()
+
+    if "dob" in body and body["dob"]:
+        set_fields["dob"] = str(body["dob"]).strip()
+
+    await arrests.update_one({"booking_number": booking_number}, {"$set": set_fields})
+    updated = await arrests.find_one({"booking_number": booking_number})
+
+    # Mirror to prospective_bonds if present
+    try:
+        prosp = get_collection("prospective_bonds")
+        p_doc = await prosp.find_one({"booking_number": booking_number})
+        if p_doc:
+            p_updates = {}
+            if "full_name" in set_fields: p_updates["defendant_name"] = set_fields["full_name"]
+            if "charges" in set_fields: p_updates["charges"] = set_fields["charges"]
+            if "bond_amount" in set_fields: p_updates["bond_amount"] = set_fields["bond_amount"]
+            if "county" in set_fields: p_updates["county"] = set_fields["county"]
+            if p_updates:
+                await prosp.update_one({"booking_number": booking_number}, {"$set": p_updates})
+    except Exception as e:
+        logger.warning("[update-lead-details] prospective sync err: %s", e)
+
+    return {"success": True, "data": serialize_doc(updated)}
+
 
 
 @legacy_bp.get("/leads/refresh-from-source/status")

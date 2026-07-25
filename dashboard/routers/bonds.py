@@ -8,6 +8,7 @@ Endpoints: /api/write-bond, /api/active-bonds (CRUD), /api/appearance-bond-pdf
 import json as json_lib
 import os
 import re
+import uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Request
@@ -1258,7 +1259,8 @@ async def api_appearance_bond_batch(request: Request):
             b_data = {
                 "name": d.get("name", ""),
                 "booking_number": d.get("booking", ""),
-                "county": d.get("county", ""),
+                "county": ch.get("county") or d.get("county", ""),
+                "court_date": ch.get("court_date") or d.get("court_date", ""),
                 "surety": surety,
                 "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
                 "dob": d.get("dob", ""),
@@ -1628,6 +1630,60 @@ async def api_bulk_exonerate(request: Request):
     - Audit event written per bond
     - SSE bond_exonerated fired per bond
     """
+@bonds_bp.post("/admin-pin-override")
+async def api_admin_pin_override(request: Request):
+    """
+    Validates Admin PIN and records an admin override to allow bond posting
+    even when paperwork is incomplete, promising completion within 24 hours.
+    """
+    _pin = os.getenv("DASHBOARD_PIN", "")
+    data = await request.json() or {}
+    pin_entered = str(data.get("pin", "")).strip()
+    booking_number = str(data.get("booking_number", "")).strip()
+    reason = str(data.get("reason", "Admin override for immediate bond posting")).strip()
+    approved_by = str(data.get("approved_by", "Admin")).strip()
+
+    if _pin and pin_entered != _pin:
+        return JSONResponse({"success": False, "error": "Invalid Admin PIN"}, status_code=401)
+
+    now = datetime.now(timezone.utc)
+    deadline_24h = now + timedelta(hours=24)
+
+    audit_col = get_collection("audit_events")
+    override_event = {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "admin_pin_override",
+        "booking_number": booking_number,
+        "approved_by": approved_by,
+        "reason": reason,
+        "status": "approved",
+        "compliance_deadline_24h": deadline_24h.isoformat(),
+        "created_at": now.isoformat()
+    }
+    await audit_col.insert_one(override_event)
+
+    if booking_number:
+        active_bonds = get_collection("active_bonds")
+        await active_bonds.update_one(
+            {"booking_number": booking_number},
+            {
+                "$set": {
+                    "status": "ready",
+                    "admin_pin_override": True,
+                    "override_approved_by": approved_by,
+                    "override_time": now.isoformat(),
+                    "compliance_deadline_24h": deadline_24h.isoformat()
+                }
+            }
+        )
+
+    return JSONResponse({
+        "success": True,
+        "message": "Admin PIN verified. Bond approved for posting (24-hour compliance deadline logged).",
+        "compliance_deadline_24h": deadline_24h.isoformat()
+    })
+
+
     # ── Auth guard: X-Admin-Token must match DASHBOARD_PIN ──────────────────
     _pin = os.getenv("DASHBOARD_PIN", "")
     if _pin:
