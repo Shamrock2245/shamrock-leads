@@ -153,6 +153,16 @@ def test_normalize_bond_date_str_mixed_inputs():
     assert normalize_bond_date_str("garbage") is None
 
 
+def test_prior_period_bounds_equal_length():
+    from dashboard.routers.reports import _prior_period_bounds, _pct_change
+
+    ps, pe = _prior_period_bounds("2020-02-01", "2020-02-29")
+    assert ps == "2020-01-03"
+    assert pe == "2020-01-31"
+    assert _pct_change(110, 100) == 10.0
+    assert _pct_change(0, 0) is None
+
+
 def test_bond_data_quality_scores_gaps():
     q = bond_data_quality([
         {"bond_date": "2015-01-01", "power_number": "A1"},

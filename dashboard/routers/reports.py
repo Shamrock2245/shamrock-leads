@@ -471,6 +471,33 @@ async def official_bond_report_xlsx(
             period_end=resolved_end,
         )
         fname = filename_for(surety_key, "Bond_Report")
+
+        # Archive for "recent reports" drawer (SuiteCRM-style report history)
+        try:
+            import base64
+            meta = {
+                "ok": True,
+                "report_type": "bond_report",
+                "source": "dashboard_xlsx",
+                "surety": surety_key,
+                "filename": fname,
+                "size_bytes": len(xlsx),
+                "active_rows": len(docs),
+                "voids": len(voids),
+                "discharges": len(discharges),
+                "start_date": resolved_start,
+                "end_date": resolved_end,
+                "status_scope": (status_scope or "open").strip().lower(),
+                "sort_order": "bond_date ascending (oldest bond first)",
+                "created_at": _utc_now(),
+                "xlsx_b64": base64.b64encode(xlsx).decode("ascii")
+                if len(xlsx) < 12_000_000
+                else None,
+            }
+            await db["generated_reports"].insert_one(meta)
+        except Exception as store_err:
+            logger.warning("bond-report.xlsx archive failed: %s", store_err)
+
         return Response(
             content=xlsx,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -489,6 +516,74 @@ async def official_bond_report_xlsx(
                 "error_type": type(exc).__name__,
                 "hint": "Ensure openpyxl is installed and active_bonds is reachable.",
             },
+            status_code=500,
+        )
+
+
+@reports_bp.get("/reports/generated")
+async def list_generated_reports(limit: int = Query(default=15, ge=1, le=50)):
+    """Recent official reports archived in Mongo (no XLSX payload — metadata only)."""
+    try:
+        db = get_db()
+        col = db["generated_reports"]
+        docs = await col.find(
+            {},
+            {"xlsx_b64": 0, "xlsx_base64": 0},
+        ).sort("created_at", -1).to_list(limit)
+        out = []
+        for d in docs:
+            rid = str(d.pop("_id", ""))
+            created = d.get("created_at")
+            if isinstance(created, datetime):
+                d["created_at"] = created.isoformat()
+            d["id"] = rid
+            d["has_file"] = True  # may still be missing if oversized at store time
+            out.append(d)
+        return {"success": True, "reports": out, "count": len(out)}
+    except Exception as exc:
+        logger.exception("reports/generated error: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": str(exc)[:400], "error_type": type(exc).__name__},
+            status_code=500,
+        )
+
+
+@reports_bp.get("/reports/generated/{report_id}/download")
+async def download_generated_report(report_id: str):
+    """Re-download an archived XLSX by id (PII-bearing — dashboard auth required)."""
+    try:
+        from bson import ObjectId
+        import base64
+
+        db = get_db()
+        try:
+            oid = ObjectId(report_id)
+        except Exception:
+            return JSONResponse({"success": False, "error": "Invalid report id"}, status_code=400)
+        doc = await db["generated_reports"].find_one({"_id": oid})
+        if not doc:
+            return JSONResponse({"success": False, "error": "Report not found"}, status_code=404)
+        b64 = doc.get("xlsx_b64") or doc.get("xlsx_base64")
+        if not b64:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "File not stored (report exceeded archive size limit)",
+                    "hint": "Re-generate via Reports → XLSX export.",
+                },
+                status_code=404,
+            )
+        raw = base64.b64decode(b64)
+        fname = doc.get("filename") or "Shamrock_Bond_Report.xlsx"
+        return Response(
+            content=raw,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except Exception as exc:
+        logger.exception("reports/generated download error: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": str(exc)[:400], "error_type": type(exc).__name__},
             status_code=500,
         )
 

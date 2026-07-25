@@ -221,11 +221,13 @@ const SLReports = (() => {
       const el = $(id); if (el) el.innerHTML = '<span class="rpt-loading-dot"></span>';
     });
 
-    const [liab, agents, dis, forf, comp, poa, void_, exp] = await Promise.all([
+    const [liab, agents, dis, forf, comp, poa, void_, exp, recent] = await Promise.all([
       _fetch('surety-liability'), _fetch('agent-production'), _fetch('discharged'),
       _fetch('forfeitures'), _fetch('check-in-compliance'), _fetch('poa-inventory'),
       _fetch('voided-powers'), _fetch('expired-powers'),
+      _fetch('generated'),
     ]);
+    _renderRecentReports(recent);
 
     // Update KPI strip
     if (liab.success)  { $('rptKpiLiability').textContent  = money(liab.grand_totals?.total_bond_amount||0); }
@@ -307,7 +309,7 @@ const SLReports = (() => {
     if (!strip || !items.length) return;
     strip.innerHTML = items.map(item => `
       <div class="rpt-summary-item">
-        <div class="rpt-summary-value ${item.color||''}">${escHtml(item.value)}</div>
+        <div class="rpt-summary-value ${item.color||''}">${item.html ? item.value : escHtml(item.value)}</div>
         <div class="rpt-summary-label">${escHtml(item.label)}</div>
       </div>`).join('');
     strip.style.display = 'flex';
@@ -439,16 +441,41 @@ const SLReports = (() => {
 
   /* ── Report renderers ──────────────────────────────────────────────── */
 
+  function _fmtPct(p) {
+    if (p == null || isNaN(p)) return '';
+    const sign = p > 0 ? '+' : '';
+    const cls = p > 0 ? 'rpt-val-green' : (p < 0 ? 'rpt-val-red' : '');
+    return ` <small class="${cls}" style="font-weight:600">(${sign}${p}%)</small>`;
+  }
+
   function _renderLiability(data) {
     const gt = data.grand_totals || {};
+    const cmp = data.comparison || {};
     _renderSummary([
-      { label: 'Total Liability',    value: money(gt.total_bond_amount||0),  color: 'rpt-val-blue'  },
-      { label: 'Premium to Collect', value: money(gt.total_premium||0),      color: 'rpt-val-green' },
+      { label: 'Total Liability',    value: escHtml(money(gt.total_bond_amount||0)) + _fmtPct(cmp.liability_pct_change),  color: 'rpt-val-blue', html: true },
+      { label: 'Premium to Collect', value: escHtml(money(gt.total_premium||0)) + _fmtPct(cmp.premium_pct_change),      color: 'rpt-val-green', html: true },
       { label: 'Surety Owed (Insurer)', value: money(gt.total_surety_owed||0), color: 'rpt-val-gold'  },
       { label: 'BUF (5%)',           value: money(gt.total_buf_owed||gt.total_buf||0), color: 'rpt-val-cyan' },
       { label: 'Agent Retains',      value: money(gt.total_agent_retains||0),color: 'rpt-val-purple'},
-      { label: 'Bond Count',         value: String(gt.total_bonds||0)                               },
+      { label: 'Bond Count',         value: escHtml(String(gt.total_bonds||0)) + _fmtPct(cmp.bonds_pct_change), html: true },
     ]);
+    // Prior-period strip (SuiteCRM / Salesforce reporting pattern)
+    if (cmp.prior_start) {
+      const strip = $('rptSummaryStrip');
+      if (strip) {
+        const note = document.createElement('div');
+        note.className = 'rpt-prior-note';
+        note.style.cssText = 'width:100%;font-size:11px;color:var(--muted);margin-top:6px';
+        note.textContent = `vs prior ${cmp.prior_start} → ${cmp.prior_end}: ${cmp.prior_bonds||0} bonds · ${money(cmp.prior_bond_amount||0)} liability · ${money(cmp.prior_premium||0)} premium`;
+        // append after summary render fills strip — schedule next tick
+        setTimeout(() => {
+          if ($('rptSummaryStrip') && !$('rptPriorNote')) {
+            note.id = 'rptPriorNote';
+            $('rptSummaryStrip').appendChild(note);
+          }
+        }, 0);
+      }
+    }
     const sureties = data.sureties || [];
     if (sureties.length) {
       _renderChart(
@@ -705,6 +732,62 @@ const SLReports = (() => {
       );
     } catch (e) {
       toast('XLSX export failed: ' + (e.message || e), 'error');
+    }
+  }
+
+  function _renderRecentReports(data) {
+    const el = $('rptRecentReports');
+    if (!el) return;
+    const reports = (data && data.success && data.reports) ? data.reports : [];
+    if (!reports.length) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:13px;font-weight:700;color:var(--text)">📁 Recent official reports</div>
+        <div style="font-size:11px;color:var(--muted)">Re-download archived XLSX · sorted oldest→newest at generate time</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${reports.slice(0, 8).map(r => {
+          const when = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
+          const label = `${escHtml(r.surety || '—')} · ${escHtml(r.filename || r.report_type || 'report')} · ${escHtml(when)}`;
+          const rows = r.active_rows != null ? `${r.active_rows} rows` : '';
+          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:rgba(15,23,42,.5);border:1px solid rgba(255,255,255,.06);border-radius:8px;font-size:12px">
+            <div style="min-width:0">
+              <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
+              <div style="color:var(--muted);font-size:11px">${escHtml(rows)}${r.start_date ? ` · ${escHtml(r.start_date)}→${escHtml(r.end_date || '…')}` : ''}</div>
+            </div>
+            <button type="button" class="inv-btn" style="font-size:11px;padding:3px 8px;flex-shrink:0" onclick="SLReports.downloadGenerated('${escHtml(r.id)}')">⬇ XLSX</button>
+          </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  async function downloadGenerated(id) {
+    if (!id) return;
+    toast('Fetching archived report…', 'info');
+    try {
+      const r = await fetch(`${API}/api/reports/generated/${encodeURIComponent(id)}/download`, { credentials: 'same-origin' });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try { const j = await r.json(); msg = j.error || msg; } catch (_) {}
+        toast('Download failed: ' + msg, 'error');
+        return;
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get('Content-Disposition') || '';
+      const m = /filename="?([^"]+)"?/.exec(cd);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? m[1] : 'Shamrock_Bond_Report.xlsx';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast('Archived report downloaded', 'success');
+    } catch (e) {
+      toast('Download failed: ' + (e.message || e), 'error');
     }
   }
 
@@ -1148,7 +1231,7 @@ const SLReports = (() => {
     resortForOutput, sortBondsOldestFirst,
     // Liability report customization & toggles
     recalcLiabilityTotals, toggleAllLiabilityRows, toggleLiabilityCol, applyLiabilityPreset,
-    filterLiabilityRegister,
+    filterLiabilityRegister, downloadGenerated,
   };
 })();
 
