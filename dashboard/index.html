@@ -5324,6 +5324,112 @@
   </div>
 </div><!-- end tabOSINT -->
 
+<!-- ═══ MODAL: MONTHLY SURETY BORDEREAU EXPORTER ═══ -->
+<div class="modal-overlay" id="bordereauModal" style="display:none">
+  <div class="modal modal-lg" style="max-width:640px;width:95%">
+    <div class="modal-header">
+      <h2>📊 Monthly Surety Bordereau Exporter</h2>
+      <button class="modal-close" onclick="document.getElementById('bordereauModal').style.display='none'">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+        Generates official monthly Bordereau liability reports required by <strong>O'Shaughnahill Surety (OSI)</strong> and <strong>Palmetto Surety Corp</strong>.
+      </p>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Surety Company</label>
+          <select id="bordereauSuretySelect" style="width:100%;padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+            <option value="osi">O'Shaughnahill Surety (OSI)</option>
+            <option value="palmetto">Palmetto Surety Corp</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Year</label>
+          <input type="number" id="bordereauYearInput" value="2026" style="width:100%;padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px">Month</label>
+          <select id="bordereauMonthSelect" style="width:100%;padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+            <option value="7">July (07)</option>
+            <option value="1">January (01)</option>
+            <option value="2">February (02)</option>
+            <option value="3">March (03)</option>
+            <option value="4">April (04)</option>
+            <option value="5">May (05)</option>
+            <option value="6">June (06)</option>
+            <option value="8">August (08)</option>
+            <option value="9">September (09)</option>
+            <option value="10">October (10)</option>
+            <option value="11">November (11)</option>
+            <option value="12">December (12)</option>
+          </select>
+        </div>
+      </div>
+      <div id="bordereauSummaryPreview" style="background:rgba(15,23,42,0.6);border:1px solid var(--border);padding:14px;border-radius:8px;font-size:12px;margin-bottom:16px;display:none"></div>
+    </div>
+    <div class="modal-footer" style="display:flex;justify-content:space-between;padding:16px;border-top:1px solid var(--border)">
+      <button class="btn-cancel" onclick="document.getElementById('bordereauModal').style.display='none'">Close</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn-secondary" onclick="SLFeatures.previewBordereauData()">👁️ Preview Summary</button>
+        <button class="btn-primary" onclick="SLFeatures.downloadBordereauCSV()">📥 Export Excel / CSV</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: COLLATERAL VAULT LEDGER ═══ -->
+<div class="modal-overlay" id="collateralModal" style="display:none">
+  <div class="modal modal-lg" style="max-width:760px;width:95%">
+    <div class="modal-header">
+      <h2>🔐 Collateral Vault Ledger & Release Receipts</h2>
+      <button class="modal-close" onclick="document.getElementById('collateralModal').style.display='none'">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <input type="text" id="colBookingNum" placeholder="Booking #" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+        <input type="text" id="colDefName" placeholder="Defendant Name" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+        <input type="text" id="colDepName" placeholder="Depositor Name" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+        <select id="colType" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+          <option value="Real Estate">Real Estate Deed</option>
+          <option value="Vehicle Title">Vehicle Title</option>
+          <option value="Cash Deposit">Cash Deposit</option>
+          <option value="Jewelry">Jewelry</option>
+          <option value="Firearms">Firearms</option>
+          <option value="Other">Other Collateral</option>
+        </select>
+        <input type="number" id="colVal" placeholder="Est. Value ($)" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+        <input type="text" id="colLoc" placeholder="Vault Location (Safe #)" value="Main Safe" style="padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px">
+      </div>
+      <input type="text" id="colDesc" placeholder="Item Description / Serial Numbers / VIN" style="width:100%;padding:8px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px;margin-bottom:16px">
+      
+      <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+        <button class="btn-primary" onclick="SLFeatures.saveCollateralItem()">📦 Record Collateral Item</button>
+      </div>
+
+      <h4 style="margin:12px 0 8px 0;font-size:13px;color:var(--text-muted)">Currently Held / Returned Collateral</h4>
+      <div id="collateralItemsTable" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;font-size:12px">Loading collateral items...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MODAL: REMITTITUR COUNTDOWN WATCHDOG ═══ -->
+<div class="modal-overlay" id="remittiturModal" style="display:none">
+  <div class="modal modal-lg" style="max-width:760px;width:95%">
+    <div class="modal-header">
+      <h2>⏳ F.S. 903.26 Forfeiture Remittitur Watchdog</h2>
+      <button class="modal-close" onclick="document.getElementById('remittiturModal').style.display='none'">&times;</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+        Florida Statute 903.26 60-day (100% Return) and 180-day summary judgment countdown watchdog engine.
+      </p>
+      <div id="remittiturClocksList" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px">Loading remittitur clocks...</div>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ OMNIBAR (COMMAND PALETTE) ═══ -->
 <div id="omnibarOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10002;align-items:flex-start;justify-content:center;padding-top:10vh;backdrop-filter:blur(4px)">
   <div style="background:var(--bg-card,#1e293b);width:600px;max-width:90vw;border-radius:12px;border:1px solid var(--border,#334155);box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;display:flex;flex-direction:column">

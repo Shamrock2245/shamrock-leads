@@ -2501,3 +2501,209 @@ async function promptAdminPinOverride(bookingNumber) {
   }
 }
 window.promptAdminPinOverride = promptAdminPinOverride;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPETITIVE SUPER-FEATURES: FRONTEND CONTROLLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+window.SLFeatures = window.SLFeatures || {};
+
+SLFeatures.openBordereauModal = function() {
+  document.getElementById('bordereauModal').style.display = 'flex';
+};
+
+SLFeatures.previewBordereauData = async function() {
+  const surety = document.getElementById('bordereauSuretySelect').value;
+  const year = document.getElementById('bordereauYearInput').value;
+  const month = document.getElementById('bordereauMonthSelect').value;
+  const box = document.getElementById('bordereauSummaryPreview');
+
+  box.style.display = 'block';
+  box.innerHTML = '<i>Loading live Bordereau calculations...</i>';
+
+  try {
+    const res = await fetch(`${API}/api/reports/bordereau?surety=${surety}&year=${year}&month=${month}&fmt=json`);
+    const d = await res.json();
+    if (!res.ok) {
+      box.innerHTML = `<span style="color:#ef4444">Error loading summary: ${d.error || 'Unknown error'}</span>`;
+      return;
+    }
+    const s = d.summary || {};
+    box.innerHTML = `
+      <div style="font-weight:600;margin-bottom:8px;color:#22c55e">📊 ${d.surety_name} — Reporting Period ${d.reporting_period}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div>Total Bonds Executed: <strong>${s.total_bonds_executed || 0}</strong></div>
+        <div>Total Bond Amount Written: <strong>$${(s.total_bond_amount || 0).toLocaleString('en-US', {minimumFractionDigits:2})}</strong></div>
+        <div>Gross Premium (10%): <strong>$${(s.total_gross_premium || 0).toLocaleString('en-US', {minimumFractionDigits:2})}</strong></div>
+        <div>BUF Escrow Deduction (1%): <strong>$${(s.total_buf_escrow_1pct || 0).toLocaleString('en-US', {minimumFractionDigits:2})}</strong></div>
+        <div>Net Owed to Surety: <strong style="color:#f59e0b">$${(s.total_net_surety_owed || 0).toLocaleString('en-US', {minimumFractionDigits:2})}</strong></div>
+      </div>
+    `;
+  } catch (err) {
+    box.innerHTML = `<span style="color:#ef4444">Network error: ${err.message}</span>`;
+  }
+};
+
+SLFeatures.downloadBordereauCSV = function() {
+  const surety = document.getElementById('bordereauSuretySelect').value;
+  const year = document.getElementById('bordereauYearInput').value;
+  const month = document.getElementById('bordereauMonthSelect').value;
+  window.open(`${API}/api/reports/bordereau?surety=${surety}&year=${year}&month=${month}&fmt=csv`, '_blank');
+};
+
+SLFeatures.openCollateralModal = function(bookingNumber, defName) {
+  document.getElementById('collateralModal').style.display = 'flex';
+  if (bookingNumber) document.getElementById('colBookingNum').value = bookingNumber;
+  if (defName) document.getElementById('colDefName').value = defName;
+  SLFeatures.loadCollateralList(bookingNumber);
+};
+
+SLFeatures.saveCollateralItem = async function() {
+  const data = {
+    booking_number: document.getElementById('colBookingNum').value.trim(),
+    defendant_name: document.getElementById('colDefName').value.trim(),
+    depositor_name: document.getElementById('colDepName').value.trim(),
+    item_type: document.getElementById('colType').value,
+    estimated_value: parseFloat(document.getElementById('colVal').value || 0),
+    storage_location: document.getElementById('colLoc').value.trim(),
+    description: document.getElementById('colDesc').value.trim()
+  };
+
+  if (!data.booking_number || !data.defendant_name) {
+    toast('Please enter Booking Number and Defendant Name', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API}/api/collateral/add`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    const d = await res.json();
+    if (!res.ok || !d.success) {
+      toast(d.error || 'Failed to record collateral', 'error');
+      return;
+    }
+    toast(`✅ Collateral Tag #${d.item.tag_number} recorded in vault!`, 'success');
+    document.getElementById('colDesc').value = '';
+    SLFeatures.loadCollateralList(data.booking_number);
+  } catch (err) {
+    toast('Error recording collateral: ' + err.message, 'error');
+  }
+};
+
+SLFeatures.loadCollateralList = async function(bookingNumber) {
+  const container = document.getElementById('collateralItemsTable');
+  container.innerHTML = '<i>Loading items...</i>';
+
+  try {
+    const url = bookingNumber ? `${API}/api/collateral?booking_number=${bookingNumber}` : `${API}/api/collateral`;
+    const res = await fetch(url);
+    const d = await res.json();
+    if (!res.ok || !d.items || d.items.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-muted)">No collateral items currently recorded.</span>';
+      return;
+    }
+    container.innerHTML = d.items.map(i => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
+        <div>
+          <strong>${i.tag_number}</strong> — ${i.item_type} ($${(i.estimated_value || 0).toLocaleString()})
+          <div style="color:var(--text-muted);font-size:11px">${i.defendant_name} | Depositor: ${i.depositor_name || 'N/A'} | ${i.storage_location}</div>
+        </div>
+        <div>
+          ${i.status === 'returned'
+            ? `<span style="color:#22c55e;font-size:11px;font-weight:600">✅ Returned</span>`
+            : `<button class="btn-secondary" style="font-size:11px;padding:4px 8px" onclick="SLFeatures.returnCollateralItem('${i.collateral_id}')">Return & Print PDF Receipt</button>`
+          }
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = '<span style="color:#ef4444">Error loading collateral items</span>';
+  }
+};
+
+SLFeatures.returnCollateralItem = async function(id) {
+  if (!confirm('Mark this collateral item as returned to depositor and generate PDF receipt?')) return;
+  try {
+    const res = await fetch(`${API}/api/collateral/return/${id}`, { method: 'POST' });
+    const d = await res.json();
+    if (!res.ok || !d.success) {
+      toast(d.error || 'Failed to update collateral', 'error');
+      return;
+    }
+    toast('✅ Collateral marked as returned! Opening PDF Return Receipt...', 'success');
+    window.open(`${API}/api/collateral/receipt-pdf/${id}`, '_blank');
+    SLFeatures.loadCollateralList();
+  } catch (err) {
+    toast('Error returning collateral: ' + err.message, 'error');
+  }
+};
+
+SLFeatures.openRemittiturModal = async function() {
+  document.getElementById('remittiturModal').style.display = 'flex';
+  const container = document.getElementById('remittiturClocksList');
+  container.innerHTML = '<i>Calculating F.S. 903.26 remittitur countdown clocks...</i>';
+
+  try {
+    const res = await fetch(`${API}/api/forfeitures/remittitur-clock`);
+    const d = await res.json();
+    if (!res.ok || !d.forfeitures || d.forfeitures.length === 0) {
+      container.innerHTML = '<span style="color:var(--text-muted)">No active bond forfeitures currently logged.</span>';
+      return;
+    }
+    container.innerHTML = d.forfeitures.map(f => `
+      <div style="background:rgba(15,23,42,0.6);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <strong style="font-size:14px;color:#ef4444">⚠️ ${f.defendant_name} (Booking #${f.booking_number})</strong>
+          <span style="background:${f.urgency_level === 'CRITICAL' ? '#ef4444' : '#f59e0b'};color:#000;font-size:10px;font-weight:bold;padding:2px 8px;border-radius:10px">${f.urgency_level} URGENCY</span>
+        </div>
+        <div style="margin-top:6px;font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px;color:var(--text-muted)">
+          <div>Bond Amount: <strong style="color:#fff">$${(f.bond_amount || 0).toLocaleString()}</strong></div>
+          <div>POA #: <strong style="color:#fff">${f.poa_number}</strong></div>
+          <div>60-Day Remittitur Deadline: <strong style="color:#22c55e">${f.deadline_60d} (${f.days_left_60d} days left)</strong></div>
+          <div>Remittitur Return Rate: <strong style="color:#38bdf8">${f.remittitur_percentage}% ($${(f.potential_remittitur_amount || 0).toLocaleString()})</strong></div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = '<span style="color:#ef4444">Error loading remittitur clocks</span>';
+  }
+};
+
+SLFeatures.sendMobileCheckinLink = async function(bookingNumber, phone) {
+  if (!bookingNumber) {
+    toast('No booking number specified', 'error');
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/api/checkin/create-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ booking_number: bookingNumber, defendant_phone: phone || '' })
+    });
+    const d = await res.json();
+    if (!res.ok || !d.success) {
+      toast(d.error || 'Failed to create check-in request', 'error');
+      return;
+    }
+    const checkinUrl = d.checkin_request.checkin_url;
+    toast(`✅ Mobile Check-In URL generated: ${checkinUrl}`, 'success');
+
+    if (phone && confirm(`Send mobile check-in link to ${phone} via BlueBubbles iMessage/SMS now?`)) {
+      const msgRes = await fetch(`${API}/api/imessage/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phone,
+          message: `Shamrock Bail Bonds Mandatory Check-In: Please click your single-use link to submit your selfie & location check-in: ${checkinUrl}`
+        })
+      });
+      const msgD = await msgRes.json();
+      if (msgD.success) toast('✅ Check-in link dispatched via iMessage/SMS!', 'success');
+    }
+  } catch (err) {
+    toast('Error dispatching check-in link: ' + err.message, 'error');
+  }
+};
