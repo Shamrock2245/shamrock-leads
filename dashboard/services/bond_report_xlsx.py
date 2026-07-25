@@ -302,6 +302,51 @@ def sort_bonds_chronologically(records: Iterable[dict]) -> list[dict]:
         return items
 
 
+def normalize_bond_date_str(val: Any) -> Optional[str]:
+    """Normalize any bond date value to ``YYYY-MM-DD`` (or None if unparseable)."""
+    dt = _fmt_date(val)
+    return dt.strftime("%Y-%m-%d") if dt else None
+
+
+def bond_data_quality(records: Iterable[dict]) -> dict[str, Any]:
+    """Compute surety-grade data-quality diagnostics (no PII).
+
+    Returns counts + min/max bond dates so operators can trust the register
+    before submitting to a surety.
+    """
+    items = [r for r in (records or []) if isinstance(r, dict)]
+    dated: list[datetime] = []
+    undated = 0
+    missing_power = 0
+    for r in items:
+        dt = _fmt_date(
+            r.get("bond_date") or r.get("date_executed") or r.get("posted_date") or r.get("created_at")
+        )
+        if dt is None:
+            undated += 1
+        else:
+            dated.append(dt)
+        power = (
+            r.get("power_number") or r.get("poa_number") or r.get("power") or r.get("power_no") or ""
+        )
+        if not str(power).strip():
+            missing_power += 1
+    dated.sort()
+    return {
+        "row_count": len(items),
+        "dated_count": len(dated),
+        "undated_count": undated,
+        "missing_power_count": missing_power,
+        "bond_date_min": dated[0].strftime("%Y-%m-%d") if dated else None,
+        "bond_date_max": dated[-1].strftime("%Y-%m-%d") if dated else None,
+        "sort_order": "bond_date ascending (oldest bond first)",
+        "quality_score": (
+            round(100.0 * (len(items) - undated - missing_power) / len(items), 1)
+            if items else 100.0
+        ),
+    }
+
+
 def _style_workbook(wb, sheet_title: str = "Report"):
     Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _require_openpyxl()
     # styles applied in build functions
@@ -318,9 +363,14 @@ def build_official_bond_report(
     discharges: Iterable[dict] | None = None,
     transfers: Iterable[dict] | None = None,
     title_override: str | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
 ) -> bytes:
     """
     Build a multi-sheet official workbook. Returns .xlsx bytes.
+
+    ``period_start`` / ``period_end`` (YYYY-MM-DD) are optional reporting-window
+    labels printed on the executive summary for surety auditors.
     """
     Workbook, Alignment, Border, Font, PatternFill, Side, get_column_letter = _require_openpyxl()
 
@@ -332,6 +382,7 @@ def build_official_bond_report(
     voids = sort_bonds_chronologically(voids)
     discharges = sort_bonds_chronologically(discharges)
     transfers = sort_bonds_chronologically(transfers)
+    quality = bond_data_quality(bonds)
 
     wb = Workbook()
     ws = wb.active
@@ -651,10 +702,15 @@ def build_official_bond_report(
     ws_sum["A1"].font = font_title
     ws_sum["A1"].fill = fill_brand
     ws_sum.merge_cells("A1:B1")
+    period_label = "All available records"
+    if period_start or period_end:
+        period_label = f"{period_start or REPORT_EPOCH_ISO} → {period_end or 'present'}"
     summary_rows = [
         ("Surety", rates["label"]),
         ("Report type", title_override or report_type),
         ("Report date", report_date.strftime("%m/%d/%Y")),
+        ("Reporting window", period_label),
+        ("Sort order", "Oldest bond written → newest"),
         ("Active line items", count),
         ("Total bond liability", f"${total_liability:,.2f}"),
         ("Total gross premium", f"${total_gross:,.2f}"),
@@ -663,9 +719,15 @@ def build_official_bond_report(
         ("Voided powers listed", len(voids)),
         ("Discharges listed", d_count),
         ("Transfers listed", len(transfers)),
+        ("Data quality score", f"{quality.get('quality_score', 100)}%"),
+        ("Undated rows (trailed)", quality.get("undated_count", 0)),
+        ("Missing power #", quality.get("missing_power_count", 0)),
+        ("Earliest bond date", quality.get("bond_date_min") or "—"),
+        ("Latest bond date", quality.get("bond_date_max") or "—"),
         ("Prepared for", "Internal / Surety submission"),
         ("Prepared by", f"{OWNER_NAME} (#{AGENT_LICENSE})"),
         ("System", "Shamrock Super CRM — Official Report Engine"),
+        ("Confidentiality", "CONFIDENTIAL — Surety / agency use only"),
     ]
     for i, (k, v) in enumerate(summary_rows, 3):
         ws_sum.cell(i, 1, k).font = Font(name="Calibri", bold=True, size=11)

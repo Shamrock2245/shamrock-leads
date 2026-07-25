@@ -812,7 +812,8 @@ async def intake_promote(request: Request, intake_id: str):
         "court_date": court_date,
         "court_time": court_time,
         "court_location": court_location,
-        "bond_date": now.isoformat(),
+        # Date-only for surety reports (matches POA execute; lexicographic Mongo windows)
+        "bond_date": now.strftime("%Y-%m-%d"),
         "status": "active",
         "source": "intake_promotion",
         "intake_id": intake_id,

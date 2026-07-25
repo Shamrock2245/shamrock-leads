@@ -2308,6 +2308,7 @@
       <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Financial compliance · Surety liability · Agent production · POA management</p>
     </div>
     <div class="rpt-header-actions">
+      <span style="font-size:11px;color:var(--muted);margin-right:6px" title="When a report is open">⌘S print · ⌘P sort+print</span>
       <button class="btn-secondary" onclick="SLReports.scheduleReport()" title="Schedule automated report delivery">⏰ Schedule</button>
       <button class="btn-secondary" onclick="SLReports.exportPDF()" id="rptPDFBtn" style="display:none">📄 Export PDF</button>
       <button class="btn-primary" onclick="SLReports.runAll()" id="rptRunAllBtn">▶ Run All</button>
@@ -2342,6 +2343,15 @@
         <option value="OSI">🛡️ OSI (O'Shaughnahill)</option>
       </select>
     </div>
+    <!-- Liability book scope -->
+    <div class="rpt-filter-group">
+      <label class="rpt-filter-label">Book</label>
+      <select id="rptStatusScope" class="rpt-input rpt-select" onchange="SLReports.onScopeChange()" title="Open book = outstanding surety liability only">
+        <option value="open" selected>Open liability</option>
+        <option value="all">All non-void</option>
+        <option value="closed">Closed / discharged</option>
+      </select>
+    </div>
     <!-- County filter -->
     <div class="rpt-filter-group">
       <label class="rpt-filter-label">County</label>
@@ -2359,6 +2369,7 @@
     <!-- Active date range display -->
     <div class="rpt-active-range" id="rptActiveRange">
       <span class="rpt-range-badge">📅 <span id="rptRangeLabel">Month to Date</span></span>
+      <span class="rpt-range-badge" title="Surety registers always print oldest bond first">↕️ Oldest → newest</span>
     </div>
   </div>
 
@@ -2582,12 +2593,17 @@
         </div>
       </div>
       <div class="rpt-results-actions">
+        <button class="btn-secondary rpt-action-btn" onclick="SLReports.copySummary()" id="rptCopySummaryBtn" style="display:none" title="Copy executive summary">📋 Copy</button>
         <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportCSV()" id="rptExportCSVBtn" style="display:none">⬇ CSV</button>
+        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportXLSX()" id="rptExportXLSXBtn" style="display:none" title="Official multi-sheet surety workbook">📗 XLSX</button>
         <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportPDF()" id="rptExportPDFBtn" style="display:none">📄 PDF</button>
         <button class="btn-secondary rpt-action-btn" onclick="SLReports.printReport()">🖨 Print</button>
         <button class="rpt-close-btn" onclick="SLReports.closeResults()">✕ Close</button>
       </div>
     </div>
+
+    <!-- Data quality / sort diagnostics (no PII) -->
+    <div id="rptQualityBanner" class="rpt-quality-banner" style="display:none;flex-wrap:wrap;gap:8px;padding:10px 14px;margin:0 0 12px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);border-radius:10px;font-size:12px;color:var(--text-secondary,#cbd5e1)"></div>
 
     <!-- Summary KPI strip (for financial reports) -->
     <div id="rptSummaryStrip" class="rpt-summary-strip" style="display:none"></div>
@@ -3459,7 +3475,7 @@
 <script src="/sl-calendar.js?v=4"></script>
 <script src="/sl-calendar-ext.js?v=4"></script>
 <script src="/sl-record-bond.js?v=4"></script>
-<script src="/sl-reports.js?v=7"></script>
+<script src="/sl-reports.js?v=8"></script>
 <script src="/sl-utils.js?v=4"></script>
 <script src="/sl-animations.js?v=4"></script>
 <script src="/sl-lifecycle.js?v=4"></script>

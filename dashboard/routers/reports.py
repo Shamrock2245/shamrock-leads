@@ -19,14 +19,27 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from dashboard.extensions import get_db
 from dashboard.services.bond_report_xlsx import (
     REPORT_ROW_LIMIT,
+    bond_data_quality,
+    build_official_bond_report,
+    filename_for,
     mongo_bond_date_filter,
+    normalize_bond_date_str,
     parse_report_date_window,
 )
+
+# Statuses that still represent open surety liability (open book)
+_OPEN_LIABILITY_STATUSES = {
+    "active", "monitoring", "alert", "reinstated", "posted", "open", "",
+}
+_CLOSED_STATUSES = {
+    "void", "voided", "expired", "exonerated", "surrendered",
+    "discharged", "forfeited", "closed", "cancelled", "VOID",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +101,17 @@ def _date_filter_with_warnings(
         start_dt.strftime("%Y-%m-%d") if start_dt else None,
         end_dt.strftime("%Y-%m-%d") if end_dt else None,
     )
+
+
+def _status_scope_filter(scope: str | None) -> dict:
+    """``open`` = outstanding liability; ``all`` = non-void; ``closed`` = discharged set."""
+    s = (scope or "open").strip().lower()
+    if s in ("all", "any", "full"):
+        return {"status": {"$nin": ["void", "voided", "VOID", "expired"]}}
+    if s in ("closed", "discharged"):
+        return {"status": {"$in": ["exonerated", "surrendered", "discharged", "forfeited", "closed"]}}
+    # Default: open book liability for surety statements
+    return {"status": {"$nin": list(_CLOSED_STATUSES)}}
 
 
 def _serialize_doc(doc: dict) -> dict:
@@ -183,20 +207,30 @@ async def surety_liability(
     surety: str = Query(default=""),
     start_date: str = Query(default=None),
     end_date: str = Query(default=None),
+    county: str = Query(default=None),
+    status_scope: str = Query(default="open", description="open | all | closed"),
 ):
-    """Per-surety financial breakdown: bond amounts, premium, surety owed, BUF, agent retains."""
+    """Per-surety financial breakdown: bond amounts, premium, surety owed, BUF, agent retains.
+
+    Default ``status_scope=open`` = outstanding open-book liability (excludes
+    exonerated/forfeited/void). Use ``all`` for historical production audit.
+    Rows are always oldest bond written → newest.
+    """
     try:
         db = get_db()
         col = db["active_bonds"]
         surety_filter = surety.strip().upper()
 
-        # Build query — all non-voided bonds
-        query = {"status": {"$nin": ["voided"]}}
+        query: dict = {}
+        query.update(_status_scope_filter(status_scope))
         if surety_filter:
             query["$or"] = [
                 {"surety": surety_filter},
+                {"surety": {"$regex": surety_filter, "$options": "i"}},
                 {"insurance_company": {"$regex": surety_filter, "$options": "i"}},
             ]
+        if county and county.strip():
+            query["county"] = {"$regex": f"^{county.strip()}$", "$options": "i"}
         date_filt, date_warnings, resolved_start, resolved_end = _date_filter_with_warnings(
             "bond_date", start_date, end_date
         )
@@ -204,9 +238,20 @@ async def surety_liability(
 
         # Oldest → newest; supports full 2012 → present windows (no year cap)
         docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
-        if len(docs) >= REPORT_ROW_LIMIT:
+        truncated = len(docs) >= REPORT_ROW_LIMIT
+        if truncated:
             date_warnings.append(
                 f"query hit row limit ({REPORT_ROW_LIMIT}); narrow the date range if rows look missing"
+            )
+
+        quality = bond_data_quality(docs)
+        if quality["undated_count"]:
+            date_warnings.append(
+                f"{quality['undated_count']} bond(s) missing parseable dates — listed after dated rows"
+            )
+        if quality["missing_power_count"]:
+            date_warnings.append(
+                f"{quality['missing_power_count']} bond(s) missing power/POA number"
             )
 
         # Group by surety
@@ -223,6 +268,10 @@ async def surety_liability(
             ba = float(d.get("bond_amount", 0) or 0)
             split = _calc_surety_split(ba, s)
             d["split"] = split
+            bond_date_raw = (
+                d.get("bond_date") or d.get("date_executed") or d.get("posted_date") or d.get("created_at") or ""
+            )
+            bond_date_norm = normalize_bond_date_str(bond_date_raw) or str(bond_date_raw or "")[:10]
 
             if s not in surety_groups:
                 surety_groups[s] = {
@@ -252,7 +301,7 @@ async def surety_liability(
                 "booking_number": d.get("booking_number", ""),
                 "county": d.get("county", ""),
                 "bond_amount": ba,
-                "bond_date": d.get("bond_date") or d.get("date_executed") or d.get("posted_date") or d.get("created_at") or "",
+                "bond_date": bond_date_norm,
                 "status": d.get("status", ""),
                 "charge": d.get("charge") or "",
                 "case_number": d.get("case_number", ""),
@@ -281,8 +330,12 @@ async def surety_liability(
             "sureties": list(surety_groups.values()),
             "grand_totals": grand,
             "sort_order": "bond_date ascending (oldest bond first)",
+            "status_scope": (status_scope or "open").strip().lower(),
             "start_date": resolved_start,
             "end_date": resolved_end,
+            "county": county.strip() if county else None,
+            "truncated": truncated,
+            "data_quality": quality,
             "warnings": date_warnings or None,
         }
     except Exception as exc:
@@ -293,6 +346,90 @@ async def surety_liability(
                 "error": str(exc)[:400],
                 "error_type": type(exc).__name__,
                 "hint": "Date range accepts 2012-01-01 → today; bond_date should be YYYY-MM-DD.",
+            },
+            status_code=500,
+        )
+
+
+@reports_bp.get("/reports/bond-report.xlsx")
+async def official_bond_report_xlsx(
+    surety: str = Query(default="OSI"),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+    county: str = Query(default=None),
+    status_scope: str = Query(default="open"),
+    include_discharges: bool = Query(default=True),
+):
+    """Download official multi-sheet surety XLSX (oldest → newest), ready for submission."""
+    try:
+        db = get_db()
+        col = db["active_bonds"]
+        surety_key = (surety or "OSI").strip().upper()
+        if surety_key not in ("OSI", "PALMETTO"):
+            if "PALM" in surety_key or surety_key == "PSC":
+                surety_key = "PALMETTO"
+            else:
+                surety_key = "OSI"
+
+        query: dict = {}
+        query.update(_status_scope_filter(status_scope))
+        query["$or"] = [
+            {"surety": {"$regex": surety_key, "$options": "i"}},
+            {"surety_id": {"$regex": surety_key, "$options": "i"}},
+            {"insurance_company": {"$regex": surety_key, "$options": "i"}},
+        ]
+        if county and county.strip():
+            query["county"] = {"$regex": f"^{county.strip()}$", "$options": "i"}
+        date_filt, _warnings, resolved_start, resolved_end = _date_filter_with_warnings(
+            "bond_date", start_date, end_date
+        )
+        query.update(date_filt)
+
+        docs = await col.find(query, {"_id": 0}).sort("bond_date", 1).to_list(REPORT_ROW_LIMIT)
+        voids = await col.find(
+            {
+                "status": {"$in": ["void", "voided", "expired", "VOID"]},
+                "$or": query["$or"],
+            },
+            {"_id": 0},
+        ).sort("bond_date", 1).to_list(500)
+        discharges = []
+        if include_discharges:
+            dis_q: dict = {
+                "status": {"$in": ["exonerated", "surrendered", "discharged"]},
+                "$or": query["$or"],
+            }
+            if date_filt:
+                dis_q.update(date_filt)
+            discharges = await col.find(dis_q, {"_id": 0}).sort("bond_date", 1).to_list(2000)
+
+        xlsx = build_official_bond_report(
+            docs,
+            surety=surety_key,
+            report_type="Surety Bond Liability Report",
+            voids=voids,
+            discharges=discharges,
+            period_start=resolved_start,
+            period_end=resolved_end,
+        )
+        fname = filename_for(surety_key, "Bond_Report")
+        return Response(
+            content=xlsx,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "X-Sort-Order": "bond_date-ascending",
+                "X-Row-Count": str(len(docs)),
+            },
+        )
+    except Exception as exc:
+        logger.exception("reports/bond-report.xlsx error: %s", exc)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+                "hint": "Ensure openpyxl is installed and active_bonds is reachable.",
             },
             status_code=500,
         )
@@ -457,6 +594,8 @@ async def forfeitures(
 async def agent_production(
     start_date: str = Query(default=None),
     end_date: str = Query(default=None),
+    county: str = Query(default=None),
+    surety: str = Query(default=None),
 ):
     """Per-agent bond count, premium, avg bond, surety breakdown, production metrics."""
     try:
@@ -467,6 +606,14 @@ async def agent_production(
             "bond_date", start_date, end_date
         )
         query.update(date_filt)
+        if county and county.strip():
+            query["county"] = {"$regex": f"^{county.strip()}$", "$options": "i"}
+        if surety and surety.strip():
+            sf = surety.strip()
+            query["$or"] = [
+                {"surety": {"$regex": sf, "$options": "i"}},
+                {"insurance_company": {"$regex": sf, "$options": "i"}},
+            ]
 
         # Normalize legacy short names → full names so they group correctly.
         # Old records may have "Brendan" instead of "Brendan O'Neal".

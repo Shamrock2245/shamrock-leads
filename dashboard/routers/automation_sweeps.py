@@ -843,6 +843,8 @@ async def generate_bond_report(request: Request, api_key: str = ""):
             report_type="Active Bond Liability Report",
             voids=voids,
             discharges=discharges,
+            period_start=start_dt.strftime("%Y-%m-%d") if start_dt else None,
+            period_end=end_dt.strftime("%Y-%m-%d") if end_dt else None,
         )
         fname = filename_for(surety, "Bond_Report")
         meta = {

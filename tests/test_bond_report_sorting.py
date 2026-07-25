@@ -20,7 +20,9 @@ from fastapi.testclient import TestClient
 from dashboard.services.bond_report_xlsx import (
     REPORT_EPOCH,
     REPORT_EPOCH_ISO,
+    bond_data_quality,
     mongo_bond_date_filter,
+    normalize_bond_date_str,
     parse_report_date_window,
     sort_bonds_chronologically,
 )
@@ -141,6 +143,28 @@ def test_mongo_bond_date_filter_clamp_pre_2012():
     filt, warnings = mongo_bond_date_filter("2010-01-01", None)
     assert filt["bond_date"]["$gte"] == REPORT_EPOCH_ISO
     assert any("clamped" in w for w in warnings)
+
+
+def test_normalize_bond_date_str_mixed_inputs():
+    assert normalize_bond_date_str("2020-03-15T12:30:00+00:00") == "2020-03-15"
+    assert normalize_bond_date_str("03/15/2020") == "2020-03-15"
+    assert normalize_bond_date_str(datetime(2018, 7, 4)) == "2018-07-04"
+    assert normalize_bond_date_str(None) is None
+    assert normalize_bond_date_str("garbage") is None
+
+
+def test_bond_data_quality_scores_gaps():
+    q = bond_data_quality([
+        {"bond_date": "2015-01-01", "power_number": "A1"},
+        {"bond_date": None, "poa_number": ""},
+        {"bond_date": "2020-06-01", "power_number": "B2"},
+    ])
+    assert q["row_count"] == 3
+    assert q["undated_count"] == 1
+    assert q["missing_power_count"] == 1
+    assert q["bond_date_min"] == "2015-01-01"
+    assert q["bond_date_max"] == "2020-06-01"
+    assert q["quality_score"] < 100
 
 
 # ── API: automation bond-report ─────────────────────────────────────────────
@@ -372,3 +396,59 @@ def test_surety_liability_invalid_start_ignored(mock_get_db, reports_app):
     assert data["start_date"] is None
     assert data["end_date"] == "2020-06-01"
     assert any("not a valid" in w for w in (data["warnings"] or []))
+
+
+@patch("dashboard.routers.reports.get_db")
+def test_surety_liability_open_scope_and_county(mock_get_db, reports_app):
+    col = MagicMock()
+    col.find.return_value = _FakeCursor([])
+    mock_get_db.return_value = {"active_bonds": col}
+
+    client = TestClient(reports_app)
+    resp = client.get(
+        "/api/reports/surety-liability",
+        params={"status_scope": "open", "county": "Lee"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["status_scope"] == "open"
+    assert data["county"] == "Lee"
+    assert "data_quality" in data
+    query = col.find.call_args[0][0]
+    assert "status" in query
+    assert query["county"]["$regex"].startswith("^Lee")
+
+
+@patch("dashboard.routers.reports.get_db")
+def test_official_xlsx_endpoint_returns_workbook(mock_get_db, reports_app):
+    docs = [
+        {
+            "poa_number": "OSI-100",
+            "bond_date": "2019-05-01",
+            "bond_amount": 5000,
+            "surety": "OSI",
+            "status": "active",
+            "defendant_name": "Test User",
+        }
+    ]
+    col = MagicMock()
+
+    def find(query, *args, **kwargs):
+        status = query.get("status")
+        if isinstance(status, dict) and "$in" in status:
+            return _FakeCursor([])
+        return _FakeCursor(docs)
+
+    col.find.side_effect = find
+    mock_get_db.return_value = {"active_bonds": col}
+
+    client = TestClient(reports_app)
+    resp = client.get(
+        "/api/reports/bond-report.xlsx",
+        params={"surety": "OSI", "start_date": "2015-01-01", "end_date": "2020-12-31"},
+    )
+    assert resp.status_code == 200
+    assert "spreadsheetml" in resp.headers.get("content-type", "")
+    assert resp.headers.get("content-disposition", "").endswith(".xlsx") or "Bond_Report" in resp.headers.get("content-disposition", "")
+    assert resp.content[:2] == b"PK"  # zip/xlsx magic
