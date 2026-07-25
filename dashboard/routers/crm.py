@@ -404,6 +404,18 @@ class CardDismissRequest(BaseModel):
     actor: Optional[str] = Field("user", description="User or agent performing dismissal")
 
 
+def _card_id_match_filter(id_fields: list[str], card_id: str) -> dict:
+    """Build a $or filter that matches string IDs and ObjectId when valid."""
+    clauses = [{field: card_id} for field in id_fields]
+    try:
+        from bson import ObjectId
+        if ObjectId.is_valid(card_id):
+            clauses.append({"_id": ObjectId(card_id)})
+    except Exception:
+        pass
+    return {"$or": clauses}
+
+
 @crm_bp.post("/cards/dismiss")
 async def dismiss_card(req: CardDismissRequest):
     """
@@ -413,26 +425,26 @@ async def dismiss_card(req: CardDismissRequest):
     now = datetime.now(timezone.utc)
     card_type = req.card_type.lower().strip()
     card_id = req.card_id.strip()
+    if not card_id:
+        return JSONResponse({"success": False, "error": "card_id required"}, status_code=400)
+
+    dismiss_fields = {
+        "desk_dismissed": True,
+        "desk_dismissed_at": now.isoformat(),
+        "desk_dismissed_by": req.actor or "user",
+    }
 
     if card_type in ("intake", "intake_queue"):
         col = get_collection("intake_queue")
         res = await col.update_one(
-            {"$or": [{"intake_id": card_id}, {"_id": card_id}]},
-            {"$set": {
-                "desk_dismissed": True,
-                "desk_dismissed_at": now.isoformat(),
-                "desk_dismissed_by": req.actor,
-            }}
+            _card_id_match_filter(["intake_id"], card_id),
+            {"$set": dismiss_fields},
         )
     elif card_type in ("prospective", "prospective_bonds", "lead"):
         col = get_collection("prospective_bonds")
         res = await col.update_one(
-            {"$or": [{"booking_number": card_id}, {"_id": card_id}]},
-            {"$set": {
-                "desk_dismissed": True,
-                "desk_dismissed_at": now.isoformat(),
-                "desk_dismissed_by": req.actor,
-            }}
+            _card_id_match_filter(["booking_number"], card_id),
+            {"$set": dismiss_fields},
         )
     else:
         return JSONResponse({"success": False, "error": f"Invalid card_type '{card_type}'"}, status_code=400)
@@ -451,18 +463,26 @@ async def restore_card(req: CardDismissRequest):
     """
     card_type = req.card_type.lower().strip()
     card_id = req.card_id.strip()
+    if not card_id:
+        return JSONResponse({"success": False, "error": "card_id required"}, status_code=400)
+
+    restore_fields = {
+        "desk_dismissed": False,
+        "desk_dismissed_at": None,
+        "desk_dismissed_by": None,
+    }
 
     if card_type in ("intake", "intake_queue"):
         col = get_collection("intake_queue")
         res = await col.update_one(
-            {"$or": [{"intake_id": card_id}, {"_id": card_id}]},
-            {"$set": {"desk_dismissed": False, "desk_dismissed_at": None}}
+            _card_id_match_filter(["intake_id"], card_id),
+            {"$set": restore_fields},
         )
     elif card_type in ("prospective", "prospective_bonds", "lead"):
         col = get_collection("prospective_bonds")
         res = await col.update_one(
-            {"$or": [{"booking_number": card_id}, {"_id": card_id}]},
-            {"$set": {"desk_dismissed": False, "desk_dismissed_at": None}}
+            _card_id_match_filter(["booking_number"], card_id),
+            {"$set": restore_fields},
         )
     else:
         return JSONResponse({"success": False, "error": f"Invalid card_type '{card_type}'"}, status_code=400)

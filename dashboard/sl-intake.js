@@ -280,8 +280,8 @@ const SLIntake = (() => {
       ` : `
         <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Open Bond Desk workflow">Open desk</button>
         ${fetchBtn}
-        <button class="btn-card-action btn-session-dismiss" onclick="event.stopPropagation();SLIntake.dismissSession('${_esc(item.IntakeID)}', this.closest('tr'))" title="Dismiss for this session (reappears on refresh)" aria-label="Dismiss for this session">✕</button>
-        <button class="btn-card-action btn-perm-remove" onclick="event.stopPropagation();SLIntake.confirmPermanentRemove('${_esc(item.IntakeID)}', this.closest('tr'))" title="Remove permanently from Bond Desk" aria-label="Remove permanently from Bond Desk">🗑️</button>
+        <button class="btn-card-action btn-session-dismiss" onclick="event.stopPropagation();SLIntake.dismissSession('${_esc(item.IntakeID)}', this.closest('tr'))" title="Hide for this browser session (stays hidden until you close the tab)" aria-label="Dismiss for this session">✕</button>
+        <button class="btn-card-action btn-perm-remove" onclick="event.stopPropagation();SLIntake.confirmPermanentRemove('${_esc(item.IntakeID)}', this.closest('tr'))" title="Remove permanently from Bond Desk (soft-delete; data kept in MongoDB)" aria-label="Remove permanently from Bond Desk">🗑️</button>
       `;
 
       return `
@@ -583,7 +583,12 @@ const SLIntake = (() => {
       target.classList.add('card-dismiss-animating');
       setTimeout(() => { target.remove(); }, 280);
     }
-    if (typeof SL !== 'undefined' && SL.toast) SL.toast('🙈 Card dismissed for this session', 'info');
+    if (typeof toast === 'function') toast('🙈 Card dismissed for this browser session', 'info');
+  }
+
+  function _intakeToast(msg, type) {
+    if (typeof toast === 'function') toast(msg, type);
+    else if (typeof SL !== 'undefined' && SL.toast) SL.toast(msg, type);
   }
 
   async function confirmPermanentRemove(intakeId, el) {
@@ -602,13 +607,13 @@ const SLIntake = (() => {
           target.classList.add('card-dismiss-animating');
           setTimeout(() => { target.remove(); }, 280);
         }
-        if (typeof SL !== 'undefined' && SL.toast) SL.toast('🗑️ Card permanently removed from Bond Desk', 'success');
+        _intakeToast('🗑️ Card permanently removed from Bond Desk', 'success');
         load();
       } else {
         throw new Error(data.error || 'Dismissal failed');
       }
     } catch (err) {
-      if (typeof SL !== 'undefined' && SL.toast) SL.toast(`Error: ${err.message}`, 'error');
+      _intakeToast(`Error: ${err.message}`, 'error');
     }
   }
 
@@ -622,13 +627,13 @@ const SLIntake = (() => {
       });
       const data = await res.json();
       if (data.success) {
-        if (typeof SL !== 'undefined' && SL.toast) SL.toast('♻️ Card restored to Bond Desk', 'success');
+        _intakeToast('♻️ Card restored to Bond Desk', 'success');
         load();
       } else {
         throw new Error(data.error || 'Restore failed');
       }
     } catch (err) {
-      if (typeof SL !== 'undefined' && SL.toast) SL.toast(`Error: ${err.message}`, 'error');
+      _intakeToast(`Error: ${err.message}`, 'error');
     }
   }
 

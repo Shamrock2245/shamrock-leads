@@ -44,16 +44,16 @@
     <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC · NC · TN · TX · LA · CT · AL · MS</small></h1>
   </div>
   <div class="header-right" style="display:flex;align-items:center;gap:10px">
-    <!-- Device Mode Dropdown -->
-    <div style="display:inline-flex;align-items:center;gap:6px;background:var(--panel,#1e293b);border:1px solid var(--border,#334155);border-radius:8px;padding:4px 10px;box-shadow:0 2px 4px rgba(0,0,0,0.15)" title="Device Mode: Select or auto-detect Desktop, iPad Pro, iPhone, Android">
-      <span id="deviceModeBadge" style="font-size:13px">⚡</span>
-      <select id="deviceModeSelect" onchange="SLDevice.setMode(this.value)" style="background:none;border:none;color:var(--text,#f8fafc);font-size:12px;font-weight:600;cursor:pointer;outline:none;padding-right:4px">
-        <option value="auto" style="background:#1e293b;color:#fff">⚡ Auto-Detect Device</option>
-        <option value="ipad" style="background:#1e293b;color:#fff">📱 iPad Pro / iPad</option>
-        <option value="iphone" style="background:#1e293b;color:#fff">📱 iPhone</option>
-        <option value="android-tablet" style="background:#1e293b;color:#fff">🤖 Android Tablet</option>
-        <option value="android-phone" style="background:#1e293b;color:#fff">🤖 Android Phone</option>
-        <option value="desktop" style="background:#1e293b;color:#fff">🖥️ Desktop</option>
+    <!-- Device Mode Dropdown (Sleek Glassmorphic Styling) -->
+    <div class="device-selector-glow" style="display:inline-flex;align-items:center;gap:8px;background:rgba(30,41,59,0.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(52,211,153,0.35);border-radius:10px;padding:5px 12px;box-shadow:0 4px 20px rgba(0,0,0,0.25), 0 0 12px rgba(16,185,129,0.15);transition:all 0.2s ease" title="Device Layout Mode (Desktop, iPad Pro, iPhone, Android)">
+      <span id="deviceModeBadge" style="font-size:14px;filter:drop-shadow(0 0 4px rgba(52,211,153,0.6))">⚡</span>
+      <select id="deviceModeSelect" onchange="SLDevice.setMode(this.value)" style="background:none;border:none;color:#e2e8f0;font-size:12px;font-weight:700;font-family:'Space Grotesk',sans-serif;cursor:pointer;outline:none;padding-right:4px">
+        <option value="auto" style="background:#0f172a;color:#fff">⚡ Auto-Detect Device</option>
+        <option value="ipad" style="background:#0f172a;color:#fff">📱 iPad Pro / iPad</option>
+        <option value="iphone" style="background:#0f172a;color:#fff">📱 iPhone</option>
+        <option value="android-tablet" style="background:#0f172a;color:#fff">🤖 Android Tablet</option>
+        <option value="android-phone" style="background:#0f172a;color:#fff">🤖 Android Phone</option>
+        <option value="desktop" style="background:#0f172a;color:#fff">🖥️ Desktop</option>
       </select>
     </div>
   </div>
@@ -623,6 +623,19 @@
         <option value="all">All (incl. closed)</option>
         <option value="closed">Closed</option>
         <option value="promoted">Promoted</option>
+        <option value="dismissed">🗑️ Desk Dismissed</option>
+      </select>
+      <select id="prospCountyFilter" multiple class="sl-filter-select" style="height:36px;min-width:130px" title="Filter by county (Ctrl/Cmd multi-select)" onchange="SLProspective.load()">
+        <option value="Lee">Lee</option>
+        <option value="Collier">Collier</option>
+        <option value="Charlotte">Charlotte</option>
+        <option value="Sarasota">Sarasota</option>
+        <option value="Hendry">Hendry</option>
+        <option value="DeSoto">DeSoto</option>
+        <option value="Manatee">Manatee</option>
+        <option value="Hillsborough">Hillsborough</option>
+        <option value="Brevard">Brevard</option>
+        <option value="Polk">Polk</option>
       </select>
       <select id="prospSortFilter" class="sl-filter-select" onchange="SLProspective.load()">
         <option value="updated_desc">Latest Activity</option>
@@ -3476,7 +3489,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/sl-core.js?v=9"></script>
+<script src="/sl-core.js?v=11"></script>
 <script src="/sl-rearrest.js?v=4"></script>
 <script src="/sl-data.js?v=6"></script>
 <!-- Tabulator v6 JS -->
@@ -3485,15 +3498,15 @@
 <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
 <!-- Vanilla Calendar Pro -->
 <script src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
-<script src="/sl-features.js?v=10"></script>
+<script src="/sl-features.js?v=11"></script>
 <script src="/sl-active-bonds.js?v=5"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-tracking.js?v=4"></script>
 <script src="/sl-geo-intelligence.js?v=1"></script>
-<script src="/sl-intake.js?v=6"></script>
+<script src="/sl-intake.js?v=7"></script>
 <script src="/sl-health.js?v=5"></script>
 <script src="/sl-service-control.js?v=1"></script>
-<script src="/sl-prospective.js?v=4"></script>
+<script src="/sl-prospective.js?v=5"></script>
 <script src="/sl-defendant-lifecycle.js?v=4"></script>
 <script src="/sl-indemnitor.js?v=5"></script>
 <script src="/sl-inventory.js?v=4"></script>

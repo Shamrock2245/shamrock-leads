@@ -149,9 +149,13 @@ window.SLProspective = (function () {
 
   // ── Render Kanban Board ────────────────────────────────────────────────────
   function renderBoard() {
+    var isDismissedView = $('prospStatusFilter') && $('prospStatusFilter').value === 'dismissed';
     ['contacted', 'negotiating', 'paperwork', 'ready'].forEach(function(stage) {
       var cards = _data.filter(function(b) {
-        return b.stage === stage && (!_sessionDismissedBks.has(b.booking_number) || _showArchived);
+        if (b.stage !== stage) return false;
+        // Session dismiss only applies on the live board (not archive / desk-dismissed views)
+        if (isDismissedView || _showArchived) return true;
+        return !_sessionDismissedBks.has(b.booking_number);
       });
       var cap = stage.charAt(0).toUpperCase() + stage.slice(1);
       var col = $('col' + cap);
@@ -211,9 +215,15 @@ window.SLProspective = (function () {
 
     var isLee = (b.county || '').toLowerCase().includes('lee');
     var isNoBond = !b.bond_amount || Number(b.bond_amount) === 0;
+    var isDismissedView = ($('prospStatusFilter') && $('prospStatusFilter').value === 'dismissed') || !!b.desk_dismissed;
     var fetchBondBtn = '<button class="cqa-btn cqa-refresh-bond" style="background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-weight:700" title="Re-fetch updated bond info from county source" onclick="event.stopPropagation();refreshDefendantFromSource(\'' + bk + '\',this)">⚡ Fetch Bond</button>';
     var leeAppBadge = (isLee && isNoBond) ? '<span class="first-app-badge" style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;margin-left:4px;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();refreshDefendantFromSource(\'' + bk + '\',this)">⏰ 1st App Watch</span>' : '';
     var leeClerkLink = isLee ? '<a href="https://matrix.leeclerk.org/Home/Search?query=' + encodeURIComponent(b.case_number || bk) + '" target="_blank" onclick="event.stopPropagation()" style="color:#93c5fd;font-size:11px;margin-left:4px" title="Search Lee County Clerk of Court (leeclerk.org)">🏛️ LeeClerk</a>' : '';
+    var sessionDismissBtn = isDismissedView ? '' :
+      '<button class="btn-card-action btn-session-dismiss" title="Hide for this browser session (sessionStorage — stays hidden until you close the tab)" aria-label="Dismiss for this session" onclick="event.stopPropagation();SLProspective.dismissSession(\'' + bk + '\',this.closest(\'.pipeline-card\'))">✕</button>';
+    var removeOrRestoreBtn = isDismissedView
+      ? '<button class="cqa-btn cqa-restore" title="Restore to Bond Desk" onclick="event.stopPropagation();SLProspective.restorePermanent(\'' + bk + '\')">♻️ Restore</button>'
+      : '<button class="cqa-btn cqa-archive btn-perm-remove" title="Remove permanently from Bond Desk (soft-delete; data kept in MongoDB)" aria-label="Remove permanently from Bond Desk" onclick="event.stopPropagation();SLProspective.confirmPermanentRemove(\'' + bk + '\',this.closest(\'.pipeline-card\'))">🗑️</button>';
 
     return '<div class="pipeline-card' + (hasNewReply ? ' has-new-reply' : '') + (isSelected ? ' card-selected' : '') + '" data-bk="' + bk + '" data-stage="' + b.stage + '">' +
       '<div class="card-select-wrap"><input type="checkbox" class="card-checkbox"' + (isSelected ? ' checked' : '') + ' onchange="SLProspective.toggleSelect(\'' + bk + '\',this.checked)" onclick="event.stopPropagation()"></div>' +
@@ -222,7 +232,7 @@ window.SLProspective = (function () {
           '<span class="pipeline-card-name">' + (b.defendant_name || 'Unknown') + '</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px">' +
             '<span class="pipeline-card-bond">' + money(b.bond_amount) + '</span>' +
-            '<button class="btn-card-action btn-session-dismiss" title="Dismiss for this session (reappears on refresh)" aria-label="Dismiss for this session" onclick="event.stopPropagation();SLProspective.dismissSession(\'' + bk + '\',this.closest(\'.pipeline-card\'))">✕</button>' +
+            sessionDismissBtn +
           '</span>' +
         '</div>' +
         '<div class="pipeline-card-meta"><span>' + (b.county || '—') + ' County</span>' + leeAppBadge + leeClerkLink + '<span class="score-pill ' + scoreCls + '">' + (b.lead_score || 0) + '</span>' + (turnCount > 0 ? '<span class="turn-badge">' + turnCount + '💬</span>' : '') + riskBadge(b) + '</div>' +
@@ -233,12 +243,14 @@ window.SLProspective = (function () {
         (lastComm && lastComm.message ? '<div class="pipeline-card-preview">"' + (lastComm.message || '').substring(0, 55) + ((lastComm.message || '').length > 55 ? '…' : '') + '"</div>' : '') +
       '</div>' +
       '<div class="card-quick-actions">' +
-        fetchBondBtn +
-        (indPhone ? '<button class="cqa-btn cqa-msg" title="Send iMessage" onclick="event.stopPropagation();SLProspective.quickMessage(\'' + bk + '\')">💬 Msg</button>' : '') +
-        advBtn +
-        '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠 Intel</button>' +
-        '<button class="cqa-btn cqa-view-def" title="View in Defendants tab" onclick="event.stopPropagation();SLProspective.viewInDefendants(\'' + bk + '\')">👤</button>' +
-        '<button class="cqa-btn cqa-archive btn-perm-remove" title="Remove permanently from Bond Desk" aria-label="Remove permanently from Bond Desk" onclick="event.stopPropagation();SLProspective.confirmPermanentRemove(\'' + bk + '\',this.closest(\'.pipeline-card\'))">🗑️</button>' +
+        (isDismissedView ? removeOrRestoreBtn : (
+          fetchBondBtn +
+          (indPhone ? '<button class="cqa-btn cqa-msg" title="Send iMessage" onclick="event.stopPropagation();SLProspective.quickMessage(\'' + bk + '\')">💬 Msg</button>' : '') +
+          advBtn +
+          '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠 Intel</button>' +
+          '<button class="cqa-btn cqa-view-def" title="View in Defendants tab" onclick="event.stopPropagation();SLProspective.viewInDefendants(\'' + bk + '\')">👤</button>' +
+          removeOrRestoreBtn
+        )) +
       '</div>' +
     '</div>';
   }

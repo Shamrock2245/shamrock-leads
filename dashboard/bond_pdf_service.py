@@ -524,7 +524,10 @@ def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[by
         
     Returns: List of PDF byte buffers (one per normalized charge).
     """
+    # Accept plural `charges` or singular `charge` (dashboard / batch PDF paths)
     charges_input = bond_data.get("charges")
+    if not charges_input:
+        charges_input = bond_data.get("charge")
     bond_amount_input = bond_data.get("bond_amount")
     
     normalized_list = _normalize_charges_and_amounts(charges_input, bond_amount_input)
@@ -608,14 +611,24 @@ def merge_uncollated_bonds(pdfs: list[bytes], copies_per_charge: int = 2) -> byt
         - Page 5: Charge 3 (Copy 1 - Court)
         - Page 6: Charge 3 (Copy 2 - Agency File)
     """
+    if copies_per_charge < 1:
+        copies_per_charge = 1
+
     out_doc = fitz.open()
+    pages_added = 0
     for pdf_bytes in pdfs:
         if not pdf_bytes:
             continue
         for _ in range(copies_per_charge):
             src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            out_doc.insert_pdf(src_doc)
+            if src_doc.page_count > 0:
+                out_doc.insert_pdf(src_doc)
+                pages_added += src_doc.page_count
             src_doc.close()
+
+    if pages_added == 0:
+        out_doc.close()
+        raise ValueError("No PDF pages to merge — generate at least one appearance bond first")
 
     buf = io.BytesIO()
     out_doc.save(buf)

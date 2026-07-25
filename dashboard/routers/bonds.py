@@ -1221,7 +1221,7 @@ async def api_appearance_bond_pdf(request: Request):
 
         return Response(
             pdf_bytes,
-            mimetype="application/pdf",
+            media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except FileNotFoundError as e:
@@ -1238,14 +1238,23 @@ async def api_appearance_bond_batch(request: Request):
     duplicated 2x each (uncollated: Copy 1 Court, Copy 2 Agency File for Charge #1, then Charge #2...).
     """
     try:
-        from dashboard.bond_pdf_service import generate_appearance_bonds, merge_uncollated_bonds, generate_safe_filename
+        from dashboard.bond_pdf_service import generate_appearance_bonds, merge_uncollated_bonds
         d = await request.json() or {}
         surety = d.get("surety", "osi")
         charges_data = d.get("charges", [])
-        copies = int(d.get("copies", 2))
+        if not charges_data:
+            return JSONResponse({"error": "No charges provided for batch appearance bond"}, status_code=400)
+        try:
+            copies = int(d.get("copies", 2) or 2)
+        except (TypeError, ValueError):
+            copies = 2
+        if copies < 1:
+            copies = 1
 
         pdf_list = []
         for ch in charges_data:
+            if not isinstance(ch, dict):
+                ch = {"charge": str(ch)}
             b_data = {
                 "name": d.get("name", ""),
                 "booking_number": d.get("booking", ""),
@@ -1254,6 +1263,7 @@ async def api_appearance_bond_batch(request: Request):
                 "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
                 "dob": d.get("dob", ""),
                 "address": d.get("address", ""),
+                # Singular charge — generate_appearance_bonds falls back to this key
                 "charge": ch.get("charge", ""),
                 "bond_amount": ch.get("bond_amount", d.get("bond", 0)),
                 "case_number": ch.get("case_number", d.get("case_number", "")),
@@ -1263,11 +1273,14 @@ async def api_appearance_bond_batch(request: Request):
             if single_pdf_list:
                 pdf_list.append(single_pdf_list[0])
 
+        if not pdf_list:
+            return JSONResponse({"error": "No appearance bond PDFs were generated from the provided charges"}, status_code=400)
+
         merged_pdf = merge_uncollated_bonds(pdf_list, copies_per_charge=copies)
         safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', d.get("name", "defendant"))
         filename = f"Uncollated_Appearance_Bonds_{surety.upper()}_{safe_name}.pdf"
 
-        # Automatic Filing to Google Drive Case Folder
+        # Automatic Filing to Google Drive Case Folder (best-effort; never blocks PDF download)
         drive_url = ""
         try:
             from dashboard.services.google_drive_service import GoogleDriveService
@@ -1276,24 +1289,31 @@ async def api_appearance_bond_batch(request: Request):
                 root_folder_id = os.getenv("GOOGLE_DRIVE_CASES_FOLDER_ID", "root")
                 surety_label = "OSI Appearance Bonds" if surety.lower() == "osi" else "Palmetto Appearance Bonds"
                 surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
-                def_folder_name = f"{safe_name}_{d.get('booking', 'no_bk')}"
-                def_folder_id = drive_service.get_or_create_folder(def_folder_name, surety_folder_id)
-                drive_url = drive_service.upload_pdf(merged_pdf, filename, def_folder_id)
-                logger.info(f"[DriveFiling] Automatically filed {filename} to Google Drive: {drive_url}")
+                if surety_folder_id:
+                    def_folder_name = f"{safe_name}_{d.get('booking', 'no_bk')}"
+                    def_folder_id = drive_service.get_or_create_folder(def_folder_name, surety_folder_id)
+                    if def_folder_id:
+                        drive_url = drive_service.upload_pdf(merged_pdf, filename, def_folder_id) or ""
+                        if drive_url:
+                            logger.info(f"[DriveFiling] Automatically filed {filename} to Google Drive: {drive_url}")
 
-                # Update DB record with drive link
-                bk_num = d.get("booking", "")
-                if bk_num:
-                    db = get_db()
-                    await db.active_bonds.update_many(
-                        {"$or": [{"booking_number": bk_num}, {"BookingNumber": bk_num}]},
-                        {"$set": {
-                            "drive_link": drive_url,
-                            "drive_folder_id": def_folder_id,
-                            "filed_to_drive": True,
-                            "updated_at": datetime.now().isoformat()
-                        }}
-                    )
+                            # Update DB record with drive link when an active bond exists
+                            bk_num = d.get("booking", "")
+                            if bk_num:
+                                db = get_db()
+                                await db.active_bonds.update_many(
+                                    {"$or": [{"booking_number": bk_num}, {"BookingNumber": bk_num}]},
+                                    {"$set": {
+                                        "drive_link": drive_url,
+                                        "drive_folder_id": def_folder_id,
+                                        "filed_to_drive": True,
+                                        "updated_at": datetime.now(timezone.utc).isoformat()
+                                    }}
+                                )
+                    else:
+                        logger.warning("[DriveFiling] Could not create defendant folder — skipping upload")
+                else:
+                    logger.warning("[DriveFiling] Could not create surety folder — skipping upload")
         except Exception as drive_err:
             logger.warning(f"[DriveFiling] Drive filing skipped/failed: {drive_err}")
 
@@ -1305,7 +1325,7 @@ async def api_appearance_bond_batch(request: Request):
 
         return Response(
             merged_pdf,
-            mimetype="application/pdf",
+            media_type="application/pdf",
             headers=headers,
         )
     except Exception as e:

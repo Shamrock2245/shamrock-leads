@@ -35,6 +35,7 @@ Dashboard.html in the GAS project:
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
 import os
+import re
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -345,7 +346,13 @@ async def intake_queue_list(
     if counties:
         county_list = [c.strip() for c in counties.split(",") if c.strip()]
         if county_list:
-            regex_list = [re.compile(f"^{re.escape(c)}$", re.IGNORECASE) for c in county_list]
+            # Match bare "Lee" or labeled "Lee (FL)"
+            regex_list = []
+            for c in county_list:
+                bare = re.sub(r"\s*\([A-Za-z]{2}\)$", "", c).strip()
+                regex_list.append(
+                    re.compile(rf"^{re.escape(bare)}(\s*\([A-Za-z]{{2}}\))?$", re.IGNORECASE)
+                )
             query["defendant_county"] = {"$in": regex_list}
 
     try:

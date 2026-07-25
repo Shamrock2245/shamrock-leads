@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -176,25 +177,29 @@ async def api_prospective_list(stage: str = Query(default=""), status: str = Que
 
         query: dict = {}
         if status == "dismissed":
+            # Soft-deleted from Bond Desk — ignore workflow status filters
             query["desk_dismissed"] = True
         else:
             query["desk_dismissed"] = {"$ne": True}
-        if stage:
-            query["stage"] = stage
+            if stage:
+                query["stage"] = stage
+            if status == "archived" or show_archived:
+                query["status"] = "archived"
+            elif status and status != "all":
+                # active | closed | promoted | etc.
+                query["status"] = status
+            else:
+                # status=all (or empty): show non-archived board items
+                query["status"] = {"$nin": ["archived"]}
         if counties:
             county_list = [c.strip() for c in counties.split(",") if c.strip()]
             if county_list:
-                regex_list = [re.compile(f"^{re.escape(c)}$", re.IGNORECASE) for c in county_list]
+                # Match bare "Lee" or labeled "Lee (FL)"
+                regex_list = []
+                for c in county_list:
+                    bare = re.sub(r"\s*\([A-Za-z]{2}\)$", "", c).strip()
+                    regex_list.append(re.compile(f"^{re.escape(bare)}(\\s*\\([A-Za-z]{{2}}\\))?$", re.IGNORECASE))
                 query["county"] = {"$in": regex_list}
-        if status and status != "all":
-            if status == "archived":
-                query["status"] = "archived"
-            else:
-                query["status"] = status
-                if not show_archived:
-                    query["status"] = {"$nin": ["archived"]}
-                    if status == "active":
-                        query["status"] = "active"
         if search:
             query["$or"] = [
                 {"defendant_name": {"$regex": search, "$options": "i"}},
@@ -207,13 +212,17 @@ async def api_prospective_list(stage: str = Query(default=""), status: str = Que
         async for doc in col.find(query, {"_id": 0}).sort("updated_at", -1).limit(200):
             bonds.append(_serialize(doc))
 
-        # Stage counts for KPI cards
+        # Stage counts for KPI cards (exclude desk-dismissed soft-deletes)
         stage_counts = {}
         for s in VALID_STAGES:
-            stage_counts[s] = await col.count_documents({"stage": s, "status": "active"})
+            stage_counts[s] = await col.count_documents({
+                "stage": s,
+                "status": "active",
+                "desk_dismissed": {"$ne": True},
+            })
 
         # Archived count for UI toggle badge
-        archived_count = await col.count_documents({"status": "archived"})
+        archived_count = await col.count_documents({"status": "archived", "desk_dismissed": {"$ne": True}})
         total_active = sum(stage_counts.values())
 
         # Messages sent today

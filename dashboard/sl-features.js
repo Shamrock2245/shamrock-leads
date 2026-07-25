@@ -463,25 +463,50 @@ function openBondModal(nameOrLead, bond, county, booking) {
 }
 
 // ── Power Capacity & Predictive Auto-Fill Helpers ──
+// Real inventory prefixes from dashboard/extensions.py POA_SEED_TIERS
+const POA_CAPACITY_MAP = {
+  OSI3: 3000, OSI6: 6000, OSI16: 16000, OSI51: 51000, OSI101: 101000, OSI251: 251000,
+  PSC2: 2000, PSC5: 5000, PSC15: 15000, PSC25: 25000, PSC50: 50000, PSC75: 75000, PSC105: 105000,
+};
+
 function getPowerCapacity(poaStr) {
   if (!poaStr) return 0;
-  const clean = poaStr.toUpperCase().replace(/[\s\-_]/g, '');
-  const m = clean.match(/(?:OSI|PSC|PAL|PALMETTO|O'?SHAUGHNAHILL)(\d+)/);
+  const upper = String(poaStr).toUpperCase().trim();
+  // Prefer space/hyphen separated form: "OSI51 20127651" or "OSI51-20127651"
+  const token = (upper.split(/[\s\-_]+/)[0] || upper).replace(/[^A-Z0-9]/g, '');
+  if (POA_CAPACITY_MAP[token]) return POA_CAPACITY_MAP[token];
+
+  // Longest-prefix match so OSI51 wins over OSI5 / OSI
+  const known = Object.keys(POA_CAPACITY_MAP).sort((a, b) => b.length - a.length);
+  for (const pfx of known) {
+    if (token.startsWith(pfx) || upper.startsWith(pfx)) return POA_CAPACITY_MAP[pfx];
+  }
+
+  // Fallback: OSI6 → 6000, PSC25 → 25000 (digits after letters, ×1000 when small)
+  const m = token.match(/^(?:OSI|PSC|PAL)(\d+)$/);
   if (m) {
-    const val = parseInt(m[1], 10);
-    return val <= 100 ? val * 1000 : val;
+    const n = parseInt(m[1], 10);
+    return n <= 300 ? n * 1000 : n;
   }
   return 0;
 }
 
 function recommendPowerTier(surety, chargeAmount) {
-  const tiers = (surety === 'palmetto') ? [5000, 10000, 25000, 50000, 100000] : [5000, 6000, 10000, 25000, 50000, 100000];
-  const pfxMap = (surety === 'palmetto') ? { 5000: 'PSC5', 10000: 'PSC10', 25000: 'PSC25', 50000: 'PSC50', 100000: 'PSC100' } : { 5000: 'OSI5', 6000: 'OSI6', 10000: 'OSI10', 25000: 'OSI25', 50000: 'OSI50', 100000: 'OSI100' };
-  
+  const amt = Number(chargeAmount) || 0;
+  const osi = [
+    { cap: 3000, pfx: 'OSI3' }, { cap: 6000, pfx: 'OSI6' }, { cap: 16000, pfx: 'OSI16' },
+    { cap: 51000, pfx: 'OSI51' }, { cap: 101000, pfx: 'OSI101' }, { cap: 251000, pfx: 'OSI251' },
+  ];
+  const psc = [
+    { cap: 2000, pfx: 'PSC2' }, { cap: 5000, pfx: 'PSC5' }, { cap: 15000, pfx: 'PSC15' },
+    { cap: 25000, pfx: 'PSC25' }, { cap: 50000, pfx: 'PSC50' }, { cap: 75000, pfx: 'PSC75' },
+    { cap: 105000, pfx: 'PSC105' },
+  ];
+  const tiers = (surety === 'palmetto') ? psc : osi;
   for (const t of tiers) {
-    if (t >= chargeAmount) return pfxMap[t] || (surety === 'palmetto' ? `PSC${t/1000}` : `OSI${t/1000}`);
+    if (t.cap >= amt) return t.pfx;
   }
-  return (surety === 'palmetto') ? 'PSC100' : 'OSI100';
+  return tiers[tiers.length - 1].pfx;
 }
 
 function predictNextPoaNumber(poaStr, incrementBy = 1) {
@@ -536,7 +561,8 @@ function autoFillConsecutivePoas(sourceIdx) {
       const predicted = predictNextPoaNumber(basePoa, i - sourceIdx);
       targetInput.value = predicted;
       targetInput.dataset.autoFilled = 'true';
-      onPoaInputChange(targetInput, i, true);
+      // Update stored POA + capacity badge without re-entering autoFill (avoids O(n²) cascade)
+      onPoaInputChange(targetInput, i, true, true);
     }
   }
 }
@@ -654,7 +680,7 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
   }
 }
 
-function onPoaInputChange(input, idx, isAutoFill = false) {
+function onPoaInputChange(input, idx, isAutoFill = false, skipCascade = false) {
   if (!input) return;
   const val = input.value.trim();
 
@@ -665,12 +691,13 @@ function onPoaInputChange(input, idx, isAutoFill = false) {
     delete input.dataset.locked;
   }
 
-  // Update stored poa number
+  // Update stored poa number — prefix is the first token (OSI51), serial is the rest
   if (window._bondModalData && window._bondModalData.poaNumbers) {
+    const parts = val.split(/[\s\-]+/).filter(Boolean);
     window._bondModalData.poaNumbers[idx] = {
       poa_full: val,
-      poa_number: val.includes('-') ? val.split('-').pop() : (val.includes(' ') ? val.split(' ').pop() : val),
-      poa_prefix: val.includes('-') ? val.split('-')[0] : (val.includes(' ') ? val.split(' ')[0] : (input.dataset.poaPrefix || ''))
+      poa_number: parts.length > 1 ? parts[parts.length - 1] : val,
+      poa_prefix: parts.length > 1 ? parts[0] : (input.dataset.poaPrefix || parts[0] || ''),
     };
   }
 
@@ -691,12 +718,16 @@ function onPoaInputChange(input, idx, isAutoFill = false) {
       html += `<span style="color:#f87171;font-size:10px;font-weight:700">⚠️ $${chargeAmt.toLocaleString()} > $${cap.toLocaleString()} capacity · Recommend ${recPfx}</span>`;
     } else if (val && cap > 0) {
       html += `<span style="color:#4ade80;font-size:10px">✅ Covers up to $${cap.toLocaleString()}</span>`;
+    } else if (val && !cap) {
+      html += `<span style="color:#fbbf24;font-size:10px">⚠️ Unknown power tier</span>`;
     }
     badgeEl.innerHTML = html;
   }
 
-  // Auto-increment consecutive POAs for subsequent unlocked inputs
-  autoFillConsecutivePoas(idx);
+  // Auto-increment consecutive POAs for subsequent unlocked inputs (source edits only)
+  if (!skipCascade) {
+    autoFillConsecutivePoas(idx);
+  }
 }
 
 function editBond(chargeEncoded, idx) {

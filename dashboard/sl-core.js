@@ -89,6 +89,32 @@ const PRESETS = {
   fl: null, // filled dynamically from SL_STATE.counties with (FL)
   all: [], none: []
 };
+const SWFL_COUNTIES_LIST = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
+
+function isSwflCountyName(county) {
+  if (!county) return false;
+  const bare = String(county).replace(/\s*\([A-Za-z]{2}\)$/, '').trim().toLowerCase();
+  return SWFL_COUNTIES_LIST.map(c => c.toLowerCase()).includes(bare);
+}
+
+async function triggerCountyScraperAuto(county) {
+  if (!county) return;
+  const countyClean = String(county).trim();
+  try {
+    const res = await fetch('/api/scraper/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ county: countyClean })
+    });
+    const data = await res.json().catch(() => ({}));
+    console.log(`[AutoScraper] Auto-triggered scraper run for ${countyClean}:`, data.message || data);
+  } catch (err) {
+    console.warn(`[AutoScraper] Could not auto-trigger scraper for ${countyClean}:`, err);
+  }
+}
+window.isSwflCountyName = isSwflCountyName;
+window.triggerCountyScraperAuto = triggerCountyScraperAuto;
+
 let searchTimer = null;
 
 // ── Auth-aware fetch (session cookie + 401 → re-login) ───────────────────
@@ -985,6 +1011,10 @@ function toast(msg, type='info') {
   _toastQueue.push({ msg, type });
   if (!_toastActive) _processToastQueue();
 }
+window.toast = toast;
+// Compat for modules that call SL.toast(...)
+if (typeof window.SL === 'undefined') window.SL = {};
+window.SL.toast = toast;
 
 function _processToastQueue() {
   if (_toastQueue.length === 0) { _toastActive = false; return; }

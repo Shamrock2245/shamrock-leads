@@ -9,6 +9,7 @@ from dashboard.bond_pdf_service import (
     _normalize_charges_and_amounts,
     generate_appearance_bonds,
     generate_appearance_bond,
+    merge_uncollated_bonds,
     fill_osi_bond,
     fill_palmetto_bond,
 )
@@ -267,3 +268,50 @@ def test_generate_appearance_bond_singular():
     assert widgets.get("DefCharge1") == "GRAND THEFT"
     assert "$5,000.00" in widgets.get("BondAmountCharge1", "")
     doc.close()
+
+
+def test_generate_appearance_bonds_singular_charge_key():
+    """Batch/dashboard paths pass singular `charge`, not plural `charges`."""
+    test_data = {
+        "name": "Jane Doe",
+        "booking_number": "BK-999",
+        "county": "Lee",
+        "bond_amount": 3500,
+        "charge": "POSSESSION OF CONTROLLED SUBSTANCE",
+        "bond_date": "07/25/2026",
+        "poa_number": "OSI6 20132136",
+        "surety": "osi",
+    }
+    pdfs = generate_appearance_bonds(test_data, template="osi")
+    assert len(pdfs) == 1
+    doc = fitz.open(stream=pdfs[0], filetype="pdf")
+    widgets = {w.field_name: w.field_value for w in doc[0].widgets()}
+    assert "POSSESSION" in (widgets.get("DefCharge1") or "")
+    doc.close()
+
+
+def test_merge_uncollated_bonds_duplicates_pages():
+    base = {
+        "name": "Merge Test",
+        "booking_number": "BK-MERGE",
+        "county": "Lee",
+        "bond_amount": 1000,
+        "charge": "PETIT THEFT",
+        "bond_date": "07/25/2026",
+        "poa_number": "OSI3 20134295",
+        "surety": "osi",
+    }
+    pdf_a = generate_appearance_bond(base)
+    pdf_b = generate_appearance_bond({**base, "charge": "RESISTING WITHOUT VIOLENCE", "poa_number": "OSI3 20134296"})
+    merged = merge_uncollated_bonds([pdf_a, pdf_b], copies_per_charge=2)
+    doc = fitz.open(stream=merged, filetype="pdf")
+    # 2 charges × 2 copies = 4 pages (assuming 1 page per bond)
+    assert doc.page_count == 4
+    doc.close()
+
+
+def test_merge_uncollated_bonds_empty_raises():
+    with pytest.raises(ValueError, match="No PDF pages"):
+        merge_uncollated_bonds([], copies_per_charge=2)
+    with pytest.raises(ValueError, match="No PDF pages"):
+        merge_uncollated_bonds([b"", None], copies_per_charge=2)
