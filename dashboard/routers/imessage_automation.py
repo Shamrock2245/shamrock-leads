@@ -205,6 +205,21 @@ async def manual_poll():
     return result
 
 
+def _phone_match_query(clean_phone: str) -> dict:
+    """Match recipient_phone across common storage formats (+1…, 10-digit, etc.)."""
+    digits = (clean_phone or "").replace("+", "").replace("-", "")
+    last10 = digits[-10:] if len(digits) >= 10 else digits
+    variants = {clean_phone, digits, last10, f"+{digits}", f"+1{last10}", f"1{last10}"}
+    variants = {v for v in variants if v}
+    return {
+        "$or": [
+            {"recipient_phone": {"$in": list(variants)}},
+            # Loose suffix match for legacy rows
+            {"recipient_phone": {"$regex": f"{last10}$"}},
+        ]
+    }
+
+
 @imessage_auto_bp.get("/imessage/thread/{phone}")
 async def get_thread(phone, limit: str = Query(default="100")):
     """Fetch full conversation history for a specific phone number.
@@ -214,12 +229,15 @@ async def get_thread(phone, limit: str = Query(default="100")):
     limit = int(limit)
     clean_phone = format_phone(phone)
     if not clean_phone:
-        return JSONResponse({"error": "Invalid phone number"}, status_code=400)
+        # Fall back to raw digits if format_phone rejects (e.g. partial)
+        digits = "".join(c for c in str(phone) if c.isdigit())
+        if len(digits) >= 10:
+            clean_phone = format_phone(digits[-10:]) or f"+1{digits[-10:]}"
+        else:
+            return JSONResponse({"error": "Invalid phone number"}, status_code=400)
 
     outreach = get_collection("imessage_outreach")
-
-    # Match messages where recipient_phone matches (covers both directions)
-    query = {"recipient_phone": clean_phone}
+    query = _phone_match_query(clean_phone)
 
     docs = []
     async for doc in outreach.find(
@@ -231,7 +249,7 @@ async def get_thread(phone, limit: str = Query(default="100")):
     # Mark inbound messages as read in MongoDB
     if docs:
         await outreach.update_many(
-            {"recipient_phone": clean_phone, "direction": "inbound", "unread": True},
+            {**query, "direction": "inbound", "unread": {"$ne": False}},
             {"$set": {"unread": False}},
         )
 
@@ -364,18 +382,46 @@ async def react_to_message(request: Request):
 
 @imessage_auto_bp.post("/imessage/mark-read")
 async def mark_chat_read(request: Request):
-    """Mark a chat as read."""
-    body = await request.json()
-    chat_guid = body.get("chat_guid", "")
+    """Mark a chat as read (BlueBubbles + MongoDB unread flags).
+
+    Accepts either:
+      - chat_guid: \"any;-;+1…\"
+      - phone / handle: normalized to chat_guid
+    """
+    body = await request.json() or {}
+    chat_guid = (body.get("chat_guid") or "").strip()
+    phone_raw = body.get("phone") or body.get("handle") or ""
+    clean = format_phone(phone_raw) if phone_raw else None
+
+    if not chat_guid and clean:
+        chat_guid = f"any;-;{clean}"
     if not chat_guid:
-        return JSONResponse({"error": "chat_guid is required"}, status_code=400)
+        return JSONResponse(
+            {"error": "chat_guid or phone/handle is required"}, status_code=400
+        )
+
+    # Always clear unread in Mongo for this conversation
+    if clean or phone_raw:
+        try:
+            phone_key = clean or format_phone(phone_raw) or phone_raw
+            outreach = get_collection("imessage_outreach")
+            await outreach.update_many(
+                {**_phone_match_query(str(phone_key)), "direction": "inbound"},
+                {"$set": {"unread": False}},
+            )
+        except Exception as exc:
+            logger.warning("mark-read Mongo update failed: %s", exc)
 
     client = _get_bb_client()
     if not client:
-        return JSONResponse({"error": "BlueBubbles not configured"}, status_code=503)
+        # Still success for dashboard — Mongo flags cleared
+        return {"success": True, "bb": False, "chat_guid": chat_guid}
 
     result = await client.mark_read(chat_guid)
-    return result, 200 if result.get("success") else 502
+    if isinstance(result, dict):
+        result.setdefault("chat_guid", chat_guid)
+        return result if result.get("success") else JSONResponse(result, status_code=502)
+    return result
 
 
 @imessage_auto_bp.post("/imessage/typing")
@@ -592,7 +638,7 @@ async def _poll_inbox_once() -> dict:
 
         if bond:
             matched += 1
-            # Run agent brain
+            # Run agent brain (logs inbound + optional auto-reply)
             agent_result = await process_inbound(
                 phone=sender_phone,
                 message_text=msg_text,
@@ -607,8 +653,32 @@ async def _poll_inbox_once() -> dict:
             if agent_result.get("responded"):
                 replied += 1
 
-            # Post Slack alert
+            await outreach_coll.update_one(
+                {"bb_message_guid": msg_guid},
+                {"$set": {"unread": True, "source": "poll", "category": agent_result.get("intent") or "general"}},
+            )
             _post_slack_alert(bond, sender_phone, msg_text, agent_result)
+
+            # Push to open dashboard threads
+            try:
+                from dashboard.routers.events import publish_event
+                await publish_event("message_received", {
+                    "phone": sender_phone,
+                    "phone_last4": sender_phone[-4:],
+                    "booking_number": bond.get("booking_number", ""),
+                    "defendant_name": bond.get("defendant_name", ""),
+                    "message": msg_text[:120],
+                    "preview": msg_text[:80],
+                    "matched": True,
+                })
+                await publish_event("new_reply", {
+                    "phone": sender_phone,
+                    "defendant_name": bond.get("defendant_name", ""),
+                    "message": msg_text[:120],
+                    "preview": msg_text[:80],
+                })
+            except Exception:
+                pass
         else:
             # Log unmatched inbound for manual review
             await outreach_coll.insert_one({
@@ -619,10 +689,24 @@ async def _poll_inbox_once() -> dict:
                 "content_hash": chash,
                 "direction": "inbound",
                 "status": "unmatched",
+                "unread": True,
+                "category": "general",
                 "sent_at": datetime.now(timezone.utc).isoformat(),
                 "sent_by": "unknown_lead",
+                "source": "poll",
             })
             logger.info("❓ Unmatched inbound from %s: %s", sender_phone[-4:], msg_text[:50])
+            try:
+                from dashboard.routers.events import publish_event
+                await publish_event("message_received", {
+                    "phone": sender_phone,
+                    "phone_last4": sender_phone[-4:],
+                    "message": msg_text[:120],
+                    "preview": msg_text[:80],
+                    "matched": False,
+                })
+            except Exception:
+                pass
 
     # Update poll timestamp
     await _update_config({"last_poll_at": datetime.now(timezone.utc).isoformat()})

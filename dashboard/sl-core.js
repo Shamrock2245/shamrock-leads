@@ -475,22 +475,31 @@ function initSSE() {
   es.addEventListener('message_received', (e) => {
     try {
       const data = JSON.parse(e.data);
-      toast(`📱 Message from ${data.from || 'unknown'}`, 'info');
-      _addActivity('📱', `iMessage from ${data.from || ''}: ${(data.text || '').slice(0, 60)}`, 'info');
+      const who = data.phone || data.from || 'unknown';
+      const preview = data.message || data.preview || data.text || data.body || '';
+      toast(`📱 Message from …${String(who).slice(-4)}`, 'info');
+      _addActivity('📱', `iMessage from …${String(who).slice(-4)}: ${String(preview).slice(0, 60)}`, 'info');
       _incrementBadge('prospective');
       if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('message_received', data);
-      _desktopNotif('📱 New iMessage', `From ${data.from || 'contact'}: ${(data.text || '').slice(0, 80)}`);
+      // Live-update the iMessage Control Center thread + sidebar
+      if (typeof SLiMessage !== 'undefined' && typeof SLiMessage.onInboundMessage === 'function') {
+        SLiMessage.onInboundMessage(data);
+      }
+      _desktopNotif('📱 New iMessage', `From …${String(who).slice(-4)}: ${String(preview).slice(0, 80)}`);
     } catch(_) {}
   });
 
   es.addEventListener('sms_received', (e) => {
     try {
       const data = JSON.parse(e.data);
-      toast(`💬 SMS from ${data.from || 'unknown'}`, 'info');
-      _addActivity('💬', `SMS from ${data.from || ''}: ${(data.body || '').slice(0, 60)}`, 'info');
+      toast(`💬 SMS from ${data.from || data.phone || 'unknown'}`, 'info');
+      _addActivity('💬', `SMS from ${data.from || data.phone || ''}: ${(data.body || data.message || '').slice(0, 60)}`, 'info');
       _incrementBadge('prospective');
       if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('sms_received', data);
-      _desktopNotif('💬 New SMS', `From ${data.from || 'contact'}: ${(data.body || '').slice(0, 80)}`);
+      if (typeof SLiMessage !== 'undefined' && typeof SLiMessage.onInboundMessage === 'function') {
+        SLiMessage.onInboundMessage(data);
+      }
+      _desktopNotif('💬 New SMS', `From ${data.from || data.phone || 'contact'}: ${(data.body || data.message || '').slice(0, 80)}`);
     } catch(_) {}
   });
 
@@ -498,13 +507,16 @@ function initSSE() {
   es.addEventListener('new_reply', (e) => {
     try {
       const data = JSON.parse(e.data);
-      const name = data.defendant_name || data.from || 'contact';
+      const name = data.defendant_name || data.from || data.phone || 'contact';
       toast(`🔔 New reply from ${name}`, 'success');
-      _addActivity('🔔', `New reply: ${name} — ${(data.message || data.text || '').slice(0, 60)}`, 'success');
+      _addActivity('🔔', `New reply: ${name} — ${(data.message || data.text || data.preview || '').slice(0, 60)}`, 'success');
       _incrementBadge('prospective');
       if (typeof SLProspective !== 'undefined') SLProspective.handleSSEEvent('new_reply', data);
+      if (typeof SLiMessage !== 'undefined' && typeof SLiMessage.onInboundMessage === 'function') {
+        SLiMessage.onInboundMessage(data);
+      }
       playHotAlert();
-      _desktopNotif('🔔 New Reply!', `${name}: ${(data.message || data.text || '').slice(0, 80)}`);
+      _desktopNotif('🔔 New Reply!', `${name}: ${(data.message || data.text || data.preview || '').slice(0, 80)}`);
     } catch(_) {}
   });
 

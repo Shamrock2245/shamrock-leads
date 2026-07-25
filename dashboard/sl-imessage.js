@@ -432,6 +432,55 @@ window.SLiMessage = (() => {
     return `${h}h ${m}m`;
   }
 
+  /* ── Phone normalize (match thread even if formats differ) ─────────────── */
+  function _digits(p) {
+    return String(p || '').replace(/\D/g, '');
+  }
+  function _phonesMatch(a, b) {
+    const da = _digits(a), db = _digits(b);
+    if (!da || !db) return false;
+    if (da === db) return true;
+    const ta = da.length >= 10 ? da.slice(-10) : da;
+    const tb = db.length >= 10 ? db.slice(-10) : db;
+    return ta === tb;
+  }
+
+  /**
+   * Called from SSE (message_received / new_reply / sms_received).
+   * Refreshes sidebar and, if that conversation is open, reloads the thread
+   * so the reply appears in the chat bubble view immediately.
+   */
+  function onInboundMessage(data) {
+    if (!data || typeof data !== 'object') return;
+    const phone = data.phone || data.from || data.recipient_phone || '';
+    const preview = data.message || data.preview || data.text || data.body || '';
+
+    // Optimistic bubble first if this conversation is open
+    if (_state.activeThread && phone && _phonesMatch(_state.activeThread, phone) && preview) {
+      _appendInboundBubble(preview, data.sent_at || data.timestamp);
+    }
+    // Refresh sidebar + open thread (loadInbox reloads active thread)
+    loadInbox();
+  }
+
+  function _appendInboundBubble(text, ts) {
+    const threadView = $('bbThreadMessages');
+    if (!threadView || !text) return;
+    const dateObj = ts ? new Date(ts) : new Date();
+    const time = !isNaN(dateObj) ? dateObj.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
+    // Avoid double-append of identical last bubble
+    const last = threadView.querySelector('.im-bubble-row.inbound:last-child .im-bubble');
+    if (last && last.textContent === text) return;
+    threadView.insertAdjacentHTML('beforeend', `
+      <div class="im-bubble-row inbound">
+        <div>
+          <div class="im-bubble">${_esc(text)}</div>
+          <div class="im-bubble-meta">${time ? `<span>${time}</span>` : ''}<span class="im-bubble-status">new</span></div>
+        </div>
+      </div>`);
+    threadView.scrollTop = threadView.scrollHeight;
+  }
+
   /* ── Inbox ─────────────────────────────────────────────────────────────── */
   async function loadInbox() {
     const { ok, data } = await safeFetch('/api/imessage/inbox?limit=50');
@@ -439,6 +488,10 @@ window.SLiMessage = (() => {
       _state.inbox = Array.isArray(data) ? data : (data.messages || data.chats || []);
       updateInboxBadge();
       renderInbox();
+      // Keep open thread in sync on periodic poll (catches poller path without SSE)
+      if (_state.activeThread) {
+        _loadThread(_state.activeThread, _state.activeThreadName || fmtPhone(_state.activeThread));
+      }
     }
   }
 
@@ -670,12 +723,16 @@ window.SLiMessage = (() => {
   }
 
   async function markRead(handle) {
+    // API accepts phone handle or full chat_guid
+    const chat_guid = (handle && String(handle).includes(';-;'))
+      ? handle
+      : `any;-;${handle}`;
     await safeFetch('/api/imessage/mark-read', {
       method: 'POST',
-      body: JSON.stringify({ handle }),
+      body: JSON.stringify({ handle, chat_guid, phone: handle }),
     });
     _state.inbox = _state.inbox.map(m =>
-      (m.recipient_phone||m.handle||m.address||m.chat_identifier) === handle
+      _phonesMatch(m.recipient_phone || m.handle || m.address || m.chat_identifier, handle)
         ? { ...m, unread: false, is_unread: false }
         : m
     );
@@ -1070,6 +1127,7 @@ window.SLiMessage = (() => {
     toggle, setStcMode, setFilter,
     saveAutoReplyConfig,
     updateTunnelUrl,
+    onInboundMessage,
     _restartMessages,
     refresh() { loadHealth(); loadInbox(); loadFindMy(); },
   };

@@ -197,8 +197,23 @@ async def _handle_new_message(event_data: dict, db) -> dict:
     if bb_server:
         bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
 
+    # Prefer BlueBubbles dateCreated (ms) for correct thread ordering
+    sent_at = datetime.now(timezone.utc).isoformat()
+    if isinstance(msg_date_ms, (int, float)) and msg_date_ms > 0:
+        try:
+            # BB dateCreated is often Apple Cocoa ns since 2001 or unix ms — try ms first
+            ts = float(msg_date_ms)
+            if ts > 1e14:  # nanoseconds-ish
+                ts = ts / 1e6
+            if ts > 1e12:  # already ms
+                sent_at = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).isoformat()
+            elif ts > 1e9:  # seconds
+                sent_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        except (OSError, OverflowError, ValueError):
+            pass
+
     if bond:
-        # Run the AI agent brain
+        # Run the AI agent brain (also logs inbound + optional auto-reply to Mongo)
         config_coll = get_collection("outreach_config")
         config = await config_coll.find_one({"type": "auto_reply"}, {"_id": 0}) or {}
 
@@ -214,11 +229,13 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             content_hash=chash,
         )
 
-        # Log the inbound message
-        # Map intent → category for the iMessage inbox UI
+        # process_inbound already inserted the inbound row — enrich it for inbox UI
         _intent = agent_result.get("intent", "")
         _category_map = {
             "intake_inquiry": "intake",
+            "interested": "intake",
+            "question": "intake",
+            "info_provided": "intake",
             "checkin": "checkin",
             "check_in": "checkin",
             "geo_response": "geo",
@@ -226,30 +243,27 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "court": "court",
         }
         _category = _category_map.get(_intent, "general")
-        await outreach_coll.insert_one({
-            "recipient_phone": sender_phone,
-            "message": msg_text,
-            "chat_guid": chat_guid,
-            "bb_message_guid": msg_guid,
-            "content_hash": chash,
-            "direction": "inbound",
-            "status": "processed",
-            "booking_number": bond.get("booking_number", ""),
-            "intent": _intent,
-            "category": _category,
-            "responded": agent_result.get("responded", False),
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-            "source": "webhook",
-        })
+        await outreach_coll.update_one(
+            {"bb_message_guid": msg_guid},
+            {"$set": {
+                "category": _category,
+                "unread": True,
+                "source": "webhook",
+                "contact_name": bond.get("defendant_name") or bond.get("indemnitor", {}).get("name") or "",
+                "booking_number": bond.get("booking_number", ""),
+                "responded": agent_result.get("responded", False),
+                "sent_at": sent_at,
+            }},
+            upsert=False,
+        )
 
         logger.info(
             "📨 Webhook: inbound from %s → intent=%s responded=%s",
             sender_phone[-4:], agent_result.get("intent"), agent_result.get("responded")
         )
 
-        # Real-time dashboard events — sl-core.js + SLProspective listen for
-        # 'message_received' (inbox refresh) and 'new_reply' (prospect badge +
-        # hot alert). A matched inbound on an active prospective bond is a reply.
+        # Real-time dashboard events — SLiMessage.onInboundMessage refreshes
+        # the open thread so replies appear in the conversation immediately.
         try:
             from dashboard.routers.events import publish_event
             _evt_payload = {
@@ -263,6 +277,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
                 "category": _category,
                 "responded": agent_result.get("responded", False),
                 "matched": True,
+                "sent_at": sent_at,
             }
             await publish_event("message_received", _evt_payload)
             await publish_event("new_reply", _evt_payload)
@@ -272,7 +287,7 @@ async def _handle_new_message(event_data: dict, db) -> dict:
         return {"processed": True, "matched": True, "agent_result": agent_result}
 
     else:
-        # Unmatched inbound — log for manual review
+        # Unmatched inbound — log for manual review (single insert)
         await outreach_coll.insert_one({
             "recipient_phone": sender_phone,
             "message": msg_text,
@@ -282,21 +297,22 @@ async def _handle_new_message(event_data: dict, db) -> dict:
             "direction": "inbound",
             "status": "unmatched",
             "category": "general",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "unread": True,
+            "sent_at": sent_at,
             "source": "webhook",
         })
         logger.info("❓ Webhook: unmatched inbound from %s: %s", sender_phone[-4:], msg_text[:50])
 
-        # Real-time dashboard event — unmatched inbound still surfaces in the
-        # inbox so staff can triage new numbers (frontend 'message_received').
         try:
             from dashboard.routers.events import publish_event
             await publish_event("message_received", {
                 "phone_last4": sender_phone[-4:] if sender_phone else "",
                 "phone": sender_phone,
+                "message": msg_text[:120],
                 "preview": msg_text[:80],
                 "category": "general",
                 "matched": False,
+                "sent_at": sent_at,
             })
         except Exception:
             pass
