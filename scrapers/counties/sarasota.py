@@ -331,12 +331,13 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
 
             bond_amount, bond_type = self._split_bond(bond_raw)
             first, middle, last = self._split_name(full_name)
-            # City from slug: jaron-moss-of-sarasota → sarasota
+            # City from slug: jaron-moss-of-sarasota-7 → Sarasota
             city = ""
             slug = post.get("slug") or ""
             cm = re.search(r"-of-([a-z0-9-]+)/?$", slug)
             if cm:
-                city = cm.group(1).replace("-", " ").title()
+                raw_city = re.sub(r"-\d+$", "", cm.group(1))
+                city = raw_city.replace("-", " ").title()
 
             detail_url = post.get("link") or ""
             status = "In Custody"
