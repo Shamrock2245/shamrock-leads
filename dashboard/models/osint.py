@@ -25,6 +25,7 @@ class EngineType(str, Enum):
     sherlock = "sherlock"
     blackbird = "blackbird"
     spiderfoot = "spiderfoot"
+    snoop = "snoop"
 
 
 class ScanStatus(str, Enum):
@@ -150,6 +151,16 @@ class SocialAccount(BaseModel):
     relevance: Relevance = Field(Relevance.unreviewed)
 
 
+class GeoPoint(BaseModel):
+    """A geo-coordinate or location finding (e.g. from Snoop geo plugins or bio parsing)."""
+
+    latitude: float
+    longitude: float
+    source: str = Field("snoop", description="Source tool or site")
+    label: Optional[str] = Field(None, description="Location name or site title")
+    context: Optional[str] = Field(None, description="Context snippet (e.g. bio, post)")
+
+
 class OSINTEntity(BaseModel):
     """A discovered entity from SpiderFoot or other enrichment engines."""
 
@@ -209,6 +220,7 @@ class OSINTScanResult(BaseModel):
     # Results
     accounts: List[SocialAccount] = Field(default_factory=list)
     entities: List[OSINTEntity] = Field(default_factory=list)
+    geo_points: List[GeoPoint] = Field(default_factory=list)
     total_accounts: int = 0
     total_entities: int = 0
     platforms_found: List[str] = Field(default_factory=list)

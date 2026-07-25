@@ -86,6 +86,28 @@ def resolve_sherlock_cmd() -> Optional[str]:
     return None
 
 
+def resolve_snoop_cmd() -> Optional[str]:
+    """Resolve snoop CLI binary or python module."""
+    candidates = [
+        os.getenv("SNOOP_PATH", "").strip(),
+        shutil.which("snoop") or "",
+        "/usr/local/bin/snoop",
+        "/usr/bin/snoop",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+        if importlib.util.find_spec("snoop") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
 def resolve_spiderfoot() -> Optional[str]:
     """Resolve SpiderFoot CLI (sf.py or sfcli.py)."""
     candidates = [
@@ -198,6 +220,23 @@ def probe_tools() -> Dict[str, Any]:
     else:
         spiderfoot_error = "not found — install with: pip install spiderfoot"
 
+    # Snoop
+    snoop_cmd = resolve_snoop_cmd()
+    snoop_ok = False
+    snoop_version = None
+    snoop_error = None
+    snoop_path = None
+    if snoop_cmd == "python-module":
+        snoop_ok = True
+        snoop_path = f"{PYTHON_CMD} -m snoop"
+        snoop_version = "installed (module)"
+    elif snoop_cmd:
+        snoop_ok = True
+        snoop_path = snoop_cmd
+        snoop_version = "installed"
+    else:
+        snoop_error = "not found — install with: pip install snoop-project"
+
     # Blackbird
     blackbird_ok = bool(bb_script and os.path.isfile(bb_script))
     blackbird_error = None
@@ -222,6 +261,12 @@ def probe_tools() -> Dict[str, Any]:
             "version": sherlock_version,
             "error": sherlock_error,
         },
+        "snoop": {
+            "available": snoop_ok,
+            "path": snoop_path or "not found",
+            "version": snoop_version,
+            "error": snoop_error,
+        },
         "blackbird": {
             "available": blackbird_ok,
             "path": bb_script or "not found",
@@ -234,7 +279,7 @@ def probe_tools() -> Dict[str, Any]:
             "version": spiderfoot_version,
             "error": spiderfoot_error,
         },
-        "ready_for_scans": maigret_ok or sherlock_ok or blackbird_ok or spiderfoot_ok,
+        "ready_for_scans": maigret_ok or sherlock_ok or snoop_ok or blackbird_ok or spiderfoot_ok,
         "worker": True,
         "version": "2.0.0",
         "defaults": {
@@ -341,6 +386,51 @@ def parse_sherlock_json(raw: Any) -> List[Dict]:
             "relevance": "unreviewed",
         })
     return accounts
+
+
+def parse_snoop_json(raw: Any) -> tuple[List[Dict], List[Dict]]:
+    """
+    Parse Snoop JSON output.
+    Returns (accounts, geo_points).
+    """
+    accounts: List[Dict] = []
+    geo_points: List[Dict] = []
+    if not raw:
+        return accounts, geo_points
+
+    if isinstance(raw, dict):
+        for site_name, data in raw.items():
+            if site_name in ("statistics", "meta", "summary"):
+                continue
+            if isinstance(data, dict):
+                url = data.get("url") or data.get("link") or data.get("url_user") or ""
+                st = str(data.get("status") or "").lower()
+                if url and (st in ("claimed", "found", "ok", "exists") or data.get("exists", True)):
+                    accounts.append({
+                        "platform": str(site_name),
+                        "url": url,
+                        "username": data.get("username", ""),
+                        "profile_data": data,
+                        "source": "snoop",
+                        "confidence": "found",
+                        "category": _categorize_platform(str(site_name)),
+                        "relevance": "unreviewed",
+                    })
+                # Geo-coordinate extraction (EXIF, bio coordinates, location tags)
+                lat = data.get("latitude") or data.get("lat")
+                lon = data.get("longitude") or data.get("lon") or data.get("lng")
+                if lat is not None and lon is not None:
+                    try:
+                        geo_points.append({
+                            "latitude": float(lat),
+                            "longitude": float(lon),
+                            "source": f"snoop_{site_name}",
+                            "label": str(data.get("location_name") or site_name),
+                            "context": str(data.get("bio") or data.get("context") or ""),
+                        })
+                    except (ValueError, TypeError):
+                        pass
+    return accounts, geo_points
 
 
 def parse_spiderfoot_json(raw: Any) -> tuple[List[Dict], List[Dict]]:

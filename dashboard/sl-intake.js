@@ -20,6 +20,9 @@ const SLIntake = (() => {
   let _currentIntakeId = null;
   let _currentHydration = null;
   let _queue = [];
+  let _sessionDismissedIds = new Set(
+    JSON.parse(sessionStorage.getItem('sl_session_dismissed_intakes') || '[]')
+  );
 
   const SOURCE_ICONS = {
     wix_portal:    '🌐',
@@ -158,6 +161,8 @@ const SLIntake = (() => {
   async function load() {
     const source = document.getElementById('intakeSourceFilter')?.value || '';
     const status = document.getElementById('intakeStatusFilter')?.value || 'pending';
+    const countySelect = document.getElementById('intakeCountyFilter');
+    const selectedCounties = countySelect ? Array.from(countySelect.selectedOptions).map(o => o.value).filter(Boolean) : [];
     const tbody = document.getElementById('intakeQueueBody');
     if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="loading">Loading…</td></tr>';
 
@@ -168,6 +173,7 @@ const SLIntake = (() => {
       const params = new URLSearchParams({ limit: 100 });
       if (source) params.set('source', source);
       if (status && status !== 'all') params.set('status', status);
+      if (selectedCounties.length > 0) params.set('counties', selectedCounties.join(','));
 
       const [queueRes, statsRes] = await Promise.all([
         fetch(`/api/intake/queue?${params}`),
@@ -238,12 +244,17 @@ const SLIntake = (() => {
     const tbody = document.getElementById('intakeQueueBody');
     if (!tbody) return;
 
-    if (!items.length) {
+    const statusFilter = document.getElementById('intakeStatusFilter')?.value;
+    const isDismissedView = statusFilter === 'dismissed';
+
+    const visibleItems = items.filter(item => isDismissedView || !_sessionDismissedIds.has(item.IntakeID));
+
+    if (!visibleItems.length) {
       tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">No intakes found</td></tr>';
       return;
     }
 
-    tbody.innerHTML = items.map(item => {
+    tbody.innerHTML = visibleItems.map(item => {
       const icon = SOURCE_ICONS[item.Source] || '📋';
       const ts = item.Timestamp ? new Date(item.Timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
       const riskColor = RISK_COLORS[item.AI_Risk?.toLowerCase()] || RISK_COLORS[''];
@@ -252,8 +263,16 @@ const SLIntake = (() => {
         : '<span style="color:var(--muted);font-size:11px">—</span>';
       const statusBadge = STATUS_BADGES[item.Status] || item.Status;
 
+      const actions = isDismissedView ? `
+        <button class="btn-sm btn-primary" onclick="SLIntake.restorePermanent('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Restore to Bond Desk">♻️ Restore</button>
+      ` : `
+        <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Open Bond Desk workflow">Open desk</button>
+        <button class="btn-card-action btn-session-dismiss" onclick="event.stopPropagation();SLIntake.dismissSession('${_esc(item.IntakeID)}', this.closest('tr'))" title="Dismiss for this session (reappears on refresh)" aria-label="Dismiss for this session">✕</button>
+        <button class="btn-card-action btn-perm-remove" onclick="event.stopPropagation();SLIntake.confirmPermanentRemove('${_esc(item.IntakeID)}', this.closest('tr'))" title="Remove permanently from Bond Desk" aria-label="Remove permanently from Bond Desk">🗑️</button>
+      `;
+
       return `
-        <tr>
+        <tr data-intake-id="${_esc(item.IntakeID)}">
           <td><span title="${item.SourceLabel || item.Source}">${icon} ${item.SourceLabel || item.Source}</span></td>
           <td style="white-space:nowrap;font-size:12px">${ts}</td>
           <td ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'full_name', '${_esc(item.FullName)}')">
@@ -266,10 +285,7 @@ const SLIntake = (() => {
           <td style="font-family:monospace;font-size:12px">${_esc(item.BookingNumber) || '—'}</td>
           <td>${riskBadge}</td>
           <td>${statusBadge}</td>
-          <td style="white-space:nowrap">
-            <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Open Bond Desk workflow">Open desk</button>
-            <button class="btn-sm" onclick="SLIntake.archive('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px;background:var(--muted);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;margin-left:4px">Archive</button>
-          </td>
+          <td style="white-space:nowrap">${actions}</td>
         </tr>
       `;
     }).join('');
@@ -541,6 +557,65 @@ const SLIntake = (() => {
     if (_currentIntakeId) {
       closeModal();
       await archive(_currentIntakeId);
+    }
+  }
+
+  // ── Session Dismiss & Permanent Soft-Delete ────────────────────────────────
+  function dismissSession(intakeId, el) {
+    if (!intakeId) return;
+    _sessionDismissedIds.add(intakeId);
+    sessionStorage.setItem('sl_session_dismissed_intakes', JSON.stringify(Array.from(_sessionDismissedIds)));
+    const target = el || document.querySelector(`tr[data-intake-id="${intakeId}"]`);
+    if (target) {
+      target.classList.add('card-dismiss-animating');
+      setTimeout(() => { target.remove(); }, 280);
+    }
+    if (typeof SL !== 'undefined' && SL.toast) SL.toast('🙈 Card dismissed for this session', 'info');
+  }
+
+  async function confirmPermanentRemove(intakeId, el) {
+    if (!intakeId) return;
+    if (!confirm(`Permanently remove intake ${intakeId} from Bond Desk?\n\nUnderlying lead data remains preserved in MongoDB for audit history.`)) return;
+    try {
+      const res = await fetch('/api/crm/cards/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_type: 'intake', card_id: intakeId, permanent: true })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const target = el || document.querySelector(`tr[data-intake-id="${intakeId}"]`);
+        if (target) {
+          target.classList.add('card-dismiss-animating');
+          setTimeout(() => { target.remove(); }, 280);
+        }
+        if (typeof SL !== 'undefined' && SL.toast) SL.toast('🗑️ Card permanently removed from Bond Desk', 'success');
+        load();
+      } else {
+        throw new Error(data.error || 'Dismissal failed');
+      }
+    } catch (err) {
+      if (typeof SL !== 'undefined' && SL.toast) SL.toast(`Error: ${err.message}`, 'error');
+    }
+  }
+
+  async function restorePermanent(intakeId) {
+    if (!intakeId) return;
+    try {
+      const res = await fetch('/api/crm/cards/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_type: 'intake', card_id: intakeId })
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (typeof SL !== 'undefined' && SL.toast) SL.toast('♻️ Card restored to Bond Desk', 'success');
+        load();
+      } else {
+        throw new Error(data.error || 'Restore failed');
+      }
+    } catch (err) {
+      if (typeof SL !== 'undefined' && SL.toast) SL.toast(`Error: ${err.message}`, 'error');
     }
   }
 
@@ -927,6 +1002,9 @@ const SLIntake = (() => {
     promoteToBond,
     archive,
     archiveCurrent,
+    dismissSession,
+    confirmPermanentRemove,
+    restorePermanent,
     openManualEntry,
     closeManualModal,
     submitManualEntry,

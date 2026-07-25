@@ -55,16 +55,22 @@ window.SLProspective = (function () {
 
   // ── Load Pipeline Data ─────────────────────────────────────────────────────
   let _showArchived = false;
+  let _sessionDismissedBks = new Set(
+    JSON.parse(sessionStorage.getItem('sl_session_dismissed_leads') || '[]')
+  );
 
   async function load() {
     const status = _showArchived ? 'archived' : ($('prospStatusFilter') ? $('prospStatusFilter').value : 'active');
     const search = $('prospSearch') ? $('prospSearch').value : '';
     const sort = $('prospSortFilter') ? $('prospSortFilter').value : 'updated_desc';
     const repliesOnly = $('prospShowReplies') ? $('prospShowReplies').checked : false;
+    const countySelect = $('prospCountyFilter');
+    const selectedCounties = countySelect ? Array.from(countySelect.selectedOptions).map(o => o.value).filter(Boolean) : [];
     const p = new URLSearchParams({ status });
     if (_stage !== 'all') p.set('stage', _stage);
     if (search) p.set('search', search);
     if (_showArchived) p.set('show_archived', 'true');
+    if (selectedCounties.length > 0) p.set('counties', selectedCounties.join(','));
 
     try {
       const r = await fetch(API + '/api/prospective-bonds?' + p);
@@ -144,7 +150,9 @@ window.SLProspective = (function () {
   // ── Render Kanban Board ────────────────────────────────────────────────────
   function renderBoard() {
     ['contacted', 'negotiating', 'paperwork', 'ready'].forEach(function(stage) {
-      var cards = _data.filter(function(b) { return b.stage === stage; });
+      var cards = _data.filter(function(b) {
+        return b.stage === stage && (!_sessionDismissedBks.has(b.booking_number) || _showArchived);
+      });
       var cap = stage.charAt(0).toUpperCase() + stage.slice(1);
       var col = $('col' + cap);
       var countEl = $('colCount' + cap);
@@ -204,7 +212,13 @@ window.SLProspective = (function () {
     return '<div class="pipeline-card' + (hasNewReply ? ' has-new-reply' : '') + (isSelected ? ' card-selected' : '') + '" data-bk="' + bk + '" data-stage="' + b.stage + '">' +
       '<div class="card-select-wrap"><input type="checkbox" class="card-checkbox"' + (isSelected ? ' checked' : '') + ' onchange="SLProspective.toggleSelect(\'' + bk + '\',this.checked)" onclick="event.stopPropagation()"></div>' +
       '<div class="card-main" onclick="SLProspective.openDetail(\'' + bk + '\')">' +
-        '<div class="pipeline-card-header"><span class="pipeline-card-name">' + (b.defendant_name || 'Unknown') + '</span><span class="pipeline-card-bond">' + money(b.bond_amount) + '</span></div>' +
+        '<div class="pipeline-card-header">' +
+          '<span class="pipeline-card-name">' + (b.defendant_name || 'Unknown') + '</span>' +
+          '<span style="display:inline-flex;align-items:center;gap:4px">' +
+            '<span class="pipeline-card-bond">' + money(b.bond_amount) + '</span>' +
+            '<button class="btn-card-action btn-session-dismiss" title="Dismiss for this session (reappears on refresh)" aria-label="Dismiss for this session" onclick="event.stopPropagation();SLProspective.dismissSession(\'' + bk + '\',this.closest(\'.pipeline-card\'))">✕</button>' +
+          '</span>' +
+        '</div>' +
         '<div class="pipeline-card-meta"><span>' + (b.county || '—') + ' County</span><span class="score-pill ' + scoreCls + '">' + (b.lead_score || 0) + '</span>' + (turnCount > 0 ? '<span class="turn-badge">' + turnCount + '💬</span>' : '') + riskBadge(b) + '</div>' +
         (indName ? '<div class="pipeline-card-ind">👤 ' + indName + '</div>' : '') +
         (indPhone ? '<div class="pipeline-card-ind" style="font-size:11px;color:var(--muted)">📞 ' + indPhone + '</div>' : '') +
@@ -217,9 +231,7 @@ window.SLProspective = (function () {
         advBtn +
         '<button class="cqa-btn cqa-intel" title="AI Intelligence" onclick="event.stopPropagation();SLProspective.showIntel(\'' + bk + '\')">🧠 Intel</button>' +
         '<button class="cqa-btn cqa-view-def" title="View in Defendants tab" onclick="event.stopPropagation();SLProspective.viewInDefendants(\'' + bk + '\')">👤</button>' +
-        (b.status === 'archived'
-          ? '<button class="cqa-btn cqa-restore" title="Restore from archive" onclick="event.stopPropagation();SLProspective.restoreLead(\'' + bk + '\')">♻️</button>'
-          : '<button class="cqa-btn cqa-archive" title="Hide / Archive" onclick="event.stopPropagation();SLProspective.archiveLead(\'' + bk + '\')">🗑️</button>') +
+        '<button class="cqa-btn cqa-archive btn-perm-remove" title="Remove permanently from Bond Desk" aria-label="Remove permanently from Bond Desk" onclick="event.stopPropagation();SLProspective.confirmPermanentRemove(\'' + bk + '\',this.closest(\'.pipeline-card\'))">🗑️</button>' +
       '</div>' +
     '</div>';
   }
@@ -899,6 +911,66 @@ window.SLProspective = (function () {
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 
+  // ── Session Dismiss & Permanent Soft-Delete ────────────────────────────────
+  function dismissSession(bk, el) {
+    if (!bk) return;
+    _sessionDismissedBks.add(bk);
+    sessionStorage.setItem('sl_session_dismissed_leads', JSON.stringify(Array.from(_sessionDismissedBks)));
+    var target = el || document.querySelector('.pipeline-card[data-bk="' + bk + '"]');
+    if (target) {
+      target.classList.add('card-dismiss-animating');
+      setTimeout(function() { target.remove(); renderBoard(); }, 280);
+    }
+    if (typeof toast === 'function') toast('🙈 Lead card dismissed for this session', 'info');
+  }
+
+  async function confirmPermanentRemove(bk, el) {
+    if (!bk) return;
+    if (!confirm('Permanently remove lead ' + bk + ' from Bond Desk?\n\nUnderlying lead data remains preserved in MongoDB for audit history.')) return;
+    try {
+      var r = await fetch(API + '/api/crm/cards/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_type: 'prospective', card_id: bk, permanent: true })
+      });
+      var d = await r.json();
+      if (d.success) {
+        var target = el || document.querySelector('.pipeline-card[data-bk="' + bk + '"]');
+        if (target) {
+          target.classList.add('card-dismiss-animating');
+          setTimeout(function() { target.remove(); load(); }, 280);
+        } else {
+          load();
+        }
+        if (typeof toast === 'function') toast('🗑️ Lead card permanently removed from Bond Desk', 'success');
+      } else {
+        if (typeof toast === 'function') toast(d.error || 'Dismissal failed', 'error');
+      }
+    } catch (err) {
+      if (typeof toast === 'function') toast('Error: ' + err.message, 'error');
+    }
+  }
+
+  async function restorePermanent(bk) {
+    if (!bk) return;
+    try {
+      var r = await fetch(API + '/api/crm/cards/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ card_type: 'prospective', card_id: bk })
+      });
+      var d = await r.json();
+      if (d.success) {
+        if (typeof toast === 'function') toast('♻️ Lead card restored to Bond Desk', 'success');
+        load();
+      } else {
+        if (typeof toast === 'function') toast(d.error || 'Restore failed', 'error');
+      }
+    } catch (err) {
+      if (typeof toast === 'function') toast('Error: ' + err.message, 'error');
+    }
+  }
+
   function toggleArchiveView() {
     _showArchived = !_showArchived;
     var btn = $('prospArchiveToggle');
@@ -1436,6 +1508,7 @@ window.SLProspective = (function () {
     loadAiSuggestions: loadAiSuggestions, useSuggestion: useSuggestion,
     officialize: officialize, promptClose: promptClose,
     archiveLead: archiveLead, restoreLead: restoreLead, bulkArchive: bulkArchive, toggleArchiveView: toggleArchiveView,
+    dismissSession: dismissSession, confirmPermanentRemove: confirmPermanentRemove, restorePermanent: restorePermanent,
     batchStartOutreach: batchStartOutreach, exportPipeline: exportPipeline,
     loadAutoReplyConfig: loadAutoReplyConfig, renderAutoReplyPanel: renderAutoReplyPanel, updateAutoReply: updateAutoReply, manualPoll: manualPoll,
     unsendMsg: unsendMsg, editMsg: editMsg, reactMsg: reactMsg,

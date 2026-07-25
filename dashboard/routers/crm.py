@@ -15,6 +15,9 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 
+from typing import Optional
+from pydantic import BaseModel, Field
+
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
@@ -390,3 +393,82 @@ async def crm_search(q: str = Query(default="", min_length=0)):
             {"success": False, "error": str(exc)[:200], "results": []},
             status_code=500,
         )
+
+
+# ── Bond Desk Card Dismissal (Permanent Soft-Delete) ──────────────────────────
+
+class CardDismissRequest(BaseModel):
+    card_type: str = Field(..., description="'intake' or 'prospective' or 'lead'")
+    card_id: str = Field(..., description="ID or booking number of the card")
+    permanent: bool = Field(True, description="True for permanent desk soft-delete")
+    actor: Optional[str] = Field("user", description="User or agent performing dismissal")
+
+
+@crm_bp.post("/cards/dismiss")
+async def dismiss_card(req: CardDismissRequest):
+    """
+    Permanently remove (soft-delete) a card from the user's Bond Desk / Lead board.
+    Underlying lead/defendant record remains stored in MongoDB for audit compliance.
+    """
+    now = datetime.now(timezone.utc)
+    card_type = req.card_type.lower().strip()
+    card_id = req.card_id.strip()
+
+    if card_type in ("intake", "intake_queue"):
+        col = get_collection("intake_queue")
+        res = await col.update_one(
+            {"$or": [{"intake_id": card_id}, {"_id": card_id}]},
+            {"$set": {
+                "desk_dismissed": True,
+                "desk_dismissed_at": now.isoformat(),
+                "desk_dismissed_by": req.actor,
+            }}
+        )
+    elif card_type in ("prospective", "prospective_bonds", "lead"):
+        col = get_collection("prospective_bonds")
+        res = await col.update_one(
+            {"$or": [{"booking_number": card_id}, {"_id": card_id}]},
+            {"$set": {
+                "desk_dismissed": True,
+                "desk_dismissed_at": now.isoformat(),
+                "desk_dismissed_by": req.actor,
+            }}
+        )
+    else:
+        return JSONResponse({"success": False, "error": f"Invalid card_type '{card_type}'"}, status_code=400)
+
+    if res.matched_count == 0:
+        return JSONResponse({"success": False, "error": f"Card '{card_id}' not found in {card_type}"}, status_code=404)
+
+    logger.info(f"[crm] Card permanently dismissed: type={card_type} id={card_id} by={req.actor}")
+    return {"success": True, "card_id": card_id, "card_type": card_type, "desk_dismissed": True}
+
+
+@crm_bp.post("/cards/restore")
+async def restore_card(req: CardDismissRequest):
+    """
+    Restore a permanently dismissed card back to the Bond Desk.
+    """
+    card_type = req.card_type.lower().strip()
+    card_id = req.card_id.strip()
+
+    if card_type in ("intake", "intake_queue"):
+        col = get_collection("intake_queue")
+        res = await col.update_one(
+            {"$or": [{"intake_id": card_id}, {"_id": card_id}]},
+            {"$set": {"desk_dismissed": False, "desk_dismissed_at": None}}
+        )
+    elif card_type in ("prospective", "prospective_bonds", "lead"):
+        col = get_collection("prospective_bonds")
+        res = await col.update_one(
+            {"$or": [{"booking_number": card_id}, {"_id": card_id}]},
+            {"$set": {"desk_dismissed": False, "desk_dismissed_at": None}}
+        )
+    else:
+        return JSONResponse({"success": False, "error": f"Invalid card_type '{card_type}'"}, status_code=400)
+
+    if res.matched_count == 0:
+        return JSONResponse({"success": False, "error": f"Card '{card_id}' not found in {card_type}"}, status_code=404)
+
+    return {"success": True, "card_id": card_id, "card_type": card_type, "desk_dismissed": False}
+

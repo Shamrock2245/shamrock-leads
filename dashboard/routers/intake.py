@@ -321,6 +321,7 @@ async def intake_queue_list(
     status: str = Query(default="pending"),
     limit: int = Query(default=50),
     source: str = Query(default=""),
+    counties: str = Query(default=""),
 ):
     """
     Return pending intakes for the staff dashboard queue.
@@ -333,10 +334,19 @@ async def intake_queue_list(
     source_filter = source
 
     query: dict = {}
-    if status_filter and status_filter != "all":
-        query["status"] = status_filter
+    if status_filter == "dismissed":
+        query["desk_dismissed"] = True
+    else:
+        query["desk_dismissed"] = {"$ne": True}
+        if status_filter and status_filter != "all":
+            query["status"] = status_filter
     if source_filter:
         query["source"] = _normalize_source(source_filter)
+    if counties:
+        county_list = [c.strip() for c in counties.split(",") if c.strip()]
+        if county_list:
+            regex_list = [re.compile(f"^{re.escape(c)}$", re.IGNORECASE) for c in county_list]
+            query["defendant_county"] = {"$in": regex_list}
 
     try:
         cursor = intake_queue.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)

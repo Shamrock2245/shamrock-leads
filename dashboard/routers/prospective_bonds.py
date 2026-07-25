@@ -164,8 +164,8 @@ async def api_prospective_create(request: Request):
 #  GET /api/prospective-bonds  — List with filters
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.get("/prospective-bonds")
-async def api_prospective_list(stage: str = Query(default=""), status: str = Query(default="active"), search: str = Query(default=""), show_archived: str = Query(default="")):
-    """List prospective bonds with optional stage/status/search filters."""
+async def api_prospective_list(stage: str = Query(default=""), status: str = Query(default="active"), search: str = Query(default=""), show_archived: str = Query(default=""), counties: str = Query(default="")):
+    """List prospective bonds with optional stage/status/search/counties filters."""
     try:
         stage = stage.strip()
         status = status.strip()
@@ -175,8 +175,17 @@ async def api_prospective_list(stage: str = Query(default=""), status: str = Que
         col = get_collection("prospective_bonds")
 
         query: dict = {}
+        if status == "dismissed":
+            query["desk_dismissed"] = True
+        else:
+            query["desk_dismissed"] = {"$ne": True}
         if stage:
             query["stage"] = stage
+        if counties:
+            county_list = [c.strip() for c in counties.split(",") if c.strip()]
+            if county_list:
+                regex_list = [re.compile(f"^{re.escape(c)}$", re.IGNORECASE) for c in county_list]
+                query["county"] = {"$in": regex_list}
         if status and status != "all":
             if status == "archived":
                 query["status"] = "archived"

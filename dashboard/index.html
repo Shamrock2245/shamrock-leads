@@ -1650,8 +1650,8 @@
       <h2 style="margin:0;font-size:20px">☘️ Bond Desk</h2>
       <p style="margin:4px 0 0;color:var(--muted);font-size:13px">How the bond is written — not a second outreach queue. Match → packet → <strong>Active Bonds</strong>. Sources: Wix · Telegram · Walk-In · Phone · Manual · Bookmarklet</p>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <select id="intakeSourceFilter" onchange="SLIntake.load()" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="intakeSourceFilter" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px" onkeydown="if(event.key==='Enter') SLIntake.load()">
         <option value="">All Sources</option>
         <option value="wix_portal">🌐 Wix Portal</option>
         <option value="telegram">📱 Telegram</option>
@@ -1660,13 +1660,31 @@
         <option value="manual_entry">✏️ Manual Entry</option>
         <option value="bookmarklet">🔖 Bookmarklet</option>
       </select>
-      <select id="intakeStatusFilter" onchange="SLIntake.load()" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+      <select id="intakeStatusFilter" style="padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px" onkeydown="if(event.key==='Enter') SLIntake.load()">
         <option value="pending">🆕 New</option>
         <option value="in_progress">✍️ Writing</option>
         <option value="promoted">→ Active Bonds</option>
         <option value="all">📋 All</option>
         <option value="archived">Archived</option>
+        <option value="dismissed">🗑️ Desk Dismissed</option>
       </select>
+      <select id="intakeCountyFilter" multiple style="padding:4px 8px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:12px;height:36px;min-width:140px" title="Select one or more counties (hold Ctrl/Cmd for multi-select)" onkeydown="if(event.key==='Enter') SLIntake.load()">
+        <option value="Lee">Lee</option>
+        <option value="Collier">Collier</option>
+        <option value="Charlotte">Charlotte</option>
+        <option value="Sarasota">Sarasota</option>
+        <option value="Hendry">Hendry</option>
+        <option value="DeSoto">DeSoto</option>
+        <option value="Manatee">Manatee</option>
+        <option value="Hillsborough">Hillsborough</option>
+        <option value="Brevard">Brevard</option>
+        <option value="Polk">Polk</option>
+        <option value="Orange">Orange</option>
+        <option value="Miami-Dade">Miami-Dade</option>
+        <option value="Broward">Broward</option>
+        <option value="Palm Beach">Palm Beach</option>
+      </select>
+      <button class="btn-primary" id="intakeApplyFiltersBtn" onclick="SLIntake.load()" style="font-size:13px;padding:8px 14px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer;font-weight:600" title="Apply filter selections (keyboard: Enter)">↵ Enter</button>
       <button class="btn-primary" onclick="SLIntake.openManualEntry()" style="font-size:13px;padding:8px 14px">+ Manual Entry</button>
       <button class="btn-export" onclick="SLIntake.load()" style="font-size:13px;padding:8px 14px">🔄 Refresh</button>
 
