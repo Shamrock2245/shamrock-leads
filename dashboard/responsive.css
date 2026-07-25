@@ -342,3 +342,107 @@ html{scroll-behavior:smooth}
 @media(min-width:1025px){
   .tab-bar{mask-image:none;-webkit-mask-image:none}
 }
+
+/* ═══════════════════════════════════════════════════════
+   iPad Pro & iPad Air (768px – 1366px) — High-Res Stylus / Touch
+   ═══════════════════════════════════════════════════════ */
+@media (min-width: 768px) and (max-width: 1366px) {
+  .header { padding: 14px 24px; gap: 14px; }
+  .container { padding: 20px 24px; max-width: 100%; }
+  
+  /* iPad Pro Grid Layouts */
+  .stats-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .defendant-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+  .pipeline-board { grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .pipeline-summary-cards { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  
+  /* Modals: Centered, spacious for iPad Pro */
+  .modal, .slc-modal-box, .rb-modal, .ab-add-modal {
+    max-width: 92vw !important;
+    max-height: 90vh !important;
+    border-radius: 16px !important;
+    margin: auto !important;
+  }
+  .modal-body, .slc-modal-body, .rb-body { padding: 22px !important; }
+  
+  /* Form Controls: Apple Pencil & Finger friendly touch size */
+  input, select, textarea, .ci-input, .slc-input, .field-input {
+    font-size: 16px !important;
+    min-height: 46px !important;
+    padding: 10px 14px !important;
+    border-radius: 8px !important;
+  }
+  button, .btn-primary, .btn-export, .cqa-btn, .preset-btn {
+    min-height: 44px !important;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   Apple Pencil & E-Signature Pad Compatibility (SignNow & Adobe Acrobat)
+   ═══════════════════════════════════════════════════════ */
+canvas.signature-pad,
+canvas[data-signature],
+.signnow-signature-container,
+.adobe-acrobat-embed-container,
+.signature-canvas,
+#signatureCanvas {
+  touch-action: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  cursor: crosshair;
+}
+
+/* SignNow & Adobe Acrobat Viewer Containers */
+.signnow-embed-frame,
+.adobe-acrobat-frame,
+#signNowEmbedContainer,
+#adobePdfEmbedContainer,
+.signnow-signing-iframe,
+.adobe-pdf-iframe {
+  width: 100%;
+  height: 75vh;
+  min-height: 520px;
+  max-height: 850px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════
+   Explicit Device Mode Class Overrides (Manual & Auto Selection)
+   ═══════════════════════════════════════════════════════ */
+/* iPad Pro / iPad / Tablet Override */
+.device-mode-ipad, .device-mode-android-tablet {
+  input, select, textarea, .ci-input, .slc-input, .field-input {
+    font-size: 16px !important;
+    min-height: 46px !important;
+    touch-action: manipulation;
+  }
+  button, .btn-primary, .btn-export, .cqa-btn, .preset-btn {
+    min-height: 44px !important;
+    touch-action: manipulation;
+  }
+  .defendant-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)) !important; }
+  .pipeline-board { grid-template-columns: repeat(3, 1fr) !important; }
+  .modal, .slc-modal-box, .rb-modal { max-width: 92vw !important; max-height: 90vh !important; border-radius: 16px !important; }
+}
+
+/* iPhone / Android Phone Override */
+.device-mode-iphone, .device-mode-android-phone {
+  input, select, textarea, .ci-input, .slc-input, .field-input {
+    font-size: 16px !important;
+    min-height: 44px !important;
+  }
+  .defendant-grid { grid-template-columns: 1fr !important; }
+  .pipeline-board { grid-template-columns: 1fr !important; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .modal, .slc-modal-box, .rb-modal { max-width: 100vw !important; width: 100vw !important; border-radius: 16px 16px 0 0 !important; }
+}
+
+

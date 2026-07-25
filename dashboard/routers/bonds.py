@@ -1208,7 +1208,15 @@ async def api_appearance_bond_pdf(request: Request):
             "indemnitor_name": _p("indemnitor_name", ""),
         }
 
+        copies_count = int(_p("copies", "1") or "1")
+        if _p("uncollated", "") == "true" or _p("uncollated", "") == "1":
+            copies_count = max(2, copies_count)
+
         pdf_bytes = generate_appearance_bond(data)
+        if copies_count > 1:
+            from dashboard.bond_pdf_service import merge_uncollated_bonds
+            pdf_bytes = merge_uncollated_bonds([pdf_bytes], copies_per_charge=copies_count)
+
         filename = generate_safe_filename(data)
 
         return Response(
@@ -1221,6 +1229,89 @@ async def api_appearance_bond_pdf(request: Request):
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"error": f"PDF generation failed: {str(e)}"}, status_code=500)
+
+
+@bonds_bp.api_route("/appearance-bond-batch", methods=["POST"])
+async def api_appearance_bond_batch(request: Request):
+    """
+    Generate a single merged, print-ready PDF containing all appearance bonds for a defendant,
+    duplicated 2x each (uncollated: Copy 1 Court, Copy 2 Agency File for Charge #1, then Charge #2...).
+    """
+    try:
+        from dashboard.bond_pdf_service import generate_appearance_bonds, merge_uncollated_bonds, generate_safe_filename
+        d = await request.json() or {}
+        surety = d.get("surety", "osi")
+        charges_data = d.get("charges", [])
+        copies = int(d.get("copies", 2))
+
+        pdf_list = []
+        for ch in charges_data:
+            b_data = {
+                "name": d.get("name", ""),
+                "booking_number": d.get("booking", ""),
+                "county": d.get("county", ""),
+                "surety": surety,
+                "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
+                "dob": d.get("dob", ""),
+                "address": d.get("address", ""),
+                "charge": ch.get("charge", ""),
+                "bond_amount": ch.get("bond_amount", d.get("bond", 0)),
+                "case_number": ch.get("case_number", d.get("case_number", "")),
+                "poa_number": ch.get("poa_number", ""),
+            }
+            single_pdf_list = generate_appearance_bonds(b_data, template=surety)
+            if single_pdf_list:
+                pdf_list.append(single_pdf_list[0])
+
+        merged_pdf = merge_uncollated_bonds(pdf_list, copies_per_charge=copies)
+        safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', d.get("name", "defendant"))
+        filename = f"Uncollated_Appearance_Bonds_{surety.upper()}_{safe_name}.pdf"
+
+        # Automatic Filing to Google Drive Case Folder
+        drive_url = ""
+        try:
+            from dashboard.services.google_drive_service import GoogleDriveService
+            drive_service = GoogleDriveService()
+            if drive_service.is_configured:
+                root_folder_id = os.getenv("GOOGLE_DRIVE_CASES_FOLDER_ID", "root")
+                surety_label = "OSI Appearance Bonds" if surety.lower() == "osi" else "Palmetto Appearance Bonds"
+                surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
+                def_folder_name = f"{safe_name}_{d.get('booking', 'no_bk')}"
+                def_folder_id = drive_service.get_or_create_folder(def_folder_name, surety_folder_id)
+                drive_url = drive_service.upload_pdf(merged_pdf, filename, def_folder_id)
+                logger.info(f"[DriveFiling] Automatically filed {filename} to Google Drive: {drive_url}")
+
+                # Update DB record with drive link
+                bk_num = d.get("booking", "")
+                if bk_num:
+                    db = get_db()
+                    await db.active_bonds.update_many(
+                        {"$or": [{"booking_number": bk_num}, {"BookingNumber": bk_num}]},
+                        {"$set": {
+                            "drive_link": drive_url,
+                            "drive_folder_id": def_folder_id,
+                            "filed_to_drive": True,
+                            "updated_at": datetime.now().isoformat()
+                        }}
+                    )
+        except Exception as drive_err:
+            logger.warning(f"[DriveFiling] Drive filing skipped/failed: {drive_err}")
+
+        headers = {
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "x-drive-url",
+            "x-drive-url": drive_url or ""
+        }
+
+        return Response(
+            merged_pdf,
+            mimetype="application/pdf",
+            headers=headers,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"error": f"Batch PDF generation failed: {str(e)}"}, status_code=500)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

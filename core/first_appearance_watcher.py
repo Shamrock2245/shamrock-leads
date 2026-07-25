@@ -72,13 +72,13 @@ _NO_BOND_TYPES = {"NO BOND", "HOLD", "NONE", "DETAINER", "ICE HOLD", "IMMIGRATIO
 # Format: { county: { day_range: (start_hour, start_min, end_hour, end_min) } }
 # "weekday" = Mon-Fri, "weekend" = Sat-Sun
 #
-# Lee County: M-F 10:30-11:30 AM ET, Sat-Sun 9:00-10:30 AM ET
+# Lee County First Appearance: Mon-Fri 10:00 AM ET, Sat-Sun & Holidays 8:30 AM ET
 _ET = ZoneInfo("America/New_York")
 
 _COURT_WINDOWS: Dict[str, Dict[str, Tuple[int, int, int, int]]] = {
     "Lee": {
-        "weekday": (10, 30, 11, 30),   # M-F  10:30 AM - 11:30 AM ET
-        "weekend": (9, 0, 10, 30),      # S-S   9:00 AM - 10:30 AM ET
+        "weekday": (10, 0, 11, 30),   # Mon-Fri 10:00 AM ET
+        "weekend": (8, 30, 10, 30),   # Sat-Sun & Holidays 8:30 AM ET
     },
 }
 

@@ -19,6 +19,70 @@ window.SL_STATE = {
   notifGranted: false,
 };
 
+/* ═══════════════════════════════════════════════════════════
+   Device Auto-Detection & Mode Override Engine (Desktop, iPad Pro, iPhone, Android)
+   ═══════════════════════════════════════════════════════════ */
+const SLDevice = (() => {
+  function detectDevice() {
+    const ua = (navigator.userAgent || '').toLowerCase();
+    const touchPoints = navigator.maxTouchPoints || 0;
+
+    // iPadOS 13+ identifies as Macintosh in userAgent but has touchPoints > 1
+    const isIPad = ua.includes('ipad') || (ua.includes('macintosh') && touchPoints > 1);
+    const isIPhone = ua.includes('iphone') || ua.includes('ipod');
+    const isAndroid = ua.includes('android');
+    const isAndroidTablet = isAndroid && !ua.includes('mobile');
+    const isAndroidPhone = isAndroid && ua.includes('mobile');
+
+    if (isIPad) return 'ipad';
+    if (isIPhone) return 'iphone';
+    if (isAndroidTablet) return 'android-tablet';
+    if (isAndroidPhone) return 'android-phone';
+    return 'desktop';
+  }
+
+  function applyDeviceMode(targetMode) {
+    const mode = (targetMode && targetMode !== 'auto') ? targetMode : detectDevice();
+    document.documentElement.dataset.deviceMode = mode;
+
+    // Update body classes for explicit CSS hooks
+    const root = document.documentElement;
+    root.className = root.className.replace(/\bdevice-mode-\S+/g, '').trim() + ` device-mode-${mode}`;
+
+    const badge = document.getElementById('deviceModeBadge');
+    if (badge) {
+      const icons = { 'ipad': '📱', 'iphone': '📱', 'android-tablet': '🤖', 'android-phone': '🤖', 'desktop': '🖥️' };
+      badge.textContent = icons[mode] || '⚡';
+    }
+    console.log(`[SLDevice] Active Device Mode: ${mode} (Selection: ${targetMode || 'auto'})`);
+  }
+
+  function setMode(mode) {
+    localStorage.setItem('sl_device_mode', mode);
+    applyDeviceMode(mode);
+    if (typeof toast === 'function') {
+      const labels = { 'auto': '⚡ Auto-Detect', 'ipad': '📱 iPad Pro / iPad Mode', 'iphone': '📱 iPhone Mode', 'android-tablet': '🤖 Android Tablet Mode', 'android-phone': '🤖 Android Phone Mode', 'desktop': '🖥️ Desktop Mode' };
+      toast(`Formatted for ${labels[mode] || mode}`, 'info');
+    }
+  }
+
+  function init() {
+    const saved = localStorage.getItem('sl_device_mode') || 'auto';
+    const sel = document.getElementById('deviceModeSelect');
+    if (sel) sel.value = saved;
+    applyDeviceMode(saved);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    setTimeout(init, 50);
+  }
+
+  return { detectDevice, applyDeviceMode, setMode, init };
+})();
+window.SLDevice = SLDevice;
+
 const API = location.origin;
 const PRESETS = {
   swfl: ['Lee (FL)','Collier (FL)','Charlotte (FL)','DeSoto (FL)','Hendry (FL)','Sarasota (FL)','Manatee (FL)'],
@@ -680,13 +744,22 @@ function toggleDefCounty(county, checked) {
   } else if (!checked) {
     SL_STATE.defSelectedCounties = SL_STATE.defSelectedCounties.filter(c => c !== county);
   }
+  // Auto-sort arrestees from newest to oldest
+  SL_STATE.defSort = 'arrest_date';
+  SL_STATE.defOrder = 'desc';
   SL_STATE.defPage = 1;
+
   updateDefCountyLabel();
   buildDefCountyOptions(SL_STATE.counties);
   // Mirror into hidden field for legacy code paths
   const hidden = document.getElementById('defCountyFilter');
   if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
   if (typeof loadDefendants === 'function') loadDefendants();
+
+  // Auto-trigger background scraper if Lee County or any SWFL county checked
+  if (checked && typeof isSwflCountyName === 'function' && isSwflCountyName(county)) {
+    triggerCountyScraperAuto(county);
+  }
 }
 
 function updateDefCountyLabel() {
@@ -727,12 +800,24 @@ function applyDefCountyPreset(name) {
   } else {
     SL_STATE.defSelectedCounties = [...(PRESETS[name] || [])];
   }
+  // Auto-sort arrestees from newest to oldest
+  SL_STATE.defSort = 'arrest_date';
+  SL_STATE.defOrder = 'desc';
   SL_STATE.defPage = 1;
+
   updateDefCountyLabel();
   buildDefCountyOptions(counties);
   const hidden = document.getElementById('defCountyFilter');
   if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
   if (typeof loadDefendants === 'function') loadDefendants();
+
+  // Auto-trigger scrapers when SWFL preset or SWFL counties selected
+  if (name === 'swfl') {
+    const swflList = ['Lee (FL)', 'Collier (FL)', 'Charlotte (FL)', 'DeSoto (FL)', 'Hendry (FL)', 'Sarasota (FL)', 'Manatee (FL)'];
+    swflList.forEach(c => triggerCountyScraperAuto(c));
+  } else if (SL_STATE.defSelectedCounties.length) {
+    SL_STATE.defSelectedCounties.filter(c => typeof isSwflCountyName === 'function' && isSwflCountyName(c)).forEach(c => triggerCountyScraperAuto(c));
+  }
 }
 /** De-dupe bare names against labeled forms: keep "Lee (FL)", drop bare "Lee" when labeled exists. */
 function dedupeCountyList(counties) {
@@ -782,7 +867,17 @@ function buildCountyOptions(counties) {
 function toggleCounty(county, checked) {
   if (checked && !SL_STATE.selectedCounties.includes(county)) SL_STATE.selectedCounties.push(county);
   else SL_STATE.selectedCounties = SL_STATE.selectedCounties.filter(c => c !== county);
+
+  // Auto-sort arrestees from newest to oldest
+  SL_STATE.sort = 'arrest_date';
+  SL_STATE.order = 'desc';
+  SL_STATE.page = 1;
+
   updateCountyLabel(); buildCountyOptions(SL_STATE.counties); applyFilters();
+
+  if (checked && typeof isSwflCountyName === 'function' && isSwflCountyName(county)) {
+    triggerCountyScraperAuto(county);
+  }
 }
 function updateCountyLabel() {
   const el = document.getElementById('countyLabel');
@@ -805,8 +900,24 @@ function applyPreset(name) {
   } else {
     SL_STATE.selectedCounties = [...(PRESETS[name] || [])];
   }
-  event.target.closest('.preset-btn').classList.add('active');
+  if (event && event.target) {
+    const btn = event.target.closest('.preset-btn');
+    if (btn) btn.classList.add('active');
+  }
+
+  // Auto-sort arrestees from newest to oldest
+  SL_STATE.sort = 'arrest_date';
+  SL_STATE.order = 'desc';
+  SL_STATE.page = 1;
+
   buildCountyOptions(SL_STATE.counties); applyFilters();
+
+  if (name === 'swfl') {
+    const swflList = ['Lee (FL)', 'Collier (FL)', 'Charlotte (FL)', 'DeSoto (FL)', 'Hendry (FL)', 'Sarasota (FL)', 'Manatee (FL)'];
+    swflList.forEach(c => triggerCountyScraperAuto(c));
+  } else if (SL_STATE.selectedCounties.length) {
+    SL_STATE.selectedCounties.filter(c => typeof isSwflCountyName === 'function' && isSwflCountyName(c)).forEach(c => triggerCountyScraperAuto(c));
+  }
 }
 
 // ── Filter Helpers ────────────────────────────────────────────────────────
@@ -891,3 +1002,105 @@ function _processToastQueue() {
     setTimeout(_processToastQueue, 300);
   }, 4500);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Rapid Keyboard Navigation (Double-Space & Double-Tab to Next Field)
+   + Native Handwriting to Text & Emoji Helper
+   ═══════════════════════════════════════════════════════════ */
+const SLFormNav = (() => {
+  let lastKey = '';
+  let lastKeyTime = 0;
+  const DOUBLE_KEY_THRESHOLD = 350; // ms
+
+  const EMOJI_MAP = {
+    ':shamrock:': '☘️', ':clover:': '☘️', '☘': '☘️',
+    ':scale:': '⚖️', ':scales:': '⚖️', ':court:': '🏛️',
+    ':bond:': '📜', ':money:': '💵', ':phone:': '📞',
+    ':write:': '✍️', ':warning:': '⚠️', ':alert:': '⏰',
+    ':check:': '✅', ':cross:': '❌', ':star:': '⭐',
+    ':thumb:': '👍', ':thumbsup:': '👍', ':)': '😊', ':(': '🙁'
+  };
+
+  function getFocusableFields(container = document) {
+    const selector = 'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])';
+    return Array.from(container.querySelectorAll(selector)).filter(el => {
+      return el.offsetWidth > 0 && el.offsetHeight > 0 && getComputedStyle(el).visibility !== 'hidden';
+    });
+  }
+
+  function focusNextField(currentEl) {
+    const scope = currentEl.closest('.modal, .slc-modal-box, .panel, .filters, form') || document.body;
+    const fields = getFocusableFields(scope);
+    const index = fields.indexOf(currentEl);
+    if (index >= 0 && index < fields.length - 1) {
+      const next = fields[index + 1];
+      next.focus();
+      if (typeof next.select === 'function' && next.type !== 'button') {
+        try { next.select(); } catch (_) {}
+      }
+    }
+  }
+
+  function handleKeydown(e) {
+    const target = e.target;
+    if (!target || !['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+
+    const now = Date.now();
+    const key = e.key;
+
+    // Check for Rapid Double-Space (Spacebar) or Rapid Double-Tab
+    if (key === ' ' || key === 'Tab') {
+      if (lastKey === key && (now - lastKeyTime) <= DOUBLE_KEY_THRESHOLD) {
+        e.preventDefault();
+        e.stopPropagation();
+        // Trim trailing space if double-space was pressed
+        if (key === ' ' && typeof target.value === 'string' && target.value.endsWith(' ')) {
+          target.value = target.value.slice(0, -1);
+        }
+        focusNextField(target);
+        lastKey = '';
+        lastKeyTime = 0;
+        return;
+      }
+      lastKey = key;
+      lastKeyTime = now;
+    } else {
+      lastKey = '';
+      lastKeyTime = 0;
+    }
+  }
+
+  function handleInput(e) {
+    const target = e.target;
+    if (!target || !['INPUT', 'TEXTAREA'].includes(target.tagName) || typeof target.value !== 'string') return;
+
+    let val = target.value;
+    let modified = false;
+
+    for (const [shortcut, emoji] of Object.entries(EMOJI_MAP)) {
+      if (val.includes(shortcut)) {
+        val = val.replace(shortcut, emoji);
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      target.value = val;
+    }
+  }
+
+  function init() {
+    document.addEventListener('keydown', handleKeydown, true);
+    document.addEventListener('input', handleInput, true);
+    console.log('[SLFormNav] Rapid Double-Space & Double-Tab Field Navigation Active');
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    setTimeout(init, 100);
+  }
+
+  return { init, focusNextField };
+})();
+window.SLFormNav = SLFormNav;

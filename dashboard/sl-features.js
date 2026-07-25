@@ -62,8 +62,17 @@ async function loadDefendants() {
       const slotId = 'defIdSlots_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
       const bondEditId = 'defBondAmt_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
       const bondPillLabel = bond > 0 ? ('$' + bond.toLocaleString()) : '$0 — set bond';
+      const isLeeDef = (l.county || '').toLowerCase().includes('lee');
+      const isNoBondDef = bond === 0 || (l.bond_type || '').toUpperCase().includes('NO BOND') || (l.bond_type || '').toUpperCase().includes('HOLD');
+      const leeBadgeDef = (isLeeDef && isNoBondDef)
+        ? `<div style="margin-top:4px"><span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();refreshDefendantFromSource('${bkEscD}',this)">⏰ 1st App Watch</span></div>`
+        : '';
+      const leeClerkBtn = isLeeDef
+        ? `<button class="btn-detail" style="background:rgba(59,130,246,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.4)" onclick="event.stopPropagation();window.open('https://matrix.leeclerk.org/Home/Search?query=${encodeURIComponent(l.case_number || l.booking_number || '')}','_blank')" title="Search Lee County Clerk of Court (leeclerk.org)">🏛️ LeeClerk</button>`
+        : '';
+
       return `<div class="def-card" data-booking="${bkEscD}">
-        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'}</div></div>
+        <div class="def-card-header"><div><div class="def-name">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${leeBadgeDef}</div></div>
           <div class="def-bond-edit-wrap" onclick="event.stopPropagation()">
             <div class="def-bond-pill ${bc} ${bond<=0?'bond-zero':''}" title="Click amount to edit — scrapers often leave $0 until first appearance">${bondPillLabel}</div>
             <div class="def-bond-edit-row">
@@ -89,8 +98,10 @@ async function loadDefendants() {
         <div class="def-card-footer">
           <button class="btn-detail" onclick="event.stopPropagation(); if('${(l.detail_url||'').replace(/'/g,"\\'")}') window.open('${(l.detail_url||'').replace(/'/g,"\\'")}'); else toast('No source booking URL on this record','error')">🔗 Source</button>
           <button class="btn-detail btn-refresh-source" id="btnRefresh_${bondEditId}"
+            style="${isNoBondDef ? 'background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-weight:700' : ''}"
             onclick="event.stopPropagation(); refreshDefendantFromSource('${bkEscD}', this)"
-            title="Re-fetch bond/status from the county booking sheet">🔄 Update</button>
+            title="Re-fetch updated bond info from county booking sheet">⚡ Fetch Bond</button>
+          ${leeClerkBtn}
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
           <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${String(l.booking_number||'')}')">📞 Contact</button>
@@ -451,6 +462,85 @@ function openBondModal(nameOrLead, bond, county, booking) {
   loadOutreachHistory(bkNum);
 }
 
+// ── Power Capacity & Predictive Auto-Fill Helpers ──
+function getPowerCapacity(poaStr) {
+  if (!poaStr) return 0;
+  const clean = poaStr.toUpperCase().replace(/[\s\-_]/g, '');
+  const m = clean.match(/(?:OSI|PSC|PAL|PALMETTO|O'?SHAUGHNAHILL)(\d+)/);
+  if (m) {
+    const val = parseInt(m[1], 10);
+    return val <= 100 ? val * 1000 : val;
+  }
+  return 0;
+}
+
+function recommendPowerTier(surety, chargeAmount) {
+  const tiers = (surety === 'palmetto') ? [5000, 10000, 25000, 50000, 100000] : [5000, 6000, 10000, 25000, 50000, 100000];
+  const pfxMap = (surety === 'palmetto') ? { 5000: 'PSC5', 10000: 'PSC10', 25000: 'PSC25', 50000: 'PSC50', 100000: 'PSC100' } : { 5000: 'OSI5', 6000: 'OSI6', 10000: 'OSI10', 25000: 'OSI25', 50000: 'OSI50', 100000: 'OSI100' };
+  
+  for (const t of tiers) {
+    if (t >= chargeAmount) return pfxMap[t] || (surety === 'palmetto' ? `PSC${t/1000}` : `OSI${t/1000}`);
+  }
+  return (surety === 'palmetto') ? 'PSC100' : 'OSI100';
+}
+
+function predictNextPoaNumber(poaStr, incrementBy = 1) {
+  if (!poaStr) return '';
+  const trimmed = poaStr.trim();
+  const match = trimmed.match(/^(.*?)(\d+)$/);
+  if (!match) return trimmed;
+  const prefix = match[1];
+  const numStr = match[2];
+  const nextNum = parseInt(numStr, 10) + incrementBy;
+  const paddedNum = String(nextNum).padStart(numStr.length, '0');
+  return prefix + paddedNum;
+}
+
+function fillDownCaseNumbers() {
+  const firstInput = document.getElementById('caseNumInput_0');
+  if (!firstInput) return;
+  const val = firstInput.value.trim();
+  const inputs = document.querySelectorAll('.charge-case-input');
+  inputs.forEach(inp => {
+    inp.value = val;
+  });
+  if (typeof toast === 'function') toast(`Case number "${val}" applied to all charges`, 'info');
+}
+
+function unlockPoaOverride(idx) {
+  const input = document.getElementById(`poaInput_${idx}`);
+  if (input) {
+    delete input.dataset.locked;
+    delete input.dataset.autoFilled;
+    input.value = '';
+    const prevIdx = idx > 0 ? idx - 1 : 0;
+    const prevInput = document.getElementById(`poaInput_${prevIdx}`);
+    if (prevInput) onPoaInputChange(prevInput, prevIdx);
+    if (typeof toast === 'function') toast(`Charge #${idx + 1} POA unlocked — re-synced to sequence`, 'info');
+  }
+}
+
+function autoFillConsecutivePoas(sourceIdx) {
+  const data = window._bondModalData;
+  if (!data || !data.chargeList) return;
+  const sourceInput = document.getElementById(`poaInput_${sourceIdx}`);
+  if (!sourceInput) return;
+
+  const basePoa = sourceInput.value.trim();
+  if (!basePoa) return;
+
+  for (let i = sourceIdx + 1; i < data.chargeList.length; i++) {
+    const targetInput = document.getElementById(`poaInput_${i}`);
+    // Only auto-fill if the target input is NOT manually locked by a custom user override
+    if (targetInput && targetInput.dataset.locked !== 'true') {
+      const predicted = predictNextPoaNumber(basePoa, i - sourceIdx);
+      targetInput.value = predicted;
+      targetInput.dataset.autoFilled = 'true';
+      onPoaInputChange(targetInput, i, true);
+    }
+  }
+}
+
 // ── POA Auto-Population ──
 async function fetchPoaNumbers(surety, bondAmt, chargeList) {
   const loadEl = document.getElementById('poaLoadingMsg');
@@ -475,20 +565,36 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
     const prefix = data.prefix || '';
     const availInTier = data.available_in_tier || 0;
     const availTotal = data.available_total || 0;
+    const defaultCaseNum = (window._bondModalData && window._bondModalData.booking) ? window._bondModalData.booking : '';
+    const perChargeBond = count > 0 ? (bondAmt / count) : bondAmt;
 
-    // Build per-charge POA input rows
-    // If we have fewer suggestions than charges, fill remaining with empty inputs
+    // Build per-charge POA & Case Number input rows
     const poaRows = chargeList.map((ch, i) => {
       const sug = suggested[i];
       const poaFull = sug ? sug.poa_full : '';
       const poaNum  = sug ? sug.poa_number : '';
       const poaPfx  = sug ? sug.poa_prefix : prefix;
+      const fillDownBtn = (i === 0 && count > 1) ? `
+        <button type="button" class="btn-export" style="font-size:10px;padding:2px 6px;margin-left:4px" onclick="fillDownCaseNumbers()" title="Copy Case #1 to all remaining charges">🔽 Fill All</button>
+      ` : '';
+
       return `
-        <div class="poa-charge-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
-          <span style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
-          <span style="flex:1;font-size:11px;color:var(--text)">${ch.length > 50 ? ch.slice(0,50)+'…' : ch}</span>
-          <div style="display:flex;flex-direction:column;gap:2px;min-width:160px">
-            <label style="font-size:10px;color:var(--muted)">POA Number</label>
+        <div class="poa-charge-row" style="display:grid;grid-template-columns:30px 1fr 140px 180px;gap:8px;align-items:center;padding:10px;background:var(--bg);border-radius:6px;border:1px solid var(--border)">
+          <span style="font-size:11px;color:var(--muted);font-weight:700">#${i+1}</span>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:2px">${ch.length > 55 ? ch.slice(0,55)+'…' : ch}</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:10px;color:var(--muted)">Case #:</span>
+              <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${defaultCaseNum}" placeholder="Case #" style="padding:2px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:110px" />
+              ${fillDownBtn}
+            </div>
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>
+            <input type="number" id="chargeAmtInput_${i}" class="charge-amt-input" value="${perChargeBond > 0 ? perChargeBond : ''}" placeholder="Amount" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-weight:600;width:110px" oninput="onPoaInputChange(document.getElementById('poaInput_${i}'), ${i})" />
+          </div>
+          <div>
+            <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">POA Serial # (Consecutive)</label>
             <input
               class="poa-input"
               id="poaInput_${i}"
@@ -497,9 +603,10 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
               data-poa-number="${poaNum}"
               value="${poaFull}"
               placeholder="${prefix} ______"
-              style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:monospace;width:140px"
+              style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-family:monospace;width:160px;font-weight:700"
               oninput="onPoaInputChange(this, ${i})"
             />
+            <div id="poaCapBadge_${i}" style="margin-top:2px"></div>
           </div>
         </div>`;
     });
@@ -510,6 +617,12 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
     window._bondModalData.poaNumbers = chargeList.map((_, i) => {
       const sug = suggested[i];
       return sug ? { poa_full: sug.poa_full, poa_number: sug.poa_number, poa_prefix: sug.poa_prefix } : { poa_full: '', poa_number: '', poa_prefix: prefix };
+    });
+
+    // Validate capacity on initial load
+    chargeList.forEach((_, i) => {
+      const inp = document.getElementById(`poaInput_${i}`);
+      if (inp) onPoaInputChange(inp, i, true);
     });
 
     // Inventory badge
@@ -528,7 +641,6 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
       errEl.style.display = 'block';
       errEl.innerHTML = `⚠️ Could not load inventory: ${e.message}. <a href="#" onclick="fetchPoaNumbers('${surety}',${bondAmt},window._bondModalData.chargeList);return false">Retry</a> or enter POA numbers manually below.`;
     }
-    // Show empty manual inputs as fallback
     if (listEl) {
       listEl.innerHTML = chargeList.map((ch, i) => `
         <div class="poa-charge-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
@@ -542,16 +654,49 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
   }
 }
 
-function onPoaInputChange(input, idx) {
-  // Update the stored poa number when user manually edits
+function onPoaInputChange(input, idx, isAutoFill = false) {
+  if (!input) return;
   const val = input.value.trim();
+
+  // Lock field if user typed manually (preventing auto-overwrites from upstream edits)
+  if (!isAutoFill && val) {
+    input.dataset.locked = 'true';
+  } else if (!val) {
+    delete input.dataset.locked;
+  }
+
+  // Update stored poa number
   if (window._bondModalData && window._bondModalData.poaNumbers) {
     window._bondModalData.poaNumbers[idx] = {
       poa_full: val,
-      poa_number: val.includes(' ') ? val.split(' ').pop() : val,
-      poa_prefix: val.includes(' ') ? val.split(' ')[0] : (input.dataset.poaPrefix || ''),
+      poa_number: val.includes('-') ? val.split('-').pop() : (val.includes(' ') ? val.split(' ').pop() : val),
+      poa_prefix: val.includes('-') ? val.split('-')[0] : (val.includes(' ') ? val.split(' ')[0] : (input.dataset.poaPrefix || ''))
     };
   }
+
+  // Validate liability capacity for this charge
+  const amtInput = document.getElementById(`chargeAmtInput_${idx}`);
+  const chargeAmt = amtInput ? (parseFloat(amtInput.value) || 0) : (window._bondModalData ? window._bondModalData.bond : 0);
+  const cap = getPowerCapacity(val);
+  const badgeEl = document.getElementById(`poaCapBadge_${idx}`);
+  const surety = window._bondModalData ? window._bondModalData.surety : 'osi';
+
+  if (badgeEl) {
+    let html = '';
+    if (input.dataset.locked === 'true') {
+      html += `<span onclick="unlockPoaOverride(${idx})" style="cursor:pointer;color:#93c5fd;font-size:10px;font-weight:700;margin-right:6px;background:rgba(59,130,246,0.2);padding:1px 5px;border-radius:4px" title="Manually overridden — click to unlock and re-sync to sequence">🔒 Custom (Unlock)</span>`;
+    }
+    if (val && cap > 0 && chargeAmt > cap) {
+      const recPfx = recommendPowerTier(surety, chargeAmt);
+      html += `<span style="color:#f87171;font-size:10px;font-weight:700">⚠️ $${chargeAmt.toLocaleString()} > $${cap.toLocaleString()} capacity · Recommend ${recPfx}</span>`;
+    } else if (val && cap > 0) {
+      html += `<span style="color:#4ade80;font-size:10px">✅ Covers up to $${cap.toLocaleString()}</span>`;
+    }
+    badgeEl.innerHTML = html;
+  }
+
+  // Auto-increment consecutive POAs for subsequent unlocked inputs
+  autoFillConsecutivePoas(idx);
 }
 
 function editBond(chargeEncoded, idx) {
@@ -593,24 +738,79 @@ function downloadBond(chargeEncoded, idx) {
   const charge = decodeURIComponent(chargeEncoded);
   const surety = data.surety;
   const poaEntry = (data.poaNumbers && data.poaNumbers[idx - 1]) || {};
-  // Read live value from input in case user overrode it
   const inputEl = document.getElementById(`poaInput_${idx - 1}`);
   const poaFull = (inputEl ? inputEl.value.trim() : '') || poaEntry.poa_full || '';
+  const caseInp = document.getElementById(`caseNumInput_${idx - 1}`);
+  const caseNum = (caseInp ? caseInp.value.trim() : '') || data.booking || '';
+  const amtInp = document.getElementById(`chargeAmtInput_${idx - 1}`);
+  const chargeAmt = amtInp ? (parseFloat(amtInp.value) || 0) : data.bond;
+
   const params = new URLSearchParams({
     name: data.name, booking: data.booking, county: data.county,
-    bond: data.bond, charge, surety, date: data.date,
+    bond: chargeAmt, charge, surety, date: data.date,
     dob: data.lead.dob || '', address: data.lead.address || '',
+    case_number: caseNum,
     poa_number: poaFull,
+    copies: '2',
+    uncollated: 'true'
   });
   window.open(`${API}/api/appearance-bond-pdf?${params}`, '_blank');
 }
 
-function downloadAllBonds() {
+async function downloadAllBonds(copiesPerCharge = 2) {
   const data = window._bondModalData;
-  if (!data) return;
-  data.chargeList.forEach((ch, i) => {
-    setTimeout(() => downloadBond(encodeURIComponent(ch), i+1), i * 400);
-  });
+  if (!data || !data.chargeList) return;
+
+  const payload = {
+    name: data.name,
+    booking: data.booking,
+    county: data.county,
+    surety: data.surety,
+    date: data.date,
+    dob: data.lead.dob || '',
+    address: data.lead.address || '',
+    copies: copiesPerCharge,
+    charges: data.chargeList.map((ch, i) => {
+      const poaInp = document.getElementById(`poaInput_${i}`);
+      const caseInp = document.getElementById(`caseNumInput_${i}`);
+      const amtInp = document.getElementById(`chargeAmtInput_${i}`);
+      return {
+        charge: ch,
+        poa_number: (poaInp ? poaInp.value.trim() : '') || (data.poaNumbers[i] ? data.poaNumbers[i].poa_full : ''),
+        case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
+        bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : data.bond
+      };
+    })
+  };
+
+  try {
+    if (typeof toast === 'function') toast(`Generating ${data.chargeList.length} bond package (2x each, uncollated)...`, 'info');
+    const res = await fetch(`${API}/api/appearance-bond-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`Batch generation failed (${res.status})`);
+    const driveUrl = res.headers.get('x-drive-url') || '';
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const safeName = (data.name || 'defendant').replace(/[^A-Za-z0-9_-]/g, '_');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Uncollated_Appearance_Bonds_${(data.surety||'osi').toUpperCase()}_${safeName}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    let msg = '🖨️ PDF package ready for uncollated printing!';
+    if (driveUrl) {
+      msg += ` · 📁 <a href="${driveUrl}" target="_blank" style="color:#c084fc;text-decoration:underline">Filed to Drive</a>`;
+    }
+    if (typeof toast === 'function') toast(msg, 'success');
+  } catch (err) {
+    if (typeof toast === 'function') toast(`Error: ${err.message}`, 'error');
+  }
 }
 
 function selectSurety(s) {

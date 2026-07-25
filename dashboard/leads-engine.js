@@ -71,10 +71,49 @@ function buildCountyOptions(counties) {
   }).join('');
   updateCountyLabel();
 }
+const SWFL_COUNTIES_LIST = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
+
+function isSwflCountyName(county) {
+  if (!county) return false;
+  const bare = String(county).replace(/\s*\([A-Za-z]{2}\)$/, '').trim().toLowerCase();
+  return SWFL_COUNTIES_LIST.map(c => c.toLowerCase()).includes(bare);
+}
+
+async function triggerCountyScraperAuto(county) {
+  if (!county) return;
+  const countyClean = String(county).trim();
+  try {
+    const res = await fetch('/api/scraper/run-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ county: countyClean })
+    });
+    const data = await res.json();
+    console.log(`[AutoScraper] Auto-triggered scraper run for ${countyClean}:`, data.message || data);
+  } catch (err) {
+    console.warn(`[AutoScraper] Could not auto-trigger scraper for ${countyClean}:`, err);
+  }
+}
+
 function toggleCounty(county, checked) {
   if (checked && !state.selectedCounties.includes(county)) state.selectedCounties.push(county);
   else state.selectedCounties = state.selectedCounties.filter(c => c !== county);
+
+  // Auto-sort arrestees from newest to oldest when any county is picked
+  state.sort = 'arrest_date';
+  state.order = 'desc';
+  state.page = 1;
+
+  document.querySelectorAll('th[data-sort]').forEach(th => { th.classList.remove('sort-asc','sort-desc'); });
+  const th = document.querySelector('th[data-sort="arrest_date"]');
+  if (th) th.classList.add('sort-desc');
+
   updateCountyLabel(); buildCountyOptions(state.counties); applyFilters();
+
+  // If Lee County or any SWFL county is checked, automatically run scraper update
+  if (checked && isSwflCountyName(county)) {
+    triggerCountyScraperAuto(county);
+  }
 }
 function updateCountyLabel() {
   const el = document.getElementById('countyLabel');
@@ -89,10 +128,34 @@ function filterCountyOptions(q) {
 }
 function applyPreset(name) {
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
-  if (name === 'all' || name === 'none') state.selectedCounties = [];
-  else state.selectedCounties = [...PRESETS[name]];
-  event.target.closest('.preset-btn').classList.add('active');
+  if (name === 'all' || name === 'none') {
+    state.selectedCounties = [];
+  } else {
+    state.selectedCounties = [...(PRESETS[name] || [])];
+  }
+  if (event && event.target) {
+    const btn = event.target.closest('.preset-btn');
+    if (btn) btn.classList.add('active');
+  }
+
+  // Auto-sort arrestees from newest to oldest when preset is picked
+  state.sort = 'arrest_date';
+  state.order = 'desc';
+  state.page = 1;
+
+  document.querySelectorAll('th[data-sort]').forEach(th => { th.classList.remove('sort-asc','sort-desc'); });
+  const th = document.querySelector('th[data-sort="arrest_date"]');
+  if (th) th.classList.add('sort-desc');
+
   buildCountyOptions(state.counties); applyFilters();
+
+  // Auto-trigger scrapers when SWFL preset or SWFL counties are selected
+  if (name === 'swfl') {
+    const swflDefaults = ['Lee (FL)', 'Collier (FL)', 'Charlotte (FL)', 'DeSoto (FL)', 'Hendry (FL)', 'Sarasota (FL)', 'Manatee (FL)'];
+    swflDefaults.forEach(c => triggerCountyScraperAuto(c));
+  } else if (state.selectedCounties.length) {
+    state.selectedCounties.filter(isSwflCountyName).forEach(c => triggerCountyScraperAuto(c));
+  }
 }
 
 // ── Date Range ──
@@ -181,17 +244,34 @@ function renderLeads() {
     const fta = ftaBadge(l);
     const st = (l.state || 'FL').toUpperCase();
     const stColor = stateColors[st] || '#64748b';
+    const isLee = (l.county || '').toLowerCase().includes('lee');
+    const isNoBond = bond === 0 || (l.bond_type || '').toUpperCase().includes('NO BOND') || (l.bond_type || '').toUpperCase().includes('HOLD');
+    const bkNum = (l.booking_number || '').replace(/'/g, "\\'");
+    const leeQuery = encodeURIComponent(l.case_number || l.booking_number || '');
+
+    const bondDisplay = isNoBond
+      ? `$0 <button class="btn-sm" style="background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;cursor:pointer;margin-left:4px" onclick="event.stopPropagation();refreshDefendantFromSource('${bkNum}',this)" title="Re-fetch updated bond info from source">⚡ Fetch Bond</button>`
+      : `$${bond.toLocaleString()}`;
+
+    const leeBadge = (isLee && isNoBond)
+      ? `<br><span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;margin-top:2px;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();refreshDefendantFromSource('${bkNum}',this)">⏰ 1st App Watch</span>`
+      : '';
+
+    const leeClerkLink = isLee
+      ? `<a href="https://matrix.leeclerk.org/Home/Search?query=${leeQuery}" target="_blank" style="color:#93c5fd;font-size:11px;margin-left:4px" title="Search Lee County Clerk of Court (leeclerk.org)" onclick="event.stopPropagation()">🏛️ LeeClerk</a>`
+      : '';
+
     return `<tr>
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
       <td><span class="ms-state-pill" style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
-      <td><span class="county-count">${l.county||'—'}</span></td>
+      <td><span class="county-count">${l.county||'—'}</span>${leeBadge}</td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
-      <td class="${bc}">$${bond.toLocaleString()}</td>
+      <td class="${bc}">${bondDisplay}</td>
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${l.lead_status||''}</span>${fta ? '<br>'+fta : ''}</td>
       <td>${custBadge}</td>
       <td>${fmtDate(l.arrest_date || l.booking_date)}</td>
       <td class="${courtCls}">${l.court_date || '—'}</td>
-      <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : '—'}</td>
+      <td>${l.detail_url ? `<a href="${l.detail_url}" target="_blank" style="color:var(--accent)">🔗</a>` : ''}${leeClerkLink}</td>
     </tr>`;
   }).join('');
 }

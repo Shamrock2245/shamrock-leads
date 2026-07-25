@@ -593,3 +593,33 @@ def generate_safe_filename(data: dict) -> str:
     surety = (data.get("surety", "osi") or "osi").upper()
     date_str = datetime.now().strftime("%m-%d-%Y")
     return f"AppearanceBond_{surety}_{name}_{charge_short}_{date_str}.pdf"
+
+
+def merge_uncollated_bonds(pdfs: list[bytes], copies_per_charge: int = 2) -> bytes:
+    """
+    Merge a list of charge bond PDFs into a single print-ready PDF stream where each
+    charge bond is duplicated N times consecutively (uncollated output: 2x per charge).
+
+    Example for 3 charges with copies_per_charge=2:
+        - Page 1: Charge 1 (Copy 1 - Court)
+        - Page 2: Charge 1 (Copy 2 - Agency File)
+        - Page 3: Charge 2 (Copy 1 - Court)
+        - Page 4: Charge 2 (Copy 2 - Agency File)
+        - Page 5: Charge 3 (Copy 1 - Court)
+        - Page 6: Charge 3 (Copy 2 - Agency File)
+    """
+    out_doc = fitz.open()
+    for pdf_bytes in pdfs:
+        if not pdf_bytes:
+            continue
+        for _ in range(copies_per_charge):
+            src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            out_doc.insert_pdf(src_doc)
+            src_doc.close()
+
+    buf = io.BytesIO()
+    out_doc.save(buf)
+    out_doc.close()
+    buf.seek(0)
+    return buf.read()
+

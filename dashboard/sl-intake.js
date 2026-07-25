@@ -263,10 +263,23 @@ const SLIntake = (() => {
         : '<span style="color:var(--muted);font-size:11px">—</span>';
       const statusBadge = STATUS_BADGES[item.Status] || item.Status;
 
+      const isLee = (item.County || '').toLowerCase().includes('lee');
+      const bkEsc = _esc(item.BookingNumber || '');
+      const fetchBtn = bkEsc ? `
+        <button class="btn-sm" style="background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-size:11px;padding:3px 8px;font-weight:700" onclick="event.stopPropagation();refreshDefendantFromSource('${bkEsc}', this)" title="Re-fetch updated bond info from county source">⚡ Fetch Bond</button>
+      ` : '';
+      const leeBadge = isLee ? `
+        <span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;margin-top:2px;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();if('${bkEsc}')refreshDefendantFromSource('${bkEsc}', this)">⏰ 1st App Watch</span>
+      ` : '';
+      const leeClerk = isLee && (item.CaseNumber || item.BookingNumber) ? `
+        <a href="https://matrix.leeclerk.org/Home/Search?query=${encodeURIComponent(item.CaseNumber || item.BookingNumber)}" target="_blank" style="color:#93c5fd;font-size:11px;margin-left:4px" title="Search Lee County Clerk of Court (leeclerk.org)" onclick="event.stopPropagation()">🏛️ LeeClerk</a>
+      ` : '';
+
       const actions = isDismissedView ? `
         <button class="btn-sm btn-primary" onclick="SLIntake.restorePermanent('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Restore to Bond Desk">♻️ Restore</button>
       ` : `
         <button class="btn-sm btn-primary" onclick="SLIntake.openProcess('${_esc(item.IntakeID)}')" style="font-size:11px;padding:4px 10px" title="Open Bond Desk workflow">Open desk</button>
+        ${fetchBtn}
         <button class="btn-card-action btn-session-dismiss" onclick="event.stopPropagation();SLIntake.dismissSession('${_esc(item.IntakeID)}', this.closest('tr'))" title="Dismiss for this session (reappears on refresh)" aria-label="Dismiss for this session">✕</button>
         <button class="btn-card-action btn-perm-remove" onclick="event.stopPropagation();SLIntake.confirmPermanentRemove('${_esc(item.IntakeID)}', this.closest('tr'))" title="Remove permanently from Bond Desk" aria-label="Remove permanently from Bond Desk">🗑️</button>
       `;
@@ -281,7 +294,7 @@ const SLIntake = (() => {
           </td>
           <td style="white-space:nowrap" ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'phone', '${_esc(item.Phone)}')">${_esc(item.Phone) || '—'}</td>
           <td ondblclick="SLIntake.editCell(this, '${_esc(item.IntakeID)}', 'defendant_name', '${_esc(item.DefendantName)}')">${_esc(item.DefendantName) || '—'}</td>
-          <td>${_esc(item.County) || '—'}</td>
+          <td>${_esc(item.County) || '—'}${leeBadge}${leeClerk}</td>
           <td style="font-family:monospace;font-size:12px">${_esc(item.BookingNumber) || '—'}</td>
           <td>${riskBadge}</td>
           <td>${statusBadge}</td>
