@@ -532,13 +532,27 @@ async def api_prospective_from_intake(request: Request):
         if initial_stage not in VALID_STAGES:
             initial_stage = "contacted"
 
-        # Build indemnitor from intake record
+        # Build indemnitor from intake record (full field flow)
         ind_info = intake_doc.get("indemnitor") or {}
+        ind_name = (
+            intake_doc.get("indemnitor_name")
+            or " ".join(filter(None, [ind_info.get("firstName"), ind_info.get("lastName")]))
+            or intake_doc.get("name", "")
+        )
         indemnitor = {
-            "name": intake_doc.get("indemnitor_name") or intake_doc.get("name", ""),
+            "name": ind_name,
             "phone": intake_doc.get("indemnitor_phone") or ind_info.get("phone", ""),
             "email": intake_doc.get("indemnitor_email") or ind_info.get("email", ""),
-            "relationship": ind_info.get("relation") or intake_doc.get("relationship", ""),
+            "relationship": ind_info.get("relationship") or ind_info.get("relation") or intake_doc.get("relationship", ""),
+            "address": ind_info.get("address", ""),
+            "city": ind_info.get("city", ""),
+            "state": ind_info.get("state", ""),
+            "zip": ind_info.get("zip", ""),
+            "employer": ind_info.get("employer", ""),
+            "ssn": ind_info.get("ssn", ""),
+            "dl": ind_info.get("dl", ""),
+            "dl_state": ind_info.get("dlState", ""),
+            "full_details": ind_info,
         }
 
         doc = {
