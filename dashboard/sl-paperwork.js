@@ -1100,9 +1100,9 @@ const SLPaperwork = {
           badge.style.color = '#4ade80';
           badge.style.borderColor = 'rgba(74,222,128,0.4)';
         } else {
-          badge.textContent = 'Adobe PDF Services ✗ — credentials not configured';
-          badge.style.color = '#f87171';
-          badge.style.borderColor = 'rgba(248,113,113,0.4)';
+          badge.textContent = '⚡ Native PDF Engine Active (PyMuPDF / ReportLab · Free)';
+          badge.style.color = '#34d399';
+          badge.style.borderColor = 'rgba(52,211,153,0.4)';
         }
       }
     } catch (e) {
