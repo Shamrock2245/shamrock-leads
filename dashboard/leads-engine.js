@@ -359,7 +359,18 @@ function toast(msg, type='info') {
 // ── Utilities ──
 function fmt(n) { return n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : n; }
 function timeAgo(iso) { const d=(Date.now()-new Date(iso).getTime())/1000; if(d<60) return Math.round(d)+'s'; if(d<3600) return Math.round(d/60)+'m'; if(d<86400) return Math.round(d/3600)+'h'; return Math.round(d/86400)+'d'; }
-function fmtDate(d) { if(!d) return '—'; try { const dt = new Date(d); return isNaN(dt)?d:dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}); } catch(e) { return d; } }
+function fmtDate(d) {
+  if(!d) return '—';
+  try {
+    const s = String(d).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, day] = s.split('-').map(Number);
+      return new Date(y, m - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+    }
+    const dt = new Date(s);
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  } catch(e) { return d; }
+}
 function isCourtSoon(d) { if(!d) return false; try { const dt=new Date(d); const diff=(dt-Date.now())/(1000*60*60*24); return diff>=0&&diff<=3; } catch(e) { return false; } }
 
 // ── Auto-Refresh ──

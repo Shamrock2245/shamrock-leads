@@ -16,7 +16,18 @@ function toast(msg, type = 'info', duration = 3500) {
   if (duration > 0) setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, duration);
 }
 function fmtCurrency(n) { return n ? '$' + Number(n).toLocaleString() : '—'; }
-function fmtDate(s) { if (!s) return '—'; try { return new Date(s).toLocaleDateString(); } catch { return s; } }
+function fmtDate(s) {
+  if (!s) return '—';
+  try {
+    const str = String(s).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      const [y, m, day] = str.split('-').map(Number);
+      return new Date(y, m - 1, day).toLocaleDateString();
+    }
+    const dt = new Date(str);
+    return isNaN(dt) ? str : dt.toLocaleDateString();
+  } catch { return s; }
+}
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function timeAgo(ts) {
   if (!ts) return '—';

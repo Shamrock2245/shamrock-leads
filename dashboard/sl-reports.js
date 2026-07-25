@@ -10,7 +10,18 @@ const SLReports = (() => {
   const moneyDec = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const pct      = n => (parseFloat(n)||0).toFixed(1) + '%';
   const toast    = (m,t) => { if(window.SL?.toast) SL.toast(m,t); };
-  const fmtDate  = d => d ? new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+  const fmtDate  = d => {
+    if (!d) return '—';
+    try {
+      const s = String(d).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const [y, m, day] = s.split('-').map(Number);
+        return new Date(y, m - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      }
+      const dt = new Date(s);
+      return isNaN(dt) ? s : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch { return '—'; }
+  };
   const escHtml  = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
   /* ── Chronological bond sort: oldest bond written first, newest last ──
@@ -46,9 +57,47 @@ const SLReports = (() => {
   let _currentPreset = 'mtd';
   let _chartInstance = null;
   let _loaded        = false;
+  const PRESET_KEY = 'sl_reports_preset_v1';
+  const SCOPE_KEY  = 'sl_reports_status_scope_v1';
 
   // Earliest supported bond record — reports may span 2012 → present.
   const REPORT_EPOCH = '2012-01-01';
+
+  function _fmtBondDate(d) {
+    if (!d) return '—';
+    const s = String(d).trim();
+    // Prefer date-only for surety readability
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+      const [y, m, day] = s.slice(0, 10).split('-');
+      return `${m}/${day}/${y}`;
+    }
+    return fmtDate(d);
+  }
+
+  function _statusScope() {
+    return $('rptStatusScope')?.value || localStorage.getItem(SCOPE_KEY) || 'open';
+  }
+
+  function _showQualityBanner(data) {
+    const el = $('rptQualityBanner');
+    if (!el) return;
+    const parts = [];
+    const q = data.data_quality || {};
+    parts.push(`↕️ Oldest → newest`);
+    if (data.status_scope) parts.push(`Scope: ${data.status_scope}`);
+    if (q.bond_date_min || q.bond_date_max) {
+      parts.push(`Window in data: ${q.bond_date_min || '—'} → ${q.bond_date_max || '—'}`);
+    }
+    if (typeof q.quality_score === 'number') parts.push(`Quality ${q.quality_score}%`);
+    if (q.undated_count) parts.push(`⚠ ${q.undated_count} undated`);
+    if (q.missing_power_count) parts.push(`⚠ ${q.missing_power_count} missing power #`);
+    if (data.truncated) parts.push(`⚠ Hit ${q.row_count || 'row'} limit — narrow range`);
+    if (Array.isArray(data.warnings) && data.warnings.length) {
+      parts.push(data.warnings[0]);
+    }
+    el.innerHTML = parts.map(p => `<span class="rpt-quality-chip">${escHtml(p)}</span>`).join('');
+    el.style.display = parts.length ? 'flex' : 'none';
+  }
 
   /* ── Date preset logic ─────────────────────────────────────────────── */
   function _presetDates(preset) {
@@ -96,6 +145,7 @@ const SLReports = (() => {
 
   function setPreset(preset) {
     _currentPreset = preset;
+    try { localStorage.setItem(PRESET_KEY, preset); } catch (_) {}
     _loaded = false;
     // Update active button
     document.querySelectorAll('.rpt-preset-btn').forEach(b => {
@@ -115,6 +165,13 @@ const SLReports = (() => {
 
   function onDateChange() { _loaded = false; load(); if (_currentReport) generate(_currentReport); }
 
+  function onScopeChange() {
+    try { localStorage.setItem(SCOPE_KEY, _statusScope()); } catch (_) {}
+    _loaded = false;
+    load();
+    if (_currentReport) generate(_currentReport);
+  }
+
   /* ── Query string builder ──────────────────────────────────────────── */
   function _qs(extra) {
     const p = new URLSearchParams();
@@ -122,10 +179,12 @@ const SLReports = (() => {
     const e   = $('rptEndDate')?.value;
     const sur = $('rptSuretyFilter')?.value;
     const cty = $('rptCountyFilter')?.value;
+    const scope = _statusScope();
     if (s)   p.set('start_date', s);
     if (e)   p.set('end_date',   e);
     if (sur) p.set('surety',     sur);
     if (cty) p.set('county',     cty);
+    if (scope) p.set('status_scope', scope);
     if (extra) Object.entries(extra).forEach(([k,v]) => p.set(k,v));
     return p.toString() ? '?' + p.toString() : '';
   }
@@ -142,8 +201,19 @@ const SLReports = (() => {
   async function load() {
     if (_loaded) return;
     _loaded = true;
-    // Set default preset dates on first load
-    if (!$('rptStartDate')?.value) setPreset('mtd');
+    // Restore last scope + preset (operators keep their working window)
+    if ($('rptStatusScope') && !$('rptStatusScope').dataset.restored) {
+      const savedScope = localStorage.getItem(SCOPE_KEY);
+      if (savedScope) $('rptStatusScope').value = savedScope;
+      $('rptStatusScope').dataset.restored = '1';
+    }
+    // Set default / restored preset dates on first load
+    if (!$('rptStartDate')?.value) {
+      let saved = 'mtd';
+      try { saved = localStorage.getItem(PRESET_KEY) || 'mtd'; } catch (_) {}
+      setPreset(saved);
+      return; // setPreset → load again
+    }
 
     // Show loading state on stat cells
     ['rptStatLiability','rptStatAgents','rptStatDischarged','rptStatForfeitures',
@@ -297,6 +367,8 @@ const SLReports = (() => {
       </table>`;
     $('rptExportCSVBtn').style.display = 'inline-flex';
     $('rptExportPDFBtn').style.display = 'inline-flex';
+    if ($('rptExportXLSXBtn')) $('rptExportXLSXBtn').style.display = 'inline-flex';
+    if ($('rptCopySummaryBtn')) $('rptCopySummaryBtn').style.display = 'inline-flex';
   }
 
   /* ── Generate specific report ──────────────────────────────────────── */
@@ -336,6 +408,7 @@ const SLReports = (() => {
         console.info('[SLReports] date window warnings:', data.warnings);
       }
     }
+    _showQualityBanner(data);
 
     switch(type) {
       case 'surety-liability':    _renderLiability(data);    break;
@@ -415,22 +488,26 @@ const SLReports = (() => {
         idx++;
         const poa = b.poa_number || b.poa_full || '—';
         const def = b.defendant_name || `${b.defendant_first_name || ''} ${b.defendant_last_name || ''}`.trim() || '—';
-        const dt = b.bond_date || '—';
+        const dt = _fmtBondDate(b.bond_date);
         const liab = Number(b.bond_amount || 0);
         const gross = Number(b.premium || b.gross_premium || 0);
         const suretyOwed = Number(b.surety_owed || 0);
         const bufOwed = Number(b.buf_owed || b.buf || 0);
         const agentRetains = Number(b.agent_retains || 0);
+        const st = (b.status || 'active').toLowerCase();
+        const cty = b.county || '';
+        const searchBlob = `${poa} ${def} ${cty} ${st} ${b.case_number || ''}`.toLowerCase();
 
         const suretyChipCls = (s.surety === 'OSI' || String(b.surety_id).toLowerCase() === 'osi') ? 'inv-chip-osi' : 'inv-chip-palm';
         const suretyIcon = (s.surety === 'OSI' || String(b.surety_id).toLowerCase() === 'osi') ? '🛡️ OSI' : '🌴 PSC';
 
-        itemRows.push(`<tr class="rpt-item-row" data-idx="${idx}" data-liab="${liab}" data-gross="${gross}" data-surety="${suretyOwed}" data-buf="${bufOwed}" data-agent="${agentRetains}">
+        itemRows.push(`<tr class="rpt-item-row" data-idx="${idx}" data-liab="${liab}" data-gross="${gross}" data-surety="${suretyOwed}" data-buf="${bufOwed}" data-agent="${agentRetains}" data-search="${escHtml(searchBlob)}" data-bond-date="${escHtml(b.bond_date || '')}">
           <td style="text-align:center"><input type="checkbox" class="rpt-row-cb" checked onchange="SLReports.recalcLiabilityTotals()"></td>
           <td class="rpt-col-poa"><span class="mono" style="font-size:11px;font-weight:600">${escHtml(poa)}</span></td>
-          <td class="rpt-col-def"><strong>${escHtml(def)}</strong></td>
-          <td class="rpt-col-date">${escHtml(dt)}</td>
+          <td class="rpt-col-def"><strong>${escHtml(def)}</strong>${cty ? `<br><small style="color:var(--muted)">${escHtml(cty)}</small>` : ''}</td>
+          <td class="rpt-col-date" data-raw-date="${escHtml(b.bond_date || '')}">${escHtml(dt)}</td>
           <td class="rpt-col-surety"><span class="inv-surety-chip ${suretyChipCls}" style="font-size:10px;padding:2px 6px">${suretyIcon}</span></td>
+          <td class="rpt-col-status"><span class="rpt-status-badge rpt-status-${escHtml(st)}">${escHtml(st || '—')}</span></td>
           <td class="rpt-col-liab" style="text-align:right;font-weight:600">${money(liab)}</td>
           <td class="rpt-col-gross" style="text-align:right;color:#34d399">${money(gross)}</td>
           <td class="rpt-col-surety-owed" style="text-align:right;color:#fcd34d">${money(suretyOwed)}</td>
@@ -448,8 +525,10 @@ const SLReports = (() => {
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
               <div style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:6px">
                 <span>⚙️ Report Customization & Audience Views</span>
+                <span style="font-size:11px;font-weight:500;color:#34d399;background:rgba(52,211,153,.12);padding:2px 8px;border-radius:999px">Oldest → newest</span>
               </div>
-              <div style="display:flex;align-items:center;gap:8px">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <input type="search" id="rptRegisterSearch" class="rpt-input" placeholder="Filter POA / defendant / county…" oninput="SLReports.filterLiabilityRegister(this.value)" style="min-width:200px;font-size:12px;padding:4px 10px" />
                 <span style="font-size:11px;color:var(--muted)">Presets:</span>
                 <button type="button" class="inv-btn" onclick="SLReports.applyLiabilityPreset('full')" style="font-size:11px;padding:3px 8px">💼 Full Audit</button>
                 <button type="button" class="inv-btn" onclick="SLReports.applyLiabilityPreset('insurer')" style="font-size:11px;padding:3px 8px;background:rgba(56,189,248,0.15);color:#38bdf8;border-color:rgba(56,189,248,0.3)">🛡️ Insurer View</button>
@@ -464,6 +543,7 @@ const SLReports = (() => {
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_def" checked onchange="SLReports.toggleLiabilityCol('rpt-col-def', this.checked)"> Defendant</label>
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_date" checked onchange="SLReports.toggleLiabilityCol('rpt-col-date', this.checked)"> Date</label>
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_surety" checked onchange="SLReports.toggleLiabilityCol('rpt-col-surety', this.checked)"> Surety</label>
+              <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_status" checked onchange="SLReports.toggleLiabilityCol('rpt-col-status', this.checked)"> Status</label>
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_liab" checked onchange="SLReports.toggleLiabilityCol('rpt-col-liab', this.checked)"> Liability</label>
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_gross" checked onchange="SLReports.toggleLiabilityCol('rpt-col-gross', this.checked)"> Premium (Collect)</label>
               <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="col_surety_owed" checked onchange="SLReports.toggleLiabilityCol('rpt-col-surety-owed', this.checked)"> Premium (Insurer)</label>
@@ -487,6 +567,7 @@ const SLReports = (() => {
                 <th class="rpt-col-def">Defendant Name</th>
                 <th class="rpt-col-date">Bond Date</th>
                 <th class="rpt-col-surety">Surety</th>
+                <th class="rpt-col-status">Status</th>
                 <th class="rpt-col-liab" style="text-align:right">Bond Liability</th>
                 <th class="rpt-col-gross" style="text-align:right">Premium to Collect</th>
                 <th class="rpt-col-surety-owed" style="text-align:right">Premium to Insurer</th>
@@ -496,9 +577,9 @@ const SLReports = (() => {
             </thead>
             <tbody>
               ${itemRows.join('')}
-              <tr style="height:14px;background:transparent"><td colspan="10" style="border:none"></td></tr>
+              <tr style="height:14px;background:transparent"><td colspan="11" style="border:none"></td></tr>
               <tr style="background:rgba(15,23,42,0.95);font-weight:700;border-top:2px solid #10b981;border-bottom:2px solid #10b981" id="rptTotalsRow">
-                <td colspan="5" style="text-align:right;padding:12px;color:#f8fafc;letter-spacing:0.5px">TOTALS</td>
+                <td colspan="6" style="text-align:right;padding:12px;color:#f8fafc;letter-spacing:0.5px">TOTALS</td>
                 <td class="rpt-col-liab" id="totCellLiab" style="text-align:right;padding:12px;color:#60a5fa">$0.00</td>
                 <td class="rpt-col-gross" id="totCellGross" style="text-align:right;padding:12px;color:#34d399">$0.00</td>
                 <td class="rpt-col-surety-owed" id="totCellSurety" style="text-align:right;padding:12px;color:#fcd34d">$0.00</td>
@@ -558,17 +639,101 @@ const SLReports = (() => {
 
   function applyLiabilityPreset(preset) {
     const colMap = {
-      full:    { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: true },
-      insurer: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: false },
-      summary: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_liab: true, col_gross: true, col_surety_owed: false, col_buf: false, col_agent: false },
+      full:    { col_poa: true, col_def: true, col_date: true, col_surety: true, col_status: true, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: true },
+      insurer: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_status: false, col_liab: true, col_gross: true, col_surety_owed: true, col_buf: true, col_agent: false },
+      summary: { col_poa: true, col_def: true, col_date: true, col_surety: true, col_status: false, col_liab: true, col_gross: true, col_surety_owed: false, col_buf: false, col_agent: false },
     }[preset] || {};
 
     Object.entries(colMap).forEach(([id, show]) => {
       const cb = $(id);
       if (cb) { cb.checked = show; }
-      const clsName = id.replace('col_', 'rpt-col-').replace('_', '-');
+      const clsName = id.replace('col_', 'rpt-col-').replace(/_/g, '-');
       toggleLiabilityCol(clsName, show);
     });
+  }
+
+  function filterLiabilityRegister(q) {
+    const needle = String(q || '').trim().toLowerCase();
+    document.querySelectorAll('.rpt-item-row').forEach(tr => {
+      const hay = tr.getAttribute('data-search') || tr.textContent.toLowerCase();
+      const show = !needle || hay.includes(needle);
+      tr.style.display = show ? '' : 'none';
+      if (!show) {
+        const cb = tr.querySelector('.rpt-row-cb');
+        if (cb) cb.checked = false;
+      }
+    });
+    recalcLiabilityTotals();
+  }
+
+  async function _downloadOneXlsx(suretyCode) {
+    const url = `${API}/api/reports/bond-report.xlsx${_qs({ surety: suretyCode })}`;
+    const r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { const j = await r.json(); msg = j.error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const fname = m ? m[1] : `Shamrock_${suretyCode}_Bond_Report.xlsx`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    return fname;
+  }
+
+  async function exportXLSX() {
+    const raw = ($('rptSuretyFilter')?.value || '').trim().toUpperCase();
+    // One workbook per surety is the official submission format
+    const sureties = !raw
+      ? ['OSI', 'PALMETTO']
+      : [(raw.includes('PALM') || raw === 'PSC') ? 'PALMETTO' : 'OSI'];
+    toast(`Building official XLSX (${sureties.join(' + ')}) — oldest → newest…`, 'info');
+    try {
+      for (const s of sureties) {
+        await _downloadOneXlsx(s);
+      }
+      toast(
+        sureties.length > 1
+          ? 'OSI + Palmetto official workbooks downloaded'
+          : 'Official XLSX downloaded — sorted oldest → newest',
+        'success'
+      );
+    } catch (e) {
+      toast('XLSX export failed: ' + (e.message || e), 'error');
+    }
+  }
+
+  async function copySummary() {
+    const d = _currentData || {};
+    const gt = d.grand_totals || {};
+    const q = d.data_quality || {};
+    const { label } = _presetDates(_currentPreset);
+    const lines = [
+      'Shamrock Bail Bonds — Report Summary',
+      `Report: ${_currentReport || '—'}`,
+      `Range: ${label}`,
+      `Sort: oldest bond written → newest`,
+      `Scope: ${d.status_scope || _statusScope()}`,
+      `Bonds: ${gt.total_bonds ?? d.count ?? q.row_count ?? '—'}`,
+      `Liability: ${money(gt.total_bond_amount || d.total_bond_amount || d.total_liability || 0)}`,
+      `Premium: ${money(gt.total_premium || d.total_premium || 0)}`,
+      `Surety owed: ${money(gt.total_surety_owed || 0)}`,
+      `BUF: ${money(gt.total_buf_owed || 0)}`,
+      `Quality: ${q.quality_score != null ? q.quality_score + '%' : '—'}`,
+      `Generated: ${new Date().toLocaleString()}`,
+      'CONFIDENTIAL — Internal / surety use only',
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      toast('Summary copied to clipboard', 'success');
+    } catch (_) {
+      toast('Could not copy — browser blocked clipboard', 'warning');
+    }
   }
 
   function _renderAgents(data) {
@@ -807,6 +972,15 @@ const SLReports = (() => {
             }
           });
           const keyOf = tr => {
+            // Prefer machine-readable date on the row / cell (MM/DD/YYYY display still sorts correctly)
+            const raw =
+              tr.getAttribute('data-bond-date') ||
+              tr.querySelector('[data-raw-date]')?.getAttribute('data-raw-date') ||
+              '';
+            if (raw) {
+              const t = Date.parse(String(raw).slice(0, 19));
+              if (!isNaN(t)) return t;
+            }
             const cells = tr.querySelectorAll('td');
             const cell = cells[dateIdx];
             const t = cell ? Date.parse(String(cell.textContent || '').trim().slice(0, 24)) : NaN;
@@ -850,29 +1024,41 @@ const SLReports = (() => {
     resortForOutput();
     const title = $('rptResultsTitle')?.textContent || 'Report';
     const range = $('rptRangeLabel')?.textContent   || '';
+    const scope = _statusScope();
+    const q = (_currentData && _currentData.data_quality) || {};
     const w = window.open('','_blank','width=900,height=700');
+    if (!w) { toast('Pop-up blocked — allow pop-ups to print/export', 'warning'); return; }
     w.document.write(`<!DOCTYPE html><html><head>
       <title>${title}</title>
       <style>
         body{font-family:system-ui,sans-serif;padding:24px;color:#1e293b;background:#fff}
-        h1{font-size:20px;margin-bottom:4px}
-        .meta{font-size:12px;color:#64748b;margin-bottom:20px}
-        table{width:100%;border-collapse:collapse;font-size:12px}
-        th{background:#f1f5f9;padding:8px 10px;text-align:left;border-bottom:2px solid #e2e8f0;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:.5px}
-        td{padding:7px 10px;border-bottom:1px solid #e2e8f0}
+        .agency{font-size:11px;color:#0B3D2E;font-weight:700;letter-spacing:.3px;text-transform:uppercase}
+        h1{font-size:20px;margin:6px 0 4px}
+        .meta{font-size:12px;color:#64748b;margin-bottom:8px}
+        .badge{display:inline-block;background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600;margin:0 6px 12px 0}
+        table{width:100%;border-collapse:collapse;font-size:11px}
+        th{background:#0f172a;color:#fff;padding:8px 10px;text-align:left;border-bottom:2px solid #e2e8f0;font-weight:700;text-transform:uppercase;font-size:9px;letter-spacing:.5px}
+        td{padding:6px 10px;border-bottom:1px solid #e2e8f0}
         tr:nth-child(even) td{background:#f8fafc}
         .summary{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-        .s-item{border:1px solid #e2e8f0;border-radius:8px;padding:12px 18px;min-width:100px;text-align:center}
-        .s-val{font-size:18px;font-weight:800}
-        .s-lbl{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
-        input[type="checkbox"], button, .inv-btn, .rpt-row-cb, #rptSelectAllRows, th:has(input), td:has(input) { display: none !important; }
+        .s-item,.rpt-summary-item{border:1px solid #e2e8f0;border-radius:8px;padding:12px 18px;min-width:100px;text-align:center}
+        .s-val,.rpt-summary-value{font-size:18px;font-weight:800}
+        .s-lbl,.rpt-summary-label{font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px}
+        .footer{margin-top:18px;font-size:10px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:10px}
+        input[type="checkbox"], button, .inv-btn, .rpt-row-cb, #rptSelectAllRows, #rptRegisterSearch,
+        th:has(input), td:has(input), 
         div[style*="background:rgba(15,23,42"] { background: none !important; border: none !important; color: #1e293b !important; padding: 0 !important; }
-        @media print{body{padding:0}}
+        @media print{body{padding:12px} @page{margin:12mm;size:landscape}}
       </style></head><body>
+      <div class="agency">Shamrock Bail Bonds · 1528 Broadway Ft. Myers, FL 33901 · Agent Lic. #P139768</div>
       <h1>☘️ ${title}</h1>
-      <div class="meta">ShamrockLeads · ${range} · Generated ${new Date().toLocaleString()}</div>
+      <div class="meta">Range: ${range} · Scope: ${scope} · Generated ${new Date().toLocaleString()}</div>
+      <span class="badge">Sorted oldest bond written → newest</span>
+      ${q.bond_date_min ? `<span class="badge">Data ${q.bond_date_min} → ${q.bond_date_max || '—'}</span>` : ''}
+      ${q.quality_score != null ? `<span class="badge">Quality ${q.quality_score}%</span>` : ''}
       ${$('rptSummaryStrip')?.innerHTML ? `<div class="summary">${$('rptSummaryStrip').innerHTML}</div>` : ''}
       ${$('rptTableWrap')?.innerHTML || '<p>No data</p>'}
+      <div class="footer">CONFIDENTIAL — Internal / surety submission. Every line item retains power #, bond date, and premium details. Shamrock Super CRM.</div>
       </body></html>`);
     w.document.close();
     setTimeout(() => { w.print(); }, 500);
@@ -955,13 +1141,14 @@ const SLReports = (() => {
 
   /* ── Public API ────────────────────────────────────────────────────── */
   return {
-    load, runAll, generate, onDateChange, setPreset,
-    exportCSV, exportPDF, printReport, closeResults,
+    load, runAll, generate, onDateChange, onScopeChange, setPreset,
+    exportCSV, exportPDF, exportXLSX, copySummary, printReport, closeResults,
     scheduleReport, closeSchedule, saveSchedule,
     // Chronological output ordering (oldest bond → newest)
     resortForOutput, sortBondsOldestFirst,
     // Liability report customization & toggles
     recalcLiabilityTotals, toggleAllLiabilityRows, toggleLiabilityCol, applyLiabilityPreset,
+    filterLiabilityRegister,
   };
 })();
 

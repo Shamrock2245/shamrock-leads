@@ -826,7 +826,15 @@ function timeAgo(iso) {
 }
 function fmtDate(d) {
   if(!d) return '—';
-  try { const dt = new Date(d); return isNaN(dt)?d:dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}); } catch(e) { return d; }
+  try {
+    const s = String(d).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, day] = s.split('-').map(Number);
+      return new Date(y, m - 1, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+    }
+    const dt = new Date(s);
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  } catch(e) { return d; }
 }
 function isCourtSoon(d) {
   if(!d) return false;

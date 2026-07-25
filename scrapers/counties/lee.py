@@ -137,35 +137,39 @@ class LeeCountyScraper(BaseScraper):
     def _fetch_arrests(
         self, start_date: datetime, end_date: datetime
     ) -> List[Dict[str, Any]]:
-        """Try multiple API query variants, return first that produces results."""
+        """Fetch both inCustody inmates and recent date-range bookings, deduplicated by bookingNumber."""
         s = start_date.strftime("%Y-%m-%d")
         e = end_date.strftime("%Y-%m-%d")
 
-        # Rate limit: 480,000 requests per 12-hour window
-        # Only try 2 variants to conserve API quota — inCustody is preferred
-        # because it returns fewer records (only current inmates) and uses
-        # less bandwidth. Date-range is fallback only.
         variants = [
-            # Variant 0: inCustody filter — most efficient, returns only current inmates
+            # Variant 0: inCustody filter — active inmates
             {"inCustody": "true"},
-            # Variant 1: date-range fallback (only if inCustody returns nothing)
+            # Variant 1: date-range filter — recent bookings (includes released/bonded)
             {"startBooking": s, "endBooking": e},
         ]
 
+        by_id: Dict[str, Dict[str, Any]] = {}
         for i, params in enumerate(variants):
             if i > 0:
                 logger.info(f"⏳ Waiting {VARIANT_DELAY_S}s before next variant...")
                 time.sleep(VARIANT_DELAY_S)
-            logger.info(f"🔄 Trying API variant {i + 1}/{len(variants)}")
+            logger.info(f"🔄 Trying API variant {i + 1}/{len(variants)}: {params}")
             results = self._fetch_with_pagination(params)
             if results:
-                logger.info(
-                    f"✅ Found {len(results)} results with variant {i + 1}"
-                )
-                return results
+                logger.info(f"✅ Found {len(results)} results with variant {i + 1}")
+                for r in results:
+                    bn = str(
+                        r.get("bookingNumber")
+                        or r.get("booking_number")
+                        or r.get("id")
+                        or ""
+                    )
+                    if bn and bn not in by_id:
+                        by_id[bn] = r
 
-        logger.warning("⚠️ No results from any API variant")
-        return []
+        combined = list(by_id.values())
+        logger.info(f"📥 Total unique bookings across variants: {len(combined)}")
+        return combined
 
     def _fetch_with_pagination(
         self, params: Dict[str, str]
