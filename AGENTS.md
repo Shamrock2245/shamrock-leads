@@ -112,7 +112,8 @@ Move records safely through this lifecycle:
 | **The Payment Agent** | Log and track premium payments | ✅ Live | `dashboard/api/payments.py`, `api/payment_plans.py` |
 | **The Auditor** | Immutable event logging for all state changes | ✅ Live | `dashboard/api/events.py` |
 | **The Finder** | OSINT: family/friend contact discovery | ✅ Live | `services/contact_discovery.py`, `api/contacts.py` |
-| **The Closer** | Outreach sequencing via iMessage | ✅ Live | `dashboard/api/outreach.py`, `services/outreach_sequencer.py` |
+| **The Closer** | Outreach sequencing via iMessage | ✅ Live | `dashboard/api/outreach.py`, `services/outreach_sequencer.py`, `routers/imessage_automation.py`, `sl-imessage.js` — BB Server **1.9.9**; App v2 is client-only (`docs/BLUEBUBBLES_VERSIONING.md`) |
+| **Family Network** | 1st/2nd degree relative graph (Bond Desk) | ✅ Code | `models/family_tree.py`, `services/family_tree_service.py`, `routers/family_tree_api.py`, `sl-family-tree.js` |
 | **The Court Clerk** | Auto-scan court dates, schedule Twilio SMS | ✅ Live | `services/court_reminder_service.py`, `api/court_reminders.py` |
 | **The Discharge Monitor** | Scan Gmail for exonerations, auto-discharge | ✅ Live | `dashboard/api/discharge_monitor.py` |
 | **Shannon** | AI iMessage auto-reply agent | ✅ Live | `dashboard/api/agent_brain.py`, `api/agent_brain_api.py` |

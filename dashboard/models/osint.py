@@ -75,9 +75,9 @@ class OSINTScanRequest(BaseModel):
     """Initiate a multi-engine OSINT scan for a subject."""
 
     subject_type: SubjectType = Field(
-        ..., description="Type of subject: 'defendant' or 'indemnitor'"
+        SubjectType.defendant, description="Type of subject: 'defendant' or 'indemnitor'"
     )
-    subject_id: str = Field(..., description="MongoDB ObjectId of the subject record")
+    subject_id: Optional[str] = Field(None, description="MongoDB ObjectId or ad-hoc identifier for subject")
 
     # Identifiers to search — at least one required
     full_name: Optional[str] = Field(None, description="Subject's full legal name")

@@ -39,55 +39,80 @@ scraper_control_bp = APIRouter(prefix="/api", tags=["scraper_control"])
 async def api_run_now(request: Request):
     """
     Trigger an immediate scraper run for a specific county.
-    POST body: {"county": "Lee"}
+    POST body: {"county": "Lee"} or {"county": "Lee", "state": "FL"}
     Writes a trigger document to MongoDB; the scraper engine polls and executes.
+    Always returns JSON (never plain-text 500) so the dashboard can parse errors.
     """
-    data = await request.json() or {}
-    county = (data.get("county") or "").strip()
-    state = (data.get("state") or "").strip().upper()
-    if not county:
-        return JSONResponse({"error": "county is required"}, status_code=400)
+    try:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
 
-    # Accept: "Lee", "Lee (FL)", "sc_lee", "nc_mecklenburg", plus optional state body field
-    matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
-    if not matched and state:
-        label = f"{county} ({state})"
-        matched = next((c for c in REGISTERED_COUNTIES if c.lower() == label.lower()), None)
-    if not matched:
-        matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
-    # Also allow raw state-prefixed trigger keys (nc_mecklenburg)
-    trigger_key = None
-    if matched:
-        trigger_key = registered_county_to_trigger_key(matched)
-    else:
-        # Bare / prefixed key that the scheduler can resolve
-        trigger_key = county.lower().replace(" ", "_").replace("-", "_")
-        # If state was provided with bare county name
-        if state and state != "FL" and not trigger_key.startswith(f"{state.lower()}_"):
+        county = (data.get("county") or "").strip()
+        state = (data.get("state") or "").strip().upper()
+        if not county:
+            return JSONResponse({"ok": False, "error": "county is required"}, status_code=400)
+
+        # Accept: "Lee", "Lee (FL)", "sc_lee", "nc_mecklenburg", plus optional state body field
+        matched = next((c for c in REGISTERED_COUNTIES if c.lower() == county.lower()), None)
+        if not matched and state:
+            label = f"{county} ({state})"
+            matched = next((c for c in REGISTERED_COUNTIES if c.lower() == label.lower()), None)
+        if not matched and state:
+            # Bare county + state: prefer exact label match over fuzzy substring
             bare, _ = parse_registered_county(county)
-            trigger_key = f"{state.lower()}_{bare.lower().replace(' ', '_')}"
-        matched = county
+            label = f"{bare} ({state})"
+            matched = next((c for c in REGISTERED_COUNTIES if c.lower() == label.lower()), None)
+        if not matched:
+            # Prefer same-state substring match when state known
+            candidates = [
+                c for c in REGISTERED_COUNTIES
+                if county.lower() in c.lower()
+                and (not state or f"({state.lower()})" in c.lower())
+            ]
+            matched = candidates[0] if candidates else None
+        if not matched:
+            matched = next((c for c in REGISTERED_COUNTIES if county.lower() in c.lower()), None)
 
-    triggers = get_collection("scraper_triggers")
-    now = datetime.now(timezone.utc)
-    await triggers.update_one(
-        {"county": trigger_key},
-        {"$set": {
-            "county": trigger_key,
-            "label": matched,
-            "requested_at": now,
-            "status": "pending",
-            "requested_by": "dashboard",
-        }},
-        upsert=True,
-    )
-    return {
-        "ok": True,
-        "county": matched,
-        "trigger_key": trigger_key,
-        "message": f"Run trigger queued for {matched} ({trigger_key}). The scraper engine will execute it within 60 seconds.",
-        "requested_at": now.isoformat(),
-    }
+        trigger_key = None
+        if matched:
+            trigger_key = registered_county_to_trigger_key(matched)
+        else:
+            # Bare / prefixed key that the scheduler can resolve
+            trigger_key = county.lower().replace(" ", "_").replace("-", "_")
+            if state and state != "FL" and not trigger_key.startswith(f"{state.lower()}_"):
+                bare, _ = parse_registered_county(county)
+                trigger_key = f"{state.lower()}_{bare.lower().replace(' ', '_')}"
+            matched = county if not state else f"{county} ({state})"
+
+        triggers = get_collection("scraper_triggers")
+        now = datetime.now(timezone.utc)
+        await triggers.update_one(
+            {"county": trigger_key},
+            {"$set": {
+                "county": trigger_key,
+                "label": matched,
+                "requested_at": now,
+                "status": "pending",
+                "requested_by": "dashboard",
+            }},
+            upsert=True,
+        )
+        return {
+            "ok": True,
+            "county": matched,
+            "trigger_key": trigger_key,
+            "message": f"Run trigger queued for {matched} ({trigger_key}). The scraper engine will execute it within 60 seconds.",
+            "requested_at": now.isoformat(),
+        }
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Failed to queue run: {type(exc).__name__}: {exc}"},
+            status_code=500,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,28 +123,35 @@ async def api_run_all():
     """
     Trigger an immediate run for ALL registered scrapers.
     Writes trigger documents for all registered counties.
+    Always returns JSON on failure.
     """
-    triggers = get_collection("scraper_triggers")
-    now = datetime.now(timezone.utc)
-    for county in REGISTERED_COUNTIES:
-        trigger_key = registered_county_to_trigger_key(county)
-        await triggers.update_one(
-            {"county": trigger_key},
-            {"$set": {
-                "county": trigger_key,
-                "label": county,
-                "requested_at": now,
-                "status": "pending",
-                "requested_by": "dashboard_run_all",
-            }},
-            upsert=True,
+    try:
+        triggers = get_collection("scraper_triggers")
+        now = datetime.now(timezone.utc)
+        for county in REGISTERED_COUNTIES:
+            trigger_key = registered_county_to_trigger_key(county)
+            await triggers.update_one(
+                {"county": trigger_key},
+                {"$set": {
+                    "county": trigger_key,
+                    "label": county,
+                    "requested_at": now,
+                    "status": "pending",
+                    "requested_by": "dashboard_run_all",
+                }},
+                upsert=True,
+            )
+        return {
+            "ok": True,
+            "triggered": len(REGISTERED_COUNTIES),
+            "message": f"Run triggers queued for all {len(REGISTERED_COUNTIES)} counties (FL/GA/SC/NC/TN/TX/LA).",
+            "requested_at": now.isoformat(),
+        }
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "error": f"Failed to queue run-all: {type(exc).__name__}: {exc}"},
+            status_code=500,
         )
-    return {
-        "ok": True,
-        "triggered": len(REGISTERED_COUNTIES),
-        "message": f"Run triggers queued for all {len(REGISTERED_COUNTIES)} counties (FL/GA/SC/NC/TN/TX/LA).",
-        "requested_at": now.isoformat(),
-    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

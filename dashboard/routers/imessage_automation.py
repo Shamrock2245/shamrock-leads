@@ -221,10 +221,19 @@ def _phone_match_query(clean_phone: str) -> dict:
 
 
 @imessage_auto_bp.get("/imessage/thread/{phone}")
-async def get_thread(phone, limit: str = Query(default="100")):
+async def get_thread(
+    phone,
+    limit: str = Query(default="100"),
+    hydrate: str = Query(default="1", description="1=also pull from BlueBubbles chat"),
+):
     """Fetch full conversation history for a specific phone number.
+
     Returns all inbound + outbound messages sorted chronologically (oldest first)
     so the UI can render a chat-style thread view.
+
+    When ``hydrate=1`` (default), also pulls recent messages for this chat from
+    BlueBubbles and merges any missing rows into Mongo so replies appear even
+    if the webhook/poller briefly lagged.
     """
     limit = int(limit)
     clean_phone = format_phone(phone)
@@ -238,6 +247,14 @@ async def get_thread(phone, limit: str = Query(default="100")):
 
     outreach = get_collection("imessage_outreach")
     query = _phone_match_query(clean_phone)
+
+    # Optionally hydrate from live BB so desktop shows replies immediately
+    hydrated = 0
+    if str(hydrate).lower() not in ("0", "false", "no"):
+        try:
+            hydrated = await _hydrate_thread_from_bb(clean_phone, limit=min(limit, 80))
+        except Exception as e:
+            logger.warning("Thread BB hydrate failed for ...%s: %s", clean_phone[-4:], e)
 
     docs = []
     async for doc in outreach.find(
@@ -253,7 +270,120 @@ async def get_thread(phone, limit: str = Query(default="100")):
             {"$set": {"unread": False}},
         )
 
-    return {"messages": docs, "count": len(docs), "phone": clean_phone}
+    return {
+        "messages": docs,
+        "count": len(docs),
+        "phone": clean_phone,
+        "hydrated_from_bb": hydrated,
+    }
+
+
+async def _hydrate_thread_from_bb(clean_phone: str, limit: int = 50) -> int:
+    """Pull chat history from BB for one phone and upsert missing outreach rows.
+
+    Returns number of newly inserted messages.
+    """
+    client = _get_bb_client()
+    if not client:
+        return 0
+
+    chat_guid = f"any;-;{clean_phone}"
+    result = await client.get_chat_messages(chat_guid, limit=limit, sort="ASC")
+    if not result.get("success"):
+        # Try without +1 prefix variants
+        digits = clean_phone.replace("+", "")
+        last10 = digits[-10:] if len(digits) >= 10 else digits
+        for alt in (f"any;-;+1{last10}", f"any;-;{last10}", f"iMessage;-;+1{last10}"):
+            result = await client.get_chat_messages(alt, limit=limit, sort="ASC")
+            if result.get("success"):
+                chat_guid = alt
+                break
+    if not result.get("success"):
+        return 0
+
+    messages = result.get("data") or []
+    if isinstance(messages, dict):
+        messages = messages.get("data") or []
+    if not isinstance(messages, list):
+        return 0
+
+    outreach = get_collection("imessage_outreach")
+    inserted = 0
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        msg_guid = msg.get("guid") or ""
+        msg_text = (msg.get("text") or "").strip()
+        if not msg_text and not msg_guid:
+            continue
+        is_from_me = bool(msg.get("isFromMe", msg.get("is_from_me", False)))
+        direction = "outbound" if is_from_me else "inbound"
+
+        # Dedup by GUID when present
+        if msg_guid:
+            existing = await outreach.find_one({"bb_message_guid": msg_guid}, {"_id": 1})
+            if existing:
+                continue
+
+        sent_at = datetime.now(timezone.utc).isoformat()
+        date_ms = msg.get("dateCreated")
+        if isinstance(date_ms, (int, float)) and date_ms > 0:
+            try:
+                ts = float(date_ms)
+                if ts > 1e14:
+                    ts = ts / 1e6
+                if ts > 1e12:
+                    sent_at = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc).isoformat()
+                elif ts > 1e9:
+                    sent_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except (OSError, OverflowError, ValueError):
+                pass
+
+        chash = _content_hash(clean_phone, msg_text or msg_guid, date_ms)
+        if chash:
+            existing_c = await outreach.find_one({"content_hash": chash}, {"_id": 1})
+            if existing_c:
+                continue
+
+        doc = {
+            "recipient_phone": clean_phone,
+            "message": msg_text or "[attachment]",
+            "chat_guid": chat_guid,
+            "bb_message_guid": msg_guid,
+            "content_hash": chash,
+            "direction": direction,
+            "status": "received" if direction == "inbound" else "sent",
+            "unread": direction == "inbound",
+            "sent_at": sent_at,
+            "sent_by": "lead" if direction == "inbound" else "dashboard",
+            "source": "bb_hydrate",
+            "category": "general",
+        }
+        await outreach.insert_one(doc)
+        inserted += 1
+
+        # Real-time UI ping for newly discovered inbound
+        if direction == "inbound":
+            try:
+                from dashboard.routers.events import publish_event
+                await publish_event("message_received", {
+                    "phone": clean_phone,
+                    "phone_last4": clean_phone[-4:],
+                    "message": (msg_text or "")[:120],
+                    "preview": (msg_text or "")[:80],
+                    "matched": False,
+                    "source": "bb_hydrate",
+                    "sent_at": sent_at,
+                })
+            except Exception:
+                pass
+
+    if inserted:
+        logger.info(
+            "💧 Hydrated %d message(s) from BB for ...%s",
+            inserted, clean_phone[-4:],
+        )
+    return inserted
 
 
 
@@ -799,15 +929,16 @@ async def start_inbox_poller(app):
     while True:
         try:
             config = await _get_config()
-            interval = config.get("poll_interval_seconds", 30)
+            # Always poll for inbound so the desktop inbox shows replies even when
+            # auto-reply AI is off. `enabled` only gates auto-replies inside process_inbound.
+            interval = int(config.get("poll_interval_seconds") or 30)
+            interval = max(10, min(interval, 120))
 
-            if config.get("enabled", False):
-                poll_result = await _poll_inbox_once()
-                # Reset backoff on successful poll
-                if poll_result.get("success", True):
-                    _consecutive_errors = 0
-                    _backoff = 30
-            # Even when disabled, sleep the normal interval
+            poll_result = await _poll_inbox_once()
+            # Reset backoff on successful poll
+            if poll_result.get("success", True):
+                _consecutive_errors = 0
+                _backoff = 30
 
             await asyncio.sleep(interval)
         except asyncio.CancelledError:

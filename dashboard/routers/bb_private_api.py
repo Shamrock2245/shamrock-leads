@@ -184,31 +184,55 @@ class BlueBubblesClient:
 
     async def get_messages(self, after: int | None = None,
                            limit: int = 50, sort: str = "DESC") -> dict:
-        """Fetch messages, optionally after a timestamp (epoch ms).
+        """Fetch messages via POST /api/v1/message/query (BB Server 1.9+).
+
+        NOTE: GET /api/v1/message returns 404 on modern BlueBubbles Server
+        (verified against 1.9.9). The official client/n8n patterns use
+        POST /api/v1/message/query with a JSON body.
 
         Args:
             after: Epoch milliseconds — only return messages after this time
             limit: Max messages to return (default 50)
             sort: "ASC" or "DESC"
         """
-        params = {"limit": str(limit), "sort": sort}
+        body: dict = {
+            "limit": limit,
+            "sort": sort,
+            "with": ["handle", "chats", "attachment"],
+        }
         if after is not None:
-            params["after"] = str(after)
-        return await self._request("GET", "/api/v1/message", params=params)
+            # BB accepts after as epoch ms in the query body
+            body["after"] = after
+        return await self._request("POST", "/api/v1/message/query", json_body=body)
 
     async def get_chats(self, limit: int = 25, offset: int = 0) -> dict:
-        """List recent chats."""
-        return await self._request(
-            "GET", "/api/v1/chat",
-            params={"limit": str(limit), "offset": str(offset)}
-        )
+        """List recent chats via POST /api/v1/chat/query (BB Server 1.9+)."""
+        body = {
+            "limit": limit,
+            "offset": offset,
+            "with": ["lastMessage", "participants"],
+        }
+        return await self._request("POST", "/api/v1/chat/query", json_body=body)
 
     async def get_chat_messages(self, chat_guid: str,
-                                limit: int = 25) -> dict:
-        """Get messages for a specific chat."""
+                                limit: int = 50, sort: str = "ASC") -> dict:
+        """Get messages for a specific chat via message/query.
+
+        Falls back to the legacy chat GUID path if query fails.
+        """
+        body = {
+            "chatGuid": chat_guid,
+            "limit": limit,
+            "sort": sort,
+            "with": ["handle", "attachment"],
+        }
+        result = await self._request("POST", "/api/v1/message/query", json_body=body)
+        if result.get("success"):
+            return result
+        # Legacy path (older servers / alternate route)
         return await self._request(
-            "GET", f"/api/v1/chat/{chat_guid}/messages",
-            params={"limit": str(limit)}
+            "GET", f"/api/v1/chat/{chat_guid}/message",
+            params={"limit": str(limit)},
         )
 
     async def get_message(self, message_guid: str) -> dict:

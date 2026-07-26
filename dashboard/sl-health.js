@@ -227,14 +227,14 @@ const SLHealth = (() => {
           <td>${r.run_count || '—'}</td>
           <td>
             <div style="display:flex;gap:4px;flex-wrap:wrap">
-              ${!isDisabled ? `<button class="btn btn-xs" onclick="SLHealth.runNow('${r.county}')" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
-              ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError('${r.county}')" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
-              <button class="btn btn-xs" onclick="SLHealth.showDrill('${r.county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
-              <button class="btn btn-xs" onclick="SLHealth.healthCheck('${r.county}')" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>
-              <button class="btn btn-xs" onclick="SLHealth.viewLogs('${r.county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View recent run logs">📋 Logs</button>
+              ${!isDisabled ? `<button class="btn btn-xs" onclick="SLHealth.runNow(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
+              ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError(${JSON.stringify(r.county)})" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
+              <button class="btn btn-xs" onclick="SLHealth.showDrill(${JSON.stringify(r.county)})" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
+              <button class="btn btn-xs" onclick="SLHealth.healthCheck(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>
+              <button class="btn btn-xs" onclick="SLHealth.viewLogs(${JSON.stringify(r.county)})" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View recent run logs">📋 Logs</button>
               ${!isDisabled
-                ? `<button class="btn btn-xs" onclick="SLHealth.disableScraper('${r.county}')" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:3px 8px;font-size:11px" title="Pause this scraper">⏸ Pause</button>`
-                : `<button class="btn btn-xs" onclick="SLHealth.enableScraper('${r.county}')" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:3px 8px;font-size:11px" title="Re-enable this scraper">▶ Enable</button>`
+                ? `<button class="btn btn-xs" onclick="SLHealth.disableScraper(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:3px 8px;font-size:11px" title="Pause this scraper">⏸ Pause</button>`
+                : `<button class="btn btn-xs" onclick="SLHealth.enableScraper(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:3px 8px;font-size:11px" title="Re-enable this scraper">▶ Enable</button>`
               }
             </div>
           </td>
@@ -242,52 +242,109 @@ const SLHealth = (() => {
     }).join('');
   }
 
-  async function runNow(county) {
-    const btn = event && event.target;
-    if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+  async function _parseJsonRes(res) {
+    const text = await res.text();
+    if (!text) return { ok: false, error: `Empty response (HTTP ${res.status})` };
     try {
-      const res = await fetch('/api/scraper/run-now', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({county}) });
-      const data = await res.json();
-      data.ok ? _showToast(`⚡ Run triggered for ${county}. Will execute within 60s.`, 'success') : _showToast(`❌ ${data.error || 'Failed to trigger run'}`, 'error');
-    } catch (err) { _showToast(`❌ Network error: ${err.message}`, 'error'); }
-    finally { if (btn) { btn.textContent = '⚡ Run'; btn.disabled = false; } setTimeout(load, 5000); }
+      return JSON.parse(text);
+    } catch (_) {
+      const snippet = text.replace(/\s+/g, ' ').slice(0, 120);
+      return {
+        ok: false,
+        error: `Server returned non-JSON (HTTP ${res.status}): ${snippet}`,
+      };
+    }
+  }
+
+  async function runNow(county, state) {
+    const btn = (typeof event !== 'undefined' && event && event.target) ? event.target : null;
+    if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+    const label = state ? `${county} (${state})` : county;
+    try {
+      const body = { county };
+      if (state) body.state = state;
+      const res = await fetch('/api/scraper/run-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const data = await _parseJsonRes(res);
+      if (data.ok) {
+        _showToast(`⚡ Run triggered for ${data.county || label}. Will execute within 60s.`, 'success');
+      } else {
+        _showToast(`❌ ${data.error || data.detail || 'Failed to trigger run'}`, 'error');
+      }
+    } catch (err) {
+      _showToast(`❌ Network error: ${err.message}`, 'error');
+    } finally {
+      if (btn) { btn.textContent = '⚡ Run'; btn.disabled = false; }
+      setTimeout(load, 5000);
+    }
   }
 
   async function runAll() {
     if (!confirm(`Trigger immediate runs for ALL ${_data.length} registered scrapers?\n\nThis may take several minutes to complete.`)) return;
     try {
-      const res = await fetch('/api/scraper/run-all', { method:'POST' });
-      const data = await res.json();
-      data.ok ? _showToast(`⚡ Run-All triggered for ${data.triggered} counties.`, 'success') : _showToast(`❌ ${data.error || 'Failed'}`, 'error');
-    } catch (err) { _showToast(`❌ Network error: ${err.message}`, 'error'); }
+      const res = await fetch('/api/scraper/run-all', { method: 'POST', credentials: 'same-origin' });
+      const data = await _parseJsonRes(res);
+      data.ok
+        ? _showToast(`⚡ Run-All triggered for ${data.triggered} counties.`, 'success')
+        : _showToast(`❌ ${data.error || 'Failed'}`, 'error');
+    } catch (err) {
+      _showToast(`❌ Network error: ${err.message}`, 'error');
+    }
     setTimeout(load, 10000);
   }
 
-  async function enableScraper(county) {
+  async function enableScraper(county, state) {
     try {
-      const res = await fetch('/api/scraper/enable', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({county}) });
-      const data = await res.json();
+      const body = { county };
+      if (state) body.state = state;
+      const res = await fetch('/api/scraper/enable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const data = await _parseJsonRes(res);
       if (data.ok) { _showToast(`▶ ${county} scraper enabled.`, 'success'); setTimeout(load, 1500); }
       else _showToast(`❌ ${data.error || 'Failed to enable'}`, 'error');
     } catch (err) { _showToast(`❌ Network error: ${err.message}`, 'error'); }
   }
 
-  async function disableScraper(county) {
+  async function disableScraper(county, state) {
     if (!confirm(`Pause the ${county} scraper?\n\nIt will stop auto-running until you re-enable it.`)) return;
     try {
-      const res = await fetch('/api/scraper/disable', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({county}) });
-      const data = await res.json();
+      const body = { county };
+      if (state) body.state = state;
+      const res = await fetch('/api/scraper/disable', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const data = await _parseJsonRes(res);
       if (data.ok) { _showToast(`⏸ ${county} scraper paused.`, 'info'); setTimeout(load, 1500); }
       else _showToast(`❌ ${data.error || 'Failed to disable'}`, 'error');
     } catch (err) { _showToast(`❌ Network error: ${err.message}`, 'error'); }
   }
 
-  async function healthCheck(county) {
+  async function healthCheck(county, state) {
     _showToast(`🩺 Health check queued for ${county}...`, 'info');
     try {
-      const res = await fetch('/api/scraper/health-check', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({county}) });
-      const data = await res.json();
-      data.ok ? _showToast(`🩺 Health check triggered for ${county}. Check back in ~60s.`, 'success') : _showToast(`❌ ${data.error || 'Health check failed'}`, 'error');
+      const body = { county };
+      if (state) body.state = state;
+      const res = await fetch('/api/scraper/health-check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(body),
+      });
+      const data = await _parseJsonRes(res);
+      data.ok
+        ? _showToast(`🩺 Health check triggered for ${county}. Check back in ~60s.`, 'success')
+        : _showToast(`❌ ${data.error || 'Health check failed'}`, 'error');
     } catch (err) { _showToast(`❌ Network error: ${err.message}`, 'error'); }
   }
 
@@ -305,10 +362,11 @@ const SLHealth = (() => {
       const data = await res.json();
       const logs = data.logs || [];
       title.textContent = `📋 ${county} — Run Logs (${logs.length})`;
+      const cJ = JSON.stringify(county);
       if (!logs.length) {
         content.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-muted)">No run logs found for ${county} yet.</div>
           <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
-            <button class="btn" onclick="SLHealth.showDrill('${county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📊 Full Detail</button>
+            <button class="btn" onclick="SLHealth.showDrill(${cJ})" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📊 Full Detail</button>
             <button class="btn" onclick="document.getElementById('countyDrillPanel').style.display='none'" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">✕ Close</button>
           </div>`;
         return;
@@ -342,7 +400,7 @@ const SLHealth = (() => {
           </table>
         </div>
         <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="btn" onclick="SLHealth.showDrill('${county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📊 Full Detail</button>
+          <button class="btn" onclick="SLHealth.showDrill(${cJ})" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📊 Full Detail</button>
           <button class="btn" onclick="document.getElementById('countyDrillPanel').style.display='none'" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">✕ Close</button>
         </div>`;
     } catch (err) {
@@ -357,15 +415,17 @@ const SLHealth = (() => {
     const title = document.getElementById('drillTitle');
     const content = document.getElementById('drillContent');
     if (!panel || !content) return;
+    const cJ = JSON.stringify(county);
+    const sJ = JSON.stringify(row.state || 'FL');
     title.textContent = `🔴 Error Detail — ${county}`;
     content.innerHTML = `
       <div style="padding:12px 0">
         <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">Last run: ${_fmtRelative(row.last_run)}</div>
         <div style="background:var(--input-bg,#0d1117);border:1px solid var(--danger);border-radius:8px;padding:14px;font-family:monospace;font-size:13px;color:var(--danger);white-space:pre-wrap;word-break:break-all">${row.error || 'No error details available'}</div>
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn" onclick="SLHealth.runNow('${county}')" style="background:var(--accent);color:#000;font-weight:700">⚡ Retry Now</button>
-          <button class="btn" onclick="SLHealth.healthCheck('${county}')" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd">🩺 Health Check</button>
-          <button class="btn" onclick="SLHealth.viewLogs('${county}')" style="background:var(--panel-bg);border:1px solid var(--border)">📋 View Logs</button>
+          <button class="btn" onclick="SLHealth.runNow(${cJ},${sJ})" style="background:var(--accent);color:#000;font-weight:700">⚡ Retry Now</button>
+          <button class="btn" onclick="SLHealth.healthCheck(${cJ},${sJ})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd">🩺 Health Check</button>
+          <button class="btn" onclick="SLHealth.viewLogs(${cJ})" style="background:var(--panel-bg);border:1px solid var(--border)">📋 View Logs</button>
           <button class="btn" onclick="document.getElementById('countyDrillPanel').style.display='none'" style="background:var(--panel-bg);border:1px solid var(--border)">✕ Close</button>
         </div>
       </div>`;
@@ -386,6 +446,8 @@ const SLHealth = (() => {
       const row = _data.find(r => r.county === county) || {};
       const cfg = _statusCfg(row.status || 'never_run');
       const isDisabled = row.enabled === false || row.status === 'disabled';
+      const cJ = JSON.stringify(county);
+      const sJ = JSON.stringify(row.state || 'FL');
       title.textContent = `📊 ${county} County — ${cfg.label}`;
       content.innerHTML = `
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:12px 0">
@@ -400,13 +462,13 @@ const SLHealth = (() => {
           <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:11px">Avg Duration</div><div class="stat-value" style="font-size:22px">${_fmtDuration(row.duration_seconds)}</div></div>
         </div>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          ${!isDisabled ? `<button class="btn" onclick="SLHealth.runNow('${county}')" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px">⚡ Run Now</button>` : ''}
-          <button class="btn" onclick="SLHealth.healthCheck('${county}')" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:6px 14px">🩺 Health Check</button>
-          <button class="btn" onclick="SLHealth.viewLogs('${county}')" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📋 View Logs</button>
+          ${!isDisabled ? `<button class="btn" onclick="SLHealth.runNow(${cJ},${sJ})" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px">⚡ Run Now</button>` : ''}
+          <button class="btn" onclick="SLHealth.healthCheck(${cJ},${sJ})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:6px 14px">🩺 Health Check</button>
+          <button class="btn" onclick="SLHealth.viewLogs(${cJ})" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📋 View Logs</button>
           <button class="btn" onclick="SL && SL.switchTab && SL.switchTab(document.querySelector('[data-tab=tabLeads]'))" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">🔍 View Leads</button>
           ${!isDisabled
-            ? `<button class="btn" onclick="SLHealth.disableScraper('${county}')" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:6px 14px">⏸ Pause Scraper</button>`
-            : `<button class="btn" onclick="SLHealth.enableScraper('${county}')" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:6px 14px">▶ Enable Scraper</button>`
+            ? `<button class="btn" onclick="SLHealth.disableScraper(${cJ},${sJ})" style="background:#3b1a1a;border:1px solid #7f1d1d;color:#fca5a5;padding:6px 14px">⏸ Pause Scraper</button>`
+            : `<button class="btn" onclick="SLHealth.enableScraper(${cJ},${sJ})" style="background:#1a3b1a;border:1px solid #166534;color:#86efac;padding:6px 14px">▶ Enable Scraper</button>`
           }
           <button class="btn" onclick="document.getElementById('countyDrillPanel').style.display='none'" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">✕ Close</button>
         </div>

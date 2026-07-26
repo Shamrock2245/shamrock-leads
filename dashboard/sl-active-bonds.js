@@ -417,6 +417,10 @@ window.openEditDrawer = function(bookingNumber) {
   _loadRenewalHistory(bookingNumber);
   // Load related cases (same defendant / indemnitor)
   if (window.SLRelationships) SLRelationships.loadRelatedIntoPanel(bond);
+  // Family tree preview for defendant
+  if (window.SLFamilyTree && bond.defendant_name) {
+    SLFamilyTree.mountBondPanel('abFamilyTreePanel', bond.defendant_name);
+  }
 }
 
 window.closeEditDrawer = function() {
@@ -569,7 +573,9 @@ window._buildEditDrawer = function() {
         <div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#8b5cf6;color:#fff" onclick="SLRelationships&&SLRelationships.findFromEdit('indemnitor')">🔗 All bonds for this indemnitor</button>
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#6366f1;color:#fff" onclick="SLRelationships&&SLRelationships.openGraph(window._abEditBookingNumber)">🕸️ Case relationship map</button>
+          <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#10b981;color:#000" onclick="(function(){var n=document.getElementById('abEditDefName')&&document.getElementById('abEditDefName').value;if(window.SLFamilyTree&&n)SLFamilyTree.openForPerson(n);})()">👪 Family tree</button>
         </div>
+        <div id="abFamilyTreePanel" style="grid-column:1/-1;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px;background:rgba(16,185,129,.06)"></div>
       `)}
       ${_es('References', `
         ${_ef('abEditRef1Name','text','Ref 1 Name','Full name')}

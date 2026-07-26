@@ -76,18 +76,60 @@ _BB_WEBHOOK_SECRET = os.getenv("BB_WEBHOOK_SECRET", "")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _verify_signature(payload: bytes, signature: str) -> bool:
-    """Verify the HMAC-SHA256 signature from BlueBubbles (if secret is set)."""
+    """Verify optional HMAC-SHA256 webhook signature.
+
+    BlueBubbles Server does **not** send HMAC signatures by default (only URL +
+    event list). If BB_WEBHOOK_SECRET is set but the request has no signature
+    header, accept the event (still protected by public HTTPS + secret URL
+    knowledge). Only reject when a signature *is* present and does not match.
+    """
     if not _BB_WEBHOOK_SECRET:
         return True  # No secret configured — skip verification
+    if not signature:
+        # BB default webhooks omit signatures — do not drop all inbound events
+        return True
     expected = hmac.new(
         _BB_WEBHOOK_SECRET.encode(), payload, hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature or "")
+    # Accept raw hex or sha256=<hex> forms
+    sig = (signature or "").strip()
+    if sig.lower().startswith("sha256="):
+        sig = sig.split("=", 1)[1].strip()
+    return hmac.compare_digest(expected, sig)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Event Handlers
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_bb_message(event_data: dict | None) -> dict:
+    """Normalize BlueBubbles webhook / poll message shapes.
+
+    Official BB Server posts::
+
+        { "type": "new-message", "data": { "guid": "...", "text": "...", "isFromMe": false, "handle": {...} } }
+
+    i.e. ``data`` *is* the message. Some proxies or older builds nest further
+    as ``data.message`` or ``data.data``. Accept all of these.
+    """
+    if not isinstance(event_data, dict):
+        return {}
+    # Prefer nested wrappers when present without top-level message identity
+    nested = event_data.get("message") or event_data.get("data")
+    if (
+        isinstance(nested, dict)
+        and not event_data.get("guid")
+        and "isFromMe" not in event_data
+        and not event_data.get("text")
+    ):
+        return nested
+    # Standard BB shape: data *is* the message
+    if any(k in event_data for k in ("guid", "text", "isFromMe", "handle", "chats", "dateCreated")):
+        return event_data
+    if isinstance(nested, dict):
+        return nested
+    return event_data
+
 
 async def _handle_new_message(event_data: dict, db) -> dict:
     """Process a new-message event from BlueBubbles.
@@ -95,26 +137,57 @@ async def _handle_new_message(event_data: dict, db) -> dict:
     Mirrors the logic previously in _poll_inbox_once() but triggered
     instantly via webhook instead of every 30 seconds.
     """
-    message = event_data.get("message") or event_data.get("data") or {}
+    message = _extract_bb_message(event_data)
     if not message:
         return {"processed": False, "reason": "no_message_in_payload"}
 
     # Only process inbound messages (is_from_me = False)
-    is_from_me = message.get("isFromMe", True)
+    # BB uses isFromMe; tolerate is_from_me aliases
+    is_from_me = message.get("isFromMe", message.get("is_from_me", True))
     if is_from_me:
         return {"processed": False, "reason": "outbound_message_skipped"}
 
     # Extract message details
-    msg_guid = message.get("guid", "")
-    msg_text = message.get("text", "") or ""
-    chat = message.get("chats", [{}])[0] if message.get("chats") else {}
-    chat_guid = chat.get("guid", "") or message.get("chatGuid", "")
+    msg_guid = str(message.get("guid") or message.get("originalROWID") or "")
+    msg_text = message.get("text", "") or message.get("subject", "") or ""
+    chats = message.get("chats") or []
+    chat = chats[0] if isinstance(chats, list) and chats else {}
+    if not isinstance(chat, dict):
+        chat = {}
+    chat_guid = chat.get("guid", "") or message.get("chatGuid", "") or message.get("chat_guid", "")
     handle = message.get("handle") or {}
-    sender_address = handle.get("address", "") or ""
+    if isinstance(handle, str):
+        sender_address = handle
+    else:
+        sender_address = (handle.get("address", "") if isinstance(handle, dict) else "") or ""
+    if not sender_address:
+        # Fallbacks used by some BB builds / SMS
+        sender_address = (
+            message.get("address")
+            or message.get("handleId")
+            or (chat.get("chatIdentifier") if chat else "")
+            or ""
+        )
+        # chatIdentifier may be "any;-;+1..." — strip prefix
+        if ";-;" in str(sender_address):
+            sender_address = str(sender_address).split(";-;")[-1]
     sender_phone = format_phone(sender_address)
 
+    if not sender_phone:
+        logger.warning(
+            "BB webhook: could not parse sender phone from handle=%r chat=%r",
+            handle, chat_guid,
+        )
+        return {"processed": False, "reason": "no_sender_phone"}
+
     if not msg_text.strip():
-        return {"processed": False, "reason": "empty_message"}
+        # Reactions / stickers may have empty text — still surface a marker
+        # so the thread updates (better than silent drop).
+        assoc = message.get("associatedMessageType")
+        if assoc:
+            msg_text = f"[reaction:{assoc}]"
+        else:
+            return {"processed": False, "reason": "empty_message"}
 
     # ── STOP / Opt-Out Detection (must run before any other processing) ──────
     # Honour STOP, UNSUBSCRIBE, QUIT, CANCEL, END, STOP ALL (case-insensitive)

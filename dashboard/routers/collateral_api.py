@@ -42,11 +42,11 @@ async def create_collateral_item(request: Request):
 @collateral_bp.post("/return/{collateral_id}")
 async def return_collateral(
     collateral_id: str = Path(...),
-    request: Optional[Request] = None
+    request: Request = None,
 ):
     """Mark collateral item as returned to depositor."""
     try:
-        data = (await request.json()) if request else {}
+        data = await request.json()
         returned_by = data.get("returned_by", "Staff")
         return_note = data.get("return_note", "")
         item = await return_collateral_item(collateral_id, returned_by=returned_by, return_note=return_note)

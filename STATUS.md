@@ -1,12 +1,13 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-24  
+> **Last verified:** 2026-07-26  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
 > **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`  
 > **Multi-state plan:** `docs/MULTI_STATE_SCRAPER_ROADMAP.md`  
-> **Proxy stack:** `docs/APE_INTEGRATION_GUIDE.md` · `docs/SELF_HOSTED_PROXY_ARCHITECTURE.md`
+> **Proxy stack:** `docs/APE_INTEGRATION_GUIDE.md` · `docs/SELF_HOSTED_PROXY_ARCHITECTURE.md`  
+> **BlueBubbles versions:** `docs/BLUEBUBBLES_VERSIONING.md` (App v2 ≠ Server; Server latest = 1.9.9)
 
 ---
 
@@ -19,7 +20,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
   → paperwork → payment → active bond → court/GPS/FTA → close
 ```
 
-**BlueBubbles (iMessage)** is the preferred consumer rail for outreach; full office reliability is an ops task (tunnel + env), not a missing dashboard tab.
+**BlueBubbles (iMessage)** is the preferred consumer rail for outreach. Office Mac runs **Server v1.9.9** (latest). Desktop reply visibility (webhook parse + `message/query` poll + thread hydrate) fixed **2026-07-26** — see `CHANGELOG` 2.17.0. App **v2.0.0+89** is the consumer *client* only; do not confuse with server upgrades (`docs/BLUEBUBBLES_VERSIONING.md`).
 
 **Bail School** is a **separate P&L** (`shamrock-bail-school`). Leads may share brand, Slack, and secrets hygiene — not course progress state.
 
@@ -76,6 +77,9 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | &nbsp;&nbsp;`intake.py` — `surety_id` persisted to MongoDB `intake_queue` | ✅ |
 | **Bond check-in A+C (July 2026)** — transparent portal GPS + condition policy | ✅ code |
 | **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired |
+| **Family Tree** tab + `/api/family-tree/*` (1st/2nd degree, soft-delete) | ✅ code 2026-07-26 |
+| **iMessage inbound replies** on desktop (webhook + poll + hydrate) | ✅ code 2026-07-26 · deploy required |
+| Scraper **Run** always JSON + county/state matching | ✅ code 2026-07-26 |
 
 ---
 

@@ -35,7 +35,7 @@ TRACCAR_PUBLIC_HOST = os.getenv(
 )
 TRACCAR_OSMAND_PUBLIC_PORT = os.getenv("TRACCAR_OSMAND_PUBLIC_PORT", "5055")
 TRACCAR_EMAIL = os.getenv("TRACCAR_EMAIL", "admin@shamrockbailbonds.biz")
-TRACCAR_PASSWORD = os.getenv("TRACCAR_PASSWORD", "shamrock-traccar-2245")
+TRACCAR_PASSWORD = os.getenv("TRACCAR_PASSWORD", "Shamrock@Traccar2026!")
 TRACCAR_TOKEN = os.getenv("TRACCAR_TOKEN", "")  # Optional: use token auth instead
 
 _TIMEOUT = httpx.Timeout(15.0, connect=10.0)

@@ -497,35 +497,51 @@ const SLMultiState = (() => {
   }
 
   // ─── ACTIONS ──────────────────────────────────────────────────────────────
+  async function _parseJsonRes(res) {
+    const text = await res.text();
+    if (!text) return { ok: false, error: `Empty response (HTTP ${res.status})` };
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return {
+        ok: false,
+        error: `Server returned non-JSON (HTTP ${res.status}): ${text.replace(/\s+/g, ' ').slice(0, 120)}`,
+      };
+    }
+  }
+
   async function runCounty(county, state) {
     try {
       const res = await fetch('/api/scraper/run-now', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ county, state: state || undefined }),
       });
-      const data = await res.json();
+      const data = await _parseJsonRes(res);
       if (data.ok) {
         const label = state ? `${county} (${state})` : county;
-        _showToast(`▶ Run queued for ${label}`, 'success');
+        _showToast(`▶ Run queued for ${data.county || label}`, 'success');
       } else {
         _showToast(`Error: ${data.error || 'Unknown'}`, 'error');
       }
     } catch (e) {
-      _showToast(`Failed to trigger ${county}`, 'error');
+      _showToast(`Failed to trigger ${county}: ${e.message}`, 'error');
     }
   }
 
   async function runAll() {
     if (!confirm('Trigger an immediate run for ALL registered scrapers across 10 states? This will put significant load on the server.')) return;
     try {
-      const res = await fetch('/api/scraper/run-all', { method: 'POST' });
-      const data = await res.json();
+      const res = await fetch('/api/scraper/run-all', { method: 'POST', credentials: 'same-origin' });
+      const data = await _parseJsonRes(res);
       if (data.ok) {
         _showToast(`▶ Run queued for all ${data.triggered} scrapers`, 'success');
+      } else {
+        _showToast(`Error: ${data.error || 'Run-all failed'}`, 'error');
       }
     } catch (e) {
-      _showToast('Failed to trigger run-all', 'error');
+      _showToast(`Failed to trigger run-all: ${e.message}`, 'error');
     }
   }
 

@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.0] — 2026-07-26 (iMessage replies + Family Tree + scraper Run JSON)
+
+### Fixed — iMessage replies not showing on desktop
+Root causes (verified against live BlueBubbles **Server v1.9.9**):
+- Inbox poller used **`GET /api/v1/message`** which returns **404** on modern BB Server.
+  Official path is **`POST /api/v1/message/query`** (same as BB client / community guides).
+- Webhook handler expected nested `data.message`; BB posts the message **as** `data`.
+- Background poller only ran when auto-reply `enabled=true` (default **false**), so inbound
+  was never ingested when AI auto-reply was off.
+- Optional `BB_WEBHOOK_SECRET` rejected unsigned BB webhooks (BB does not send HMAC by default).
+
+Fixes:
+- `bb_private_api.py` — `get_messages` / `get_chats` / `get_chat_messages` use POST query APIs.
+- `bb_webhook_receiver.py` — `_extract_bb_message()`, soft HMAC, better handle/phone parsing.
+- `imessage_automation.py` — always poll inbound; thread endpoint **hydrates from BB** into Mongo.
+- `sl-imessage.js` — debounced SSE refresh; cache bump `?v=7`.
+
+**Versioning note:** BlueBubbles **App** `v2.0.0+89` is the phone/desktop *client* rewrite —
+it is **not** a server upgrade. Mac server latest remains **1.9.9** (already deployed). See
+`docs/BLUEBUBBLES_VERSIONING.md`.
+
+### Added — Family / Relationship Network (1st–2nd degree)
+- Models + service + API: `family_tree.py`, `family_tree_service.py`, `family_tree_api.py`
+  (`GET /api/family-tree/graph/{name}`, `POST/DELETE /relationship`, list relationships).
+- Frontend: Intelligence → **Family Tree** tab (`sl-family-tree.js`); Active Bonds edit drawer
+  panel + open-tree actions. Soft-delete, session dismiss, bond co-indemnitor discovery.
+
+### Fixed — Scraper Health / Multi-State **Run** button JSON errors
+- `/api/scraper/run-now` and `run-all` always return JSON on failure (no plain-text 500).
+- County+state matching for bare names (`Lee` + `FL` → `Lee (FL)`).
+- Global unhandled exception handler returns JSON for API routes.
+- `sl-health.js` / `sl-multi-state.js` safe JSON parse; pass `state` on Run.
+
+### Fixed / improved — OSINT + collateral + health tab wiring
+- OSINT: optional subject ID (ad-hoc scans), always-visible phone/email, PDF export per scan row.
+- `collateral_api.py` — FastAPI `Request` typing so the router imports (was silent-missing).
+- Scraper Health tab now loads `SLHealth` fleet table + Service Control.
+
+---
+
 ## [2.16.1] — 2026-07-20 (SSE publisher coverage — dead listeners wired)
 
 ### Fixed — Frontend SSE listeners with no backend publisher

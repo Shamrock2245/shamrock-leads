@@ -139,9 +139,10 @@
       <div class="sidebar-group-body" data-group-body="intel" hidden>
         <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">10 ST</span></button>
         <button class="sidebar-btn" data-tab="tabBondIntel" onclick="SL.switchTab(this);SLBondIntel.load()"><span class="sidebar-btn-icon">💰</span> Bond Intelligence <span class="badge" id="bondIntelBadge" style="background:#10b981;color:#000;font-size:9px">LIVE</span></button>
-        <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
+        <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLHealth.load();SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
         <button class="sidebar-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()"><span class="sidebar-btn-icon">🧠</span> Intelligence</button>
         <button class="sidebar-btn" data-tab="tabOSINT" onclick="SL.switchTab(this);SLOSINT.init()"><span class="sidebar-btn-icon">🕵️</span> OSINT Intel <span class="badge" id="osintBadge" style="background:#ef4444;display:none"></span></button>
+        <button class="sidebar-btn" data-tab="tabFamilyTree" onclick="SL.switchTab(this);SLFamilyTree.init()"><span class="sidebar-btn-icon">👪</span> Family Tree</button>
         <button class="sidebar-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()"><span class="sidebar-btn-icon">✨</span> Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
         <button class="sidebar-btn" data-tab="tabAlphaIntel" onclick="SL.switchTab(this);SLAlphaIntel.load()"><span class="sidebar-btn-icon">👁️</span> Alpha Intel</button>
         <button class="sidebar-btn" data-tab="tabLegalNLP" onclick="SL.switchTab(this);SLLegalNLP.init('legalNlpContainer')"><span class="sidebar-btn-icon">⚖️</span> Legal NLP</button>
@@ -5232,8 +5233,8 @@
               </select>
             </div>
             <div class="osint-field">
-              <label>Subject ID</label>
-              <input type="text" id="osintSubjectId" placeholder="MongoDB ObjectId" />
+              <label>Subject ID (optional)</label>
+              <input type="text" id="osintSubjectId" placeholder="Optional — auto-generated if blank" />
             </div>
           </div>
 
@@ -5256,7 +5257,7 @@
               <label>Email Address</label>
               <input type="email" id="osintEmail" placeholder="subject@email.com" />
             </div>
-            <div class="osint-field" id="osintPhoneField" style="display:none">
+            <div class="osint-field" id="osintPhoneField">
               <label>Phone Number</label>
               <input type="tel" id="osintPhone" placeholder="+1 239-555-0100" />
             </div>
@@ -5323,6 +5324,82 @@
     </div>
   </div>
 </div><!-- end tabOSINT -->
+
+<!-- ═══════════════════════════════════════════════════════
+     FAMILY / RELATIONSHIP NETWORK
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabFamilyTree">
+  <div class="container" style="max-width:1200px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0;font-size:20px">👪 Family &amp; Relationship Network</h2>
+        <p style="margin:6px 0 0;font-size:13px;color:var(--muted)">1st &amp; 2nd degree relatives · Persist graph · Soft-delete audit · Bond Desk co-signors</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="SLFamilyTree.setDegree(1)" id="ftDegree1" style="padding:6px 12px;background:var(--accent);color:#000;font-weight:700;border:none;border-radius:8px;cursor:pointer">1st Degree</button>
+        <button class="btn" onclick="SLFamilyTree.setDegree(2)" id="ftDegree2" style="padding:6px 12px;background:var(--panel);border:1px solid var(--border);color:var(--text);border-radius:8px;cursor:pointer">2nd Degree</button>
+      </div>
+    </div>
+
+    <div class="panel" style="padding:16px 18px;margin-bottom:14px">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">Person name (defendant or indemnitor)</label>
+          <input type="text" id="ftPersonName" placeholder="e.g. John Michael Smith" style="width:100%;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px" onkeydown="if(event.key==='Enter')SLFamilyTree.loadGraph()">
+        </div>
+        <button class="btn" onclick="SLFamilyTree.loadGraph()" style="padding:9px 16px;background:var(--accent);color:#000;font-weight:700;border:none;border-radius:8px;cursor:pointer">🔍 Load Tree</button>
+        <button class="btn" onclick="SLFamilyTree.openAddModal()" style="padding:9px 16px;background:#6366f1;color:#fff;font-weight:600;border:none;border-radius:8px;cursor:pointer">+ Link Relative</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 320px;gap:14px" class="ft-main-grid">
+      <div class="panel" style="padding:16px;min-height:420px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div class="panel-title" style="margin:0" id="ftGraphTitle">Family Tree</div>
+          <span id="ftGraphMeta" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div id="ftGraphCanvas" style="min-height:360px">
+          <div style="padding:48px 20px;text-align:center;color:var(--muted)">
+            <div style="font-size:36px;margin-bottom:10px">🌳</div>
+            <div>Enter a name and load the family tree to visualize 1st/2nd degree relatives.</div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="padding:16px">
+        <div class="panel-title" style="margin:0 0 10px">Links</div>
+        <div id="ftRelList" style="font-size:12px;color:var(--muted)">No relationships loaded yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+@media (max-width: 900px) {
+  .ft-main-grid { grid-template-columns: 1fr !important; }
+}
+.ft-node {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--panel);
+  min-width: 140px;
+  max-width: 200px;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,.2);
+}
+.ft-node.root { border-color: var(--accent,#00d4aa); box-shadow: 0 0 0 1px rgba(0,212,170,.25); }
+.ft-node.defendant { border-color: rgba(0,212,170,.5); }
+.ft-node.indemnitor { border-color: rgba(139,92,246,.5); }
+.ft-node-name { font-weight: 700; font-size: 13px; color: var(--text); }
+.ft-node-role { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+.ft-node-meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+.ft-tier-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 12px 0 8px; }
+.ft-tier { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: stretch; }
+.ft-rel-row {
+  display: flex; justify-content: space-between; gap: 8px; align-items: flex-start;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+</style>
 
 <!-- ═══ MODAL: MONTHLY SURETY BORDEREAU EXPORTER ═══ -->
 <div class="modal-overlay" id="bordereauModal" style="display:none">
@@ -5461,7 +5538,7 @@
 
 <script src="/sl-omnibar.js?v=1"></script>
 <script src="/sl-notifications.js?v=4"></script>
-<script src="/sl-imessage.js?v=6"></script>
+<script src="/sl-imessage.js?v=7"></script>
 <script src="/sl-accounting.js?v=1"></script>
 <script src="/sl-alpha-intel.js?v=1"></script>
 <script src="/sl-fta.js?v=1"></script>
@@ -5472,6 +5549,7 @@
 <script src="/sl-paperwork.js?v=2"></script>
 <script src="/sl-automations.js?v=2"></script>
 <script src="/sl-relationships.js?v=1"></script>
+<script src="/sl-family-tree.js?v=1"></script>
 <link rel="stylesheet" href="/sl-bond-intelligence.css?v=1">
   <link rel="stylesheet" href="/sl-multi-state.css?v=2">
 <script src="/sl-bond-intelligence.js?v=2"></script>

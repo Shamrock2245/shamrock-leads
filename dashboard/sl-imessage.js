@@ -148,8 +148,8 @@ window.SLiMessage = (() => {
     loadAutomationConfig();
     loadAutoReplyConfig();
 
-    /* Polling intervals */
-    _state.pollTimer      = setInterval(loadInbox,  POLL_MS);
+    /* Polling intervals — inbox poll also reloads open thread (hydrate from BB) */
+    _state.pollTimer      = setInterval(() => loadInbox({ skipThread: false }), POLL_MS);
     _state.healthInterval = setInterval(loadHealth, HEALTH_MS);
     _state.findMyInterval = setInterval(loadFindMy, FINDMY_MS);
 
@@ -195,7 +195,7 @@ window.SLiMessage = (() => {
         refreshBtn.innerHTML = '⏳ Polling…';
         refreshBtn.disabled = true;
         await safeFetch('/api/imessage/inbox/poll', { method: 'POST' });
-        await loadInbox();
+        await loadInbox({ skipThread: false });
         refreshBtn.innerHTML = origHtml;
         refreshBtn.disabled = false;
       });
@@ -459,8 +459,14 @@ window.SLiMessage = (() => {
     if (_state.activeThread && phone && _phonesMatch(_state.activeThread, phone) && preview) {
       _appendInboundBubble(preview, data.sent_at || data.timestamp);
     }
-    // Refresh sidebar + open thread (loadInbox reloads active thread)
-    loadInbox();
+    // Debounced full refresh — avoid thrashing on burst of SSE events
+    clearTimeout(_state._inboundRefreshTimer);
+    _state._inboundRefreshTimer = setTimeout(() => {
+      loadInbox();
+      if (_state.activeThread && phone && _phonesMatch(_state.activeThread, phone)) {
+        _loadThread(_state.activeThread, _state.activeThreadName || fmtPhone(_state.activeThread));
+      }
+    }, 400);
   }
 
   function _appendInboundBubble(text, ts) {
@@ -482,14 +488,15 @@ window.SLiMessage = (() => {
   }
 
   /* ── Inbox ─────────────────────────────────────────────────────────────── */
-  async function loadInbox() {
+  async function loadInbox(opts = {}) {
     const { ok, data } = await safeFetch('/api/imessage/inbox?limit=50');
     if (ok) {
       _state.inbox = Array.isArray(data) ? data : (data.messages || data.chats || []);
       updateInboxBadge();
       renderInbox();
       // Keep open thread in sync on periodic poll (catches poller path without SSE)
-      if (_state.activeThread) {
+      // Skip when caller is already about to reload the thread (prevents double fetch)
+      if (_state.activeThread && !opts.skipThread) {
         _loadThread(_state.activeThread, _state.activeThreadName || fmtPhone(_state.activeThread));
       }
     }

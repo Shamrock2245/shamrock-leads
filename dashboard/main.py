@@ -110,6 +110,21 @@ app.add_middleware(PinAuthMiddleware)
 mount_login_routes(app)
 
 
+# ── Ensure unhandled errors return JSON (not Starlette plain-text "Internal Server Error") ──
+# Starlette still routes HTTPException / RequestValidationError to their own handlers (MRO).
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception):
+    """Dashboard JS always does res.json() — plain-text 500 breaks Run / Health buttons."""
+    path = request.url.path or ""
+    logger.exception("Unhandled error on %s: %s", path, exc)
+    payload = {
+        "ok": False,
+        "error": f"Internal server error: {type(exc).__name__}: {exc}",
+        "path": path,
+    }
+    return JSONResponse(payload, status_code=500)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # No-Cache Middleware for JS/CSS (replaces Quart serve_static() headers)
 # ═══════════════════════════════════════════════════════════════════════════════

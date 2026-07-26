@@ -134,6 +134,13 @@ class OSINTService:
         """Insert scan doc, dispatch background worker, return scan_id."""
         col = self._scans_col
         now = datetime.now(timezone.utc)
+        subject_id = req.subject_id or f"adhoc_{int(now.timestamp())}"
+        
+        usernames = list(req.usernames or [])
+        if req.email and "@" in req.email:
+            handle = req.email.split("@")[0].strip()
+            if handle and handle not in usernames:
+                usernames.append(handle)
 
         engines_list = [e.value for e in req.engines]
 
@@ -152,12 +159,12 @@ class OSINTService:
 
         doc = {
             "subject_type": req.subject_type.value,
-            "subject_id": req.subject_id,
+            "subject_id": subject_id,
             "full_name": req.full_name,
             "scan_requested_by": actor,
             "engines_requested": engines_list,
             "scan_params": {
-                "usernames": req.usernames or [],
+                "usernames": usernames,
                 "email": req.email,
                 "phone": req.phone,
                 "full_name": req.full_name,
@@ -215,8 +222,14 @@ class OSINTService:
         worker_result: Dict[str, Any] = {}
 
         try:
+            usernames = list(req.usernames or [])
+            if req.email and "@" in req.email:
+                handle = req.email.split("@")[0].strip()
+                if handle and handle not in usernames:
+                    usernames.append(handle)
+
             payload = {
-                "usernames": req.usernames or [],
+                "usernames": usernames,
                 "full_name": req.full_name,
                 "email": req.email,
                 "phone": req.phone,

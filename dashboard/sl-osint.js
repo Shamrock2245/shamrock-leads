@@ -31,6 +31,7 @@
     exportJSON,
     exportCSV,
     exportPDF,
+    exportPDFForId,
     attachToSubject,
     markRelevant,
     markIrrelevant,
@@ -135,12 +136,10 @@
   }
 
   function _updateAdaptiveFields() {
-    const needsEmail = _selectedEngines.has('blackbird') || _selectedEngines.has('spiderfoot');
-    const needsPhone = _selectedEngines.has('spiderfoot');
     const emailField = $('osintEmailField');
     const phoneField = $('osintPhoneField');
-    if (emailField) emailField.style.display = needsEmail ? '' : 'none';
-    if (phoneField) phoneField.style.display = needsPhone ? '' : 'none';
+    if (emailField) emailField.style.display = '';
+    if (phoneField) phoneField.style.display = '';
   }
 
   // ── Load Scans ─────────────────────────────────────────────────────
@@ -178,7 +177,7 @@
 
     container.innerHTML = _scans.map(scan => {
       const id = scan._id;
-      const name = scan.full_name || 'Unknown Subject';
+      const name = scan.full_name || (scan.scan_params?.email || scan.scan_params?.usernames?.[0] || 'Ad-Hoc Subject');
       const engines = (scan.engines_requested || []).join(', ');
       const status = scan.status || 'unknown';
       const count = scan.total_accounts || 0;
@@ -192,6 +191,7 @@
         </div>
         <span class="report-count">${count}</span>
         <span class="report-status ${status}">${status}</span>
+        <button class="osint-row-pdf-btn" onclick="event.stopPropagation();SLOSINT.exportPDFForId('${id}')" title="Download PDF Report" style="background:rgba(0,100,60,0.15);color:#00643c;border:1px solid rgba(0,100,60,0.3);border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px">📄 PDF</button>
       </div>`;
     }).join('');
   }
@@ -202,7 +202,7 @@
     if (!btn || btn.disabled) return;
 
     const subjectType = $('osintSubjectType')?.value || 'defendant';
-    const subjectId = $('osintSubjectId')?.value?.trim();
+    let subjectId = $('osintSubjectId')?.value?.trim();
     const fullName = $('osintFullName')?.value?.trim();
     const usernames = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
     const email = $('osintEmail')?.value?.trim() || null;
@@ -211,13 +211,13 @@
     const secondOpinion = $('osintSecondOpinion')?.checked || false;
     const notes = $('osintNotes')?.value?.trim() || null;
 
-    if (!subjectId) {
-      toast('Subject ID is required', 'error');
-      return;
-    }
     if (!fullName && !usernames.length && !email && !phone) {
       toast('At least one identifier required (name, username, email, or phone)', 'error');
       return;
+    }
+
+    if (!subjectId) {
+      subjectId = 'adhoc_' + Date.now();
     }
 
     const engines = Array.from(_selectedEngines);
@@ -570,6 +570,11 @@
   function exportPDF() {
     if (!_activeScan) return;
     _downloadFile(`${API}/api/osint/scan/${_activeScan._id}/export/pdf`, `osint_report_${_activeScan._id}.pdf`);
+  }
+
+  function exportPDFForId(scanId) {
+    if (!scanId) return;
+    _downloadFile(`${API}/api/osint/scan/${scanId}/export/pdf`, `osint_report_${scanId}.pdf`);
   }
 
   async function _downloadFile(url, filename) {
