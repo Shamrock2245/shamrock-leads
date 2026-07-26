@@ -18,6 +18,7 @@
   <entry key='web.port'>8082</entry>
   <entry key='web.address'>0.0.0.0</entry>
   <entry key='web.path'>/opt/traccar/web</entry>
+  <entry key='registration.default'>true</entry>
 
   <!-- ── Geocoder (reverse geocoding for human-readable addresses) ─────── -->
   <entry key='geocoder.enable'>true</entry>
