@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.17.1] — 2026-07-26 (FL Wave-2 counties on registry + frontend)
+
+### Fixed — Finished FL scrapers missing from dashboard fleet UI
+Sixteen Wave-2 FL counties were **scheduled in `main.py`** but absent from
+`REGISTERED_COUNTIES`, so Scraper Health / Multi-State Ops / dropdowns never
+listed them (ops could not Run / Pause / see health).
+
+**Added to registry (now FL 67/67 · total 247):** Baker, Bradford, Calhoun,
+Franklin, Gilchrist, Gulf, Hamilton, Holmes, Jefferson, Lafayette, Levy,
+Liberty, Madison, Union, Wakulla, Washington.
+
+Also:
+- Normalize `St. Johns` / `St. Lucie` slugs to `st_johns` / `st_lucie` (strip
+  periods) in `scraper_id`, trigger keys, and `_resolve_job_id` so Run-Now
+  matches the scheduler job id.
+- Regression test: `tests/test_registered_counties_coverage.py`.
+
+---
+
 ## [2.17.0] — 2026-07-26 (iMessage replies + Family Tree + scraper Run JSON)
 
 ### Fixed — iMessage replies not showing on desktop

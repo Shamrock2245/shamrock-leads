@@ -43,7 +43,7 @@
 
 ## Phase 1b: FL County Expansion ✅ COMPLETE (core market)
 
-**Registered:** 51 FL scrapers in `scrapers/counties/` (legacy job IDs `scraper_<county>`).
+**Registered:** **67 FL** scrapers in `scrapers/counties/` (legacy job IDs `scraper_<county>`) — full FL coverage on dashboard registry.
 
 **Shared bases:** P2C, SmartCOP, JailTracker, New World, Kologik, Southern SW, etc.
 

@@ -557,7 +557,14 @@ class BaseScraper(ABC):
         Other states use ``scraper_<st>_<county>`` so multi-state names (Lee, Sumter,
         etc.) do not collide.
         """
-        county_slug = self.county.lower().replace(" ", "_").replace("-", "_")
+        # Strip periods so St. Johns → st_johns (not st._johns)
+        county_slug = (
+            self.county.lower()
+            .replace(".", "")
+            .replace(" ", "_")
+            .replace("-", "_")
+            .strip("_")
+        )
         st = (self.state or "FL").upper()
         if st == "FL":
             return f"scraper_{county_slug}"

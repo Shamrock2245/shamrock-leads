@@ -86,7 +86,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| Registered scrapers | **231** (74 GA · 51 FL · 46 SC · 31 NC · 12 TX · 6 TN · 4 LA · 3 AL · 2 CT · 2 MS) — see `STATUS.md` |
+| Registered scrapers | **247** (74 GA · **67 FL** · 46 SC · 31 NC · 12 TX · 6 TN · 4 LA · 3 AL · 2 CT · 2 MS) — see `STATUS.md` |
 | Scraper paths | `counties/` (FL), `counties_ga/`, `counties_sc/`, `counties_nc/`, `counties_tx/`, `counties_tn/`, `counties_la/`, `counties_al/`, `counties_ct/`, `counties_ms/` |
 | Job ID form | FL: `scraper_<county>` · other: `scraper_<st>_<county>` |
 | API blueprint modules | 66+ (in `dashboard/routers/`) incl. `multi_state_ops.py` |

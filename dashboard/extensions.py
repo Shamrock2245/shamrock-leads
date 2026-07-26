@@ -180,11 +180,14 @@ POA_RECEIPT_DATA = [
 # Format: "County (ST)" so multi-state name collisions (Lee, Sumter, Polk…) stay unique.
 # Mongo stores bare county + separate state field — parsers strip the (ST) for queries.
 REGISTERED_COUNTIES = sorted([
-    # ── Florida ──
+    # ── Florida (all 67 counties — Wave 2 full coverage registered in main.py) ──
     "Alachua (FL)",
+    "Baker (FL)",
     "Bay (FL)",
+    "Bradford (FL)",
     "Brevard (FL)",
     "Broward (FL)",
+    "Calhoun (FL)",
     "Charlotte (FL)",
     "Citrus (FL)",
     "Clay (FL)",
@@ -195,18 +198,28 @@ REGISTERED_COUNTIES = sorted([
     "Duval (FL)",
     "Escambia (FL)",
     "Flagler (FL)",
+    "Franklin (FL)",
     "Gadsden (FL)",
+    "Gilchrist (FL)",
     "Glades (FL)",
+    "Gulf (FL)",
+    "Hamilton (FL)",
     "Hardee (FL)",
     "Hendry (FL)",
     "Hernando (FL)",
     "Highlands (FL)",
     "Hillsborough (FL)",
+    "Holmes (FL)",
     "Indian River (FL)",
     "Jackson (FL)",
+    "Jefferson (FL)",
+    "Lafayette (FL)",
     "Lake (FL)",
     "Lee (FL)",
     "Leon (FL)",
+    "Levy (FL)",
+    "Liberty (FL)",
+    "Madison (FL)",
     "Manatee (FL)",
     "Marion (FL)",
     "Martin (FL)",
@@ -230,8 +243,11 @@ REGISTERED_COUNTIES = sorted([
     "Sumter (FL)",
     "Suwannee (FL)",
     "Taylor (FL)",
+    "Union (FL)",
     "Volusia (FL)",
+    "Wakulla (FL)",
     "Walton (FL)",
+    "Washington (FL)",
     # ── Georgia ──
     "Bacon (GA)",
     "Baker (GA)",
@@ -460,13 +476,28 @@ def county_label(name: str, state: str | None = None) -> str:
     return f"{bare} ({st})"
 
 
+def _county_slug(name: str) -> str:
+    """Normalize county name to a stable job/trigger slug.
+
+    Strips periods so ``St. Johns`` → ``st_johns`` (not ``st._johns``).
+    """
+    return (
+        (name or "")
+        .lower()
+        .replace(".", "")
+        .replace(" ", "_")
+        .replace("-", "_")
+        .strip("_")
+    )
+
+
 def registered_county_to_trigger_key(label: str) -> str:
     """Map REGISTERED_COUNTIES label to scheduler trigger key.
 
     FL → bare county (``lee``). Other states → ``sc_lee`` / ``nc_mecklenburg``.
     """
     name, st = parse_registered_county(label)
-    slug = name.lower().replace(" ", "_").replace("-", "_")
+    slug = _county_slug(name)
     if not st or st == "FL":
         return slug
     return f"{st.lower()}_{slug}"

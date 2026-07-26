@@ -445,17 +445,20 @@ class ScraperScheduler:
 
         state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "ms"}
 
+        def _slug(s: str) -> str:
+            return s.lower().replace(".", "").replace(" ", "_").replace("-", "_").strip("_")
+
         # "County (ST)" form used by dashboard REGISTERED_COUNTIES
         m = re.match(r"^(.+?)\s*\(([A-Za-z]{2})\)$", raw)
         if m:
-            cty = m.group(1).strip().lower().replace(" ", "_").replace("-", "_")
+            cty = _slug(m.group(1).strip())
             st = m.group(2).lower()
             jid = f"scraper_{cty}" if st == "fl" else f"scraper_{st}_{cty}"
             if jid in self._scrapers:
                 return jid
             raw = f"{st}_{cty}"
 
-        key = raw.lower().replace(" ", "_").replace("-", "_")
+        key = _slug(raw)
 
         # Already a job id
         if key in self._scrapers:

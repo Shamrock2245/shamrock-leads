@@ -31,7 +31,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
-| **FL** | **51** | `scrapers/counties/` | OSI home market; legacy `scraper_<county>` IDs |
+| **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler (Wave 2); legacy `scraper_<county>` IDs |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **NC** | **31** | `scrapers/counties_nc/` | Southern SW, Zuercher, P2C, Meck/Durham… |
 | **TX** | **12** | `scrapers/counties_tx/` | Bexar, Dallas, Harris, Tarrant, Travis, Collin, Denton, Fort Bend, Montgomery, Williamson, El Paso, Hidalgo |
@@ -40,7 +40,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
 | **CT** | **2** | `scrapers/counties_ct/` | Statewide Criminal Dockets + CT DOC Inmate Roster |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **231** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` |
+| **Total** | **247** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 
