@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.18.0] — 2026-07-26 (Wave-3 NC/TN/TX scrapers → 256)
+
+### Added — 9 county scrapers (registered + scheduled)
+| County | State | Platform | Smoke (one-shot) |
+|--------|-------|----------|-----------------:|
+| **Johnston** | NC | ColdFusion jailsearch | ~296 |
+| **Buncombe** | NC | Police-to-Citizen SPA | browser/SPA (strict parse) |
+| **Onslow** | NC | P2C + FingerprintJS | 0 when portal dead/sinkhole (fail closed) |
+| **Montgomery** | TN | MCSO JSON inmates | ~600 |
+| **Sumner** | TN | MyOCV `SumnerInmates.json` | ~702 (charges+bond) |
+| **Williamson** | TN | JailTracker | CAPTCHA/browser on VPS |
+| **Cameron** | TX | CCSO HTML roster | ~963 |
+| **Galveston** | TX | P2C jqGrid `jqHandler.ashx?op=s` `t=ii` | ~1155 |
+| **Brazoria** | TX | Tyler Odyssey JailAccess `*/*` wildcard | ~198 |
+
+- `main.py` registers `scraper_nc_*` / `scraper_tn_*` / `scraper_tx_*` jobs
+- `REGISTERED_COUNTIES` labels for Scraper Health / Multi-State Ops (**256** total)
+- Registry docs: NC / TN / TX · regression test wave-3 set
+
+### Fixed
+- **Galveston**: was thin P2C HTML wrapper (0 rows); now paginated jqGrid JSON POST
+- **Sumner**: HTML list was only ~10/page; now full OCV S3 JSON with charge/bond parse
+- **Brazoria**: Odyssey requires first+last; `*/*` wildcard + parse name from sibling cells
+
+---
+
 ## [2.17.1] — 2026-07-26 (FL Wave-2 counties on registry + frontend)
 
 ### Fixed — Finished FL scrapers missing from dashboard fleet UI

@@ -52,7 +52,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Bertie | ⬜ No portal | Southern SW agency only | No confinemen link |
 | Bladen | ⬜ No portal | — | VINE / phone |
 | Brunswick | 🔲 Planned | Zuercher | Official link; DNS fail from some hosts |
-| Buncombe | 🔲 Planned | P2C cloud | WAF from datacenter |
+| Buncombe | ✅ Live | Police-to-Citizen SPA | `buncombecountyso.policetocitizen.com` · browser letter walk |
 | Burke | 🔲 Planned | P2C cloud (Morganton PD?) | **Validate agency scope** |
 | Cabarrus | 🔲 Planned | P2C classic | High conf 200 |
 | Caldwell | 🔲 Planned | PDF roster | DocumentCenter PDF |
@@ -102,7 +102,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 |--------|--------|----------|-------|
 | Iredell | 🔲 Planned | P2C classic | `p2c.iredellcountync.gov` |
 | Jackson | ⬜ App-only | OCV app | App-centric |
-| Johnston | 🔲 Planned | Custom | `jcso.org/detention-center/inmate-search/` |
+| Johnston | ✅ Live | ColdFusion | `johnstonnc.com/sheriffs_office/b_jailsearch2s.cfm` · ~296 |
 | Jones | ⬜ No portal | — | VINE / phone |
 | Lee | 🔲 Planned | DCN | `dcn.leecountync.gov/dcn/inmates` |
 | Lenoir | ⬜ No portal | — | VINE / phone |
@@ -118,7 +118,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Nash | ⬜ No portal | — | VINE / phone |
 | New Hanover | 🔲 Planned | P2C classic | `p2c.nhcgov.com/p2c/jailinmates.aspx` |
 | Northampton | ⬜ No portal | — | VINE / phone |
-| Onslow | ⬜ App-only | OCV app | No stable web roster |
+| Onslow | ⚠️ Degraded | P2C + FingerprintJS | `p2c.ocsheriff.com` often sinkhole/timeout; fail closed · app still primary for public |
 | Orange | 🔲 Planned | Custom React | `ocsonc.com/detention/current-detainees` |
 
 ### P–Z

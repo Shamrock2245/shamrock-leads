@@ -402,20 +402,30 @@ REGISTERED_COUNTIES = sorted([
     "Guilford (NC)",
     "Forsyth (NC)",
     "Cumberland (NC)",
-    # ── Tennessee (wave-1 + TnCIS statewide + wave-2) ──
+    # Wave-3 NC metros
+    "Buncombe (NC)",
+    "Johnston (NC)",
+    "Onslow (NC)",
+    # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ──
     "Davidson (TN)",
     "Hamilton (TN)",
     "Knox (TN)",
+    "Montgomery (TN)",
     "Rutherford (TN)",
     "Shelby (TN)",
+    "Sumner (TN)",
     "TnCIS (TN)",
-    # ── Texas (wave-1 + wave-2 + wave-3 registered scrapers) ──
+    "Williamson (TN)",
+    # ── Texas (wave-1 + wave-2 + wave-3 + wave-4 registered scrapers) ──
     "Bexar (TX)",
+    "Brazoria (TX)",
+    "Cameron (TX)",
     "Collin (TX)",
     "Dallas (TX)",
     "Denton (TX)",
     "El Paso (TX)",
     "Fort Bend (TX)",
+    "Galveston (TX)",
     "Harris (TX)",
     "Hidalgo (TX)",
     "Montgomery (TX)",

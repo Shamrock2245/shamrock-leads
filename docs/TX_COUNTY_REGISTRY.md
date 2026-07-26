@@ -1,7 +1,7 @@
 # Texas County Scraper Registry
 
-> **Last Updated:** 2026-07-24  
-> **Registered (dashboard):** 12 scrapers — wave-1 (Bexar, Dallas, Harris, Tarrant) + wave-2 (Travis, Collin, Denton) + wave-3 (Fort Bend, Montgomery, Williamson, El Paso, Hidalgo)  
+> **Last Updated:** 2026-07-26  
+> **Registered (dashboard):** 15 scrapers — waves 1–3 + wave-4 Gulf Coast (Cameron, Brazoria, Galveston)  
 > **Package:** `scrapers/counties_tx/`  
 > **Job IDs:** `scraper_tx_<county>` · CLI: `.venv/bin/python main.py tx_fort_bend`
 
@@ -45,6 +45,16 @@ All Texas scrapers use the 4-layer stealth stack:
 | **Fort Bend** | ~860k | `fort_bend.py` | https://pos.fortbendcountytx.gov/ | ✅ Live | Houston Metro expansion; A-Z JSON API walk |
 | **Montgomery** | ~650k | `montgomery.py` | https://mctxsheriff.org/inmate_inquiry/ | ✅ Live | North Houston metro; A-Z walk via `make_stealth_request` |
 | **Williamson** | ~640k | `williamson.py` | https://www.wilco.org/Sheriff/Inmate-Search | ✅ Live | Austin Metro expansion; JailView A-Z JSON API |
+
+---
+
+## Wave-4 Gulf Coast (Registered)
+
+| County | Population | Scraper | Portal / Strategy | Status | Scraped (one-shot) | Notes |
+|--------|-----------:|---------|------------------|--------|------------------:|-------|
+| **Cameron** | ~420k | `cameron.py` | https://cameroncountytx.gov/os/inmates/ | ✅ Live | ~963 | Brownsville CCSO HTML table (current + 7 days) |
+| **Galveston** | ~350k | `galveston.py` | P2C jqGrid `jqHandler.ashx?op=s` `t=ii` | ✅ Live | ~1155 | rows=50 pagination; empty page-size traps avoided |
+| **Brazoria** | ~370k | `brazoria.py` | Tyler Odyssey JailAccess `*/*` wildcard | ✅ Live | ~198 | Requires first+last; session from `default.aspx` |
 
 ---
 

@@ -269,6 +269,9 @@ from scrapers.counties_nc.wake import WakeScraper as NC_WakeScraper
 from scrapers.counties_nc.guilford import GuilfordScraper as NC_GuilfordScraper
 from scrapers.counties_nc.forsyth import ForsythScraper as NC_ForsythScraper
 from scrapers.counties_nc.cumberland import CumberlandScraper as NC_CumberlandScraper
+from scrapers.counties_nc.buncombe import BuncombeScraper as NC_BuncombeScraper
+from scrapers.counties_nc.johnston import JohnstonScraper as NC_JohnstonScraper
+from scrapers.counties_nc.onslow import OnslowScraper as NC_OnslowScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
@@ -277,6 +280,9 @@ from scrapers.counties_tn.knox import KnoxScraper as TN_KnoxScraper
 from scrapers.counties_tn.tncis import TnCISScraper as TN_TnCISScraper
 from scrapers.counties_tn.hamilton import HamiltonScraper as TN_HamiltonScraper
 from scrapers.counties_tn.rutherford import RutherfordScraper as TN_RutherfordScraper
+from scrapers.counties_tn.williamson import WilliamsonScraper as TN_WilliamsonScraper
+from scrapers.counties_tn.montgomery import MontgomeryScraper as TN_MontgomeryScraper
+from scrapers.counties_tn.sumner import SumnerScraper as TN_SumnerScraper
 
 # ── Texas Scrapers ─────────────────────────────────────────────────────────
 from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
@@ -291,6 +297,9 @@ from scrapers.counties_tx.montgomery import MontgomeryScraper as TX_MontgomerySc
 from scrapers.counties_tx.williamson import WilliamsonScraper as TX_WilliamsonScraper
 from scrapers.counties_tx.el_paso import ElPasoScraper as TX_ElPasoScraper
 from scrapers.counties_tx.hidalgo import HidalgoScraper as TX_HidalgoScraper
+from scrapers.counties_tx.cameron import CameronScraper as TX_CameronScraper
+from scrapers.counties_tx.brazoria import BrazoriaScraper as TX_BrazoriaScraper
+from scrapers.counties_tx.galveston import GalvestonScraper as TX_GalvestonScraper
 
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
@@ -600,16 +609,24 @@ def register_scrapers(sched):
     sched.register_scraper(NC_GuilfordScraper(), interval_minutes=60)
     sched.register_scraper(NC_ForsythScraper(), interval_minutes=90)
     sched.register_scraper(NC_CumberlandScraper(), interval_minutes=90)
+    # Wave-3 NC metros (Asheville / Smithfield / Jacksonville)
+    sched.register_scraper(NC_BuncombeScraper(), interval_minutes=90)
+    sched.register_scraper(NC_JohnstonScraper(), interval_minutes=60)
+    sched.register_scraper(NC_OnslowScraper(), interval_minutes=90)
 
-    # ── Tennessee (wave-1 + TnCIS statewide + wave-2) ─────────────────────────────────
+    # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
     sched.register_scraper(TN_ShelbyScraper(), interval_minutes=90)
     sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
     sched.register_scraper(TN_TnCISScraper(), interval_minutes=180)
     sched.register_scraper(TN_HamiltonScraper(), interval_minutes=60)
     sched.register_scraper(TN_RutherfordScraper(), interval_minutes=90)
+    # Wave-3 TN metros (Franklin / Clarksville / Gallatin)
+    sched.register_scraper(TN_WilliamsonScraper(), interval_minutes=90)
+    sched.register_scraper(TN_MontgomeryScraper(), interval_minutes=60)
+    sched.register_scraper(TN_SumnerScraper(), interval_minutes=90)
 
-    # ── Texas (wave-1 + wave-2 + wave-3) ──────────────────────────────────────────
+    # ── Texas (wave-1 + wave-2 + wave-3 + wave-4) ──────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
     sched.register_scraper(TX_DallasScraper(), interval_minutes=90)
     sched.register_scraper(TX_BexarScraper(), interval_minutes=60)
@@ -622,6 +639,10 @@ def register_scrapers(sched):
     sched.register_scraper(TX_WilliamsonScraper(), interval_minutes=90)
     sched.register_scraper(TX_ElPasoScraper(), interval_minutes=90)
     sched.register_scraper(TX_HidalgoScraper(), interval_minutes=90)
+    # Wave-4 TX metros (RGV / Gulf Coast)
+    sched.register_scraper(TX_CameronScraper(), interval_minutes=90)
+    sched.register_scraper(TX_BrazoriaScraper(), interval_minutes=120)
+    sched.register_scraper(TX_GalvestonScraper(), interval_minutes=90)
 
     # ── Louisiana (wave-1) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)

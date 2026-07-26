@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-07-26 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **247** — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
+> **Last Updated:** 2026-07-26 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **256** — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
 
 ---
 

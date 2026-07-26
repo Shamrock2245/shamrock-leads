@@ -33,14 +33,14 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
 | **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler (Wave 2); legacy `scraper_<county>` IDs |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
-| **NC** | **31** | `scrapers/counties_nc/` | Southern SW, Zuercher, P2C, Meck/Durham… |
-| **TX** | **12** | `scrapers/counties_tx/` | Bexar, Dallas, Harris, Tarrant, Travis, Collin, Denton, Fort Bend, Montgomery, Williamson, El Paso, Hidalgo |
-| **TN** | **6** | `scrapers/counties_tn/` | Davidson, Knox, Shelby, Hamilton, Rutherford, TnCIS |
+| **NC** | **34** | `scrapers/counties_nc/` | + wave-3 Buncombe, Johnston, Onslow |
+| **TX** | **15** | `scrapers/counties_tx/` | + wave-4 Cameron, Brazoria, Galveston (Gulf Coast) |
+| **TN** | **9** | `scrapers/counties_tn/` | + wave-3 Williamson, Montgomery, Sumner |
 | **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
 | **CT** | **2** | `scrapers/counties_ct/` | Statewide Criminal Dockets + CT DOC Inmate Roster |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **247** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **256** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 
@@ -78,6 +78,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **Bond check-in A+C (July 2026)** — transparent portal GPS + condition policy | ✅ code |
 | **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired |
 | **Family Tree** tab + `/api/family-tree/*` (1st/2nd degree, soft-delete) | ✅ code 2026-07-26 |
+| **Wave-3 scrapers** NC/TN/TX (Buncombe, Johnston, Onslow, Williamson, Montgomery, Sumner, Cameron, Brazoria, Galveston) | ✅ code 2026-07-26 · total **256** |
 | **iMessage inbound replies** on desktop (webhook + poll + hydrate) | ✅ code 2026-07-26 · deploy required |
 | Scraper **Run** always JSON + county/state matching | ✅ code 2026-07-26 |
 

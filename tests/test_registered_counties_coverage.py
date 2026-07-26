@@ -38,10 +38,30 @@ def test_wave2_fl_counties_are_registered():
     assert not missing, f"Wave-2 FL counties missing from REGISTERED_COUNTIES: {sorted(missing)}"
 
 
-def test_fl_is_full_67_and_total_247():
+def test_fl_is_full_67_and_total_256():
     fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)")]
     assert len(fl) == 67, f"Expected 67 FL counties, got {len(fl)}"
-    assert len(REGISTERED_COUNTIES) == 247, f"Expected 247 total, got {len(REGISTERED_COUNTIES)}"
+    assert len(REGISTERED_COUNTIES) == 256, f"Expected 256 total, got {len(REGISTERED_COUNTIES)}"
+
+
+# Wave-3 NC/TN/TX metros (2026-07-26)
+EXPECTED_WAVE3 = {
+    "Buncombe (NC)",
+    "Johnston (NC)",
+    "Onslow (NC)",
+    "Williamson (TN)",
+    "Montgomery (TN)",
+    "Sumner (TN)",
+    "Cameron (TX)",
+    "Brazoria (TX)",
+    "Galveston (TX)",
+}
+
+
+def test_wave3_nc_tn_tx_counties_are_registered():
+    reg = set(REGISTERED_COUNTIES)
+    missing = EXPECTED_WAVE3 - reg
+    assert not missing, f"Wave-3 counties missing from REGISTERED_COUNTIES: {sorted(missing)}"
 
 
 def test_st_johns_st_lucie_trigger_keys_have_no_period_slug():
