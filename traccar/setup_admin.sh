@@ -33,8 +33,7 @@ RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$TRACCAR_URL/api/users" \
   -d "{
     \"name\": \"$ADMIN_NAME\",
     \"email\": \"$ADMIN_EMAIL\",
-    \"password\": \"$ADMIN_PASSWORD\",
-    \"administrator\": true
+    \"password\": \"$ADMIN_PASSWORD\"
   }")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
