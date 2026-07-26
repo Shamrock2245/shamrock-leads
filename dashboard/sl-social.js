@@ -533,12 +533,18 @@ const SLSocial = (() => {
   async function checkHealth() {
     const data = await _fetch('/health');
     const el = document.getElementById('socEngineStatus');
+    const banner = document.getElementById('socOfflineBanner');
+    const engineOk = data && (data.status === 'healthy' || data.status === 'ok' || data.success);
     if (el) {
-      if (data.status === 'healthy' || data.status === 'ok') {
+      if (engineOk) {
         el.innerHTML = '<span class="soc-conn-dot green"></span> Engine Online';
       } else {
         el.innerHTML = '<span class="soc-conn-dot red"></span> Engine Offline';
       }
+    }
+    if (banner) {
+      // Banner is about external Postiz host; keep visible when engine unreachable
+      banner.style.display = engineOk ? 'none' : 'block';
     }
     const postiz = await _fetch('/postiz/health');
     const pel = document.getElementById('socPostizStatus');

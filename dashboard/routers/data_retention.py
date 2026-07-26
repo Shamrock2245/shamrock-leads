@@ -92,40 +92,60 @@ async def _get_protected_booking_numbers() -> set[str]:
 #  Purge Estimates
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _age_filter(cutoff_iso: str, cutoff_dt: datetime | None = None) -> dict:
+    """Match record age on the fields we actually store.
+
+    Prefer ``created_at`` (datetime, set on first insert). Also accept string
+    ``scrape_timestamp`` / legacy ``scraped_at`` for older writers. Note:
+    ``scrape_timestamp`` is refreshed on every re-scrape so it is a poor
+    sole signal — ``created_at`` is authoritative for retention.
+    """
+    clauses: list[dict] = []
+    if cutoff_dt is not None:
+        clauses.append({"created_at": {"$lt": cutoff_dt}})
+    clauses.append({"scrape_timestamp": {"$lt": cutoff_iso}})
+    clauses.append({"scraped_at": {"$lt": cutoff_iso}})
+    return {"$or": clauses}
+
+
 async def _estimate_purge() -> dict:
     """Estimate how many records would be purged under the tiered policy."""
     arrests_col = get_collection("arrests")
     notif_col = get_collection("notifications")
     now = datetime.now(timezone.utc)
     protected = await _get_protected_booking_numbers()
+    protected_list = list(protected)
 
     estimates: dict[str, int] = {}
 
     # Tier 1: Disqualified > 90 days
-    cutoff_90 = (now - timedelta(days=90)).isoformat()
+    cutoff_90_dt = now - timedelta(days=90)
+    cutoff_90 = cutoff_90_dt.isoformat()
     estimates["tier1_disqualified_90d"] = await arrests_col.count_documents({
-        "scraped_at": {"$lt": cutoff_90},
+        **_age_filter(cutoff_90, cutoff_90_dt),
         "lead_status": "Disqualified",
-        "booking_number": {"$nin": list(protected)},
+        "booking_number": {"$nin": protected_list},
         "bonded": {"$ne": True},
     })
 
     # Tier 2: Cold > 60 days
-    cutoff_60 = (now - timedelta(days=60)).isoformat()
+    cutoff_60_dt = now - timedelta(days=60)
+    cutoff_60 = cutoff_60_dt.isoformat()
     estimates["tier2_cold_60d"] = await arrests_col.count_documents({
-        "scraped_at": {"$lt": cutoff_60},
+        **_age_filter(cutoff_60, cutoff_60_dt),
         "lead_status": "Cold",
-        "booking_number": {"$nin": list(protected)},
+        "booking_number": {"$nin": protected_list},
         "bonded": {"$ne": True},
     })
 
     # Tier 3: Warm + no_contact > 30 days
-    cutoff_30 = (now - timedelta(days=30)).isoformat()
+    cutoff_30_dt = now - timedelta(days=30)
+    cutoff_30 = cutoff_30_dt.isoformat()
     estimates["tier3_warm_no_contact_30d"] = await arrests_col.count_documents({
-        "scraped_at": {"$lt": cutoff_30},
+        **_age_filter(cutoff_30, cutoff_30_dt),
         "lead_status": "Warm",
         "no_contact": True,
-        "booking_number": {"$nin": list(protected)},
+        "booking_number": {"$nin": protected_list},
         "bonded": {"$ne": True},
     })
 
@@ -168,9 +188,10 @@ async def _execute_purge(dry_run: bool = True) -> dict:
     protected_list = list(protected)
 
     # Tier 1: Disqualified > 90 days
-    cutoff_90 = (now - timedelta(days=90)).isoformat()
+    cutoff_90_dt = now - timedelta(days=90)
+    cutoff_90 = cutoff_90_dt.isoformat()
     r = await arrests_col.delete_many({
-        "scraped_at": {"$lt": cutoff_90},
+        **_age_filter(cutoff_90, cutoff_90_dt),
         "lead_status": "Disqualified",
         "booking_number": {"$nin": protected_list},
         "bonded": {"$ne": True},
@@ -178,9 +199,10 @@ async def _execute_purge(dry_run: bool = True) -> dict:
     results["tier1_disqualified_90d"] = r.deleted_count
 
     # Tier 2: Cold > 60 days
-    cutoff_60 = (now - timedelta(days=60)).isoformat()
+    cutoff_60_dt = now - timedelta(days=60)
+    cutoff_60 = cutoff_60_dt.isoformat()
     r = await arrests_col.delete_many({
-        "scraped_at": {"$lt": cutoff_60},
+        **_age_filter(cutoff_60, cutoff_60_dt),
         "lead_status": "Cold",
         "booking_number": {"$nin": protected_list},
         "bonded": {"$ne": True},
@@ -188,9 +210,10 @@ async def _execute_purge(dry_run: bool = True) -> dict:
     results["tier2_cold_60d"] = r.deleted_count
 
     # Tier 3: Warm + no_contact > 30 days
-    cutoff_30 = (now - timedelta(days=30)).isoformat()
+    cutoff_30_dt = now - timedelta(days=30)
+    cutoff_30 = cutoff_30_dt.isoformat()
     r = await arrests_col.delete_many({
-        "scraped_at": {"$lt": cutoff_30},
+        **_age_filter(cutoff_30, cutoff_30_dt),
         "lead_status": "Warm",
         "no_contact": True,
         "booking_number": {"$nin": protected_list},
@@ -212,7 +235,29 @@ async def _execute_purge(dry_run: bool = True) -> dict:
     })
     results["notifications_read_90d"] = r.deleted_count
 
-    results["total_purged"] = sum(results.values())
+    # Ops log bloat (safe — not CRM state)
+    for cname, days, key in (
+        ("error_log", 14, "error_log_14d"),
+        ("automation_run_log", 14, "automation_run_log_14d"),
+        ("bb_health_checks", 14, "bb_health_checks_14d"),
+    ):
+        try:
+            cut = (now - timedelta(days=days)).isoformat()
+            col = get_collection(cname)
+            # try common timestamp fields
+            deleted = 0
+            for field in ("timestamp", "created_at", "ts", "checked_at"):
+                try:
+                    rr = await col.delete_many({field: {"$lt": cut}})
+                    deleted += rr.deleted_count
+                except Exception:
+                    pass
+            results[key] = deleted
+        except Exception as exc:
+            logger.warning("[Retention] %s purge: %s", cname, exc)
+            results[key] = 0
+
+    results["total_purged"] = sum(v for k, v in results.items() if isinstance(v, int))
     results["purged_at"] = now.isoformat()
     results["protected_booking_numbers"] = len(protected)
 
