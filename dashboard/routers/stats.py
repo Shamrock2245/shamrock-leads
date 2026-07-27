@@ -1,7 +1,9 @@
 from __future__ import annotations
 """Stats Router — FastAPI port of api/stats.py (13 endpoints)"""
+import asyncio
 import logging
 import re as re_mod
+import time
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Query, Depends
@@ -22,6 +24,13 @@ from dashboard.models.leads import LeadsQueryModel
 logger = logging.getLogger("shamrock.stats")
 
 router = APIRouter(prefix="/api", tags=["stats"])
+
+# Short in-process caches — distinct(county) and hourly activity are expensive
+# relative to the paginated lead page itself.
+_COUNTIES_CACHE: dict = {"ts": 0.0, "value": None}
+_COUNTIES_TTL_SEC = 60.0
+_ACTIVITY_CACHE: dict = {"ts": 0.0, "value": None}
+_ACTIVITY_TTL_SEC = 30.0
 
 
 def _build_leads_query(query: LeadsQueryModel):
@@ -333,6 +342,34 @@ async def api_command_center():
         return {"error": "Internal server error"}
 
 
+async def _cached_counties_list(arrests) -> list:
+    now = time.monotonic()
+    if _COUNTIES_CACHE["value"] is not None and (now - _COUNTIES_CACHE["ts"]) < _COUNTIES_TTL_SEC:
+        return _COUNTIES_CACHE["value"]
+    db_counties = await arrests.distinct("county")
+    counties_list = merge_county_list_for_ui(db_counties)
+    _COUNTIES_CACHE["ts"] = now
+    _COUNTIES_CACHE["value"] = counties_list
+    return counties_list
+
+
+async def _cached_scraped_last_hour(arrests) -> int:
+    now = time.monotonic()
+    if _ACTIVITY_CACHE["value"] is not None and (now - _ACTIVITY_CACHE["ts"]) < _ACTIVITY_TTL_SEC:
+        return _ACTIVITY_CACHE["value"]
+    hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+    # Prefer datetime compare (indexed); fall back to ISO string for mixed storage.
+    scraped_last_hour = await arrests.count_documents({
+        "$or": [
+            {"scraped_at": {"$gte": hour_ago}},
+            {"scraped_at": {"$gte": hour_ago.isoformat()}},
+        ]
+    })
+    _ACTIVITY_CACHE["ts"] = now
+    _ACTIVITY_CACHE["value"] = scraped_last_hour
+    return scraped_last_hour
+
+
 @router.get("/leads")
 async def api_leads(
     query: LeadsQueryModel = Depends(),
@@ -370,23 +407,26 @@ async def api_leads(
             "race": 1, "address": 1, "detail_url": 1, "facility": 1,
             "mugshot_url": 1, "scraped_at": 1, "created_at": 1,
         }
-        total = await arrests.count_documents(mongo_query)
-        leads_list = []
-        async for doc in arrests.find(mongo_query, projection).sort(mongo_sort, sort_order).skip(skip).limit(query.limit):
-            leads_list.append(serialize_doc(doc))
-        db_counties = await arrests.distinct("county")
-        # De-dupe bare Mongo names (Lee) against registered labels (Lee (FL))
-        counties_list = merge_county_list_for_ui(db_counties)
 
-        # Real-time activity for frontend meta (sl-data.js resultsMeta line).
-        # scraped_at may be stored as datetime or ISO string — match both.
-        hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-        scraped_last_hour = await arrests.count_documents({
-            "$or": [
-                {"scraped_at": {"$gte": hour_ago}},
-                {"scraped_at": {"$gte": hour_ago.isoformat()}},
-            ]
-        })
+        async def _fetch_page():
+            leads_list = []
+            cursor = (
+                arrests.find(mongo_query, projection)
+                .sort(mongo_sort, sort_order)
+                .skip(skip)
+                .limit(query.limit)
+            )
+            async for doc in cursor:
+                leads_list.append(serialize_doc(doc))
+            return leads_list
+
+        # Parallelize independent Mongo work so county filters feel snappy
+        total, leads_list, counties_list, scraped_last_hour = await asyncio.gather(
+            arrests.count_documents(mongo_query),
+            _fetch_page(),
+            _cached_counties_list(arrests),
+            _cached_scraped_last_hour(arrests),
+        )
 
         return {
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,

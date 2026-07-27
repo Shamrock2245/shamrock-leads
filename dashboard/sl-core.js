@@ -90,6 +90,10 @@ const PRESETS = {
   all: [], none: []
 };
 const SWFL_COUNTIES_LIST = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
+/** Per-county cooldown so clicking the same county doesn't spam the trigger bus */
+const _scraperTriggerCooldownMs = 3 * 60 * 1000;
+const _scraperLastTriggered = Object.create(null);
+const _scraperRefreshTimers = [];
 
 function isSwflCountyName(county) {
   if (!county) return false;
@@ -97,9 +101,50 @@ function isSwflCountyName(county) {
   return SWFL_COUNTIES_LIST.map(c => c.toLowerCase()).includes(bare);
 }
 
-async function triggerCountyScraperAuto(county) {
-  if (!county) return;
+function _clearScraperRefreshTimers() {
+  while (_scraperRefreshTimers.length) {
+    clearTimeout(_scraperRefreshTimers.pop());
+  }
+}
+
+/** Soft-refresh lead/defendant views after an on-demand scrape catch-up. */
+function scheduleLeadsRefreshAfterScrape(countyLabel) {
+  _clearScraperRefreshTimers();
+  const delays = [12000, 35000, 70000]; // scraper engine polls triggers within ~60s
+  delays.forEach((ms) => {
+    const t = setTimeout(() => {
+      try {
+        if (typeof applyFilters === 'function') applyFilters();
+        if (typeof loadDefendants === 'function') {
+          const defTab = document.getElementById('tabDefendants');
+          if (defTab && defTab.classList.contains('active')) loadDefendants();
+        }
+        if (window.SL && typeof SL.toast === 'function' && countyLabel && ms === delays[delays.length - 1]) {
+          SL.toast(`Refreshed ${countyLabel} after catch-up scrape`, 'info');
+        }
+      } catch (e) {
+        console.warn('[AutoScraper] refresh after scrape failed:', e);
+      }
+    }, ms);
+    _scraperRefreshTimers.push(t);
+  });
+}
+
+/**
+ * Queue an on-demand scraper run so the county catches up on any arrests
+ * the schedule may have missed. Rate-limited per county.
+ */
+async function triggerCountyScraperAuto(county, opts = {}) {
+  if (!county) return false;
   const countyClean = String(county).trim();
+  const force = !!(opts && opts.force);
+  const key = countyClean.toLowerCase();
+  const now = Date.now();
+  if (!force && _scraperLastTriggered[key] && (now - _scraperLastTriggered[key]) < _scraperTriggerCooldownMs) {
+    console.log(`[AutoScraper] Skip ${countyClean} — cooldown active`);
+    return false;
+  }
+  _scraperLastTriggered[key] = now;
   try {
     const res = await fetch('/api/scraper/run-now', {
       method: 'POST',
@@ -107,13 +152,19 @@ async function triggerCountyScraperAuto(county) {
       body: JSON.stringify({ county: countyClean })
     });
     const data = await res.json().catch(() => ({}));
-    console.log(`[AutoScraper] Auto-triggered scraper run for ${countyClean}:`, data.message || data);
+    console.log(`[AutoScraper] Queued catch-up scrape for ${countyClean}:`, data.message || data);
+    if (data.ok !== false) {
+      scheduleLeadsRefreshAfterScrape(data.county || countyClean);
+      return true;
+    }
   } catch (err) {
     console.warn(`[AutoScraper] Could not auto-trigger scraper for ${countyClean}:`, err);
   }
+  return false;
 }
 window.isSwflCountyName = isSwflCountyName;
 window.triggerCountyScraperAuto = triggerCountyScraperAuto;
+window.scheduleLeadsRefreshAfterScrape = scheduleLeadsRefreshAfterScrape;
 
 let searchTimer = null;
 
@@ -770,10 +821,12 @@ function toggleDefCounty(county, checked) {
   } else if (!checked) {
     SL_STATE.defSelectedCounties = SL_STATE.defSelectedCounties.filter(c => c !== county);
   }
-  // Auto-sort arrestees from newest to oldest
-  SL_STATE.defSort = 'arrest_date';
+  // Newest first after county pick
+  SL_STATE.defSort = 'scraped_at';
   SL_STATE.defOrder = 'desc';
   SL_STATE.defPage = 1;
+  const defSortEl = document.getElementById('defSort');
+  if (defSortEl) defSortEl.value = 'scraped_at';
 
   updateDefCountyLabel();
   buildDefCountyOptions(SL_STATE.counties);
@@ -782,8 +835,8 @@ function toggleDefCounty(county, checked) {
   if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
   if (typeof loadDefendants === 'function') loadDefendants();
 
-  // Auto-trigger background scraper if Lee County or any SWFL county checked
-  if (checked && typeof isSwflCountyName === 'function' && isSwflCountyName(county)) {
+  // Any county selection triggers catch-up scrape
+  if (checked) {
     triggerCountyScraperAuto(county);
   }
 }
@@ -826,10 +879,12 @@ function applyDefCountyPreset(name) {
   } else {
     SL_STATE.defSelectedCounties = [...(PRESETS[name] || [])];
   }
-  // Auto-sort arrestees from newest to oldest
-  SL_STATE.defSort = 'arrest_date';
+  // Newest first after preset
+  SL_STATE.defSort = 'scraped_at';
   SL_STATE.defOrder = 'desc';
   SL_STATE.defPage = 1;
+  const defSortEl2 = document.getElementById('defSort');
+  if (defSortEl2) defSortEl2.value = 'scraped_at';
 
   updateDefCountyLabel();
   buildDefCountyOptions(counties);
@@ -837,12 +892,12 @@ function applyDefCountyPreset(name) {
   if (hidden) hidden.value = SL_STATE.defSelectedCounties.join(',');
   if (typeof loadDefendants === 'function') loadDefendants();
 
-  // Auto-trigger scrapers when SWFL preset or SWFL counties selected
+  // Catch-up scrapes for focused presets only (avoid firing all FL at once)
   if (name === 'swfl') {
     const swflList = ['Lee (FL)', 'Collier (FL)', 'Charlotte (FL)', 'DeSoto (FL)', 'Hendry (FL)', 'Sarasota (FL)', 'Manatee (FL)'];
     swflList.forEach(c => triggerCountyScraperAuto(c));
-  } else if (SL_STATE.defSelectedCounties.length) {
-    SL_STATE.defSelectedCounties.filter(c => typeof isSwflCountyName === 'function' && isSwflCountyName(c)).forEach(c => triggerCountyScraperAuto(c));
+  } else if (SL_STATE.defSelectedCounties.length && SL_STATE.defSelectedCounties.length <= 8) {
+    SL_STATE.defSelectedCounties.forEach(c => triggerCountyScraperAuto(c));
   }
 }
 /** De-dupe bare names against labeled forms: keep "Lee (FL)", drop bare "Lee" when labeled exists. */
@@ -894,14 +949,15 @@ function toggleCounty(county, checked) {
   if (checked && !SL_STATE.selectedCounties.includes(county)) SL_STATE.selectedCounties.push(county);
   else SL_STATE.selectedCounties = SL_STATE.selectedCounties.filter(c => c !== county);
 
-  // Auto-sort arrestees from newest to oldest
-  SL_STATE.sort = 'arrest_date';
+  // Newest first: scraped_at surfaces catch-up fills; arrest_date is secondary UI label
+  SL_STATE.sort = 'scraped_at';
   SL_STATE.order = 'desc';
   SL_STATE.page = 1;
 
   updateCountyLabel(); buildCountyOptions(SL_STATE.counties); applyFilters();
 
-  if (checked && typeof isSwflCountyName === 'function' && isSwflCountyName(county)) {
+  // Any county selection triggers catch-up scrape so roster is not stale
+  if (checked) {
     triggerCountyScraperAuto(county);
   }
 }
@@ -931,18 +987,19 @@ function applyPreset(name) {
     if (btn) btn.classList.add('active');
   }
 
-  // Auto-sort arrestees from newest to oldest
-  SL_STATE.sort = 'arrest_date';
+  // Newest first (scraped_at = live catch-up order)
+  SL_STATE.sort = 'scraped_at';
   SL_STATE.order = 'desc';
   SL_STATE.page = 1;
 
   buildCountyOptions(SL_STATE.counties); applyFilters();
 
+  // Catch-up scrapes: SWFL always; other presets only when small enough to not stampede
   if (name === 'swfl') {
     const swflList = ['Lee (FL)', 'Collier (FL)', 'Charlotte (FL)', 'DeSoto (FL)', 'Hendry (FL)', 'Sarasota (FL)', 'Manatee (FL)'];
     swflList.forEach(c => triggerCountyScraperAuto(c));
-  } else if (SL_STATE.selectedCounties.length) {
-    SL_STATE.selectedCounties.filter(c => typeof isSwflCountyName === 'function' && isSwflCountyName(c)).forEach(c => triggerCountyScraperAuto(c));
+  } else if (SL_STATE.selectedCounties.length && SL_STATE.selectedCounties.length <= 8) {
+    SL_STATE.selectedCounties.forEach(c => triggerCountyScraperAuto(c));
   }
 }
 

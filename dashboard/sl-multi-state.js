@@ -546,25 +546,38 @@ const SLMultiState = (() => {
   }
 
   function viewCountyArrests(county, state) {
-    // Switch to Lead Explorer and filter by county (+ state when available)
+    // Switch to Lead Explorer, select the county, trigger catch-up scrape, newest first
+    const label = state ? `${county} (${state})` : county;
     const leadsBtn = document.querySelector('[data-tab="tabLeads"]');
     if (leadsBtn) leadsBtn.click();
+
+    // Queue catch-up immediately so scraper fills anything behind
+    if (typeof triggerCountyScraperAuto === 'function') {
+      triggerCountyScraperAuto(label, { force: true });
+    } else {
+      runCounty(county, state);
+    }
+
     setTimeout(() => {
       const stateSel = document.getElementById('stateFilter');
-      if (stateSel && state) {
-        stateSel.value = state;
+      if (stateSel && state) stateSel.value = state;
+
+      // Prefer multi-select county filter over free-text search
+      if (window.SL_STATE) {
+        SL_STATE.selectedCounties = [label];
+        SL_STATE.sort = 'scraped_at';
+        SL_STATE.order = 'desc';
+        SL_STATE.page = 1;
+        if (typeof buildCountyOptions === 'function') {
+          buildCountyOptions(SL_STATE.counties || []);
+        } else if (typeof updateCountyLabel === 'function') {
+          updateCountyLabel();
+        }
       }
-      const searchEl = document.getElementById('searchInput') || document.getElementById('leadSearch');
-      if (searchEl) {
-        searchEl.value = county;
-        searchEl.dispatchEvent(new Event('input'));
-      }
-      if (window.SL && typeof window.SL.applyFilters === 'function') {
-        if (stateSel) window.SL.applyFilters();
-      } else if (typeof applyFilters === 'function') {
-        applyFilters();
-      }
-    }, 300);
+
+      if (typeof applyFilters === 'function') applyFilters();
+      else if (window.SL && typeof window.SL.applyFilters === 'function') window.SL.applyFilters();
+    }, 200);
   }
 
   function _showToast(msg, type = 'info') {

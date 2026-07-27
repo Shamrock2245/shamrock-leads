@@ -130,14 +130,25 @@ async def _unhandled_exception(request: Request, exc: Exception):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.middleware("http")
-async def no_cache_static(request: Request, call_next):
-    """Ensure JS/CSS files are never cached — deploys take effect immediately."""
+async def cache_static_assets(request: Request, call_next):
+    """Cache versioned JS/CSS aggressively; revalidate unversioned assets.
+
+    index.html already busts caches with ``?v=N`` query strings. Allowing the
+    browser to keep those responses cuts repeat dashboard load time dramatically
+    while still letting deploys take effect when the version bump changes.
+    """
     response: Response = await call_next(request)
     path = request.url.path
     if path.endswith((".js", ".css")):
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+        has_version = bool(request.query_params.get("v"))
+        if has_version:
+            # Versioned URL → safe long cache (immutable content for that URL)
+            response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+        else:
+            # Unversioned → short revalidate so deploys still land quickly
+            response.headers["Cache-Control"] = "public, max-age=120, must-revalidate"
+        response.headers.pop("Pragma", None)
+        response.headers.pop("Expires", None)
     return response
 
 

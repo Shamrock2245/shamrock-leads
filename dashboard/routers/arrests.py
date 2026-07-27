@@ -78,20 +78,35 @@ async def api_county_arrests(
     county_name: str,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
-    sort: str = "created_at",
+    sort: str = "scraped_at",
     dir: int = -1,
     search: str = "",
 ):
+    """Return newest arrests for a county.
+
+    Accepts bare names (``Lee``) or labeled registry form (``Lee (FL)``).
+    Default sort is ``scraped_at`` desc so catch-up scrapes surface first.
+    """
     arrests = get_collection("arrests")
-    query: dict = {"county": county_name}
+    bare, st = parse_registered_county(county_name)
+    bare = bare or county_name
+    query: dict = {"county": bare}
+    if st:
+        query["state"] = st
     if search:
         query["$or"] = [
             {"full_name": {"$regex": search, "$options": "i"}},
             {"charges": {"$regex": search, "$options": "i"}},
         ]
+    allowed_sort = {
+        "scraped_at", "created_at", "arrest_date", "booking_date",
+        "lead_score", "bond_amount", "full_name",
+    }
+    mongo_sort = sort if sort in allowed_sort else "scraped_at"
+    sort_dir = -1 if int(dir) < 0 else 1
     total = await arrests.count_documents(query)
     results = []
-    async for doc in arrests.find(query, {"_id": 0}).sort(sort, dir).skip((page - 1) * limit).limit(limit):
+    async for doc in arrests.find(query, {"_id": 0}).sort(mongo_sort, sort_dir).skip((page - 1) * limit).limit(limit):
         results.append(serialize_doc(doc))
     return {"county": county_name, "arrests": results, "total": total,
             "page": page, "pages": max(1, (total + limit - 1) // limit)}

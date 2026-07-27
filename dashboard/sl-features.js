@@ -12,7 +12,8 @@ async function _safeFetch(url, opts) {
 // ── Defendants ──
 async function loadDefendants() {
   const search = document.getElementById('defSearch')?.value || '';
-  const sort = document.getElementById('defSort')?.value || SL_STATE.defSort;
+  const sort = document.getElementById('defSort')?.value || SL_STATE.defSort || 'scraped_at';
+  if (window.SL_STATE) SL_STATE.defSort = sort;
   const custody = document.getElementById('defCustody')?.value || '';
   // Multi-select: prefer state array; fall back to hidden field (comma-joined)
   const selected = (window.SL_STATE && Array.isArray(SL_STATE.defSelectedCounties))

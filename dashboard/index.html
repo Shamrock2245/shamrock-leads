@@ -444,7 +444,8 @@
     <div class="filters">
       <input type="text" id="defSearch" placeholder="🔍 Search defendants..." style="flex:1;min-width:200px" oninput="SL.debounceDefSearch()">
 
-      <select id="defSort" onchange="SL.loadDefendants()">
+      <select id="defSort" onchange="if(window.SL_STATE){SL_STATE.defSort=this.value;}SL.loadDefendants()">
+        <option value="scraped_at">Sort: Just Scraped (Newest)</option>
         <option value="bond_amount">Sort: Bond (Highest)</option>
         <option value="lead_score">Sort: Lead Score</option>
         <option value="full_name">Sort: Name (A-Z)</option>
@@ -3333,7 +3334,7 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <!-- PWA Install Banner -->
 <div id="pwaInstallBanner">
@@ -3488,47 +3489,48 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/sl-core.js?v=11"></script>
+<!-- Core path first (Lead Explorer + county catch-up). Heavy CDNs deferred. -->
+<script src="/sl-core.js?v=12"></script>
 <script src="/sl-rearrest.js?v=4"></script>
 <script src="/sl-data.js?v=6"></script>
-<!-- Tabulator v6 JS -->
-<script src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
-<!-- ApexCharts -->
-<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
-<!-- Vanilla Calendar Pro -->
-<script src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
 <script src="/sl-features.js?v=11"></script>
+<script src="/sl-utils.js?v=4"></script>
+<script src="/sl-intake.js?v=8"></script>
+<script src="/sl-prospective.js?v=5"></script>
 <script src="/sl-active-bonds.js?v=5"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
-<script src="/sl-tracking.js?v=4"></script>
-<script src="/sl-geo-intelligence.js?v=1"></script>
-<script src="/sl-intake.js?v=7"></script>
-<script src="/sl-health.js?v=5"></script>
-<script src="/sl-service-control.js?v=1"></script>
-<script src="/sl-prospective.js?v=5"></script>
-<script src="/sl-defendant-lifecycle.js?v=4"></script>
-<script src="/sl-indemnitor.js?v=5"></script>
-<script src="/sl-inventory.js?v=4"></script>
-<script src="/sl-analytics.js?v=4"></script>
-<script src="/sl-analytics-apex.js?v=4"></script>
-<script src="/sl-intelligence.js?v=1"></script>
-<script src="/sl-docket-monitor.js?v=1"></script>
-<script src="/sl-legal-nlp.js?v=1"></script>
-<script src="/sl-calendar.js?v=4"></script>
-<script src="/sl-calendar-ext.js?v=4"></script>
-<script src="/sl-record-bond.js?v=4"></script>
-<script src="/sl-reports.js?v=9"></script>
-<script src="/sl-utils.js?v=4"></script>
-<script src="/sl-animations.js?v=4"></script>
-<script src="/sl-lifecycle.js?v=4"></script>
-<script src="/sl-refinements.js?v=4"></script>
-<script src="/sl-pipeline-ui.js?v=5"></script>
-<script src="/sl-reports-ui.js?v=4"></script>
-<script src="/sl-compliance.js?v=1"></script>
-<script src="/sl-tab-polish.js?v=4"></script>
-<script src="/sl-overhaul.js?v=4"></script>
+<script src="/sl-notifications.js?v=4"></script>
+<script src="/sl-omnibar.js?v=1"></script>
+<!-- Non-critical modules + heavy CDNs: defer so Lead Explorer paints first -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script defer src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/apexcharts@3.49.2/dist/apexcharts.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.js"></script>
+<script defer src="/sl-tracking.js?v=4"></script>
+<script defer src="/sl-geo-intelligence.js?v=1"></script>
+<script defer src="/sl-health.js?v=5"></script>
+<script defer src="/sl-service-control.js?v=1"></script>
+<script defer src="/sl-defendant-lifecycle.js?v=4"></script>
+<script defer src="/sl-indemnitor.js?v=5"></script>
+<script defer src="/sl-inventory.js?v=4"></script>
+<script defer src="/sl-analytics.js?v=4"></script>
+<script defer src="/sl-analytics-apex.js?v=4"></script>
+<script defer src="/sl-intelligence.js?v=1"></script>
+<script defer src="/sl-docket-monitor.js?v=1"></script>
+<script defer src="/sl-legal-nlp.js?v=1"></script>
+<script defer src="/sl-calendar.js?v=4"></script>
+<script defer src="/sl-calendar-ext.js?v=4"></script>
+<script defer src="/sl-record-bond.js?v=4"></script>
+<script defer src="/sl-reports.js?v=9"></script>
+<script defer src="/sl-animations.js?v=4"></script>
+<script defer src="/sl-lifecycle.js?v=4"></script>
+<script defer src="/sl-refinements.js?v=4"></script>
+<script defer src="/sl-pipeline-ui.js?v=5"></script>
+<script defer src="/sl-reports-ui.js?v=4"></script>
+<script defer src="/sl-compliance.js?v=1"></script>
+<script defer src="/sl-tab-polish.js?v=4"></script>
+<script defer src="/sl-overhaul.js?v=4"></script>
 
 <!-- ═══════════════════════════════════════════════════════
      TAB: CLIENT PORTAL MANAGEMENT
@@ -5894,23 +5896,21 @@
   </div> <!-- /main-content -->
 </div> <!-- /app-layout -->
 
-<script src="/sl-omnibar.js?v=1"></script>
-<script src="/sl-notifications.js?v=4"></script>
-<script src="/sl-imessage.js?v=7"></script>
-<script src="/sl-accounting.js?v=1"></script>
-<script src="/sl-alpha-intel.js?v=1"></script>
-<script src="/sl-fta.js?v=1"></script>
-<script src="/sl-social.js?v=2"></script>
-<script src="/sl-enrichment.js?v=1"></script>
-<script src="/sl-tasks.js?v=1"></script>
-<script src="/sl-osint.js?v=1"></script>
-<script src="/sl-paperwork.js?v=2"></script>
-<script src="/sl-automations.js?v=2"></script>
-<script src="/sl-relationships.js?v=1"></script>
-<script src="/sl-family-tree.js?v=1"></script>
+<script defer src="/sl-imessage.js?v=7"></script>
+<script defer src="/sl-accounting.js?v=1"></script>
+<script defer src="/sl-alpha-intel.js?v=1"></script>
+<script defer src="/sl-fta.js?v=1"></script>
+<script defer src="/sl-social.js?v=2"></script>
+<script defer src="/sl-enrichment.js?v=1"></script>
+<script defer src="/sl-tasks.js?v=1"></script>
+<script defer src="/sl-osint.js?v=1"></script>
+<script defer src="/sl-paperwork.js?v=2"></script>
+<script defer src="/sl-automations.js?v=2"></script>
+<script defer src="/sl-relationships.js?v=1"></script>
+<script defer src="/sl-family-tree.js?v=1"></script>
 <link rel="stylesheet" href="/sl-bond-intelligence.css?v=1">
-  <link rel="stylesheet" href="/sl-multi-state.css?v=2">
-<script src="/sl-bond-intelligence.js?v=2"></script>
-<script src="/sl-multi-state.js?v=2"></script>
+<link rel="stylesheet" href="/sl-multi-state.css?v=2">
+<script defer src="/sl-bond-intelligence.js?v=3"></script>
+<script defer src="/sl-multi-state.js?v=3"></script>
 </body>
 </html>

@@ -968,9 +968,16 @@ const SLIntake = (() => {
           status.textContent = `✅ +${delta} new arrest${delta !== 1 ? 's' : ''} loaded`;
         }
         if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
-        // Reload the hot-leads panel if SLData is available
+        // Reload hot-leads + Lead Explorer (newest scraped first)
         if (window.SLData && typeof SLData.load === 'function') SLData.load();
-        // Toast
+        if (typeof applyFilters === 'function') {
+          if (window.SL_STATE) {
+            SL_STATE.sort = 'scraped_at';
+            SL_STATE.order = 'desc';
+            SL_STATE.page = 1;
+          }
+          applyFilters();
+        }
         if (window.SL && typeof SL.toast === 'function') {
           SL.toast(`⚡ ${delta} new arrest${delta !== 1 ? 's' : ''} pulled for ${county}`, 'success');
         }
@@ -984,6 +991,8 @@ const SLIntake = (() => {
           status.textContent = `Scraper ran — no new entries vs baseline (${baselineCount})`;
         }
         if (btn) { btn.disabled = false; btn.textContent = '⚡ Run Now'; btn.style.opacity = '1'; }
+        // Still refresh — catch-up may have updated existing rows without +count
+        if (typeof applyFilters === 'function') applyFilters();
         return;
       }
 
