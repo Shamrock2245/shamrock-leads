@@ -223,13 +223,30 @@ async def attach_to_subject(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
-    """Write a clean OSINT summary into the defendant's/indemnitor's record."""
+    """Write OSINT summary + hydrate discovered fields into the subject's record."""
     _require_admin(request, x_admin_key, x_admin_token)
     svc = get_osint_service()
     result = await svc.attach_to_subject(scan_id, actor="admin")
     if not result:
         raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found.")
     return result
+
+
+@router.get("/scan/{scan_id}/import-fields", summary="Get extracted fields importable into subject form fields")
+async def get_importable_fields(
+    scan_id: str,
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Retrieve structured OSINT findings ready for importing into Defendant/Indemnitor forms."""
+    _require_admin(request, x_admin_key, x_admin_token)
+    svc = get_osint_service()
+    scan = await svc.get_scan(scan_id, include_raw=False)
+    if not scan:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found.")
+    fields = svc.extract_importable_fields(scan)
+    return fields
 
 
 # ── Export Endpoints ──────────────────────────────────────────────────────────

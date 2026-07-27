@@ -82,3 +82,33 @@ def test_probe_tools_structure():
     assert "blackbird" in probe
     assert "ready_for_scans" in probe
     assert "defaults" in probe
+
+
+def test_extract_importable_fields():
+    from dashboard.services.osint_service import OSINTService
+    svc = OSINTService()
+    doc = {
+        "_id": "scan123",
+        "subject_type": "defendant",
+        "subject_id": "def456",
+        "full_name": "John Doe",
+        "scan_params": {"email": "john@example.com", "phone": "2395550100", "usernames": ["johndoe"]},
+        "accounts": [
+            {"platform": "Twitter", "url": "https://twitter.com/johndoe", "username": "johndoe"},
+            {"platform": "GitHub", "url": "https://github.com/johndoe", "username": "johndoe"},
+        ],
+        "entities": [
+            {"type": "email", "value": "john.alt@example.com"},
+            {"type": "alias", "value": "Johnny Doe"},
+        ],
+        "platforms_found": ["Twitter", "GitHub"],
+        "osint_risk_score": 10,
+        "total_accounts": 2,
+    }
+    fields = svc.extract_importable_fields(doc)
+    assert fields["email"] in ("john@example.com", "john.alt@example.com")
+    assert "john.alt@example.com" in fields["emails"]
+    assert fields["social_profiles"]["twitter"] == "https://twitter.com/johndoe"
+    assert "johndoe" in fields["usernames"]
+    assert "Johnny Doe" in fields["aliases"]
+

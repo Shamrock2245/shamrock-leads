@@ -33,6 +33,7 @@
     exportPDF,
     exportPDFForId,
     attachToSubject,
+    importToActiveForm,
     markRelevant,
     markIrrelevant,
   };
@@ -603,9 +604,31 @@
       });
       if (!r.ok) { toast('Attach failed', 'error'); return; }
       const data = await r.json();
-      toast(data.success ? 'OSINT summary attached to subject record' : 'Attach failed', data.success ? 'success' : 'error');
+      if (data.success) {
+        const count = (data.hydrated_fields || []).length;
+        const detail = count ? ` (${data.hydrated_fields.join(', ')})` : '';
+        toast(`✅ OSINT summary attached & ${count} fields hydrated${detail}`, 'success');
+      } else {
+        toast('Attach failed: ' + (data.error || 'unknown'), 'error');
+      }
     } catch (e) {
       toast(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  async function importToActiveForm(scanId) {
+    const id = scanId || _activeScan?._id;
+    if (!id) return null;
+    try {
+      const r = await fetch(`${API}/api/osint/scan/${id}/import-fields`, {
+        headers: headers(),
+        credentials: 'same-origin',
+      });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch (e) {
+      console.warn('Import fields failed:', e);
+      return null;
     }
   }
 

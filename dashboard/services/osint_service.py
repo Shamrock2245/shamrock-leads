@@ -406,8 +406,73 @@ class OSINTService:
         )
         return True
 
+    def extract_importable_fields(self, scan_doc: Dict) -> Dict[str, Any]:
+        """Extract structured fields importable into defendant/indemnitor form fields."""
+        social_profiles: Dict[str, str] = {}
+        usernames_set: set[str] = set()
+        emails_set: set[str] = set()
+        phones_set: set[str] = set()
+        aliases_set: set[str] = set()
+
+        for acct in scan_doc.get("accounts") or []:
+            if not isinstance(acct, dict):
+                continue
+            plat = (acct.get("platform") or "").lower().strip()
+            url = acct.get("url") or ""
+            u = acct.get("username") or ""
+            if plat and url:
+                social_profiles[plat] = url
+            if u and len(u) >= 2:
+                usernames_set.add(u)
+
+        for ent in scan_doc.get("entities") or []:
+            if not isinstance(ent, dict):
+                continue
+            etype = (ent.get("type") or "").lower().strip()
+            val = (ent.get("value") or "").strip()
+            if not val:
+                continue
+            if etype == "email" and "@" in val:
+                emails_set.add(val)
+            elif etype in ("phone", "telephone", "mobile"):
+                phones_set.add(val)
+            elif etype in ("alias", "name", "full_name"):
+                aliases_set.add(val)
+
+        params = scan_doc.get("scan_params") or {}
+        if params.get("email") and "@" in params["email"]:
+            emails_set.add(params["email"])
+        if params.get("phone"):
+            phones_set.add(params["phone"])
+        for u in params.get("usernames") or []:
+            if u and len(u) >= 2:
+                usernames_set.add(u)
+
+        usernames = sorted(list(usernames_set))
+        emails = sorted(list(emails_set))
+        phones = sorted(list(phones_set))
+        aliases = sorted(list(aliases_set))
+
+        return {
+            "scan_id": str(scan_doc.get("_id", "")),
+            "subject_type": scan_doc.get("subject_type", "defendant"),
+            "subject_id": scan_doc.get("subject_id"),
+            "full_name": scan_doc.get("full_name") or params.get("full_name"),
+            "email": emails[0] if emails else None,
+            "phone": phones[0] if phones else None,
+            "emails": emails,
+            "phones": phones,
+            "social_profiles": social_profiles,
+            "usernames": usernames,
+            "aliases": aliases,
+            "platforms_found": scan_doc.get("platforms_found", []),
+            "osint_risk_score": scan_doc.get("osint_risk_score", 0),
+            "total_accounts": scan_doc.get("total_accounts", 0),
+            "total_entities": scan_doc.get("total_entities", 0),
+        }
+
     async def attach_to_subject(self, scan_id: str, actor: str = "admin") -> Optional[Dict]:
-        """Write OSINT summary into the subject's record."""
+        """Write OSINT summary + hydrate discovered fields into the subject's record."""
         try:
             doc = await self._scans_col.find_one({"_id": ObjectId(scan_id)})
         except Exception:
@@ -418,6 +483,10 @@ class OSINTService:
         subject_type = doc.get("subject_type", "defendant")
         subject_id = doc.get("subject_id")
         collection_name = f"{subject_type}s"
+        if collection_name not in ("defendants", "indemnitors", "prospective_bonds", "arrests", "intake_queue"):
+            collection_name = "defendants"
+
+        extracted = self.extract_importable_fields(doc)
 
         summary = {
             "osint_scan_id": scan_id,
@@ -429,14 +498,71 @@ class OSINTService:
             "osint_risk_advisory": True,
             "osint_platforms": doc.get("platforms_found", []),
             "osint_summary": doc.get("ai_summary") or f"{doc.get('total_accounts', 0)} accounts found across {len(doc.get('platforms_found', []))} platforms",
+            "social_profiles": extracted.get("social_profiles", {}),
+            "usernames": extracted.get("usernames", []),
         }
 
         db = self._get_db()
+        col = db[collection_name]
+
+        target_doc = None
         try:
-            result = await db[collection_name].update_one(
-                {"_id": ObjectId(subject_id)},
-                {"$set": {"osint_intel": summary}},
-            )
+            if ObjectId.is_valid(subject_id):
+                target_doc = await col.find_one({"_id": ObjectId(subject_id)})
+        except Exception:
+            pass
+
+        if not target_doc and subject_id:
+            target_doc = await col.find_one({
+                "$or": [
+                    {"_id": subject_id},
+                    {"booking_number": subject_id},
+                    {"defendant_id": subject_id},
+                    {"indemnitor_id": subject_id},
+                ]
+            })
+
+        hydrated_fields = []
+        update_set: Dict[str, Any] = {"osint_intel": summary, "osint_last_scanned_at": datetime.now(timezone.utc)}
+
+        if extracted.get("social_profiles"):
+            existing_sp = (target_doc.get("social_profiles") if target_doc else {}) or {}
+            merged_sp = {**existing_sp, **extracted["social_profiles"]}
+            update_set["social_profiles"] = merged_sp
+            hydrated_fields.append("social_profiles")
+
+        if extracted.get("usernames"):
+            existing_un = (target_doc.get("social_handles") or target_doc.get("usernames") if target_doc else []) or []
+            merged_un = list(dict.fromkeys((existing_un or []) + extracted["usernames"]))
+            update_set["social_handles"] = merged_un
+            update_set["usernames"] = merged_un
+            hydrated_fields.append("social_handles")
+
+        if extracted.get("email"):
+            if not target_doc or not target_doc.get("email"):
+                update_set["email"] = extracted["email"]
+                hydrated_fields.append("email")
+            update_set["osint_discovered_emails"] = extracted["emails"]
+
+        if extracted.get("phone"):
+            if not target_doc or not target_doc.get("phone"):
+                update_set["phone"] = extracted["phone"]
+                hydrated_fields.append("phone")
+            update_set["osint_discovered_phones"] = extracted["phones"]
+
+        if extracted.get("aliases"):
+            existing_al = (target_doc.get("aliases") if target_doc else []) or []
+            merged_al = list(dict.fromkeys((existing_al or []) + extracted["aliases"]))
+            update_set["aliases"] = merged_al
+            hydrated_fields.append("aliases")
+
+        target_filter = {"_id": target_doc["_id"]} if target_doc else (
+            {"_id": ObjectId(subject_id)} if (subject_id and ObjectId.is_valid(subject_id)) else {"_id": subject_id}
+        )
+
+        try:
+            result = await col.update_one(target_filter, {"$set": update_set}, upsert=False)
+            modified_count = result.modified_count
         except Exception as exc:
             log.error("Failed to attach OSINT to %s/%s: %s", collection_name, subject_id, exc)
             return {"success": False, "error": str(exc)}
@@ -444,18 +570,25 @@ class OSINTService:
         await AuditService.log_event(
             entity_type=subject_type,
             entity_id=subject_id,
-            action="osint_attached_to_subject",
-            details={"scan_id": scan_id, "accounts": doc.get("total_accounts", 0)},
+            action="osint_attached_and_hydrated",
+            details={
+                "scan_id": scan_id,
+                "accounts": doc.get("total_accounts", 0),
+                "hydrated_fields": hydrated_fields,
+            },
             actor=actor,
             actor_type="admin",
             event_context="osint_intelligence",
         )
 
         return {
-            "success": bool(result.modified_count),
+            "success": True,
+            "modified_count": modified_count,
             "subject_type": subject_type,
             "subject_id": subject_id,
             "summary": summary,
+            "extracted_fields": extracted,
+            "hydrated_fields": hydrated_fields,
         }
 
     # ── Export Methods ────────────────────────────────────────────────────────
