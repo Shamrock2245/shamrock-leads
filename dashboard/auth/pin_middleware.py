@@ -60,6 +60,8 @@ OPEN_PREFIXES = (
     "/c/",
     "/api/portal/",
     "/api/config/bluebubbles-url",
+    "/traccar/setup/",
+    "/api/traccar/device-status/",
 )
 
 # OAuth popup paths — login redirects + provider callbacks (no cookie in popup)
