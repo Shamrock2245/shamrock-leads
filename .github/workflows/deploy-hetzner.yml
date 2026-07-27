@@ -132,7 +132,7 @@ jobs:
             # Prefer BuildKit; avoid leaving orphan cache when build fails mid-pip
             export DOCKER_BUILDKIT=1
             export COMPOSE_DOCKER_CLI_BUILD=1
-            docker compose build shamrock-leads dashboard
+            docker compose build shamrock-leads dashboard osint-worker
 
             # ── Rolling restart (avoids full downtime) ────────────
             # Force-recreate so Docker never fails with:
