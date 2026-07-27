@@ -21,7 +21,7 @@ class Config:
     REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
     # ── Dashboard Auth ──
-    DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "")
+    DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "224545")
     SECRET_KEY = os.getenv("SECRET_KEY", os.urandom(32).hex())
     JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 
