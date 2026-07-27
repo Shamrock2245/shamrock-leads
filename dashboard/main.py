@@ -147,8 +147,10 @@ async def cache_static_assets(request: Request, call_next):
         else:
             # Unversioned → short revalidate so deploys still land quickly
             response.headers["Cache-Control"] = "public, max-age=120, must-revalidate"
-        response.headers.pop("Pragma", None)
-        response.headers.pop("Expires", None)
+        # Starlette MutableHeaders has no .pop(); delete safely if present
+        for header_name in ("pragma", "expires"):
+            if header_name in response.headers:
+                del response.headers[header_name]
     return response
 
 
