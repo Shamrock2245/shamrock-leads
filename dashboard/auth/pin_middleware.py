@@ -297,15 +297,15 @@ def mount_login_routes(app):
                     "is_admin": role == "admin" or is_admin_email(session_email),
                 }
             )
-            # secure=True is required on HTTPS — without it the browser
-            # silently drops the cookie and every subsequent API call returns 401,
-            # causing the dashboard to render as a black screen.
+            is_https = (request.url.scheme == "https") or (
+                request.headers.get("x-forwarded-proto") == "https"
+            )
             response.set_cookie(
                 key=COOKIE_NAME,
                 value=token,
                 max_age=COOKIE_MAX_AGE,
                 httponly=True,
-                secure=True,
+                secure=is_https,
                 samesite="lax",
                 path="/",
             )
