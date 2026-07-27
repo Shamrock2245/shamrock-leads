@@ -25,6 +25,23 @@ jobs:
     timeout-minutes: 25
 
     steps:
+      # Fail fast with a clear message if the VPS is unreachable (e.g. Tailscale
+      # exit-node misconfig blackholing public SSH — do not waste a full job).
+      - name: Preflight SSH reachability
+        run: |
+          set -e
+          echo "Probing 178.156.179.237:22 ..."
+          for i in 1 2 3 4 5 6; do
+            if timeout 8 bash -c 'echo >/dev/tcp/178.156.179.237/22' 2>/dev/null; then
+              echo "✅ SSH port open (attempt $i)"
+              exit 0
+            fi
+            echo "⏳ port closed/timeout (attempt $i/6) — retry in 10s"
+            sleep 10
+          done
+          echo "::error::VPS SSH port 22 unreachable from GitHub runners. Check host networking / Tailscale (VPS must not use an exit node)."
+          exit 1
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         env:
@@ -35,7 +52,9 @@ jobs:
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
+          # Long builds (pip + docker) need a live TCP channel; defaults can drop.
           command_timeout: 20m
+          timeout: 60s
           envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |
             set -e
@@ -44,6 +63,14 @@ jobs:
             echo "═══════════════════════════════════════════════════"
             echo "  ShamrockLeads Deploy — $(date '+%Y-%m-%d %H:%M:%S')"
             echo "═══════════════════════════════════════════════════"
+
+            # Re-assert network safety every deploy (idempotent). Never let the VPS
+            # route through a Tailscale exit node or peer MagicDNS — that blackholes
+            # public SSH and breaks GitHub Actions deploys.
+            if command -v tailscale >/dev/null 2>&1; then
+              tailscale set --exit-node= --accept-dns=false --accept-routes=false 2>/dev/null || true
+              systemctl start shamrock-net-harden.service 2>/dev/null || true
+            fi
 
             cd /opt/shamrock-leads
 
