@@ -648,7 +648,7 @@
     if (p.includes('facebook')) return '📘';
     if (p.includes('instagram')) return '📷';
     if (p.includes('linkedin')) return '💼';
-    if (p.includes('github')) return '🐙';
+    if (p.includes('github') || p.includes('gitlab')) return '🐙';
     if (p.includes('reddit')) return '🤖';
     if (p.includes('tiktok')) return '🎵';
     if (p.includes('youtube')) return '▶️';
@@ -656,6 +656,11 @@
     if (p.includes('snapchat')) return '👻';
     if (p.includes('telegram')) return '✈️';
     if (p.includes('discord')) return '💬';
+    if (p.includes('binance') || p.includes('coinbase') || p.includes('kraken') || p.includes('crypto')) return '🪙';
+    if (p.includes('steam') || p.includes('twitch') || p.includes('epic')) return '🎮';
+    if (p.includes('spotify') || p.includes('soundcloud') || p.includes('bandcamp')) return '🎧';
+    if (p.includes('medium') || p.includes('substacks') || p.includes('wordpress')) return '✍️';
+    if (p.includes('keybase') || p.includes('signal')) return '🔑';
     return '🌐';
   }
 })();

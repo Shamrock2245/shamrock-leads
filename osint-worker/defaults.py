@@ -212,6 +212,26 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
             })
             break
 
+    crypto_platforms = platforms & {"binance", "coinbase", "kraken", "localbitcoins", "paxful", "bybit"}
+    if crypto_platforms:
+        score += 5
+        signals.append({
+            "signal_type": "crypto_footprint",
+            "severity": "medium",
+            "detail": f"Discovered accounts on cryptocurrency exchange(s): {', '.join(sorted(crypto_platforms))}.",
+            "source": "osint_engine",
+        })
+
+    stealth_platforms = platforms & {"telegram", "signal", "session", "element", "keybase"}
+    if len(stealth_platforms) >= 2:
+        score += 5
+        signals.append({
+            "signal_type": "encrypted_comms_footprint",
+            "severity": "medium",
+            "detail": f"Discovered accounts on encrypted/privacy messaging channels: {', '.join(sorted(stealth_platforms))}.",
+            "source": "osint_engine",
+        })
+
     if total == 0:
         score += 12
         signals.append({

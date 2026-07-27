@@ -95,8 +95,8 @@ class OSINTScanRequest(BaseModel):
 
     # Engine selection — list of engines to run
     engines: List[EngineType] = Field(
-        default_factory=lambda: [EngineType.maigret],
-        description="Engines to run. Default: [maigret]. Options: maigret, sherlock, blackbird, spiderfoot",
+        default_factory=lambda: [EngineType.maigret, EngineType.sherlock],
+        description="Engines to run. Default: [maigret, sherlock]. Options: maigret, sherlock, blackbird, spiderfoot",
     )
 
     # Scan options

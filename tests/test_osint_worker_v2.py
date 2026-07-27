@@ -37,6 +37,20 @@ def test_parse_sherlock_dict_format():
     assert accounts[1]["platform"] == "GitHub"
 
 
+def test_parse_sherlock_exists_field():
+    """Standard sherlock-project JSON uses exists: claimed."""
+    raw = {
+        "Binance": {"exists": "claimed", "url_user": "https://binance.com/user/jsmith", "response_time_s": 0.25},
+        "Coinbase": {"exists": "claimed", "url_user": "https://coinbase.com/jsmith", "response_time_s": 0.18},
+        "UnknownPlatform": {"exists": "available", "url_user": ""},
+    }
+    accounts = parse_sherlock_json(raw)
+    assert len(accounts) == 2
+    assert accounts[0]["platform"] == "Binance"
+    assert accounts[0]["profile_data"] == {"response_time_s": 0.25}
+    assert accounts[1]["platform"] == "Coinbase"
+
+
 def test_parse_sherlock_list_format():
     """Some versions output a list of dicts."""
     raw = [

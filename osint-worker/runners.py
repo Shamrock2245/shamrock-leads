@@ -78,12 +78,13 @@ def resolve_sherlock_cmd() -> Optional[str]:
     try:
         import importlib.util
         if importlib.util.find_spec("sherlock_project") is not None:
-            return "python-module"
+            return "python-module:sherlock_project"
         if importlib.util.find_spec("sherlock") is not None:
-            return "python-module"
+            return "python-module:sherlock"
     except Exception:
         pass
     return None
+
 
 
 def resolve_snoop_cmd() -> Optional[str]:
@@ -187,10 +188,11 @@ def probe_tools() -> Dict[str, Any]:
     sherlock_error = None
     sherlock_path = None
 
-    if sherlock_cmd == "python-module":
+    if sherlock_cmd and sherlock_cmd.startswith("python-module"):
         sherlock_ok = True
-        sherlock_path = f"{PYTHON_CMD} -m sherlock_project"
-        sherlock_version = "installed (module)"
+        mod_name = sherlock_cmd.split(":", 1)[1] if ":" in sherlock_cmd else "sherlock_project"
+        sherlock_path = f"{PYTHON_CMD} -m {mod_name}"
+        sherlock_version = f"installed (module: {mod_name})"
     elif sherlock_cmd:
         sherlock_ok = True
         sherlock_path = sherlock_cmd
@@ -341,26 +343,42 @@ def parse_maigret_json(raw: Any) -> List[Dict]:
 
 
 def parse_sherlock_json(raw: Any) -> List[Dict]:
-    """Parse Sherlock JSON output (dict of site_name → {url, status, ...})."""
+    """
+    Parse Sherlock JSON output (dict of site_name → {url_user, exists/status, ...}
+    or list of site items).
+    Supports standard sherlock-project output where status is in `exists`, `status`, or `claim`.
+    """
     accounts: List[Dict] = []
     if not raw:
         return accounts
+
+    VALID_STATUSES = {"claimed", "found", "taken", "active", "200", "ok"}
+
+    def _is_claimed(val: Any) -> bool:
+        if not val:
+            return False
+        s = str(val).strip().lower()
+        return s in VALID_STATUSES or any(w in s for w in ("claimed", "found", "taken"))
+
     if isinstance(raw, list):
-        # Some versions output a list
         for item in raw:
             if not isinstance(item, dict):
                 continue
-            st = str(item.get("status") or "").lower()
-            if st not in ("claimed", "found"):
+            st = item.get("status") or item.get("exists") or item.get("claim")
+            if not _is_claimed(st):
                 continue
+            site_name = str(item.get("site") or item.get("site_name") or item.get("platform") or "Unknown")
+            url = item.get("url_user") or item.get("url") or item.get("url_main") or ""
+            resp_time = item.get("response_time_s")
+            profile_data = {"response_time_s": resp_time} if resp_time is not None else {}
             accounts.append({
-                "platform": item.get("site", "Unknown"),
-                "url": item.get("url_user") or item.get("url", ""),
+                "platform": site_name,
+                "url": url,
                 "username": item.get("username", ""),
-                "profile_data": {},
+                "profile_data": profile_data,
                 "source": "sherlock",
                 "confidence": "found",
-                "category": _categorize_platform(item.get("site", "")),
+                "category": _categorize_platform(site_name),
                 "relevance": "unreviewed",
             })
         return accounts
@@ -371,15 +389,17 @@ def parse_sherlock_json(raw: Any) -> List[Dict]:
     for site_name, site_data in raw.items():
         if not isinstance(site_data, dict):
             continue
-        st = str(site_data.get("status") or "").lower()
-        if st not in ("claimed", "found"):
+        st = site_data.get("status") or site_data.get("exists") or site_data.get("claim")
+        if not _is_claimed(st):
             continue
-        url = site_data.get("url_user") or site_data.get("url") or ""
+        url = site_data.get("url_user") or site_data.get("url") or site_data.get("url_main") or ""
+        resp_time = site_data.get("response_time_s")
+        profile_data = {"response_time_s": resp_time} if resp_time is not None else {}
         accounts.append({
             "platform": str(site_name),
             "url": url,
             "username": site_data.get("username", ""),
-            "profile_data": site_data.get("response_time_s", {}),
+            "profile_data": profile_data,
             "source": "sherlock",
             "confidence": "found",
             "category": _categorize_platform(site_name),
@@ -697,17 +717,23 @@ async def run_maigret(
 
 
 async def run_sherlock(
-    username: str,
+    username: Union[str, List[str]],
     deep: bool = False,
     tmpdir: str = "",
 ) -> Dict[str, Any]:
-    """Run Sherlock for a single username."""
+    """Run Sherlock for one or multiple usernames."""
     result_meta: Dict[str, Any] = {
         "tool": "sherlock", "ok": False, "error": None,
         "warning": None, "raw": {}, "accounts": [],
     }
-    if not username or len(username) < 2:
-        result_meta["error"] = "username too short"
+
+    if isinstance(username, str):
+        target_users = [username.strip()] if username.strip() else []
+    else:
+        target_users = [u.strip() for u in (username or []) if u and len(u.strip()) >= 2]
+
+    if not target_users:
+        result_meta["error"] = "no valid usernames provided"
         return result_meta
 
     sherlock_cmd = resolve_sherlock_cmd()
@@ -716,24 +742,23 @@ async def run_sherlock(
         return result_meta
 
     out_dir = tmpdir or tempfile.mkdtemp(prefix="sherlock_")
-    output_file = os.path.join(out_dir, f"sherlock_{username}.json")
 
-    if sherlock_cmd == "python-module":
-        cmd = [PYTHON_CMD, "-m", "sherlock_project"]
+    if sherlock_cmd.startswith("python-module"):
+        mod_name = sherlock_cmd.split(":", 1)[1] if ":" in sherlock_cmd else "sherlock_project"
+        cmd = [PYTHON_CMD, "-m", mod_name]
     else:
         cmd = [sherlock_cmd]
 
     timeout_s = "15" if deep else "10"
+    cmd += target_users
     cmd += [
-        username,
-        "--output", output_file,
         "--folderoutput", out_dir,
-        "--json", output_file,
+        "--json",
         "--no-color",
         "--timeout", timeout_s,
     ]
 
-    log.info("Sherlock scan for %s deep=%s", _redact(username), deep)
+    log.info("Sherlock scan for %s deep=%s", [_redact(u) for u in target_users], deep)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -746,34 +771,46 @@ async def run_sherlock(
         stderr_s = (stderr or b"").decode("utf-8", errors="replace")
         stdout_s = (stdout or b"").decode("utf-8", errors="replace")
 
-        # Find JSON output
-        json_path = None
-        if os.path.isfile(output_file):
-            json_path = output_file
-        else:
-            # Sherlock may output to different filename patterns
+        json_files = []
+        if os.path.isdir(out_dir):
             for fn in os.listdir(out_dir):
                 if fn.endswith(".json"):
-                    json_path = os.path.join(out_dir, fn)
-                    break
+                    json_files.append(os.path.join(out_dir, fn))
 
-        if not json_path:
-            # Try parsing stdout as JSON
+        raw_outputs: Dict[str, Any] = {}
+        all_accounts: List[Dict[str, Any]] = []
+
+        if json_files:
+            for jp in json_files:
+                try:
+                    with open(jp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    base_fn = os.path.basename(jp).removesuffix(".json")
+                    raw_outputs[base_fn] = data
+                    parsed = parse_sherlock_json(data)
+                    for acct in parsed:
+                        if not acct.get("username") and len(target_users) == 1:
+                            acct["username"] = target_users[0]
+                    all_accounts.extend(parsed)
+                except Exception as exc:
+                    log.warning("Failed to parse Sherlock file %s: %s", jp, exc)
+        else:
             try:
                 raw = json.loads(stdout_s) if stdout_s.strip().startswith(("{", "[")) else {}
             except Exception:
                 raw = {}
-            if not raw:
-                result_meta["error"] = f"sherlock no JSON output (exit {proc.returncode})"
-                return result_meta
-        else:
-            with open(json_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
+            if raw:
+                raw_outputs["stdout"] = raw
+                all_accounts = parse_sherlock_json(raw)
 
-        accounts = parse_sherlock_json(raw)
-        result_meta.update({"ok": True, "raw": raw, "accounts": accounts})
+        if not raw_outputs and proc.returncode != 0 and not all_accounts:
+            result_meta["error"] = f"sherlock failed (exit {proc.returncode}): {stderr_s[:200] or stdout_s[:200]}"
+            return result_meta
+
+        accounts = dedupe_accounts(all_accounts)
+        result_meta.update({"ok": True, "raw": raw_outputs, "accounts": accounts})
         if not accounts:
-            result_meta["warning"] = "sherlock ran but found 0 accounts"
+            result_meta["warning"] = f"sherlock scanned {len(target_users)} username(s) but found 0 accounts"
         return result_meta
 
     except asyncio.TimeoutError:
@@ -1154,7 +1191,7 @@ async def execute_scan_v2(
                 tasks.append(run_maigret(mg_users[0], deep=deep_scan, tmpdir=tmpdir))
                 task_map.append(engine)
             elif engine == "sherlock" and mg_users:
-                tasks.append(run_sherlock(mg_users[0], deep=deep_scan, tmpdir=tmpdir))
+                tasks.append(run_sherlock(mg_users, deep=deep_scan, tmpdir=tmpdir))
                 task_map.append(engine)
             elif engine == "blackbird":
                 bb_user = mg_users[0] if mg_users else None
