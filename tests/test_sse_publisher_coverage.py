@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 RELAYED_VIA_SCRAPER_WEBHOOK = {"new_arrest", "hot_lead", "scraper_error"}
 
 # SSE plumbing / DOM events that are not domain events.
-NON_DOMAIN = {"heartbeat", "connected", "click", "keydown", "message"}
+NON_DOMAIN = {"heartbeat", "connected", "click", "keydown", "message", "input"}
 
 # payment_confirmed is an intentional legacy alias of payment_received in the
 # frontend; publishing both would double-toast. Documented exemption.

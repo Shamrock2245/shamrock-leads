@@ -96,13 +96,13 @@ def test_normalize_charges_and_amounts():
     assert res[0] == {"charge": "DUI", "amount": 1000.0}
     assert res[1] == {"charge": "BATTERY", "amount": 500.0}
 
-    # Case C: List of strings and single amount (falls back to putting all on first charge)
+    # Case C: List of strings and single amount (splits total across charges)
     charges_c = ["DUI", "BATTERY"]
     amount_c = 1500
     res = _normalize_charges_and_amounts(charges_c, amount_c)
     assert len(res) == 2
-    assert res[0] == {"charge": "DUI", "amount": 1500.0}
-    assert res[1] == {"charge": "BATTERY", "amount": 0.0}
+    assert res[0] == {"charge": "DUI", "amount": 750.0}
+    assert res[1] == {"charge": "BATTERY", "amount": 750.0}
 
     # Case D: Pipe delimited strings
     charges_d = "DUI | BATTERY | THEFT"

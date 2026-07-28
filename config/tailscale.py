@@ -38,9 +38,12 @@ logger = logging.getLogger(__name__)
 class TailscaleConfig:
     """Tailscale tailnet configuration and service discovery."""
 
-    enabled: bool = field(default_factory=lambda: os.getenv("TAILSCALE_ENABLED", "true").lower() == "true")
     authkey: str = field(default_factory=lambda: os.getenv("TAILSCALE_AUTHKEY", ""))
     tailnet: str = field(default_factory=lambda: os.getenv("TAILSCALE_TAILNET", "shamrockbailbonds.biz"))
+
+    @property
+    def enabled(self) -> bool:
+        return os.getenv("TAILSCALE_ENABLED", "true").lower() == "true"
 
     # ── Device Hostnames (MagicDNS) ──
     imac_hostname: str = field(default_factory=lambda: os.getenv("TAILSCALE_IMAC_HOSTNAME", "shamrocksimac"))
@@ -168,7 +171,6 @@ class TailscaleConfig:
                 ip = results[0][4][0]
                 if ip.startswith("100."):
                     return ip
-                return ip
         except (socket.gaierror, OSError):
             pass
         return ""
