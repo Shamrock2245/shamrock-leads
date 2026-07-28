@@ -419,7 +419,7 @@ def parse_sherlock_csv(csv_path: str) -> List[Dict]:
         with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                st = str(row.get("status") or row.get("Status") or "").strip().lower()
+                st = str(row.get("exists") or row.get("status") or row.get("Status") or "").strip().lower()
                 if st in ("claimed", "found", "taken", "200", "ok"):
                     platform = str(row.get("name") or row.get("site") or row.get("platform") or "Unknown")
                     url = str(row.get("url_user") or row.get("url") or "")

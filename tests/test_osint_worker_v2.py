@@ -72,7 +72,7 @@ def test_parse_sherlock_csv(tmp_path):
     from runners import parse_sherlock_csv
     csv_file = tmp_path / "testuser.csv"
     csv_file.write_text(
-        "username,name,url_main,url_user,status,http_status,response_time_s\n"
+        "username,name,url_main,url_user,exists,http_status,response_time_s\n"
         "testuser,GitHub,https://github.com,https://github.com/testuser,Claimed,200,0.5\n"
         "testuser,Twitter,https://twitter.com,https://twitter.com/testuser,Available,404,0.3\n"
     )
