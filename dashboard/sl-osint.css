@@ -584,21 +584,45 @@
 .osint-empty .empty-icon { font-size: 2.2rem; margin-bottom: 10px; opacity: 0.4; }
 .osint-empty .empty-text { font-size: 0.75rem; max-width: 280px; }
 
-/* ── Deletion Controls ────────────────────────────────────────────── */
+/* ── Deletion & Row Action Controls ────────────────────────────────── */
+.report-row-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.osint-row-pdf-btn {
+  background: rgba(0, 100, 60, 0.15);
+  color: #00c853;
+  border: 1px solid rgba(0, 200, 83, 0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: var(--osint-transition);
+}
+.osint-row-pdf-btn:hover {
+  background: rgba(0, 200, 83, 0.25);
+  border-color: #00c853;
+}
 .osint-row-del-btn {
-  background: rgba(248, 81, 73, 0.12);
+  background: rgba(248, 81, 73, 0.15);
   color: var(--osint-danger);
   border: 1px solid rgba(248, 81, 73, 0.3);
   border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 11px;
+  padding: 2px 6px;
+  font-size: 10px;
   font-weight: 600;
   cursor: pointer;
-  margin-left: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: var(--osint-transition);
 }
 .osint-row-del-btn:hover {
-  background: rgba(248, 81, 73, 0.25);
+  background: rgba(248, 81, 73, 0.3);
   border-color: var(--osint-danger);
 }
 .osint-clear-all-btn {

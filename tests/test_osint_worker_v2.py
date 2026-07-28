@@ -68,6 +68,22 @@ def test_parse_sherlock_empty():
     assert parse_sherlock_json([]) == []
 
 
+def test_parse_sherlock_csv(tmp_path):
+    from runners import parse_sherlock_csv
+    csv_file = tmp_path / "testuser.csv"
+    csv_file.write_text(
+        "username,name,url_main,url_user,status,http_status,response_time_s\n"
+        "testuser,GitHub,https://github.com,https://github.com/testuser,Claimed,200,0.5\n"
+        "testuser,Twitter,https://twitter.com,https://twitter.com/testuser,Available,404,0.3\n"
+    )
+    accounts = parse_sherlock_csv(str(csv_file))
+    assert len(accounts) == 1
+    assert accounts[0]["platform"] == "GitHub"
+    assert accounts[0]["url"] == "https://github.com/testuser"
+    assert accounts[0]["source"] == "sherlock"
+
+
+
 # ── SpiderFoot Parser Tests ───────────────────────────────────────────────────
 
 def test_parse_spiderfoot_social_accounts():

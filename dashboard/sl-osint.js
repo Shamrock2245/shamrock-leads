@@ -192,10 +192,12 @@
           <div class="report-name">${_esc(name)}</div>
           <div class="report-meta">${_esc(engines)} · ${date}</div>
         </div>
-        <span class="report-count">${count}</span>
-        <span class="report-status ${status}">${status}</span>
-        <button class="osint-row-pdf-btn" onclick="event.stopPropagation();SLOSINT.exportPDFForId('${id}')" title="Download PDF Report" style="background:rgba(0,100,60,0.15);color:#00643c;border:1px solid rgba(0,100,60,0.3);border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px">📄 PDF</button>
-        <button class="osint-row-del-btn" onclick="event.stopPropagation();SLOSINT.deleteScan('${id}')" title="Delete scan permanently" style="background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3);border-radius:4px;padding:3px 6px;font-size:11px;font-weight:600;cursor:pointer;margin-left:4px">🗑️</button>
+        <div class="report-row-right">
+          <span class="report-count" title="${count} accounts found">${count}</span>
+          <span class="report-status ${status}">${status}</span>
+          <button class="osint-row-pdf-btn" onclick="event.stopPropagation();SLOSINT.exportPDFForId('${id}')" title="Download PDF Report">📄 PDF</button>
+          <button class="osint-row-del-btn" onclick="event.stopPropagation();SLOSINT.deleteScan('${id}')" title="Delete scan permanently">🗑️</button>
+        </div>
       </div>`;
     }).join('');
   }

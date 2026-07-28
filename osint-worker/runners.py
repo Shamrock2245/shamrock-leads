@@ -5,6 +5,7 @@ Writable filesystem assumed (not read-only dashboard rootfs).
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
 import logging
@@ -408,6 +409,38 @@ def parse_sherlock_json(raw: Any) -> List[Dict]:
     return accounts
 
 
+def parse_sherlock_csv(csv_path: str) -> List[Dict]:
+    """Parse Sherlock CSV output file (username,name,url_user,status,response_time_s)."""
+    accounts: List[Dict] = []
+    if not os.path.isfile(csv_path):
+        return accounts
+    try:
+        with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                st = str(row.get("status") or row.get("Status") or "").strip().lower()
+                if st in ("claimed", "found", "taken", "200", "ok"):
+                    platform = str(row.get("name") or row.get("site") or row.get("platform") or "Unknown")
+                    url = str(row.get("url_user") or row.get("url") or "")
+                    user = str(row.get("username") or "")
+                    resp_time = row.get("response_time_s")
+                    profile_data = {"response_time_s": resp_time} if resp_time else {}
+                    accounts.append({
+                        "platform": platform,
+                        "url": url,
+                        "username": user,
+                        "profile_data": profile_data,
+                        "source": "sherlock",
+                        "confidence": "found",
+                        "category": _categorize_platform(platform),
+                        "relevance": "unreviewed",
+                    })
+    except Exception as exc:
+        log.warning("Failed to parse Sherlock CSV file %s: %s", csv_path, exc)
+    return accounts
+
+
+
 def parse_snoop_json(raw: Any) -> tuple[List[Dict], List[Dict]]:
     """
     Parse Snoop JSON output.
@@ -750,13 +783,13 @@ async def run_sherlock(
         cmd = [sherlock_cmd]
 
     timeout_s = "15" if deep else "10"
-    cmd += target_users
     cmd += [
         "--folderoutput", out_dir,
-        "--json",
+        "--csv",
         "--no-color",
         "--timeout", timeout_s,
     ]
+    cmd += target_users
 
     log.info("Sherlock scan for %s deep=%s", [_redact(u) for u in target_users], deep)
 
@@ -771,14 +804,28 @@ async def run_sherlock(
         stderr_s = (stderr or b"").decode("utf-8", errors="replace")
         stdout_s = (stdout or b"").decode("utf-8", errors="replace")
 
+        csv_files = []
         json_files = []
         if os.path.isdir(out_dir):
             for fn in os.listdir(out_dir):
-                if fn.endswith(".json"):
-                    json_files.append(os.path.join(out_dir, fn))
+                fp = os.path.join(out_dir, fn)
+                if fn.endswith(".csv"):
+                    csv_files.append(fp)
+                elif fn.endswith(".json"):
+                    json_files.append(fp)
 
         raw_outputs: Dict[str, Any] = {}
         all_accounts: List[Dict[str, Any]] = []
+
+        if csv_files:
+            for cp in csv_files:
+                parsed = parse_sherlock_csv(cp)
+                base_fn = os.path.basename(cp).removesuffix(".csv")
+                raw_outputs[base_fn] = {"csv_file": cp, "found_count": len(parsed)}
+                for acct in parsed:
+                    if not acct.get("username") and len(target_users) == 1:
+                        acct["username"] = target_users[0]
+                all_accounts.extend(parsed)
 
         if json_files:
             for jp in json_files:
@@ -793,8 +840,9 @@ async def run_sherlock(
                             acct["username"] = target_users[0]
                     all_accounts.extend(parsed)
                 except Exception as exc:
-                    log.warning("Failed to parse Sherlock file %s: %s", jp, exc)
-        else:
+                    log.warning("Failed to parse Sherlock JSON %s: %s", jp, exc)
+
+        if not csv_files and not json_files:
             try:
                 raw = json.loads(stdout_s) if stdout_s.strip().startswith(("{", "[")) else {}
             except Exception:
