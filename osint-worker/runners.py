@@ -25,6 +25,7 @@ from defaults import (
     SHERLOCK_TIMEOUT,
     SPIDERFOOT_TIMEOUT,
     assess_maigret_quality,
+    dedupe_accounts,
     maigret_site_args,
 )
 
