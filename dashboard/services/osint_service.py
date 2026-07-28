@@ -377,7 +377,55 @@ class OSINTService:
             docs.append(doc)
         return docs, total
 
+    async def delete_scan(self, scan_id: str, actor: str = "admin") -> bool:
+        """Permanently delete a scan history record from Mongo database."""
+        col = self._scans_col
+        try:
+            try:
+                query = {"_id": ObjectId(scan_id)}
+            except Exception:
+                query = {"_id": scan_id}
+            
+            res = await col.delete_one(query)
+            if res.deleted_count > 0:
+                await AuditService.log_event(
+                    entity_type="osint_scan",
+                    entity_id=scan_id,
+                    action="osint_scan_deleted",
+                    details={"scan_id": scan_id},
+                    actor=actor,
+                    actor_type="admin",
+                    event_context="osint_intelligence",
+                )
+                return True
+            return False
+        except Exception as exc:
+            log.error("Failed to delete OSINT scan %s: %s", scan_id, exc)
+            return False
+
+    async def delete_all_scans(self, actor: str = "admin") -> int:
+        """Permanently clear all scan history records from Mongo database."""
+        col = self._scans_col
+        try:
+            res = await col.delete_many({})
+            count = res.deleted_count
+            if count > 0:
+                await AuditService.log_event(
+                    entity_type="osint_scan",
+                    entity_id="all",
+                    action="osint_scans_cleared",
+                    details={"count": count},
+                    actor=actor,
+                    actor_type="admin",
+                    event_context="osint_intelligence",
+                )
+            return count
+        except Exception as exc:
+            log.error("Failed to clear all OSINT scans: %s", exc)
+            return 0
+
     # ── Finding Management ────────────────────────────────────────────────────
+
 
     async def update_findings_relevance(
         self, scan_id: str, body: FindingRelevanceUpdate

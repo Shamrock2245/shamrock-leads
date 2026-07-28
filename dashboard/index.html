@@ -5651,7 +5651,10 @@
 
         <!-- Scan History -->
         <div class="osint-card" style="flex:1">
-          <div class="osint-card-title"><span class="icon">📋</span> Scan History</div>
+          <div class="osint-card-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span><span class="icon">📋</span> Scan History</span>
+            <button class="osint-clear-all-btn" onclick="SLOSINT.clearAllScans()" title="Clear all scan history permanently">🗑️ Clear History</button>
+          </div>
           <div class="osint-reports-toolbar">
             <input type="text" id="osintSearchInput" placeholder="Search by name..." />
             <select id="osintStatusFilter">

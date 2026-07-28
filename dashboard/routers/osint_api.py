@@ -15,6 +15,8 @@ Endpoints:
   GET    /api/osint/scan/{id}                   → Get scan status + results
   GET    /api/osint/scan/{id}/raw               → Full report with raw tool output
   GET    /api/osint/scans                       → List scans (filter/sort/paginate)
+  DELETE /api/osint/scan/{id}                   → Permanently delete single scan history record
+  DELETE /api/osint/scans                       → Permanently clear all scan history
   PATCH  /api/osint/scan/{id}/findings          → Mark findings relevant/irrelevant
   POST   /api/osint/scan/{id}/attach            → Copy summary to subject record
   GET    /api/osint/scan/{id}/export/json       → Export full JSON
@@ -197,7 +199,37 @@ async def list_scans(
     return {"scans": scans, "total": total, "limit": limit, "skip": skip}
 
 
+@router.delete("/scan/{scan_id}", summary="Delete OSINT scan history record permanently")
+async def delete_scan(
+    scan_id: str,
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Permanently delete a scan history record from the database."""
+    _require_admin(request, x_admin_key, x_admin_token)
+    svc = get_osint_service()
+    success = await svc.delete_scan(scan_id, actor="admin")
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_id} not found or already deleted.")
+    return {"success": True, "deleted_id": scan_id}
+
+
+@router.delete("/scans", summary="Permanently delete all OSINT scan history")
+async def clear_all_scans(
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Permanently clear all scan history records from the database."""
+    _require_admin(request, x_admin_key, x_admin_token)
+    svc = get_osint_service()
+    count = await svc.delete_all_scans(actor="admin")
+    return {"success": True, "deleted_count": count}
+
+
 # ── Finding Management ────────────────────────────────────────────────────────
+
 
 @router.patch("/scan/{scan_id}/findings", summary="Mark findings relevant/irrelevant")
 async def update_findings(

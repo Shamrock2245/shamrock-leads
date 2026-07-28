@@ -36,6 +36,8 @@
     importToActiveForm,
     markRelevant,
     markIrrelevant,
+    deleteScan,
+    clearAllScans,
   };
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -193,6 +195,7 @@
         <span class="report-count">${count}</span>
         <span class="report-status ${status}">${status}</span>
         <button class="osint-row-pdf-btn" onclick="event.stopPropagation();SLOSINT.exportPDFForId('${id}')" title="Download PDF Report" style="background:rgba(0,100,60,0.15);color:#00643c;border:1px solid rgba(0,100,60,0.3);border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px">📄 PDF</button>
+        <button class="osint-row-del-btn" onclick="event.stopPropagation();SLOSINT.deleteScan('${id}')" title="Delete scan permanently" style="background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3);border-radius:4px;padding:3px 6px;font-size:11px;font-weight:600;cursor:pointer;margin-left:4px">🗑️</button>
       </div>`;
     }).join('');
   }
@@ -344,6 +347,7 @@
           <button onclick="SLOSINT.exportCSV()">CSV</button>
           <button onclick="SLOSINT.exportPDF()">PDF</button>
           <button class="primary" onclick="SLOSINT.attachToSubject()">Attach</button>
+          <button class="danger" onclick="SLOSINT.deleteScan('${scan._id}')" style="background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3)" title="Delete scan record permanently">🗑️ Delete</button>
           <button onclick="SLOSINT.closeScan()">✕</button>
         </div>
       </div>
@@ -629,6 +633,66 @@
     } catch (e) {
       console.warn('Import fields failed:', e);
       return null;
+    }
+  }
+
+  // ── Scan Deletion ──────────────────────────────────────────────────
+  async function deleteScan(scanId) {
+    const id = scanId || _activeScan?._id;
+    if (!id) return;
+
+    if (!confirm('Are you sure you want to permanently delete this scan history record? It will be removed from the database completely.')) {
+      return;
+    }
+
+    try {
+      const r = await fetch(`${API}/api/osint/scan/${id}`, {
+        method: 'DELETE',
+        headers: headers(),
+        credentials: 'same-origin',
+      });
+      if (r.ok) {
+        toast('Scan deleted permanently', 'success');
+        if (_activeScan && _activeScan._id === id) {
+          closeScan();
+        }
+        await load();
+      } else {
+        const data = await r.json().catch(() => ({}));
+        toast('Delete failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+    } catch (e) {
+      toast(`Delete error: ${e.message}`, 'error');
+    }
+  }
+
+  async function clearAllScans() {
+    if (!_scans || !_scans.length) {
+      toast('No scan history to clear', 'info');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to permanently delete ALL scan history? All past subject searches will be completely erased from the database.')) {
+      return;
+    }
+
+    try {
+      const r = await fetch(`${API}/api/osint/scans`, {
+        method: 'DELETE',
+        headers: headers(),
+        credentials: 'same-origin',
+      });
+      if (r.ok) {
+        const data = await r.json().catch(() => ({}));
+        toast(`Cleared ${data.deleted_count || 0} scans from database`, 'success');
+        closeScan();
+        await load();
+      } else {
+        const data = await r.json().catch(() => ({}));
+        toast('Clear history failed: ' + (data.detail || 'unknown error'), 'error');
+      }
+    } catch (e) {
+      toast(`Clear error: ${e.message}`, 'error');
     }
   }
 

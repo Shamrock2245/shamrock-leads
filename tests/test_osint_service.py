@@ -112,3 +112,36 @@ def test_extract_importable_fields():
     assert "johndoe" in fields["usernames"]
     assert "Johnny Doe" in fields["aliases"]
 
+
+@pytest.mark.asyncio
+async def test_delete_scan_and_clear_all(mocker):
+    from dashboard.services.osint_service import OSINTService
+
+    svc = OSINTService()
+    mock_col = mocker.MagicMock()
+
+    # Mock delete_one
+    mock_delete_one_res = mocker.MagicMock()
+    mock_delete_one_res.deleted_count = 1
+    mock_col.delete_one = mocker.AsyncMock(return_value=mock_delete_one_res)
+
+    # Mock delete_many
+    mock_delete_many_res = mocker.MagicMock()
+    mock_delete_many_res.deleted_count = 5
+    mock_col.delete_many = mocker.AsyncMock(return_value=mock_delete_many_res)
+
+    mock_db = {"osint_scans": mock_col}
+    svc._db = mock_db
+    mocker.patch("dashboard.services.audit_service.AuditService.log_event", mocker.AsyncMock())
+
+    # Test single delete
+    deleted = await svc.delete_scan("507f1f77bcf86cd799439011")
+    assert deleted is True
+    mock_col.delete_one.assert_called_once()
+
+    # Test clear all
+    cleared = await svc.delete_all_scans()
+    assert cleared == 5
+    mock_col.delete_many.assert_called_once()
+
+
