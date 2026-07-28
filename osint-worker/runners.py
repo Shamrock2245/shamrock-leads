@@ -420,7 +420,8 @@ def parse_sherlock_csv(csv_path: str) -> List[Dict]:
             reader = csv.DictReader(f)
             for row in reader:
                 st = str(row.get("exists") or row.get("status") or row.get("Status") or "").strip().lower()
-                if st in ("claimed", "found", "taken", "200", "ok"):
+                # Sherlock CSV "exists" is often Claimed/Available; some builds emit true/false
+                if st in ("claimed", "found", "taken", "200", "ok", "true", "yes", "1"):
                     platform = str(row.get("name") or row.get("site") or row.get("platform") or "Unknown")
                     url = str(row.get("url_user") or row.get("url") or "")
                     user = str(row.get("username") or "")

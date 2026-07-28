@@ -99,38 +99,60 @@ async def auto_release_poa(poa_number: str, reason: str, actor: str) -> bool:
     return True
 
 
-async def check_poa_inventory_thresholds(threshold: int = 3) -> dict:
+async def check_poa_inventory_thresholds(
+    threshold: int = 3,
+    *,
+    notify: bool = False,
+) -> dict:
     """
-    Scan available POA inventory by prefix and trigger alerts for low stock.
-    
+    Scan available POA inventory by prefix (the real inventory key is
+    ``poa_prefix``, not ``tier``) and optionally fire a Slack digest.
+
     Returns:
-        { "low_stock": [ { "prefix": str, "surety_id": str, "available": int } ], ... }
+        {
+          "checked_at": ISO timestamp,
+          "threshold": int,
+          "low_stock": [
+            { "prefix", "tier", "surety_id", "available", "max_bond" }, ...
+          ],
+        }
     """
+    from datetime import datetime, timezone
+
     from dashboard.extensions import get_db
-    from writers.slack_notifier import notify_slack
-    
+
     db = get_db()
-    low_stock = []
-    
+    low_stock: list[dict] = []
+
     for surety_id, prefix_list in TIERS.items():
         for cap, prefix in prefix_list:
+            # Seeded inventory uses lowercase "available"; tolerate case variants.
             count = await db.poa_inventory.count_documents({
                 "surety_id": surety_id,
                 "poa_prefix": prefix,
-                "status": "available",
+                "status": {"$in": ["available", "Available", "AVAILABLE"]},
             })
             if count <= threshold:
-                item = {"prefix": prefix, "surety_id": surety_id, "available": count, "max_bond": cap}
-                low_stock.append(item)
-                
-    if low_stock:
-        lines = [f"• *{i['prefix']}* ({i['surety_id'].upper()}, max ${i['max_bond']:,}): *{i['available']} left*" for i in low_stock]
-        msg = f"⚠️ *POA Inventory Low Stock Alert*\nThe following power prefixes are running low:\n" + "\n".join(lines)
+                low_stock.append({
+                    "prefix": prefix,
+                    "tier": prefix,  # digest_poa_low_stock historically labels this "tier"
+                    "surety_id": surety_id,
+                    "available": count,
+                    "max_bond": cap,
+                })
+
+    if notify and low_stock:
         try:
-            notify_slack(msg, channel_type="alerts")
+            from dashboard.services.automation_digest import digest_poa_low_stock
+            await digest_poa_low_stock(low_stock, threshold)
         except Exception:
+            # Never let alert delivery break inventory checks
             pass
-            
-    return {"checked_at": True, "low_stock": low_stock}
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "threshold": threshold,
+        "low_stock": low_stock,
+    }
 
 

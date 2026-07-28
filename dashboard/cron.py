@@ -376,45 +376,37 @@ async def _run_intake_recovery():
 
 
 async def _run_poa_low_stock():
-    """Alert when surety POA inventory tiers fall below threshold."""
+    """Alert when surety POA inventory prefixes fall below threshold.
+
+    Inventory docs are keyed by ``poa_prefix`` (OSI3, PSC5, …), not ``tier``.
+    Delegates counting + optional Slack digest to poa_service.
+    """
     from dashboard.services.automation_config import get_automation_config
-    from dashboard.services.automation_digest import digest_poa_low_stock
+    from dashboard.services.poa_service import check_poa_inventory_thresholds
     from dashboard.extensions import get_db
     from datetime import datetime, timezone
     db = get_db()
     cfg = await get_automation_config(db)
     poa_cfg = cfg.get("poa_low_stock") or {}
     threshold = int(poa_cfg.get("threshold") or 5)
-    pipeline = [
-        {"$match": {"status": {"$in": ["available", "Available", "AVAILABLE"]}}},
-        {"$group": {
-            "_id": {"surety_id": "$surety_id", "tier": "$tier"},
-            "available": {"$sum": 1},
-        }},
-        {"$match": {"available": {"$lte": threshold}}},
-    ]
-    rows = []
     try:
-        async for r in db["poa_inventory"].aggregate(pipeline):
-            rows.append({
-                "surety_id": (r.get("_id") or {}).get("surety_id") or "unknown",
-                "tier": (r.get("_id") or {}).get("tier") or "?",
-                "available": r.get("available", 0),
-            })
+        result = await check_poa_inventory_thresholds(threshold=threshold, notify=True)
     except Exception as e:
-        logger.warning("[POALowStock] aggregate failed: %s", e)
+        logger.warning("[POALowStock] check failed: %s", e)
         return
+    rows = result.get("low_stock") or []
     await db["automation_run_log"].insert_one({
         "automation": "poa_low_stock",
         "run_at": datetime.now(timezone.utc),
-        "result": {"low_tiers": len(rows), "threshold": threshold, "rows": rows},
+        "result": {
+            "low_tiers": len(rows),
+            "threshold": threshold,
+            "rows": rows,
+            "checked_at": result.get("checked_at"),
+        },
     })
     if rows:
-        logger.warning("[POALowStock] %d tiers ≤ %s", len(rows), threshold)
-        try:
-            await digest_poa_low_stock(rows, threshold)
-        except Exception as e:
-            logger.debug("[POALowStock] digest: %s", e)
+        logger.warning("[POALowStock] %d prefixes ≤ %s", len(rows), threshold)
 
 
 async def _run_surety_weekly_reports():

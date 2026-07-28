@@ -23,6 +23,7 @@ class P2CBaseScraper(BaseScraper):
     P2C_URL: str = ""           # Override: full URL to jail inmates page
     COUNTY_NAME: str = ""       # Override
     FACILITY_NAME: str = ""     # Override
+    jms_vendor = "p2c"
 
     @property
     def county(self) -> str:
@@ -36,9 +37,7 @@ class P2CBaseScraper(BaseScraper):
             logger.error(f"requests/bs4 not installed"); return []
 
         session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        })
+        session.headers.update(self.get_vendor_headers("p2c"))
 
         try:
             resp = session.get(self.P2C_URL, timeout=30, allow_redirects=True)

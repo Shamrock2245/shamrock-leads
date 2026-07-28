@@ -51,6 +51,8 @@ class ZuercherBaseScraper(BaseScraper):
     Subclasses only need to provide the county name and subdomain.
     """
 
+    jms_vendor = "zuercher"
+
     @property
     def county(self) -> str:
         raise NotImplementedError("Subclasses must define county name")
@@ -151,15 +153,11 @@ class ZuercherBaseScraper(BaseScraper):
 
         try:
             session = requests.Session()
-            session.headers.update({
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json, text/plain, */*",
-                "Content-Type": "application/json",
-                "Referer": f"{base_url}/",
-            })
+            headers = self.get_vendor_headers("zuercher")
+            headers["Accept"] = "application/json, text/plain, */*"
+            headers["Content-Type"] = "application/json"
+            headers["Referer"] = f"{base_url}/"
+            session.headers.update(headers)
 
             # Step 1: establish session cookie (ZPORTAL_SID)
             try:

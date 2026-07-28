@@ -224,21 +224,78 @@ async def save_doc_rules_config(request: Request):
 
 @paperwork_bp.get("/paperwork/preview/{bond_case_id}")
 async def paperwork_preview(bond_case_id: str):
-    """Generate an instant mobile PDF preview stream for a bond case."""
+    """Generate an instant mobile PDF preview stream for a bond case or intake."""
     from fastapi.responses import Response
     from dashboard.bond_pdf_service import generate_appearance_bond
 
-    cases_col = get_collection("active_bonds")
-    case_doc = await cases_col.find_one({"$or": [{"bond_case_id": bond_case_id}, {"_id": bond_case_id}]})
-    if not case_doc:
-        intake_col = get_collection("intake_queue")
-        case_doc = await intake_col.find_one({"$or": [{"intake_id": bond_case_id}, {"_id": bond_case_id}]})
-        if not case_doc:
-            return JSONResponse({"success": False, "error": "Case record not found"}, status_code=404)
-        case_doc = _build_bond_data(case_doc)
+    def _id_clauses(value: str) -> list[dict]:
+        clauses: list[dict] = [
+            {"bond_case_id": value},
+            {"intake_id": value},
+            {"booking_number": value},
+            {"_id": value},
+        ]
+        try:
+            from bson import ObjectId
+            if ObjectId.is_valid(value):
+                clauses.append({"_id": ObjectId(value)})
+        except Exception:
+            pass
+        return clauses
 
-    pdf_bytes = generate_appearance_bond(case_doc)
-    return Response(content=pdf_bytes, media_type="application/pdf")
+    try:
+        cases_col = get_collection("active_bonds")
+        case_doc = await cases_col.find_one({"$or": _id_clauses(bond_case_id)})
+        source = "active_bonds"
+        if not case_doc:
+            intake_col = get_collection("intake_queue")
+            case_doc = await intake_col.find_one({"$or": _id_clauses(bond_case_id)})
+            source = "intake_queue"
+            if not case_doc:
+                return JSONResponse(
+                    {"success": False, "error": "Case record not found"},
+                    status_code=404,
+                )
+            bond_data = _build_bond_data(case_doc)
+        else:
+            # active_bonds already stores flat fields; normalize aliases for PDF fill
+            bond_data = {
+                "defendant_name": case_doc.get("defendant_name") or case_doc.get("name") or "",
+                "booking_number": case_doc.get("booking_number") or "",
+                "county": case_doc.get("county") or case_doc.get("defendant_county") or "",
+                "charges": case_doc.get("charges") or case_doc.get("charge") or "",
+                "bond_amount": case_doc.get("bond_amount") or case_doc.get("amount") or "",
+                "poa_number": case_doc.get("poa_number") or "",
+                "case_number": case_doc.get("case_number") or "",
+                "indemnitor_name": case_doc.get("indemnitor_name") or "",
+                "surety": (
+                    case_doc.get("surety")
+                    or case_doc.get("surety_id")
+                    or case_doc.get("insuranceCompany")
+                    or "osi"
+                ),
+                "court_date": case_doc.get("court_date") or "",
+                "address": case_doc.get("defendant_address") or case_doc.get("address") or "",
+            }
+
+        pdf_bytes = generate_appearance_bond(bond_data)
+        if not pdf_bytes:
+            return JSONResponse(
+                {"success": False, "error": "PDF generation returned empty output"},
+                status_code=500,
+            )
+        filename = f"preview_{bond_case_id}.pdf".replace(" ", "_")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename}"',
+                "X-Preview-Source": source,
+            },
+        )
+    except Exception as exc:
+        logger.exception("paperwork_preview error for %s", bond_case_id)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
 
@@ -784,17 +841,24 @@ async def push_to_signnow(request: Request, packet_id: str):
 
         from dashboard.services.signnow_packet_service import SignNowPacketService
         svc = SignNowPacketService()
-        result = await svc.create_packet(
-            intake_doc=intake,
-            packet_id=packet_id,
-            phase=phase,
-            surety_id=surety_id,
-            signer_email=signer_email,
-            signer_name=signer_name,
-            poa_number=poa_number or None,
-            custom_manifest=custom_manifest,
-            routing_scenario=routing_scenario,
-        )
+        try:
+            result = await svc.create_packet(
+                intake_doc=intake,
+                packet_id=packet_id,
+                phase=phase,
+                surety_id=surety_id,
+                signer_email=signer_email,
+                signer_name=signer_name,
+                poa_number=poa_number or None,
+                custom_manifest=custom_manifest,
+                routing_scenario=routing_scenario,
+            )
+        except ValueError as ve:
+            # Hydration fail-closed / missing POA etc. → client error, not 500
+            return JSONResponse(status_code=400, content={
+                "error": str(ve),
+                "packet_id": packet_id,
+            })
 
         # Store the primary SignNow document ID for webhook correlation
         # The first document_id is the primary signing document

@@ -48,36 +48,129 @@ class SignNowPacketService:
     # extensions.py references this location — do NOT duplicate there.
     #
     # To add Palmetto-specific templates:
-    # 1. Upload new templates to SignNow under admin@
-    # 2. Add template IDs here under PALMETTO_TEMPLATE_MAP
+    #   1. Upload new templates to SignNow under admin@
+    #   2. Add template IDs under PALMETTO_TEMPLATE_MAP
+    #   3. build_packet_manifest() surety routing will pick them up
+    # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def validate_packet_hydration(bond_data: Dict[str, Any], phase: int = 1) -> Dict[str, Any]:
+    def _flatten_bond_fields(bond_data: Dict[str, Any], poa_number: Optional[str] = None) -> Dict[str, Any]:
         """
-        Pre-flight audit of mandatory fields before generating SignNow packet.
-        
+        Normalize nested intake / bond docs into the flat keys used by
+        validate_packet_hydration (and broadly by PDF/SignNow prefills).
+        """
+        if not bond_data:
+            return {}
+        def_ = bond_data.get("defendant") or {}
+        ind = bond_data.get("indemnitor") or {}
+        if not isinstance(def_, dict):
+            def_ = {}
+        if not isinstance(ind, dict):
+            ind = {}
+
+        defendant_name = (
+            bond_data.get("defendant_name")
+            or def_.get("name")
+            or " ".join(
+                filter(
+                    None,
+                    [
+                        def_.get("firstName") or def_.get("first_name"),
+                        def_.get("middleName") or def_.get("middle_name"),
+                        def_.get("lastName") or def_.get("last_name"),
+                    ],
+                )
+            )
+            or ""
+        )
+        indemnitor_name = (
+            bond_data.get("indemnitor_name")
+            or ind.get("name")
+            or " ".join(
+                filter(
+                    None,
+                    [
+                        ind.get("firstName") or ind.get("first_name"),
+                        ind.get("lastName") or ind.get("last_name"),
+                    ],
+                )
+            )
+            or ""
+        )
+        county = (
+            bond_data.get("county")
+            or bond_data.get("defendant_county")
+            or def_.get("county")
+            or ""
+        )
+        indemnitor_phone = (
+            bond_data.get("indemnitor_phone")
+            or ind.get("phone")
+            or ""
+        )
+        indemnitor_email = (
+            bond_data.get("indemnitor_email")
+            or ind.get("email")
+            or ""
+        )
+        case_number = (
+            bond_data.get("case_number")
+            or bond_data.get("Case_Number")
+            or def_.get("caseNumber")
+            or def_.get("case_number")
+            or ""
+        )
+        poa = (
+            poa_number
+            or bond_data.get("poa_number")
+            or bond_data.get("POA_Number")
+            or ""
+        )
+
+        return {
+            "defendant_name": str(defendant_name).strip(),
+            "county": str(county).strip(),
+            "indemnitor_name": str(indemnitor_name).strip(),
+            "indemnitor_phone": str(indemnitor_phone).strip(),
+            "indemnitor_email": str(indemnitor_email).strip(),
+            "poa_number": str(poa).strip(),
+            "case_number": str(case_number).strip(),
+        }
+
+    @staticmethod
+    def validate_packet_hydration(
+        bond_data: Dict[str, Any],
+        phase: int = 1,
+        *,
+        poa_number: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pre-flight audit of mandatory fields before generating a SignNow packet.
+
+        Accepts flat bond dicts or nested intake docs (defendant/indemnitor).
+
         Returns:
-            { "valid": bool, "missing": [str], "warnings": [str] }
+            { "valid": bool, "missing": [str], "warnings": [str], "phase": int, "fields": dict }
         """
+        flat = SignNowPacketService._flatten_bond_fields(bond_data or {}, poa_number=poa_number)
         required_p1 = ["defendant_name", "county", "indemnitor_name", "indemnitor_phone"]
         required_p2 = required_p1 + ["poa_number", "case_number"]
-        
+
         target = required_p2 if phase == 2 else required_p1
-        missing = [f for f in target if not bond_data.get(f)]
-        warnings_list = []
-        
-        if not bond_data.get("indemnitor_email"):
+        missing = [f for f in target if not flat.get(f)]
+        warnings_list: list[str] = []
+
+        if not flat.get("indemnitor_email"):
             warnings_list.append("indemnitor_email is missing (SMS-only delivery fallback)")
-            
+
         return {
             "valid": len(missing) == 0,
             "phase": phase,
             "missing": missing,
             "warnings": warnings_list,
+            "fields": flat,
         }
 
-    #   3. The surety-routing logic in build_packet_manifest() will pick it up
-    # ──────────────────────────────────────────────────────────────────────
     TEMPLATE_MAP = {
         # ── Shared Templates (Paperwork for All Packets) ──────────────────────
         # Used by BOTH OSI and Palmetto. Single canonical forms.
@@ -1013,6 +1106,23 @@ class SignNowPacketService:
 
         if (phase == 2 or routing_scenario == "all-in-one") and not poa_number:
             raise ValueError("Phase 2 and All-in-One require a valid POA number")
+
+        # Fail closed: block packet creation when mandatory hydration fields are missing
+        audit_phase = 2 if (phase == 2 or routing_scenario == "all-in-one") else phase
+        hydration = self.validate_packet_hydration(
+            intake_doc, phase=audit_phase, poa_number=poa_number
+        )
+        if hydration.get("warnings"):
+            logger.warning(
+                "[signnow] Packet %s hydration warnings: %s",
+                packet_id,
+                hydration["warnings"],
+            )
+        if not hydration.get("valid"):
+            missing = ", ".join(hydration.get("missing") or [])
+            raise ValueError(
+                f"SignNow packet hydration incomplete (phase {audit_phase}): missing {missing}"
+            )
 
         await self._get_token()
 

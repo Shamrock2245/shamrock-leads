@@ -16,17 +16,6 @@ logger = logging.getLogger(__name__)
 
 IMPERSONATE = "chrome131"
 
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-}
-
-
 class SmartCOPBaseScraper(BaseScraper):
     """
     Base scraper for SmartCOP/SmartWebClient ASP.NET jail portals.
@@ -34,12 +23,16 @@ class SmartCOPBaseScraper(BaseScraper):
     Uses curl_cffi for TLS fingerprint impersonation and APE for proxy rotation.
     """
 
+    jms_vendor = "smartcop"
+
     @property
     def portal_url(self) -> str:
         raise NotImplementedError("Subclass must define portal_url")
 
     def get_headers(self) -> dict:
-        headers = dict(HEADERS)
+        headers = self.get_vendor_headers("smartcop")
+        # SmartCOP form posts expect same-origin navigation after the first hit
+        headers["Sec-Fetch-Site"] = "same-origin"
         headers["Referer"] = self.portal_url
         return headers
 
@@ -198,10 +191,7 @@ class SmartCOPBaseScraper(BaseScraper):
         records = []
         try:
             session = requests.Session()
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
+            headers = self.get_headers()
             resp = session.get(self.portal_url, headers=headers, timeout=30, verify=False)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")

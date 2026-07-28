@@ -90,8 +90,12 @@ async def digest_poa_low_stock(rows: list[dict[str, Any]], threshold: int) -> No
         return
     lines = [f"📕 *POA Low Stock* (threshold ≤ {threshold})"]
     for r in rows[:12]:
+        # Prefer explicit prefix; fall back to historical "tier" label
+        label = r.get("prefix") or r.get("tier") or "?"
+        max_bond = r.get("max_bond")
+        bond_bit = f", max ${max_bond:,}" if isinstance(max_bond, (int, float)) else ""
         lines.append(
-            f"• {r.get('surety_id', '?').upper()} tier {r.get('tier', '?')}: "
+            f"• {str(r.get('surety_id', '?')).upper()} *{label}*{bond_bit}: "
             f"*{r.get('available', 0)}* available"
         )
     await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ERRORS")
