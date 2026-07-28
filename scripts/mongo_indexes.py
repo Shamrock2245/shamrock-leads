@@ -83,6 +83,16 @@ def create_indexes():
             name="idx_county_scraped",
             comment="Per-county timeline",
         ),
+        IndexModel(
+            [("state", ASCENDING), ("scraped_at", DESCENDING)],
+            name="idx_state_scraped",
+            comment="Multi-state timeline queries",
+        ),
+        IndexModel(
+            [("state", ASCENDING), ("lead_score", DESCENDING)],
+            name="idx_state_score",
+            comment="Multi-state lead scoring queries",
+        ),
     ]
 
     for idx in indexes:
