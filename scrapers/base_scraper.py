@@ -508,6 +508,13 @@ class BaseScraper(ABC):
         if not self.ape:
             return None
         return self.ape.get_next_proxy(prefer_residential=prefer_residential)
+
+    def get_vendor_headers(self, vendor: str | None = None) -> dict[str, str]:
+        """Get tailored HTTP headers for a given JMS vendor or scraper's vendor."""
+        from scrapers.jms_headers import get_vendor_headers as gvh
+        v_name = vendor or getattr(self, "jms_vendor", None) or getattr(self, "vendor", None) or ""
+        return gvh(v_name)
+
     
     def get_sticky_proxy(self, session_id: str) -> Optional[str]:
         """

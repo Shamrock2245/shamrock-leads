@@ -222,6 +222,26 @@ async def save_doc_rules_config(request: Request):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+@paperwork_bp.get("/paperwork/preview/{bond_case_id}")
+async def paperwork_preview(bond_case_id: str):
+    """Generate an instant mobile PDF preview stream for a bond case."""
+    from fastapi.responses import Response
+    from dashboard.bond_pdf_service import generate_appearance_bond
+
+    cases_col = get_collection("active_bonds")
+    case_doc = await cases_col.find_one({"$or": [{"bond_case_id": bond_case_id}, {"_id": bond_case_id}]})
+    if not case_doc:
+        intake_col = get_collection("intake_queue")
+        case_doc = await intake_col.find_one({"$or": [{"intake_id": bond_case_id}, {"_id": bond_case_id}]})
+        if not case_doc:
+            return JSONResponse({"success": False, "error": "Case record not found"}, status_code=404)
+        case_doc = _build_bond_data(case_doc)
+
+    pdf_bytes = generate_appearance_bond(case_doc)
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+
 def _build_bond_data(intake: dict) -> dict:
     """
     Build the data dict expected by bond_pdf_service.generate_appearance_bonds().

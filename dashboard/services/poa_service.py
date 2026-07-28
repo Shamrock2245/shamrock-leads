@@ -98,3 +98,39 @@ async def auto_release_poa(poa_number: str, reason: str, actor: str) -> bool:
     
     return True
 
+
+async def check_poa_inventory_thresholds(threshold: int = 3) -> dict:
+    """
+    Scan available POA inventory by prefix and trigger alerts for low stock.
+    
+    Returns:
+        { "low_stock": [ { "prefix": str, "surety_id": str, "available": int } ], ... }
+    """
+    from dashboard.extensions import get_db
+    from writers.slack_notifier import notify_slack
+    
+    db = get_db()
+    low_stock = []
+    
+    for surety_id, prefix_list in TIERS.items():
+        for cap, prefix in prefix_list:
+            count = await db.poa_inventory.count_documents({
+                "surety_id": surety_id,
+                "poa_prefix": prefix,
+                "status": "available",
+            })
+            if count <= threshold:
+                item = {"prefix": prefix, "surety_id": surety_id, "available": count, "max_bond": cap}
+                low_stock.append(item)
+                
+    if low_stock:
+        lines = [f"• *{i['prefix']}* ({i['surety_id'].upper()}, max ${i['max_bond']:,}): *{i['available']} left*" for i in low_stock]
+        msg = f"⚠️ *POA Inventory Low Stock Alert*\nThe following power prefixes are running low:\n" + "\n".join(lines)
+        try:
+            notify_slack(msg, channel_type="alerts")
+        except Exception:
+            pass
+            
+    return {"checked_at": True, "low_stock": low_stock}
+
+

@@ -48,8 +48,34 @@ class SignNowPacketService:
     # extensions.py references this location — do NOT duplicate there.
     #
     # To add Palmetto-specific templates:
-    #   1. Create the template in SignNow (admin@shamrockbailbonds.biz)
-    #   2. Add the ID below under "Palmetto-Specific Overrides"
+    # 1. Upload new templates to SignNow under admin@
+    # 2. Add template IDs here under PALMETTO_TEMPLATE_MAP
+
+    @staticmethod
+    def validate_packet_hydration(bond_data: Dict[str, Any], phase: int = 1) -> Dict[str, Any]:
+        """
+        Pre-flight audit of mandatory fields before generating SignNow packet.
+        
+        Returns:
+            { "valid": bool, "missing": [str], "warnings": [str] }
+        """
+        required_p1 = ["defendant_name", "county", "indemnitor_name", "indemnitor_phone"]
+        required_p2 = required_p1 + ["poa_number", "case_number"]
+        
+        target = required_p2 if phase == 2 else required_p1
+        missing = [f for f in target if not bond_data.get(f)]
+        warnings_list = []
+        
+        if not bond_data.get("indemnitor_email"):
+            warnings_list.append("indemnitor_email is missing (SMS-only delivery fallback)")
+            
+        return {
+            "valid": len(missing) == 0,
+            "phase": phase,
+            "missing": missing,
+            "warnings": warnings_list,
+        }
+
     #   3. The surety-routing logic in build_packet_manifest() will pick it up
     # ──────────────────────────────────────────────────────────────────────
     TEMPLATE_MAP = {
