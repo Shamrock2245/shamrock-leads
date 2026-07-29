@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-231-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-256-orange)](#county-coverage)
 [![States](https://img.shields.io/badge/States-10-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
@@ -24,27 +24,30 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **231 registered county scrapers** across 10 states (GA 74 · FL 51 · SC 46 · NC 31 · TX 12 · TN 6 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
+1. **Scrapes** real-time booking data from **256 registered county scrapers** across 10 states (GA 74 · FL 67 · SC 46 · NC 34 · TX 15 · TN 9 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
 5. **Alerts** bondsmen via Slack with real-time hot lead notifications
 6. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`)
-7. **Manages** defendants (notes, contact logs, DNB/DNC flags, lifecycle tracking)
-8. **Matches** indemnitor intake to defendants via confidence-scored matching engine
-9. **Creates** bonded cases with surety selection (OSI / Palmetto) and POA assignment
-10. **Generates** surety-specific 14-document paperwork packets via SignNow
-11. **Orchestrates** e-signatures with webhook-driven completion tracking
-12. **Collects** premium payments via SwipeSimple integration
-13. **Manages** the 7-status active bond lifecycle via drag-and-drop Kanban
-14. **Automates** iMessage outreach via BlueBubbles bridge to the office iMac
-15. **Detects** re-arrests of defendants on active bonds
-16. **Monitors** Gmail for court discharge/exoneration emails
-17. **Syncs** court dates to Google Calendar with Twilio SMS reminders
-18. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
-19. **Visualizes** multi-state ops via Super CRM + **Multi-State Ops** + **Bond Intelligence**
-20. **Generates** official surety bond & liability XLSX financial reports with 2012+ date ranges and auto-chronological sorting
-21. **Automates** social media presence across platforms via Postiz integration
+7. **Automates First Appearance Bond Filling**: Continuous 24/7 background worker (`FirstAppearanceWatcher`) re-checks unset/$0 bond records across target active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto) every 30 mins to auto-populate newly set bonds post-hearing
+8. **Supports Per-Charge Bond Breakdown**: Stores structured `charge_details` (`[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety"}, ...]`) with interactive UI modal editing and `POST /api/leads/update-charge-bonds` auto-rescoring
+9. **Powers Multi-State Query Engine**: Seamless state and county sorting/filtering across all 10 states with case-insensitive regex matching and dynamic state-scoped county selector
+10. **Manages** defendants (notes, contact logs, DNB/DNC flags, lifecycle tracking)
+11. **Matches** indemnitor intake to defendants via confidence-scored matching engine
+12. **Creates** bonded cases with surety selection (OSI / Palmetto) and POA assignment
+13. **Generates** surety-specific 14-document paperwork packets via SignNow
+14. **Orchestrates** e-signatures with webhook-driven completion tracking
+15. **Collects** premium payments via SwipeSimple integration
+16. **Manages** the 7-status active bond lifecycle via drag-and-drop Kanban
+17. **Automates** iMessage outreach via BlueBubbles bridge to the office iMac
+18. **Detects** re-arrests of defendants on active bonds
+19. **Monitors** Gmail for court discharge/exoneration emails
+20. **Syncs** court dates to Google Calendar with Twilio SMS reminders
+21. **Tracks** defendant GPS location via Traccar integration (OsmAnd, vehicle trackers)
+22. **Visualizes** multi-state ops via Super CRM + **Multi-State Ops** + **Bond Intelligence**
+23. **Generates** official surety bond & liability XLSX financial reports with 2012+ date ranges and auto-chronological sorting
+24. **Automates** social media presence across platforms via Postiz integration
 
 ---
 

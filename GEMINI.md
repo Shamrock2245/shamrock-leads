@@ -2,7 +2,7 @@
 
 > This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
-> **Last Updated:** 2026-06-11
+> **Last Updated:** 2026-07-29
 
 ---
 

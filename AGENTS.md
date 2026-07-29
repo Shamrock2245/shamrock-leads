@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-07-24  
+> **Last Updated:** 2026-07-29  
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
@@ -17,19 +17,22 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
-6. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
-7. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
-8. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
-9. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
-10. **Collects payments** via SwipeSimple `[IMPLEMENTED]`
-11. **Manages** the 7-status bond lifecycle via drag-and-drop Kanban `[IMPLEMENTED]`
-12. **Automates** iMessage outreach via BlueBubbles `[CODE COMPLETE — office tunnel/reliability is ops]`
-13. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
-14. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
-15. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
-16. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
-17. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
-18. **Multi-State Ops + Bond Intelligence** dashboard surfaces for FL/GA/SC/NC/TN/TX/LA `[IMPLEMENTED July 2026]`
+6. **Automates First Appearance Bond Filling** 24/7 background worker (`FirstAppearanceWatcher`) re-checking unset/$0 bonds across target active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto) every 30 mins `[IMPLEMENTED]`
+7. **Supports Per-Charge Bond Breakdown** structured `charge_details` data model + UI modal editing + `POST /api/leads/update-charge-bonds` auto-rescoring `[IMPLEMENTED]`
+8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and 256 county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
+9. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
+10. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
+11. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
+12. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
+13. **Collects payments** via SwipeSimple `[IMPLEMENTED]`
+14. **Manages** the 7-status bond lifecycle via drag-and-drop Kanban `[IMPLEMENTED]`
+15. **Automates** iMessage outreach via BlueBubbles `[CODE COMPLETE — office tunnel/reliability is ops]`
+16. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
+17. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
+18. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
+19. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
+20. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
+21. **Multi-State Ops + Bond Intelligence** dashboard surfaces for FL/GA/SC/NC/TN/TX/LA `[IMPLEMENTED July 2026]`
 
 **Not this repo:** Bail School student LMS → `shamrock-bail-school`.
 
