@@ -39,34 +39,73 @@ def _build_leads_query(query: LeadsQueryModel):
     q: dict = {}
     if query.status:
         q["lead_status"] = query.status
-    if getattr(query, "state", None):
+
+    def _state_cond(st: str):
+        st_clean = st.strip().upper()
+        if st_clean == "FL":
+            return {"$or": [
+                {"state": {"$in": ["FL", "fl", "Florida", "FLORIDA"]}},
+                {"state": None},
+                {"state": ""},
+                {"state": {"$exists": False}},
+            ]}
+        else:
+            return {"state": {"$in": [st_clean, st_clean.lower(), st_clean.title()]}}
+
+    state_conds = []
+    if getattr(query, "state", None) and query.state.strip():
         states = [s.strip().upper() for s in query.state.split(",") if s.strip()]
         if len(states) == 1:
-            q["state"] = states[0]
+            state_conds.append(_state_cond(states[0]))
         elif states:
-            q["state"] = {"$in": states}
+            state_conds.append({"$or": [_state_cond(s) for s in states]})
+
     if query.county:
         cs = [c.strip() for c in query.county.split(",") if c.strip()]
-        clauses = []
-        bare_only = []
+        county_clauses = []
         for c in cs:
             name, st = parse_registered_county(c)
+            escaped_name = re_mod.escape(name)
+            c_regex = {"$regex": f"^{escaped_name}(?:\\s+County)?$", "$options": "i"}
             if st:
-                clauses.append({"county": name, "state": st})
+                s_cond = _state_cond(st)
+                if "$or" in s_cond:
+                    clause = {"$and": [{"county": c_regex}, {"$or": s_cond["$or"]}]}
+                else:
+                    clause = {"county": c_regex, **s_cond}
+                county_clauses.append(clause)
             else:
-                bare_only.append(name)
-        if bare_only:
-            if len(bare_only) == 1:
-                clauses.append({"county": bare_only[0]})
+                county_clauses.append({"county": c_regex})
+
+        if len(county_clauses) == 1:
+            county_clauses_item = county_clauses[0]
+            if "$and" in county_clauses_item:
+                if "$and" in q:
+                    q["$and"].extend(county_clauses_item["$and"])
+                else:
+                    q["$and"] = county_clauses_item["$and"]
             else:
-                clauses.append({"county": {"$in": bare_only}})
-        if len(clauses) == 1:
-            # Merge single clause into top-level query
-            for k, v in clauses[0].items():
-                # If state already set and clause also has state, prefer clause
+                for k, v in county_clauses_item.items():
+                    q[k] = v
+        elif county_clauses:
+            if "$or" in q:
+                q["$and"] = [{"$or": q.pop("$or")}, {"$or": county_clauses}]
+            else:
+                q["$or"] = county_clauses
+
+    if state_conds:
+        s_item = state_conds[0]
+        if "$or" in s_item:
+            if "$or" in q:
+                q["$and"] = [{"$or": q.pop("$or")}, {"$or": s_item["$or"]}]
+            elif "$and" in q:
+                q["$and"].append({"$or": s_item["$or"]})
+            else:
+                q["$or"] = s_item["$or"]
+        else:
+            for k, v in s_item.items():
                 q[k] = v
-        elif clauses:
-            q["$or"] = clauses
+
     if query.custody == "true":
         q["status"] = {"$regex": "custody|confined|held", "$options": "i"}
     elif query.custody == "released":
@@ -91,7 +130,11 @@ def _build_leads_query(query: LeadsQueryModel):
         ]
         if "$or" in q:
             existing = q.pop("$or")
-            q["$and"] = [{"$or": existing}, {"$or": sor}]
+            if "$and" in q:
+                q["$and"].append({"$or": existing})
+                q["$and"].append({"$or": sor})
+            else:
+                q["$and"] = [{"$or": existing}, {"$or": sor}]
         else:
             q["$or"] = sor
     return q

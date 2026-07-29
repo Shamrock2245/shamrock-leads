@@ -16,7 +16,11 @@ function _relTime(iso) {
 async function applyFilters() {
   SL_STATE.custody = document.getElementById('custodyFilter')?.value || '';
   SL_STATE.status = document.getElementById('statusFilter')?.value || '';
-  SL_STATE.stateCode = document.getElementById('stateFilter')?.value || '';
+  const newSt = document.getElementById('stateFilter')?.value || '';
+  if (SL_STATE.stateCode !== newSt) {
+    SL_STATE.stateCode = newSt;
+    if (typeof buildCountyOptions === 'function') buildCountyOptions(SL_STATE.counties || []);
+  }
   SL_STATE.limit = parseInt(document.getElementById('limitSelect')?.value || 50);
   const p = new URLSearchParams({
     page: SL_STATE.page,

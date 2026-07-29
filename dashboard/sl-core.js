@@ -928,9 +928,16 @@ function dedupeCountyList(counties) {
 function buildCountyOptions(counties) {
   counties = dedupeCountyList(counties);
   SL_STATE.counties = counties;
+  const selectedState = (document.getElementById('stateFilter')?.value || SL_STATE.stateCode || '').toUpperCase();
+  let displayCounties = counties;
+  if (selectedState) {
+    const stRegex = new RegExp(`\\(${selectedState}\\)$`, 'i');
+    const filtered = counties.filter(c => stRegex.test(c));
+    if (filtered.length) displayCounties = filtered;
+  }
   const el = document.getElementById('countyOptions');
   if (el) {
-    el.innerHTML = counties.map(c => {
+    el.innerHTML = displayCounties.map(c => {
       const safe = String(c).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const chk = SL_STATE.selectedCounties.includes(c) ? 'checked' : '';
       return `<label class="multi-select-option ${chk?'checked':''}"><input type="checkbox" value="${c.replace(/"/g, '&quot;')}" ${chk} onchange="toggleCounty('${safe}',this.checked)" onclick="event.stopPropagation()">${c}</label>`;
@@ -938,7 +945,7 @@ function buildCountyOptions(counties) {
   }
   updateCountyLabel();
   // Keep Defendants multi-select in sync (checkboxes, not single <select>)
-  buildDefCountyOptions(counties);
+  buildDefCountyOptions(displayCounties);
   // Populate calendar county filter (single-select still OK)
   const cf = document.getElementById('calCountyFilter');
   if (cf && cf.options.length <= 1) {
