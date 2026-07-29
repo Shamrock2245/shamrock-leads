@@ -18,7 +18,7 @@ All routes use Quart (async) + Motor (async MongoDB).
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, Response
 
 from dashboard.extensions import get_db
@@ -1069,4 +1069,173 @@ async def kpi_trends(days: int = Query(default=30)):
     except Exception as exc:
         logger.exception("reports/kpi-trends error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+import pandas as pd
+import io
+import re
+from dashboard.services.google_drive_service import GoogleDriveService
+
+def _parse_spreadsheet_to_docs(df: pd.DataFrame, surety: str) -> list[dict]:
+    # Try to standardize columns
+    df.columns = [str(c).lower().strip().replace(' ', '_') for c in df.columns]
+    
+    # Map common variations
+    col_map = {
+        'poa': 'poa_number', 'power': 'poa_number', 'power_number': 'poa_number', 'power_#': 'poa_number',
+        'defendant': 'defendant_name', 'name': 'defendant_name', 'client': 'defendant_name',
+        'first_name': 'defendant_first_name', 'last_name': 'defendant_last_name',
+        'bond': 'bond_amount', 'amount': 'bond_amount', 'liability': 'bond_amount',
+        'date': 'bond_date', 'date_executed': 'bond_date', 'posted_date': 'bond_date',
+        'offense': 'charge', 'case': 'case_number', 'status': 'status', 'county': 'county'
+    }
+    
+    docs = []
+    for _, row in df.iterrows():
+        doc = {}
+        for col, val in row.items():
+            mapped_col = col_map.get(col, col)
+            if pd.isna(val):
+                val = ""
+            doc[mapped_col] = val
+        
+        # Ensure minimal required fields
+        if not doc.get('poa_number') and not doc.get('defendant_name') and not doc.get('defendant_first_name'):
+            continue # skip empty rows
+            
+        if 'bond_amount' in doc:
+            try:
+                # Handle '$5,000' strings
+                if isinstance(doc['bond_amount'], str):
+                    clean_amt = doc['bond_amount'].replace('$', '').replace(',', '')
+                    doc['bond_amount'] = float(clean_amt)
+                else:
+                    doc['bond_amount'] = float(doc['bond_amount'])
+            except:
+                doc['bond_amount'] = 0.0
+                
+        # Split calculation
+        ba = doc.get("bond_amount", 0.0)
+        split = _calc_surety_split(ba, surety)
+        doc.update(split)
+        
+        # Ensure status is set if empty
+        if not doc.get('status'):
+            doc['status'] = 'open'
+            
+        docs.append(doc)
+    return docs
+
+@reports_bp.post("/reports/upload-spreadsheet")
+async def upload_spreadsheet(
+    file: UploadFile = File(None),
+    spreadsheet_url: str = Form(None),
+    surety: str = Form("OSI")
+):
+    """Process an uploaded Excel/CSV file or a Google Sheets URL into an official Bond Report."""
+    try:
+        drive_service = GoogleDriveService()
+        df = None
+        
+        if file:
+            contents = await file.read()
+            if file.filename.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(contents))
+            else:
+                df = pd.read_excel(io.BytesIO(contents))
+        elif spreadsheet_url:
+            match = re.search(r'/d/([a-zA-Z0-9-_]+)', spreadsheet_url)
+            if not match:
+                return JSONResponse({"success": False, "error": "Invalid Google Sheets URL"}, status_code=400)
+            sheet_id = match.group(1)
+            xlsx_bytes = drive_service.export_sheet_as_xlsx(sheet_id)
+            if not xlsx_bytes:
+                return JSONResponse({"success": False, "error": "Could not export Google Sheet. Ensure it is shared or accessible by the service account."}, status_code=400)
+            df = pd.read_excel(io.BytesIO(xlsx_bytes))
+        else:
+            return JSONResponse({"success": False, "error": "No file or URL provided"}, status_code=400)
+
+        docs = _parse_spreadsheet_to_docs(df, surety)
+        if not docs:
+            return JSONResponse({"success": False, "error": "No valid bond records found in spreadsheet."}, status_code=400)
+
+        surety_key = (surety or "OSI").strip().upper()
+        if surety_key not in ("OSI", "PALMETTO"):
+            if "PALM" in surety_key or surety_key == "PSC":
+                surety_key = "PALMETTO"
+            else:
+                surety_key = "OSI"
+
+        xlsx = build_official_bond_report(
+            docs,
+            surety=surety_key,
+            report_type="Uploaded Spreadsheet Report",
+            voids=[],
+            discharges=[],
+            period_start=None,
+            period_end=None,
+        )
+        
+        fname = filename_for(surety_key, "Uploaded_Bond_Report")
+        
+        drive_link = None
+        folder_id = drive_service.get_or_create_folder("Shamrock Bond Reports", "root")
+        if folder_id:
+            drive_link = drive_service.upload_file(
+                xlsx, 
+                fname, 
+                folder_id, 
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+
+        # We also store it in generated_reports so standard UI can still work 
+        import base64
+        db = get_db()
+        meta = {
+            "ok": True,
+            "report_type": "uploaded_spreadsheet",
+            "source": "dashboard_xlsx_upload",
+            "surety": surety_key,
+            "filename": fname,
+            "size_bytes": len(xlsx),
+            "active_rows": len(docs),
+            "voids": 0,
+            "discharges": 0,
+            "start_date": None,
+            "end_date": None,
+            "status_scope": "open",
+            "sort_order": "original",
+            "created_at": _utc_now(),
+            "drive_link": drive_link,
+            "xlsx_b64": base64.b64encode(xlsx).decode("ascii") if len(xlsx) < 12_000_000 else None,
+        }
+        await db["generated_reports"].insert_one(meta)
+
+        # Return file back to user immediately as well
+        return Response(
+            content=xlsx,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "X-Drive-Link": drive_link or ""
+            },
+        )
+    except Exception as exc:
+        logger.exception("reports/upload-spreadsheet error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+@reports_bp.get("/reports/drive-reports")
+async def list_drive_reports(limit: int = Query(default=15)):
+    """Fetch recent reports generated and saved to Google Drive."""
+    try:
+        drive_service = GoogleDriveService()
+        folder_id = drive_service.get_or_create_folder("Shamrock Bond Reports", "root")
+        if not folder_id:
+            return JSONResponse({"success": False, "error": "Could not access or create Google Drive folder."}, status_code=400)
+            
+        files = drive_service.list_files_in_folder(folder_id, limit=limit)
+        return {"success": True, "reports": files, "count": len(files)}
+    except Exception as exc:
+        logger.exception("reports/drive-reports error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
 

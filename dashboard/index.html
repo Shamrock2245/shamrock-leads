@@ -2471,6 +2471,22 @@
     </div>
   </div>
 
+  <!-- ═══ REPORTS: Upload Spreadsheet ═══ -->
+  <div class="panel" style="padding:20px;margin-bottom:20px;">
+    <div class="panel-title" style="margin-bottom:14px">📁 Upload Spreadsheet</div>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <input type="file" id="rptUploadFile" accept=".xlsx,.csv" class="sl-input" style="flex:1;">
+      <span style="color:var(--muted);font-size:12px;">OR</span>
+      <input type="text" id="rptUploadUrl" placeholder="Google Sheets URL" class="sl-input" style="flex:2;">
+      <select id="rptUploadSurety" class="sl-input" style="width:120px;">
+        <option value="OSI">OSI</option>
+        <option value="PALMETTO">Palmetto</option>
+      </select>
+      <button class="sl-btn sl-btn-primary" onclick="SLReports.uploadSpreadsheet()">Upload & Generate</button>
+    </div>
+    <div id="rptUploadStatus" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
+  </div>
+
   <!-- Recent official XLSX archive (SuiteCRM-style report history) -->
   <div id="rptRecentReports" class="panel" style="display:none;padding:16px 18px;margin-bottom:16px"></div>
 

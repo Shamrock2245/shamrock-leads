@@ -225,7 +225,7 @@ const SLReports = (() => {
       _fetch('surety-liability'), _fetch('agent-production'), _fetch('discharged'),
       _fetch('forfeitures'), _fetch('check-in-compliance'), _fetch('poa-inventory'),
       _fetch('voided-powers'), _fetch('expired-powers'),
-      _fetch('generated'),
+      _fetch('drive-reports'),
     ]);
     _renderRecentReports(recent);
 
@@ -747,23 +747,23 @@ const SLReports = (() => {
     el.style.display = 'block';
     el.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-        <div style="font-size:13px;font-weight:700;color:var(--text)">📁 Recent official reports</div>
-        <div style="font-size:11px;color:var(--muted)">Re-download archived XLSX · sorted oldest→newest at generate time</div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)">📁 Shamrock Bond Reports (Google Drive)</div>
+        <div style="font-size:11px;color:var(--muted)">Recent uploads and exports to Drive folder</div>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px">
         ${reports.slice(0, 8).map(r => {
-          const when = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
-          const label = `${escHtml(r.surety || '—')} · ${escHtml(r.filename || r.report_type || 'report')} · ${escHtml(when)}`;
-          const rows = r.active_rows != null ? `${r.active_rows} rows` : '';
-          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:rgba(15,23,42,.5);border:1px solid rgba(255,255,255,.06);border-radius:8px;font-size:12px">
+          const when = r.createdTime ? new Date(r.createdTime).toLocaleString() : '—';
+          const label = escHtml(r.name || 'Unnamed Report');
+          const link = escHtml(r.webViewLink || '#');
+          return \`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:rgba(15,23,42,.5);border:1px solid rgba(255,255,255,.06);border-radius:8px;font-size:12px">
             <div style="min-width:0">
-              <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${label}</div>
-              <div style="color:var(--muted);font-size:11px">${escHtml(rows)}${r.start_date ? ` · ${escHtml(r.start_date)}→${escHtml(r.end_date || '…')}` : ''}</div>
+              <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">\${label}</div>
+              <div style="color:var(--muted);font-size:11px">\${escHtml(when)}</div>
             </div>
-            <button type="button" class="inv-btn" style="font-size:11px;padding:3px 8px;flex-shrink:0" onclick="SLReports.downloadGenerated('${escHtml(r.id)}')">⬇ XLSX</button>
-          </div>`;
+            <a href="\${link}" target="_blank" class="sl-btn sl-btn-secondary" style="font-size:11px;padding:3px 8px;flex-shrink:0;text-decoration:none;">🔗 Open in Drive</a>
+          </div>\`;
         }).join('')}
-      </div>`;
+      </div>\`;
   }
 
   async function downloadGenerated(id) {
@@ -1222,11 +1222,68 @@ const SLReports = (() => {
     closeSchedule();
   }
 
+  /* ── Upload Spreadsheet ────────────────────────────────────────────── */
+  async function uploadSpreadsheet() {
+    const fileInput = $('rptUploadFile');
+    const urlInput = $('rptUploadUrl');
+    const suretyInput = $('rptUploadSurety');
+    const statusDiv = $('rptUploadStatus');
+
+    if (!fileInput || !urlInput || !statusDiv) return;
+
+    const file = fileInput.files[0];
+    const url = urlInput.value.trim();
+    const surety = suretyInput ? suretyInput.value : 'OSI';
+
+    if (!file && !url) {
+      statusDiv.textContent = 'Please select a file or enter a URL.';
+      statusDiv.style.color = 'var(--text-danger, #ef4444)';
+      return;
+    }
+
+    statusDiv.textContent = 'Uploading... Please wait.';
+    statusDiv.style.color = 'var(--muted)';
+
+    const formData = new FormData();
+    if (file) formData.append('file', file);
+    if (url) formData.append('url', url);
+    formData.append('surety', surety);
+
+    try {
+      const response = await fetch(`${API}/api/reports/upload-spreadsheet`, {
+        method: 'POST',
+        body: formData
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || 'Upload failed');
+      }
+
+      statusDiv.textContent = '✅ Success! The report was generated and uploaded to Google Drive.';
+      statusDiv.style.color = 'var(--text-success, #10b981)';
+      
+      // Clear inputs
+      fileInput.value = '';
+      urlInput.value = '';
+
+      // Reload recent reports
+      toast('Spreadsheet processed successfully!', 'success');
+      load();
+
+    } catch (err) {
+      console.error('[SLReports] Upload Error:', err);
+      statusDiv.textContent = `❌ Error: ${err.message}`;
+      statusDiv.style.color = 'var(--text-danger, #ef4444)';
+      toast('Upload failed.', 'error');
+    }
+  }
+
   /* ── Public API ────────────────────────────────────────────────────── */
   return {
     load, runAll, generate, onDateChange, onScopeChange, setPreset,
     exportCSV, exportPDF, exportXLSX, copySummary, printReport, closeResults,
-    scheduleReport, closeSchedule, saveSchedule,
+    scheduleReport, closeSchedule, saveSchedule, uploadSpreadsheet,
     // Chronological output ordering (oldest bond → newest)
     resortForOutput, sortBondsOldestFirst,
     // Liability report customization & toggles

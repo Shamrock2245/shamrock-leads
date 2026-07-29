@@ -76,7 +76,7 @@ class GoogleDriveService:
             logger.error(f"[Drive] Failed to create folder {folder_name}: {e}")
             return None
 
-    def upload_pdf(self, pdf_bytes: bytes, filename: str, folder_id: str) -> Optional[str]:
+    def upload_file(self, file_bytes: bytes, filename: str, folder_id: str, mimetype: str) -> Optional[str]:
         service = self._get_service()
         if not service:
             return None
@@ -87,8 +87,8 @@ class GoogleDriveService:
         }
         
         media = MediaIoBaseUpload(
-            io.BytesIO(pdf_bytes),
-            mimetype='application/pdf',
+            io.BytesIO(file_bytes),
+            mimetype=mimetype,
             resumable=True
         )
         
@@ -103,4 +103,49 @@ class GoogleDriveService:
         except Exception as e:
             logger.error(f"[Drive] Failed to upload {filename}: {e}")
             return None
+
+    def upload_pdf(self, pdf_bytes: bytes, filename: str, folder_id: str) -> Optional[str]:
+        return self.upload_file(pdf_bytes, filename, folder_id, 'application/pdf')
+
+    def list_files_in_folder(self, folder_id: str, limit: int = 50) -> list:
+        service = self._get_service()
+        if not service:
+            return []
+            
+        try:
+            query = f"'{folder_id}' in parents and trashed=false"
+            response = service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name, webViewLink, createdTime, size)',
+                orderBy='createdTime desc',
+                pageSize=limit
+            ).execute()
+            return response.get('files', [])
+        except Exception as e:
+            logger.error(f"[Drive] Failed to list files in folder {folder_id}: {e}")
+            return []
+
+    def export_sheet_as_xlsx(self, spreadsheet_id: str) -> Optional[bytes]:
+        service = self._get_service()
+        if not service:
+            return None
+            
+        try:
+            request = service.files().export_media(
+                fileId=spreadsheet_id,
+                mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            file_data = io.BytesIO()
+            from googleapiclient.http import MediaIoBaseDownload
+            downloader = MediaIoBaseDownload(file_data, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            return file_data.getvalue()
+        except Exception as e:
+            logger.error(f"[Drive] Failed to export sheet {spreadsheet_id}: {e}")
+            return None
+
 
