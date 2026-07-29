@@ -1912,6 +1912,23 @@
   </div>
 </div>
 
+<!-- ═══ PER-CHARGE BOND ADJUSTMENT MODAL ═══ -->
+<div class="modal-overlay" id="chargeBondsModal" style="display:none" onclick="if(event.target===this)closeChargeBondsModal()">
+  <div class="modal modal-lg" style="max-width:680px">
+    <div class="modal-header">
+      <h2>⚖️ Per-Charge Bond Breakdown</h2>
+      <button class="modal-close" onclick="closeChargeBondsModal()">✕</button>
+    </div>
+    <div class="modal-body" id="chargeBondsModalBody" style="padding:20px">
+      <div style="color:var(--muted);font-size:12px">Loading charges...</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-cancel" onclick="closeChargeBondsModal()">Cancel</button>
+      <button class="btn-primary" onclick="saveChargeBondsFromModal()">💾 Save Per-Charge Bonds</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ CONTACT INDEMNITOR MODAL ═══ -->
 <div class="modal-overlay" id="contactIndemModal" onclick="if(event.target===this)SLContact.closeModal()">
   <div class="modal" style="max-width:520px;width:95vw">

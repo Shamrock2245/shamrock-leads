@@ -417,6 +417,110 @@ async def update_bond_amount(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@legacy_bp.post("/leads/update-charge-bonds")
+async def update_charge_bonds(request: Request):
+    """Update individual per-charge bond amounts for an arrest lead."""
+    body = await request.json() or {}
+    booking_number = (body.get("booking_number") or "").strip()
+    if not booking_number:
+        return JSONResponse({"error": "booking_number is required"}, status_code=400)
+
+    charge_details = body.get("charge_details")
+    if not isinstance(charge_details, list):
+        return JSONResponse({"error": "charge_details must be a list"}, status_code=400)
+
+    changed_by = (body.get("changed_by") or body.get("agent") or "dashboard_user").strip()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    arrests = get_collection("arrests")
+    existing = await arrests.find_one({"booking_number": booking_number})
+    if not existing:
+        return JSONResponse({"error": f"No arrest record for {booking_number}"}, status_code=404)
+
+    clean_details = []
+    total_bond = 0.0
+    charge_descs = []
+    bond_types = set()
+
+    for item in charge_details:
+        if not isinstance(item, dict):
+            continue
+        c_desc = str(item.get("charge") or "").strip()
+        if not c_desc:
+            continue
+        try:
+            c_bond = float(item.get("bond_amount") or 0)
+        except (ValueError, TypeError):
+            c_bond = 0.0
+        c_type = str(item.get("bond_type") or "Surety").strip()
+        c_case = str(item.get("case_number") or "").strip()
+
+        total_bond += max(0.0, c_bond)
+        charge_descs.append(c_desc)
+        if c_type:
+            bond_types.add(c_type)
+
+        clean_details.append({
+            "charge": c_desc,
+            "bond_amount": c_bond,
+            "bond_type": c_type,
+            "case_number": c_case,
+        })
+
+    primary_bond_type = " / ".join(bond_types) if bond_types else "Surety"
+
+    from core.models import ArrestRecord
+    rec_dict = dict(existing)
+    rec_dict["bond_amount"] = f"{total_bond:.2f}"
+    rec_dict["bond_type"] = primary_bond_type
+    if charge_descs:
+        rec_dict["charges"] = " | ".join(charge_descs)
+
+    from scoring.lead_scorer import LeadScorer
+    rec = ArrestRecord.from_mongo_doc(rec_dict)
+    scorer = LeadScorer()
+    scorer.score_and_update(rec)
+
+    update_fields = {
+        "bond_amount": total_bond,
+        "bond_type": primary_bond_type,
+        "charge_details": clean_details,
+        "lead_score": rec.Lead_Score,
+        "lead_status": rec.Lead_Status,
+        "updated_at": now,
+        "last_checked": now_iso,
+        "last_checked_mode": "MANUAL_CHARGE_BONDS",
+    }
+    if charge_descs:
+        update_fields["charges"] = " | ".join(charge_descs)
+
+    await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
+
+    try:
+        await get_collection("prospective_bonds").update_many(
+            {"booking_number": booking_number},
+            {"$set": {
+                "bond_amount": total_bond,
+                "bond_type": primary_bond_type,
+                "lead_score": rec.Lead_Score,
+                "updated_at": now,
+            }}
+        )
+    except Exception as e:
+        logger.warning("[update-charge-bonds] prospective sync error: %s", e)
+
+    return {
+        "success": True,
+        "booking_number": booking_number,
+        "total_bond": total_bond,
+        "bond_type": primary_bond_type,
+        "charge_details": clean_details,
+        "lead_score": rec.Lead_Score,
+        "lead_status": rec.Lead_Status,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Refresh single defendant from originating booking-sheet URL
 # ═══════════════════════════════════════════════════════════════════════════════

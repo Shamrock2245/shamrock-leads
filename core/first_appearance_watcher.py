@@ -203,7 +203,11 @@ class FirstAppearanceWatcher:
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=WATCH_WINDOW_DAYS)
 
+        TARGET_COUNTIES = [c.strip() for c in os.getenv("WATCH_COUNTIES", "Lee,Collier,Charlotte,Sarasota,Manatee,Hendry,DeSoto").split(",") if c.strip()]
+
         query = {
+            # Target key active counties to avoid system overhead
+            "county": {"$in": TARGET_COUNTIES},
             # Must still be in custody
             "status": {"$regex": "in.custody|incustody", "$options": "i"},
             # Bond must be zero (or missing)
@@ -284,35 +288,74 @@ class FirstAppearanceWatcher:
         self, doc: Dict[str, Any], detail_url: str
     ) -> Optional[ArrestRecord]:
         """
-        Generic fallback: HTTP GET the detail page and parse bond amount
-        from common HTML patterns.
+        Generic fallback: re-fetch detail page or API endpoint to parse updated bond amount.
         """
+        county = doc.get("county", "").lower()
+        booking_id = doc.get("booking_number", "")
+
         try:
             import requests
-            resp = requests.get(
-                detail_url,
-                timeout=15,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    )
-                },
-            )
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/json, text/html, */*;q=0.8",
+                "Referer": "https://www.sheriffleefl.org/",
+            }
+
+            # ── Lee County API direct charges fetch ──────────────────────────
+            if county == "lee" and booking_id:
+                c_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges"
+                resp = requests.get(c_url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    try:
+                        charges_json = resp.json()
+                        if isinstance(charges_json, list) and charges_json:
+                            total_bond = 0.0
+                            charge_details = []
+                            for c in charges_json:
+                                desc = c.get("offenseDescription", "").strip()
+                                amt = 0.0
+                                if c.get("bondAmount"):
+                                    try:
+                                        amt = float(str(c["bondAmount"]).replace(",", ""))
+                                        total_bond += amt
+                                    except (ValueError, TypeError):
+                                        pass
+                                bt = str(c.get("bondTypeName", "")).strip().upper() or "SURETY"
+                                cn = str(c.get("caseNumber", "")).strip()
+                                if desc:
+                                    charge_details.append({
+                                        "charge": desc,
+                                        "bond_amount": amt,
+                                        "bond_type": bt,
+                                        "case_number": cn,
+                                    })
+                            record = ArrestRecord.from_mongo_doc(doc)
+                            if total_bond > 0:
+                                record.Bond_Amount = f"{total_bond:.2f}"
+                                if not record.Bond_Type or record.Bond_Type.upper() in ("NO BOND", "NONE", "0"):
+                                    record.Bond_Type = "Surety"
+                            if charge_details:
+                                record.extra_data["charge_details"] = charge_details
+                            record.LastCheckedMode = "UPDATE"
+                            record.LastChecked = datetime.now(timezone.utc).isoformat()
+                            return record
+                    except ValueError:
+                        pass
+
+            # ── Standard HTML Page Fetch ───────────────────────────────────────
+            resp = requests.get(detail_url, timeout=15, headers=headers)
             if resp.status_code != 200:
-                logger.debug(
-                    f"FirstAppearanceWatcher: HTTP {resp.status_code} for {detail_url}"
-                )
+                logger.debug(f"FirstAppearanceWatcher: HTTP {resp.status_code} for {detail_url}")
                 return None
 
             html = resp.text
-
-            # Try to extract bond amount from common patterns:
-            #   "Bond Amt. 10000.00"  /  "Bond Amount: $10,000"  /  "10000.00"
             bond_val = _extract_bond_from_html(html)
 
-            # Reconstruct an ArrestRecord from the stored doc, updating bond fields
             record = ArrestRecord.from_mongo_doc(doc)
             record.Bond_Amount     = str(bond_val) if bond_val > 0 else record.Bond_Amount
             record.LastCheckedMode = "UPDATE"
@@ -375,11 +418,8 @@ class FirstAppearanceWatcher:
             booking_id = doc.get("booking_number", "?")
             old_bond   = float(doc.get("bond_amount", 0) or 0)
 
-            # ── Court window guard: skip counties outside their hearing window ──
-            if not _is_in_court_window(county):
-                county_skip_count[county] = county_skip_count.get(county, 0) + 1
-                stats["no_change"] += 1
-                continue
+            # ── Court window guard: continuous 24/7 monitoring for target active counties ──
+            # (Court window check bypassed so hearings set at any hour are caught within 30 min)
 
             # ── Rate-limit guard: skip counties with 3+ consecutive failures ──
             if county_fail_count.get(county, 0) >= 3:

@@ -160,8 +160,10 @@ class MongoWriter:
             # Keep scraped_at in $setOnInsert so discovery timestamp is preserved
             doc.pop("scraped_at", None)
 
-            # ── Promote FTA intelligence fields to top-level for querying ──
+            # ── Promote FTA intelligence & charge details fields to top-level for querying ──
             extra = record.extra_data or {}
+            if extra.get("charge_details"):
+                doc["charge_details"] = extra["charge_details"]
             if extra.get("fta_risk_score") is not None:
                 doc["fta_risk_score"] = extra["fta_risk_score"]
                 doc["fta_risk_level"] = extra.get("fta_risk_level")

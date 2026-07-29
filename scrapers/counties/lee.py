@@ -37,7 +37,7 @@ SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE off
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 50                 # Fixed: Lee API clamps max records per page to 50
 MAX_PAGES = 30                 # 30 × 50 = 1500 records max (enough for active roster + 30 days)
-MAX_ENRICH = 5                 # Conservative: 5 enrichments per run to save API quota
+MAX_ENRICH = 50                # Enriched up to 50 records per run to populate charges and bond amounts
 DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
 DETAIL_JITTER_S = 4.0          # Increased jitter
 RETRY_LIMIT = 2                # Outer retries (StealthSession also rotates proxies)
@@ -345,16 +345,12 @@ class LeeCountyScraper(BaseScraper):
         court_locations: Set[str] = set()
         court_dates: List[Tuple[str, str]] = []
         has_paid_bond = False
+        charge_details: List[Dict[str, Any]] = []
 
         for c in charges_array:
             # Charges
             desc = c.get("offenseDescription", "").strip()
-            if desc and len(desc) > 3 and not LeeCountyScraper._is_statute_only(desc):
-                cleaned = LeeCountyScraper._clean_charge_text(desc)
-                if cleaned:
-                    result["charges"].append(cleaned)
-
-            # Bond amount
+            amt = 0.0
             if c.get("bondAmount"):
                 try:
                     amt = float(str(c["bondAmount"]).replace(",", ""))
@@ -362,19 +358,28 @@ class LeeCountyScraper(BaseScraper):
                 except (ValueError, TypeError):
                     pass
 
-            # Bond type
             bt = str(c.get("bondTypeName", "")).strip().upper()
             if bt:
                 bond_types.add(bt)
 
-            # Bond paid
-            if c.get("bondDatePosted") or c.get("bondPosted") or c.get("dateBondPosted"):
-                has_paid_bond = True
-
-            # Case number
             cn = str(c.get("caseNumber", "")).strip()
             if cn:
                 case_numbers.add(cn)
+
+            if desc and len(desc) > 3 and not LeeCountyScraper._is_statute_only(desc):
+                cleaned = LeeCountyScraper._clean_charge_text(desc)
+                if cleaned:
+                    result["charges"].append(cleaned)
+                    charge_details.append({
+                        "charge": cleaned,
+                        "bond_amount": amt,
+                        "bond_type": bt or "SURETY",
+                        "case_number": cn,
+                    })
+
+            # Bond paid
+            if c.get("bondDatePosted") or c.get("bondPosted") or c.get("dateBondPosted"):
+                has_paid_bond = True
 
             # Court location
             cl = str(c.get("courtLocation", "")).strip()
@@ -397,6 +402,7 @@ class LeeCountyScraper(BaseScraper):
                 seen.add(key)
                 unique_charges.append(charge)
         result["charges"] = unique_charges
+        result["charge_details"] = charge_details
 
         result["bond_amount"] = f"{total_bond:.2f}" if total_bond > 0 else ""
         result["bond_type"] = " / ".join(bond_types)
@@ -550,6 +556,7 @@ class LeeCountyScraper(BaseScraper):
             Court_Location=n.get("court_location", ""),
             Detail_URL=n.get("detail_url", ""),
             LastCheckedMode="INITIAL",
+            extra_data={"charge_details": n.get("charge_details", [])},
         )
 
     # ── HTTP (APE StealthSession primary) ──

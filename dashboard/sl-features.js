@@ -88,7 +88,7 @@ async function loadDefendants() {
         </div>
         <div class="def-body">
           <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}" id="defScore_${bondEditId}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div></div>
-          <div class="def-section"><div class="def-section-title">⚖️ Charges</div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
+          <div class="def-section"><div class="def-section-title" style="display:flex;justify-content:space-between;align-items:center"><span>⚖️ Charges</span><button type="button" class="btn-detail" style="font-size:10px;padding:2px 8px;background:rgba(168,85,247,0.2);color:#c084fc;border:1px solid rgba(168,85,247,0.4);border-radius:4px" onclick="event.stopPropagation();openChargeBondsModal('${bkEscD}')">⚖️ Per-Charge Bonds</button></div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
           <div class="def-section" onclick="event.stopPropagation()">
             <div class="def-section-title">🪪 Driver License / ID &amp; Selfie</div>
             <div class="id-photo-slots" id="${slotId}" data-booking="${bkEscD}">
@@ -2708,3 +2708,236 @@ SLFeatures.sendMobileCheckinLink = async function(bookingNumber, phone) {
     toast('Error dispatching check-in link: ' + err.message, 'error');
   }
 };
+
+// ── Per-Charge Bond Breakdown Modal ─────────────────────────────────────────
+let _currentChargeBondsBooking = null;
+
+async function openChargeBondsModal(bookingNumber) {
+  if (!bookingNumber) { toast('Missing booking number', 'error'); return; }
+  _currentChargeBondsBooking = bookingNumber;
+
+  const modal = document.getElementById('chargeBondsModal');
+  const body = document.getElementById('chargeBondsModalBody');
+  if (!modal || !body) return;
+
+  modal.style.display = 'flex';
+  modal.classList.add('show');
+  body.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:20px;text-align:center">Loading charges data...</div>';
+
+  let lead = window._leadMap ? window._leadMap[bookingNumber] : null;
+  if (!lead) {
+    try {
+      const r = await fetch(`${API}/api/leads/${encodeURIComponent(bookingNumber)}`);
+      const d = await r.json();
+      if (r.ok && d) lead = d;
+    } catch (e) { console.error('Error fetching lead detail:', e); }
+  }
+
+  const name = lead?.full_name || 'Defendant';
+  const county = lead?.county || '';
+  const currentTotal = lead?.bond_amount || 0;
+  const chargeDetails = Array.isArray(lead?.charge_details) && lead.charge_details.length ? lead.charge_details : null;
+  const chargesRaw = lead?.charges || '';
+
+  let items = [];
+  if (chargeDetails) {
+    items = chargeDetails;
+  } else if (chargesRaw) {
+    const split = chargesRaw.split(/\s*\|\s*/);
+    items = split.map(c => ({ charge: c, bond_amount: 0, bond_type: 'Surety', case_number: '' }));
+  } else {
+    items = [{ charge: 'Charge 1', bond_amount: currentTotal, bond_type: 'Surety', case_number: '' }];
+  }
+
+  let rowsHtml = items.map((item, idx) => `
+    <tr class="charge-bond-row" data-index="${idx}" style="border-bottom:1px solid var(--border,#334155)">
+      <td style="padding:8px">
+        <input type="text" class="ci-input charge-name-input" value="${(item.charge || '').replace(/"/g, '&quot;')}" style="width:100%;font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px" placeholder="Offense description">
+      </td>
+      <td style="padding:8px">
+        <input type="text" class="ci-input charge-case-input" value="${(item.case_number || '').replace(/"/g, '&quot;')}" style="width:100%;font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px" placeholder="Case #">
+      </td>
+      <td style="padding:8px">
+        <select class="ci-input charge-type-select" style="font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px">
+          <option value="Surety" ${item.bond_type === 'Surety' ? 'selected' : ''}>Surety</option>
+          <option value="Cash" ${item.bond_type === 'Cash' ? 'selected' : ''}>Cash</option>
+          <option value="No Bond" ${item.bond_type === 'No Bond' ? 'selected' : ''}>No Bond</option>
+          <option value="ROR" ${item.bond_type === 'ROR' ? 'selected' : ''}>ROR</option>
+        </select>
+      </td>
+      <td style="padding:8px">
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="color:var(--muted)">$</span>
+          <input type="number" class="ci-input charge-bond-input" value="${item.bond_amount || 0}" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
+        </div>
+      </td>
+      <td style="padding:8px;text-align:center">
+        <button type="button" class="btn-cancel" style="padding:2px 8px;color:#fca5a5;border:1px solid rgba(239,68,68,0.4);border-radius:4px;background:rgba(239,68,68,0.1);cursor:pointer" onclick="removeChargeBondRow(this)">✕</button>
+      </td>
+    </tr>
+  `).join('');
+
+  body.innerHTML = `
+    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <h3 style="margin:0;font-size:16px;color:var(--text,#f8fafc)">${name}</h3>
+        <div style="font-size:12px;color:var(--muted,#94a3b8)">Booking #${bookingNumber} · ${county}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;color:var(--muted,#94a3b8)">TOTAL BOND</div>
+        <div id="cbModalTotal" style="font-size:20px;font-weight:800;color:var(--emerald,#10b981)">$${Number(currentTotal).toLocaleString()}</div>
+      </div>
+    </div>
+    <div style="max-height:360px;overflow-y:auto;border:1px solid var(--border,#334155);border-radius:6px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:var(--bg-subtle,#1e293b);text-align:left;color:var(--muted,#94a3b8)">
+            <th style="padding:8px 12px">Charge Description</th>
+            <th style="padding:8px 12px;width:120px">Case #</th>
+            <th style="padding:8px 12px;width:110px">Type</th>
+            <th style="padding:8px 12px;width:130px">Bond Amount</th>
+            <th style="padding:8px 12px;width:40px"></th>
+          </tr>
+        </thead>
+        <tbody id="chargeBondsTableBody">
+          ${rowsHtml}
+        </tbody>
+      </table>
+    </div>
+    <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
+      <button type="button" class="btn-detail" style="font-size:11px;padding:4px 10px;background:rgba(59,130,246,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.4);border-radius:4px" onclick="addChargeBondRow()">➕ Add Charge</button>
+      <span style="font-size:11px;color:var(--muted,#94a3b8)">Total bond auto-sums from charge amounts.</span>
+    </div>
+  `;
+
+  recalcChargeBondsTotal();
+}
+
+function closeChargeBondsModal() {
+  const modal = document.getElementById('chargeBondsModal');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.remove('show');
+  }
+}
+
+function recalcChargeBondsTotal() {
+  let total = 0;
+  document.querySelectorAll('#chargeBondsTableBody .charge-bond-input').forEach(inp => {
+    const val = parseFloat(inp.value) || 0;
+    total += Math.max(0, val);
+  });
+  const el = document.getElementById('cbModalTotal');
+  if (el) el.textContent = '$' + total.toLocaleString();
+}
+
+function addChargeBondRow() {
+  const tbody = document.getElementById('chargeBondsTableBody');
+  if (!tbody) return;
+  const tr = document.createElement('tr');
+  tr.className = 'charge-bond-row';
+  tr.style.borderBottom = '1px solid var(--border,#334155)';
+  tr.innerHTML = `
+    <td style="padding:8px">
+      <input type="text" class="ci-input charge-name-input" value="" style="width:100%;font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px" placeholder="Offense description">
+    </td>
+    <td style="padding:8px">
+      <input type="text" class="ci-input charge-case-input" value="" style="width:100%;font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px" placeholder="Case #">
+    </td>
+    <td style="padding:8px">
+      <select class="ci-input charge-type-select" style="font-size:12px;background:rgba(0,0,0,0.3);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 6px">
+        <option value="Surety" selected>Surety</option>
+        <option value="Cash">Cash</option>
+        <option value="No Bond">No Bond</option>
+        <option value="ROR">ROR</option>
+      </select>
+    </td>
+    <td style="padding:8px">
+      <div style="display:flex;align-items:center;gap:4px">
+        <span style="color:var(--muted)">$</span>
+        <input type="number" class="ci-input charge-bond-input" value="0" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
+      </div>
+    </td>
+    <td style="padding:8px;text-align:center">
+      <button type="button" class="btn-cancel" style="padding:2px 8px;color:#fca5a5;border:1px solid rgba(239,68,68,0.4);border-radius:4px;background:rgba(239,68,68,0.1);cursor:pointer" onclick="removeChargeBondRow(this)">✕</button>
+    </td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function removeChargeBondRow(btn) {
+  const tr = btn.closest('tr');
+  if (tr) tr.remove();
+  recalcChargeBondsTotal();
+}
+
+async function saveChargeBondsFromModal() {
+  if (!_currentChargeBondsBooking) return;
+  const rows = document.querySelectorAll('#chargeBondsTableBody .charge-bond-row');
+  const details = [];
+  rows.forEach(tr => {
+    const charge = tr.querySelector('.charge-name-input')?.value?.trim();
+    const caseNum = tr.querySelector('.charge-case-input')?.value?.trim() || '';
+    const bondType = tr.querySelector('.charge-type-select')?.value || 'Surety';
+    const bondAmt = parseFloat(tr.querySelector('.charge-bond-input')?.value) || 0;
+    if (charge) {
+      details.push({
+        charge: charge,
+        bond_amount: bondAmt,
+        bond_type: bondType,
+        case_number: caseNum,
+      });
+    }
+  });
+
+  try {
+    const r = await fetch(`${API}/api/leads/update-charge-bonds`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: _currentChargeBondsBooking,
+        charge_details: details,
+        changed_by: document.getElementById('outreachAgent')?.value || 'dashboard_user',
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.success === false) {
+      toast(d.error || 'Failed to save charge bonds', 'error');
+      return;
+    }
+
+    const total = d.total_bond || 0;
+    toast(`Saved per-charge bonds! Total bond: $${total.toLocaleString()}`, 'success');
+
+    if (window._leadMap && window._leadMap[_currentChargeBondsBooking]) {
+      window._leadMap[_currentChargeBondsBooking].bond_amount = total;
+      window._leadMap[_currentChargeBondsBooking].charge_details = details;
+      if (d.lead_score != null) window._leadMap[_currentChargeBondsBooking].lead_score = d.lead_score;
+      if (d.lead_status) window._leadMap[_currentChargeBondsBooking].lead_status = d.lead_status;
+    }
+
+    const card = document.querySelector(`.def-card[data-booking="${CSS.escape ? CSS.escape(_currentChargeBondsBooking) : _currentChargeBondsBooking}"]`);
+    if (card) {
+      const pill = card.querySelector('.def-bond-pill');
+      if (pill) {
+        pill.textContent = total > 0 ? ('$' + total.toLocaleString()) : '$0 — set bond';
+        pill.classList.toggle('bond-zero', total <= 0);
+        const bc = total >= 10000 ? 'high' : total >= 2500 ? 'mid' : 'low';
+        pill.className = 'def-bond-pill ' + bc + (total <= 0 ? ' bond-zero' : '');
+      }
+      const bondInp = card.querySelector('.def-bond-input');
+      if (bondInp) bondInp.value = total > 0 ? total : '';
+    }
+
+    closeChargeBondsModal();
+  } catch (e) {
+    toast('Network error saving per-charge bonds', 'error');
+  }
+}
+
+window.openChargeBondsModal = openChargeBondsModal;
+window.closeChargeBondsModal = closeChargeBondsModal;
+window.recalcChargeBondsTotal = recalcChargeBondsTotal;
+window.addChargeBondRow = addChargeBondRow;
+window.removeChargeBondRow = removeChargeBondRow;
+window.saveChargeBondsFromModal = saveChargeBondsFromModal;
