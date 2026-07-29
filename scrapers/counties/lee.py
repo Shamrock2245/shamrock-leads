@@ -35,8 +35,8 @@ DETAIL_PAGE = "/booking/"
 SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE offline
 
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
-PAGE_SIZE = 200
-MAX_PAGES = 15                 # Reduced: 15 × 200 = 3000 records max (enough for 30 days)
+PAGE_SIZE = 50                 # Fixed: Lee API clamps max records per page to 50
+MAX_PAGES = 30                 # 30 × 50 = 1500 records max (enough for active roster + 30 days)
 MAX_ENRICH = 5                 # Conservative: 5 enrichments per run to save API quota
 DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
 DETAIL_JITTER_S = 4.0          # Increased jitter
@@ -213,6 +213,7 @@ class LeeCountyScraper(BaseScraper):
                 break
 
             offset += PAGE_SIZE
+            time.sleep(1.5)
 
         return all_records
 
@@ -610,12 +611,8 @@ class LeeCountyScraper(BaseScraper):
                 if code in (403, 429, 503) and hasattr(stealth, "rotate_proxy"):
                     stealth.rotate_proxy()
             except Exception as exc:
-                logger.warning("[Lee] StealthSession error: %s — trying fallbacks", exc)
-                if stealth is not False and hasattr(stealth, "rotate_proxy"):
-                    try:
-                        stealth.rotate_proxy()
-                    except Exception:
-                        pass
+                logger.warning("[Lee] StealthSession error: %s — disabling for remainder of run", exc)
+                self._stealth = False
 
         # ── Path 2: Scrapfly (optional env) ──
         scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")

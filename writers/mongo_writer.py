@@ -157,7 +157,8 @@ class MongoWriter:
         for record in records:
             doc = record.to_mongo_doc()
             doc["updated_at"] = now  # Track when record was last refreshed
-            doc["scraped_at"] = now.isoformat()  # ISO string for dashboard
+            # Keep scraped_at in $setOnInsert so discovery timestamp is preserved
+            doc.pop("scraped_at", None)
 
             # ── Promote FTA intelligence fields to top-level for querying ──
             extra = record.extra_data or {}
@@ -181,6 +182,7 @@ class MongoWriter:
                         "$set": doc,
                         "$setOnInsert": {
                             "created_at": now,
+                            "scraped_at": now.isoformat(),
                         },
                     },
                     upsert=True,

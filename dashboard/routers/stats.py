@@ -412,7 +412,7 @@ async def api_leads(
             leads_list = []
             cursor = (
                 arrests.find(mongo_query, projection)
-                .sort(mongo_sort, sort_order)
+                .sort([(mongo_sort, sort_order), ("booking_number", -1)])
                 .skip(skip)
                 .limit(query.limit)
             )
