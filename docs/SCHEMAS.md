@@ -40,8 +40,9 @@ Populated by the scraper pipeline. Dedup key: `county + booking_number`.
 | `state` | `State` | string | Two-letter abbreviation (default: FL) |
 | `zip` | `ZIP` | string | ZIP code |
 | `mugshot_url` | `Mugshot_URL` | string | Direct URL to mugshot |
-| `charges` | `Charges` | string | Semicolon-delimited charge descriptions |
-| `bond_amount` | — | float | Parsed numeric bond amount |
+| `charges` | `Charges` | string | Semicolon/pipe-delimited charge descriptions |
+| `charge_details` | — | array | Structured per-charge bond array: `[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety", "case_number": "..."}, ...]` |
+| `bond_amount` | — | float | Parsed total numeric bond amount |
 | `bond_amount_raw` | `Bond_Amount` | string | Raw bond string (e.g., `$5,000.00`, `NO BOND`) |
 | `bond_paid` | `Bond_Paid` | string | `YES` or `NO` |
 | `bond_type` | `Bond_Type` | string | `Surety`, `Cash`, `ROR`, etc. |
