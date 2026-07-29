@@ -9,12 +9,12 @@
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | Scrape → Score → Alert | ✅ Complete |
-| 1b | FL County Expansion (51 registered / 67 goal) | ✅ Complete (core market) |
+| 1b | FL County Expansion (67 registered / 67 goal) | ✅ Complete (core market) |
 | 1c | GA County Expansion (74 registered / 159 goal) | 🔄 In Progress |
 | 1d | SC County Expansion (46/46 registered) | ✅ Registered · ⏳ production depth |
-| 1e | NC Wave-1 (27 registered / 100 goal) | ✅ Wave-1 code · ⏳ first production scrapes |
-| 1f | Multi-State Ops dashboard (FL/GA/SC/NC) | ✅ Complete (July 2026) |
-| 1g | TN / TX / CT / LA / MS | 🔲 Scaffold packages only |
+| 1e | NC Wave-1 (34 registered / 100 goal) | ✅ Wave-1 code · ⏳ first production scrapes |
+| 1f | Multi-State Ops dashboard (FL/GA/SC/NC/TN/TX/LA/CT/AL/MS) | ✅ Complete (July 2026) |
+| 1g | TN / TX / CT / LA / MS / AL | ✅ 40 Registered scrapers |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -31,7 +31,9 @@
 | 15 | Intelligence Dashboard Overhaul | ✅ Complete |
 | 16 | Social Media Command Center (Postiz) | ✅ Complete |
 | 17 | Super CRM hub APIs + secrets hygiene | ✅ Complete (July 2026) |
-| 18 | True phone→autopilot state machine (explicit human gates) | 🔲 Next product focus |
+| 19 | Automated First Appearance Bond Fill | ✅ Complete (July 2026) |
+| 20 | Per-Charge Bond Breakdown & Multi-State Query Engine | ✅ Complete (July 2026) |
+| 21 | True phone→autopilot state machine (explicit human gates) | 🔲 Next product focus |
 
 ---
 
@@ -254,7 +256,24 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 - Social Engine API (port 5060) for AI-powered content repurposing
 - SSL / reverse proxy configured for secure social integrations
 - Integration with Temporal, Postgres, and Redis for workflow orchestration
-- Frontend command center via `sl-social.js`
+---
+
+## Phase 19: Automated First Appearance Bond Fill ✅ COMPLETE (July 2026)
+
+- Continuous 24/7 background worker (`FirstAppearanceWatcher`) targeting "In Custody" defendants with unset/$0 bonds across key active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto)
+- Runs every 30 mins to re-check county booking systems/APIs and auto-populate newly assigned bond amounts post-hearing
+- Lee County API enrichment scale increased to 50 records per run
+- Fires Slack notifications when no-bond records graduate to posted bonds
+
+---
+
+## Phase 20: Per-Charge Bond Breakdown & Multi-State Query Engine ✅ COMPLETE (July 2026)
+
+- Structured `charge_details` data model (`[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety", "case_number": "..."}, ...]`)
+- `POST /api/leads/update-charge-bonds` endpoint to edit individual charge bonds and auto-recalculate total bond amount and lead score
+- Interactive **⚖️ Per-Charge Bonds Modal** on Defendant cards in the UI
+- Multi-state query builder supporting all 10 states (FL, GA, SC, NC, TN, TX, LA, CT, AL, MS) and 256 county labels (`County (ST)`)
+- Dynamic county selector filtering dropdown options by selected state
 
 ---
 
