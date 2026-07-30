@@ -47,9 +47,16 @@ class SignNowPacketService:
     # All template IDs live HERE and only here.
     # extensions.py references this location — do NOT duplicate there.
     #
-    # To add Palmetto-specific templates:
+    # Local PDF blanks (flatten / Adobe / offline) live under:
+    #   templates/surety-agnostic-shamrock/  → shared Shamrock forms
+    #   templates/osi/                       → OSI surety forms
+    #   templates/palmetto/                  → Palmetto surety forms
+    # Packet rule: OSI = agnostic + osi · Palmetto = agnostic + palmetto
+    # (see dashboard/paperwork_pdf_service.py)
+    #
+    # To add Palmetto-specific SignNow templates:
     #   1. Upload new templates to SignNow under admin@
-    #   2. Add template IDs under PALMETTO_TEMPLATE_MAP
+    #   2. Add IDs below as "<doc-key>-palmetto"
     #   3. build_packet_manifest() surety routing will pick them up
     # ──────────────────────────────────────────────────────────────────────
 
@@ -172,43 +179,38 @@ class SignNowPacketService:
         }
 
     TEMPLATE_MAP = {
-        # ── Shared Templates (Paperwork for All Packets) ──────────────────────
-        # Used by BOTH OSI and Palmetto. Single canonical forms.
+        # ── Surety-agnostic Shamrock forms (templates/surety-agnostic-shamrock/) ──
+        # Used by BOTH OSI and Palmetto packets.
         # NOTE: appearance-bond is PRINT-ONLY — never sent via SignNow.
         "paperwork-header":      "9b9dad3e319f4b1580094e05f9844929d5a6f7de",  # shamrock-paperwork-header
         "faq-cosigners":         "0820b9fef3bd4c38a91643455881021f3f0c3a88",  # Shamrock Bail Bonds - FAQ Cosigners
         "faq-defendants":        "1524f1c816c54a72be76d14fe128e4a6034579dc",  # Shamrock Bail Bonds - FAQ Defendants
-        "promissory-note":       "460bd43c2f514305a3b296481713a00ee8311c79",  # Promissory Side 2 FINAL
-        "disclosure-form":       "fb8b57bf55ac4d5e8bff820b018a0bfd3b17a37a",  # Disclosure FINAL
         "master-waiver":         "3b0e71188b3049cc8760d144e6c49df227ccd741",  # shamrock-master-waiver
         "ssa-release":           "4800defff07541079760889d83109059585b0cea",  # shamrock-ssa-release
+        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # premium finance notice (agnostic)
 
-        # ── OSI-Specific Templates (osi templates folder) ─────────────────────
-        # Default templates used when surety_id == "osi" (or unspecified)
+        # ── Shared legal (no surety branding; local PDFs under templates/osi/) ──
+        "promissory-note":       "460bd43c2f514305a3b296481713a00ee8311c79",  # Promissory Side 2 FINAL
+        "disclosure-form":       "fb8b57bf55ac4d5e8bff820b018a0bfd3b17a37a",  # Disclosure FINAL
+
+        # ── OSI-Specific Templates (templates/osi/) ───────────────────────────
+        # Default when surety_id == "osi" (or unspecified)
         "indemnity-agreement":   "ed5e6ca0a3444796a127fbeb6a880658371aafd7",  # Indemnity Agreement FINAL (OSI)
         "defendant-application": "d50adc808f3245f087b218d33da89e4ace15ecd4",  # App for Appearance Bond FINAL (OSI)
         "surety-terms":          "192aeb246230446bb0d7f658765afd2832704964",  # Surety Terms and Conditions (OSI)
         "collateral-receipt":    "4b1f5611840f4de4bc891677617f5dbf6ff7ad05",  # osi-premium-collateral-template
-        "payment-plan":          "1861b158d7a447d48be5ac1dd24755f727f0773b",  # shamrock-premium-finance-notice (OSI)
         # appearance-bond is PRINT-ONLY — physical printout only. DO NOT add to any phase doc list.
         "appearance-bond":       "7ba703e101e04604a2f1458c21d3addfce9ca86b",  # PRINT-ONLY reference
 
-        # ── Palmetto-Specific Overrides (shamrock-palmetto-templates folder) ──
-        # To add a new Palmetto template:
-        #   1. Log in to SignNow as admin@shamrockbailbonds.biz
-        #   2. Open the template and copy the 40-char template ID from the URL
-        #   3. Add the key here using the pattern "<doc-key>-palmetto"
-        #   4. The surety-routing logic in build_packet_manifest() will pick it up automatically
-        "appearance-bond-palmetto":      "9b1d3d0b64004153b347ceccda07420a906350e5",  # shamrock-palmetto-appearance-bond (reference only)
-        "faq-cosigners-palmetto":        "",  # Handled by shared
-        "faq-defendants-palmetto":       "",  # Handled by shared
-        "indemnity-agreement-palmetto":  "2359c0fdf9ea47ee8129d4426e698ece0112a85c",
+        # ── Palmetto-Specific Overrides (templates/palmetto/) ─────────────────
+        # Keys use the pattern "<doc-key>-palmetto". build_packet_manifest()
+        # swaps these in when surety_id == "palmetto".
+        "appearance-bond-palmetto":       "9b1d3d0b64004153b347ceccda07420a906350e5",  # PRINT-ONLY reference
+        "indemnity-agreement-palmetto":   "2359c0fdf9ea47ee8129d4426e698ece0112a85c",
         "defendant-application-palmetto": "9c6f62509e03453a8d212bd67c88eccf65e65958",
-        "master-waiver-palmetto":        "",  # Handled by shared
-        "ssa-release-palmetto":          "",  # Handled by shared
-        "surety-terms-palmetto":         "c897c72df2674beaa0ad9c8bbf1f5856e150d553",
-        "collateral-receipt-palmetto":   "b5b89aec16f44bf4b8538891707beebf71977a19",
-        "payment-plan-palmetto":         "661390d6984c40439c948bd31813ada600163a8f",
+        "surety-terms-palmetto":          "c897c72df2674beaa0ad9c8bbf1f5856e150d553",
+        "collateral-receipt-palmetto":    "b5b89aec16f44bf4b8538891707beebf71977a19",
+        # payment-plan is agnostic (local + SignNow shared); no Palmetto override
     }
 
     # Document Multiplication Rules
@@ -225,7 +227,16 @@ class SignNowPacketService:
         "ssa-release":           {"rule": "per-person",     "label": "SSA Release"},
         "collateral-receipt":    {"rule": "shared",         "label": "Collateral & Premium Receipt"},
         "payment-plan":          {"rule": "shared",         "label": "Payment Plan Agreement"},
-        "appearance-bond":       {"rule": "per-charge",     "label": "Appearance Bond"},
+        # PRINT-ONLY: wet-ink signature on paper → take to jail. Never e-sign.
+        "appearance-bond":       {
+            "rule": "print-only",
+            "label": "Appearance Bond (print / wet-ink / jail)",
+            "signature_mode": "wet_ink_live",
+            "e_sign": False,
+            "procedure": (
+                "Store unsigned PDF → print → live signature on paper → take to jail"
+            ),
+        },
     }
 
     def __init__(self):
@@ -863,18 +874,27 @@ class SignNowPacketService:
             ]
             target_docs = phase_1_docs if phase == 1 else phase_2_docs
 
-        # Palmetto overrides: these 5 doc keys have Palmetto-specific templates.
-        # Shared docs (master-waiver, ssa-release, faq-*, promissory-note, disclosure-form)
-        # use the same template for both sureties.
+        # Palmetto overrides: surety-branded docs only (templates/palmetto/).
+        # Agnostic (faq-*, master-waiver, ssa-release, payment-plan, paperwork-header)
+        # and shared legal (promissory-note, disclosure-form) stay on the shared IDs.
         _palmetto_overrideable = {
             "indemnity-agreement",
             "defendant-application",
             "surety-terms",
             "collateral-receipt",
-            "payment-plan",
         }
 
         for doc_key in target_docs:
+            # Appearance bonds are print-only (wet-ink → jail). Never copy to SignNow.
+            if doc_key in ("appearance-bond", "appearance-bond-palmetto") or doc_key.endswith(
+                "appearance-bond"
+            ):
+                logger.info(
+                    "[signnow] Skipping %s — print-only wet-ink bond (not e-signed)",
+                    doc_key,
+                )
+                continue
+
             template_key = doc_key
             if surety_id == "palmetto" and doc_key in _palmetto_overrideable:
                 palmetto_key = f"{doc_key}-palmetto"
@@ -892,31 +912,36 @@ class SignNowPacketService:
                 continue
 
             rule = self.DOC_RULES.get(doc_key, {}).get("rule", "static")
+            if rule == "print-only":
+                logger.info("[signnow] Skipping print-only doc %s", doc_key)
+                continue
 
             copies_needed = 1
             if rule == "per-indemnitor":
-                copies_needed = num_indemnitors
+                copies_needed = max(1, int(num_indemnitors or 1))
             elif rule == "per-person":
                 if phase == 1:
-                    copies_needed = num_indemnitors
+                    copies_needed = max(1, int(num_indemnitors or 1))
                 else:
-                    copies_needed = 1  # 1 for defendant in phase 2
+                    copies_needed = 1  # defendant in phase 2
             elif rule == "per-charge":
-                # For Palmetto Appearance Bond
-                copies_needed = num_charges
+                # Reserved (appearance bonds are print-only and never reach here)
+                copies_needed = max(1, int(num_charges or 1))
 
+            label = self.DOC_RULES.get(doc_key, {}).get("label") or doc_key.replace("-", " ").title()
             for i in range(copies_needed):
                 manifest.append(
                     {
                         "doc_key": doc_key,
+                        "template_key": template_key,
                         "template_id": template_id,
                         "copy_index": i + 1,
                         "rule": rule,
-                        "label": self.DOC_RULES[doc_key]["label"],
+                        "label": label,
                     }
                 )
 
-                return manifest
+        return manifest
 
     def handle_send_phase_1(
         self,

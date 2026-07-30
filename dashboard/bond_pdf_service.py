@@ -3,17 +3,30 @@ ShamrockLeads — Bond PDF Generation Service
 Fills official OSI and Palmetto Appearance Bond PDF templates
 with arrest record data using PyMuPDF (fitz).
 
-One appearance bond per criminal charge.
+Identity rules (non-negotiable)
+-------------------------------
+1. **One appearance bond PDF per charge** for a defendant.
+2. Every charge (and its appearance bond) is tied to a **case number**.
+   A defendant may have **multiple case numbers** (e.g. 26-CF-001 and 26-MM-002).
+3. **Exactly one POA number per charge** — never re-use the same POA across
+   charges. If only one POA is supplied for N charges, only charge 0 receives
+   it; remaining bonds generate with an empty POA (must be filled before print).
+
+Packet composition (surety folders) is separate — see paperwork_pdf_service.py.
 """
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 from datetime import datetime, date
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import fitz  # PyMuPDF
+
+logger = logging.getLogger(__name__)
 
 
 # ── Template Paths ──
@@ -147,9 +160,171 @@ def _normalize_charges_and_amounts(charges_input, bond_amount_input) -> list[dic
                 amt_val = 0.0
         normalized.append({
             "charge": chg,
-            "amount": amt_val
+            "amount": amt_val,
         })
     return normalized
+
+
+def _split_list_field(val: Any) -> List[str]:
+    """Split a multi-value field (list or delimited string) into a list of strings."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        out = []
+        for item in val:
+            if isinstance(item, dict):
+                # Prefer full POA display, then number
+                s = (
+                    item.get("poa_full")
+                    or item.get("poa_number")
+                    or item.get("case_number")
+                    or item.get("value")
+                    or ""
+                )
+                out.append(str(s).strip())
+            else:
+                out.append(str(item).strip())
+        return [x for x in out if x]
+    s = str(val).strip()
+    if not s:
+        return []
+    for sep in ("|", ";", "\n"):
+        if sep in s:
+            return [p.strip() for p in s.split(sep) if p.strip()]
+    # Comma: only if multiple tokens look like distinct ids (not "Last, First")
+    if "," in s and not re.search(r"[A-Za-z]{3,},\s*[A-Za-z]", s):
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        if len(parts) > 1:
+            return parts
+    return [s]
+
+
+def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
+    """
+    Build the canonical per-charge rows for appearance bond generation.
+
+    Preference order for charge source:
+      1. charge_details (structured from Lead Explorer / update-charge-bonds)
+      2. charge_list (dashboard write-bond modal)
+      3. charges / charge + bond_amount (legacy)
+
+    Each row:
+      {
+        "charge": str,
+        "amount": float,
+        "case_number": str,   # case this charge belongs to
+        "poa_number": str,    # exactly one POA for this charge (may be empty)
+        "bond_type": str,
+        "index": int,
+      }
+
+    Rules:
+      - One row → one appearance bond PDF
+      - case_number may repeat across rows (same case, multiple counts) or differ
+        (multiple cases per defendant)
+      - poa_number is 1:1 with charge index from poa_numbers / parallel lists;
+        a single shared POA is **not** copied onto every charge
+    """
+    bond_data = bond_data or {}
+    rows: List[Dict[str, Any]] = []
+
+    # ── Structured charge_details ──────────────────────────────────────────
+    details = bond_data.get("charge_details") or bond_data.get("charge_list")
+    if isinstance(details, list) and details:
+        for i, item in enumerate(details):
+            if isinstance(item, dict):
+                desc = (
+                    item.get("charge")
+                    or item.get("description")
+                    or item.get("charge_desc")
+                    or ""
+                ).strip()
+                if not desc:
+                    continue
+                amt = item.get("bond_amount", item.get("amount", item.get("bond")))
+                rows.append({
+                    "charge": desc,
+                    "amount": _safe_float(amt) if amt is not None else 0.0,
+                    "case_number": str(
+                        item.get("case_number")
+                        or item.get("Case_Number")
+                        or item.get("appearance_bond_number")
+                        or ""
+                    ).strip(),
+                    "poa_number": str(
+                        item.get("poa_number")
+                        or item.get("poa_full")
+                        or item.get("POA_Number")
+                        or ""
+                    ).strip(),
+                    "bond_type": str(item.get("bond_type") or item.get("bondType") or "Surety").strip(),
+                    "index": i,
+                })
+            else:
+                desc = str(item).strip()
+                if desc:
+                    rows.append({
+                        "charge": desc,
+                        "amount": 0.0,
+                        "case_number": "",
+                        "poa_number": "",
+                        "bond_type": "Surety",
+                        "index": i,
+                    })
+
+    # ── Legacy charges + amounts ───────────────────────────────────────────
+    if not rows:
+        charges_input = bond_data.get("charges") or bond_data.get("charge")
+        bond_amount_input = bond_data.get("bond_amount")
+        for i, item in enumerate(_normalize_charges_and_amounts(charges_input, bond_amount_input)):
+            rows.append({
+                "charge": item["charge"],
+                "amount": item["amount"],
+                "case_number": "",
+                "poa_number": "",
+                "bond_type": "Surety",
+                "index": i,
+            })
+
+    if not rows:
+        rows = [{
+            "charge": "No Charge Specified",
+            "amount": _safe_float(bond_data.get("bond_amount")),
+            "case_number": str(bond_data.get("case_number") or "").strip(),
+            "poa_number": "",
+            "bond_type": "Surety",
+            "index": 0,
+        }]
+
+    # ── Parallel POA list (one POA per charge — never broadcast) ────────────
+    poa_list = _split_list_field(
+        bond_data.get("poa_numbers")
+        if bond_data.get("poa_numbers") is not None
+        else bond_data.get("poa_number")
+    )
+    # ── Parallel / fallback case numbers ───────────────────────────────────
+    case_list = _split_list_field(
+        bond_data.get("case_numbers")
+        if bond_data.get("case_numbers") is not None
+        else bond_data.get("case_number")
+    )
+    default_case = str(bond_data.get("case_number") or bond_data.get("Case_Number") or "").strip()
+
+    for i, row in enumerate(rows):
+        if not row.get("poa_number"):
+            if i < len(poa_list):
+                row["poa_number"] = poa_list[i]
+            # Do NOT fall back to poa_list[0] for later charges — one POA per charge only
+        if not row.get("case_number"):
+            if i < len(case_list):
+                row["case_number"] = case_list[i]
+            elif default_case and len(case_list) <= 1:
+                # Single case number on the defendant/case may apply to every count
+                # on that case; multiple case_numbers list takes precedence above.
+                row["case_number"] = default_case
+        row["index"] = i
+
+    return rows
 
 
 def _split_charge(charge_text: str, max_line1: int = 80) -> tuple:
@@ -516,76 +691,207 @@ def fill_palmetto_bond(data: dict) -> bytes:
 
 def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[bytes]:
     """
-    Generate filled appearance bond PDFs (one per criminal charge).
-    
+    Generate filled appearance bond PDFs — **one PDF per charge**.
+
+    Identity:
+      - Each charge → one appearance bond
+      - Each charge → one POA number (exclusive; not shared across charges)
+      - Each charge → a case_number (defendant may have multiple case numbers)
+
     Args:
-        bond_data: Dict containing defendant, indemnitor, and booking facts.
-        template: "osi" or "palmetto" template set to use.
-        
-    Returns: List of PDF byte buffers (one per normalized charge).
+        bond_data: Defendant, indemnitor, booking, charge_details / charges, POAs.
+        template: "osi" or "palmetto".
+
+    Returns:
+        List of PDF byte buffers in charge order (same length as normalize_charge_rows).
     """
-    # Accept plural `charges` or singular `charge` (dashboard / batch PDF paths)
-    charges_input = bond_data.get("charges")
-    if not charges_input:
-        charges_input = bond_data.get("charge")
-    bond_amount_input = bond_data.get("bond_amount")
-    
-    normalized_list = _normalize_charges_and_amounts(charges_input, bond_amount_input)
-    
-    pdfs = []
-    poas = bond_data.get("poa_number") or ""
-    poa_list = []
-    if isinstance(poas, list):
-        poa_list = [str(p).strip() for p in poas]
-    elif isinstance(poas, str):
-        if "|" in poas:
-            poa_list = [p.strip() for p in poas.split("|")]
-        elif ";" in poas:
-            poa_list = [p.strip() for p in poas.split(";")]
-        elif "," in poas:
-            poa_list = [p.strip() for p in poas.split(",")]
-        else:
-            poa_list = [poas.strip()]
-            
-    for idx, item in enumerate(normalized_list):
+    surety = (template or bond_data.get("surety") or "osi").lower().strip()
+    if surety not in ("osi", "palmetto"):
+        surety = "osi"
+
+    rows = normalize_charge_rows(bond_data)
+    pdfs: List[bytes] = []
+    missing_poa = []
+    missing_case = []
+
+    for row in rows:
         charge_data = dict(bond_data)
-        charge_data["charge"] = item["charge"]
-        charge_data["bond_amount"] = item["amount"]
-        
-        # Match POA to the charge
-        if idx < len(poa_list):
-            charge_data["poa_number"] = poa_list[idx]
-        elif len(poa_list) == 1:
-            charge_data["poa_number"] = poa_list[0] if idx == 0 else ""
-        else:
-            charge_data["poa_number"] = ""
-            
-        # Select appropriate filling routine
-        surety = template.lower().strip()
+        charge_data["charge"] = row["charge"]
+        charge_data["bond_amount"] = row["amount"]
+        charge_data["case_number"] = row.get("case_number") or ""
+        charge_data["poa_number"] = row.get("poa_number") or ""
+        charge_data["bond_type"] = row.get("bond_type") or "Surety"
+        charge_data["charge_index"] = row.get("index", 0)
+        charge_data["surety"] = surety
+
+        if not charge_data["poa_number"]:
+            missing_poa.append(row["index"])
+        if not charge_data["case_number"]:
+            missing_case.append(row["index"])
+
         if surety == "palmetto":
             pdf_bytes = fill_palmetto_bond(charge_data)
         else:
             pdf_bytes = fill_osi_bond(charge_data)
-            
         pdfs.append(pdf_bytes)
-        
+
+    if missing_poa:
+        logger.warning(
+            "[appearance-bond] charges missing POA (one POA required per charge): indices=%s defendant=%s",
+            missing_poa,
+            bond_data.get("defendant_name") or bond_data.get("name") or "?",
+        )
+    if missing_case:
+        logger.warning(
+            "[appearance-bond] charges missing case_number: indices=%s defendant=%s",
+            missing_case,
+            bond_data.get("defendant_name") or bond_data.get("name") or "?",
+        )
+
+    logger.info(
+        "[appearance-bond] generated %s bond(s) surety=%s defendant=%s",
+        len(pdfs),
+        surety,
+        bond_data.get("defendant_name") or bond_data.get("name") or "?",
+    )
     return pdfs
 
 
 def generate_appearance_bond(data: dict) -> bytes:
     """
-    Generate a single filled appearance bond PDF for the given surety.
-    Backward compatibility wrapper.
-    
+    Generate appearance bond PDF(s) for the given surety.
+
+    - Single charge → one PDF
+    - Multiple charges → uncollated merge (2 copies per charge by default) so
+      print jobs stay one-file-per-defendant while still one bond form per charge
+
     Args:
         data: Dict with keys: surety ('osi'|'palmetto'), name, booking_number,
-              county, bond_amount, charge, court_date, address, etc.
-              
-    Returns: PDF bytes of the first filled template page
+              county, bond_amount, charge(s), charge_details, case_number(s),
+              poa_number(s), etc.
+
+    Returns: PDF bytes
     """
     surety = (data.get("surety", "osi") or "osi").lower().strip()
     pdfs = generate_appearance_bonds(data, template=surety)
-    return pdfs[0] if pdfs else b""
+    if not pdfs:
+        return b""
+    if len(pdfs) == 1:
+        return pdfs[0]
+    # Multi-charge: merge into one print-ready stream (2 copies per charge)
+    copies = int(data.get("copies_per_charge") or 2)
+    return merge_uncollated_bonds(pdfs, copies_per_charge=copies)
+
+
+# Procedural constants — appearance bonds are never e-signed
+APPEARANCE_BOND_SIGNATURE_MODE = "wet_ink_live"
+APPEARANCE_BOND_PROCEDURE = (
+    "Generate unsigned PDF → store file → print → live (wet-ink) signature "
+    "on paper → take signed original to the jail"
+)
+APPEARANCE_BOND_ESIGN = False  # never SignNow / Adobe Sign
+
+
+def appearance_bond_procedure_meta() -> Dict[str, Any]:
+    """Shared metadata for UI, packet docs, and storage."""
+    return {
+        "print_only": True,
+        "e_sign": APPEARANCE_BOND_ESIGN,
+        "signature_mode": APPEARANCE_BOND_SIGNATURE_MODE,
+        "signature_required": "live_wet_ink",
+        "storage_state": "unsigned_file",
+        "procedure": APPEARANCE_BOND_PROCEDURE,
+        "delivery": "print_and_jail",
+        "not_for": ["signnow", "adobe_sign", "adobe_acrobat_sign", "email_sign"],
+    }
+
+
+def describe_appearance_bonds(bond_data: dict) -> List[Dict[str, Any]]:
+    """
+    Diagnostic / UI: list planned appearance bonds without generating PDFs.
+    Useful for Bond Desk to show “Charge → Case # → POA #” before print.
+    """
+    rows = normalize_charge_rows(bond_data)
+    proc = appearance_bond_procedure_meta()
+    return [
+        {
+            "charge_index": r["index"],
+            "charge": r["charge"],
+            "bond_amount": r["amount"],
+            "case_number": r.get("case_number") or "",
+            "poa_number": r.get("poa_number") or "",
+            "bond_type": r.get("bond_type") or "Surety",
+            "ready": bool(r.get("poa_number") and r.get("case_number")),
+            **proc,
+        }
+        for r in rows
+    ]
+
+
+def store_appearance_bond_pdfs(
+    pdfs: List[bytes],
+    *,
+    bond_data: dict,
+    surety: str = "osi",
+    packet_id: Optional[str] = None,
+    booking_number: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Persist **unsigned** appearance bond PDFs to disk for print workflow.
+
+    Files are never sent for e-signature. Staff prints, wet-signs, takes to jail.
+    Returns one metadata dict per charge PDF (paths are relative to repo root
+    when possible, absolute otherwise).
+    """
+    surety = (surety or "osi").lower().strip()
+    rows = normalize_charge_rows(bond_data)
+    booking = (
+        booking_number
+        or bond_data.get("booking_number")
+        or bond_data.get("defendant_booking_number")
+        or "unknown"
+    )
+    booking_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(booking))[:40]
+    pkt = packet_id or f"BOND-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    pkt_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(pkt))[:40]
+
+    root = Path(__file__).resolve().parent / "uploads" / "appearance_bonds" / pkt_safe
+    root.mkdir(parents=True, exist_ok=True)
+
+    stored: List[Dict[str, Any]] = []
+    proc = appearance_bond_procedure_meta()
+    for i, blob in enumerate(pdfs):
+        row = rows[i] if i < len(rows) else {}
+        charge_slug = re.sub(
+            r"[^A-Za-z0-9_-]+", "_", (row.get("charge") or f"charge_{i + 1}")[:30]
+        )
+        fname = f"{surety}_{booking_safe}_ch{i + 1:02d}_{charge_slug}_UNSIGNED.pdf"
+        path = root / fname
+        path.write_bytes(blob)
+        try:
+            rel = str(path.relative_to(Path(__file__).resolve().parent.parent))
+        except ValueError:
+            rel = str(path)
+        stored.append({
+            "charge_index": i,
+            "charge": row.get("charge") or "",
+            "case_number": row.get("case_number") or "",
+            "poa_number": row.get("poa_number") or "",
+            "bond_amount": row.get("amount"),
+            "filename": fname,
+            "file_path": rel,
+            "absolute_path": str(path),
+            "size_bytes": len(blob),
+            "status": "unsigned_stored",
+            "signed": False,
+            **proc,
+        })
+        logger.info(
+            "[appearance-bond] stored UNSIGNED print file %s (%s bytes)",
+            path.name,
+            len(blob),
+        )
+    return stored
 
 
 def generate_safe_filename(data: dict) -> str:

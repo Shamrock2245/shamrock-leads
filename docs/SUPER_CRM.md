@@ -78,7 +78,16 @@ GPS tracking, court reminders, FTA alerts, rearrest detector
 ## Paperwork autofill (Bond Desk)
 
 Hydration source: `dashboard/services/signnow_packet_service.py` (`_build_prefill_fields`).  
-Blanks: `templates/blanks/` (OSI + Palmetto variants).
+Local blanks (flatten / Adobe / offline):
+
+| Folder | Role |
+|--------|------|
+| `templates/surety-agnostic-shamrock/` | Shared Shamrock forms (header, FAQs, waiver, SSA, payment plan) |
+| `templates/osi/` | OSI surety forms + shared legal (promissory, disclosure) + appearance bond |
+| `templates/palmetto/` | Palmetto surety forms + appearance bond |
+
+**Packet rule:** OSI = agnostic + `osi/` · Palmetto = agnostic + `palmetto/`.  
+E-sign after flatten: **SignNow** (primary) or **Adobe Sign / Acrobat** (per-client provider).
 
 Must collect before send: defendant identity & descriptors, booking/charges/court, bond $, indemnitor PII (address, DL, SSN for SSA, refs, employment, vehicle), surety, POA (phase 2), agency constants.
 

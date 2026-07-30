@@ -1,12 +1,17 @@
 """
-ShamrockLeads — Paperwork PDF Engine (secondary / offline assist)
+ShamrockLeads — Paperwork PDF Engine (local stitch / fill / flatten assist)
 
-Stitches blank PDF templates from templates/blanks into a single packet and
-places SignNow-style text tags where anchors exist.
+Packet composition rule
+-----------------------
+  OSI packet      = templates/surety-agnostic-shamrock/*  +  templates/osi/*
+  Palmetto packet = templates/surety-agnostic-shamrock/*  +  templates/palmetto/*
 
-PRIMARY production path remains SignNowPacketService (SignNow templates).
-This module is for local stitch / fallback / offline preview — not a replacement
-for surety-routed SignNow delivery.
+Defendant fields come from arrest-lead scrape data; indemnitor fields come from
+intake / match / dashboard. This module hydrates blanks, stitches the packet,
+and leaves e-sign to SignNow (primary) or Adobe Sign (optional) after flatten.
+
+PRIMARY production path remains SignNowPacketService (cloud templates).
+This module is for local stitch / Adobe PDF Services fill / offline preview.
 """
 from __future__ import annotations
 
@@ -19,9 +24,18 @@ import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
-TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "blanks"
+# ── Roots (Docker /app/templates, else repo templates/) ──────────────────────
+_DOCKER_ROOT = Path("/app/templates")
+_LOCAL_ROOT = Path(__file__).resolve().parent.parent / "templates"
+TEMPLATES_ROOT = _DOCKER_ROOT if _DOCKER_ROOT.exists() else _LOCAL_ROOT
 
-# Canonical packet order (matches Telegram DOC_ORDER / SignNow phases, minus print-only bond)
+AGNOSTIC_DIR = TEMPLATES_ROOT / "surety-agnostic-shamrock"
+OSI_DIR = TEMPLATES_ROOT / "osi"
+PALMETTO_DIR = TEMPLATES_ROOT / "palmetto"
+# Legacy fallback if someone still has the old flat layout
+LEGACY_BLANKS_DIR = TEMPLATES_ROOT / "blanks"
+
+# Canonical packet order (matches SignNow phases; appearance bond is print-only)
 PACKET_DOC_ORDER: List[str] = [
     "paperwork-header",
     "faq-cosigners",
@@ -37,21 +51,173 @@ PACKET_DOC_ORDER: List[str] = [
     "payment-plan",
 ]
 
+# Optional print-only docs (not e-signed) — resolved via bond_pdf_service paths
+PRINT_ONLY_DOC_ORDER: List[str] = [
+    "appearance-bond",
+]
+
 # Docs that need one copy per indemnitor
 PER_INDEMNITOR_DOCS = frozenset({"indemnity-agreement"})
 
 # Docs that need one copy per person (defendant + each indemnitor)
 PER_PERSON_DOCS = frozenset({"master-waiver", "ssa-release"})
 
+# ── Slug → on-disk filename by tier ──────────────────────────────────────────
+# Surety-agnostic Shamrock forms (always included for both sureties)
+AGNOSTIC_FILES: Dict[str, str] = {
+    "paperwork-header": "paperwork-header.pdf",
+    "faq-cosigners": "faq-cosigners.pdf",
+    "faq-defendants": "faq-defendants.pdf",
+    "master-waiver": "master-waiver.pdf",
+    "ssa-release": "ssa-release.pdf",
+    "payment-plan": "payment-plan.pdf",
+}
+
+# OSI surety-specific (and shared legal forms currently stored under osi/)
+OSI_FILES: Dict[str, str] = {
+    "appearance-bond": "Appearance Bond blank.pdf",
+    "collateral-receipt": "collateral-receipt.pdf",
+    "defendant-application": "defendant-application.pdf",
+    "disclosure-form": "disclosure-form.pdf",
+    "indemnity-agreement": "indemnity-agreement.pdf",
+    "promissory-note": "promissory-note.pdf",
+    "surety-terms": "surety-terms.pdf",
+}
+
+# Palmetto surety-specific
+PALMETTO_FILES: Dict[str, str] = {
+    "appearance-bond": "Shamrock Palmetto Official Appearance Bond.pdf",
+    "collateral-receipt": "collateral-receipt-palmetto.pdf",
+    "defendant-application": "defendant-application-palmetto.pdf",
+    "indemnity-agreement": "indemnity-agreement-palmetto.pdf",
+    "surety-terms": "surety-terms-palmetto.pdf",
+}
+
+# Shared legal forms that have no Palmetto-branded PDF; live under templates/osi/
+# and are used for BOTH sureties (matches SignNow shared templates).
+SHARED_LEGAL_SLUGS = frozenset({"promissory-note", "disclosure-form"})
+
+
+def _normalize_surety(surety: Optional[str]) -> str:
+    s = (surety or "osi").lower().strip()
+    if s not in ("osi", "palmetto"):
+        return "osi"
+    return s
+
 
 def get_template_path(slug: str, surety: str = "osi") -> Path:
-    """Resolve blank PDF path; prefer surety-specific file when present."""
-    surety = (surety or "osi").lower().strip()
+    """
+    Resolve blank PDF path for a document slug + surety.
+
+    Order:
+      1. surety-agnostic-shamrock/{file} when slug is agnostic
+      2. templates/{osi|palmetto}/{file} for surety-specific slugs
+      3. shared legal (promissory/disclosure) from templates/osi/ for any surety
+      4. legacy templates/blanks/{slug}[-palmetto].pdf (migration safety net)
+    """
+    surety = _normalize_surety(surety)
+    slug = (slug or "").strip().lower()
+
+    # 1) Agnostic
+    if slug in AGNOSTIC_FILES:
+        path = AGNOSTIC_DIR / AGNOSTIC_FILES[slug]
+        if path.is_file():
+            return path
+
+    # 2) Surety-specific
+    if surety == "palmetto" and slug in PALMETTO_FILES:
+        path = PALMETTO_DIR / PALMETTO_FILES[slug]
+        if path.is_file():
+            return path
+
+    if surety == "osi" and slug in OSI_FILES:
+        path = OSI_DIR / OSI_FILES[slug]
+        if path.is_file():
+            return path
+
+    # 3) Shared legal stored under osi/ (available to Palmetto packets too)
+    if slug in SHARED_LEGAL_SLUGS and slug in OSI_FILES:
+        path = OSI_DIR / OSI_FILES[slug]
+        if path.is_file():
+            return path
+
+    # 3b) Palmetto missing a surety form → do NOT borrow OSI branding forms
+    #     except shared legal (already handled). Fall through to legacy.
+
+    # 4) Legacy flat blanks/ layout
+    if LEGACY_BLANKS_DIR.is_dir():
+        if surety == "palmetto":
+            pal = LEGACY_BLANKS_DIR / f"{slug}-palmetto.pdf"
+            if pal.is_file():
+                return pal
+        leg = LEGACY_BLANKS_DIR / f"{slug}.pdf"
+        if leg.is_file():
+            return leg
+
+    # Expected path (may not exist — caller checks is_file())
+    if slug in AGNOSTIC_FILES:
+        return AGNOSTIC_DIR / AGNOSTIC_FILES[slug]
+    if surety == "palmetto" and slug in PALMETTO_FILES:
+        return PALMETTO_DIR / PALMETTO_FILES[slug]
+    if slug in OSI_FILES:
+        return OSI_DIR / OSI_FILES[slug]
+    return AGNOSTIC_DIR / f"{slug}.pdf"
+
+
+def packet_composition(surety: str = "osi") -> Dict[str, Any]:
+    """
+    Describe which folders + files compose a packet for a surety.
+    Used by paperwork config / diagnostics UI.
+    """
+    surety = _normalize_surety(surety)
+    agnostic = {
+        slug: str(AGNOSTIC_DIR / name)
+        for slug, name in AGNOSTIC_FILES.items()
+    }
     if surety == "palmetto":
-        palmetto = TEMPLATES_DIR / f"{slug}-palmetto.pdf"
-        if palmetto.is_file():
-            return palmetto
-    return TEMPLATES_DIR / f"{slug}.pdf"
+        surety_files = {
+            slug: str(PALMETTO_DIR / name)
+            for slug, name in PALMETTO_FILES.items()
+        }
+        shared_legal = {
+            slug: str(OSI_DIR / OSI_FILES[slug])
+            for slug in SHARED_LEGAL_SLUGS
+            if slug in OSI_FILES
+        }
+        surety_dir = str(PALMETTO_DIR)
+    else:
+        surety_files = {
+            slug: str(OSI_DIR / name)
+            for slug, name in OSI_FILES.items()
+            if slug not in SHARED_LEGAL_SLUGS
+        }
+        shared_legal = {
+            slug: str(OSI_DIR / OSI_FILES[slug])
+            for slug in SHARED_LEGAL_SLUGS
+            if slug in OSI_FILES
+        }
+        surety_dir = str(OSI_DIR)
+
+    return {
+        "surety_id": surety,
+        "rule": (
+            "surety-agnostic-shamrock + palmetto"
+            if surety == "palmetto"
+            else "surety-agnostic-shamrock + osi"
+        ),
+        "folders": {
+            "agnostic": str(AGNOSTIC_DIR),
+            "surety": surety_dir,
+            "templates_root": str(TEMPLATES_ROOT),
+        },
+        "agnostic_docs": agnostic,
+        "surety_docs": surety_files,
+        "shared_legal_docs": shared_legal,
+        "packet_order": list(PACKET_DOC_ORDER),
+        "print_only": list(PRINT_ONLY_DOC_ORDER),
+        "esign_providers": ["signnow", "adobe", "both", "none"],
+        "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
+    }
 
 
 def place_text_by_anchor(
@@ -77,12 +243,17 @@ def place_text_by_anchor(
 def _open_blank(slug: str, surety: str) -> Optional[fitz.Document]:
     path = get_template_path(slug, surety)
     if not path.is_file():
-        logger.warning("[paperwork_pdf] missing blank template: %s", path.name)
+        logger.warning(
+            "[paperwork_pdf] missing blank template slug=%s surety=%s path=%s",
+            slug,
+            surety,
+            path,
+        )
         return None
     try:
         return fitz.open(path)
     except Exception as e:
-        logger.error("[paperwork_pdf] failed to open %s: %s", path.name, e)
+        logger.error("[paperwork_pdf] failed to open %s: %s", path, e)
         return None
 
 
@@ -166,11 +337,16 @@ def _hydrate_common_fields(
         place_text_by_anchor(page, "this", date_tag, dx=20, dy=0, font_size=8, index=role_index)
 
 
-def hydrate_indemnity_agreement(data: Dict[str, Any], indemnitor_index: int = 0, surety: str = "osi") -> bytes:
+def hydrate_indemnity_agreement(
+    data: Dict[str, Any], indemnitor_index: int = 0, surety: str = "osi"
+) -> bytes:
     """Fills the Indemnity Agreement and places SignNow signature tags."""
     doc = _open_blank("indemnity-agreement", surety)
     if doc is None:
-        raise FileNotFoundError("indemnity-agreement blank PDF missing under templates/blanks")
+        raise FileNotFoundError(
+            "indemnity-agreement blank PDF missing under "
+            f"templates/{_normalize_surety(surety)}/ (or surety-agnostic path)"
+        )
 
     inds = data.get("indemnitors") or [{}]
     if indemnitor_index >= len(inds):
@@ -198,9 +374,7 @@ def _doc_bytes_for_slug(
     role_index: int = 0,
 ) -> Optional[bytes]:
     if slug == "indemnity-agreement" and person is not None:
-        # Reuse dedicated hydrator when we have indemnitor index in role
         try:
-            # role like "Indemnitor 1"
             idx = 0
             if role.startswith("Indemnitor"):
                 parts = role.split()
@@ -209,6 +383,26 @@ def _doc_bytes_for_slug(
             return hydrate_indemnity_agreement(data, indemnitor_index=idx, surety=surety)
         except FileNotFoundError:
             return None
+
+    # Appearance bonds: one form per charge (case # + exclusive POA per charge).
+    # Multi-charge defendants produce a merged print PDF via bond_pdf_service.
+    if slug == "appearance-bond":
+        try:
+            from dashboard.bond_pdf_service import generate_appearance_bond
+
+            bond_data = dict(data or {})
+            bond_data["surety"] = _normalize_surety(surety)
+            return generate_appearance_bond(bond_data)
+        except Exception as exc:
+            logger.warning("[paperwork_pdf] appearance-bond fill failed: %s", exc)
+            doc = _open_blank(slug, surety)
+            if doc is None:
+                return None
+            buf = io.BytesIO()
+            doc.save(buf)
+            doc.close()
+            buf.seek(0)
+            return buf.read()
 
     doc = _open_blank(slug, surety)
     if doc is None:
@@ -221,18 +415,23 @@ def _doc_bytes_for_slug(
     return buf.read()
 
 
-def generate_full_packet(data: Dict[str, Any], surety: str = "osi") -> bytes:
+def generate_full_packet(
+    data: Dict[str, Any],
+    surety: str = "osi",
+    *,
+    include_appearance_bond: bool = False,
+) -> bytes:
     """
-    Stitch the full blank packet (all available docs in canonical order).
+    Stitch the full blank packet for a surety:
+
+      agnostic Shamrock forms + that surety's forms
 
     - Per-indemnitor: indemnity-agreement
     - Per-person: master-waiver, ssa-release
     - Static/shared: remaining docs once each
     Missing blank files are skipped with a warning (never silent empty crash).
     """
-    surety = (surety or "osi").lower().strip()
-    if surety not in ("osi", "palmetto"):
-        surety = "osi"
+    surety = _normalize_surety(surety)
 
     out_doc = fitz.open()
     included: List[str] = []
@@ -241,10 +440,13 @@ def generate_full_packet(data: Dict[str, Any], surety: str = "osi") -> bytes:
     people = _person_list(data)
     indemnitors = [p for p in people if p[0] != "Defendant"]
     if not indemnitors:
-        # Still emit one indemnitor slot so packet structure is complete
         indemnitors = [("Indemnitor 1", "Indemnitor", {})]
 
-    for slug in PACKET_DOC_ORDER:
+    order = list(PACKET_DOC_ORDER)
+    if include_appearance_bond:
+        order = order + list(PRINT_ONLY_DOC_ORDER)
+
+    for slug in order:
         if slug in PER_INDEMNITOR_DOCS:
             for i, (role, _name, fields) in enumerate(indemnitors):
                 label = f"Indemnitor {i + 1}"
@@ -287,7 +489,8 @@ def generate_full_packet(data: Dict[str, Any], surety: str = "osi") -> bytes:
     if out_doc.page_count == 0:
         out_doc.close()
         raise RuntimeError(
-            "generate_full_packet produced zero pages — check templates/blanks PDFs"
+            "generate_full_packet produced zero pages — check "
+            f"templates/surety-agnostic-shamrock + templates/{surety}/"
         )
 
     if missing:
@@ -314,4 +517,22 @@ def generate_full_packet(data: Dict[str, Any], surety: str = "osi") -> bytes:
 
 def list_available_blanks(surety: str = "osi") -> Dict[str, bool]:
     """Diagnostics: which packet slugs resolve to an on-disk blank."""
-    return {slug: get_template_path(slug, surety).is_file() for slug in PACKET_DOC_ORDER}
+    surety = _normalize_surety(surety)
+    out = {slug: get_template_path(slug, surety).is_file() for slug in PACKET_DOC_ORDER}
+    for slug in PRINT_ONLY_DOC_ORDER:
+        out[slug] = get_template_path(slug, surety).is_file()
+    return out
+
+
+def list_template_inventory() -> Dict[str, Any]:
+    """Full inventory for paperwork config / health checks."""
+    return {
+        "osi": {
+            **packet_composition("osi"),
+            "available": list_available_blanks("osi"),
+        },
+        "palmetto": {
+            **packet_composition("palmetto"),
+            "available": list_available_blanks("palmetto"),
+        },
+    }

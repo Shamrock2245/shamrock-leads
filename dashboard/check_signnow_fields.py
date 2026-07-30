@@ -12,12 +12,12 @@ async def main():
     missing_fields = set()
     found_fields = set()
     
+    # Palmetto surety-branded templates only (payment-plan is agnostic/shared)
     palmetto_keys = [
         "indemnity-agreement-palmetto",
         "defendant-application-palmetto",
         "surety-terms-palmetto",
         "collateral-receipt-palmetto",
-        "payment-plan-palmetto"
     ]
     
     supported_keys = {

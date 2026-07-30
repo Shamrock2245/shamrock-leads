@@ -41,7 +41,7 @@ Populated by the scraper pipeline. Dedup key: `county + booking_number`.
 | `zip` | `ZIP` | string | ZIP code |
 | `mugshot_url` | `Mugshot_URL` | string | Direct URL to mugshot |
 | `charges` | `Charges` | string | Semicolon/pipe-delimited charge descriptions |
-| `charge_details` | — | array | Structured per-charge bond array: `[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety", "case_number": "..."}, ...]` |
+| `charge_details` | — | array | Structured per-charge array: `[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety", "case_number": "...", "poa_number": "..."}, ...]` — **one appearance bond + one POA per charge**; case numbers may repeat or differ per defendant |
 | `bond_amount` | — | float | Parsed total numeric bond amount |
 | `bond_amount_raw` | `Bond_Amount` | string | Raw bond string (e.g., `$5,000.00`, `NO BOND`) |
 | `bond_paid` | `Bond_Paid` | string | `YES` or `NO` |

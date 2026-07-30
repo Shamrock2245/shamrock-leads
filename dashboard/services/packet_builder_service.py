@@ -3,7 +3,14 @@ ShamrockLeads — Adaptive Packet Builder Service
 ================================================
 Resolves defendant + indemnitor from the matching system, builds a robust
 field-hydration map, assembles drag-and-drop packet manifests, flattens
-final PDFs, and routes to SignNow (primary) or Adobe Sign (optional).
+final PDFs, and routes to SignNow (primary) or Adobe Sign / Acrobat (optional).
+
+Local blank PDFs (see dashboard/paperwork_pdf_service.py):
+  OSI packet      = templates/surety-agnostic-shamrock/* + templates/osi/*
+  Palmetto packet = templates/surety-agnostic-shamrock/* + templates/palmetto/*
+
+Defendant fields: arrest-lead scrape → defendant record.
+Indemnitor fields: intake / match / dashboard.
 
 Self-indemnitor (defendant also indemnitor) is allowed only for small bonds
 and requires Brendan's authorization PIN (default 224545).
@@ -58,7 +65,14 @@ CATALOG_TO_TEMPLATE: Dict[str, str] = {
     "appearance-bond": "appearance-bond",
 }
 
+# Appearance bonds: stored unsigned, printed, wet-ink signed, taken to jail.
+# Never included in SignNow or Adobe Sign invites.
 PRINT_ONLY_TEMPLATES = frozenset({"appearance-bond"})
+
+APPEARANCE_BOND_PROCEDURE = (
+    "Generate unsigned PDF → store file → print → live wet-ink signature "
+    "on paper → take signed original to the jail"
+)
 
 SELF_INDEMNITOR_PIN = os.getenv("SELF_INDEMNITOR_PIN", "224545")
 SMALL_BOND_MAX = float(os.getenv("SMALL_BOND_MAX", "10000"))
@@ -602,13 +616,26 @@ def assemble_manifest(
     docs = []
     for i, key in enumerate(ordered_keys):
         slug = template_slug_for_catalog_key(key)
-        docs.append({
+        print_only = slug in PRINT_ONLY_TEMPLATES
+        entry: Dict[str, Any] = {
             "order": i + 1,
             "catalog_key": key,
             "template_slug": slug,
-            "print_only": slug in PRINT_ONLY_TEMPLATES,
+            "print_only": print_only,
+            "e_sign": not print_only,
             "label": key.replace("_", " ").replace("-", " ").title(),
-        })
+        }
+        if print_only:
+            entry["signature_mode"] = "wet_ink_live"
+            entry["procedure"] = APPEARANCE_BOND_PROCEDURE
+            entry["storage_state"] = "unsigned_file"
+            entry["delivery"] = "print_and_jail"
+            entry["label"] = (
+                "Appearance Bond (print · wet-ink · jail)"
+                if "appearance" in slug
+                else entry["label"]
+            )
+        docs.append(entry)
     return docs
 
 

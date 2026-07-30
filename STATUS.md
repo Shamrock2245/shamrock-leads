@@ -156,7 +156,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
 | FL error scrapers (7 remaining) | ⏳ 5 blocked upstream (Bay/Gadsden/Gilchrist/Okeechobee/Suwannee), 1 WAF (Marion), 1 captcha-service (Lake) |
 | Defendants collection backfill | ✅ **4,580** defendants (3.7% of 130k arrests normalized) |
-| Local PDF stitcher full blank packet | ✅ 2026-07-10 (`paperwork_pdf_service`) — SignNow remains primary |
+| Local PDF stitcher full blank packet | ✅ 2026-07-10 · **2026-07-30** folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` (was `templates/blanks/`) · SignNow primary, Adobe Sign optional |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
 
