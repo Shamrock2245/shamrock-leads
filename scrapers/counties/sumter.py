@@ -43,15 +43,79 @@ class SumterCountyScraper(BaseScraper):
             raise
 
         session = cf.Session()
-        records = []
-        seen = set()
-        offset = 0
+        session.headers.update({
+            "User-Agent": HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": f"{BASE_URL}/Jail.aspx",
+        })
+        search_url = f"{BASE_URL}/Jail.aspx"
 
-        while True:
+        # Establish ASP.NET session + cookies (AJAX without prior GET often 500s)
+        try:
+            resp = session.get(search_url, timeout=30, impersonate=IMPERSONATE, verify=False)
+            if resp.status_code >= 500:
+                logger.warning("Sumter: Jail.aspx GET %s — returning empty", resp.status_code)
+                return []
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning("Sumter: initial GET failed (%s) — returning empty", e)
+            return []
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        def _hid(name: str) -> str:
+            el = soup.find("input", {"name": name}) or soup.find("input", {"id": name})
+            return el["value"] if el and el.get("value") else ""
+
+        # Primary: form POST with wildcard. Only send fields that exist on this host
+        # (extra TypeSearch/Sort fields used by Putnam can break Sumter's postback).
+        post_data = {
+            "__VIEWSTATE": _hid("__VIEWSTATE"),
+            "__VIEWSTATEGENERATOR": _hid("__VIEWSTATEGENERATOR"),
+            "__EVENTVALIDATION": _hid("__EVENTVALIDATION"),
+            "__EVENTTARGET": "",
+            "__EVENTARGUMENT": "",
+            "txbLastName": "%",
+            "txbFirstName": "",
+            "txbMiddleName": "",
+            "tbBeginDate": "",
+            "tbEndDate": "",
+            "tbBeginReleaseDate": "",
+            "tbEndReleaseDate": "",
+            "btnSumit": "Submit",
+        }
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        try:
+            resp2 = session.post(
+                search_url, data=post_data, timeout=45, impersonate=IMPERSONATE, verify=False,
+            )
+            if resp2.status_code == 200 and len(resp2.text) > 1000:
+                records = self._parse_html(resp2.text, seen)
+                logger.info("Sumter: form POST returned %s records", len(records))
+            else:
+                logger.warning(
+                    "Sumter: form POST status=%s len=%s",
+                    getattr(resp2, "status_code", "?"),
+                    len(getattr(resp2, "text", "") or ""),
+                )
+        except Exception as e:
+            logger.warning("Sumter: form POST failed: %s", e)
+
+        # AJAX pagination for remaining pages (when form path works)
+        offset = len(records) if records else 0
+        json_headers = {
+            **HEADERS,
+            "Referer": search_url,
+            "Origin": "https://portal.sumtercountysheriff.org",
+        }
+        max_pages = 20
+        page = 0
+        while page < max_pages:
             payload = {
                 "FirstName": "",
                 "MiddleName": "",
-                "LastName": "",
+                "LastName": "%",
                 "BeginBookDate": "",
                 "EndBookDate": "",
                 "BeginReleaseDate": "",
@@ -62,136 +126,53 @@ class SumterCountyScraper(BaseScraper):
                 "SortOrder": 1,
                 "IsDefault": False,
             }
-
             try:
                 r = session.post(
                     AJAX_URL,
                     json=payload,
-                    headers=HEADERS,
+                    headers=json_headers,
                     timeout=30,
                     impersonate=IMPERSONATE,
+                    verify=False,
                 )
+                if r.status_code >= 500:
+                    if not records:
+                        logger.warning("Sumter: AJAX %s with no form results — empty", r.status_code)
+                    break
                 r.raise_for_status()
-            except Exception as e:
-                logger.error(f"Sumter AJAX failed (offset={offset}): {e}")
-                break
-
-            try:
                 data = r.json()
-                html_rows = data["d"]["Data"]["data"]
+                d = data.get("d", data)
+                if isinstance(d, dict):
+                    d = d.get("Data", d)
+                html_rows = d.get("data", "") if isinstance(d, dict) else ""
+                results_returned = d.get("resultsReturned", 0) if isinstance(d, dict) else 0
             except Exception as e:
-                logger.error(f"Sumter JSON parse failed: {e}")
+                logger.warning(f"Sumter AJAX failed (offset={offset}): {e}")
                 break
 
-            if not html_rows or len(html_rows) < 1:
+            if not html_rows or results_returned == 0:
                 break
 
             batch = self._parse_html(html_rows, seen)
             if not batch:
                 break
-
             records.extend(batch)
-            offset += PAGE_SIZE
-
-            if offset >= PAGE_SIZE * 3:
-                break
+            offset += results_returned or PAGE_SIZE
+            page += 1
 
         logger.info(f"Sumter: {len(records)} records")
         return records
 
     def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
-        from datetime import datetime, timezone
-        soup = BeautifulSoup(html, "html.parser")
-        records = []
+        """Shared SmartWeb card parser (handles short headers without DOB)."""
+        from scrapers.smartweb_card_parser import parse_smartweb_cards
 
-        for img in soup.find_all("img", src=re.compile(r"bookno=")):
-            src = img.get("src", "")
-            bk_m = re.search(r"bookno=([A-Z0-9]+)", src)
-            if not bk_m:
-                continue
-            booking_num = bk_m.group(1)
-            if booking_num in seen:
-                continue
-            seen.add(booking_num)
-
-            # Collect text from this row and next 15 siblings
-            block_text = ""
-            try:
-                row = img.find_parent("tr")
-                current = row
-                for _ in range(15):
-                    if current:
-                        block_text += " " + current.get_text(" ", strip=True)
-                        current = current.find_next_sibling("tr")
-            except Exception:
-                pass
-
-            # Name: "LAST, FIRST MIDDLE (RACE/SEX)"
-            name_m = re.search(
-                r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\']+)\s*\(([A-Z])/\s*([A-Z]+)\)",
-                block_text,
-                re.IGNORECASE
-            )
-            full_name = name_m.group(1).strip() if name_m else ""
-            race = name_m.group(2) if name_m else ""
-            sex = name_m.group(3) if name_m else ""
-
-            # Try relaxed name regex if strict one failed
-            if not full_name:
-                name_m = re.search(
-                    r"([a-zA-Z][a-zA-Z\s\-\',]+,\s*[a-zA-Z][a-zA-Z\s\-\']+)\s*\(([a-zA-Z])/\s*([a-zA-Z]+)\)",
-                    block_text
-                )
-                if name_m:
-                    full_name = name_m.group(1).strip()
-                    race = name_m.group(2)
-                    sex = name_m.group(3)
-
-            last, first, middle = "", "", ""
-            if "," in full_name:
-                parts = full_name.split(",", 1)
-                last = parts[0].strip()
-                fm = parts[1].strip().split()
-                first = fm[0] if fm else ""
-                middle = " ".join(fm[1:]) if len(fm) > 1 else ""
-
-            dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
-            dob = dob_m.group(1) if dob_m else ""
-
-            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
-            booking_date = bd_m.group(1) if bd_m else ""
-
-            charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
-
-            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
-            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
-
-            # Parse status from block text
-            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower():
-                status = "In Custody"
-
-            # Parse address from block text
-            addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
-            address = addr_m.group(1).strip() if addr_m else ""
-
-            if not full_name:
-                continue
-
-            records.append(ArrestRecord(
-                County=self.county, State="FL", Facility=FACILITY,
-                Full_Name=full_name.upper(),
-                First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
-                DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
-                Booking_Number=booking_num, Booking_Date=booking_date,
-                Charges=charges, Bond_Amount=bond,
-                Address=address, Status=status,
-                Detail_URL=f"{BASE_URL}/Jail.aspx",
-                Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                LastChecked=datetime.now(timezone.utc).isoformat(),
-                LastCheckedMode="INITIAL",
-            ))
-
-        return records
+        return parse_smartweb_cards(
+            html,
+            county=self.county,
+            facility=FACILITY,
+            detail_url=f"{BASE_URL}/Jail.aspx",
+            seen=seen,
+            state="FL",
+            log_prefix="Sumter",
+        )

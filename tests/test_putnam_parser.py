@@ -97,6 +97,46 @@ def _parse():
     return s._parse_html(SAMPLE_HTML, set())
 
 
+# Live Putnam/Santa Rosa headers often omit DOB (only race/sex in paren)
+SAMPLE_HTML_SHORT_HEADER = """
+<table>
+  <tr>
+    <td>
+      <table>
+        <tr>
+          <td class="SearchHeader">COLEMAN, CECIL &nbsp; (B/
+        MALE
+        )</td>
+        </tr>
+        <tr>
+          <td class="InmateInfoGridTd">Status:</td>
+          <td class="InmateInfoGridTd">In Jail</td>
+        </tr>
+        <tr>
+          <td class="InmateInfoGridTd">Booking No:</td>
+          <td class="InmateInfoGridTd">PCSO26JBN002141</td>
+        </tr>
+        <tr>
+          <td class="InmateInfoGridTd">Booking Date:</td>
+          <td class="InmateInfoGridTd">07/30/2026 09:16 AM</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+"""
+
+
+def test_parses_short_header_without_dob():
+    s = PutnamCountyScraper.__new__(PutnamCountyScraper)
+    recs = s._parse_html(SAMPLE_HTML_SHORT_HEADER, set())
+    assert len(recs) == 1
+    assert recs[0].Last_Name.upper() == "COLEMAN"
+    assert recs[0].First_Name.upper() == "CECIL"
+    assert recs[0].Booking_Number == "PCSO26JBN002141"
+    assert recs[0].Status == "In Custody"
+
+
 def test_parses_two_inmates():
     recs = _parse()
     assert len(recs) == 2

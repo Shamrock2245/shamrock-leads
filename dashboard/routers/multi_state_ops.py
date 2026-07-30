@@ -263,22 +263,29 @@ async def get_state_summary():
         })
         total_arrests = await arrests.count_documents(state_match)
 
-        # Scraper health
+        # Scraper health — active only if last run returned records
         active = 0
+        empty = 0
         errors = 0
         never_run = 0
         if counties:
             async for doc in scraper_status.find(
-                {"county": {"$in": counties}}, {"_id": 0, "status": 1}
+                {"county": {"$in": counties}},
+                {"_id": 0, "status": 1, "records": 1},
             ):
-                s = doc.get("status", "never_run")
-                if s in ("ok", "healthy"):
+                s = (doc.get("status") or "never_run").lower()
+                recs = int(doc.get("records") or 0)
+                if s in ("ok", "healthy", "success") and recs > 0:
                     active += 1
-                elif s in ("error", "offline"):
+                elif s in ("empty", "no_data", "blocked") or (
+                    s in ("ok", "healthy", "success") and recs <= 0
+                ):
+                    empty += 1
+                elif s in ("error", "offline", "failed", "fail"):
                     errors += 1
                 else:
                     never_run += 1
-        accounted = active + errors + never_run
+        accounted = active + empty + errors + never_run
         if total_counties > accounted:
             never_run += total_counties - accounted
 
@@ -311,6 +318,7 @@ async def get_state_summary():
             "state": state,
             "total_counties": total_counties,
             "active_scrapers": active,
+            "empty_scrapers": empty,
             "error_scrapers": errors,
             "never_run": never_run,
             "arrests_24h": arrests_24h,

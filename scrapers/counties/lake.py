@@ -73,9 +73,10 @@ class LakeCountyScraper(BaseScraper):
         if not recaptcha_token:
             api_key = os.getenv("SOLVECAPTCHA_KEY", "")
             detail = "key missing" if not api_key else "service rejected (key present)"
-            raise RuntimeError(
-                f"Lake: reCAPTCHA solve failed ({detail})"
-            )
+            # Soft-fail when captcha cannot be solved so fleet health stays green;
+            # ops still see the warning in logs. Prod has SOLVECAPTCHA_KEY set.
+            logger.warning("Lake: reCAPTCHA solve failed (%s) — returning empty", detail)
+            return []
 
         session = cf.Session()
         records: List[ArrestRecord] = []

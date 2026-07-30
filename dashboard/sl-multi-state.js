@@ -70,6 +70,7 @@ const SLMultiState = (() => {
   const STATUS_CONFIG = {
     ok:        { label: 'Active',    cls: 'ms-badge-ok',      icon: '●' },
     healthy:   { label: 'Healthy',   cls: 'ms-badge-ok',      icon: '●' },
+    empty:     { label: 'Empty',     cls: 'ms-badge-pending', icon: '○' },
     stale:     { label: 'Stale',     cls: 'ms-badge-warn',    icon: '◐' },
     warning:   { label: 'Warning',   cls: 'ms-badge-warn',    icon: '◐' },
     error:     { label: 'Error',     cls: 'ms-badge-error',   icon: '✕' },

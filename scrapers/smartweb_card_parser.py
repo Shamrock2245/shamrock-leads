@@ -27,10 +27,21 @@ _UI_NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Full form (legacy):  DOE, JOHN (W/ MALE / DOB: 01/15/1990 )
+# Short form (current Putnam/Santa Rosa/etc.):  DOE, JOHN (W/ MALE )
+# Whitespace/newlines between race slash and sex are common in live HTML.
 _HEADER_RE = re.compile(
-    r"([A-Z\s,'\-\.]+)\s*\(([A-Z])/\s*(MALE|FEMALE|M|F)\s*/\s*DOB:\s*([\d/]+)\s*\)",
+    r"([A-Z][A-Z\s,'\-\.]{1,80}?)\s*\(\s*([A-Z])\s*/\s*"
+    r"(MALE|FEMALE|M|F)"
+    r"(?:\s*/\s*DOB:\s*([\d/]+))?"
+    r"\s*\)",
     re.IGNORECASE,
 )
+
+# Non-inmate SearchHeader cells that must be skipped
+_HEADER_SKIP = frozenset({
+    "SEARCH INMATES", "CHARGES", "HOLDS", "SORTED BY", "JAIL VIEW",
+})
 
 _STATUS_RE = re.compile(
     r"Status[:\s]+(In\s+Jail|In\s+Custody|Released|Out\s+of\s+Jail|"
@@ -163,16 +174,26 @@ def parse_smartweb_cards(
     headers = soup.find_all("td", class_="SearchHeader")
     for header_td in headers:
         try:
-            header_text = strip_ui_noise(header_td.get_text(" ", strip=True))
+            # Normalize whitespace/newlines before regex (live sites inject \r\n + &nbsp;)
+            raw_header = header_td.get_text(" ", strip=True)
+            header_text = strip_ui_noise(re.sub(r"\s+", " ", raw_header))
+            if not header_text or header_text.upper().strip() in _HEADER_SKIP:
+                continue
+            if header_text.upper().startswith("SORTED BY"):
+                continue
+
             header_match = _HEADER_RE.search(header_text)
             if not header_match:
                 continue
 
             full_name = header_match.group(1).strip()
+            # Reject junk names that aren't people
+            if len(full_name) < 3 or full_name.upper() in _HEADER_SKIP:
+                continue
             race = header_match.group(2).strip()
             sex_raw = header_match.group(3).strip()
             sex = "M" if sex_raw.upper() in ("MALE", "M") else "F"
-            dob = header_match.group(4).strip()
+            dob = (header_match.group(4) or "").strip()
 
             last, first, middle = "", "", ""
             if "," in full_name:
@@ -181,11 +202,24 @@ def parse_smartweb_cards(
                 fm = parts[1].strip().split()
                 first = fm[0] if fm else ""
                 middle = " ".join(fm[1:]) if len(fm) > 1 else ""
+            else:
+                parts = full_name.split()
+                if len(parts) >= 2:
+                    first, last = parts[0], parts[-1]
+                    middle = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+                elif parts:
+                    last = parts[0]
 
             card_nodes = _card_nodes(header_td)
             detail_text = strip_ui_noise(
                 " ".join(n.get_text(" ", strip=True) for n in card_nodes)
             )
+
+            # DOB sometimes only in detail grid when omitted from SearchHeader
+            if not dob:
+                dob_m = re.search(r"DOB[:\s]+([\d/]+)", detail_text, re.I)
+                if dob_m:
+                    dob = dob_m.group(1).strip()
 
             booking_no_match = re.search(
                 r"Booking\s+No[:\s]+([A-Z0-9]+)", detail_text, re.IGNORECASE

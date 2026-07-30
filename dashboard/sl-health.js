@@ -16,11 +16,22 @@ const SLHealth = (() => {
     ok:        { label: '🟢 Active',    cls: 'status-ok',    order: 1 },
     stale:     { label: '🟡 Stale',     cls: 'status-warn',  order: 2 },
     warning:   { label: '🟡 Warning',   cls: 'status-warn',  order: 3 },
-    offline:   { label: '🔴 Offline',   cls: 'status-error', order: 4 },
-    error:     { label: '🔴 Error',     cls: 'status-error', order: 5 },
-    never_run: { label: '⏳ Never Run', cls: 'status-never', order: 6 },
-    disabled:  { label: '⏸ Disabled',  cls: 'status-never', order: 7 },
+    empty:     { label: '⚪ Empty',     cls: 'status-never', order: 4 },
+    offline:   { label: '🔴 Offline',   cls: 'status-error', order: 5 },
+    error:     { label: '🔴 Error',     cls: 'status-error', order: 6 },
+    never_run: { label: '⏳ Never Run', cls: 'status-never', order: 7 },
+    disabled:  { label: '⏸ Disabled',  cls: 'status-never', order: 8 },
   };
+
+  /** Productive = last run succeeded with records (not soft-empty / stubs). */
+  function _isProductive(r) {
+    const st = (r.status || '').toLowerCase();
+    if (st === 'empty' || st === 'error' || st === 'never_run' || st === 'disabled') return false;
+    if (st === 'healthy' || st === 'ok') return true;
+    // stale/warning/offline only count if last run actually had rows
+    const lastN = r.last_run_records != null ? r.last_run_records : r.records;
+    return (st === 'stale' || st === 'warning' || st === 'offline') && (lastN > 0);
+  }
 
   function _statusCfg(s) { return STATUS_CONFIG[s] || { label: s, cls: 'status-never', order: 9 }; }
   function _fmtDuration(secs) {
@@ -93,9 +104,11 @@ const SLHealth = (() => {
         const st = _filter.slice(6).toUpperCase();
         rows = rows.filter(r => (r.state || 'FL').toUpperCase() === st);
       } else if (_filter === 'ok') {
-        rows = rows.filter(r => r.status === 'ok' || r.status === 'healthy');
+        rows = rows.filter(r => _isProductive(r) && (r.status === 'ok' || r.status === 'healthy'));
       } else if (_filter === 'stale') {
         rows = rows.filter(r => ['stale','warning','offline'].includes(r.status));
+      } else if (_filter === 'empty') {
+        rows = rows.filter(r => r.status === 'empty');
       } else {
         rows = rows.filter(r => r.status === _filter);
       }
@@ -123,15 +136,15 @@ const SLHealth = (() => {
     const chips = states.map(st => {
       const stRows = _data.filter(r => (r.state || 'FL').toUpperCase() === st);
       if (!stRows.length) return '';
-      const active = stRows.filter(r => r.status === 'ok' || r.status === 'healthy').length;
+      const productive = stRows.filter(_isProductive).length;
       const total = stRows.length;
       const records = stRows.reduce((s, r) => s + (r.total_records || 0), 0);
       const hot = stRows.reduce((s, r) => s + (r.hot_leads || 0), 0);
       const color = STATE_COLORS_H[st] || '#64748b';
       return `<div class="health-state-chip" onclick="SLHealth.setFilter('state:${st}',null)" style="cursor:pointer;padding:10px 16px;border-radius:10px;border:1px solid ${color}33;background:${color}11;display:flex;flex-direction:column;gap:4px;min-width:120px;transition:background .2s" onmouseover="this.style.background='${color}22'" onmouseout="this.style.background='${color}11'">
         <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:.08em">${st}</div>
-        <div style="font-size:20px;font-weight:800;color:var(--text)">${active}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/${total}</span></div>
-        <div style="font-size:11px;color:var(--text-muted)">${records.toLocaleString()} records &middot; ${hot} hot</div>
+        <div style="font-size:20px;font-weight:800;color:var(--text)">${productive}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/${total}</span></div>
+        <div style="font-size:11px;color:var(--text-muted)">${records.toLocaleString()} in DB · ${hot} hot</div>
       </div>`;
     }).filter(Boolean).join('');
     el.innerHTML = chips || '<span style="color:var(--text-muted);font-size:12px">No state data yet</span>';
@@ -141,7 +154,8 @@ const SLHealth = (() => {
     const kpiEl = document.getElementById('healthKpis');
     if (!kpiEl) return;
     const total = _data.length;
-    const active = _data.filter(r => r.status === 'ok' || r.status === 'healthy').length;
+    const active = _data.filter(r => _isProductive(r) && (r.status === 'ok' || r.status === 'healthy')).length;
+    const empty = _data.filter(r => r.status === 'empty').length;
     const errors = _data.filter(r => r.status === 'error').length;
     const neverRun = _data.filter(r => r.status === 'never_run').length;
     const stale = _data.filter(r => ['stale','warning','offline'].includes(r.status)).length;
@@ -152,12 +166,17 @@ const SLHealth = (() => {
       <div class="stat-card" onclick="SLHealth.setFilter('all',this)" style="cursor:pointer">
         <div class="stat-label">Total Registered</div>
         <div class="stat-value">${total}</div>
-        <div class="stat-sub">counties in fleet</div>
+        <div class="stat-sub">on registry (not all live)</div>
       </div>
       <div class="stat-card" style="border-color:var(--success,#00c896);cursor:pointer" onclick="SLHealth.setFilter('ok',this)">
-        <div class="stat-label">🟢 Active</div>
+        <div class="stat-label">🟢 Active (data)</div>
         <div class="stat-value" style="color:var(--success,#00c896)">${active}</div>
-        <div class="stat-sub">running successfully</div>
+        <div class="stat-sub">last run returned records</div>
+      </div>
+      <div class="stat-card" style="border-color:#94a3b8;cursor:pointer" onclick="SLHealth.setFilter('empty',this)">
+        <div class="stat-label">⚪ Empty run</div>
+        <div class="stat-value" style="color:#94a3b8">${empty}</div>
+        <div class="stat-sub">ran, 0 rows (stub/empty)</div>
       </div>
       <div class="stat-card" style="border-color:var(--danger,#ff4757);cursor:pointer" onclick="SLHealth.setFilter('error',this)">
         <div class="stat-label">🔴 Errors</div>
@@ -167,12 +186,12 @@ const SLHealth = (() => {
       <div class="stat-card" style="border-color:#ffa502;cursor:pointer" onclick="SLHealth.setFilter('stale',this)">
         <div class="stat-label">🟡 Stale</div>
         <div class="stat-value" style="color:#ffa502">${stale}</div>
-        <div class="stat-sub">no recent data</div>
+        <div class="stat-sub">had data, not recent</div>
       </div>
       <div class="stat-card" style="border-color:#ffa502;cursor:pointer" onclick="SLHealth.setFilter('never_run',this)">
         <div class="stat-label">⏳ Never Run</div>
         <div class="stat-value" style="color:#ffa502">${neverRun}</div>
-        <div class="stat-sub">not yet triggered</div>
+        <div class="stat-sub">no live scraper status</div>
       </div>
       ${disabled > 0 ? `<div class="stat-card" style="border-color:#6b7280;cursor:pointer" onclick="SLHealth.setFilter('disabled',this)">
         <div class="stat-label">⏸ Disabled</div>

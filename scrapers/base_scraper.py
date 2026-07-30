@@ -769,7 +769,11 @@ class BaseScraper(ABC):
 
 
             # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
+            # Accurate fleet metrics: "ok" only when we actually ingested rows.
+            # Soft-empty runs (stubs, empty jail, blocked upstream that return [])
+            # use status="empty" so Scraper Health does not inflate Active/Healthy.
             cold_count = sum(1 for r in records if r.Lead_Status == "Cold")
+            run_status = "ok" if len(records) > 0 else "empty"
             if _dashboard_available:
                 try:
                     update_scraper_status(
@@ -780,7 +784,7 @@ class BaseScraper(ABC):
                         cold=cold_count,
                         disqualified=disqualified,
                         duration=elapsed,
-                        status="ok",
+                        status=run_status,
                     )
                 except Exception:
                     pass
@@ -797,7 +801,7 @@ class BaseScraper(ABC):
                             cold=cold_count,
                             disqualified=disqualified,
                             duration=elapsed,
-                            status="ok",
+                            status=run_status,
                             state=getattr(self, "state", None) or "FL",
                             scraper_id=getattr(self, "scraper_id", None),
                         )
@@ -805,6 +809,7 @@ class BaseScraper(ABC):
                         logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {_e}")
                     break  # Only need one writer to persist status
 
+            combined_stats["status"] = run_status
             return combined_stats
 
         except Exception as e:

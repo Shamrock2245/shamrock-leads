@@ -56,22 +56,38 @@ class GilchristCountyScraper(BaseScraper):
             logger.error("curl_cffi/bs4 not installed")
             raise
 
-        proxy = self.get_proxy(prefer_residential=True) if self.ape else None
+        proxy = self.get_proxy(prefer_residential=True) if getattr(self, "ape", None) else None
         proxies = {"http": proxy, "https": proxy} if proxy else None
 
         session = cffi_requests.Session()
-        try:
-            resp = session.get(
-                SEARCH_URL, headers=HEADERS, timeout=30,
-                impersonate=IMPERSONATE, proxies=proxies
+        last_err = None
+        resp = None
+        # Try all known hosts; most are NXDOMAIN / dead as of 2026-07
+        for url in URL_CANDIDATES:
+            try:
+                resp = session.get(
+                    url, headers={**HEADERS, "Referer": url}, timeout=15,
+                    impersonate=IMPERSONATE, proxies=proxies,
+                )
+                if resp.status_code == 200 and len(resp.text) > 500:
+                    break
+                last_err = f"{url} -> HTTP {resp.status_code}"
+                resp = None
+            except Exception as e:
+                last_err = f"{url}: {e}"
+                resp = None
+
+        if resp is None:
+            logger.warning(
+                "Gilchrist: no live SmartWEB host (upstream DNS/dead) — returning empty. last=%s",
+                last_err,
             )
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} loading page")
-        except Exception as e:
-            logger.error(f"Gilchrist: failed to load page: {e}")
             if proxy:
-                self.record_proxy_failure(proxy)
-            raise
+                try:
+                    self.record_proxy_failure(proxy)
+                except Exception:
+                    pass
+            return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
@@ -97,18 +113,23 @@ class GilchristCountyScraper(BaseScraper):
         time.sleep(1.5)
 
         try:
+            post_url = getattr(resp, "url", None) or SEARCH_URL
             resp2 = session.post(
-                SEARCH_URL, data=post_data, headers=HEADERS,
+                post_url, data=post_data, headers=HEADERS,
                 timeout=60, impersonate=IMPERSONATE, proxies=proxies
             )
             if resp2.status_code != 200:
-                raise Exception(f"{resp2.status_code} on POST")
+                logger.warning("Gilchrist: POST %s — returning empty", resp2.status_code)
+                return []
             soup2 = BeautifulSoup(resp2.text, "html.parser")
         except Exception as e:
-            logger.error(f"Gilchrist: POST failed ({e})")
+            logger.warning(f"Gilchrist: POST failed ({e}) — returning empty")
             if proxy:
-                self.record_proxy_failure(proxy)
-            raise
+                try:
+                    self.record_proxy_failure(proxy)
+                except Exception:
+                    pass
+            return []
 
         records = self._parse_table(soup2)
         if proxy and records:

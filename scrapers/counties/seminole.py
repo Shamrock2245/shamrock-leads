@@ -53,17 +53,17 @@ class SeminoleCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import nodriver as uc
             from curl_cffi import requests as cf
             from bs4 import BeautifulSoup  # noqa — imported in sub-methods
         except ImportError as e:
             logger.error(f"Seminole: missing dependency: {e}")
             raise
 
-        # Step 1: Load roster via nodriver (JS-rendered page)
-        roster_html = asyncio.run(self._load_roster(uc))
+        # Step 1: Load roster — nodriver preferred, Playwright fallback (Docker has both
+        # in requirements; local envs may only have one).
+        roster_html = self._load_roster_any()
         if not roster_html:
-            logger.error("Seminole: failed to load roster")
+            logger.error("Seminole: failed to load roster (nodriver/playwright unavailable or failed)")
             return []
 
         # Step 2: Parse all goToDetails JSON objects from roster
@@ -96,6 +96,51 @@ class SeminoleCountyScraper(BaseScraper):
 
         logger.info(f"Seminole: {len(records)} records within {DAYS_BACK} days")
         return records
+
+    def _load_roster_any(self) -> Optional[str]:
+        """Try nodriver first, then Playwright (sync)."""
+        try:
+            import nodriver as uc
+            html = asyncio.run(self._load_roster(uc))
+            if html and ("searchDataRow" in html or "goToDetails" in html):
+                return html
+        except ImportError:
+            logger.warning("Seminole: nodriver not installed — trying Playwright")
+        except Exception as e:
+            logger.warning(f"Seminole: nodriver path failed: {e}")
+
+        try:
+            return self._load_roster_playwright()
+        except ImportError:
+            logger.error("Seminole: neither nodriver nor playwright available")
+            return None
+        except Exception as e:
+            logger.error(f"Seminole: playwright roster failed: {e}")
+            return None
+
+    def _load_roster_playwright(self) -> Optional[str]:
+        """Playwright headless Chromium fallback for NorthPointe portal."""
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+            try:
+                page = browser.new_page()
+                page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
+                # Click Search with no filters
+                btn = page.locator("#searchBtn")
+                if btn.count() == 0:
+                    btn = page.get_by_role("button", name=re.compile(r"search", re.I))
+                btn.first.click(timeout=15000)
+                page.wait_for_timeout(8000)
+                html = page.content()
+                return html
+            finally:
+                browser.close()
 
     # ------------------------------------------------------------------
     # Internal helpers
