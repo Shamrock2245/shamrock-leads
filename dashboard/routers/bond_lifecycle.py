@@ -360,13 +360,18 @@ async def generate_packet(request: Request):
         )
         return JSONResponse(status_code=200, content=res)
     except Exception as e:
-        logger.error(f"SignNow packet creation failed ({str(e)}) — initiating 100% Adobe Sign fallback")
+        logger.error(f"SignNow packet creation failed ({str(e)}) — initiating Adobe Sign fallback")
         try:
-            from dashboard.services.packet_builder_service import send_via_adobe, flatten_pdf_bytes
+            # E-sign packet only (indemnity / apps / waivers). Appearance bonds are
+            # print-only wet-ink → jail and must NEVER go through Adobe Sign.
+            from dashboard.services.packet_builder_service import send_via_adobe
+            from dashboard.paperwork_pdf_service import generate_full_packet
 
-            from dashboard.bond_pdf_service import generate_appearance_bonds
-            pdf_bonds = generate_appearance_bonds(intake_doc, template=surety_id)
-            flat_pdf = flatten_pdf_bytes(pdf_bonds) if pdf_bonds else b""
+            flat_pdf = generate_full_packet(
+                intake_doc if isinstance(intake_doc, dict) else {},
+                surety=surety_id,
+                include_appearance_bond=False,
+            )
 
             if flat_pdf:
                 adobe_res = await send_via_adobe(
@@ -377,13 +382,17 @@ async def generate_packet(request: Request):
                     agreement_name=f"Shamrock Bond Packet (Adobe Sign Fallback) — {signer_name}"
                 )
                 if adobe_res.get("success"):
-                    logger.info("✅ 100% Adobe Sign fallback succeeded!")
+                    logger.info("✅ Adobe Sign e-sign fallback succeeded (appearance bonds excluded)")
                     return JSONResponse(status_code=200, content={
                         "status": "success",
                         "provider": "adobe_sign_fallback",
                         "signing_link": adobe_res.get("signing_link") or adobe_res.get("url") or "",
                         "agreement_id": adobe_res.get("agreement_id"),
-                        "message": "SignNow encountered an issue; packet successfully dispatched via Adobe Sign fallback."
+                        "appearance_bonds": "print_only_not_included",
+                        "message": (
+                            "SignNow failed; e-sign packet sent via Adobe Sign. "
+                            "Appearance bonds are print-only (wet-ink → jail) and were not e-signed."
+                        ),
                     })
         except Exception as ad_err:
             logger.error(f"Adobe Sign fallback also failed: {str(ad_err)}")

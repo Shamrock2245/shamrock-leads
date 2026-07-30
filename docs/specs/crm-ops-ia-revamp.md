@@ -146,13 +146,13 @@ Legacy statuses `pending` / `in_progress` / `promoted` map into these stages wit
 
 Source of truth for hydration: `dashboard/services/signnow_packet_service.py` → `_build_prefill_fields`.
 
-### Packet docs (`templates/blanks/` + SignNow)
+### Packet docs (`templates/surety-agnostic-shamrock/` + `osi/` + `palmetto/` + SignNow)
 
 | Phase | Documents |
 |-------|-----------|
 | Phase 1 (cosigner) | Header, FAQ cosigners, Indemnity Agreement, Promissory Note, Disclosure, SSA Release, Master Waiver |
 | Phase 2 (defendant / post-POA) | FAQ defendants, Defendant Application, Surety Terms, Master Waiver, SSA, Collateral Receipt, Payment Plan |
-| Surety variants | OSI vs Palmetto blanks for appearance bond, indemnity, defendant app, collateral, payment plan, surety terms |
+| Surety variants | OSI vs Palmetto folders for appearance bond, indemnity, defendant app, collateral, surety terms; payment plan is agnostic |
 
 ### Autofill field groups (must be green before “Send packet”)
 

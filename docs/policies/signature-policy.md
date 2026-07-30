@@ -58,6 +58,22 @@ Before sending a signing link:
 - Bond case `Signature_Status` updates to `signed`
 - **Check-in enrollment (A+C):** system enables transparent `check_in_required` monitoring, generates a defendant portal magic link, and creates a staff CRM task to **send** the check-in link. **No automatic client SMS/iMessage** — see `monitoring-checkin-policy.md`.
 
+### Rule 6: Appearance Bonds Are Print / Wet-Ink Only
+
+**Appearance bonds are not e-signature documents.**
+
+| Step | Action |
+|------|--------|
+| 1 | System fills and **stores an UNSIGNED PDF** (one form per charge) |
+| 2 | Staff **prints** the unsigned form(s) |
+| 3 | **Live wet-ink signature** on the paper |
+| 4 | Take the signed original(s) **to the jail** |
+
+- Never send appearance bonds via SignNow, Adobe Acrobat Sign, or email e-sign
+- One appearance bond PDF per charge; one POA per charge; case number(s) per charge
+- Indemnitor/defendant packet docs (indemnity, SSA, applications, etc.) still use e-sign
+- Stored under `dashboard/uploads/appearance_bonds/<packet_id>/` with status `unsigned_stored`
+
 ---
 
 ## Delivery Channels

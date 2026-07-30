@@ -7,6 +7,8 @@ from dashboard.bond_pdf_service import (
     _amount_to_words,
     _parse_date_parts,
     _normalize_charges_and_amounts,
+    normalize_charge_rows,
+    describe_appearance_bonds,
     generate_appearance_bonds,
     generate_appearance_bond,
     merge_uncollated_bonds,
@@ -143,6 +145,90 @@ def test_normalize_charges_and_amounts():
     res = _normalize_charges_and_amounts(charges_h, amount_h)
     assert len(res) == 1
     assert res[0] == {"charge": "DUI, 1ST OFFENSE", "amount": 1000.0}
+
+
+def test_normalize_charge_rows_one_poa_per_charge():
+    """One POA must not be broadcast to every charge."""
+    rows = normalize_charge_rows({
+        "charges": "DUI | BATTERY | THEFT",
+        "bond_amount": "1000 | 500 | 250",
+        "poa_number": "OSI6 - 20134323",  # single POA
+        "case_number": "26-CF-001",
+    })
+    assert len(rows) == 3
+    assert rows[0]["poa_number"] == "OSI6 - 20134323"
+    assert rows[1]["poa_number"] == ""
+    assert rows[2]["poa_number"] == ""
+    # Single case number may apply to all counts on that case
+    assert all(r["case_number"] == "26-CF-001" for r in rows)
+
+
+def test_normalize_charge_rows_parallel_poas_and_cases():
+    rows = normalize_charge_rows({
+        "charge_details": [
+            {"charge": "DUI", "bond_amount": 2500, "case_number": "26-CF-100"},
+            {"charge": "BATTERY", "bond_amount": 1500, "case_number": "26-CF-100"},
+            {"charge": "TRESPASS", "bond_amount": 500, "case_number": "26-MM-200"},
+        ],
+        "poa_numbers": ["OSI6 - 111", "OSI3 - 222", "OSI3 - 333"],
+    })
+    assert len(rows) == 3
+    assert rows[0]["poa_number"] == "OSI6 - 111"
+    assert rows[1]["poa_number"] == "OSI3 - 222"
+    assert rows[2]["poa_number"] == "OSI3 - 333"
+    assert rows[0]["case_number"] == "26-CF-100"
+    assert rows[1]["case_number"] == "26-CF-100"
+    assert rows[2]["case_number"] == "26-MM-200"
+
+
+def test_describe_appearance_bonds_ready_flag():
+    plan = describe_appearance_bonds({
+        "charge_details": [
+            {"charge": "DUI", "bond_amount": 1000, "case_number": "26-CF-1", "poa_number": "OSI3 - 1"},
+            {"charge": "THEFT", "bond_amount": 500, "case_number": "26-CF-1"},
+        ],
+    })
+    assert plan[0]["ready"] is True
+    assert plan[1]["ready"] is False  # missing POA
+    # Wet-ink / jail procedure — never e-sign
+    assert plan[0]["print_only"] is True
+    assert plan[0]["e_sign"] is False
+    assert plan[0]["signature_mode"] == "wet_ink_live"
+    assert plan[0]["delivery"] == "print_and_jail"
+
+
+def test_store_appearance_bond_unsigned_file(tmp_path, monkeypatch):
+    from dashboard import bond_pdf_service as bps
+
+    # Redirect storage under tmp so tests don't write into real uploads/
+    monkeypatch.setattr(
+        bps,
+        "store_appearance_bond_pdfs",
+        bps.store_appearance_bond_pdfs,
+    )
+    # Minimal filled PDF via fill path
+    data = {
+        "defendant_name": "John Doe",
+        "booking_number": "BK-TEST-1",
+        "county": "Lee",
+        "charge_details": [
+            {"charge": "DUI", "bond_amount": 1500, "case_number": "26-CF-1", "poa_number": "OSI3 - 99"},
+        ],
+        "bond_date": "05/20/2026",
+        "surety": "osi",
+    }
+    pdfs = generate_appearance_bonds(data, template="osi")
+    assert len(pdfs) == 1
+    stored = bps.store_appearance_bond_pdfs(
+        pdfs, bond_data=data, surety="osi", packet_id="PKT-TEST-WET",
+    )
+    assert len(stored) == 1
+    assert stored[0]["signed"] is False
+    assert stored[0]["status"] == "unsigned_stored"
+    assert stored[0]["e_sign"] is False
+    assert "UNSIGNED" in stored[0]["filename"]
+    from pathlib import Path
+    assert Path(stored[0]["absolute_path"]).is_file()
 
 
 def test_fill_osi_bond():

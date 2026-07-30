@@ -455,18 +455,24 @@ async def update_charge_bonds(request: Request):
             c_bond = 0.0
         c_type = str(item.get("bond_type") or "Surety").strip()
         c_case = str(item.get("case_number") or "").strip()
+        c_poa = str(item.get("poa_number") or item.get("poa_full") or "").strip()
 
         total_bond += max(0.0, c_bond)
         charge_descs.append(c_desc)
         if c_type:
             bond_types.add(c_type)
 
-        clean_details.append({
+        # One appearance bond + one POA per charge; case_number may be shared
+        # across counts on the same case or differ (multiple cases / defendant).
+        row = {
             "charge": c_desc,
             "bond_amount": c_bond,
             "bond_type": c_type,
             "case_number": c_case,
-        })
+        }
+        if c_poa:
+            row["poa_number"] = c_poa
+        clean_details.append(row)
 
     primary_bond_type = " / ".join(bond_types) if bond_types else "Surety"
 

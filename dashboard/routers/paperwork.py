@@ -128,10 +128,33 @@ async def paperwork_config():
                 "configured": bool(template_id),
             }
 
+        # Local PDF folder inventory (agnostic + surety) for flatten / Adobe path
+        local_pdf: dict = {}
+        try:
+            from dashboard.paperwork_pdf_service import list_template_inventory, packet_composition
+
+            local_pdf = {
+                "inventory": list_template_inventory(),
+                "composition": {
+                    "osi": packet_composition("osi"),
+                    "palmetto": packet_composition("palmetto"),
+                },
+                "rule": (
+                    "OSI packet = surety-agnostic-shamrock + osi; "
+                    "Palmetto packet = surety-agnostic-shamrock + palmetto"
+                ),
+            }
+        except Exception as inv_exc:
+            logger.warning("paperwork/config local inventory: %s", inv_exc)
+            local_pdf = {"error": str(inv_exc)}
+
         return {
             "success": True,
             "template_map": {"osi": osi, "palmetto": palmetto},
             "doc_rules": doc_rules,
+            "local_pdf": local_pdf,
+            "esign_providers": ["signnow", "adobe", "both", "none"],
+            "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
             "counts": {
                 "osi": len(osi),
                 "palmetto": len(palmetto),
@@ -148,12 +171,19 @@ async def paperwork_config():
 
 
 # Standard default drag-and-drop document rules categories
+# universal ≈ templates/surety-agnostic-shamrock + shared legal
+# osi_surety / palmetto_surety ≈ templates/osi or templates/palmetto
 DEFAULT_DOC_RULES_CATEGORIES = {
     "universal": [
+        "paperwork-header",
+        "faq-cosigners",
+        "faq-defendants",
         "master_bail_application",
         "indemnity_agreement",
         "promissory_note",
         "disclosure_statement",
+        "master-waiver",
+        "ssa-release",
         "premium_receipt",
     ],
     "payment_plan": [
@@ -165,10 +195,12 @@ DEFAULT_DOC_RULES_CATEGORIES = {
     "osi_surety": [
         "osi_appearance_bond",
         "osi_premium_receipt",
+        "surety-terms",
     ],
     "palmetto_surety": [
         "palmetto_power_certificate",
         "palmetto_appearance_bond",
+        "surety-terms",
     ],
     "conditional": [
         "cosigner_addendum",
@@ -302,10 +334,36 @@ async def paperwork_preview(bond_case_id: str):
 def _build_bond_data(intake: dict) -> dict:
     """
     Build the data dict expected by bond_pdf_service.generate_appearance_bonds().
-    Maps intake fields → PDF template fields.
+
+    Identity (enforced by bond_pdf_service):
+      - One appearance bond per charge
+      - Each charge → case_number (defendant may have multiple cases)
+      - Exactly one POA per charge
     """
     ind = intake.get("indemnitor", {})
     def_ = intake.get("defendant", {})
+
+    # Prefer structured charge_details (per-charge bond + case + optional POA)
+    charge_details = (
+        intake.get("charge_details")
+        or def_.get("charge_details")
+        or intake.get("charge_list")
+        or def_.get("charge_list")
+        or []
+    )
+    poa_numbers = (
+        intake.get("poa_numbers")
+        or intake.get("poa_number")
+        or def_.get("poa_numbers")
+        or ""
+    )
+    case_numbers = (
+        intake.get("case_numbers")
+        or intake.get("case_number")
+        or def_.get("case_number")
+        or def_.get("caseNumber")
+        or ""
+    )
 
     return {
         # Defendant
@@ -316,6 +374,11 @@ def _build_bond_data(intake: dict) -> dict:
         "facility": def_.get("facility", intake.get("defendant_facility", "")),
         "charges": def_.get("charges", ""),
         "bond_amount": def_.get("bondAmount", ""),
+        "charge_details": charge_details if isinstance(charge_details, list) else [],
+        "case_number": case_numbers if isinstance(case_numbers, str) else "",
+        "case_numbers": case_numbers,
+        "poa_number": poa_numbers if isinstance(poa_numbers, str) else "",
+        "poa_numbers": poa_numbers,
         # Indemnitor
         "indemnitor_name": intake.get("indemnitor_name", ""),
         "indemnitor_address": ind.get("address", ""),
@@ -358,22 +421,53 @@ async def generate_packet(request: Request, intake_id: str):
         bond_data = _build_bond_data(intake)
         documents = []
 
-        # ── Generate appearance bond PDFs ──────────────────────────────────
+        # ── Appearance bonds (one per charge) — UNSIGNED files for print ────
+        # Procedure: store unsigned PDF → print → live wet-ink signature → jail.
+        # Never e-sign (SignNow / Adobe Sign). See bond_pdf_service.appearance_bond_procedure_meta.
         if DOC_APPEARANCE_BOND in PACKET_TYPES.get(packet_type, [DOC_APPEARANCE_BOND]):
             try:
+                from dashboard.bond_pdf_service import (
+                    describe_appearance_bonds,
+                    store_appearance_bond_pdfs,
+                    appearance_bond_procedure_meta,
+                )
+
                 generate_bonds = _get_bond_pdf_service()
+                plan = describe_appearance_bonds(bond_data)
                 pdf_buffers = generate_bonds(bond_data, template=template)
-                for i, buf in enumerate(pdf_buffers, 1):
-                    doc_id = f"{packet_id}-BOND-{i:02d}"
+                stored = store_appearance_bond_pdfs(
+                    pdf_buffers,
+                    bond_data=bond_data,
+                    surety=template,
+                    packet_id=packet_id,
+                    booking_number=bond_data.get("booking_number"),
+                )
+                proc = appearance_bond_procedure_meta()
+                for i, buf in enumerate(pdf_buffers):
+                    meta = plan[i] if i < len(plan) else {}
+                    file_meta = stored[i] if i < len(stored) else {}
+                    charge_label = (meta.get("charge") or f"Charge {i + 1}")[:60]
+                    case_no = meta.get("case_number") or ""
+                    poa = meta.get("poa_number") or ""
+                    doc_id = f"{packet_id}-BOND-{i + 1:02d}"
                     documents.append({
                         "doc_id": doc_id,
                         "type": DOC_APPEARANCE_BOND,
-                        "label": f"Appearance Bond #{i}",
+                        "label": f"Appearance Bond (UNSIGNED · print) — {charge_label}",
                         "template": template,
                         "charge_index": i,
-                        "status": "generated",
+                        "charge": meta.get("charge") or "",
+                        "case_number": case_no,
+                        "poa_number": poa,
+                        "bond_amount": meta.get("bond_amount"),
+                        "ready": bool(meta.get("ready")),
+                        "status": "unsigned_stored",
+                        "signed": False,
                         "size_bytes": len(buf),
+                        "file_path": file_meta.get("file_path"),
+                        "filename": file_meta.get("filename"),
                         "generated_at": now.isoformat(),
+                        **proc,
                     })
             except Exception as e:
                 logger.warning("Bond PDF generation error: %s", e)
@@ -381,6 +475,8 @@ async def generate_packet(request: Request, intake_id: str):
                     "type": DOC_APPEARANCE_BOND,
                     "status": "error",
                     "error": str(e),
+                    "print_only": True,
+                    "e_sign": False,
                 })
 
         # ── Indemnity Agreement ────────────────────────────────────────────

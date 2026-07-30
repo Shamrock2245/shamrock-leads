@@ -88,4 +88,8 @@ def test_catalog_to_template_and_manifest():
     # self-indemnitor skips cosigner addendum
     assert "cosigner_addendum" not in keys
     print_only = [m for m in man if m["print_only"]]
-    assert any(m["template_slug"] == "appearance-bond" for m in print_only)
+    ab = next(m for m in print_only if m["template_slug"] == "appearance-bond")
+    assert ab["e_sign"] is False
+    assert ab["signature_mode"] == "wet_ink_live"
+    assert ab["delivery"] == "print_and_jail"
+    assert "wet" in ab["procedure"].lower() or "jail" in ab["procedure"].lower()

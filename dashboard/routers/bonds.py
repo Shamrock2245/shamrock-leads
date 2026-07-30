@@ -1164,69 +1164,114 @@ async def api_active_bonds_process_missed():
 @bonds_bp.api_route("/appearance-bond-pdf", methods=["GET", "POST"])
 async def api_appearance_bond_pdf(request: Request):
     """
-    _qp = dict(request.query_params)
-    Generate a pre-populated Appearance Bond PDF using the official
-    OSI or Palmetto surety-approved templates.
+    Generate pre-populated Appearance Bond PDF(s) for print / wet-ink / jail.
+
+    One form per charge. Stored as UNSIGNED files — never e-signed.
+    Procedure: print → live wet-ink signature on paper → take to jail.
 
     Accepts GET query params or POST JSON body:
-        name, booking, county, bond, charge, surety, date, dob, address,
-        court_date, court_time, case_number, poa_number, court_type,
-        first_name, last_name, indemnitor_name
+        name, booking, county, bond, charge(s), charge_details, surety, date, dob,
+        address, court_date, court_time, case_number(s), poa_number(s), court_type,
+        first_name, last_name, indemnitor_name, copies, uncollated, store
     """
     try:
-        from dashboard.bond_pdf_service import generate_appearance_bond, generate_safe_filename
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            generate_safe_filename,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+            appearance_bond_procedure_meta,
+        )
 
-        # Accept both GET query params and POST JSON body
         _qp = dict(request.query_params)
+        d: dict = {}
         if request.method == "POST":
             try:
                 d = await request.json() or {}
             except Exception:
                 d = {}
-            def _p(key, default=""):
-                return d.get(key, _qp.get(key, default))
-        else:
-            def _p(key, default=""):
-                return _qp.get(key, default)
 
+        def _p(key, default=""):
+            return d.get(key, _qp.get(key, default))
+
+        surety = (_p("surety", "osi") or "osi").lower().strip()
         data = {
             "name": _p("name") or _p("defendant_name", ""),
+            "defendant_name": _p("name") or _p("defendant_name", ""),
             "first_name": _p("first_name", ""),
             "last_name": _p("last_name", ""),
             "booking_number": _p("booking") or _p("booking_number", ""),
             "county": _p("county", ""),
             "bond_amount": _p("bond") or _p("bond_amount", "0"),
             "charge": _p("charge", ""),
-            "surety": _p("surety", "osi"),
+            "charges": _p("charges") or _p("charge", ""),
+            "charge_details": d.get("charge_details") or d.get("charge_list") or [],
+            "surety": surety,
             "bond_date": _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y"),
             "dob": _p("dob") or _p("date_of_birth", ""),
             "address": _p("address", ""),
             "court_date": _p("court_date", ""),
             "court_time": _p("court_time", ""),
             "case_number": _p("case_number", ""),
+            "case_numbers": d.get("case_numbers") or _p("case_numbers", ""),
             "poa_number": _p("poa_number", ""),
+            "poa_numbers": d.get("poa_numbers") or _p("poa_numbers", ""),
             "court_type": _p("court_type", ""),
             "indemnitor_name": _p("indemnitor_name", ""),
         }
 
-        copies_count = int(_p("copies", "1") or "1")
-        if _p("uncollated", "") == "true" or _p("uncollated", "") == "1":
+        try:
+            copies_count = int(_p("copies", "2") or "2")
+        except (TypeError, ValueError):
+            copies_count = 2
+        if _p("uncollated", "") in ("true", "1", "yes") or copies_count > 1:
             copies_count = max(2, copies_count)
 
-        pdf_bytes = generate_appearance_bond(data)
-        if copies_count > 1:
-            from dashboard.bond_pdf_service import merge_uncollated_bonds
-            pdf_bytes = merge_uncollated_bonds([pdf_bytes], copies_per_charge=copies_count)
+        pdf_list = generate_appearance_bonds(data, template=surety)
+        if not pdf_list:
+            return JSONResponse({"error": "No appearance bond PDFs generated"}, status_code=400)
 
+        # Persist unsigned print files (best-effort)
+        stored = []
+        if str(_p("store", "1")).lower() not in ("0", "false", "no"):
+            try:
+                stored = store_appearance_bond_pdfs(
+                    pdf_list,
+                    bond_data=data,
+                    surety=surety,
+                    booking_number=data.get("booking_number"),
+                )
+            except Exception as store_exc:
+                logger.warning("[appearance-bond-pdf] store failed: %s", store_exc)
+
+        pdf_bytes = merge_uncollated_bonds(pdf_list, copies_per_charge=copies_count)
         filename = generate_safe_filename(data)
+        # Make clear this is the print/unsigned package
+        if "UNSIGNED" not in filename.upper():
+            filename = filename.replace(".pdf", "_UNSIGNED_PRINT.pdf")
+
+        proc = appearance_bond_procedure_meta()
+        headers = {
+            "Content-Disposition": f"attachment; filename={filename}",
+            "X-Appearance-Bond-Print-Only": "1",
+            "X-Appearance-Bond-Signature": "wet_ink_live",
+            "X-Appearance-Bond-Count": str(len(pdf_list)),
+        }
+        if stored:
+            headers["X-Appearance-Bond-Stored"] = stored[0].get("file_path", "")[:200]
 
         return Response(
             pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
+            headers=headers,
         )
     except FileNotFoundError as e:
-        return JSONResponse({"error": f"Template not found: {str(e)}. Ensure templates are in templates/ directory."}, status_code=404)
+        return JSONResponse({
+            "error": (
+                f"Template not found: {str(e)}. "
+                "Ensure templates are in templates/osi/ or templates/palmetto/."
+            ),
+        }, status_code=404)
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"error": f"PDF generation failed: {str(e)}"}, status_code=500)
@@ -1235,14 +1280,19 @@ async def api_appearance_bond_pdf(request: Request):
 @bonds_bp.api_route("/appearance-bond-batch", methods=["POST"])
 async def api_appearance_bond_batch(request: Request):
     """
-    Generate a single merged, print-ready PDF containing all appearance bonds for a defendant,
-    duplicated 2x each (uncollated: Copy 1 Court, Copy 2 Agency File for Charge #1, then Charge #2...).
+    Print-ready package: one appearance bond per charge, uncollated copies
+    (default 2×: Court + Agency). UNSIGNED files for wet-ink → jail.
+    Never e-signed.
     """
     try:
-        from dashboard.bond_pdf_service import generate_appearance_bonds, merge_uncollated_bonds
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+        )
         d = await request.json() or {}
-        surety = d.get("surety", "osi")
-        charges_data = d.get("charges", [])
+        surety = (d.get("surety") or "osi").lower().strip()
+        charges_data = d.get("charges") or d.get("charge_details") or d.get("charge_list") or []
         if not charges_data:
             return JSONResponse({"error": "No charges provided for batch appearance bond"}, status_code=400)
         try:
@@ -1252,35 +1302,52 @@ async def api_appearance_bond_batch(request: Request):
         if copies < 1:
             copies = 1
 
-        pdf_list = []
+        # Normalize charge rows into structured charge_details (1 POA + case per charge)
+        charge_details = []
         for ch in charges_data:
             if not isinstance(ch, dict):
                 ch = {"charge": str(ch)}
-            b_data = {
-                "name": d.get("name", ""),
-                "booking_number": d.get("booking", ""),
-                "county": ch.get("county") or d.get("county", ""),
-                "court_date": ch.get("court_date") or d.get("court_date", ""),
-                "surety": surety,
-                "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
-                "dob": d.get("dob", ""),
-                "address": d.get("address", ""),
-                # Singular charge — generate_appearance_bonds falls back to this key
-                "charge": ch.get("charge", ""),
-                "bond_amount": ch.get("bond_amount", d.get("bond", 0)),
-                "case_number": ch.get("case_number", d.get("case_number", "")),
-                "poa_number": ch.get("poa_number", ""),
-            }
-            single_pdf_list = generate_appearance_bonds(b_data, template=surety)
-            if single_pdf_list:
-                pdf_list.append(single_pdf_list[0])
+            charge_details.append({
+                "charge": ch.get("charge") or ch.get("description") or "",
+                "bond_amount": ch.get("bond_amount", ch.get("amount", d.get("bond", 0))),
+                "case_number": ch.get("case_number") or d.get("case_number") or "",
+                "poa_number": ch.get("poa_number") or ch.get("poa_full") or "",
+                "bond_type": ch.get("bond_type") or "Surety",
+            })
+
+        b_data = {
+            "name": d.get("name", ""),
+            "defendant_name": d.get("name", ""),
+            "booking_number": d.get("booking") or d.get("booking_number", ""),
+            "county": d.get("county", ""),
+            "court_date": d.get("court_date", ""),
+            "surety": surety,
+            "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
+            "dob": d.get("dob", ""),
+            "address": d.get("address", ""),
+            "indemnitor_name": d.get("indemnitor_name", ""),
+            "charge_details": charge_details,
+            "case_number": d.get("case_number", ""),
+            "poa_numbers": d.get("poa_numbers") or [c.get("poa_number") for c in charge_details],
+        }
+        pdf_list = generate_appearance_bonds(b_data, template=surety)
 
         if not pdf_list:
             return JSONResponse({"error": "No appearance bond PDFs were generated from the provided charges"}, status_code=400)
 
+        try:
+            store_appearance_bond_pdfs(
+                pdf_list,
+                bond_data=b_data,
+                surety=surety,
+                booking_number=b_data.get("booking_number"),
+            )
+        except Exception as store_exc:
+            logger.warning("[appearance-bond-batch] store failed: %s", store_exc)
+
         merged_pdf = merge_uncollated_bonds(pdf_list, copies_per_charge=copies)
         safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', d.get("name", "defendant"))
-        filename = f"Uncollated_Appearance_Bonds_{surety.upper()}_{safe_name}.pdf"
+        filename = f"Uncollated_Appearance_Bonds_{surety.upper()}_{safe_name}_UNSIGNED_PRINT.pdf"
 
         # Automatic Filing to Google Drive Case Folder (best-effort; never blocks PDF download)
         drive_url = ""
