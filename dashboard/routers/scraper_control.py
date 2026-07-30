@@ -187,6 +187,7 @@ async def api_scheduler_status():
 
     total_registered = len(REGISTERED_COUNTIES)
     active = 0
+    empty = 0
     errors = 0
     never_run = 0
     disabled = 0
@@ -200,8 +201,14 @@ async def api_scheduler_status():
             never_run += 1
             continue
         s = (live.get("status") or "").lower()
-        if s in ("ok", "healthy", "success"):
+        recs = int(live.get("records") or 0)
+        # Active = last run succeeded with data (not soft-empty / stubs)
+        if s in ("ok", "healthy", "success") and recs > 0:
             active += 1
+        elif s in ("empty", "no_data", "blocked") or (
+            s in ("ok", "healthy", "success") and recs <= 0
+        ):
+            empty += 1
         elif s in ("error", "failed", "fail"):
             errors += 1
         else:
@@ -210,12 +217,14 @@ async def api_scheduler_status():
     return {
         "total_registered": total_registered,
         "active": active,
+        "empty": empty,
         "errors": errors,
         "never_run": never_run,
         "disabled": disabled,
         "pending_triggers": pending_triggers,
         "pending_count": len(pending_triggers),
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "note": "active = last run ok with records>0; empty = ran with 0 rows",
     }
 
 

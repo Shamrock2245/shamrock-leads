@@ -183,35 +183,44 @@ async def api_status():
             arrest = arrest_by_label.get(label, {})
             if live:
                 lr = live.get("last_run")
+                live_status = (live.get("status") or "ok").lower()
+                live_recs = int(live.get("records") or 0)
+                # Normalize legacy ok+0 → empty for accurate fleet counts
+                if live_status in ("ok", "healthy", "success") and live_recs <= 0:
+                    live_status = "empty"
                 scrapers[label] = {
                     "last_run": lr.isoformat() if isinstance(lr, datetime) else str(lr or ""),
-                    "records": live.get("records", 0) or arrest.get("records", 0),
-                    "hot_leads": live.get("hot_leads", 0) or arrest.get("hot", 0),
-                    "warm_leads": live.get("warm_leads", 0) or arrest.get("warm", 0),
+                    "records": live_recs,
+                    "hot_leads": live.get("hot_leads", 0),
+                    "warm_leads": live.get("warm_leads", 0),
                     "cold_leads": live.get("cold_leads", 0),
                     "disqualified": live.get("disqualified", 0),
                     "duration_seconds": live.get("duration_seconds", 0),
-                    "status": live.get("status", "ok"),
+                    "status": live_status,
                     "error": live.get("error"),
                     "run_count": live.get("run_count", 1),
-                    "total_records": live.get("records", 0) or arrest.get("records", 0),
+                    # Inventory (all-time in arrests) vs last-run count
+                    "total_records": arrest.get("records", 0) or live_recs,
+                    "last_run_records": live_recs,
                     "source": "live",
                     "state": st or "FL",
                 }
             elif arrest:
                 lt = arrest.get("latest")
                 scrapers[label] = {
-                    "last_run": lt.isoformat() if isinstance(lt, datetime) else str(lt or ""),
-                    "records": arrest["records"],
+                    "last_run": "",
+                    "records": 0,
                     "hot_leads": arrest.get("hot", 0),
                     "warm_leads": arrest.get("warm", 0),
                     "cold_leads": 0,
                     "disqualified": 0,
                     "duration_seconds": 0,
-                    "status": "ok",
+                    # Historical inventory only — not a live productive run
+                    "status": "never_run",
                     "error": None,
-                    "run_count": 1,
+                    "run_count": 0,
                     "total_records": arrest["records"],
+                    "last_run_records": 0,
                     "source": "arrests_aggregate",
                     "state": st or "FL",
                 }
@@ -693,34 +702,50 @@ def _health_status_for_row(
     latest: datetime | None,
     now: datetime,
 ) -> tuple[str, float]:
-    """Return (status, hours_since_update) for a scraper-health row."""
+    """Return (status, hours_since_update) for a scraper-health row.
+
+    Accuracy rules (dashboard KPIs):
+      - healthy / ok  → last run succeeded **with records** and is recent
+      - empty         → last run finished with 0 records (soft-fail / empty roster / stub)
+      - error         → last run raised
+      - never_run     → no live scraper_status run (historical arrest data alone ≠ healthy)
+    """
     if not enabled:
         hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
         return "disabled", hours
 
-    if live.get("status") == "error":
+    raw = (live.get("status") or "").lower().strip()
+    last_records = int(live.get("records") or 0)
+
+    if raw in ("error", "failed", "fail"):
         hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
         return "error", hours
 
+    # Explicit empty / blocked soft-fail — never count as Active
+    if raw in ("empty", "no_data", "blocked", "unavailable"):
+        hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
+        return "empty", hours
+
     if last_run:
         hours = (now - last_run).total_seconds() / 3600
-        if hours < 3:
-            return "healthy", hours
-        if hours < 6:
-            return "stale", hours
-        if hours < 24:
-            return "warning", hours
-        return "offline", hours
+        # Legacy "ok" with 0 records (pre-fix writers) → empty
+        if raw in ("ok", "healthy", "success") and last_records <= 0:
+            return "empty", hours
+        # Productive run — recency tiers
+        if raw in ("ok", "healthy", "success") or last_records > 0:
+            if hours < 3:
+                return "healthy", hours
+            if hours < 6:
+                return "stale", hours
+            if hours < 24:
+                return "warning", hours
+            return "offline", hours
+        return "empty", hours
 
+    # Arrests in Mongo without a live run: show inventory, not "healthy"
     if latest:
         hours = (now - latest).total_seconds() / 3600
-        if hours < 2:
-            return "healthy", hours
-        if hours < 6:
-            return "stale", hours
-        if hours < 24:
-            return "warning", hours
-        return "offline", hours
+        return "never_run", hours
 
     return "never_run", 999.0
 
@@ -846,17 +871,20 @@ async def api_scraper_health():
                 now=now,
             )
 
+            last_run_records = int((live or {}).get("records") or 0)
             out.append({
                 "county": bare,
                 "county_label": label,
                 "state": st,
                 "total_records": r.get("total_records", 0),
+                "last_run_records": last_run_records,
                 "in_custody": r.get("in_custody", 0),
                 "records_24h": counts_24h.get(label, 0),
                 "latest_record": latest.isoformat() if latest else "",
                 "last_run": last_run.isoformat() if last_run else "",
                 "hours_since_update": round(ui_hours, 1),
                 "status": base_status,
+                "raw_status": (live or {}).get("status") or "",
                 "avg_bond": round(r.get("avg_bond") or 0, 2),
                 "max_bond": round(r.get("max_bond") or 0, 2),
                 "total_bond": round(r.get("total_bond") or 0, 2),

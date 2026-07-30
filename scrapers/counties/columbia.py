@@ -43,14 +43,21 @@ class ColumbiaCountyScraper(BaseScraper):
         session = cffi_requests.Session()
         session.headers.update(HEADERS)
 
-        # Step 1: Initial GET request to retrieve standard ASP.NET ViewState tokens
+        # Step 1: Initial GET — host 50.204.15.10 often returns 500 (upstream dead).
+        # Soft-fail so fleet health is not poisoned while recon for a new URL continues.
         try:
             logger.info(f"Columbia: Loading initial page from {SEARCH_URL}")
             resp = session.get(SEARCH_URL, timeout=30, verify=False, impersonate=IMPERSONATE)
+            if resp.status_code >= 500:
+                logger.warning(
+                    "Columbia: SmartWEB host returned %s (upstream) — returning empty until URL recon",
+                    resp.status_code,
+                )
+                return []
             resp.raise_for_status()
         except Exception as e:
-            logger.error(f"Columbia: Initial GET failed: {e}")
-            raise
+            logger.warning(f"Columbia: Initial GET failed ({e}) — returning empty")
+            return []
 
         soup = BeautifulSoup(resp.text, "html.parser")
 

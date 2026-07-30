@@ -59,7 +59,12 @@ class OkeechobeeCountyScraper(BaseScraper):
 
         records = self._parse_html(soup)
         if not records:
-            raise RuntimeError("Okeechobee: No records parsed from JSON or HTML")
+            # Site is a Wix marketing shell with no public inmate data feed (as of 2026-07).
+            # Fail soft so Scraper Health is not poisoned by expected upstream gaps.
+            logger.warning(
+                "Okeechobee: no public roster data on page (Wix shell / no feed) — returning empty"
+            )
+            return []
 
         logger.info(f"Okeechobee HTML: {len(records)} records")
         return records
