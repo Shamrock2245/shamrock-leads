@@ -755,15 +755,15 @@ const SLReports = (() => {
           const when = r.createdTime ? new Date(r.createdTime).toLocaleString() : '—';
           const label = escHtml(r.name || 'Unnamed Report');
           const link = escHtml(r.webViewLink || '#');
-          return \`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:rgba(15,23,42,.5);border:1px solid rgba(255,255,255,.06);border-radius:8px;font-size:12px">
+          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:rgba(15,23,42,.5);border:1px solid rgba(255,255,255,.06);border-radius:8px;font-size:12px">
             <div style="min-width:0">
               <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">\${label}</div>
               <div style="color:var(--muted);font-size:11px">\${escHtml(when)}</div>
             </div>
             <a href="\${link}" target="_blank" class="sl-btn sl-btn-secondary" style="font-size:11px;padding:3px 8px;flex-shrink:0;text-decoration:none;">🔗 Open in Drive</a>
-          </div>\`;
+          </div>`;
         }).join('')}
-      </div>\`;
+      </div>`;
   }
 
   async function downloadGenerated(id) {

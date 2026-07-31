@@ -1409,7 +1409,7 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
   a.click();
   setTimeout(() => a.remove(), 500);
   toast(`💬 SMS app opened for ${displayPhone}`, 'info');
-}
+};
 
 /* ══════════════════════════════════════════════════════════════════
    KANBAN BOARD — Bond Portfolio View
