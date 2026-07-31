@@ -45,10 +45,10 @@ function _abFtaBadge(b) {
   const score = b.fta_risk_score;
   if (!lvl || score == null) return '—';
   const colors = { critical: '#ff4444', high: '#ff8800', moderate: '#ffcc00', low: '#44bb44', disqualified: '#888' };
-  const icons  = { critical: '🔴', high: '🟠', moderate: '🟡', low: '🟢', disqualified: '⛔' };
+  const icons = { critical: '🔴', high: '🟠', moderate: '🟡', low: '🟢', disqualified: '⛔' };
   const clr = colors[lvl] || '#888';
   const ico = icons[lvl] || '⚪';
-  return `<span class="fta-badge" style="background:${clr}22;color:${clr};border:1px solid ${clr}44;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;white-space:nowrap;cursor:help" title="FTA Risk: ${lvl} (${score}/100) | Confidence: ${b.fta_risk_confidence != null ? (b.fta_risk_confidence * 100).toFixed(0) + '%' : 'N/A'}">${ico} ${lvl.charAt(0).toUpperCase()+lvl.slice(1)} <span style="opacity:0.7;font-size:9px">${score}</span></span>`;
+  return `<span class="fta-badge" style="background:${clr}22;color:${clr};border:1px solid ${clr}44;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;white-space:nowrap;cursor:help" title="FTA Risk: ${lvl} (${score}/100) | Confidence: ${b.fta_risk_confidence != null ? (b.fta_risk_confidence * 100).toFixed(0) + '%' : 'N/A'}">${ico} ${lvl.charAt(0).toUpperCase() + lvl.slice(1)} <span style="opacity:0.7;font-size:9px">${score}</span></span>`;
 }
 
 /* ── State ────────────────────────────────────────────────────────── */
@@ -73,9 +73,9 @@ async function loadActiveBonds() {
     window._abBonds = _abBonds;   // expose for sl-active-bonds-ext.js override
 
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('abKpiTotal',    (data.total || _abBonds.length).toLocaleString());
-    set('abKpiAlerts',   (data.alerts || _abBonds.filter(b => (b.alert_count || (b.alerts||[]).length) > 0).length).toLocaleString());
-    set('abKpiHighRisk', (data.high_risk || _abBonds.filter(b => (b.risk_score||0) >= 70).length).toLocaleString());
+    set('abKpiTotal', (data.total || _abBonds.length).toLocaleString());
+    set('abKpiAlerts', (data.alerts || _abBonds.filter(b => (b.alert_count || (b.alerts || []).length) > 0).length).toLocaleString());
+    set('abKpiHighRisk', (data.high_risk || _abBonds.filter(b => (b.risk_score || 0) >= 70).length).toLocaleString());
     set('activeBondsBadge', data.total || _abBonds.length);
 
     const today = new Date().toISOString().slice(0, 10);
@@ -98,7 +98,7 @@ async function loadActiveBonds() {
 /* ── Feature B: CSV Export ─────────────────────────────── */
 function exportActiveBondsCSV() {
   if (!_abBonds.length) { toast('No bonds to export', 'error'); return; }
-  const headers = ['Defendant','Booking #','County','Bond Amount','Premium','Surety','POA #','Court Date','Days Until Court','Indemnitor','Indemnitor Phone','Status','Risk Score','Last Check-In','Charges'];
+  const headers = ['Defendant', 'Booking #', 'County', 'Bond Amount', 'Premium', 'Surety', 'POA #', 'Court Date', 'Days Until Court', 'Indemnitor', 'Indemnitor Phone', 'Status', 'Risk Score', 'Last Check-In', 'Charges'];
   const rows = _abBonds.map(b => {
     const cd = b.court_date ? new Date(b.court_date) : null;
     const daysUntil = cd ? Math.ceil((cd - new Date()) / 86400000) : '';
@@ -116,7 +116,7 @@ function exportActiveBondsCSV() {
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = `active-bonds-${new Date().toISOString().slice(0,10)}.csv`;
+  a.href = url; a.download = `active-bonds-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click(); URL.revokeObjectURL(url);
   toast(`Exported ${_abBonds.length} bonds to CSV`, 'success');
 }
@@ -165,10 +165,10 @@ async function _checkPoaStock() {
     } else {
       // Flat surety-keyed format: { osi: { available, assigned, total }, palmetto: {...} }
       sureties = Object.entries(d)
-        .filter(([k]) => !['updated_at','success'].includes(k))
+        .filter(([k]) => !['updated_at', 'success'].includes(k))
         .map(([k, v]) => ({ name: k.toUpperCase(), available: (v && v.available) || 0 }));
     }
-    const lowStock  = sureties.filter(s => s.available > 0 && s.available <= 5);
+    const lowStock = sureties.filter(s => s.available > 0 && s.available <= 5);
     const outOfStock = sureties.filter(s => s.available === 0);
     if (lowStock.length === 0 && outOfStock.length === 0) { banner.style.display = 'none'; return; }
     banner.style.display = 'block';
@@ -186,19 +186,19 @@ async function _checkPoaStock() {
       html += lowStock.map(s => `<div style="color:var(--warning);font-size:12px">⚠️ <strong>${escHtml(s.name)}</strong> — only <strong>${s.available}</strong> POA${s.available !== 1 ? 's' : ''} remaining</div>`).join('');
     }
     banner.innerHTML = html;
-  } catch(e) { /* non-fatal — POA stock check should never break the main view */ }
+  } catch (e) { /* non-fatal — POA stock check should never break the main view */ }
 }
 
 function renderActiveBondsTable() {
   const tbody = document.getElementById('abTableBody');
   if (!tbody) return;
 
-  let filtered = _abFilter === 'all'       ? _abBonds
-    : _abFilter === 'active'     ? _abBonds.filter(b => b.status === 'active')
-    : _abFilter === 'alerts'     ? _abBonds.filter(b => (b.alert_count || (b.alerts||[]).length) > 0)
-    : _abFilter === 'monitoring' ? _abBonds.filter(b => b.status === 'monitoring')
-    : _abFilter === 'exonerated' ? _abBonds.filter(b => b.status === 'exonerated')
-    : _abBonds;
+  let filtered = _abFilter === 'all' ? _abBonds
+    : _abFilter === 'active' ? _abBonds.filter(b => b.status === 'active')
+      : _abFilter === 'alerts' ? _abBonds.filter(b => (b.alert_count || (b.alerts || []).length) > 0)
+        : _abFilter === 'monitoring' ? _abBonds.filter(b => b.status === 'monitoring')
+          : _abFilter === 'exonerated' ? _abBonds.filter(b => b.status === 'exonerated')
+            : _abBonds;
 
   // Search filter
   const searchEl = document.getElementById('abSearch');
@@ -223,11 +223,11 @@ function renderActiveBondsTable() {
   tbody.innerHTML = filtered.map(b => {
     const risk = b.risk_score || 0;
     const rCls = risk >= 75 ? 'score-hot' : risk >= 50 ? 'score-warm' : 'score-cold';
-    const sCls = { alert:'status-offline', active:'status-healthy', monitoring:'status-stale', exonerated:'status-healthy', forfeited:'status-offline', surrendered:'status-stale' }[b.status] || 'status-stale';
+    const sCls = { alert: 'status-offline', active: 'status-healthy', monitoring: 'status-stale', exonerated: 'status-healthy', forfeited: 'status-offline', surrendered: 'status-stale' }[b.status] || 'status-stale';
     const overdue = b.check_in_overdue;
     const hoursOver = b.hours_overdue || 0;
     const lastCI = b.last_check_in ? timeAgo(b.last_check_in) : '<span style="color:var(--danger)">Never</span>';
-    const nextDue = b.next_check_in_due ? new Date(b.next_check_in_due).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
+    const nextDue = b.next_check_in_due ? new Date(b.next_check_in_due).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
     const nextDueStyle = overdue ? 'color:var(--danger);font-weight:700' : '';
     const overdueLabel = overdue ? `<br><span style="color:var(--danger);font-size:10px">⚠️ ${hoursOver}h overdue</span>` : '';
     const chargesRaw = b.charges_raw || b.charges || '';
@@ -252,7 +252,7 @@ function renderActiveBondsTable() {
     if (b.court_date) {
       const cd = new Date(b.court_date);
       const diff = Math.ceil((cd - new Date()) / 86400000);
-      const fullDate = cd.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+      const fullDate = cd.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
       const locationTip = b.court_location ? ` @ ${b.court_location}` : '';
       const tooltip = escHtml(`${fullDate}${locationTip}`);
       let countLabel, countStyle;
@@ -278,9 +278,9 @@ function renderActiveBondsTable() {
         countLabel = `${diff}d`;
         countStyle = 'color:var(--muted)';
       }
-      const dateLabel = cd.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+      const dateLabel = cd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       courtCountdown = `<span title="${tooltip}" style="cursor:help;${countStyle}">${countLabel}</span>`
-        + `<div style="font-size:10px;color:var(--muted)" title="${tooltip}">${dateLabel}${b.court_location ? `<br><span style="font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;display:block" title="${escHtml(b.court_location)}">${escHtml(b.court_location.slice(0,18))}${b.court_location.length>18?'…':''}</span>` : ''}</div>`;
+        + `<div style="font-size:10px;color:var(--muted)" title="${tooltip}">${dateLabel}${b.court_location ? `<br><span style="font-size:9px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:80px;display:block" title="${escHtml(b.court_location)}">${escHtml(b.court_location.slice(0, 18))}${b.court_location.length > 18 ? '…' : ''}</span>` : ''}</div>`;
     }
 
     return `<tr class="${overdue ? 'row-alert' : ''}" style="${overdue ? 'background:rgba(239,68,68,0.05)' : ''}">
@@ -288,13 +288,13 @@ function renderActiveBondsTable() {
         <div style="font-weight:600">${escHtml(b.defendant_name || '—')}${alertBadge}</div>
         <div style="font-size:11px;color:var(--muted)">${escHtml(b.booking_number || '—')}${bookingLink}</div>
       </td>
-      <td>${b.county&&b.county!=='—'?`<span class="county-badge" data-county="${escHtml(b.county)}">${escHtml(b.county)}</span>`:'—'}</td>
+      <td>${b.county && b.county !== '—' ? `<span class="county-badge" data-county="${escHtml(b.county)}">${escHtml(b.county)}</span>` : '—'}</td>
       <td><strong>$${(b.bond_amount || 0).toLocaleString()}</strong></td>
       <td>${insBadge}</td>
       <td style="font-size:11px;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escHtml(indemnitorName)}">
         ${indemnitorName && indemnitorName !== '—'
-          ? `<a href="#" style="color:var(--accent);text-decoration:none" onclick="event.preventDefault();crossLinkToDefendants('${escHtml(indemnitorName).replace(/'/g,"\\'")}')">${escHtml(indemnitorName)}</a>`
-          : '—'}
+        ? `<a href="#" style="color:var(--accent);text-decoration:none" onclick="event.preventDefault();crossLinkToDefendants('${escHtml(indemnitorName).replace(/'/g, "\\'")}')">${escHtml(indemnitorName)}</a>`
+        : '—'}
       </td>
       <td style="font-size:11px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(charges)}</td>
       <td>
@@ -309,22 +309,22 @@ function renderActiveBondsTable() {
       <td><span class="status-badge ${sCls}">${b.status || 'active'}</span></td>
       <td>
         <div class="poa-inline-cell" style="display:flex;align-items:center;gap:4px;min-width:90px">
-          <span class="poa-inline-value" style="font-size:11px;font-weight:600;color:var(--text)" title="${escHtml(b.poa_number||'—')}">${escHtml((b.poa_number||'—').slice(0,12))}</span>
-          <button class="poa-inline-swap-btn" title="Swap POA" style="font-size:10px;padding:1px 5px;background:var(--panel);border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--accent)" onclick="SLKanban&&SLKanban.openPoaSwap(${JSON.stringify(b).replace(/"/g,'&quot;')})">⇄</button>
+          <span class="poa-inline-value" style="font-size:11px;font-weight:600;color:var(--text)" title="${escHtml(b.poa_number || '—')}">${escHtml((b.poa_number || '—').slice(0, 12))}</span>
+          <button class="poa-inline-swap-btn" title="Swap POA" style="font-size:10px;padding:1px 5px;background:var(--panel);border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--accent)" onclick="SLKanban&&SLKanban.openPoaSwap(${JSON.stringify(b).replace(/"/g, '&quot;')})">⇄</button>
         </div>
       </td>
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="window.openEditDrawer('${bkSafe}')">✏️ Edit</button>
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g,'&quot;')})" title="Send SignNow packet (${ins.includes('PALM')||ins.includes('PSC')?'Palmetto':'OSI'} templates)">📝 Docs</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Send SignNow packet (${ins.includes('PALM') || ins.includes('PSC') ? 'Palmetto' : 'OSI'} templates)">📝 Docs</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:var(--danger)" onclick="addManualAlert('${bkSafe}','${nameSafe}')">🚨 Alert</button>
           ${b.status !== 'exonerated' ? `<button class="btn-export" style="font-size:10px;padding:3px 8px;background:#22c55e;color:#fff" onclick="exonerateFromActiveBonds('${bkSafe}','${nameSafe}')">✅ Exonerate</button>` : ''}
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#10b981;color:#fff" onclick="fileBondToDrive('${bkSafe}')">📁 File to Drive</button>
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff" onclick="sendPaymentLink('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💳 Pay Link</button>
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#8b5cf6;color:#fff" onclick="sendBondImessage('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone||b.indemnitor_phone||'')}')">💬 iMessage</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff" onclick="sendPaymentLink('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone || b.indemnitor_phone || '')}')">💳 Pay Link</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#8b5cf6;color:#fff" onclick="sendBondImessage('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone || b.indemnitor_phone || '')}')">💬 iMessage</button>
           <select style="font-size:10px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text)" onchange="updateBondStatus('${bkSafe}',this.value);this.value=''">
             <option value="">Status…</option>
             <option value="active">Active</option>
@@ -359,7 +359,7 @@ function filterActiveBonds(status) {
 /* ══════════════════════════════════════════════════════════════════
    EDIT DRAWER
    ══════════════════════════════════════════════════════════════════ */
-window.openEditDrawer = function(bookingNumber) {
+window.openEditDrawer = function (bookingNumber) {
   const bond = _abBonds.find(b => b.booking_number === bookingNumber);
   if (!bond) { toast('Bond not found', 'error'); return; }
   _abEditingBooking = bookingNumber;
@@ -367,32 +367,32 @@ window.openEditDrawer = function(bookingNumber) {
   if (!document.getElementById('abEditDrawer')) window._buildEditDrawer();
 
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-  set('abEditDefName',       bond.defendant_name);
-  set('abEditDefPhone',      bond.defendant_phone);
-  set('abEditDefAddress',    bond.defendant_address);
-  set('abEditDefDob',        bond.defendant_dob);
-  set('abEditDefEmail',      bond.defendant_email);
-  set('abEditBookingUrl',    bond.booking_page_url);
-  set('abEditCounty',        bond.county);
-  set('abEditFacility',      bond.facility);
-  set('abEditBondAmount',    bond.bond_amount);
-  set('abEditPremium',       bond.premium);
-  set('abEditPOA',           bond.poa_number);
-  set('abEditCaseNum',       bond.case_number);
-  set('abEditCourtDate',     bond.court_date ? String(bond.court_date).substring(0, 10) : '');
+  set('abEditDefName', bond.defendant_name);
+  set('abEditDefPhone', bond.defendant_phone);
+  set('abEditDefAddress', bond.defendant_address);
+  set('abEditDefDob', bond.defendant_dob);
+  set('abEditDefEmail', bond.defendant_email);
+  set('abEditBookingUrl', bond.booking_page_url);
+  set('abEditCounty', bond.county);
+  set('abEditFacility', bond.facility);
+  set('abEditBondAmount', bond.bond_amount);
+  set('abEditPremium', bond.premium);
+  set('abEditPOA', bond.poa_number);
+  set('abEditCaseNum', bond.case_number);
+  set('abEditCourtDate', bond.court_date ? String(bond.court_date).substring(0, 10) : '');
   set('abEditCourtLocation', bond.court_location);
-  set('abEditCharges',       typeof bond.charges === 'string' ? bond.charges : (bond.charges_raw || ''));
-  set('abEditIndemName',     bond.indemnitor?.name || bond.indemnitor_name || '');
-  set('abEditIndemPhone',    bond.indemnitor?.phone || bond.indemnitor_phone || '');
-  set('abEditIndemEmail',    bond.indemnitor?.email || bond.indemnitor_email || '');
-  set('abEditIndemRel',      bond.indemnitor?.relationship || bond.indemnitor_relationship || '');
-  set('abEditRef1Name',      bond.ref1_name);
-  set('abEditRef1Phone',     bond.ref1_phone);
-  set('abEditRef2Name',      bond.ref2_name);
-  set('abEditRef2Phone',     bond.ref2_phone);
-  set('abEditAgentName',     bond.agent_name);
-  set('abEditNotes',         bond.notes);
-  set('abEditCIFreq',        bond.check_in_frequency_days || 30);
+  set('abEditCharges', typeof bond.charges === 'string' ? bond.charges : (bond.charges_raw || ''));
+  set('abEditIndemName', bond.indemnitor?.name || bond.indemnitor_name || '');
+  set('abEditIndemPhone', bond.indemnitor?.phone || bond.indemnitor_phone || '');
+  set('abEditIndemEmail', bond.indemnitor?.email || bond.indemnitor_email || '');
+  set('abEditIndemRel', bond.indemnitor?.relationship || bond.indemnitor_relationship || '');
+  set('abEditRef1Name', bond.ref1_name);
+  set('abEditRef1Phone', bond.ref1_phone);
+  set('abEditRef2Name', bond.ref2_name);
+  set('abEditRef2Phone', bond.ref2_phone);
+  set('abEditAgentName', bond.agent_name);
+  set('abEditNotes', bond.notes);
+  set('abEditCIFreq', bond.check_in_frequency_days || 30);
 
   const ins = document.getElementById('abEditInsurance');
   if (ins) {
@@ -423,13 +423,13 @@ window.openEditDrawer = function(bookingNumber) {
   }
 }
 
-window.closeEditDrawer = function() {
+window.closeEditDrawer = function () {
   document.getElementById('abEditDrawer')?.classList.remove('open');
   document.getElementById('abEditOverlay')?.classList.remove('show');
   _abEditingBooking = null;
 }
 
-window.copyBondToClipboard = function() {
+window.copyBondToClipboard = function () {
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const text = `
 DEFENDANT: ${get('abEditDefName')}
@@ -458,7 +458,7 @@ INDEMNITOR PHONE: ${get('abEditIndemPhone')}
   });
 };
 
-window.saveEditDrawer = async function() {
+window.saveEditDrawer = async function () {
   const booking = window._abEditingBooking;
   if (!booking) return;
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
@@ -530,7 +530,7 @@ function _es(title, fields) {
   return `<div style="margin-bottom:20px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">${title}</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">${fields}</div></div>`;
 }
 
-window._buildEditDrawer = function() {
+window._buildEditDrawer = function () {
   const overlay = document.createElement('div');
   overlay.id = 'abEditOverlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:none;cursor:pointer';
@@ -550,26 +550,26 @@ window._buildEditDrawer = function() {
     </div>
     <div style="flex:1;overflow-y:auto;padding:20px 24px">
       ${_es('Defendant', `
-        ${_ef('abEditDefName','text','Full Name','Last, First Middle')}
-        ${_ef('abEditDefPhone','tel','Phone','+12395550000')}
-        ${_ef('abEditDefDob','text','Date of Birth','MM/DD/YYYY')}
-        ${_ef('abEditDefEmail','email','Email Address','defendant@example.com')}
-        ${_ef('abEditDefAddress','text','Address','Street, City, State, Zip')}
-        ${_ef('abEditBookingUrl','text','Sheriff Booking Link','https://...')}
-        ${_ef('abEditCounty','text','County','e.g. Lee')}
-        ${_ef('abEditFacility','text','Facility','e.g. Lee County Jail')}
+        ${_ef('abEditDefName', 'text', 'Full Name', 'Last, First Middle')}
+        ${_ef('abEditDefPhone', 'tel', 'Phone', '+12395550000')}
+        ${_ef('abEditDefDob', 'text', 'Date of Birth', 'MM/DD/YYYY')}
+        ${_ef('abEditDefEmail', 'email', 'Email Address', 'defendant@example.com')}
+        ${_ef('abEditDefAddress', 'text', 'Address', 'Street, City, State, Zip')}
+        ${_ef('abEditBookingUrl', 'text', 'Sheriff Booking Link', 'https://...')}
+        ${_ef('abEditCounty', 'text', 'County', 'e.g. Lee')}
+        ${_ef('abEditFacility', 'text', 'Facility', 'e.g. Lee County Jail')}
         <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Charges<textarea id="abEditCharges" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:60px;resize:vertical"></textarea></label>
       `)}
       ${_es('Bond Details', `
-        ${_ef('abEditBondAmount','number','Bond Amount ($)','')}
-        ${_ef('abEditPremium','number','Premium ($)','')}
+        ${_ef('abEditBondAmount', 'number', 'Bond Amount ($)', '')}
+        ${_ef('abEditPremium', 'number', 'Premium ($)', '')}
         <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Insurance<select id="abEditInsurance" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"><option value="OSI">🛡️ OSI</option><option value="PALMETTO">🌴 Palmetto</option></select></label>
       `)}
       ${_es('Indemnitor (linked to this case)', `
-        ${_ef('abEditIndemName','text','Name','Full name')}
-        ${_ef('abEditIndemPhone','tel','Phone','+12395550000')}
-        ${_ef('abEditIndemEmail','email','Email','email@example.com')}
-        ${_ef('abEditIndemRel','text','Relationship','e.g. Spouse, Mother, Friend')}
+        ${_ef('abEditIndemName', 'text', 'Name', 'Full name')}
+        ${_ef('abEditIndemPhone', 'tel', 'Phone', '+12395550000')}
+        ${_ef('abEditIndemEmail', 'email', 'Email', 'email@example.com')}
+        ${_ef('abEditIndemRel', 'text', 'Relationship', 'e.g. Spouse, Mother, Friend')}
         <div style="grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#8b5cf6;color:#fff" onclick="SLRelationships&&SLRelationships.findFromEdit('indemnitor')">🔗 All bonds for this indemnitor</button>
           <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px;background:#6366f1;color:#fff" onclick="SLRelationships&&SLRelationships.openGraph(window._abEditBookingNumber)">🕸️ Case relationship map</button>
@@ -578,24 +578,24 @@ window._buildEditDrawer = function() {
         <div id="abFamilyTreePanel" style="grid-column:1/-1;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:8px;background:rgba(16,185,129,.06)"></div>
       `)}
       ${_es('References', `
-        ${_ef('abEditRef1Name','text','Ref 1 Name','Full name')}
-        ${_ef('abEditRef1Phone','tel','Ref 1 Phone','+12395550000')}
-        ${_ef('abEditRef2Name','text','Ref 2 Name','Full name')}
-        ${_ef('abEditRef2Phone','tel','Ref 2 Phone','+12395550000')}
+        ${_ef('abEditRef1Name', 'text', 'Ref 1 Name', 'Full name')}
+        ${_ef('abEditRef1Phone', 'tel', 'Ref 1 Phone', '+12395550000')}
+        ${_ef('abEditRef2Name', 'text', 'Ref 2 Name', 'Full name')}
+        ${_ef('abEditRef2Phone', 'tel', 'Ref 2 Phone', '+12395550000')}
       `)}
       ${_es('System Details', `
-        ${_ef('abEditPOA','text','POA Number','e.g. PSC2 2644680')}
-        ${_ef('abEditCaseNum','text','Case Number','e.g. 24-CF-001234')}
-        ${_ef('abEditCourtDate','date','Court Date','')}
-        ${_ef('abEditCourtLocation','text','Court Location','e.g. Lee County Courthouse')}
-        ${_ef('abEditAgentName','text','Agent Name','e.g. Brendan')}
+        ${_ef('abEditPOA', 'text', 'POA Number', 'e.g. PSC2 2644680')}
+        ${_ef('abEditCaseNum', 'text', 'Case Number', 'e.g. 24-CF-001234')}
+        ${_ef('abEditCourtDate', 'date', 'Court Date', '')}
+        ${_ef('abEditCourtLocation', 'text', 'Court Location', 'e.g. Lee County Courthouse')}
+        ${_ef('abEditAgentName', 'text', 'Agent Name', 'e.g. Brendan')}
       `)}
       ${_es('Notes', `
         <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Internal Notes<textarea id="abEditNotes" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:80px;resize:vertical" placeholder="Internal notes…"></textarea></label>
       `)}
       ${_es('Check-In Settings', `
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abEditCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
-        ${_ef('abEditCIFreq','number','Frequency (days)','30')}
+        ${_ef('abEditCIFreq', 'number', 'Frequency (days)', '30')}
       `)}
       <div style="margin-bottom:20px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid var(--border)">Related Cases (same people)</div>
@@ -633,7 +633,7 @@ window._buildEditDrawer = function() {
 /* ══════════════════════════════════════════════════════════════════
    ADD BOND MODAL
    ══════════════════════════════════════════════════════════════════ */
-window.openAddBondModal = function() {
+window.openAddBondModal = function () {
   if (window.SLRecordBond && typeof window.SLRecordBond.open === 'function') {
     window.SLRecordBond.open();
   } else {
@@ -656,17 +656,17 @@ window.openAddBondModal = function() {
   }
 }
 
-window.closeAddBondModal = function() {
+window.closeAddBondModal = function () {
   const m = document.getElementById('abAddBondModal');
   if (m) { m.classList.remove('active'); m.style.display = 'none'; }
 }
 
-window.submitAddBond = async function() {
+window.submitAddBond = async function () {
   const get = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   const booking = get('abAddBooking');
   const defName = get('abAddDefName');
   if (!booking) { toast('Booking number is required', 'error'); return; }
-  if (!defName)  { toast('Defendant name is required', 'error'); return; }
+  if (!defName) { toast('Defendant name is required', 'error'); return; }
 
   const payload = {
     booking_number: booking,
@@ -722,7 +722,7 @@ window.submitAddBond = async function() {
   }
 }
 
-window._buildAddBondModal = function() {
+window._buildAddBondModal = function () {
   const modal = document.createElement('div');
   modal.id = 'abAddBondModal';
   modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1002;align-items:center;justify-content:center';
@@ -736,42 +736,42 @@ window._buildAddBondModal = function() {
         ${_es('Defendant', `
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Booking # <span style="color:var(--danger)">*</span><input id="abAddBooking" type="text" placeholder="e.g. 2024-00012345" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></label>
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Full Name <span style="color:var(--danger)">*</span><input id="abAddDefName" type="text" placeholder="Last, First Middle" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></label>
-          ${_ef('abAddDefPhone','tel','Phone','+12395550000')}
-          ${_ef('abAddDefDob','text','DOB','MM/DD/YYYY')}
-          ${_ef('abAddDefAddress','text','Address','Street, City, State, Zip')}
-          ${_ef('abAddBookingUrl','text','Sheriff Booking Link','https://...')}
-          ${_ef('abAddRef1Name','text','Ref 1 Name','Full name')}
-          ${_ef('abAddRef1Phone','tel','Ref 1 Phone','+12395550000')}
-          ${_ef('abAddRef2Name','text','Ref 2 Name','Full name')}
-          ${_ef('abAddRef2Phone','tel','Ref 2 Phone','+12395550000')}
-          ${_ef('abAddCounty','text','County','e.g. Lee')}
-          ${_ef('abAddFacility','text','Facility','e.g. Lee County Jail')}
+          ${_ef('abAddDefPhone', 'tel', 'Phone', '+12395550000')}
+          ${_ef('abAddDefDob', 'text', 'DOB', 'MM/DD/YYYY')}
+          ${_ef('abAddDefAddress', 'text', 'Address', 'Street, City, State, Zip')}
+          ${_ef('abAddBookingUrl', 'text', 'Sheriff Booking Link', 'https://...')}
+          ${_ef('abAddRef1Name', 'text', 'Ref 1 Name', 'Full name')}
+          ${_ef('abAddRef1Phone', 'tel', 'Ref 1 Phone', '+12395550000')}
+          ${_ef('abAddRef2Name', 'text', 'Ref 2 Name', 'Full name')}
+          ${_ef('abAddRef2Phone', 'tel', 'Ref 2 Phone', '+12395550000')}
+          ${_ef('abAddCounty', 'text', 'County', 'e.g. Lee')}
+          ${_ef('abAddFacility', 'text', 'Facility', 'e.g. Lee County Jail')}
           <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Charges<textarea id="abAddCharges" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;min-height:60px;resize:vertical" placeholder="Charge descriptions"></textarea></label>
         `)}
         ${_es('Bond Details', `
-          ${_ef('abAddBondAmount','number','Bond Amount ($)','')}
-          ${_ef('abAddPremium','number','Premium ($)','')}
+          ${_ef('abAddBondAmount', 'number', 'Bond Amount ($)', '')}
+          ${_ef('abAddPremium', 'number', 'Premium ($)', '')}
           <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">Insurance<select id="abAddInsurance" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"><option value="OSI">🛡️ OSI</option><option value="PALMETTO">🌴 Palmetto</option></select></label>
-          ${_ef('abAddPOA','text','POA Number','e.g. PSC2 2644680')}
-          ${_ef('abAddCaseNum','text','Case Number','e.g. 24-CF-001234')}
-          ${_ef('abAddCourtDate','date','Court Date','')}
-          ${_ef('abAddCourtLocation','text','Court Location','e.g. Lee County Courthouse')}
-          ${_ef('abAddAgent','text','Agent Name','e.g. Brendan')}
+          ${_ef('abAddPOA', 'text', 'POA Number', 'e.g. PSC2 2644680')}
+          ${_ef('abAddCaseNum', 'text', 'Case Number', 'e.g. 24-CF-001234')}
+          ${_ef('abAddCourtDate', 'date', 'Court Date', '')}
+          ${_ef('abAddCourtLocation', 'text', 'Court Location', 'e.g. Lee County Courthouse')}
+          ${_ef('abAddAgent', 'text', 'Agent Name', 'e.g. Brendan')}
         `)}
         ${_es('Indemnitor', `
-          ${_ef('abAddIndemName','text','Name','Full name')}
-          ${_ef('abAddIndemPhone','tel','Phone','+12395550000')}
-          ${_ef('abAddIndemEmail','email','Email','email@example.com')}
+          ${_ef('abAddIndemName', 'text', 'Name', 'Full name')}
+          ${_ef('abAddIndemPhone', 'tel', 'Phone', '+12395550000')}
+          ${_ef('abAddIndemEmail', 'email', 'Email', 'email@example.com')}
         `)}
         ${_es('References', `
-          ${_ef('abAddRef1Name','text','Ref 1 Name','Full name')}
-          ${_ef('abAddRef1Phone','tel','Ref 1 Phone','+12395550000')}
-          ${_ef('abAddRef2Name','text','Ref 2 Name','Full name')}
-          ${_ef('abAddRef2Phone','tel','Ref 2 Phone','+12395550000')}
+          ${_ef('abAddRef1Name', 'text', 'Ref 1 Name', 'Full name')}
+          ${_ef('abAddRef1Phone', 'tel', 'Ref 1 Phone', '+12395550000')}
+          ${_ef('abAddRef2Name', 'text', 'Ref 2 Name', 'Full name')}
+          ${_ef('abAddRef2Phone', 'tel', 'Ref 2 Phone', '+12395550000')}
         `)}
         ${_es('Check-In', `
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input id="abAddCIRequired" type="checkbox" style="width:16px;height:16px"> Check-In Required</label>
-          ${_ef('abAddCIFreq','number','Frequency (days)','30')}
+          ${_ef('abAddCIFreq', 'number', 'Frequency (days)', '30')}
         `)}
       </div>
       <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel);border-radius:0 0 12px 12px">
@@ -786,7 +786,7 @@ window._buildAddBondModal = function() {
 /* ══════════════════════════════════════════════════════════════════
    LOCATION HISTORY MODAL
    ══════════════════════════════════════════════════════════════════ */
-window.showLocationHistory = async function(bookingNumber, defName) {
+window.showLocationHistory = async function (bookingNumber, defName) {
   const bond = _abBonds.find(b => b.booking_number === bookingNumber);
   let pings = bond?.location_history || [];
   try {
@@ -796,7 +796,7 @@ window.showLocationHistory = async function(bookingNumber, defName) {
       const remote = d.history || d.pings || [];
       if (remote.length > pings.length) pings = remote;
     }
-  } catch {}
+  } catch { }
 
   const name = defName || bond?.defendant_name || bookingNumber;
   let modal = document.getElementById('abLocationModal');
@@ -819,8 +819,8 @@ window.showLocationHistory = async function(bookingNumber, defName) {
       </div>
       <div style="padding:16px 20px;overflow-y:auto">
         ${pings.length === 0
-          ? `<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:32px;margin-bottom:8px">📍</div><div>No location pings recorded yet.</div><button class="btn-export" style="margin-top:12px" onclick="document.getElementById('abLocationModal').style.display='none';openCheckinModal('${bkSafe}','${nameSafe}')">📍 Record First Check-In</button></div>`
-          : `<div class="table-wrap"><table><thead><tr><th>Date/Time</th><th>Address</th><th>Coordinates</th><th>Source</th><th>Notes</th></tr></thead><tbody>${pings.slice().reverse().map(p => `<tr>
+      ? `<div style="text-align:center;padding:32px;color:var(--muted)"><div style="font-size:32px;margin-bottom:8px">📍</div><div>No location pings recorded yet.</div><button class="btn-export" style="margin-top:12px" onclick="document.getElementById('abLocationModal').style.display='none';openCheckinModal('${bkSafe}','${nameSafe}')">📍 Record First Check-In</button></div>`
+      : `<div class="table-wrap"><table><thead><tr><th>Date/Time</th><th>Address</th><th>Coordinates</th><th>Source</th><th>Notes</th></tr></thead><tbody>${pings.slice().reverse().map(p => `<tr>
               <td style="white-space:nowrap">${p.timestamp ? new Date(p.timestamp).toLocaleString() : (p.created_at ? new Date(p.created_at).toLocaleString() : '—')}</td>
               <td>${escHtml(p.address || p.location || p.county || '—')}</td>
               <td>${p.lat && p.lng ? `<a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" style="color:var(--accent)">${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</a>` : '—'}</td>
@@ -842,13 +842,13 @@ window.showLocationHistory = async function(bookingNumber, defName) {
    ══════════════════════════════════════════════════════════════════ */
 let _abCheckinPortalUrl = '';
 
-window.openCheckinModal = function(booking, name) {
+window.openCheckinModal = function (booking, name) {
   _abCheckinBooking = booking;
   _abCheckinName = name;
   _abCheckinPortalUrl = '';
   const nameEl = document.getElementById('abCheckinDefName');
   if (nameEl) nameEl.textContent = `📍 Check-In: ${name}`;
-  ['abCheckinLat','abCheckinLng','abCheckinCounty','abCheckinPhone'].forEach(id => {
+  ['abCheckinLat', 'abCheckinLng', 'abCheckinCounty', 'abCheckinPhone'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   const urlEl = document.getElementById('abCheckinPortalUrl');
@@ -865,7 +865,7 @@ window.openCheckinModal = function(booking, name) {
       _abCheckinPortalUrl = bond.checkin_portal_url;
       if (urlEl) urlEl.textContent = bond.checkin_portal_url;
     }
-  } catch (_) {}
+  } catch (_) { }
   document.getElementById('abCheckinModal')?.classList.add('show');
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(pos => {
@@ -876,7 +876,7 @@ window.openCheckinModal = function(booking, name) {
       const src = document.getElementById('abCheckinSource');
       if (src) src.value = 'gps';
       toast('📍 Staff GPS captured', 'success', 2000);
-    }, () => {});
+    }, () => { });
   }
 }
 
@@ -994,8 +994,8 @@ async function sendBondCheckinLink() {
 
 async function submitCheckin() {
   if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
-  const lat    = parseFloat(document.getElementById('abCheckinLat')?.value);
-  const lng    = parseFloat(document.getElementById('abCheckinLng')?.value);
+  const lat = parseFloat(document.getElementById('abCheckinLat')?.value);
+  const lng = parseFloat(document.getElementById('abCheckinLng')?.value);
   const county = document.getElementById('abCheckinCounty')?.value?.trim() || '';
   const source = document.getElementById('abCheckinSource')?.value || 'manual';
   try {
@@ -1029,10 +1029,10 @@ async function submitCheckin() {
 function showRiskBreakdown(bookingNumber, defName, risk, factorsEncoded) {
   let factors = {};
   try { factors = JSON.parse(decodeURIComponent(factorsEncoded || '{}')); } catch {
-    try { factors = JSON.parse(factorsEncoded || '{}'); } catch {}
+    try { factors = JSON.parse(factorsEncoded || '{}'); } catch { }
   }
   const lines = Object.entries(factors).map(([k, v]) =>
-    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px;color:var(--muted)">${k.replace(/_/g,' ')}</span><span style="font-size:12px;font-weight:600;color:${v > 0 ? 'var(--danger)' : 'var(--accent)'}">${v > 0 ? '+' : ''}${v}</span></div>`
+    `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)"><span style="font-size:12px;color:var(--muted)">${k.replace(/_/g, ' ')}</span><span style="font-size:12px;font-weight:600;color:${v > 0 ? 'var(--danger)' : 'var(--accent)'}">${v > 0 ? '+' : ''}${v}</span></div>`
   ).join('') || '<p style="color:var(--muted);font-size:12px">No factor breakdown available.</p>';
 
   // Look up FTA data from the bond record
@@ -1085,7 +1085,7 @@ function showRiskBreakdown(bookingNumber, defName, risk, factorsEncoded) {
 /* ══════════════════════════════════════════════════════════════════
    MANUAL ALERT
    ══════════════════════════════════════════════════════════════════ */
-window.addManualAlert = async function(booking, name) {
+window.addManualAlert = async function (booking, name) {
   const message = prompt(`Add alert for ${name}:\nDescribe the issue (e.g. "FTA - warrant issued", "Missed court date"):`);
   if (!message) return;
   const severity = confirm('Is this HIGH severity? (OK = High, Cancel = Medium)') ? 'high' : 'medium';
@@ -1133,9 +1133,9 @@ async function updateBondStatus(booking, newStatus) {
 /* ══════════════════════════════════════════════════════════════════
    CROSS-TAB: OPEN IN TRACKING
    ══════════════════════════════════════════════════════════════════ */
-window.openInTracking = function(bookingNumber) {
+window.openInTracking = function (bookingNumber) {
   const trackTab = document.querySelector('[data-tab="tabTracking"]') ||
-                   Array.from(document.querySelectorAll('.tab-btn')).find(b => b.textContent.includes('Tracking'));
+    Array.from(document.querySelectorAll('.tab-btn')).find(b => b.textContent.includes('Tracking'));
   if (trackTab) trackTab.click();
   setTimeout(() => {
     const searchEl = document.getElementById('trkSearch');
@@ -1147,7 +1147,7 @@ window.openInTracking = function(bookingNumber) {
 /* ══════════════════════════════════════════════════════════════════
    EXONERATE
    ══════════════════════════════════════════════════════════════════ */
-window.exonerateFromActiveBonds = async function(bookingNumber, defName) {
+window.exonerateFromActiveBonds = async function (bookingNumber, defName) {
   const note = prompt(
     `✅ Exonerate bond for ${defName}?\n\n` +
     'This will:\n  • Stop all location tracking immediately\n  • Cancel all pending GPS capture links\n  • Cancel all pending court reminders\n\n' +
@@ -1226,11 +1226,11 @@ async function loadReminderStatus() {
     el('crStatus').textContent = `${d.total || 0} total reminders`;
     if (d.next_due) {
       const dt = new Date(d.next_due.send_at);
-      el('crNextDue').innerHTML = `⏰ Next: <strong>${escHtml(d.next_due.defendant_name || '—')}</strong> (${d.next_due.touch}) → ${dt.toLocaleDateString('en-US',{month:'short',day:'numeric'})} at ${dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}`;
+      el('crNextDue').innerHTML = `⏰ Next: <strong>${escHtml(d.next_due.defendant_name || '—')}</strong> (${d.next_due.touch}) → ${dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
     } else {
       el('crNextDue').textContent = 'No pending reminders';
     }
-  } catch(e) { console.warn('Reminder status load error:', e); }
+  } catch (e) { console.warn('Reminder status load error:', e); }
 }
 
 async function runCourtReminderScan() {
@@ -1264,7 +1264,7 @@ async function runCourtReminderScan() {
     } else {
       toast(d.error || 'Scan failed', 'error');
     }
-  } catch(e) {
+  } catch (e) {
     toast('Court scan error: ' + e.message, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '🔄 Scan Now'; }
@@ -1304,7 +1304,7 @@ async function bulkExonerate() {
   try {
     const r = await fetch(`${API}/api/active-bonds/bulk-exonerate`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         booking_numbers: bookings,
         exoneration_type: exType,
@@ -1318,7 +1318,7 @@ async function bulkExonerate() {
     } else {
       toast(d.error || 'Bulk exonerate failed', 'error');
     }
-  } catch(e) {
+  } catch (e) {
     toast('Bulk exonerate error: ' + e.message, 'error');
   }
 }
@@ -1337,13 +1337,13 @@ if (document.readyState === 'loading') {
  * Send SwipeSimple payment link to indemnitor via iMessage.
  * Falls back to copying the link if BB is offline.
  */
-window.sendPaymentLink = async function(bookingNumber, defendantName, phone) {
+window.sendPaymentLink = async function (bookingNumber, defendantName, phone) {
   const paymentLink = window._SWIPESIMPLE_LINK || 'https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd';
   const cleanPhone = (phone || '').replace(/\D/g, '');
 
   if (!cleanPhone) {
     // No phone — just copy the link
-    try { await navigator.clipboard.writeText(paymentLink); } catch(e) { /* ignore */ }
+    try { await navigator.clipboard.writeText(paymentLink); } catch (e) { /* ignore */ }
     toast('No phone on file — payment link copied to clipboard', 'warning');
     return;
   }
@@ -1364,7 +1364,7 @@ window.sendPaymentLink = async function(bookingNumber, defendantName, phone) {
       window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
       toast('BB offline — opened SMS fallback', 'warning');
     }
-  } catch(e) {
+  } catch (e) {
     window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
     toast('Opened SMS fallback', 'warning');
   }
@@ -1375,7 +1375,7 @@ window.sendPaymentLink = async function(bookingNumber, defendantName, phone) {
  * If the iMessage tab is available, switches to it and pre-fills the compose area.
  * Otherwise falls back to sms: link.
  */
-window.sendBondImessage = function(bookingNumber, defendantName, phone) {
+window.sendBondImessage = function (bookingNumber, defendantName, phone) {
   const cleanPhone = (phone || '').replace(/\D/g, '');
   if (!cleanPhone || cleanPhone.length < 10) {
     toast('No valid phone number on file for this bond', 'error');
@@ -1383,7 +1383,7 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
   }
   const digits10 = cleanPhone.slice(-10);
   const formattedPhone = '+1' + digits10;
-  const displayPhone = `(${digits10.slice(0,3)}) ${digits10.slice(3,6)}-${digits10.slice(6)}`;
+  const displayPhone = `(${digits10.slice(0, 3)}) ${digits10.slice(3, 6)}-${digits10.slice(6)}`;
   const defaultMsg = `Hi, this is Shamrock Bail Bonds regarding ${defendantName}'s bond. `;
 
   // Prefer in-app iMessage compose (SLiMessage module)
@@ -1432,20 +1432,20 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
 
   /* ── Constants ──────────────────────────────────────────────────── */
   const COLUMNS = [
-    { status: 'active',      label: 'Active',      icon: '🟢' },
-    { status: 'monitoring',  label: 'Monitoring',  icon: '🔵' },
-    { status: 'alert',       label: 'Alert',       icon: '🔴' },
-    { status: 'exonerated',  label: 'Exonerated',  icon: '✅' },
-    { status: 'forfeited',   label: 'Forfeited',   icon: '❌' },
+    { status: 'active', label: 'Active', icon: '🟢' },
+    { status: 'monitoring', label: 'Monitoring', icon: '🔵' },
+    { status: 'alert', label: 'Alert', icon: '🔴' },
+    { status: 'exonerated', label: 'Exonerated', icon: '✅' },
+    { status: 'forfeited', label: 'Forfeited', icon: '❌' },
     { status: 'surrendered', label: 'Surrendered', icon: '🏳️' },
-    { status: 'reinstated',  label: 'Reinstated',  icon: '🔄' },
+    { status: 'reinstated', label: 'Reinstated', icon: '🔄' },
   ];
 
   /* ── State ──────────────────────────────────────────────────────── */
   let _currentView = 'table';   // 'table' | 'kanban'
-  let _dragCard    = null;      // DOM element being dragged
-  let _dragBond    = null;      // bond object being dragged
-  let _ghost       = null;      // placeholder DOM element
+  let _dragCard = null;      // DOM element being dragged
+  let _dragBond = null;      // bond object being dragged
+  let _ghost = null;      // placeholder DOM element
 
   /* ── DOM helpers ────────────────────────────────────────────────── */
   function qs(sel, root) { return (root || document).querySelector(sel); }
@@ -1538,14 +1538,14 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
       <div class="kb-card-actions">
         <button onclick="openEditDrawer('${escHtml(bond.booking_number)}')">Edit</button>
         <button onclick="openInTracking('${escHtml(bond.booking_number)}')">Track</button>
-        <button onclick="sendBondImessage('${escHtml(bond.booking_number)}','${escHtml(bond.defendant_name)}','${escHtml(bond.indemnitor_phone||'')}')">💬</button>
+        <button onclick="sendBondImessage('${escHtml(bond.booking_number)}','${escHtml(bond.defendant_name)}','${escHtml(bond.indemnitor_phone || '')}')">💬</button>
         <button onclick="SLKanban.loadStatusHistory('${escHtml(bond.booking_number)}')">History</button>
       </div>
     `;
 
     // Drag events
     card.addEventListener('dragstart', (e) => onDragStart(e, bond, card));
-    card.addEventListener('dragend',   onDragEnd);
+    card.addEventListener('dragend', onDragEnd);
 
     // Touch drag fallback
     addTouchDrag(card, bond);
@@ -1649,7 +1649,7 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
         card.classList.add('dragging');
       }
       clone.style.left = (t.clientX - card.offsetWidth / 2) + 'px';
-      clone.style.top  = (t.clientY - 30) + 'px';
+      clone.style.top = (t.clientY - 30) + 'px';
 
       // Highlight target column
       const el = document.elementFromPoint(t.clientX, t.clientY);
@@ -1761,9 +1761,9 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
      ══════════════════════════════════════════════════════════════════ */
   function toggleView(view) {
     _currentView = view;
-    const table  = document.getElementById('abTableWrapper') || qs('.ab-table-wrapper') || qs('#abTable')?.closest('div');
-    const board  = document.getElementById('abKanbanBoard');
-    const btnTable  = document.getElementById('abViewTable');
+    const table = document.getElementById('abTableWrapper') || qs('.ab-table-wrapper') || qs('#abTable')?.closest('div');
+    const board = document.getElementById('abKanbanBoard');
+    const btnTable = document.getElementById('abViewTable');
     const btnKanban = document.getElementById('abViewKanban');
 
     if (!board) return;
@@ -1771,13 +1771,13 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
     if (view === 'kanban') {
       if (table) table.style.display = 'none';
       board.classList.add('visible');
-      if (btnTable)  btnTable.classList.remove('active');
+      if (btnTable) btnTable.classList.remove('active');
       if (btnKanban) btnKanban.classList.add('active');
       render();
     } else {
       if (table) table.style.display = '';
       board.classList.remove('visible');
-      if (btnTable)  btnTable.classList.add('active');
+      if (btnTable) btnTable.classList.add('active');
       if (btnKanban) btnKanban.classList.remove('active');
     }
   }
@@ -1788,7 +1788,7 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
   async function openPoaSwap(bond) {
     // Fetch available POAs for this surety
     const suretyRaw = (bond.insurance_company || bond.surety || 'osi').toLowerCase();
-    const suretyId  = (suretyRaw.includes('palm') || suretyRaw.includes('psc')) ? 'palmetto' : 'osi';
+    const suretyId = (suretyRaw.includes('palm') || suretyRaw.includes('psc')) ? 'palmetto' : 'osi';
 
     let available = [];
     try {
@@ -1822,13 +1822,13 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
     }
 
     const subtitle = document.getElementById('abPoaSwapSubtitle');
-    const list     = document.getElementById('abPoaSwapList');
+    const list = document.getElementById('abPoaSwapList');
     if (subtitle) subtitle.textContent = `${bond.defendant_name} · Current POA: ${bond.poa_number || '(none)'} · Surety: ${suretyId.toUpperCase()}`;
 
     list.innerHTML = available.length === 0
       ? '<p style="color:var(--muted);text-align:center;padding:16px">No available POAs for this surety</p>'
       : available.map(p => `
-          <div class="poa-swap-item" onclick="SLKanban._confirmPoaSwap('${escHtml(bond.booking_number)}','${escHtml(bond.poa_number||'')}','${escHtml(p.poa_number)}','${suretyId}','${escHtml(bond.defendant_name)}')">
+          <div class="poa-swap-item" onclick="SLKanban._confirmPoaSwap('${escHtml(bond.booking_number)}','${escHtml(bond.poa_number || '')}','${escHtml(p.poa_number)}','${suretyId}','${escHtml(bond.defendant_name)}')">
             <div>
               <div class="poa-num">${escHtml(p.poa_number)}</div>
               <div class="poa-meta">${escHtml(p.poa_prefix || suretyId.toUpperCase())} · Added ${fmtDate(p.added_at)}</div>
@@ -1891,7 +1891,7 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
           <div class="tl-transition">${escHtml(h.from_status || '—')} → ${escHtml(h.to_status || '—')}</div>
           <div class="tl-time">${fmtDate(h.timestamp)} ${h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : ''}</div>
           ${h.agent ? `<div class="tl-agent">by ${escHtml(h.agent)}</div>` : ''}
-          ${h.note  ? `<div class="tl-note">"${escHtml(h.note)}"</div>` : ''}
+          ${h.note ? `<div class="tl-note">"${escHtml(h.note)}"</div>` : ''}
         </div>
       `).join('')}</div>`;
 
@@ -1910,9 +1910,9 @@ window.sendBondImessage = function(bookingNumber, defendantName, phone) {
      INIT — wire up view toggle buttons
      ══════════════════════════════════════════════════════════════════ */
   function init() {
-    const btnTable  = document.getElementById('abViewTable');
+    const btnTable = document.getElementById('abViewTable');
     const btnKanban = document.getElementById('abViewKanban');
-    if (btnTable)  btnTable.addEventListener('click',  () => toggleView('table'));
+    if (btnTable) btnTable.addEventListener('click', () => toggleView('table'));
     if (btnKanban) btnKanban.addEventListener('click', () => toggleView('kanban'));
 
     // Re-render kanban whenever bonds are refreshed (if kanban is active)
@@ -1993,7 +1993,7 @@ async function _loadCompliancePanel(bookingNumber) {
     // Check-in row
     const ci = d.check_in || {};
     const ciStatus = !ci.required ? 'N/A' : ci.overdue ? `<span style="color:var(--danger);font-weight:700">Overdue ${ci.hours_overdue}h</span>` : `<span style="color:var(--accent)">${ci.compliance_pct}% (${ci.checkins_90d} in 90d)</span>`;
-    const ciLast = ci.last_checkin ? new Date(ci.last_checkin).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '<span style="color:var(--muted)">Never</span>';
+    const ciLast = ci.last_checkin ? new Date(ci.last_checkin).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '<span style="color:var(--muted)">Never</span>';
 
     // Court row
     const ct = d.court || {};
@@ -2011,8 +2011,8 @@ async function _loadCompliancePanel(bookingNumber) {
     const pay = d.payment || {};
     let payStatus = '—';
     if (pay.status === 'paid') payStatus = `<span style="color:var(--accent)">Paid in Full</span>`;
-    else if (pay.status === 'current') payStatus = `<span style="color:var(--accent)">Current ($${(pay.balance_remaining||0).toLocaleString()} remaining)</span>`;
-    else if (pay.status === 'overdue') payStatus = `<span style="color:var(--danger);font-weight:700">Overdue ${pay.days_overdue}d ($${(pay.balance_remaining||0).toLocaleString()})</span>`;
+    else if (pay.status === 'current') payStatus = `<span style="color:var(--accent)">Current ($${(pay.balance_remaining || 0).toLocaleString()} remaining)</span>`;
+    else if (pay.status === 'overdue') payStatus = `<span style="color:var(--danger);font-weight:700">Overdue ${pay.days_overdue}d ($${(pay.balance_remaining || 0).toLocaleString()})</span>`;
     else payStatus = `<span style="color:var(--muted)">No plan on file</span>`;
 
     panel.innerHTML = `
@@ -2032,14 +2032,14 @@ async function _loadCompliancePanel(bookingNumber) {
         <tr style="border-bottom:1px solid var(--border)">
           <td style="padding:6px 0;color:var(--muted)">⚖️ Court Date</td>
           <td style="padding:6px 0">${courtStatus}</td>
-          <td style="padding:6px 0;color:var(--muted);font-size:11px;text-align:right">${ct.court_date ? new Date(ct.court_date).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</td>
+          <td style="padding:6px 0;color:var(--muted);font-size:11px;text-align:right">${ct.court_date ? new Date(ct.court_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}</td>
         </tr>
         <tr>
           <td style="padding:6px 0;color:var(--muted)">💳 Payment</td>
           <td style="padding:6px 0" colspan="2">${payStatus}</td>
         </tr>
       </table>
-      <div style="margin-top:8px;font-size:10px;color:var(--muted);text-align:right">Updated ${new Date(d.evaluated_at).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}</div>
+      <div style="margin-top:8px;font-size:10px;color:var(--muted);text-align:right">Updated ${new Date(d.evaluated_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</div>
     `;
   } catch (e) {
     panel.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center;padding:8px">Compliance data unavailable</div>`;
@@ -2051,7 +2051,7 @@ async function _loadCompliancePanel(bookingNumber) {
    BOND RENEWAL / RE-WRITE MODAL
    Captira-style: update court date, reason, optional new POA/bond amount
    ══════════════════════════════════════════════════════════════════ */
-window.openRenewBondModal = function(bookingNumber, defendantName) {
+window.openRenewBondModal = function (bookingNumber, defendantName) {
   const bn = bookingNumber || window._abEditBookingNumber || '';
   if (!bn) { toast('No booking number — open from a bond row', 'error'); return; }
 
@@ -2092,7 +2092,7 @@ window.openRenewBondModal = function(bookingNumber, defendantName) {
         <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
           New Court Date *
           <input id="abRenewCourtDate" type="date" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"
-            value="${bond && bond.court_date ? String(bond.court_date).substring(0,10) : ''}">
+            value="${bond && bond.court_date ? String(bond.court_date).substring(0, 10) : ''}">
         </label>
         <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">
           New Court Location (optional)
@@ -2127,12 +2127,12 @@ window.openRenewBondModal = function(bookingNumber, defendantName) {
 }
 
 async function _submitRenewBond(bookingNumber) {
-  const reason    = document.getElementById('abRenewReason')?.value?.trim();
+  const reason = document.getElementById('abRenewReason')?.value?.trim();
   const courtDate = document.getElementById('abRenewCourtDate')?.value?.trim();
-  const courtLoc  = document.getElementById('abRenewCourtLoc')?.value?.trim();
-  const bondAmt   = document.getElementById('abRenewBondAmount')?.value?.trim();
-  const poa       = document.getElementById('abRenewPOA')?.value?.trim();
-  const notes     = document.getElementById('abRenewNotes')?.value?.trim();
+  const courtLoc = document.getElementById('abRenewCourtLoc')?.value?.trim();
+  const bondAmt = document.getElementById('abRenewBondAmount')?.value?.trim();
+  const poa = document.getElementById('abRenewPOA')?.value?.trim();
+  const notes = document.getElementById('abRenewNotes')?.value?.trim();
 
   if (!reason) { toast('Please select a renewal reason', 'error'); return; }
   if (!courtDate) { toast('New court date is required', 'error'); return; }
@@ -2142,9 +2142,9 @@ async function _submitRenewBond(bookingNumber) {
 
   const payload = { renewal_reason: reason, new_court_date: courtDate };
   if (courtLoc) payload.court_location = courtLoc;
-  if (bondAmt)  payload.bond_amount = parseFloat(bondAmt);
-  if (poa)      payload.poa_number = poa;
-  if (notes)    payload.renewal_notes = notes;
+  if (bondAmt) payload.bond_amount = parseFloat(bondAmt);
+  if (poa) payload.poa_number = poa;
+  if (notes) payload.renewal_notes = notes;
 
   try {
     const r = await fetch(`${API}/api/active-bonds/${encodeURIComponent(bookingNumber)}/renew`, {
@@ -2237,7 +2237,7 @@ function openBondFromActiveBond(bond) {
   }
 }
 
-window.fileBondToDrive = async function(bookingNumber) {
+window.fileBondToDrive = async function (bookingNumber) {
   toast('Fetching document from SignNow and uploading to Drive...', 'info');
   try {
     const r = await fetch(`${API}/api/file-to-drive/${encodeURIComponent(bookingNumber)}`, {
@@ -2250,7 +2250,7 @@ window.fileBondToDrive = async function(bookingNumber) {
     } else {
       toast(result.error || 'Failed to file to drive', 'error');
     }
-  } catch(e) {
+  } catch (e) {
     toast('Network error while filing to drive', 'error');
   }
 }
