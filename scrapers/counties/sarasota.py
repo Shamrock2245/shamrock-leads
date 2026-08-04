@@ -435,7 +435,10 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
         )
 
         proxy_url, proxy_source = resolve_residential_proxy(
-            self, sticky_session="fl-sarasota-revize"
+            self,
+            sticky_session="fl-sarasota-revize",
+            require=True,
+            max_ape_attempts=5,
         )
         if proxy_source == "ape":
             try:

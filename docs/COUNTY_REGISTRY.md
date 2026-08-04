@@ -82,9 +82,9 @@
 | 32 | **Putnam** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `putnam.py` | ✅ Active | 180 min | 2026-05-25 |
 | 33 | **Columbia** | P2C HTML | `columbia.py` | ✅ Active | 120 min | 2026-04-27 |
 | 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | 🔴 Upstream 500 (server crash on search POST) | 180 min | 2026-07-24 |
-| 35 | **Marion** | curl_cffi POST btnRecentBookings — jail.marionso.com | `marion.py` | ⚠️ AWS WAF (VPS IP blocked intermittently) | 120 min | 2026-07-24 |
+| 35 | **Marion** | curl_cffi + **required residential** (Warren/Tailscale) — jail.marionso.com AWS WAF | `marion.py` | ✅ Active (residential egress) | 90 min | 2026-08-04 |
 
-> **Note:** Marion is commented out in `main.py`. Scraper file exists and needs validation before re-enabling.
+> **Note:** Marion fails closed without US residential exit (APE Warren / Tailscale SOCKS). Direct VPS IP is always 403.
 
 ---
 

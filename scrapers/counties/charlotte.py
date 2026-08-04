@@ -47,8 +47,12 @@ class CharlotteCountyScraper(BaseScraper):
             wait_past_cloudflare,
         )
 
+        # Fail closed without US residential — VPS IP never clears Revize CF.
         proxy_url, proxy_source = resolve_residential_proxy(
-            self, sticky_session="fl-charlotte"
+            self,
+            sticky_session="fl-charlotte",
+            require=True,
+            max_ape_attempts=5,
         )
         logger.info("[Charlotte] proxy source=%s", proxy_source)
 

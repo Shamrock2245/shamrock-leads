@@ -410,24 +410,39 @@ class AutonomousProxyEngine:
         self._lock = threading.RLock()
 
     def get_next_proxy(
-        self, prefer_residential: bool = True, protocol: str = "socks5"
+        self,
+        prefer_residential: bool = True,
+        protocol: str = "socks5",
+        *,
+        residential_only: bool = False,
+        exclude: Optional[Set[str]] = None,
     ) -> Optional[str]:
         """
         Get next proxy with automatic failover.
 
         When prefer_residential=True: Tailscale → Warren → S5W2C → Stormsia
         When prefer_residential=False: Stormsia first, then others
+
+        ``residential_only=True`` drops Stormsia (public datacenter lists).
+        Use that for Cloudflare / AWS-WAF scrapers that must not fall back
+        to free proxies or the bare VPS IP.
         """
         chain: List[str]
         if prefer_residential:
-            chain = ["tailscale", "warren", "s5w2c", "stormsia"]
+            chain = ["tailscale", "warren", "s5w2c"]
+            if not residential_only:
+                chain.append("stormsia")
         else:
             chain = ["stormsia", "tailscale", "warren", "s5w2c"]
+            if residential_only:
+                chain = ["tailscale", "warren", "s5w2c"]
 
+        skip = set(exclude or ())
         with self._lock:
+            skip |= set(self.failed_proxies)
             for source in chain:
                 proxy = self._proxy_from_source(source, protocol=protocol)
-                if proxy and proxy not in self.failed_proxies:
+                if proxy and proxy not in skip:
                     logger.debug("Using %s proxy", source)
                     return proxy
 
@@ -440,9 +455,20 @@ class AutonomousProxyEngine:
                 from config.tailscale import ts_config
                 if not ts_config.enabled:
                     return None
+                # Prefer full SOCKS5 CONNECT health over bare TCP — port 1080 can
+                # listen (stale ssh -R) while CONNECT returns empty and is unusable.
                 proxy_url = ts_config.imac_socks_url
-                if ts_config._tcp_probe(ts_config._resolve_imac(), ts_config.socks_port, 2.0):
-                    return proxy_url
+                try:
+                    from scrapers.socks_proxy import socks5_connect_ok
+
+                    if socks5_connect_ok(proxy_url, timeout=2.5):
+                        return proxy_url
+                except Exception:
+                    # Fallback: TCP probe only (legacy)
+                    if ts_config._tcp_probe(
+                        ts_config._resolve_imac(), ts_config.socks_port, 2.0
+                    ):
+                        return proxy_url
             except Exception:
                 pass
             return None
@@ -470,7 +496,9 @@ class AutonomousProxyEngine:
 
         return None
 
-    def get_sticky_proxy(self, session_id: str) -> Optional[str]:
+    def get_sticky_proxy(
+        self, session_id: str, *, residential_only: bool = False
+    ) -> Optional[str]:
         """Sticky session via Warren (falls back to next available if Warren down)."""
         if self.warren_enabled and self.warren_manager.is_available():
             proxy = self.warren_manager.get_proxy(
@@ -479,7 +507,58 @@ class AutonomousProxyEngine:
             )
             if proxy and proxy not in self.failed_proxies:
                 return proxy
-        return self.get_next_proxy(prefer_residential=True)
+        return self.get_next_proxy(
+            prefer_residential=True, residential_only=residential_only
+        )
+
+    def get_validated_residential_proxy(
+        self,
+        *,
+        sticky_session_id: Optional[str] = None,
+        max_attempts: int = 5,
+        validate: Optional[Any] = None,
+    ) -> Optional[str]:
+        """
+        Return a proxy that passes ``validate(url) -> bool``.
+
+        Default validate is TCP/SOCKS endpoint reachability only; callers that
+        need true US residential should pass a stronger check (exit-IP org).
+        Rotates through sticky + pool, marking failures.
+        """
+        if validate is None:
+            def validate(url: str) -> bool:  # type: ignore[misc]
+                return bool(url)
+
+        tried: Set[str] = set()
+        for attempt in range(max(1, max_attempts)):
+            proxy: Optional[str] = None
+            if sticky_session_id and attempt == 0:
+                proxy = self.get_sticky_proxy(
+                    sticky_session_id, residential_only=True
+                )
+            if not proxy:
+                # Vary sticky id on later attempts so Warren can mint a new exit
+                if sticky_session_id and attempt > 0:
+                    proxy = self.get_sticky_proxy(
+                        f"{sticky_session_id}-r{attempt}",
+                        residential_only=True,
+                    )
+                if not proxy:
+                    proxy = self.get_next_proxy(
+                        prefer_residential=True,
+                        residential_only=True,
+                        exclude=tried,
+                    )
+            if not proxy or proxy in tried:
+                continue
+            tried.add(proxy)
+            try:
+                if validate(proxy):
+                    return proxy
+            except Exception as exc:
+                logger.debug("residential validate failed for %s: %s", proxy[:48], exc)
+            self.record_failure(proxy)
+        return None
 
     def get_regional_proxy(self, region: str) -> Optional[str]:
         """Regional routing via Warren; falls back to pool if unavailable."""

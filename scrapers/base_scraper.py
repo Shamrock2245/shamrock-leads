@@ -495,19 +495,28 @@ class BaseScraper(ABC):
 
     # ── Autonomous Proxy Engine (APE) Helpers ────────────────────────────────────
     
-    def get_proxy(self, prefer_residential: bool = True) -> Optional[str]:
+    def get_proxy(
+        self,
+        prefer_residential: bool = True,
+        *,
+        residential_only: bool = False,
+    ) -> Optional[str]:
         """
         Get proxy from APE with automatic failover.
-        
+
         Args:
             prefer_residential: Prefer residential proxies (Warren/S5W2C)
-        
+            residential_only: Exclude Stormsia free lists (WAF/CF counties)
+
         Returns:
             Proxy URL or None if all sources fail
         """
         if not self.ape:
             return None
-        return self.ape.get_next_proxy(prefer_residential=prefer_residential)
+        return self.ape.get_next_proxy(
+            prefer_residential=prefer_residential,
+            residential_only=residential_only,
+        )
 
     def get_vendor_headers(self, vendor: str | None = None) -> dict[str, str]:
         """Get tailored HTTP headers for a given JMS vendor or scraper's vendor."""
@@ -515,20 +524,24 @@ class BaseScraper(ABC):
         v_name = vendor or getattr(self, "jms_vendor", None) or getattr(self, "vendor", None) or ""
         return gvh(v_name)
 
-    
-    def get_sticky_proxy(self, session_id: str) -> Optional[str]:
+    def get_sticky_proxy(
+        self, session_id: str, *, residential_only: bool = False
+    ) -> Optional[str]:
         """
         Get proxy with sticky session (same IP for multi-step flows).
-        
+
         Args:
             session_id: Session identifier
-        
+            residential_only: Exclude Stormsia free lists
+
         Returns:
             Proxy URL with sticky routing
         """
         if not self.ape:
             return None
-        return self.ape.get_sticky_proxy(session_id)
+        return self.ape.get_sticky_proxy(
+            session_id, residential_only=residential_only
+        )
     
     def record_proxy_success(self, proxy: str, response_time_ms: float = 0.0):
         """

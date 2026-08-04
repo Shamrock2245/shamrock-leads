@@ -196,13 +196,24 @@ def require_socks_or_raise(proxy_url: Optional[str] = None) -> str:
 
 
 def _office_socks_candidates() -> List[str]:
-    """Ordered list of office SOCKS URLs to try (unique, non-empty)."""
-    candidates = [
+    """Ordered list of office / Tailscale SOCKS URLs to try (unique, non-empty)."""
+    candidates: List[str] = [
         os.environ.get("SCRAPER_SOCKS_PROXY") or "",
         os.environ.get("SOCKS_PROXY") or "",
-        LOCAL_SOCKS,
-        DEFAULT_SOCKS,
     ]
+    # Tailscale mesh → iMac residential SOCKS (replaces fragile ssh -R when up)
+    try:
+        from config.tailscale import ts_config
+
+        if ts_config.enabled:
+            candidates.append(ts_config.imac_socks_url)
+            # Also try raw 100.x IP if hostname differs
+            if ts_config.imac_ip:
+                candidates.append(f"socks5://{ts_config.imac_ip}:{ts_config.socks_port}")
+    except Exception:
+        pass
+    candidates.extend([LOCAL_SOCKS, DEFAULT_SOCKS])
+
     seen = set()
     out: List[str] = []
     for c in candidates:
@@ -214,139 +225,252 @@ def _office_socks_candidates() -> List[str]:
     return out
 
 
+def _is_socks_url(proxy_url: str) -> bool:
+    return (proxy_url or "").lower().startswith(("socks5://", "socks5h://", "socks4://"))
+
+
+def validate_residential_proxy(
+    proxy_url: Optional[str],
+    *,
+    require_residential_exit: bool = True,
+    timeout: float = 15.0,
+) -> Tuple[bool, Dict[str, Any]]:
+    """
+    Health-check a proxy and optionally verify US residential exit IP.
+
+    Returns ``(ok, exit_info)``. For SOCKS, CONNECT must succeed. For HTTP
+    Warren hubs, TCP endpoint + exit-IP org must look residential.
+    """
+    info: Dict[str, Any] = {}
+    if proxy_url is None:
+        # Direct host egress
+        if not require_residential_exit:
+            return True, info
+        try:
+            from scrapers.cf_browser import check_exit_ip
+
+            info = check_exit_ip(None, timeout=timeout, retries=2)
+            return bool(info.get("residential_likely")), info
+        except Exception as exc:
+            return False, {"error": str(exc)}
+
+    normalized = _normalize_playwright_proxy(proxy_url)
+    if _is_socks_url(normalized):
+        if not socks5_connect_ok(normalized, timeout=min(4.0, timeout)):
+            return False, {"error": "socks_connect_failed"}
+        if not require_residential_exit:
+            return True, info
+        try:
+            from scrapers.cf_browser import check_exit_ip
+
+            info = check_exit_ip(normalized, timeout=timeout, retries=2)
+            return bool(info.get("residential_likely")), info
+        except Exception as exc:
+            # CONNECT worked; treat as usable if exit check is flaky
+            logger.warning(
+                "[proxy] SOCKS exit check failed after CONNECT ok: %s — accepting tunnel",
+                exc,
+            )
+            return True, {"error": str(exc), "socks_connect_ok": True}
+
+    # HTTP(S) proxy (Warren hub)
+    if not http_proxy_endpoint_ok(normalized, timeout=min(4.0, timeout)):
+        return False, {"error": "http_endpoint_unreachable"}
+    if not require_residential_exit:
+        return True, info
+    try:
+        from scrapers.cf_browser import check_exit_ip
+
+        info = check_exit_ip(normalized, timeout=timeout, retries=2)
+        return bool(info.get("residential_likely")), info
+    except Exception as exc:
+        return False, {"error": str(exc)}
+
+
 def resolve_residential_proxy(
     scraper: Any = None,
     *,
     prefer_residential: bool = True,
     require: bool = True,
     sticky_session: Optional[str] = None,
+    max_ape_attempts: int = 5,
 ) -> Tuple[Optional[str], str]:
-    """Resolve a proxy for Cloudflare / WAF-protected FL scrapers.
+    """Resolve a proxy for Cloudflare / AWS-WAF-protected scrapers.
 
-    Order:
-      1. Env SOCKS if healthy (ops override)
-      2. APE via ``scraper.get_proxy`` / sticky session (Warren residential preferred)
-      3. Office SOCKS candidates (local + Docker bridge)
+    Never silently returns a Hetzner/datacenter path. Order:
+
+      1. Env SOCKS (ops pin) — CONNECT + residential exit
+      2. APE residential-only pool (Tailscale → Warren → S5W2C), multi-try
+      3. Office / Tailscale SOCKS candidates (CONNECT + exit when possible)
+      4. Direct only if *this host* is already US residential (office Mac)
+
+    Stormsia free lists are **excluded** (datacenter). VPS direct is **excluded**.
 
     Args:
         scraper: Optional BaseScraper instance (uses ``get_proxy`` / APE metrics).
-        prefer_residential: Passed to APE.
+        prefer_residential: Passed to APE (always True effectively for this path).
         require: If True, raise RuntimeError when nothing healthy is available.
-        sticky_session: When set, prefer APE sticky routing for multi-page CF flows.
+        sticky_session: Prefer APE sticky routing for multi-page CF flows.
+        max_ape_attempts: How many APE candidates to try before falling back.
 
     Returns:
-        ``(proxy_url, source)`` where source is ``env_socks`` | ``ape`` | ``office_socks``.
-        proxy_url keeps credentials in URL form for httpx; use
-        :func:`to_playwright_proxy` for Playwright.
+        ``(proxy_url, source)`` where source is
+        ``env_socks`` | ``ape`` | ``office_socks`` | ``tailscale_socks`` | ``direct`` | ``none``.
     """
-    # 1) Explicit env SOCKS — ops pin (only if set)
+    prefer_residential = True  # this resolver is residential-only by design
+    _ = prefer_residential
+
+    # 1) Explicit env SOCKS — ops pin
     env_url = (
         os.environ.get("SCRAPER_SOCKS_PROXY") or os.environ.get("SOCKS_PROXY") or ""
     ).strip()
-    if env_url and socks5_connect_ok(env_url):
-        logger.info("[proxy] using env SOCKS (%s)", env_url.split("@")[-1])
-        return _normalize_playwright_proxy(env_url), "env_socks"
+    if env_url:
+        ok, info = validate_residential_proxy(env_url, require_residential_exit=True)
+        if ok:
+            logger.info(
+                "[proxy] using env SOCKS (%s) ip=%s org=%s",
+                env_url.split("@")[-1],
+                info.get("ip"),
+                info.get("org"),
+            )
+            return _normalize_playwright_proxy(env_url), "env_socks"
+        logger.warning(
+            "[proxy] env SOCKS rejected (%s): %s",
+            env_url.split("@")[-1],
+            info.get("error") or info,
+        )
 
-    # 2) APE (Warren residential preferred)
-    ape_proxy = None
+    # 2) APE residential-only multi-try (Warren sticky + pool)
+    tried: set = set()
     if scraper is not None:
-        try:
-            if sticky_session and hasattr(scraper, "get_sticky_proxy"):
-                ape_proxy = scraper.get_sticky_proxy(sticky_session)
-            if not ape_proxy and hasattr(scraper, "get_proxy"):
-                ape_proxy = scraper.get_proxy(prefer_residential=prefer_residential)
-        except Exception as exc:
-            logger.warning("[proxy] APE get_proxy failed: %s", exc)
+        for attempt in range(max(1, max_ape_attempts)):
             ape_proxy = None
-
-    if ape_proxy:
-        normalized = _normalize_playwright_proxy(ape_proxy)
-        ape_ok = False
-        if normalized.lower().startswith("socks"):
-            ape_ok = socks5_connect_ok(normalized)
-            if not ape_ok:
-                logger.warning(
-                    "[proxy] APE SOCKS failed health check: %s",
-                    normalized.split("@")[-1],
-                )
-        else:
-            # HTTP Warren — hub must be up AND exit must be residential US
-            if not http_proxy_endpoint_ok(normalized):
-                logger.warning(
-                    "[proxy] APE HTTP endpoint unreachable: %s",
-                    normalized.split("@")[-1],
-                )
-            else:
-                try:
-                    from scrapers.cf_browser import check_exit_ip
-
-                    exit_info = check_exit_ip(normalized, timeout=15.0, retries=2)
-                    if exit_info.get("residential_likely"):
-                        ape_ok = True
-                        logger.info(
-                            "[proxy] using APE residential ip=%s org=%s",
-                            exit_info.get("ip"),
-                            exit_info.get("org"),
-                        )
-                    else:
-                        logger.warning(
-                            "[proxy] APE exit not residential (ip=%s org=%s country=%s) — trying fallbacks",
-                            exit_info.get("ip"),
-                            exit_info.get("org"),
-                            exit_info.get("country"),
-                        )
-                except Exception as exc:
-                    logger.warning("[proxy] APE exit check error: %s — trying fallbacks", exc)
-
-        if ape_ok:
-            return normalized, "ape"
-        if hasattr(scraper, "record_proxy_failure"):
             try:
-                scraper.record_proxy_failure(ape_proxy)
-            except Exception:
-                pass
+                if sticky_session and hasattr(scraper, "get_sticky_proxy"):
+                    sid = sticky_session if attempt == 0 else f"{sticky_session}-r{attempt}"
+                    ape_proxy = scraper.get_sticky_proxy(
+                        sid, residential_only=True
+                    )
+                if not ape_proxy and hasattr(scraper, "get_proxy"):
+                    ape_proxy = scraper.get_proxy(
+                        prefer_residential=True, residential_only=True
+                    )
+                # Prefer APE engine multi-validate when present
+                if (
+                    not ape_proxy
+                    and getattr(scraper, "ape", None) is not None
+                    and hasattr(scraper.ape, "get_validated_residential_proxy")
+                ):
+                    ape_proxy = scraper.ape.get_validated_residential_proxy(
+                        sticky_session_id=sticky_session,
+                        max_attempts=1,
+                        validate=lambda u: u not in tried,
+                    )
+            except TypeError:
+                # Older get_sticky_proxy / get_proxy without residential_only kw
+                try:
+                    if sticky_session and hasattr(scraper, "get_sticky_proxy"):
+                        ape_proxy = scraper.get_sticky_proxy(sticky_session)
+                    if not ape_proxy and hasattr(scraper, "get_proxy"):
+                        ape_proxy = scraper.get_proxy(prefer_residential=True)
+                except Exception as exc:
+                    logger.warning("[proxy] APE get_proxy failed: %s", exc)
+                    ape_proxy = None
+            except Exception as exc:
+                logger.warning("[proxy] APE get_proxy failed: %s", exc)
+                ape_proxy = None
 
-    # 3) Office SOCKS candidates (local host + Docker bridge)
+            if not ape_proxy or ape_proxy in tried:
+                continue
+            tried.add(ape_proxy)
+            normalized = _normalize_playwright_proxy(ape_proxy)
+            ok, info = validate_residential_proxy(
+                normalized, require_residential_exit=True
+            )
+            if ok:
+                logger.info(
+                    "[proxy] using APE residential ip=%s org=%s (attempt %d)",
+                    info.get("ip"),
+                    info.get("org"),
+                    attempt + 1,
+                )
+                return normalized, "ape"
+            logger.warning(
+                "[proxy] APE candidate rejected (ip=%s org=%s err=%s) — rotating",
+                info.get("ip"),
+                info.get("org"),
+                info.get("error"),
+            )
+            if hasattr(scraper, "record_proxy_failure"):
+                try:
+                    scraper.record_proxy_failure(ape_proxy)
+                except Exception:
+                    pass
+
+    # 3) Office / Tailscale SOCKS candidates
     for candidate in _office_socks_candidates():
-        if socks5_connect_ok(candidate):
-            logger.info("[proxy] using office SOCKS tunnel (%s)", candidate)
-            return _normalize_playwright_proxy(candidate), "office_socks"
+        if candidate in tried:
+            continue
+        ok, info = validate_residential_proxy(
+            candidate, require_residential_exit=True
+        )
+        if not ok:
+            logger.debug(
+                "[proxy] SOCKS candidate rejected (%s): %s",
+                candidate.split("@")[-1],
+                info.get("error") or info,
+            )
+            continue
+        source = (
+            "tailscale_socks"
+            if ("100." in candidate or "shamrock" in candidate.lower())
+            else "office_socks"
+        )
+        logger.info(
+            "[proxy] using %s (%s) ip=%s org=%s",
+            source,
+            candidate.split("@")[-1],
+            info.get("ip"),
+            info.get("org"),
+        )
+        return _normalize_playwright_proxy(candidate), source
 
-    # 4) Direct egress when this host already has US residential IP
-    #    (office Mac on home ISP — no VPN). Hetzner VPS will fail the
-    #    residential check and must not use this path for CF sites.
+    # 4) Direct only when host itself is US residential (never Hetzner VPS)
     allow_direct = os.environ.get("SCRAPER_ALLOW_DIRECT", "true").strip().lower() in {
         "1", "true", "yes", "on",
     }
     if allow_direct:
-        try:
-            from scrapers.cf_browser import check_exit_ip
-
-            direct = check_exit_ip(None, timeout=12.0, retries=2)
-            if direct.get("residential_likely"):
-                logger.info(
-                    "[proxy] using DIRECT residential egress ip=%s org=%s",
-                    direct.get("ip"),
-                    direct.get("org"),
-                )
-                return None, "direct"
+        ok, info = validate_residential_proxy(None, require_residential_exit=True)
+        if ok:
             logger.info(
-                "[proxy] direct egress not residential (ip=%s org=%s) — skipping",
-                direct.get("ip"),
-                direct.get("org"),
+                "[proxy] using DIRECT residential egress ip=%s org=%s",
+                info.get("ip"),
+                info.get("org"),
             )
-        except Exception as exc:
-            logger.warning("[proxy] direct egress check failed: %s", exc)
+            return None, "direct"
+        logger.info(
+            "[proxy] direct egress not residential (ip=%s org=%s) — refusing VPS IP",
+            info.get("ip"),
+            info.get("org"),
+        )
 
     if require:
         raise RuntimeError(
-            "No healthy residential egress available. "
-            "Tried: env SOCKS, APE/Warren, office tunnels "
-            f"({LOCAL_SOCKS}, {DEFAULT_SOCKS}), and direct residential. "
-            "Fix: (1) disconnect VPN on the office Mac (home ISP only); "
-            "(2) keep Mac Warren node running "
-            "(`launchctl print gui/$(id -u)/com.warren.node` → state=running) "
-            "and WARREN_* env on the VPS scraper host; "
-            "(3) or set SCRAPER_SOCKS_PROXY to a working US residential SOCKS endpoint."
+            "No healthy residential egress available for WAF/CF scrapers. "
+            "Tried: env SOCKS, APE/Warren (residential-only, multi-try), "
+            "Tailscale/office SOCKS, and direct residential. "
+            "VPS datacenter IP is intentionally blocked. "
+            "Fix: (1) ensure Warren hub + mac-office node online "
+            "(WARREN_* env on VPS; `com.warren.node` on iMac); "
+            "(2) restore iMac SOCKS — Tailscale :1080 or ssh -R to VPS :1080 "
+            "with a working CONNECT (not a stale listen); "
+            "(3) or set SCRAPER_SOCKS_PROXY to a US residential SOCKS endpoint."
         )
     return None, "none"
+
+
+def curl_cffi_proxies(proxy_url: Optional[str]) -> Optional[Dict[str, str]]:
+    """Build curl_cffi ``proxies=`` dict from a residential proxy URL."""
+    if not proxy_url:
+        return None
+    return {"http": proxy_url, "https": proxy_url}

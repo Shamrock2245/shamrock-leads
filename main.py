@@ -408,7 +408,7 @@ def register_scrapers(sched):
     sched.register_scraper(VolusiaCountyScraper(), interval_minutes=90)
     sched.register_scraper(BrevardCountyScraper(), interval_minutes=120)
     sched.register_scraper(AlachuaCountyScraper(), interval_minutes=90)
-    # Marion disabled — datacenter IP blocked
+    # Marion re-enabled via Wave 2 below (residential egress required — AWS WAF)
     sched.register_scraper(PutnamCountyScraper(), interval_minutes=180)
 
     # ── Panhandle / NW FL + Miami ─────────────────────────────────────────────

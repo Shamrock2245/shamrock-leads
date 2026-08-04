@@ -55,7 +55,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [x] *partial* — GAS `action=health` success V409; live write-bond smoke still staff-confirm |
 | B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [x] *config* — secret present + CRM `wix_webhook_auth:true`; live Wix post still staff-confirm |
 | B5 | SignNow token env (`SIGNNOW_*`) valid; Phase 1 packet can be sent on a test case | Ops | [x] *2026-07-24* — token valid, 19/19 templates accessible via validate-templates; send-packet needs intake doc (human gate) |
-| B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [ ] *env present* — live pay smoke still open |
+| B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [x] *2026-08-04* — staff-confirmed live; SwipeSimple Retriever shows **Bail Bond Payment - Shamrock Bail Bonds** ACTIVE (74 sales) + school $199/$649 links; site popups surface correct pay links |
 | B7 | Hot lead Slack webhooks (`SLACK_WEBHOOK_*`) deliver | Ops | [x] *config* — webhooks set + CRM `slack:true`; delivery confirmed by ongoing scraper alerts path |
 | B8 | Core county scrapers healthy (no mass auto-disable) | Ops | [x] *2026-07-24* — 233 ok / 7 error; Monroe 80, Hillsborough 7 (not mass-disabled) |
 
