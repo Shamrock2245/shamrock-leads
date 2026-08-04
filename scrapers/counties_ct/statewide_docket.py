@@ -93,6 +93,8 @@ PRIORITY_COURTS = [
 MAX_COURTS_PER_RUN = 12
 MAX_ENTRIES_PER_COURT = 500
 COURT_DELAY_S = 0.8
+# Soft cap so a single run cannot flood M0 (dockets churn daily; retention purges Pending)
+MAX_RECORDS_PER_RUN = int(__import__("os").environ.get("CT_DOCKET_MAX_RECORDS", "4000"))
 
 
 class CTStatewideDockerScraper(BaseScraper):
@@ -142,6 +144,14 @@ class CTStatewideDockerScraper(BaseScraper):
             except Exception as exc:
                 logger.warning("CT %s: scrape failed: %s", court_name, exc)
                 continue
+
+        if len(all_records) > MAX_RECORDS_PER_RUN:
+            logger.info(
+                "  CT Statewide: capping %d → %d records for M0 storage",
+                len(all_records),
+                MAX_RECORDS_PER_RUN,
+            )
+            all_records = all_records[:MAX_RECORDS_PER_RUN]
 
         logger.info(
             "✅ CT Statewide: %d docket entries from %d courts "

@@ -38,15 +38,22 @@ POST_URL = "https://www.ctinmateinfo.state.ct.us/resultsupv.asp"
 DETAIL_BASE = "https://www.ctinmateinfo.state.ct.us/"
 
 # Detail enrichment is optional — list rows already have name/DOB/facility.
-MAX_DETAIL_ENRICH = 40
+MAX_DETAIL_ENRICH = 80
 DETAIL_DELAY_S = 0.2
 LETTER_DELAY_S = 0.35
+# M0 storage guard: never dump the full ~14k statewide sentenced population.
+# Local CCs hold most unsentenced / bondable detainees (actionable bail leads).
+MAX_RECORDS_PER_RUN = int(__import__("os").environ.get("CT_DOC_MAX_RECORDS", "2500"))
+# Facilities that look like local community / CC sites (not long-term CI)
+_CC_HINTS = (" CC", "CORRECTIONAL CENTER", "DETENTION", "LOCKUP", "JAIL")
 
 
 class CTDOCInmateScraper(BaseScraper):
     """Scrapes the CT DOC public inmate information search (statewide)."""
 
     enrich_details: bool = True
+    # When True, only write CC-style facilities + enriched rows (default; saves M0 space)
+    prefer_local_facilities: bool = True
 
     @property
     def county(self) -> str:
@@ -60,6 +67,26 @@ class CTDOCInmateScraper(BaseScraper):
     def scraper_id(self) -> str:
         # Stable id: avoid scraper_ct_ct_doc from state+slug("CT DOC")
         return "scraper_ct_doc"
+
+    @staticmethod
+    def _is_local_facility(facility: str) -> bool:
+        """True for local detention / CC sites (bondable), not long-term CI prisons."""
+        f = (facility or "").upper().strip()
+        if not f:
+            return False
+        # Explicit long-term CI prisons → exclude from prefer_local filter
+        if " CI" in f or f.endswith(" CI") or "CORRECTIONAL INSTITUTION" in f:
+            # Still keep women's York CI as some bondable holds exist — include if "YORK"
+            if "YORK" in f:
+                return True
+            return False
+        if any(h in f for h in _CC_HINTS):
+            return True
+        # Named CCs without the letters " CC" glued oddly
+        for token in ("BRIDGEPORT", "HARTFORD", "NEW HAVEN", "NEW BRITAIN", "GARNER"):
+            if token in f:
+                return True
+        return False
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
@@ -84,6 +111,8 @@ class CTDOCInmateScraper(BaseScraper):
                 rows = self._search_list(session, letter)
                 for row in rows:
                     iid = row["inmate_id"]
+                    if not iid:
+                        continue
                     if iid not in by_id:
                         by_id[iid] = row
                 logger.info(
@@ -100,13 +129,26 @@ class CTDOCInmateScraper(BaseScraper):
             logger.warning("CT DOC: no inmates from letter walk")
             return []
 
+        # Prefer local CC facilities for write (bondable population)
+        if self.prefer_local_facilities:
+            local = {
+                k: v for k, v in by_id.items()
+                if self._is_local_facility(v.get("facility") or "")
+            }
+            if local:
+                logger.info(
+                    "  CT DOC facility filter: %d local / %d total (dropping long-term CI bulk)",
+                    len(local),
+                    len(by_id),
+                )
+                by_id = local
+
         # Optional detail enrichment (bond / offense) on a capped sample
-        enrich_ids = list(by_id.keys())
+        enrich_ids: List[str] = []
         if self.enrich_details and MAX_DETAIL_ENRICH > 0:
-            # Prefer facilities that look like local CCs (bond leads) over long-term CI
             enrich_ids = sorted(
                 by_id.keys(),
-                key=lambda i: (0 if " CC" in (by_id[i].get("facility") or "") else 1, i),
+                key=lambda i: (0 if self._is_local_facility(by_id[i].get("facility") or "") else 1, i),
             )[:MAX_DETAIL_ENRICH]
             for iid in enrich_ids:
                 try:
@@ -117,11 +159,28 @@ class CTDOCInmateScraper(BaseScraper):
                 except Exception as exc:
                     logger.debug("CT DOC detail %s failed: %s", iid, exc)
 
-        records = [self._to_record(row) for row in by_id.values()]
+        # Cap write volume for M0 — prioritize enriched / local / any remaining
+        rows_sorted = sorted(
+            by_id.values(),
+            key=lambda r: (
+                0 if r.get("charges") and r.get("charges") != "Unknown" else 1,
+                0 if self._is_local_facility(r.get("facility") or "") else 1,
+                0 if (r.get("bond") and r.get("bond") not in ("0", "", "0.0")) else 1,
+                r.get("inmate_id") or "",
+            ),
+        )[:MAX_RECORDS_PER_RUN]
+
+        records = []
+        for row in rows_sorted:
+            rec = self._to_record(row)
+            if rec and rec.Booking_Number:
+                records.append(rec)
+
         logger.info(
-            "✅ CT DOC: %d inmate records (enriched %d) in %.1fs",
+            "✅ CT DOC: %d records written (from %d scanned, enriched %d) in %.1fs",
             len(records),
-            len(enrich_ids) if self.enrich_details else 0,
+            len(by_id),
+            len(enrich_ids),
             time.time() - start,
         )
         return records

@@ -257,6 +257,54 @@ async def _execute_purge(dry_run: bool = True) -> dict:
             logger.warning("[Retention] %s purge: %s", cname, exc)
             results[key] = 0
 
+    # Tier 4: Court docket / Pending rows (CT Statewide etc.) > 14 days
+    cutoff_docket_dt = now - timedelta(days=14)
+    r = await arrests_col.delete_many({
+        "status": {"$regex": "^pending$", "$options": "i"},
+        "updated_at": {"$lt": cutoff_docket_dt},
+        "booking_number": {"$nin": protected_list},
+        "bonded": {"$ne": True},
+    })
+    results["tier4_pending_docket_14d"] = r.deleted_count
+
+    # Tier 5: Stale in-custody not re-scraped > 21d + low value
+    cutoff_stale_dt = now - timedelta(days=21)
+    r = await arrests_col.delete_many({
+        "status": {"$regex": "custody|confined|held|sentenced|unsentenced", "$options": "i"},
+        "updated_at": {"$lt": cutoff_stale_dt},
+        "booking_number": {"$nin": protected_list},
+        "bonded": {"$ne": True},
+        "$or": [
+            {"lead_status": {"$in": ["Cold", "Disqualified"]}},
+            {"lead_score": {"$lt": 50}},
+            {"bond_amount": {"$lte": 0}},
+        ],
+    })
+    results["tier5_stale_custody_21d"] = r.deleted_count
+
+    # Emergency: if storage still high, delete oldest non-protected by updated_at
+    try:
+        db_stats = await _get_db_stats()
+        if db_stats.get("usage_pct", 0) >= _ALERT_THRESHOLD_PCT:
+            # Batch delete oldest cold/disqualified
+            cursor = arrests_col.find(
+                {
+                    "lead_status": {"$in": ["Cold", "Disqualified"]},
+                    "booking_number": {"$nin": protected_list},
+                    "bonded": {"$ne": True},
+                },
+                {"_id": 1},
+            ).sort("updated_at", 1).limit(3000)
+            ids = [doc["_id"] async for doc in cursor]
+            if ids:
+                rr = await arrests_col.delete_many({"_id": {"$in": ids}})
+                results["emergency_oldest_cold"] = rr.deleted_count
+            else:
+                results["emergency_oldest_cold"] = 0
+    except Exception as exc:
+        logger.warning("[Retention] emergency oldest purge: %s", exc)
+        results["emergency_oldest_cold"] = 0
+
     results["total_purged"] = sum(v for k, v in results.items() if isinstance(v, int))
     results["purged_at"] = now.isoformat()
     results["protected_booking_numbers"] = len(protected)

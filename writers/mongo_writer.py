@@ -80,12 +80,31 @@ class MongoWriter:
         )
         # Query indexes
         self.arrests.create_index([("county", ASCENDING)], name="idx_county")
+        self.arrests.create_index([("state", ASCENDING)], name="idx_state")
         self.arrests.create_index([("booking_date", DESCENDING)], name="idx_booking_date")
         self.arrests.create_index([("lead_score", DESCENDING)], name="idx_lead_score")
         self.arrests.create_index([("status", ASCENDING)], name="idx_status")
         self.arrests.create_index(
             [("lead_status", ASCENDING), ("county", ASCENDING)],
             name="idx_lead_status_county",
+        )
+        # Retention / "oldest first" eviction indexes (M0 512MB guard)
+        self.arrests.create_index(
+            [("updated_at", ASCENDING)],
+            name="idx_updated_at",
+        )
+        self.arrests.create_index(
+            [("created_at", ASCENDING)],
+            name="idx_created_at",
+        )
+        self.arrests.create_index(
+            [("scraped_at", DESCENDING)],
+            name="idx_scraped_at",
+            sparse=True,
+        )
+        self.arrests.create_index(
+            [("state", ASCENDING), ("lead_status", ASCENDING), ("updated_at", ASCENDING)],
+            name="idx_state_lead_updated",
         )
 
         # Leads collection indexes
@@ -149,16 +168,42 @@ class MongoWriter:
                 "total_records": 0,
                 "new_records": 0,
                 "updated_records": 0,
+                "skipped_invalid": 0,
                 "sheet_name": county,
             }
 
         now = datetime.now(timezone.utc)
         operations = []
-        for record in records:
+        skipped_invalid = 0
+        # Map bulk op index → original record index (after filtering invalids)
+        op_to_record_idx: list[int] = []
+
+        for idx, record in enumerate(records):
+            booking = (record.Booking_Number or "").strip()
+            county_name = (record.County or county or "").strip()
+            state = (record.State or "FL").strip().upper() or "FL"
+            if not booking or not county_name:
+                skipped_invalid += 1
+                logger.debug(
+                    "Skip invalid record (missing booking/county): name=%r county=%r",
+                    getattr(record, "Full_Name", ""),
+                    county_name,
+                )
+                continue
+            # Normalize identity onto the record so writers/downstream agree
+            record.Booking_Number = booking
+            record.County = county_name
+            record.State = state
+
             doc = record.to_mongo_doc()
-            doc["updated_at"] = now  # Track when record was last refreshed
-            # Keep scraped_at in $setOnInsert so discovery timestamp is preserved
-            doc.pop("scraped_at", None)
+            doc["state"] = state
+            doc["county"] = county_name
+            doc["booking_number"] = booking
+            doc["updated_at"] = now  # Track when record was last refreshed (retention signal)
+            doc["last_seen_at"] = now
+            # Refresh scraped_at on every write so live activity KPIs stay honest;
+            # created_at (setOnInsert) remains the original discovery time.
+            doc["scraped_at"] = now.isoformat()
 
             # ── Promote FTA intelligence & charge details fields to top-level for querying ──
             extra = record.extra_data or {}
@@ -176,38 +221,49 @@ class MongoWriter:
                 UpdateOne(
                     {
                         # State-aware natural key — Lee (FL) ≠ Lee (GA) ≠ Lee (SC)
-                        "state": (record.State or "FL"),
-                        "county": record.County,
-                        "booking_number": record.Booking_Number,
+                        "state": state,
+                        "county": county_name,
+                        "booking_number": booking,
                     },
                     {
                         "$set": doc,
                         "$setOnInsert": {
                             "created_at": now,
-                            "scraped_at": now.isoformat(),
                         },
                     },
                     upsert=True,
                 )
             )
+            op_to_record_idx.append(idx)
+
+        if not operations:
+            return {
+                "total_records": 0,
+                "new_records": 0,
+                "updated_records": 0,
+                "skipped_invalid": skipped_invalid,
+                "sheet_name": county,
+            }
 
         result = self.arrests.bulk_write(operations, ordered=False)
 
         # Which input records were genuinely NEW (upserted, not just refreshed)?
-        # bulk_api_result["upserted"] is a list of {"index": <op idx>, "_id": ...}
-        # and operations map 1:1 to `records`, so op index == record index.
-        # BaseScraper uses this to broadcast only new arrests to the SSE feed.
+        # bulk_api_result["upserted"] indexes refer to `operations` order;
+        # map back to original `records` indexes via op_to_record_idx.
         try:
             new_record_indexes = [
-                u["index"] for u in result.bulk_api_result.get("upserted", [])
+                op_to_record_idx[u["index"]]
+                for u in result.bulk_api_result.get("upserted", [])
+                if u.get("index") is not None and u["index"] < len(op_to_record_idx)
             ]
         except Exception:
             new_record_indexes = []
 
         stats = {
-            "total_records": len(records),
+            "total_records": len(operations),
             "new_records": result.upserted_count,
             "updated_records": result.modified_count,
+            "skipped_invalid": skipped_invalid,
             "new_record_indexes": new_record_indexes,
             "sheet_name": county,
         }
@@ -215,7 +271,8 @@ class MongoWriter:
         logger.info(
             f"📝 {county}: {stats['new_records']} new, "
             f"{stats['updated_records']} updated "
-            f"(of {stats['total_records']} total)"
+            f"(of {stats['total_records']} written"
+            f"{f', {skipped_invalid} skipped' if skipped_invalid else ''})"
         )
         return stats
 
@@ -266,12 +323,13 @@ class MongoWriter:
         return list(self.arrests.aggregate(pipeline))
 
     def log_ingestion(
-        self, county: str, stats: Dict[str, Any], error: str = None
+        self, county: str, stats: Dict[str, Any], error: str = None, state: str = None
     ):
-        """Log a scraper run."""
+        """Log a scraper run (include state for multi-state ops)."""
         self.ingestion_log.insert_one({
             "timestamp": datetime.now(timezone.utc),
             "county": county,
+            "state": (state or "FL").upper(),
             "total_records": stats.get("total_records", 0),
             "new_records": stats.get("new_records", 0),
             "updated_records": stats.get("updated_records", 0),

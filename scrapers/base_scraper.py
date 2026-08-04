@@ -692,6 +692,26 @@ class BaseScraper(ABC):
                 "writer_results": [],
             }
 
+            # Drop records that cannot form a Mongo natural key
+            before_filter = len(records)
+            records = [
+                r for r in records
+                if (r.Booking_Number or "").strip() and (r.County or self.county or "").strip()
+            ]
+            if len(records) < before_filter:
+                logger.warning(
+                    "⚠️ %s: dropped %d records missing booking_number/county before write",
+                    self.county,
+                    before_filter - len(records),
+                )
+            # Ensure State is always set for multi-state dedup
+            st = (getattr(self, "state", None) or "FL").upper()
+            for r in records:
+                if not (r.State or "").strip():
+                    r.State = st
+                if not (r.County or "").strip():
+                    r.County = self.county
+
             if writers and records:
                 for writer in writers:
                     try:
