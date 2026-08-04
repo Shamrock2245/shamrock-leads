@@ -712,21 +712,21 @@
 
     </div>
 
-    <!-- ── Detail Drawer (slides in from right) ── -->
-    <div class="prosp-drawer-overlay" id="prospDrawerOverlay" onclick="SLProspective.closeDetail()"></div>
-    <div class="prosp-drawer" id="prospDetailPanel">
-      <div class="prosp-drawer-header">
-        <div id="prospDetailTitle" class="prosp-drawer-title">📋 Lead Detail</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="prosp-drawer-nav" id="prospDrawerPrev" onclick="SLProspective.navDetail(-1)" title="Previous lead">‹</button>
-          <button class="prosp-drawer-nav" id="prospDrawerNext" onclick="SLProspective.navDetail(1)" title="Next lead">›</button>
-          <button class="prosp-drawer-close" onclick="SLProspective.closeDetail()">✕</button>
-        </div>
-      </div>
-      <div id="prospDetailBody" class="prosp-drawer-body"></div>
-    </div>
-
   </div>
+</div>
+
+<!-- ── Detail Drawer (slides in from right) ── -->
+<div class="prosp-drawer-overlay" id="prospDrawerOverlay" onclick="SLProspective.closeDetail()"></div>
+<div class="prosp-drawer" id="prospDetailPanel">
+  <div class="prosp-drawer-header">
+    <div id="prospDetailTitle" class="prosp-drawer-title">📋 Lead Detail</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="prosp-drawer-nav" id="prospDrawerPrev" onclick="SLProspective.navDetail(-1)" title="Previous lead">‹</button>
+      <button class="prosp-drawer-nav" id="prospDrawerNext" onclick="SLProspective.navDetail(1)" title="Next lead">›</button>
+      <button class="prosp-drawer-close" onclick="SLProspective.closeDetail()">✕</button>
+    </div>
+  </div>
+  <div id="prospDetailBody" class="prosp-drawer-body"></div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
