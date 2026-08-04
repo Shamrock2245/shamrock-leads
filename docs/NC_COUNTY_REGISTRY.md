@@ -8,8 +8,8 @@
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| ✅ Registered | **41** | Waves 1–5: platforms + metros + DCN + Pitt + Craven + Randolph |
-| Scheduler / dashboard | **41** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
+| ✅ Registered | **44** | Waves 1–6: + Catawba HTML · Carteret DCN · Caldwell PDF |
+| Scheduler / dashboard | **44** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
 | 🔲 Planned (portal mapped, not built) | ~40 | URL + platform in recon |
 | ⬜ No public web roster / app / VINE | ~45 | Skip or VINE-only until portal appears |
 | First production scrapes | ⏳ | Run via dashboard Multi-State Ops or `python main.py nc_mecklenburg` |
@@ -55,11 +55,11 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Buncombe | ✅ Live | Police-to-Citizen SPA | `buncombecountyso.policetocitizen.com` · browser letter walk |
 | Burke | 🔲 Planned | P2C cloud (Morganton PD?) | **Validate agency scope** |
 | Cabarrus | 🔲 Planned | P2C classic | High conf 200 |
-| Caldwell | 🔲 Planned | PDF roster | DocumentCenter PDF |
+| Caldwell | ✅ Live | Daily PDF | DocumentCenter in-custody PDF · ~150 |
 | Camden | ⬜ No portal | — | VINE / phone |
-| Carteret | 🔲 Planned | Custom | `inmateinfo.carteretcountync.gov` |
+| Carteret | ✅ Live | DCN | `inmateinfo.carteretcountync.gov/inmates` · `dcn_base` |
 | Caswell | ⬜ No portal | — | VINE / phone |
-| Catawba | 🔲 Planned | Custom | `injail.catawbacountync.gov/whosinjail/` |
+| Catawba | ✅ Live | Custom HTML | Who's In Jail table · ~410 + bond/charges |
 | Chatham | 🔲 Planned | OCV web | `chathamsheriff.com/inmateSearch` |
 | Cherokee | 🔲 Planned | DCN? | Port 8080 DCN URL historically; unreachable 2026-07-14 |
 | Chowan | ⬜ No portal | — | VINE / phone |

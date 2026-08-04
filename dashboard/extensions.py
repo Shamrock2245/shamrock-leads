@@ -415,6 +415,10 @@ REGISTERED_COUNTIES = sorted([
     # Wave-5 NC: Craven ArcGIS + Randolph
     "Craven (NC)",
     "Randolph (NC)",
+    # Wave-6 NC mid-market
+    "Caldwell (NC)",
+    "Carteret (NC)",
+    "Catawba (NC)",
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ──
     "Davidson (TN)",
     "Hamilton (TN)",

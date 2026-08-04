@@ -33,14 +33,14 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
 | **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler (Wave 2); legacy `scraper_<county>` IDs |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
-| **NC** | **41** | `scrapers/counties_nc/` | + wave-5 Craven (ArcGIS) + Randolph confined list |
+| **NC** | **44** | `scrapers/counties_nc/` | + wave-6 Catawba HTML · Carteret DCN · Caldwell PDF |
 | **TX** | **15** | `scrapers/counties_tx/` | + wave-4 Cameron, Brazoria, Galveston (Gulf Coast) |
 | **TN** | **9** | `scrapers/counties_tn/` | + wave-3 Williamson, Montgomery, Sumner |
 | **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
 | **CT** | **2** | `scrapers/counties_ct/` | Dockets hardened (~1.6k/run) · DOC A–Z list (~14k) |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **263** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **266** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 

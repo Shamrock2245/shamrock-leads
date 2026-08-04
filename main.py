@@ -280,6 +280,10 @@ from scrapers.counties_nc.richmond import RichmondScraper as NC_RichmondScraper
 from scrapers.counties_nc.pitt import PittScraper as NC_PittScraper
 from scrapers.counties_nc.craven import CravenScraper as NC_CravenScraper
 from scrapers.counties_nc.randolph import RandolphScraper as NC_RandolphScraper
+# Wave-6 NC mid-market
+from scrapers.counties_nc.catawba import CatawbaScraper as NC_CatawbaScraper
+from scrapers.counties_nc.carteret import CarteretScraper as NC_CarteretScraper
+from scrapers.counties_nc.caldwell import CaldwellScraper as NC_CaldwellScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
@@ -630,6 +634,10 @@ def register_scrapers(sched):
     # Wave-5 NC: Craven ArcGIS + Randolph confined list
     sched.register_scraper(NC_CravenScraper(), interval_minutes=90)
     sched.register_scraper(NC_RandolphScraper(), interval_minutes=90)
+    # Wave-6 NC: Catawba HTML + Carteret DCN + Caldwell PDF
+    sched.register_scraper(NC_CatawbaScraper(), interval_minutes=60)
+    sched.register_scraper(NC_CarteretScraper(), interval_minutes=90)
+    sched.register_scraper(NC_CaldwellScraper(), interval_minutes=120)
 
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
