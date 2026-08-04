@@ -1,4 +1,4 @@
-# Shamrock Platform — Ecosystem Production Checklist
+ # Shamrock Platform — Ecosystem Production Checklist
 
 > **Purpose:** Single source of “are we production?” across the whole platform.  
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
