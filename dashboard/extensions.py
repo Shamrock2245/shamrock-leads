@@ -419,6 +419,10 @@ REGISTERED_COUNTIES = sorted([
     "Caldwell (NC)",
     "Carteret (NC)",
     "Catawba (NC)",
+    # Wave-7 NC: OCV + Orange
+    "Chatham (NC)",
+    "Orange (NC)",
+    "Stanly (NC)",
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ──
     "Davidson (TN)",
     "Hamilton (TN)",

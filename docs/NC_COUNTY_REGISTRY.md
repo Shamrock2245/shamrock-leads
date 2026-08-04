@@ -8,8 +8,8 @@
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| ✅ Registered | **44** | Waves 1–6: + Catawba HTML · Carteret DCN · Caldwell PDF |
-| Scheduler / dashboard | **44** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
+| ✅ Registered | **47** | Waves 1–7: + Chatham/Stanly OCV · Orange daily PDF |
+| Scheduler / dashboard | **47** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
 | 🔲 Planned (portal mapped, not built) | ~40 | URL + platform in recon |
 | ⬜ No public web roster / app / VINE | ~45 | Skip or VINE-only until portal appears |
 | First production scrapes | ⏳ | Run via dashboard Multi-State Ops or `python main.py nc_mecklenburg` |
@@ -60,7 +60,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Carteret | ✅ Live | DCN | `inmateinfo.carteretcountync.gov/inmates` · `dcn_base` |
 | Caswell | ⬜ No portal | — | VINE / phone |
 | Catawba | ✅ Live | Custom HTML | Who's In Jail table · ~410 + bond/charges |
-| Chatham | 🔲 Planned | OCV web | `chathamsheriff.com/inmateSearch` |
+| Chatham | ✅ Live | OCV JSON | `myocv.s3…/a104027312/inmates.json` · ~94 |
 | Cherokee | 🔲 Planned | DCN? | Port 8080 DCN URL historically; unreachable 2026-07-14 |
 | Chowan | ⬜ No portal | — | VINE / phone |
 | Clay | ⬜ No portal | — | VINE / phone |
@@ -119,7 +119,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | New Hanover | 🔲 Planned | P2C classic | `p2c.nhcgov.com/p2c/jailinmates.aspx` |
 | Northampton | ⬜ No portal | — | VINE / phone |
 | Onslow | ⚠️ Degraded | P2C + FingerprintJS | `p2c.ocsheriff.com` often sinkhole/timeout; fail closed · app still primary for public |
-| Orange | 🔲 Planned | Custom React | `ocsonc.com/detention/current-detainees` |
+| Orange | ✅ Live | Daily PDF | Wix portal → newest ugd PDF · ~50 + bonds |
 
 ### P–Z
 
@@ -140,7 +140,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Rutherford | 🔲 Planned | Zuercher | `rutherford-so-nc.zuercherportal.com` |
 | Sampson | 🔲 Planned | Southern SW | Prefer SW over legacy DCN IP |
 | Scotland | 🔲 Planned | Southern SW | AgencyID=`ScotlandCoNC` |
-| Stanly | 🔲 Planned | OCV web | `stanlysheriff.us/inmateList` |
+| Stanly | ✅ Live | OCV JSON | `myocv.s3…/a109928001/inmates.json` · ~143 |
 | Stokes | 🔲 Planned | Southern SW | AgencyID=`StokesCoNC` |
 | Surry | 🔲 Planned | Southern SW | AgencyID=`SurryCoNC` |
 | Swain | ⬜ No portal | — | VINE / phone |

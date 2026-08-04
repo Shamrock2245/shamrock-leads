@@ -284,6 +284,10 @@ from scrapers.counties_nc.randolph import RandolphScraper as NC_RandolphScraper
 from scrapers.counties_nc.catawba import CatawbaScraper as NC_CatawbaScraper
 from scrapers.counties_nc.carteret import CarteretScraper as NC_CarteretScraper
 from scrapers.counties_nc.caldwell import CaldwellScraper as NC_CaldwellScraper
+# Wave-7 NC: OCV + Orange PDF
+from scrapers.counties_nc.chatham import ChathamScraper as NC_ChathamScraper
+from scrapers.counties_nc.stanly import StanlyScraper as NC_StanlyScraper
+from scrapers.counties_nc.orange import OrangeScraper as NC_OrangeScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
@@ -638,6 +642,10 @@ def register_scrapers(sched):
     sched.register_scraper(NC_CatawbaScraper(), interval_minutes=60)
     sched.register_scraper(NC_CarteretScraper(), interval_minutes=90)
     sched.register_scraper(NC_CaldwellScraper(), interval_minutes=120)
+    # Wave-7 NC: Chatham/Stanly OCV JSON + Orange daily PDF
+    sched.register_scraper(NC_ChathamScraper(), interval_minutes=60)
+    sched.register_scraper(NC_StanlyScraper(), interval_minutes=60)
+    sched.register_scraper(NC_OrangeScraper(), interval_minutes=120)
 
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
