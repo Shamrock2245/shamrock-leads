@@ -109,6 +109,9 @@ async function loadDefendants() {
           <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track</button>
             <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Bond</button>
           <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Life</button>
+          <button class="btn-detail" style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid rgba(239,68,68,.45)"
+            onclick="event.stopPropagation();SLAdminHygiene&&SLAdminHygiene.deleteFromCard('${bkEscD}','${(l.full_name||'').replace(/'/g,"\\'")}','${(l.county||'').replace(/'/g,"\\'")}','${(l.state||'').replace(/'/g,"\\'")}')"
+            title="Superadmin: permanently delete this lead and related records">🗑️ Delete</button>
         </div>    </div>
       </div>`;
     }).join('') || '<div class="loading">No defendants found</div>';
