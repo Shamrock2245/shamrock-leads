@@ -406,6 +406,15 @@ REGISTERED_COUNTIES = sorted([
     "Buncombe (NC)",
     "Johnston (NC)",
     "Onslow (NC)",
+    # Wave-4 NC: DCN cluster + Pitt
+    "Halifax (NC)",
+    "Lee (NC)",
+    "Moore (NC)",
+    "Pitt (NC)",
+    "Richmond (NC)",
+    # Wave-5 NC: Craven ArcGIS + Randolph
+    "Craven (NC)",
+    "Randolph (NC)",
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ──
     "Davidson (TN)",
     "Hamilton (TN)",
@@ -505,12 +514,19 @@ def registered_county_to_trigger_key(label: str) -> str:
     """Map REGISTERED_COUNTIES label to scheduler trigger key.
 
     FL → bare county (``lee``). Other states → ``sc_lee`` / ``nc_mecklenburg``.
+
+    Special case: ``CT DOC (CT)`` → ``ct_doc`` (slug already starts with ``ct_``;
+    avoid double-prefix ``ct_ct_doc``).
     """
     name, st = parse_registered_county(label)
     slug = _county_slug(name)
     if not st or st == "FL":
         return slug
-    return f"{st.lower()}_{slug}"
+    st_l = st.lower()
+    # If county slug already starts with the state code, don't double-prefix
+    if slug.startswith(f"{st_l}_"):
+        return slug
+    return f"{st_l}_{slug}"
 
 
 def _registered_by_bare() -> dict[str, list[str]]:

@@ -1,21 +1,37 @@
 # Connecticut Scraper Registry
 
-> **Last Updated:** 2026-07-24  
-> **Registered (dashboard):** 2 scrapers — Statewide Criminal Dockets + Statewide DOC Inmate Roster  
-> **Package:** `scrapers/counties_ct/`  
-> **Job IDs:** `scraper_ct_statewide`, `scraper_ct_doc` · CLI: `.venv/bin/python main.py ct_doc`
+> Last updated: 2026-08-04  
+> Palmetto surety footprint · Code: `scrapers/counties_ct/`
 
-## System Architecture
+CT does **not** use a 8-county jail roster model like FL. Primary public sources:
 
-Connecticut criminal justice is unified statewide:
-1. **CT Judicial Branch Criminal Dockets (`statewide_docket.py`)**: Daily court dockets covering all 8 Judicial Districts and Geographical Area courts (Bridgeport, Hartford, New Haven, Waterbury, Stamford, New Britain, Danbury).
-2. **CT Department of Correction Inmate Roster (`ct_doc.py`)**: Real-time inmate lookup covering all CT state correctional centers (Bridgeport CC, Hartford CC, New Haven CC, Corrigan-Radgowski, MacDougall-Walker, York CI, Brooklyn CI).
+| Scraper | Dashboard label | Portal | Status |
+|---------|-----------------|--------|--------|
+| `statewide_docket.py` | `Statewide (CT)` | [Criminal Dockets by Court](https://www.jud2.ct.gov/crdockets/SearchByCourt.aspx) | ✅ Live — ~1.6k docket rows / 12 courts per run |
+| `ct_doc.py` | `CT DOC (CT)` | [CT Inmate Info Search](https://www.ctinmateinfo.state.ct.us/) | ✅ Live — full A–Z list (~14k inmates) + detail sample |
 
----
+## CLI
 
-## Registered & Operational Scrapers
+```bash
+python main.py statewide          # CT criminal dockets (county key: Statewide)
+python main.py "ct doc"           # may need exact scheduler key — prefer dashboard Run
+# Scheduler job IDs typically: scraper_ct_* or bare county names Statewide / CT DOC
+```
 
-| Scraper | Coverage | Package File | Strategy / Target | Status | Notes |
-|---------|----------|--------------|-------------------|--------|-------|
-| **Statewide Criminal Dockets** | All 8 Judicial Districts + GAs | `statewide_docket.py` | https://www.jud2.ct.gov/crdockets/SearchByCourt.aspx | ✅ Live | ASP.NET WebForms; `curl_cffi` TLS impersonation (`chrome124`); extracts daily criminal dockets |
-| **CT DOC Inmates** | All CT Correctional Facilities | `ct_doc.py` | https://www.ctinmateinfo.state.ct.us/ | ✅ Live | `resultsupv.asp` & `detailsupv.asp`; A-Z last-name rotation; extracts inmate #, charges, facility, status, bond amount |
+## Hardening notes (2026-08-04)
+
+### Statewide docket
+- **Requires** `curl_cffi` chrome impersonation (plain `requests` → SSL handshake failure)
+- Form button value is **`Search`** (not Submit)
+- Rotates **12** priority courts per run; full list of 35 in `ALL_COURTS`
+- Skips empty placeholder table rows
+- `MAX_ENTRIES_PER_COURT = 500`
+
+### CT DOC
+- **List-first** A–Z last-name search (Number, Name, DOB, Facility) — primary coverage
+- Optional detail enrichment (bond + controlling offense) capped at 40/run (CC facilities preferred)
+- `County` field is **`CT DOC`** (must match `REGISTERED_COUNTIES`)
+
+## Gaps / non-goals
+- No separate municipal jail scrapers for all 169 towns — DOC + court dockets cover statewide custody/hearings
+- Housing courts omitted from docket list (civil focus)

@@ -33,14 +33,14 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
 | **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler (Wave 2); legacy `scraper_<county>` IDs |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
-| **NC** | **34** | `scrapers/counties_nc/` | + wave-3 Buncombe, Johnston, Onslow |
+| **NC** | **41** | `scrapers/counties_nc/` | + wave-5 Craven (ArcGIS) + Randolph confined list |
 | **TX** | **15** | `scrapers/counties_tx/` | + wave-4 Cameron, Brazoria, Galveston (Gulf Coast) |
 | **TN** | **9** | `scrapers/counties_tn/` | + wave-3 Williamson, Montgomery, Sumner |
 | **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
-| **CT** | **2** | `scrapers/counties_ct/` | Statewide Criminal Dockets + CT DOC Inmate Roster |
+| **CT** | **2** | `scrapers/counties_ct/` | Dockets hardened (~1.6k/run) · DOC A–Z list (~14k) |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **256** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **263** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
 
@@ -143,13 +143,13 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 
 | Item | Status |
 |------|--------|
-| NC wave-1 scrapers **registered** but many still need first successful production scrape | ⏳ Run via Multi-State Ops / scheduler |
+| NC scrapers **registered** (39) but many still need first successful production scrape | ⏳ Run via Multi-State Ops / scheduler; wave-4 DCN list is partial (≤100/page) |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
 | GA remaining counties beyond registered set | ⏳ Recon + wrappers |
 | TN wave-1 (Davidson/Knox live; Shelby TLS) | ⏳ Deepen + Hamilton/Rutherford |
 | TX wave-1 (Bexar/Dallas live; Harris browser) | ⏳ Tarrant/Travis + top-25 |
 | LA wave-1 (Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + EBR/Jefferson |
-| CT / AL / MS | 🔲 Scaffold only — recon waves next |
+| CT dockets + DOC | ✅ Hardened 2026-08-04 — production scrape next |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live 2026-07-23 (frp + BB 1.9.9); keep watchdog |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ Set on VPS 2026-07-23 |
 | Atlas network restriction / rotated Mongo password if ever leaked | Ops |

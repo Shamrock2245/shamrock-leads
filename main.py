@@ -272,6 +272,14 @@ from scrapers.counties_nc.cumberland import CumberlandScraper as NC_CumberlandSc
 from scrapers.counties_nc.buncombe import BuncombeScraper as NC_BuncombeScraper
 from scrapers.counties_nc.johnston import JohnstonScraper as NC_JohnstonScraper
 from scrapers.counties_nc.onslow import OnslowScraper as NC_OnslowScraper
+# Wave-4 NC: DCN cluster + Pitt metro
+from scrapers.counties_nc.moore import MooreScraper as NC_MooreScraper
+from scrapers.counties_nc.lee import LeeScraper as NC_LeeScraper
+from scrapers.counties_nc.halifax import HalifaxScraper as NC_HalifaxScraper
+from scrapers.counties_nc.richmond import RichmondScraper as NC_RichmondScraper
+from scrapers.counties_nc.pitt import PittScraper as NC_PittScraper
+from scrapers.counties_nc.craven import CravenScraper as NC_CravenScraper
+from scrapers.counties_nc.randolph import RandolphScraper as NC_RandolphScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
@@ -613,6 +621,15 @@ def register_scrapers(sched):
     sched.register_scraper(NC_BuncombeScraper(), interval_minutes=90)
     sched.register_scraper(NC_JohnstonScraper(), interval_minutes=60)
     sched.register_scraper(NC_OnslowScraper(), interval_minutes=90)
+    # Wave-4 NC: DCN family (Moore/Lee/Halifax/Richmond) + Pitt metro
+    sched.register_scraper(NC_MooreScraper(), interval_minutes=90)
+    sched.register_scraper(NC_LeeScraper(), interval_minutes=90)
+    sched.register_scraper(NC_HalifaxScraper(), interval_minutes=90)
+    sched.register_scraper(NC_RichmondScraper(), interval_minutes=90)
+    sched.register_scraper(NC_PittScraper(), interval_minutes=60)
+    # Wave-5 NC: Craven ArcGIS + Randolph confined list
+    sched.register_scraper(NC_CravenScraper(), interval_minutes=90)
+    sched.register_scraper(NC_RandolphScraper(), interval_minutes=90)
 
     # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)

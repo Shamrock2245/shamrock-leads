@@ -774,14 +774,15 @@ async def api_scraper_health():
                     "state": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
                 },
                 "total_records": {"$sum": 1},
-                "latest_record": {"$max": "$created_at"},
-                "latest_scrape": {"$max": "$scrape_timestamp"},
+                # Prefer live scrape time; fall back to created_at for legacy docs
+                "latest_record": {"$max": {"$ifNull": ["$scraped_at", "$created_at"]}},
+                "latest_scrape": {"$max": {"$ifNull": ["$scraped_at", "$scrape_timestamp"]}},
                 "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
                 "max_bond": {"$max": "$bond_amount"},
                 "total_bond": {"$sum": "$bond_amount"},
                 "in_custody": {"$sum": {"$cond": [
                     {"$in": [
-                        {"$toLower": {"$ifNull": ["$custody_status", ""]}},
+                        {"$toLower": {"$ifNull": ["$custody_status", {"$ifNull": ["$status", ""]}]}},
                         ["in custody", "in-custody", "incustody", "confined", "held", "booked"],
                     ]},
                     1, 0,
@@ -802,8 +803,14 @@ async def api_scraper_health():
             results_map[county_label(bare, st)] = r
 
         counts_24h: dict[str, int] = {}
+        h24_iso = h24_ago.isoformat()
         async for r in arrests.aggregate([
-            {"$match": {"created_at": {"$gte": h24_ago}}},
+            {"$match": {"$or": [
+                {"scraped_at": {"$gte": h24_ago}},
+                {"scraped_at": {"$gte": h24_iso}},
+                {"created_at": {"$gte": h24_ago}},
+                {"created_at": {"$gte": h24_iso}},
+            ]}},
             {"$group": {
                 "_id": {
                     "county": "$county",

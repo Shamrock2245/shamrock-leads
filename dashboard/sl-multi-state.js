@@ -64,6 +64,7 @@ const SLMultiState = (() => {
     'Kologik':       '#eab308',
     'SmartCOP':      '#14b8a6',
     'SmartWeb':      '#a78bfa',
+    'DCN':           '#22d3ee',
     'Custom HTML':   '#94a3b8',
   };
 
@@ -115,10 +116,11 @@ const SLMultiState = (() => {
 
   function _startAutoRefresh() {
     if (_feedTimer) clearInterval(_feedTimer);
+    // 12s while tab is active so state KPIs / live feed track production
     _feedTimer = setInterval(() => {
       const tab = document.getElementById('tabMultiState');
       if (tab && tab.classList.contains('active')) _refresh();
-    }, 30000);
+    }, 12000);
   }
 
   // ─── SHELL ────────────────────────────────────────────────────────────────
@@ -131,7 +133,7 @@ const SLMultiState = (() => {
           <span class="ms-title-icon">🌎</span>
           <div>
             <h2 class="ms-title-text">Multi-State Operations</h2>
-            <p class="ms-title-sub">Live scraper network across 10 states &mdash; FL (67 counties), GA, SC, NC, TN, TX, LA, CT, AL &amp; MS</p>
+            <p class="ms-title-sub" id="msTitleSub">Live scraper network across FL · GA · SC · NC · TN · TX · LA · CT · AL · MS</p>
           </div>
         </div>
         <div class="ms-header-actions">
@@ -233,15 +235,36 @@ const SLMultiState = (() => {
   // ─── STATE SUMMARY CARDS ──────────────────────────────────────────────────
   async function _loadStateSummary() {
     try {
-      const res = await fetch('/api/ops/state-summary');
+      const res = await fetch('/api/ops/state-summary', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      _renderStateCards(data.states);
-      _renderStateChart(data.states);
-      _renderArrestsChart(data.states);
+      _renderStateCards(data.states || {});
+      _renderStateChart(data.states || {});
+      _renderArrestsChart(data.states || {});
+      _updateFleetSubtitle(data);
     } catch (e) {
       console.error('[SLMultiState] state-summary error:', e);
     }
+  }
+
+  function _updateFleetSubtitle(data) {
+    const el = document.getElementById('msTitleSub');
+    if (!el) return;
+    const fleet = data.fleet || {};
+    const states = data.states || {};
+    const parts = STATE_ORDER
+      .filter(s => (states[s]?.total_counties || 0) > 0)
+      .map(s => `${s} ${states[s].total_counties}`);
+    const total = fleet.total_registered
+      || Object.values(states).reduce((n, s) => n + (s.total_counties || 0), 0);
+    const active = fleet.active != null ? fleet.active : '—';
+    const arrests = fleet.total_arrests != null
+      ? Number(fleet.total_arrests).toLocaleString()
+      : '—';
+    el.innerHTML = `<strong>${total}</strong> registered scrapers`
+      + ` · <span style="color:var(--success,#00d4aa)">${active} active</span>`
+      + ` · ${arrests} arrests in DB`
+      + (parts.length ? ` · ${parts.join(' · ')}` : '');
   }
 
   function _renderStateCards(states) {
@@ -317,8 +340,16 @@ const SLMultiState = (() => {
     const el = document.getElementById('msStateChart');
     if (!el || typeof ApexCharts === 'undefined') return;
     if (_registryChart) { _registryChart.destroy(); _registryChart = null; }
-    const labels = Object.keys(states);
-    const values = labels.map(s => states[s].total_counties || 0);
+    // Prefer fixed STATE_ORDER so chart order is stable across refreshes
+    const labels = STATE_ORDER.filter(s => (states[s]?.total_counties || 0) > 0);
+    Object.keys(states || {}).forEach(s => {
+      if (!labels.includes(s) && (states[s]?.total_counties || 0) > 0) labels.push(s);
+    });
+    const values = labels.map(s => states[s]?.total_counties || 0);
+    if (!values.length || values.every(v => !v)) {
+      el.innerHTML = '<div class="ms-empty" style="padding:40px;text-align:center">No registry data</div>';
+      return;
+    }
     const colors = labels.map(s => STATE_COLORS[s] || '#64748b');
     _registryChart = new ApexCharts(el, {
       chart: { type: 'donut', background: 'transparent', height: 220 },
@@ -386,14 +417,19 @@ const SLMultiState = (() => {
   // ─── REGISTRY TABLE ───────────────────────────────────────────────────────
   async function _loadRegistry() {
     try {
-      const res = await fetch('/api/ops/scraper-registry');
+      const res = await fetch('/api/ops/scraper-registry', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       _registryData = data.scrapers || [];
       _renderRegistry();
       _loadPlatformChart();
       const countEl = document.getElementById('msRegistryCount');
-      if (countEl) countEl.textContent = `${_registryData.length} scrapers`;
+      if (countEl) {
+        const byState = data.by_state || {};
+        const stateBits = Object.keys(byState).sort().map(s => `${s}:${byState[s]}`).join(' ');
+        countEl.textContent = `${_registryData.length} scrapers${stateBits ? ` (${stateBits})` : ''}`;
+        countEl.title = stateBits || '';
+      }
     } catch (e) {
       console.error('[SLMultiState] registry error:', e);
     }
@@ -451,7 +487,7 @@ const SLMultiState = (() => {
   // ─── LIVE FEED ────────────────────────────────────────────────────────────
   async function _loadLiveFeed() {
     try {
-      const res = await fetch('/api/ops/live-feed?limit=60');
+      const res = await fetch('/api/ops/live-feed?limit=60', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       _arrestsData = data.feed || [];
@@ -473,18 +509,30 @@ const SLMultiState = (() => {
       return;
     }
     list.innerHTML = _arrestsData.map(a => {
-      const state = a.state || '??';
+      const state = (a.state || '??').toString().toUpperCase();
       const color = STATE_COLORS[state] || '#64748b';
-      const bail = a.bail_amount ? `$${Number(a.bail_amount).toLocaleString()}` : 'No Bail';
-      const charge = a.charges ? (a.charges.length > 45 ? a.charges.substring(0, 45) + '…' : a.charges) : 'Unknown Charge';
-      const time = _fmtRelative(a.scraped_at);
+      const bondVal = a.bond_amount ?? a.bail_amount ?? 0;
+      const bail = Number(bondVal) > 0
+        ? `$${Number(bondVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+        : 'No Bail';
+      const rawCharge = a.charges || a.Charges || '';
+      const charge = rawCharge
+        ? (rawCharge.length > 45 ? rawCharge.substring(0, 45) + '…' : rawCharge)
+        : 'Unknown Charge';
+      const time = _fmtRelative(a.scraped_at || a.created_at);
+      const name = a.full_name || a.Full_Name || 'Unknown';
+      const county = a.county || a.County || '?';
+      const score = a.lead_score || 0;
+      const scoreBadge = score >= 70
+        ? `<span style="color:#ef4444;font-size:10px;font-weight:700">🔥${score}</span>`
+        : (score >= 40 ? `<span style="color:#f59e0b;font-size:10px">${score}</span>` : '');
       return `
         <div class="ms-feed-item">
           <div class="ms-feed-state-dot" style="background:${color}" title="${state}"></div>
           <div class="ms-feed-content">
-            <div class="ms-feed-name">${a.full_name || 'Unknown'}</div>
+            <div class="ms-feed-name">${name} ${scoreBadge}</div>
             <div class="ms-feed-meta">
-              <span class="ms-feed-county" style="color:${color}">${a.county || '?'}, ${state}</span>
+              <span class="ms-feed-county" style="color:${color}">${county}, ${state}</span>
               <span class="ms-feed-charge">${charge}</span>
             </div>
           </div>

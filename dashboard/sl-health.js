@@ -54,9 +54,14 @@ const SLHealth = (() => {
 
   async function load() {
     try {
-      const res = await fetch('/api/scraper-health');
+      const res = await fetch('/api/scraper-health', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      _data = await res.json();
+      const payload = await res.json();
+      // Endpoint returns a list; guard against error object
+      _data = Array.isArray(payload) ? payload : [];
+      if (!Array.isArray(payload) && payload?.error) {
+        throw new Error(payload.error);
+      }
       _render();
       _updateLastRefresh();
       if (!_initialized) { _initialized = true; _startAutoRefresh(); }
@@ -71,10 +76,11 @@ const SLHealth = (() => {
 
   function _startAutoRefresh() {
     if (_refreshTimer) clearInterval(_refreshTimer);
+    // 15s while tab is visible so KPIs track live scraper runs
     _refreshTimer = setInterval(() => {
       const tab = document.getElementById('tabHealth');
       if (tab && tab.classList.contains('active')) load();
-    }, 60000);
+    }, 15000);
   }
 
   function _updateLastRefresh() {
@@ -113,7 +119,12 @@ const SLHealth = (() => {
         rows = rows.filter(r => r.status === _filter);
       }
     }
-    if (_search) rows = rows.filter(r => (r.county||'').toLowerCase().includes(_search));
+    if (_search) {
+      rows = rows.filter(r => {
+        const blob = `${r.county || ''} ${r.county_label || ''} ${r.state || ''}`.toLowerCase();
+        return blob.includes(_search);
+      });
+    }
     rows.sort((a, b) => {
       let av = a[_sortKey], bv = b[_sortKey];
       if (_sortKey === 'status') { av = _statusCfg(av).order; bv = _statusCfg(bv).order; }
@@ -131,8 +142,25 @@ const SLHealth = (() => {
   function _renderStateBreakdown() {
     const el = document.getElementById('healthStateBreakdown');
     if (!el) return;
-    const STATE_COLORS_H = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
-    const states = ['FL', 'GA', 'SC', 'NC'];
+    const STATE_COLORS_H = {
+      FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6',
+      TN: '#ef4444', TX: '#eab308', LA: '#ec4899', CT: '#06b6d4',
+      AL: '#f97316', MS: '#84cc16',
+    };
+    // Derive order from live data so new states appear automatically
+    const seen = new Set();
+    const states = [];
+    const preferred = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'CT', 'AL', 'MS'];
+    preferred.forEach(st => {
+      if (_data.some(r => (r.state || 'FL').toUpperCase() === st)) {
+        states.push(st);
+        seen.add(st);
+      }
+    });
+    _data.forEach(r => {
+      const st = (r.state || 'FL').toUpperCase();
+      if (!seen.has(st)) { states.push(st); seen.add(st); }
+    });
     const chips = states.map(st => {
       const stRows = _data.filter(r => (r.state || 'FL').toUpperCase() === st);
       if (!stRows.length) return '';
@@ -140,11 +168,12 @@ const SLHealth = (() => {
       const total = stRows.length;
       const records = stRows.reduce((s, r) => s + (r.total_records || 0), 0);
       const hot = stRows.reduce((s, r) => s + (r.hot_leads || 0), 0);
+      const never = stRows.filter(r => r.status === 'never_run').length;
       const color = STATE_COLORS_H[st] || '#64748b';
       return `<div class="health-state-chip" onclick="SLHealth.setFilter('state:${st}',null)" style="cursor:pointer;padding:10px 16px;border-radius:10px;border:1px solid ${color}33;background:${color}11;display:flex;flex-direction:column;gap:4px;min-width:120px;transition:background .2s" onmouseover="this.style.background='${color}22'" onmouseout="this.style.background='${color}11'">
         <div style="font-size:11px;font-weight:700;color:${color};letter-spacing:.08em">${st}</div>
         <div style="font-size:20px;font-weight:800;color:var(--text)">${productive}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/${total}</span></div>
-        <div style="font-size:11px;color:var(--text-muted)">${records.toLocaleString()} in DB · ${hot} hot</div>
+        <div style="font-size:11px;color:var(--text-muted)">${records.toLocaleString()} in DB · ${hot} hot${never ? ` · ${never} pending` : ''}</div>
       </div>`;
     }).filter(Boolean).join('');
     el.innerHTML = chips || '<span style="color:var(--text-muted);font-size:12px">No state data yet</span>';
@@ -221,7 +250,11 @@ const SLHealth = (() => {
       body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">No counties match the current filter.</td></tr>`;
       return;
     }
-    const STATE_COLORS_H = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
+    const STATE_COLORS_H = {
+      FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6',
+      TN: '#ef4444', TX: '#eab308', LA: '#ec4899', CT: '#06b6d4',
+      AL: '#f97316', MS: '#84cc16',
+    };
     body.innerHTML = rows.map(r => {
       const cfg = _statusCfg(r.status);
       const lastRun = _fmtRelative(r.last_run || r.latest_record);
@@ -231,15 +264,17 @@ const SLHealth = (() => {
       const st = (r.state || 'FL').toUpperCase();
       const stColor = STATE_COLORS_H[st] || '#64748b';
       const statePill = `<span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:5px">${st}</span>`;
+      const lastN = r.last_run_records != null ? r.last_run_records : null;
+      const lastNLabel = lastN != null ? ` · last run ${lastN}` : '';
       return `
         <tr class="${hasError ? 'row-error' : ''}" style="${isDisabled ? 'opacity:0.6' : ''}">
-          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}">${r.county}</span>`:'—'}</td>
+          <td>${r.county&&r.county!=='—'?`<span class="county-badge" data-county="${r.county}" title="${r.county_label || r.county}">${r.county}</span>`:'—'}</td>
           <td>${statePill}</td>
           <td>
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
             ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}
           </td>
-          <td>${_fmtNum(r.total_records)}</td>
+          <td title="In DB${lastNLabel}">${_fmtNum(r.total_records)}${lastN != null ? `<div style="font-size:10px;color:var(--text-muted)">last ${lastN}</div>` : ''}</td>
           <td style="color:var(--danger)">${_fmtNum(r.hot_leads)}</td>
           <td style="color:${isNeverRun ? 'var(--text-muted)' : 'inherit'}">${lastRun}</td>
           <td>${_fmtDuration(r.duration_seconds)}</td>

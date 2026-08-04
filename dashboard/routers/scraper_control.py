@@ -144,7 +144,10 @@ async def api_run_all():
         return {
             "ok": True,
             "triggered": len(REGISTERED_COUNTIES),
-            "message": f"Run triggers queued for all {len(REGISTERED_COUNTIES)} counties (FL/GA/SC/NC/TN/TX/LA).",
+            "message": (
+                f"Run triggers queued for all {len(REGISTERED_COUNTIES)} scrapers "
+                f"(FL/GA/SC/NC/TN/TX/LA/CT/AL/MS)."
+            ),
             "requested_at": now.isoformat(),
         }
     except Exception as exc:

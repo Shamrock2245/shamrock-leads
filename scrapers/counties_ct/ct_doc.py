@@ -2,17 +2,28 @@
 Connecticut Department of Correction (CT DOC) Inmate Scraper.
 
 Portal: https://www.ctinmateinfo.state.ct.us/
-Coverage: Statewide CT correctional facilities (Bridgeport CC, Hartford CC, New Haven CC,
-          Corrigan-Radgowski, MacDougall-Walker, York CI, Brooklyn CI, etc.)
-Data: Real-time inmate roster — unsentenced & sentenced inmates, bond amounts, controlling offenses
+Coverage: Statewide CT correctional facilities (Bridgeport CC, Hartford CC,
+          New Haven CC, Corrigan-Radgowski, MacDougall-Walker, York CI, etc.)
 
-Dedup key: Inmate_Number (mapped to Booking_Number)
+Strategy (hardened 2026-08-04):
+  1. Letter A–Z last-name search → parse results **list** (Number, Name, DOB, Facility)
+  2. Optional detail enrichment for a capped sample (bond + controlling offense)
+  3. Dedup by inmate number
+
+List search alone returns hundreds per letter (verified: A≈600, B≈1100, S≈1200).
+Prior detail-only path was too slow (3 prefixes × 100 details) for effective coverage.
+
+Dedup key: Inmate Number → Booking_Number
+Dashboard label: ``CT DOC (CT)``
 """
 from __future__ import annotations
 
 import logging
+import re
+import string
 import time
-from typing import List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+from urllib.parse import urljoin
 
 from curl_cffi import requests
 from bs4 import BeautifulSoup
@@ -26,22 +37,16 @@ SEARCH_URL = "https://www.ctinmateinfo.state.ct.us/"
 POST_URL = "https://www.ctinmateinfo.state.ct.us/resultsupv.asp"
 DETAIL_BASE = "https://www.ctinmateinfo.state.ct.us/"
 
-# Common last name prefixes to rotate through
-LAST_NAME_PREFIXES = [
-    "SM", "JO", "WI", "BR", "DA", "MILL", "GARC", "RODR", "MART",
-    "JOH", "CL", "THO", "JACK", "WHIT", "HARR", "TAYL",
-    "AL", "BA", "CA", "DE", "FL", "GA", "HA", "LE", "MA", "PA", "RE", "SA", "VA"
-]
-
-MAX_PREFIXES_PER_RUN = 3
-MAX_DETAILS_PER_PREFIX = 100
+# Detail enrichment is optional — list rows already have name/DOB/facility.
+MAX_DETAIL_ENRICH = 40
+DETAIL_DELAY_S = 0.2
+LETTER_DELAY_S = 0.35
 
 
 class CTDOCInmateScraper(BaseScraper):
-    """
-    Scrapes the Connecticut Department of Correction inmate roster.
-    Returns ArrestRecord objects for active CT DOC inmates.
-    """
+    """Scrapes the CT DOC public inmate information search (statewide)."""
+
+    enrich_details: bool = True
 
     @property
     def county(self) -> str:
@@ -51,11 +56,13 @@ class CTDOCInmateScraper(BaseScraper):
     def state(self) -> str:
         return "CT"
 
+    @property
+    def scraper_id(self) -> str:
+        # Stable id: avoid scraper_ct_ct_doc from state+slug("CT DOC")
+        return "scraper_ct_doc"
+
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        all_records: List[ArrestRecord] = []
-        seen_inmates: set = set()
-
         session = requests.Session(impersonate="chrome124")
         session.headers.update({
             "User-Agent": (
@@ -65,166 +72,253 @@ class CTDOCInmateScraper(BaseScraper):
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         })
 
-        # Landing request to initialize session cookies
         try:
-            session.get(SEARCH_URL, timeout=15, verify=False)
+            session.get(SEARCH_URL, timeout=20, verify=False)
         except Exception as exc:
-            logger.error(f"CT DOC landing GET failed: {exc}")
+            logger.error("CT DOC landing GET failed: %s", exc)
+            return []
 
-        # Rotate search prefixes by hour
-        import datetime
-        hour = datetime.datetime.now().hour
-        start_idx = (hour % (len(LAST_NAME_PREFIXES) // MAX_PREFIXES_PER_RUN)) * MAX_PREFIXES_PER_RUN
-        prefixes_this_run = LAST_NAME_PREFIXES[start_idx:start_idx + MAX_PREFIXES_PER_RUN]
-        if not prefixes_this_run:
-            prefixes_this_run = LAST_NAME_PREFIXES[:MAX_PREFIXES_PER_RUN]
-
-        for prefix in prefixes_this_run:
+        by_id: Dict[str, dict] = {}
+        for letter in string.ascii_uppercase:
             try:
-                records = self._scrape_prefix(session, prefix, seen_inmates)
-                all_records.extend(records)
-                time.sleep(1.0)
+                rows = self._search_list(session, letter)
+                for row in rows:
+                    iid = row["inmate_id"]
+                    if iid not in by_id:
+                        by_id[iid] = row
+                logger.info(
+                    "  CT DOC '%s': +%d list (unique total %d)",
+                    letter,
+                    len(rows),
+                    len(by_id),
+                )
+                time.sleep(LETTER_DELAY_S)
             except Exception as exc:
-                logger.warning(f"CT DOC prefix '{prefix}' failed: {exc}")
-                continue
+                logger.warning("CT DOC letter '%s' failed: %s", letter, exc)
 
+        if not by_id:
+            logger.warning("CT DOC: no inmates from letter walk")
+            return []
+
+        # Optional detail enrichment (bond / offense) on a capped sample
+        enrich_ids = list(by_id.keys())
+        if self.enrich_details and MAX_DETAIL_ENRICH > 0:
+            # Prefer facilities that look like local CCs (bond leads) over long-term CI
+            enrich_ids = sorted(
+                by_id.keys(),
+                key=lambda i: (0 if " CC" in (by_id[i].get("facility") or "") else 1, i),
+            )[:MAX_DETAIL_ENRICH]
+            for iid in enrich_ids:
+                try:
+                    detail = self._parse_detail(session, iid)
+                    if detail:
+                        by_id[iid].update(detail)
+                    time.sleep(DETAIL_DELAY_S)
+                except Exception as exc:
+                    logger.debug("CT DOC detail %s failed: %s", iid, exc)
+
+        records = [self._to_record(row) for row in by_id.values()]
         logger.info(
-            f"✅ CT DOC: {len(all_records)} inmate records from {len(prefixes_this_run)} "
-            f"prefixes in {time.time() - start:.1f}s"
+            "✅ CT DOC: %d inmate records (enriched %d) in %.1fs",
+            len(records),
+            len(enrich_ids) if self.enrich_details else 0,
+            time.time() - start,
         )
-        return all_records
+        return records
 
-    def _scrape_prefix(
-        self,
-        session: requests.Session,
-        prefix: str,
-        seen: set,
-    ) -> List[ArrestRecord]:
-        """Post search criteria for a last name prefix and fetch inmate details."""
+    def _search_list(self, session: requests.Session, last_prefix: str) -> List[dict]:
         payload = {
             "id_inmt_num": "",
-            "nm_inmt_last": prefix,
+            "nm_inmt_last": last_prefix,
             "nm_inmt_first": "",
             "dt_inmt_birth": "",
             "submit1": "Search All Inmates",
         }
-        try:
-            resp = session.post(POST_URL, data=payload, timeout=30, verify=False)
-            resp.raise_for_status()
-        except Exception as exc:
-            logger.error(f"CT DOC POST '{prefix}' failed: {exc}")
-            return []
-
+        resp = session.post(POST_URL, data=payload, timeout=45, verify=False)
+        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-        detail_links = soup.find_all("a", href=lambda h: h and "details" in str(h))
+        return self._parse_results_table(soup)
 
-        records: List[ArrestRecord] = []
-        count = 0
+    def _parse_results_table(self, soup: BeautifulSoup) -> List[dict]:
+        """Parse Number | Inmate Name | Date of Birth | Facility rows."""
+        out: List[dict] = []
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if len(rows) < 3:
+                continue
+            # Find header row that looks like results
+            header_idx = None
+            for i, tr in enumerate(rows[:5]):
+                texts = [c.get_text(" ", strip=True).lower() for c in tr.find_all(["td", "th"])]
+                joined = " ".join(texts)
+                if "number" in joined and ("name" in joined or "inmate" in joined):
+                    header_idx = i
+                    break
+            if header_idx is None:
+                continue
 
-        for link in detail_links:
-            if count >= MAX_DETAILS_PER_PREFIX:
+            for tr in rows[header_idx + 1:]:
+                cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+                if len(cells) < 3:
+                    continue
+                # Inmate number may be in first cell or link
+                a = tr.find("a", href=True)
+                inmate_id = ""
+                if a and "id_inmt_num=" in a["href"]:
+                    inmate_id = a["href"].split("id_inmt_num=")[-1].split("&")[0].strip()
+                if not inmate_id:
+                    for c in cells:
+                        if c.isdigit() and len(c) >= 4:
+                            inmate_id = c
+                            break
+                if not inmate_id:
+                    continue
+
+                # Name: usually second cell, or cell that contains a comma
+                name = ""
+                dob = ""
+                facility = ""
+                for c in cells:
+                    if c == inmate_id or c.lower().startswith("click"):
+                        continue
+                    if not name and ("," in c or re.search(r"[A-Za-z]{2,}", c)):
+                        # Prefer comma form LAST,FIRST
+                        if "," in c or not any(ch.isdigit() for ch in c):
+                            if re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", c):
+                                pass
+                            elif c.lower() in ("number", "inmate name", "date of birth", "facility"):
+                                continue
+                            else:
+                                name = c
+                                continue
+                    if not dob and re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", c):
+                        dob = c
+                        continue
+                    if name and dob and not facility and len(c) > 2:
+                        facility = c
+
+                if not name:
+                    # positional fallback: Number, Name, DOB, Facility
+                    if len(cells) >= 4:
+                        name = cells[1]
+                        dob = cells[2]
+                        facility = cells[3]
+                    elif len(cells) >= 2:
+                        name = cells[1]
+
+                if not name or len(name) < 2:
+                    continue
+
+                out.append({
+                    "inmate_id": inmate_id,
+                    "name": name,
+                    "dob": dob,
+                    "facility": facility or "CT DOC Facility",
+                    "detail_url": urljoin(DETAIL_BASE, f"detailsupv.asp?id_inmt_num={inmate_id}"),
+                })
+            if out:
                 break
+        return out
 
-            href = link.get("href", "")
-            if not href:
-                continue
-
-            # Extract inmate ID from URL
-            inmate_id = ""
-            if "id_inmt_num=" in href:
-                inmate_id = href.split("id_inmt_num=")[-1].split("&")[0].strip()
-
-            if not inmate_id or inmate_id in seen:
-                continue
-
-            seen.add(inmate_id)
-            detail_url = DETAIL_BASE + href if not href.startswith("http") else href
-
-            try:
-                record = self._parse_detail(session, detail_url, inmate_id)
-                if record:
-                    records.append(record)
-                    count += 1
-                time.sleep(0.15)
-            except Exception as exc:
-                logger.debug(f"CT DOC detail {inmate_id} failed: {exc}")
-                continue
-
-        logger.info(f"  CT DOC '{prefix}': {len(records)} inmates extracted")
-        return records
-
-    def _parse_detail(
-        self,
-        session: requests.Session,
-        url: str,
-        inmate_id: str,
-    ) -> ArrestRecord | None:
-        """Fetch and parse detailed inmate profile."""
-        resp = session.get(url, timeout=15, verify=False)
+    def _parse_detail(self, session: requests.Session, inmate_id: str) -> Optional[dict]:
+        url = urljoin(DETAIL_BASE, f"detailsupv.asp?id_inmt_num={inmate_id}")
+        resp = session.get(url, timeout=20, verify=False)
         if resp.status_code != 200:
             return None
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        data: dict = {}
-
-        # Parse key-value pairs from table cells
+        data: Dict[str, str] = {}
         for tr in soup.find_all("tr"):
             cells = [td.get_text(" ", strip=True) for td in tr.find_all(["td", "th"])]
-            if len(cells) >= 2:
-                key = cells[0].rstrip(":").strip()
-                val = cells[1].strip()
-                if key and val:
-                    data[key] = val
+            if len(cells) < 2:
+                continue
+            key = cells[0].rstrip(":").strip().lower()
+            val = cells[1].strip()
+            if key and val and key != val.lower().rstrip(":"):
+                data[key] = val
 
-        name = data.get("Inmate Name", "")
-        if not name:
-            return None
+        # Also try label: value patterns in page text
+        text = soup.get_text("\n", strip=True)
+        for label, field in [
+            (r"Bond Amount:\s*(.+)", "bond amount"),
+            (r"Controlling Offense\*?:\s*(.+)", "controlling offense"),
+            (r"Status:\s*(.+)", "status"),
+            (r"Current Location:\s*(.+)", "current location"),
+            (r"Latest Admission Date:\s*(.+)", "latest admission date"),
+        ]:
+            m = re.search(label, text, re.I)
+            if m and field not in data:
+                data[field] = m.group(1).strip().split("\n")[0].strip()
 
+        out: Dict[str, str] = {}
+        if data.get("bond amount"):
+            out["bond"] = self._normalize_bond(data["bond amount"])
+        offense = (
+            data.get("controlling offense*")
+            or data.get("controlling offense")
+            or ""
+        )
+        if offense:
+            out["charges"] = re.sub(r"\s+", " ", offense).strip()
+        if data.get("status"):
+            out["status_raw"] = data["status"]
+        if data.get("current location"):
+            out["facility"] = data["current location"]
+        if data.get("latest admission date"):
+            out["admit"] = data["latest admission date"]
+        return out or None
+
+    def _to_record(self, row: dict) -> ArrestRecord:
+        name = row["name"]
         first, last = self._split_name(name)
-        dob = data.get("Date of Birth", "")
-        facility = data.get("Current Location", "CT DOC Facility")
-        status_raw = data.get("Status", "In Custody")
-        bond_raw = data.get("Bond Amount", "")
-        offense = data.get("Controlling Offense*", "") or data.get("Controlling Offense", "Unknown")
+        status_raw = (row.get("status_raw") or "").upper()
+        custody = "In Custody"
+        if "UNSENTENCED" in status_raw:
+            custody = "In Custody (Unsentenced)"
+        elif "SENTENCED" in status_raw:
+            custody = "In Custody (Sentenced)"
 
-        # Map CT DOC status
-        custody_status = "In Custody"
-        if "UNSENTENCED" in status_raw.upper():
-            custody_status = "In Custody (Unsentenced)"
-        elif "SENTENCED" in status_raw.upper():
-            custody_status = "In Custody (Sentenced)"
+        bond = row.get("bond") or "0"
+        charges = row.get("charges") or "Unknown"
 
-        # Normalize bond amount
-        bond_amount = self._normalize_bond(bond_raw)
+        # Normalize "LAST,FIRST M" → "Last, First M"
+        if "," in name:
+            lp, rp = name.split(",", 1)
+            display = f"{lp.strip().title()}, {rp.strip().title()}"
+        else:
+            display = name.title() if name.isupper() else name
 
         return ArrestRecord(
-            County="Statewide",
+            County=self.county,
             State="CT",
-            Full_Name=name.title() if name.isupper() else name,
+            Full_Name=display,
             First_Name=first,
             Last_Name=last,
-            DOB=dob,
-            Booking_Number=inmate_id,
-            Person_ID=inmate_id,
-            Facility=facility,
-            Status=custody_status,
-            Charges=offense,
-            Bond_Amount=bond_amount,
+            DOB=row.get("dob") or "",
+            Booking_Number=str(row["inmate_id"]),
+            Person_ID=str(row["inmate_id"]),
+            Facility=row.get("facility") or "CT DOC Facility",
+            Status=custody,
+            Charges=charges,
+            Bond_Amount=bond if bond else "0",
+            Booking_Date=row.get("admit") or "",
             Agency="Connecticut Department of Correction",
-            Detail_URL=url,
+            Detail_URL=row.get("detail_url") or SEARCH_URL,
         )
 
     @staticmethod
     def _normalize_bond(val: str) -> str:
-        """Strip currency symbols and return integer string or empty string."""
-        if not val or val == "0":
-            return ""
-        clean = "".join(c for c in str(val) if c.isdigit())
-        return clean if clean and clean != "0" else ""
+        if not val:
+            return "0"
+        clean = "".join(c for c in str(val) if c.isdigit() or c == ".")
+        if not clean or clean == "0" or clean == "0.0":
+            return "0"
+        return clean
 
     @staticmethod
     def _split_name(name: str) -> Tuple[str, str]:
         """'LAST,FIRST MIDDLE' → (first, last)."""
+        name = name.strip()
         if "," in name:
             parts = name.split(",", 1)
             last = parts[0].strip().title()

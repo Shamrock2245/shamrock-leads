@@ -1,16 +1,16 @@
 # North Carolina County Registry
 
-> Last updated: 2026-07-14  
+> Last updated: 2026-08-04  
 > Goal: all **100** NC counties (Palmetto multi-state footprint)  
-> Code: `scrapers/counties_nc/` (scaffold) · Recon: [`docs/NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md)
+> Code: `scrapers/counties_nc/` · Recon: [`docs/NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md)
 
 ## Coverage Summary
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| ✅ Wave-1 registered | **27** | Southern SW, Zuercher, P2C classic, Davidson, Gaston, Meck/Durham scaffolds |
-| Scheduler / dashboard | **27** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
-| 🔲 Planned (portal mapped, not wave-1) | ~55 | URL + platform in recon |
+| ✅ Registered | **41** | Waves 1–5: platforms + metros + DCN + Pitt + Craven + Randolph |
+| Scheduler / dashboard | **41** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
+| 🔲 Planned (portal mapped, not built) | ~40 | URL + platform in recon |
 | ⬜ No public web roster / app / VINE | ~45 | Skip or VINE-only until portal appears |
 | First production scrapes | ⏳ | Run via dashboard Multi-State Ops or `python main.py nc_mecklenburg` |
 
@@ -66,7 +66,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Clay | ⬜ No portal | — | VINE / phone |
 | Cleveland | 🔲 Planned | P2C classic | IP host `74.218.167.200` — fragile |
 | Columbus | ⬜ App-only | OCV app | No open web roster |
-| Craven | 🔲 Planned | Custom GIS | `gis.cravencountync.gov/images/activebookings` |
+| Craven | ✅ Live | ArcGIS MapServer | `BookingsPublic/MapServer/0` · ~336 inmates + bond/statutes |
 | Cumberland | 🔲 Planned | Custom | Active inmate page — host flaky |
 | Currituck | ⬜ No portal | — | VINE / phone |
 
@@ -88,7 +88,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Granville | ⬜ No portal | — | VINE / phone |
 | Greene | ⬜ No portal | — | VINE / phone |
 | Guilford | 🔲 Planned | P2C cloud | WAF; dual jails |
-| Halifax | 🔲 Planned | DCN | `inmates.halifaxncsheriff.com/dcn/` |
+| Halifax | ✅ Live | DCN | `inmates.halifaxncsheriff.com/dcn/inmates` · shared `dcn_base` (list ≤100 + detail enrich) |
 | Harnett | 🔲 Planned | Southern SW | AgencyID=`HarnettCoNC` |
 | Haywood | ⬜ No portal | — | VINE / phone |
 | Henderson | 🔲 Planned | Southern SW | AgencyID=`HendersonCoNC` |
@@ -104,7 +104,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Jackson | ⬜ App-only | OCV app | App-centric |
 | Johnston | ✅ Live | ColdFusion | `johnstonnc.com/sheriffs_office/b_jailsearch2s.cfm` · ~296 |
 | Jones | ⬜ No portal | — | VINE / phone |
-| Lee | 🔲 Planned | DCN | `dcn.leecountync.gov/dcn/inmates` |
+| Lee | ✅ Live | DCN | `dcn.leecountync.gov/dcn/inmates` · `dcn_base` (CLI `nc_lee`) |
 | Lenoir | ⬜ No portal | — | VINE / phone |
 | Lincoln | 🔲 Planned | P2C classic | `p2c.lincolnsheriff.org` |
 | Macon | ⬜ No portal | — | VINE / phone |
@@ -114,7 +114,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | **Mecklenburg** | 🔲 Planned | Custom MCSO | Top build target |
 | Mitchell | ⬜ No portal | — | VINE / phone |
 | Montgomery | ⬜ No portal | — | VINE / phone |
-| Moore | 🔲 Planned | DCN | `webapps.moorecountync.gov/dcn/inmates` |
+| Moore | ✅ Live | DCN | `webapps.moorecountync.gov/dcn/inmates` · `dcn_base` |
 | Nash | ⬜ No portal | — | VINE / phone |
 | New Hanover | 🔲 Planned | P2C classic | `p2c.nhcgov.com/p2c/jailinmates.aspx` |
 | Northampton | ⬜ No portal | — | VINE / phone |
@@ -130,10 +130,10 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Pender | 🔲 Planned | Zuercher | `pender-so-nc.zuercherportal.com` |
 | Perquimans | ⬜ No portal | — | VINE / phone |
 | Person | ⬜ No portal | — | VINE / phone |
-| Pitt | 🔲 Planned | Custom app | `apps.pittcountync.gov/apps/detention/detainee/` |
+| Pitt | ✅ Live | Custom ASP.NET | Letter-walk detainee search · ~300 active · booking #s |
 | Polk | 🔲 Planned | Southern SW | AgencyID=`PolkCoNC` |
-| Randolph | 🔲 Planned | Custom ASP.NET | legacyweb ConfinedInmates* |
-| Richmond | 🔲 Planned | DCN | `webapp01.richmondnc.com/dcn/` |
+| Randolph | ✅ Live | ASP.NET HTML | ConfinedInmatesByName · ~362 with charges/bail |
+| Richmond | ✅ Live | DCN | `webapp01.richmondnc.com/dcn/inmates` · `dcn_base` |
 | Robeson | 🔲 Planned | P2C cloud | WAF |
 | Rockingham | ⬜ No portal | — | VINE / phone |
 | Rowan | 🔲 Planned | P2C cloud | WAF |
@@ -162,12 +162,11 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 
 See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).
 
-1. Mecklenburg custom  
-2. Wake / Guilford / Forsyth P2C (proxy)  
-3. Gaston New World  
-4. Southern SW NC batch (11)  
-5. Zuercher NC batch (4–5)  
-6. Classic P2C 200s (Cabarrus, Union, NHC, Alamance, Iredell, Lincoln)
+1. Harden registered wave-1/2/3 metros (Meck, Wake WAF, Guilford, Forsyth)  
+2. DCN pagination beyond first 100 (DevExpress AJAX unreliable from DC IPs)  
+3. Craven GIS / Orange OCV / Randolph ASP.NET / Catawba  
+4. Rowan / Robeson cloud P2C (proxy)  
+5. Alexander classic P2C (DNS flaky)
 
 ## Multi-state roadmap (Palmetto)
 

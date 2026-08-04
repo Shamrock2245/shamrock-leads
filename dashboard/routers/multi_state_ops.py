@@ -18,150 +18,183 @@ from typing import Optional
 from fastapi import APIRouter, Query
 
 from dashboard.extensions import (
+    ACTIVE_STATE_CODES,
+    REGISTERED_COUNTIES,
     get_collection,
     index_scraper_status_docs,
+    parse_registered_county,
+    registered_county_to_trigger_key,
     resolve_scraper_status,
 )
 
 logger = logging.getLogger(__name__)
 multi_state_bp = APIRouter(prefix="/api/ops", tags=["multi_state_ops"])
 
-# Live + scaffolding states (Palmetto footprint). Registry only includes dirs that exist.
-# AL/CT/MS: cross-state scrapers live in counties/ (FL dir) and dedicated counties_XX dirs.
-ACTIVE_STATES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "CT", "AL", "MS")
+# Source of truth for dashboard state cards — matches REGISTERED_COUNTIES states.
+ACTIVE_STATES = tuple(ACTIVE_STATE_CODES)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SCRAPER REGISTRY — built from the actual scraper files on disk
+# SCRAPER REGISTRY — REGISTERED_COUNTIES first, disk platform enrichment second
 # ─────────────────────────────────────────────────────────────────────────────
+
+_PLATFORM_HINTS = (
+    ("jailtracker_base", "JailTracker"),
+    ("p2c_base", "P2C"),
+    ("eas_base", "EAS"),
+    ("interopweb_base", "InteropWeb"),
+    ("zuercher_base", "Zuercher"),
+    ("southern_sw_base", "Southern SW"),
+    ("socrata_base", "Socrata"),
+    ("xml_feed_base", "XML Feed"),
+    ("new_world_base", "New World"),
+    ("odyssey_base", "Tyler Odyssey"),
+    ("kologik_base", "Kologik"),
+    ("smartcop_base", "SmartCOP"),
+    ("smartwebclient", "SmartCOP"),
+    ("smartweb_parser", "SmartWeb"),
+    ("dcn_base", "DCN"),
+    ("curl_cffi", "Custom HTML"),
+    ("base_scraper", "Custom HTML"),
+)
+
+_STATE_DIR = {
+    "FL": "counties",
+    "GA": "counties_ga",
+    "SC": "counties_sc",
+    "NC": "counties_nc",
+    "TN": "counties_tn",
+    "TX": "counties_tx",
+    "LA": "counties_la",
+    "CT": "counties_ct",
+    "AL": "counties_al",
+    "MS": "counties_ms",
+}
+
+# Explicit file map for labels that don't match slug filenames
+_LABEL_FILE_OVERRIDES: dict[str, str] = {
+    "CT DOC (CT)": "ct_doc.py",
+    "Statewide (CT)": "statewide_docket.py",
+    "TnCIS (TN)": "tncis.py",
+    "Miami-Dade (FL)": "miami_dade.py",
+    "St. Johns (FL)": "st_johns.py",
+    "St. Lucie (FL)": "st_lucie.py",
+    "Indian River (FL)": "indian_river.py",
+    "Santa Rosa (FL)": "santa_rosa.py",
+    "Palm Beach (FL)": "palm_beach.py",
+    "New Hanover (NC)": "new_hanover.py",
+    "East Baton Rouge (LA)": "east_baton_rouge.py",
+    "Fort Bend (TX)": "fort_bend.py",
+    "El Paso (TX)": "el_paso.py",
+}
+
+# scraper_id overrides when auto-derived id would double-prefix state
+_SCRAPER_ID_OVERRIDES: dict[str, str] = {
+    "CT DOC (CT)": "scraper_ct_doc",
+}
+
+
+def _scrapers_base() -> str:
+    return os.path.normpath(os.path.join(os.path.dirname(__file__), "../../scrapers"))
+
+
+def _slug(name: str) -> str:
+    return (
+        (name or "")
+        .lower()
+        .replace(".", "")
+        .replace(" ", "_")
+        .replace("-", "_")
+        .strip("_")
+    )
+
+
+def _detect_platform(content: str) -> str:
+    for key, val in _PLATFORM_HINTS:
+        if key in content:
+            return val
+    return "Custom HTML"
+
+
+def _platform_for_label(label: str, bare: str, state: str) -> tuple[str, str]:
+    """Return (platform, filename) for a registered label."""
+    base = _scrapers_base()
+    fname = _LABEL_FILE_OVERRIDES.get(label)
+    if not fname:
+        fname = f"{_slug(bare)}.py"
+    # CT special-case filenames already mapped
+    sub = _STATE_DIR.get(state, "counties")
+    candidates = [
+        os.path.join(base, sub, fname),
+        os.path.join(base, "counties", fname),  # legacy cross-state
+    ]
+    for fpath in candidates:
+        if os.path.isfile(fpath):
+            try:
+                with open(fpath, encoding="utf-8", errors="ignore") as f:
+                    content = f.read(12000)
+                return _detect_platform(content), os.path.basename(fpath)
+            except Exception:
+                return "Custom HTML", os.path.basename(fpath)
+    return "Custom HTML", fname
 
 
 def _build_registry() -> list[dict]:
-    """Dynamically build the full scraper registry from the scrapers/ directory."""
-    base = os.path.normpath(os.path.join(os.path.dirname(__file__), "../../scrapers"))
-    state_dirs = {
-        "FL": os.path.join(base, "counties"),
-        "GA": os.path.join(base, "counties_ga"),
-        "SC": os.path.join(base, "counties_sc"),
-        "NC": os.path.join(base, "counties_nc"),
-        # Dedicated state packages:
-        "TN": os.path.join(base, "counties_tn"),
-        "TX": os.path.join(base, "counties_tx"),
-        "LA": os.path.join(base, "counties_la"),
-        # Scaffolded packages (appear when scrapers are added):
-        "CT": os.path.join(base, "counties_ct"),
-        "AL": os.path.join(base, "counties_al"),
-        "MS": os.path.join(base, "counties_ms"),
-    }
-    # Cross-state scrapers that live in the FL counties/ dir but cover other states.
-    # Keyed by filename → (state, display_county, platform_hint)
-    cross_state_overrides: dict[str, tuple[str, str, str]] = {
-        "alabama_mississippi.py":   ("AL",  "Alabama Multi-County",    "Custom HTML"),
-        "connecticut_judicial.py":  ("CT",  "Connecticut Statewide",   "Custom HTML"),
-        "louisiana_lavine.py":      ("LA",  "Louisiana LAVINE",        "Custom HTML"),
-        "tennessee_tncis_v2_ape.py": ("TN",  "Tennessee TnCIS v2 APE",  "Custom HTML"),
-        "texas_odyssey.py":         ("TX",  "Texas Odyssey",           "Tyler Odyssey"),
-    }
-    platform_map = {
-        "jailtracker_base": "JailTracker",
-        "p2c_base": "P2C",
-        "eas_base": "EAS",
-        "interopweb_base": "InteropWeb",
-        "zuercher_base": "Zuercher",
-        "southern_sw_base": "Southern SW",
-        "socrata_base": "Socrata",
-        "xml_feed_base": "XML Feed",
-        "new_world_base": "New World",
-        "odyssey_base": "Tyler Odyssey",
-        "kologik_base": "Kologik",
-        "smartcop_base": "SmartCOP",
-        "smartwebclient": "SmartCOP",
-        "smartweb_parser": "SmartWeb",
-        "base_scraper": "Custom HTML",
-    }
-    registry = []
-    # Track filenames already claimed by cross-state overrides so the FL loop skips them.
-    _cross_state_fnames = set(cross_state_overrides.keys())
-    # Inject cross-state scrapers under their correct state first.
-    fl_dir = os.path.normpath(state_dirs["FL"])
-    for fname, (cs_state, cs_county, cs_platform) in cross_state_overrides.items():
-        fpath = os.path.join(fl_dir, fname)
-        if not os.path.exists(fpath):
-            continue
-        county_slug = cs_county.lower().replace(" ", "_").replace("-", "_")
+    """Build registry from REGISTERED_COUNTIES (dashboard source of truth).
+
+    Disk scan only enriches platform/file metadata — counts always match the
+    health tab and Multi-State Ops fleet size.
+    """
+    registry: list[dict] = []
+    for label in sorted(REGISTERED_COUNTIES):
+        bare, st = parse_registered_county(label)
+        st = (st or "FL").upper()
+        platform, fname = _platform_for_label(label, bare, st)
+        trigger_key = registered_county_to_trigger_key(label)
+        scraper_id = _SCRAPER_ID_OVERRIDES.get(label) or (
+            f"scraper_{_slug(bare)}"
+            if st == "FL"
+            else f"scraper_{st.lower()}_{_slug(bare)}"
+        )
         registry.append({
-            "county": cs_county,
-            "state": cs_state,
-            "platform": cs_platform,
+            "county": bare,
+            "state": st,
+            "platform": platform,
             "file": fname,
-            "scraper_id": f"scraper_{cs_state.lower()}_{county_slug}",
-            "trigger_key": f"{cs_state.lower()}_{county_slug}",
-            "label": f"{cs_county} ({cs_state})",
+            "scraper_id": scraper_id,
+            "trigger_key": trigger_key,
+            "label": label,
         })
-    for state, dirpath in state_dirs.items():
-        dirpath = os.path.normpath(dirpath)
-        if not os.path.exists(dirpath):
-            continue
-        for fname in sorted(os.listdir(dirpath)):
-            if not fname.endswith(".py") or fname in ("__init__.py", "eas_batch_runner.py"):
-                continue
-            # Skip cross-state files already injected above (only in FL dir).
-            if state == "FL" and fname in _cross_state_fnames:
-                continue
-            fpath = os.path.join(dirpath, fname)
-            try:
-                with open(fpath) as f:
-                    content = f.read()
-            except Exception:
-                continue
-            platform = "Custom HTML"
-            for key, val in platform_map.items():
-                if key in content:
-                    platform = val
-                    break
-            # Prefer explicit county property / COUNTY_NAME over first string return
-            m = re.search(r'COUNTY_NAME\s*=\s*["\']([^"\']+)["\']', content)
-            if not m:
-                m = re.search(
-                    r'def county\(self\)[^:]*:\s*(?:.*?return\s+["\']([^"\']+)["\'])',
-                    content,
-                    re.DOTALL,
-                )
-            if not m:
-                m = re.search(r'return\s+"([^"]+)"', content)
-            county = m.group(1) if m else fname.replace(".py", "").replace("_", " ").title()
-            county_slug = county.lower().replace(" ", "_").replace("-", "_")
-            scraper_id = (
-                f"scraper_{county_slug}" if state == "FL"
-                else f"scraper_{state.lower()}_{county_slug}"
-            )
-            registry.append({
-                "county": county,
-                "state": state,
-                "platform": platform,
-                "file": fname,
-                "scraper_id": scraper_id,
-                "trigger_key": (
-                    county_slug if state == "FL"
-                    else f"{state.lower()}_{county_slug}"
-                ),
-                "label": f"{county} ({state})",
-            })
     return registry
 
 
 _REGISTRY_CACHE: list[dict] = []
 _REGISTRY_BUILT_AT: Optional[datetime] = None
+_REGISTRY_TTL_SEC = 45  # short TTL so new counties appear quickly after deploy
 
 
 def _get_registry() -> list[dict]:
     global _REGISTRY_CACHE, _REGISTRY_BUILT_AT
     now = datetime.now(timezone.utc)
-    if not _REGISTRY_CACHE or (
-        _REGISTRY_BUILT_AT and (now - _REGISTRY_BUILT_AT).seconds > 300
-    ):
+    stale = (
+        not _REGISTRY_CACHE
+        or not _REGISTRY_BUILT_AT
+        or (now - _REGISTRY_BUILT_AT).total_seconds() > _REGISTRY_TTL_SEC
+        or len(_REGISTRY_CACHE) != len(REGISTERED_COUNTIES)
+    )
+    if stale:
         _REGISTRY_CACHE = _build_registry()
         _REGISTRY_BUILT_AT = now
     return _REGISTRY_CACHE
+
+
+def _scraped_at_match(cutoff: datetime) -> dict:
+    """Match scraped_at whether stored as datetime or ISO string."""
+    return {"$or": [
+        {"scraped_at": {"$gte": cutoff}},
+        {"scraped_at": {"$gte": cutoff.isoformat()}},
+        {"created_at": {"$gte": cutoff}},
+        {"created_at": {"$gte": cutoff.isoformat()}},
+    ]}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,87 +252,108 @@ async def get_scraper_registry(state: str = ""):
 # ─────────────────────────────────────────────────────────────────────────────
 @multi_state_bp.get("/state-summary")
 async def get_state_summary():
-    """Return high-level KPIs per state."""
+    """Return high-level KPIs per state (registry-first, live status join)."""
     registry = _get_registry()
     arrests = get_collection("arrests")
     scraper_status = get_collection("scraper_status")
 
-    # Build state → county mapping
-    state_counties: dict[str, list[str]] = {}
+    # state → list of registry rows
+    by_state: dict[str, list[dict]] = {}
     for r in registry:
-        state_counties.setdefault(r["state"], []).append(r["county"])
+        by_state.setdefault(r["state"], []).append(r)
+    for st in ACTIVE_STATES:
+        by_state.setdefault(st, [])
 
     now = datetime.now(timezone.utc)
     cutoff_24h = now - timedelta(hours=24)
     cutoff_7d = now - timedelta(days=7)
 
-    # Always surface all ACTIVE_STATES even when a dir is empty (zeros).
-    for st in ACTIVE_STATES:
-        state_counties.setdefault(st, [])
+    # Load all scraper_status once and index multi-key (Lee FL ≠ Lee SC)
+    status_docs = []
+    async for doc in scraper_status.find({}, {"_id": 0}):
+        status_docs.append(doc)
+    status_index = index_scraper_status_docs(status_docs)
 
     result = {}
-    for state, counties in state_counties.items():
-        total_counties = len(counties)
+    total_fleet = 0
+    total_active = 0
+    total_errors = 0
+    total_arrests_all = 0
 
-        # Arrest counts — accept both datetime and ISO string scraped_at
-        state_match = {"$or": [
-            {"state": state},
-            {"state": state.lower()},
-            {"State": state},
-        ]}
+    for state in ACTIVE_STATES:
+        rows = by_state.get(state, [])
+        total_counties = len(rows)
+        total_fleet += total_counties
+
+        # Arrest counts — FL includes legacy docs with missing state
+        if state == "FL":
+            state_match = {"$or": [
+                {"state": {"$in": ["FL", "fl", "Florida", "FLORIDA"]}},
+                {"state": None},
+                {"state": ""},
+                {"state": {"$exists": False}},
+            ]}
+        else:
+            state_match = {"state": {"$in": [state, state.lower(), state.title()]}}
+
         arrests_24h = await arrests.count_documents({
-            **state_match,
-            "$and": [{"$or": [
-                {"scraped_at": {"$gte": cutoff_24h}},
-                {"scraped_at": {"$gte": cutoff_24h.isoformat()}},
-            ]}],
+            "$and": [state_match, _scraped_at_match(cutoff_24h)],
         })
         arrests_7d = await arrests.count_documents({
-            **state_match,
-            "$and": [{"$or": [
-                {"scraped_at": {"$gte": cutoff_7d}},
-                {"scraped_at": {"$gte": cutoff_7d.isoformat()}},
-            ]}],
+            "$and": [state_match, _scraped_at_match(cutoff_7d)],
         })
         total_arrests = await arrests.count_documents(state_match)
+        total_arrests_all += total_arrests
 
-        # Scraper health — active only if last run returned records
-        active = 0
-        empty = 0
-        errors = 0
-        never_run = 0
-        if counties:
-            async for doc in scraper_status.find(
-                {"county": {"$in": counties}},
-                {"_id": 0, "status": 1, "records": 1},
+        # Scraper health via multi-key resolve (not bare county $in)
+        active = empty = errors = never_run = stale = 0
+        for r in rows:
+            live = resolve_scraper_status(status_index, r["county"], state) or {}
+            if not live:
+                never_run += 1
+                continue
+            s = (live.get("status") or "never_run").lower()
+            recs = int(live.get("records") or live.get("records_last_run") or 0)
+            last_run = live.get("last_run") or live.get("last_run_at")
+            hours = 999.0
+            if isinstance(last_run, datetime):
+                lr = last_run if last_run.tzinfo else last_run.replace(tzinfo=timezone.utc)
+                hours = (now - lr).total_seconds() / 3600
+            if s in ("error", "failed", "fail", "offline"):
+                errors += 1
+            elif s in ("empty", "no_data", "blocked") or (
+                s in ("ok", "healthy", "success") and recs <= 0
             ):
-                s = (doc.get("status") or "never_run").lower()
-                recs = int(doc.get("records") or 0)
-                if s in ("ok", "healthy", "success") and recs > 0:
+                empty += 1
+            elif s in ("ok", "healthy", "success") and recs > 0:
+                if hours < 6:
                     active += 1
-                elif s in ("empty", "no_data", "blocked") or (
-                    s in ("ok", "healthy", "success") and recs <= 0
-                ):
-                    empty += 1
-                elif s in ("error", "offline", "failed", "fail"):
-                    errors += 1
                 else:
-                    never_run += 1
-        accounted = active + empty + errors + never_run
-        if total_counties > accounted:
-            never_run += total_counties - accounted
+                    stale += 1
+            elif recs > 0 and hours < 6:
+                active += 1
+            elif recs > 0:
+                stale += 1
+            else:
+                never_run += 1
 
-        # Bond + lead stats for this state
+        total_active += active
+        total_errors += errors
+
         bond_stats: dict = {"avg_bond": 0.0, "max_bond": 0.0, "total_bond": 0.0}
         hot_leads = 0
         warm_leads = 0
         async for r in arrests.aggregate([
-            {"$match": {**state_match, "bond_amount": {"$gt": 0}}},
+            {"$match": state_match},
             {"$group": {
                 "_id": None,
-                "avg_bond": {"$avg": "$bond_amount"},
+                "avg_bond": {"$avg": {
+                    "$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", "$$REMOVE"],
+                }},
                 "max_bond": {"$max": "$bond_amount"},
-                "total_bond": {"$sum": "$bond_amount"},
+                "total_bond": {"$sum": {
+                    "$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0],
+                }},
                 "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
                 "warm": {"$sum": {"$cond": [
                     {"$and": [{"$gte": ["$lead_score", 40]}, {"$lt": ["$lead_score", 70]}]},
@@ -320,6 +374,7 @@ async def get_state_summary():
             "active_scrapers": active,
             "empty_scrapers": empty,
             "error_scrapers": errors,
+            "stale_scrapers": stale,
             "never_run": never_run,
             "arrests_24h": arrests_24h,
             "arrests_7d": arrests_7d,
@@ -332,6 +387,12 @@ async def get_state_summary():
     return {
         "states": result,
         "state_order": list(ACTIVE_STATES),
+        "fleet": {
+            "total_registered": total_fleet,
+            "active": total_active,
+            "errors": total_errors,
+            "total_arrests": total_arrests_all,
+        },
         "generated_at": now.isoformat(),
     }
 
@@ -454,13 +515,54 @@ async def get_platform_breakdown():
 # ─────────────────────────────────────────────────────────────────────────────
 @multi_state_bp.get("/live-feed")
 async def get_live_feed(limit: int = Query(default=50, ge=1, le=200)):
-    """Return the most recent arrests across all states — the live ticker."""
+    """Return the most recent arrests across all states — the live ticker.
+
+    Normalizes field names so the Multi-State UI always sees:
+    full_name, county, state, charges, bond_amount, bail_amount, scraped_at.
+    """
     arrests = get_collection("arrests")
     results = []
-    async for doc in arrests.find({}, {"_id": 0}).sort("scraped_at", -1).limit(limit):
-        for k, v in doc.items():
+    # Prefer scraped_at; fall back to created_at for legacy docs
+    async for doc in arrests.find({}, {"_id": 0}).sort(
+        [("scraped_at", -1), ("created_at", -1)]
+    ).limit(limit):
+        for k, v in list(doc.items()):
             if hasattr(v, "isoformat"):
                 doc[k] = v.isoformat()
-        results.append(doc)
+        # Normalize casing / aliases for the frontend
+        state = (
+            doc.get("state")
+            or doc.get("State")
+            or ""
+        )
+        if isinstance(state, str):
+            state = state.upper()[:2] if len(state) >= 2 else state.upper()
+        bond = doc.get("bond_amount")
+        if bond is None:
+            bond = doc.get("bail_amount")
+        try:
+            bond_num = float(bond) if bond not in (None, "") else 0
+        except (TypeError, ValueError):
+            bond_num = 0
+        charges = doc.get("charges") or doc.get("Charges") or ""
+        if isinstance(charges, list):
+            charges = " | ".join(str(c) for c in charges)
+        results.append({
+            "full_name": doc.get("full_name") or doc.get("Full_Name") or "Unknown",
+            "county": doc.get("county") or doc.get("County") or "?",
+            "state": state or "??",
+            "charges": charges,
+            "bond_amount": bond_num,
+            "bail_amount": bond_num,  # alias used by older UI
+            "lead_score": doc.get("lead_score") or 0,
+            "lead_status": doc.get("lead_status") or "",
+            "booking_number": doc.get("booking_number") or doc.get("Booking_Number") or "",
+            "scraped_at": doc.get("scraped_at") or doc.get("created_at") or "",
+            "status": doc.get("status") or doc.get("custody_status") or "",
+        })
 
-    return {"feed": results, "count": len(results)}
+    return {
+        "feed": results,
+        "count": len(results),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }

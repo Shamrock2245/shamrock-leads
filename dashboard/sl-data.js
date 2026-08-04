@@ -86,7 +86,11 @@ function renderLeads() {
   const tb = document.getElementById('leadsBody');
   if (!tb) return;
   if (!SL_STATE.leads.length) { tb.innerHTML = '<tr><td colspan="10" class="loading">No leads match current filters</td></tr>'; return; }
-  const stateColors = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6', TN: '#ef4444', TX: '#eab308', LA: '#ec4899' };
+  const stateColors = {
+    FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6',
+    TN: '#ef4444', TX: '#eab308', LA: '#ec4899', CT: '#06b6d4',
+    AL: '#f97316', MS: '#84cc16',
+  };
   tb.innerHTML = SL_STATE.leads.map(l => {
     const bond = l.bond_amount || 0;
     const bc = bond >= 10000 ? 'bond-high' : bond >= 2500 ? 'bond-mid' : 'bond-low';
