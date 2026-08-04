@@ -1,12 +1,12 @@
 # ============================================
 # ShamrockLeads — OSINT Worker v2
-# Writable FS for Maigret + Sherlock + Blackbird + SpiderFoot
+# Writable FS for Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant
 # Internal network only (no published ports)
 # ============================================
 FROM python:3.12-slim
 
 LABEL maintainer="Shamrock Active Software"
-LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot)"
+LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant)"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -36,6 +36,11 @@ RUN pip install --no-cache-dir sherlock-project \
 # ── SpiderFoot ────────────────────────────────────────────────────────
 RUN pip install --no-cache-dir spiderfoot \
     || echo "WARNING: spiderfoot install failed"
+
+# ── Ignorant (phone → Instagram / Snapchat / Amazon registration) ─────
+# Does not alert the target number. Requires httpx + trio (in requirements).
+RUN pip install --no-cache-dir "ignorant>=1.2" \
+    || echo "WARNING: ignorant install failed"
 
 # ── Blackbird ─────────────────────────────────────────────────────────
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \

@@ -3,7 +3,7 @@ OSINT Intelligence API Router v2 — ShamrockLeads
 =================================================
 Admin-only endpoints for multi-engine OSINT research on defendants and indemnitors.
 
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
 
 All endpoints require admin authorization via:
   1. Signed session cookie with admin role, OR
@@ -82,7 +82,7 @@ async def osint_status(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
-    """Returns availability of all 4 engines + queue depth."""
+    """Returns availability of all engines (incl. Ignorant) + queue depth."""
     _require_admin(request, x_admin_key, x_admin_token)
     svc = get_osint_service()
     tools = svc.probe_tools()

@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
    ShamrockLeads — OSINT Intelligence Workstation v2
-   Admin-Only · 4-Engine Platform
-   Maigret · Sherlock · Blackbird · SpiderFoot
+   Admin-Only · Multi-Engine Platform
+   Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
    ═══════════════════════════════════════════════════════════════════ */
 /* global SL */
 (function () {
@@ -78,6 +78,12 @@
     if (sortSelect) sortSelect.addEventListener('change', () => load());
     const statusFilter = $('osintStatusFilter');
     if (statusFilter) statusFilter.addEventListener('change', () => load());
+
+    const phoneInput = $('osintPhone');
+    if (phoneInput) {
+      phoneInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
+      phoneInput.addEventListener('change', () => _updateAdaptiveFields());
+    }
   }
 
   function _debounce(fn, ms) {
@@ -101,13 +107,14 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot'];
+    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = info.available;
       const cls = available ? 'available' : 'unavailable';
       const version = info.version ? ` v${info.version}` : '';
-      return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}">
+      const note = info.note ? ` — ${info.note}` : '';
+      return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}">
         <span class="dot"></span>${eng.charAt(0).toUpperCase() + eng.slice(1)}${version}
       </span>`;
     }).join('');
@@ -143,6 +150,15 @@
     const phoneField = $('osintPhoneField');
     if (emailField) emailField.style.display = '';
     if (phoneField) phoneField.style.display = '';
+
+    // Auto-suggest Ignorant when a phone is present (phone-registration engine)
+    const phone = ($('osintPhone')?.value || '').trim();
+    if (phone && phone.replace(/\D/g, '').length >= 10) {
+      if (!_selectedEngines.has('ignorant')) {
+        _selectedEngines.add('ignorant');
+        _updateEngineChips();
+      }
+    }
   }
 
   // ── Load Scans ─────────────────────────────────────────────────────

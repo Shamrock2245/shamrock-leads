@@ -2,7 +2,7 @@
 OSINT scan policy defaults — ShamrockLeads osint-worker v2
 ===========================================================
 Noise control and underwriting-friendly defaults.
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ MAIGRET_TIMEOUT = int(os.getenv("OSINT_MAIGRET_TIMEOUT", "180"))
 SHERLOCK_TIMEOUT = int(os.getenv("OSINT_SHERLOCK_TIMEOUT", "120"))
 BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
 SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
+IGNORANT_TIMEOUT = int(os.getenv("OSINT_IGNORANT_TIMEOUT", "45"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
 
 # ── Quick vs deep site coverage ───────────────────────────────────────────────
@@ -193,6 +194,25 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
             "severity": "medium",
             "detail": f"Active on platforms suggesting possible relocation: {', '.join(sorted(oos))}.",
             "source": "osint_engine",
+        })
+
+    # Phone-linked social (Ignorant): IG / Snap / Amazon registration checks
+    phone_linked = [
+        a for a in accounts
+        if str(a.get("source") or "") == "ignorant"
+        and (a.get("profile_data") or {}).get("phone_registered")
+    ]
+    if phone_linked:
+        names = sorted({str(a.get("platform") or "") for a in phone_linked if a.get("platform")})
+        score += min(12, 4 * len(phone_linked))
+        signals.append({
+            "signal_type": "phone_linked_social",
+            "severity": "medium" if len(phone_linked) < 3 else "high",
+            "detail": (
+                f"Phone number appears registered on: {', '.join(names)}. "
+                "(Ignorant passive check — does not message the target.)"
+            ),
+            "source": "ignorant",
         })
 
     legal_keywords = {"arrest", "mugshot", "inmate", "offender", "warrant", "felony", "conviction"}

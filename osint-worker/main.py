@@ -1,7 +1,8 @@
 """
 ShamrockLeads OSINT Worker v2
 ==============================
-Internal-only FastAPI service running Maigret, Sherlock, Blackbird, SpiderFoot.
+Internal-only FastAPI service running Maigret, Sherlock, Blackbird,
+SpiderFoot, and Ignorant (phone registration checks).
 The dashboard stores results in Mongo and handles auth/UI.
 
 Endpoints:
@@ -30,7 +31,7 @@ WORKER_KEY = os.getenv("OSINT_WORKER_KEY", "").strip()
 
 app = FastAPI(
     title="Shamrock OSINT Worker",
-    version="2.0.0",
+    version="2.1.0",
     docs_url=None,
     redoc_url=None,
 )
@@ -56,7 +57,9 @@ class ScanRequestV2(BaseModel):
     deep_scan: bool = False
     engines: List[str] = Field(
         default_factory=lambda: ["maigret"],
-        description="Engines to run: maigret, sherlock, blackbird, spiderfoot",
+        description=(
+            "Engines to run: maigret, sherlock, blackbird, spiderfoot, ignorant"
+        ),
     )
     second_opinion: bool = False
 
@@ -70,7 +73,7 @@ def _check_key(x_worker_key: Optional[str]) -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "osint-worker", "version": "2.0.0"}
+    return {"status": "ok", "service": "osint-worker", "version": "2.1.0"}
 
 
 @app.get("/status")
@@ -123,7 +126,14 @@ async def scan_v2(
     if not any([body.full_name, body.usernames, body.email, body.phone]):
         raise HTTPException(status_code=422, detail="At least one identifier required")
 
-    valid_engines = {"maigret", "sherlock", "blackbird", "spiderfoot"}
+    valid_engines = {
+        "maigret",
+        "sherlock",
+        "blackbird",
+        "spiderfoot",
+        "ignorant",
+        "snoop",
+    }
     engines = [e for e in body.engines if e in valid_engines]
     if not engines:
         raise HTTPException(status_code=422, detail="No valid engines specified")

@@ -2,7 +2,7 @@
 Pydantic Models — OSINT Intelligence Module v2
 Admin-only. All access is audited. PII must not appear in logs.
 
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class EngineType(str, Enum):
     blackbird = "blackbird"
     spiderfoot = "spiderfoot"
     snoop = "snoop"
+    ignorant = "ignorant"
 
 
 class ScanStatus(str, Enum):
@@ -89,14 +90,18 @@ class OSINTScanRequest(BaseModel):
         None, description="Known email address (for Blackbird, SpiderFoot)"
     )
     phone: Optional[str] = Field(
-        None, description="Known phone number (for SpiderFoot)"
+        None,
+        description="Known phone number (for Ignorant phone registration + SpiderFoot)",
     )
     dob: Optional[str] = Field(None, description="Date of birth (YYYY-MM-DD)")
 
     # Engine selection — list of engines to run
     engines: List[EngineType] = Field(
         default_factory=lambda: [EngineType.maigret, EngineType.sherlock],
-        description="Engines to run. Default: [maigret, sherlock]. Options: maigret, sherlock, blackbird, spiderfoot",
+        description=(
+            "Engines to run. Default: [maigret, sherlock]. "
+            "Options: maigret, sherlock, blackbird, spiderfoot, ignorant"
+        ),
     )
 
     # Scan options

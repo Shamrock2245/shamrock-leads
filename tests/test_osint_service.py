@@ -11,7 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "osint-worker"))
 
-from runners import parse_blackbird_json, parse_maigret_json  # noqa: E402
+from runners import (  # noqa: E402
+    parse_blackbird_json,
+    parse_ignorant_results,
+    parse_maigret_json,
+    parse_phone_for_ignorant,
+)
 from defaults import score_signals  # noqa: E402
 
 
@@ -75,13 +80,57 @@ def test_score_signals_high_account_count():
     assert any(s["signal_type"] == "high_account_count" for s in signals)
 
 
+def test_parse_phone_for_ignorant_nanp():
+    assert parse_phone_for_ignorant("239-555-0100") == ("1", "2395550100")
+    assert parse_phone_for_ignorant("+1 (239) 555-0100") == ("1", "2395550100")
+    assert parse_phone_for_ignorant("12395550100") == ("1", "2395550100")
+    assert parse_phone_for_ignorant("") is None
+    assert parse_phone_for_ignorant("123") is None
+
+
+def test_parse_ignorant_results_exists_only():
+    raw = [
+        {"name": "instagram", "domain": "instagram.com", "rateLimit": False, "exists": True},
+        {"name": "snapchat", "domain": "snapchat.com", "rateLimit": False, "exists": False},
+        {"name": "amazon", "domain": "amazon.com", "rateLimit": True, "exists": False},
+    ]
+    accounts, entities = parse_ignorant_results(
+        raw, country_code="1", national="2395550100"
+    )
+    assert len(accounts) == 1
+    assert accounts[0]["platform"] == "Instagram"
+    assert accounts[0]["source"] == "ignorant"
+    assert accounts[0]["profile_data"]["phone_registered"] is True
+    assert any(e["type"] == "phone" for e in entities)
+
+
+def test_score_signals_phone_linked_social():
+    accounts = [
+        {
+            "platform": "Instagram",
+            "source": "ignorant",
+            "profile_data": {"phone_registered": True},
+        },
+        {
+            "platform": "Snapchat",
+            "source": "ignorant",
+            "profile_data": {"phone_registered": True},
+        },
+    ]
+    score, signals = score_signals(accounts)
+    assert score >= 8
+    assert any(s["signal_type"] == "phone_linked_social" for s in signals)
+
+
 def test_probe_tools_structure():
     from runners import probe_tools
     probe = probe_tools()
     assert "maigret" in probe
     assert "blackbird" in probe
+    assert "ignorant" in probe
     assert "ready_for_scans" in probe
     assert "defaults" in probe
+    assert probe["defaults"].get("ignorant_on_phone") is True
 
 
 def test_extract_importable_fields():

@@ -4,5 +4,10 @@ pydantic>=2.0.0
 httpx>=0.27.0
 maigret>=0.6.0
 sherlock-project>=0.15.0
+# Phone registration checks (Instagram / Snapchat / Amazon) — does not alert target
+ignorant>=1.2
+trio>=0.22.0
+termcolor>=2.0.0
+beautifulsoup4>=4.12.0
 # SpiderFoot is optional — no usable spiderfoot>=4 on PyPI (only a stub).
 # runners.py already degrades when missing. Install later only if needed.

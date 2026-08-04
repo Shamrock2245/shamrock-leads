@@ -1,5 +1,5 @@
 """
-CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot — osint-worker v2
+CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant — osint-worker v2
 Writable filesystem assumed (not read-only dashboard rootfs).
 """
 from __future__ import annotations
@@ -13,10 +13,11 @@ import os
 import re
 import shutil
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from defaults import (
     BLACKBIRD_TIMEOUT,
+    IGNORANT_TIMEOUT,
     MAIGRET_NO_AUTOUPDATE,
     MAIGRET_NO_RECURSION,
     MAIGRET_SITE_TIMEOUT,
@@ -147,16 +148,74 @@ def resolve_blackbird() -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def resolve_ignorant() -> Optional[str]:
+    """Resolve ignorant package / CLI for phone registration checks."""
+    candidates = [
+        os.getenv("IGNORANT_PATH", "").strip(),
+        shutil.which("ignorant") or "",
+        "/usr/local/bin/ignorant",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("ignorant") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def parse_phone_for_ignorant(phone: str) -> Optional[Tuple[str, str]]:
+    """
+    Split a phone string into (country_code, national_number) for ignorant.
+
+    Defaults to US/Canada (+1) when given 10-digit NANP numbers — correct for
+    Shamrock FL bail-bond intake. Returns None if unusable.
+    """
+    raw = (phone or "").strip()
+    if not raw:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if not digits or len(digits) < 7:
+        return None
+
+    # NANP
+    if len(digits) == 11 and digits.startswith("1"):
+        return "1", digits[1:]
+    if len(digits) == 10:
+        return "1", digits
+
+    # International: peel 1–3 digit country code when remainder looks national
+    if len(digits) > 10:
+        if digits.startswith("1") and len(digits) >= 11:
+            return "1", digits[1:11]
+        for cc_len in (1, 2, 3):
+            cc = digits[:cc_len]
+            rest = digits[cc_len:]
+            if 6 <= len(rest) <= 12 and not rest.startswith("0"):
+                return cc, rest
+
+    if 7 <= len(digits) <= 15:
+        return "1", digits
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Tool Probe
 # ══════════════════════════════════════════════════════════════════════════════
 
 def probe_tools() -> Dict[str, Any]:
-    """Probe all 4 engines for availability."""
+    """Probe all engines for availability (incl. Ignorant phone checks)."""
     maigret_cmd = resolve_maigret_cmd()
     sherlock_cmd = resolve_sherlock_cmd()
     spiderfoot_cmd = resolve_spiderfoot()
     bb_dir, bb_script = resolve_blackbird()
+    ignorant_cmd = resolve_ignorant()
 
     # Maigret
     maigret_ok = False
@@ -252,6 +311,34 @@ def probe_tools() -> Dict[str, Any]:
     else:
         blackbird_error = "not found — clone blackbird to /opt/blackbird"
 
+    # Ignorant (phone → IG / Snap / Amazon registration)
+    ignorant_ok = False
+    ignorant_version = None
+    ignorant_error = None
+    ignorant_path = None
+    if ignorant_cmd == "python-module":
+        try:
+            from ignorant.core import __version__ as _ig_ver  # type: ignore
+
+            ignorant_ok = True
+            ignorant_version = str(_ig_ver)
+            ignorant_path = f"{PYTHON_CMD} -m ignorant (API)"
+        except Exception as e:
+            try:
+                import ignorant as _ig  # noqa: F401
+
+                ignorant_ok = True
+                ignorant_version = getattr(_ig, "__version__", "installed")
+                ignorant_path = f"{PYTHON_CMD} -m ignorant"
+            except Exception as e2:
+                ignorant_error = str(e2)[:200]
+    elif ignorant_cmd:
+        ignorant_ok = True
+        ignorant_path = ignorant_cmd
+        ignorant_version = "cli"
+    else:
+        ignorant_error = "not found — install with: pip install ignorant"
+
     return {
         "maigret": {
             "available": maigret_ok,
@@ -283,16 +370,32 @@ def probe_tools() -> Dict[str, Any]:
             "version": spiderfoot_version,
             "error": spiderfoot_error,
         },
-        "ready_for_scans": maigret_ok or sherlock_ok or snoop_ok or blackbird_ok or spiderfoot_ok,
+        "ignorant": {
+            "available": ignorant_ok,
+            "path": ignorant_path or "not found",
+            "version": ignorant_version,
+            "error": ignorant_error,
+            "note": "Phone registration check (IG/Snap/Amazon). Does not message target.",
+        },
+        "ready_for_scans": (
+            maigret_ok
+            or sherlock_ok
+            or snoop_ok
+            or blackbird_ok
+            or spiderfoot_ok
+            or ignorant_ok
+        ),
         "worker": True,
-        "version": "2.0.0",
+        "version": "2.1.0",
         "defaults": {
             "maigret_default": True,
             "sherlock_default": True,
             "blackbird_default": False,
             "spiderfoot_default": False,
+            "ignorant_default": False,
             "blackbird_on_email": True,
             "spiderfoot_on_phone": True,
+            "ignorant_on_phone": True,
             "no_recursion": MAIGRET_NO_RECURSION,
         },
     }
@@ -601,6 +704,73 @@ def parse_blackbird_json(raw: Any) -> List[Dict]:
             "relevance": "unreviewed",
         })
     return accounts
+
+
+def parse_ignorant_results(
+    raw: Any,
+    *,
+    country_code: str = "",
+    national: str = "",
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Parse ignorant module output into (accounts, entities).
+
+    Only sites with exists=True become accounts. Rate-limited sites are omitted
+    from accounts but counted in profile_data of a summary entity when useful.
+    """
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not raw:
+        return accounts, entities
+
+    results = raw if isinstance(raw, list) else raw.get("results") or []
+    e164 = f"+{country_code}{national}" if country_code and national else ""
+    rate_limited: List[str] = []
+    checked: List[str] = []
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "unknown")
+        domain = str(item.get("domain") or f"{name}.com")
+        checked.append(name)
+        if item.get("rateLimit"):
+            rate_limited.append(name)
+            continue
+        if not item.get("exists"):
+            continue
+        platform = name.capitalize() if name.islower() else name
+        accounts.append({
+            "platform": platform,
+            "url": f"https://{domain}",
+            "username": "",
+            "profile_data": {
+                "phone_registered": True,
+                "method": item.get("method") or "",
+                "e164": e164,
+                "country_code": country_code,
+                "check": "ignorant_phone_registration",
+            },
+            "source": "ignorant",
+            "confidence": "found",
+            "category": _categorize_platform(platform),
+            "relevance": "unreviewed",
+        })
+
+    if e164:
+        entities.append({
+            "type": "phone",
+            "value": e164,
+            "source": "ignorant",
+            "module": "phone_check",
+            "confidence": "high" if accounts else "medium",
+            "context": (
+                f"Checked {', '.join(checked) or 'modules'}"
+                + (f"; rate-limited: {', '.join(rate_limited)}" if rate_limited else "")
+            ),
+            "relevance": "unreviewed",
+        })
+    return accounts, entities
 
 
 def _categorize_platform(name: str) -> str:
@@ -982,6 +1152,97 @@ async def run_spiderfoot(
     return result_meta
 
 
+async def run_ignorant(phone: str) -> Dict[str, Any]:
+    """
+    Run Ignorant phone-registration checks (Instagram, Snapchat, Amazon).
+
+    Does **not** send SMS or otherwise notify the target number.
+    Uses the public async module API (httpx) rather than the CLI.
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "ignorant",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "accounts": [],
+        "entities": [],
+    }
+    parsed = parse_phone_for_ignorant(phone)
+    if not parsed:
+        result_meta["error"] = "invalid or empty phone number"
+        return result_meta
+    if not resolve_ignorant():
+        result_meta["error"] = "ignorant not installed"
+        return result_meta
+
+    country_code, national = parsed
+    log.info(
+        "Ignorant phone check e164=+%s…%s",
+        country_code,
+        national[-4:] if len(national) >= 4 else "****",
+    )
+
+    try:
+        import httpx
+        from ignorant.core import get_functions, import_submodules, launch_module
+    except ImportError as exc:
+        result_meta["error"] = f"ignorant import failed: {exc}"
+        return result_meta
+
+    try:
+        modules = import_submodules("ignorant.modules")
+        websites = get_functions(modules)
+        if not websites:
+            result_meta["error"] = "ignorant: no modules discovered"
+            return result_meta
+
+        out: List[Dict[str, Any]] = []
+        timeout = httpx.Timeout(float(min(IGNORANT_TIMEOUT, 30)))
+
+        async def _run() -> None:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                await asyncio.gather(
+                    *[
+                        launch_module(mod, national, country_code, client, out)
+                        for mod in websites
+                    ]
+                )
+
+        await asyncio.wait_for(_run(), timeout=float(IGNORANT_TIMEOUT))
+
+        accounts, entities = parse_ignorant_results(
+            out, country_code=country_code, national=national
+        )
+        rate_limited = [r for r in out if isinstance(r, dict) and r.get("rateLimit")]
+        result_meta.update({
+            "ok": True,
+            "raw": {
+                "results": out,
+                "country_code": country_code,
+                "national_redacted": f"***{national[-4:]}" if len(national) >= 4 else "****",
+            },
+            "accounts": accounts,
+            "entities": entities,
+        })
+        if rate_limited and not accounts:
+            result_meta["warning"] = (
+                f"ignorant rate-limited on: "
+                f"{', '.join(str(r.get('name')) for r in rate_limited)}"
+            )
+        elif rate_limited:
+            result_meta["warning"] = (
+                f"partial rate-limit on: "
+                f"{', '.join(str(r.get('name')) for r in rate_limited)}"
+            )
+        return result_meta
+    except asyncio.TimeoutError:
+        result_meta["error"] = f"ignorant timed out after {IGNORANT_TIMEOUT}s"
+    except Exception as exc:
+        result_meta["error"] = f"ignorant error: {exc}"
+    return result_meta
+
+
 async def run_blackbird(
     username: Optional[str] = None,
     email: Optional[str] = None,
@@ -1254,6 +1515,13 @@ async def execute_scan_v2(
                     deep=deep_scan,
                 ))
                 task_map.append(engine)
+            elif engine == "ignorant":
+                if phone and str(phone).strip():
+                    tasks.append(run_ignorant(str(phone).strip()))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No phone number for ignorant"
             else:
                 progress[engine]["status"] = "skipped"
                 progress[engine]["error"] = f"No valid input for {engine}"
