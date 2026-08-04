@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.19.0] — 2026-08-04 (NC waves 4–7 · CT harden · fleet 269 · data hygiene)
+
+### Added
+- **NC waves 4–7** → **47** NC scrapers: Pitt, DCN cluster (Moore/Lee/Halifax/Richmond/Carteret), Craven, Randolph, Catawba, Caldwell PDF, Chatham/Stanly OCV, Orange PDF
+- Shared bases: `scrapers/dcn_base.py` (DevExpress), `scrapers/ocv_inmates_base.py` (OCV S3 inmates.json)
+- Superadmin **Data Hygiene** API + UI (`/api/admin/hygiene/*`) — purge test junk, repair mismatches
+- Mongo M0 oldest-first retention + upsert validation (`last_seen` / `scraped_at`)
+
+### Hardened
+- **CT Statewide dockets** + **CT DOC** (`curl_cffi`, list-first DOC A–Z, record caps)
+- Multi-State Ops / Scraper Health / stats **registry-first** live KPIs (all 10 states)
+
+### Docs
+- Authoritative scale **269** (GA74 · FL67 · SC46 · NC47 · TX15 · TN9 · LA4 · AL3 · CT2 · MS2) in `STATUS.md`, `AGENTS.md`, `ROADMAP.md`, `README.md`, registries, `MULTI_STATE_SCRAPER_ROADMAP.md`
+
+### Scale
+- `REGISTERED_COUNTIES` → **269** (was 256 at 2.18.0)
+
+---
+
 ## [2.18.0] — 2026-07-26 (Wave-3 NC/TN/TX scrapers → 256)
 
 ### Added — 9 county scrapers (registered + scheduled)

@@ -1,8 +1,8 @@
 # DATA_MODEL.md — ShamrockLeads Entity & Schema Reference
 
-> **Last Updated:** 2026-07-29  
+> **Last Updated:** 2026-08-04  
 > **Database:** MongoDB Atlas — `ShamrockBailDB`  
-> **Dedup Key:** `county` + `booking_number` (for arrests)  
+> **Dedup Key:** `county` + `booking_number` (for arrests; multi-state prefers `state` + `county` + `booking_number`)  
 > **Identity Rule:** ArrestLead ≠ Defendant ≠ Indemnitor ≠ Match ≠ BondCase. Never collapse.  
 > **Multi-state:** always set `state` (FL/GA/SC/NC…); never collapse same-name counties across states.
 
@@ -12,7 +12,7 @@
 
 | Collection | Purpose | Dedup Key |
 |------------|---------|-----------|
-| `arrests` | Raw scraped arrest records from **256 registered** scrapers across 10 states (39 fields + `state` + `charge_details`) | `county` + `booking_number` |
+| `arrests` | Raw scraped arrest records from **269 registered** scrapers across 10 states (39 fields + `state` + `charge_details`) | `county` + `booking_number` |
 | `defendants` | Normalized defendant profiles | `Defendant_ID` (UUID) |
 | `indemnitors` | Indemnitor intake records | `Indemnitor_ID` (UUID) |
 | `matches` | Validated defendant↔indemnitor links | `Match_ID` (UUID) |

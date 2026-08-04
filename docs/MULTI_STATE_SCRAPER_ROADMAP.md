@@ -1,35 +1,38 @@
 # Multi-State Scraper Expansion Roadmap
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
-> Plus **GA** (adjacent market / existing build).  
-> Last updated: 2026-07-15  
-> **Live registered (dashboard):** 51 FL · 74 GA · 46 SC · 27 NC · 3 TN · 3 TX · 2 LA = **206** — see root `STATUS.md`
+> Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
+> Last updated: 2026-08-04  
+> **Live registered (dashboard):** 67 FL · 74 GA · 46 SC · 47 NC · 15 TX · 9 TN · 4 LA · 3 AL · 2 CT · 2 MS = **269** — see root `STATUS.md`
 
 ## Why this order
 
 1. **FL** — OSI home market + densest scrapers already live ✅  
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
-3. **GA** — large existing Track A/B/C investment 🔄  
-4. **NC** — wave-1 **27 registered**; deepen scrapes then expand 🔄  
-5. **TN** — wave-1 **3 registered** (Davidson/Knox live) 🔄  
-6. **TX** — wave-1 **3 registered** (Bexar/Dallas live); top-25 next 🔄  
-7. **LA → MS** — wave-1 **2 LA registered**; MS scaffold 🔲  
-8. **CT** — only 8 counties; quick once bases are solid 🔲  
+3. **GA** — large existing Track A/B/C investment 🔄 (74/159)  
+4. **NC** — **47 registered** / 100 goal; deepen scrapes then expand 🔄  
+5. **TN** — **9 registered** (Davidson/Knox live) 🔄  
+6. **TX** — **15 registered** (Bexar/Dallas live); top-25 next 🔄  
+7. **LA → MS** — **4 LA** + **2 MS** registered; harden + expand 🔄  
+8. **CT** — **2 statewide sources** (dockets + DOC) hardened ✅  
+9. **AL** — **3** major metros registered 🔄  
 
 ## Shared platform bases (leverage first)
 
 | Base | File | States using today |
 |------|------|--------------------|
-| Zuercher | `scrapers/zuercher_base.py` | GA, SC |
+| Zuercher | `scrapers/zuercher_base.py` | GA, SC, NC |
 | JailTracker | `scrapers/jailtracker_base.py` | FL, SC, GA |
-| Southern Software | `scrapers/southern_sw_base.py` | GA, SC |
-| P2C | `scrapers/p2c_base.py` | FL, GA, SC |
+| Southern Software | `scrapers/southern_sw_base.py` | GA, SC, NC |
+| P2C | `scrapers/p2c_base.py` | FL, GA, SC, NC |
 | SmartCOP | `scrapers/smartcop_base.py` | FL, GA, SC |
 | New World | `scrapers/new_world_base.py` | FL, GA, SC |
 | Kologik | `scrapers/kologik_base.py` | FL (Calhoun FL); reusable |
 | Odyssey-style | `scrapers/odyssey_base.py` | GA stubs |
 | EAS | `scrapers/eas_base.py` | GA batch |
 | XML feed | `scrapers/xml_feed_base.py` | GA |
+| DCN DevExpress | `scrapers/dcn_base.py` | NC (Moore, Lee, Halifax, Richmond, Carteret, …) |
+| OCV inmates.json | `scrapers/ocv_inmates_base.py` | NC (Chatham, Stanly, …) |
 
 **Rule:** before writing a custom county scraper, check if the roster is one of the above platforms. Thin wrappers are preferred.
 
@@ -49,48 +52,55 @@
 3. **Greenville** — Incapsula; residential SOCKS when available  
 4. Proxy path for 403 jailroster.org family; scaffold quiet no-portal counties  
 
-### NC (wave-1 registered — first prod scrapes)
-1. **NC recon ✅** + **27 wave-1 scrapers registered** — `docs/NC_COUNTY_REGISTRY.md`  
-2. Platforms: Southern SW + Zuercher + classic P2C + Meck/Durham custom  
+### NC (47 registered — deepen + expand to 100)
+1. **NC recon ✅** + **47 scrapers registered** (waves 1–7) — `docs/NC_COUNTY_REGISTRY.md`  
+2. Platforms: Southern SW + Zuercher + classic P2C + DCN DevExpress + OCV inmates.json + custody PDFs + custom HTML  
 3. Dashboard Multi-State Ops filters NC; run-now uses `nc_*` keys  
 4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
-5. TN recon pass next → `docs/TN_RECON_RESULTS.md`
+5. Next: DCN pagination beyond first 100 · more OCV app_ids · Rowan/Robeson · remaining rural  
 
-### TN (wave-1 registered — deepen)
+### TN (9 registered — deepen)
 1. **Davidson** ✅ DCSO Justice Integration (RecentBookings + detail bond)  
 2. **Knox** ✅ sheriff.knoxcountytn.gov letter index  
 3. **Shelby** ⏳ IML TLS — curl_cffi path  
-4. Next: Hamilton, Rutherford · registry `docs/TN_COUNTY_REGISTRY.md`
+4. + Williamson, Montgomery, Sumner · registry `docs/TN_COUNTY_REGISTRY.md`
 
-### TX (wave-1 registered — expand top-25)
+### TX (15 registered — expand top-25)
 1. **Bexar** ✅ Central Magistrate 24h HTML  
 2. **Dallas** ✅ official jaillookup name grid  
 3. **Harris** ⏳ browser A–Z  
-4. Next: Tarrant, Travis · registry `docs/TX_COUNTY_REGISTRY.md`  
+4. + Gulf Coast (Cameron, Brazoria, Galveston) · registry `docs/TX_COUNTY_REGISTRY.md`  
 5. Expect heavy Odyssey/Tyler + custom municipal jails  
 
-### LA (wave-1 registered — harden)
+### LA (4 registered — harden)
 1. **Orleans** ⏳ OPSO partial · **Lafayette** ⏳ 365Labs captcha  
-2. Registry `docs/LA_COUNTY_REGISTRY.md`  
-3. Next: East Baton Rouge, Jefferson  
+2. Jefferson + East Baton Rouge registered · registry `docs/LA_COUNTY_REGISTRY.md`  
 
-### CT / MS / AL
-1. Recon → registry → wrappers  
-2. CT can be completed in one session once patterns known  
+### CT (2 statewide — hardened)
+1. **Statewide dockets** ✅ ~1.6k rows / 12 courts (`curl_cffi`)  
+2. **CT DOC** ✅ A–Z list-first (~14k) · detail sample cap  
+3. Registry `docs/CT_COUNTY_REGISTRY.md`  
+
+### MS / AL
+1. MS: Hinds, Jackson registered  
+2. AL: Jefferson, Madison, Mobile registered  
 
 ## Directory layout
 
 ```
 scrapers/
-  counties/          # FL
-  counties_ga/       # GA
-  counties_sc/       # SC
-  counties_nc/       # NC (scaffold)
-  counties_tn/       # TN (scaffold)
-  counties_tx/       # TX (scaffold)
-  counties_ct/       # CT (scaffold)
-  counties_la/       # LA (scaffold)
-  counties_ms/       # MS (scaffold)
+  counties/          # FL (67)
+  counties_ga/       # GA (74)
+  counties_sc/       # SC (46)
+  counties_nc/       # NC (47)
+  counties_tn/       # TN (9)
+  counties_tx/       # TX (15)
+  counties_ct/       # CT (2 statewide)
+  counties_la/       # LA (4)
+  counties_ms/       # MS (2)
+  counties_al/       # AL (3)
+  dcn_base.py        # NC DevExpress
+  ocv_inmates_base.py
   *_base.py          # shared platforms
 ```
 

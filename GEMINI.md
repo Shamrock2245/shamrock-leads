@@ -2,16 +2,18 @@
 
 > This file configures AI coding assistants (Gemini, Antigravity, Manus, etc.).
 > **Read `BRAND.md` first.** It defines who we are and what we're building.
-> **Last Updated:** 2026-07-29
+> **Last Updated:** 2026-08-04  
+> **Authoritative status:** [`STATUS.md`](./STATUS.md) · Agent handbook: [`AGENTS.md`](./AGENTS.md)
 
 ---
 
 ## What This Is
 
-ShamrockLeads is the core intelligence engine for **Shamrock Bail Bonds** — a Florida bail bond agency
-automating the full bond lifecycle from arrest scrape to signed paperwork to payment collection.
+ShamrockLeads is the core intelligence engine for **Shamrock Bail Bonds** — multi-state arrest intelligence
+and bond Auto-CRM (scrape → score → outreach → intake → match → paperwork → pay → active bond lifecycle).
 
-**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year by dominating the Florida (67 counties) and Georgia (159 counties) markets.
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint**
+plus **Georgia** — **269 registered scrapers** across 10 states (see `STATUS.md`).
 
 ---
 

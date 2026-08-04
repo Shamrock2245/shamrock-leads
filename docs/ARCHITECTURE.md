@@ -59,7 +59,7 @@ ShamrockLeads is a **statewide arrest intelligence and bond lifecycle platform**
 
 | Service | Container | Internal | External | Technology | Purpose |
 |---------|-----------|----------|----------|------------|---------|
-| `shamrock-leads` | `shamrock-leads` | — | — | Python 3.12 + APScheduler | Scraper engine: 198 registered scrapers (FL/GA/SC/NC), lead scoring, dedup |
+| `shamrock-leads` | `shamrock-leads` | — | — | Python 3.12 + APScheduler | Scraper engine: **269** registered scrapers (10 states), lead scoring, dedup |
 | `dashboard` | `shamrock-dashboard` | 5050 | 8088 | FastAPI + Uvicorn | Intelligence dashboard: 61 API modules, 36 services, 42 JS modules |
 | `traccar` | `shamrock-traccar` | 8082 | 8082 | Java (Traccar) | GPS tracking: OsmAnd (5055), TK103 (5001), H02 (5013), GT06 (5023) |
 | `node-red` | `shamrock-node-red` | 1880 | 1880 | Node-RED | Ops dashboard, 39+ cron jobs (profile: `ops`) |

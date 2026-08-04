@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-256-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-269-orange)](#county-coverage)
 [![States](https://img.shields.io/badge/States-10-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
@@ -24,7 +24,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **256 registered county scrapers** across 10 states (GA 74 · FL 67 · SC 46 · NC 34 · TX 15 · TN 9 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
+1. **Scrapes** real-time booking data from **269 registered county scrapers** across 10 states (GA 74 · FL 67 · SC 46 · NC 47 · TX 15 · TN 9 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
@@ -181,21 +181,21 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 
 ## County Coverage
 
-**231 registered scrapers** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 states**, utilizing shared platform bases:
+**269 registered scrapers** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 states**, utilizing shared platform bases:
 
 | State | Registered | Path | Job ID form | CLI command |
 |-------|----------:|------|-------------|-------------|
 | **Georgia** | 74 | `scrapers/counties_ga/` | `scraper_ga_<county>` | `python main.py ga_fulton` |
-| **Florida** | 51 | `scrapers/counties/` | `scraper_<county>` (legacy) | `python main.py lee` |
+| **Florida** | 67 | `scrapers/counties/` | `scraper_<county>` (legacy) | `python main.py lee` |
 | **South Carolina** | 46 | `scrapers/counties_sc/` | `scraper_sc_<county>` | `python main.py sc_charleston` |
-| **North Carolina** | 31 | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
-| **Texas** | 12 | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
-| **Tennessee** | 6 | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
+| **North Carolina** | 47 | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
+| **Texas** | 15 | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
+| **Tennessee** | 9 | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
 | **Louisiana** | 4 | `scrapers/counties_la/` | `scraper_la_<parish>` | `python main.py la_orleans` |
 | **Alabama** | 3 | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
-| **Connecticut** | 2 | `scrapers/counties_ct/` | `scraper_ct_<county>` | `python main.py ct_doc` |
+| **Connecticut** | 2 | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` |
 | **Mississippi** | 2 | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
-| **Total** | **231** | `dashboard/extensions.py` | Labels: `County (ST)` | |
+| **Total** | **269** | `dashboard/extensions.py` | Labels: `County (ST)` | |
 
 ### Shared Base Classes
 
@@ -208,6 +208,8 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 | `SouthernSWBaseScraper` | Southern Software | GA, SC, NC |
 | `JailTrackerBaseScraper` | JailTracker | FL, SC, GA |
 | `NewWorldBaseScraper` | New World InmateInquiry | FL, GA, SC |
+| `DCNBaseScraper` | DevExpress DCN | NC |
+| `OCVInmatesBaseScraper` | OCV S3 inmates.json | NC, TN |
 | `KologikBaseScraper` | Kologik Vue roster | FL (reusable) |
 | `OdysseyBaseScraper` | Tyler Odyssey family | GA, TX |
 

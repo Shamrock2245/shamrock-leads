@@ -1,7 +1,7 @@
 # ROADMAP.md — ShamrockLeads Phase Progression
 
 > **Purpose:** Define what exists vs what is coming. Every agent must check this before writing code.  
-> **Last Updated:** 2026-07-14 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
+> **Last Updated:** 2026-08-04 · Authoritative truth: [`STATUS.md`](./STATUS.md)  
 > **Read `BRAND.md` first.** Platform: [`docs/PLATFORM.md`](./docs/PLATFORM.md) · Prod: [`docs/ECOSYSTEM_PROD_CHECKLIST.md`](./docs/ECOSYSTEM_PROD_CHECKLIST.md) · Multi-state: [`docs/MULTI_STATE_SCRAPER_ROADMAP.md`](./docs/MULTI_STATE_SCRAPER_ROADMAP.md)
 
 ## Phase Overview
@@ -12,9 +12,9 @@
 | 1b | FL County Expansion (67 registered / 67 goal) | ✅ Complete (core market) |
 | 1c | GA County Expansion (74 registered / 159 goal) | 🔄 In Progress |
 | 1d | SC County Expansion (46/46 registered) | ✅ Registered · ⏳ production depth |
-| 1e | NC Wave-1 (34 registered / 100 goal) | ✅ Wave-1 code · ⏳ first production scrapes |
-| 1f | Multi-State Ops dashboard (FL/GA/SC/NC/TN/TX/LA/CT/AL/MS) | ✅ Complete (July 2026) |
-| 1g | TN / TX / CT / LA / MS / AL | ✅ 40 Registered scrapers |
+| 1e | NC Expansion (47 registered / 100 goal) | ✅ Waves 1–7 code · ⏳ production depth + remaining counties |
+| 1f | Multi-State Ops dashboard (FL/GA/SC/NC/TN/TX/LA/CT/AL/MS) | ✅ Complete · registry-first KPIs |
+| 1g | TN / TX / CT / LA / MS / AL | ✅ **35** registered (TN9 · TX15 · LA4 · CT2 · AL3 · MS2) |
 | 2 | Defendant Normalization + Contact Discovery | ✅ Complete |
 | 3 | Intake Ingestion (all sources) | ✅ Complete |
 | 4 | Matching Engine | ✅ Complete |
@@ -75,35 +75,47 @@ See `docs/GEORGIA_COUNTY_REGISTRY.md`. Goal: all 159 counties over time.
 
 ---
 
-## Phase 1e: NC Wave-1 ✅ CODE · ⏳ FIRST PROD SCRAPES
+## Phase 1e: NC Expansion ✅ 47 REGISTERED · ⏳ PROD DEPTH + 100-COUNTY GOAL
 
-**Registered:** **27** NC wave-1 scrapers in `scrapers/counties_nc/` (`scraper_nc_*`).
+**Registered:** **47** NC scrapers in `scrapers/counties_nc/` (`scraper_nc_*`) as of 2026-08-04.
 
 | Platform | Examples |
 |----------|----------|
 | Southern SW | Anson, Duplin, Edgecombe, Harnett, Henderson, … |
 | Zuercher | Brunswick, Davie, Hoke, Pender, Rutherford |
 | P2C classic | Alamance, Cabarrus, Cleveland, Iredell, Lincoln, … |
-| Custom | Mecklenburg, Durham, Davidson, Gaston |
+| DCN DevExpress | Moore, Lee, Halifax, Richmond, Carteret (`dcn_base.py`) |
+| OCV inmates.json | Chatham, Stanly (`ocv_inmates_base.py`) |
+| Daily custody PDF | Caldwell, Orange |
+| Custom HTML/ASP | Mecklenburg, Durham, Davidson, Gaston, Pitt, Craven, Randolph, Catawba |
 
 **Docs:** `docs/NC_COUNTY_REGISTRY.md`, `docs/NC_RECON_RESULTS.md`  
-**Next:** first successful production scrapes → expand beyond wave-1 (100-county goal).
+**Next:** production scrapes for new counties; WAF strategy for cloud P2C metros; DCN page-2; more OCV app_ids; Rowan/Robeson.
 
 ---
 
 ## Phase 1f: Multi-State Ops Dashboard ✅ COMPLETE
 
-- **Multi-State Ops** tab: `/api/ops/*` registry, state KPIs, live arrest feed (FL/GA/SC/NC)
+- **Multi-State Ops** tab: `/api/ops/*` registry-first KPIs, live arrest feed (all 10 states)
 - **Bond Intelligence** tab: bond analytics by state
-- Lead Explorer: state column + filter; `REGISTERED_COUNTIES` labels `County (ST)`
-- Run-now triggers emit state-prefixed keys (`nc_mecklenburg`, `sc_lee`)
+- Lead Explorer: state column + filter; `REGISTERED_COUNTIES` labels `County (ST)` (**269** total)
+- Run-now triggers emit state-prefixed keys (`nc_mecklenburg`, `sc_lee`, `ct_doc`)
+- Scraper Health / stats reflect live `REGISTERED_COUNTIES` counts
 
 ---
 
-## Phase 1g: Remaining Palmetto states 🔲 SCAFFOLD
+## Phase 1g: Remaining Palmetto states ✅ REGISTERED (depth ongoing)
 
-Package dirs exist: `counties_tn/`, `counties_tx/`, `counties_ct/`, `counties_la/`, `counties_ms/`.  
-Order of battle: see `docs/MULTI_STATE_SCRAPER_ROADMAP.md` (NC→TN→LA/MS→TX→CT).
+| State | Registered | Path | Notes |
+|-------|----------:|------|-------|
+| TN | 9 | `counties_tn/` | Davidson/Knox live; Shelby TLS; + metros |
+| TX | 15 | `counties_tx/` | Bexar/Dallas live; Harris browser; Gulf Coast |
+| LA | 4 | `counties_la/` | Orleans/Lafayette/Jefferson/EBR |
+| CT | 2 | `counties_ct/` | Statewide dockets + CT DOC (hardened 2026-08-04) |
+| AL | 3 | `counties_al/` | Jefferson, Madison, Mobile |
+| MS | 2 | `counties_ms/` | Hinds, Jackson |
+
+Order of battle / deepen: see `docs/MULTI_STATE_SCRAPER_ROADMAP.md`.
 
 ---
 
@@ -272,7 +284,7 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 - Structured `charge_details` data model (`[{"charge": "...", "bond_amount": 1500, "bond_type": "Surety", "case_number": "..."}, ...]`)
 - `POST /api/leads/update-charge-bonds` endpoint to edit individual charge bonds and auto-recalculate total bond amount and lead score
 - Interactive **⚖️ Per-Charge Bonds Modal** on Defendant cards in the UI
-- Multi-state query builder supporting all 10 states (FL, GA, SC, NC, TN, TX, LA, CT, AL, MS) and 256 county labels (`County (ST)`)
+- Multi-state query builder supporting all 10 states (FL, GA, SC, NC, TN, TX, LA, CT, AL, MS) and **269** county labels (`County (ST)`)
 - Dynamic county selector filtering dropdown options by selected state
 
 ---

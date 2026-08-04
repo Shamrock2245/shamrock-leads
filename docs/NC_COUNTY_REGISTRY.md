@@ -160,23 +160,28 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 
 ## Next build priorities
 
-See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).
+See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).  
+**As of 2026-08-04:** **47 registered** (waves 1–7 including Pitt, DCN cluster, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF).
 
-1. Harden registered wave-1/2/3 metros (Meck, Wake WAF, Guilford, Forsyth)  
+1. Harden registered metros (Meck, Wake WAF, Guilford, Forsyth) — residential proxy  
 2. DCN pagination beyond first 100 (DevExpress AJAX unreliable from DC IPs)  
-3. Craven GIS / Orange OCV / Randolph ASP.NET / Catawba  
+3. More OCV `app_id` counties (Wilson, etc.) where S3 inmates.json is public  
 4. Rowan / Robeson cloud P2C (proxy)  
-5. Alexander classic P2C (DNS flaky)
+5. Alexander classic P2C (DNS flaky)  
+6. Remaining rural / no-portal counties (VINE-only — skip or low priority)
 
 ## Multi-state roadmap (Palmetto)
 
-| State | Counties (approx) | Code dir | Status |
-|-------|------------------:|----------|--------|
-| FL | 67 | `scrapers/counties/` | Primary |
-| GA | 159 | `scrapers/counties_ga/` | Expanding |
-| SC | 46 | `scrapers/counties_sc/` | Building |
-| **NC** | **100** | **`scrapers/counties_nc/`** | **Recon complete · build pending** |
-| TN | 95 | `scrapers/counties_tn/` | Scaffold |
-| TX | 254 | `scrapers/counties_tx/` | Scaffold |
-| CT | 8 | `scrapers/counties_ct/` | Scaffold |
-| LA | 64 | `scrapers/counties_la/` | Scaffold |
+| State | Goal | Registered | Code dir | Status |
+|-------|-----:|----------:|----------|--------|
+| FL | 67 | **67** | `scrapers/counties/` | Primary complete |
+| GA | 159 | **74** | `scrapers/counties_ga/` | Expanding |
+| SC | 46 | **46** | `scrapers/counties_sc/` | Registered · depth ongoing |
+| **NC** | **100** | **47** | **`scrapers/counties_nc/`** | **Waves 1–7 · expand portals** |
+| TN | 95 | **9** | `scrapers/counties_tn/` | Expanding |
+| TX | 254 | **15** | `scrapers/counties_tx/` | Expanding |
+| CT | statewide | **2** | `scrapers/counties_ct/` | DOC + dockets hardened |
+| LA | 64 | **4** | `scrapers/counties_la/` | Expanding |
+| AL | — | **3** | `scrapers/counties_al/` | Major metros |
+| MS | — | **2** | `scrapers/counties_ms/` | Major metros |
+| **Total** | — | **269** | `REGISTERED_COUNTIES` | See `STATUS.md` |

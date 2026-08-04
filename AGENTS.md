@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-07-29  
+> **Last Updated:** 2026-08-04  
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
@@ -12,14 +12,14 @@
 
 ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 256 registered scrapers · 67 FL]`
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 269 registered scrapers · 67 FL · 47 NC]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
 6. **Automates First Appearance Bond Filling** 24/7 background worker (`FirstAppearanceWatcher`) re-checking unset/$0 bonds across target active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto) every 30 mins `[IMPLEMENTED]`
 7. **Supports Per-Charge Bond Breakdown** structured `charge_details` data model + UI modal editing + `POST /api/leads/update-charge-bonds` auto-rescoring `[IMPLEMENTED]`
-8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and 256 county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
+8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and **269** county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
 9. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
 10. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 11. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
@@ -32,7 +32,7 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 18. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
 19. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
 20. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
-21. **Multi-State Ops + Bond Intelligence** dashboard surfaces for FL/GA/SC/NC/TN/TX/LA `[IMPLEMENTED July 2026]`
+21. **Multi-State Ops + Bond Intelligence** dashboard surfaces for all 10 states `[IMPLEMENTED · registry-first KPIs]`
 
 **Not this repo:** Bail School student LMS → `shamrock-bail-school`.
 
@@ -47,6 +47,9 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 | TN | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
 | TX | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
 | LA | `scrapers/counties_la/` | `scraper_la_<parish>` | `python main.py la_orleans` |
+| CT | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` / statewide key |
+| AL | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
+| MS | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
 
 - Dashboard labels use `County (ST)` in `REGISTERED_COUNTIES` (`dashboard/extensions.py`).
 - Scheduler resolves bare names, `sc_lee`, and `Lee (FL)` via `_resolve_job_id`.
@@ -106,7 +109,7 @@ Move records safely through this lifecycle:
 
 | Agent | Role | Status | Key File(s) |
 |-------|------|--------|-------------|
-| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties*.py` (FL/GA/SC/NC/TN/TX/LA), `*_base.py`, `base_scraper.py` |
+| **The Clerk** | Jail roster parsing, anti-bot evasion | ✅ Live | `scrapers/counties*.py` (10 states), `dcn_base`/`ocv_inmates_base`, `*_base.py`, `base_scraper.py` |
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
@@ -138,8 +141,8 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  206 County Scrapers  │  │  Super CRM + Multi-State  │ │
-│  │  (FL/GA/SC/NC/TN/TX/LA)│ │  Ops + Bond Intel         │ │
+│  │  269 County Scrapers  │  │  Super CRM + Multi-State  │ │
+│  │  (10 states)          │  │  Ops + Bond Intel         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
 │  │  Lead Scorer         │            │                   │
