@@ -272,11 +272,13 @@ def get_lead_context(bond_doc: dict) -> dict:
 async def generate_response(lead_context: dict, message_text: str,
                              intent: str, ai_enabled: bool = True,
                              conversation_history: list = None,
-                             is_first_message: bool = False) -> Optional[str]:
+                             is_first_message: bool = False,
+                             memory_block: str = "") -> Optional[str]:
     """Generate a response to an inbound message with conversation history.
 
     Uses OpenAI with full conversation context if ai_enabled and available,
     otherwise falls back to templates.
+    Optional ``memory_block`` injects Mem0 long-term facts (prior calls/texts).
     Returns None if we shouldn't respond (e.g. spam).
     """
     # Don't respond to spam
@@ -287,6 +289,8 @@ async def generate_response(lead_context: dict, message_text: str,
     # Try AI-powered response with conversation history
     if ai_enabled:
         filled_prompt = SYSTEM_PROMPT.format(**lead_context)
+        if memory_block:
+            filled_prompt = f"{filled_prompt}\n\n{memory_block}"
         
         # Build message list with history
         messages = []
@@ -538,16 +542,44 @@ async def process_inbound(phone: str, message_text: str,
     )
     is_first_message = len(conversation_history) <= 1  # Only the current message
 
+    # 4b. Long-term memory (Mem0) — cross-channel with GAS voice Shannon
+    memory_block = ""
+    mem0_facts = 0
+    mem0_stored = False
+    try:
+        from dashboard.services.mem0_service import format_memory_block, search_facts
+        query = f"{message_text} {context.get('defendant_name', '')} bail bond"
+        facts = await search_facts(phone, query)
+        mem0_facts = len(facts)
+        if facts:
+            memory_block = format_memory_block(facts)
+    except Exception as e:
+        logger.debug("mem0 search skipped: %s", e)
+
     # 5. Check if we should auto-reply
     should_reply, reason = await should_auto_reply(phone, booking_number, db, config)
 
     if not should_reply:
         logger.info("⏭️  No auto-reply: %s (phone=%s, bk=%s)", reason, phone[-4:], booking_number)
+        # Still store inbound for long-term memory when human handles thread
+        try:
+            from dashboard.services.mem0_service import remember_exchange
+            mem0_stored = await remember_exchange(
+                phone,
+                (conversation_history or [])[-6:],
+                booking_number=booking_number,
+                county=context.get("county", ""),
+                intent=intent,
+            )
+        except Exception:
+            pass
         return {
             "responded": False,
             "intent": intent,
             "response": None,
             "reason": reason,
+            "mem0_facts": mem0_facts,
+            "mem0_stored": mem0_stored,
         }
 
     # 6. Determine response type
@@ -561,6 +593,7 @@ async def process_inbound(phone: str, message_text: str,
             context, message_text, intent, ai_enabled,
             conversation_history=conversation_history,
             is_first_message=is_first_message,
+            memory_block=memory_block,
         )
 
     if not response_text:
@@ -662,9 +695,25 @@ async def process_inbound(phone: str, message_text: str,
         except Exception as e:
             logger.debug("Info extraction skipped: %s", e)
 
+    # 12. Persist exchange to Mem0 (long-term; shares project with voice Shannon)
+    try:
+        from dashboard.services.mem0_service import remember_exchange
+        turns = list(conversation_history or [])
+        if response_text:
+            turns = turns + [{"role": "assistant", "content": response_text}]
+        mem0_stored = await remember_exchange(
+            phone,
+            turns[-8:],
+            booking_number=booking_number,
+            county=context.get("county", ""),
+            intent=intent,
+        )
+    except Exception as e:
+        logger.debug("mem0 store skipped: %s", e)
+
     logger.info(
-        "✅ Auto-replied to %s (intent=%s, turn=%d, bk=%s)",
-        phone[-4:], intent, len(conversation_history), booking_number
+        "✅ Auto-replied to %s (intent=%s, turn=%d, bk=%s, mem0_facts=%d)",
+        phone[-4:], intent, len(conversation_history), booking_number, mem0_facts
     )
 
     return {
@@ -674,4 +723,6 @@ async def process_inbound(phone: str, message_text: str,
         "reason": reason,
         "bb_message_guid": sent_guid,
         "conversation_turn": len(conversation_history),
+        "mem0_facts": mem0_facts,
+        "mem0_stored": mem0_stored,
     }

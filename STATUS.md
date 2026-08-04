@@ -76,6 +76,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **Family Tree** tab + `/api/family-tree/*` | ✅ code |
 | **NC waves 4–7** (Pitt, DCN Moore/Lee/Halifax/Richmond, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF) | ✅ code 2026-08-04 · NC **47** |
 | **CT harden** (curl_cffi dockets + DOC A–Z list-first) | ✅ code 2026-08-04 |
+| **Mem0 long-term memory** for Shannon iMessage (GAS-compatible `MEMO_API_KEY`) | ✅ code 2026-08-04 · set env on VPS |
 | **iMessage inbound replies** on desktop (webhook + poll + hydrate) | ✅ code · BB ops ongoing |
 | Scraper **Run** always JSON + county/state matching | ✅ |
 

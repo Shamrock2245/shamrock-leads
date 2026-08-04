@@ -45,6 +45,12 @@ class Settings:
     # --- OpenAI ---
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
+    # --- Mem0 (Shannon long-term memory; same project as GAS voice Shannon) ---
+    # GAS Script Property is MEMO_API_KEY; MEM0_API_KEY accepted as alias.
+    MEMO_API_KEY: str = os.getenv("MEMO_API_KEY", "") or os.getenv("MEM0_API_KEY", "")
+    MEM0_API_KEY: str = os.getenv("MEM0_API_KEY", "") or os.getenv("MEMO_API_KEY", "")
+    MEM0_ENABLED: str = os.getenv("MEM0_ENABLED", "")  # empty = auto when key set
+
     # --- Slack ---
     SLACK_WEBHOOK_ARRESTS: str = os.getenv("SLACK_WEBHOOK_ARRESTS", "")
     SLACK_WEBHOOK_LEADS: str = os.getenv("SLACK_WEBHOOK_LEADS", "")
@@ -153,6 +159,7 @@ class Settings:
             "BlueBubbles": cls.bluebubbles_configured(),
             "Google Sheets": cls.sheets_configured(),
             "OpenAI": bool(cls.OPENAI_API_KEY),
+            "Mem0 (Shannon memory)": bool(cls.MEMO_API_KEY or cls.MEM0_API_KEY),
         }
         print("\n  Services:")
         for name, configured in services.items():

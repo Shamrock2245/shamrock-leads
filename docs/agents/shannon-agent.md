@@ -15,11 +15,25 @@ Shannon is the AI-powered auto-reply agent that handles incoming iMessage conver
 
 ```
 Incoming iMessage (via BlueBubbles webhook)
-    → Message context loaded (last 10 messages in thread)
-    → OpenAI GPT-4o generates contextual response
-    → Response sent via BlueBubbles iMessage
-    → Conversation logged for human review
+    → Match lead + load Mongo thread history (~20 msgs for phone+booking)
+    → Mem0 search (long-term facts for last-10 phone digits — shared with voice Shannon)
+    → OpenAI GPT-4o-mini with history + KNOWN FACTS block
+    → Response sent via BlueBubbles iMessage (human gates unchanged)
+    → Conversation logged to Mongo + Mem0 remember_exchange
 ```
+
+### Mem0 long-term memory
+
+| Item | Detail |
+|------|--------|
+| Env | `MEMO_API_KEY` (GAS name) or `MEM0_API_KEY` |
+| Same project as | GAS `ElevenLabs_WebhookHandler.js` → `saveMem0Memory_` |
+| `user_id` | Last **10** phone digits (cross-channel with voice calls) |
+| Fail mode | Missing key / API error → current Mongo-only behavior |
+| Status | `GET /api/agent-brain/memory/status` |
+| Service | `dashboard/services/mem0_service.py` |
+
+**Ops:** Copy the Mem0 key from GAS Script Properties (`MEMO_API_KEY`) into Hetzner / leads `.env`. Do not commit the key.
 
 ---
 
@@ -27,11 +41,12 @@ Incoming iMessage (via BlueBubbles webhook)
 
 | File | Purpose |
 |------|---------|
-| `dashboard/api/agent_brain.py` | Core AI agent logic |
-| `dashboard/api/agent_brain_api.py` | Agent API endpoints |
-| `dashboard/api/bb_webhook_receiver.py` | Incoming message handler |
+| `dashboard/routers/agent_brain.py` | Core AI agent logic + Mem0 inject/store |
+| `dashboard/routers/agent_brain_api.py` | Agent API endpoints + memory status |
+| `dashboard/services/mem0_service.py` | Mem0 REST client (httpx) |
+| `dashboard/routers/bb_webhook_receiver.py` | Incoming message handler |
 | `dashboard/services/bb_client.py` | BlueBubbles message sending |
-| `dashboard/api/imessage_automation.py` | Automation rules |
+| `dashboard/routers/imessage_automation.py` | Automation rules |
 | `dashboard/sl-imessage.js` | iMessage control center frontend |
 
 ---

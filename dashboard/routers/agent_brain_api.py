@@ -85,6 +85,43 @@ async def _get_lead_context(booking_number: str) -> Optional[dict]:
     return doc
 
 
+def _extract_lead_phone(doc: dict) -> str:
+    """Best-effort phone for Mem0 lookup (indemnitor / contact / outreach)."""
+    indemnitor = doc.get("indemnitor") or {}
+    for key in (
+        "callback_phone",
+        "phone",
+        "mobile",
+        "cell",
+    ):
+        val = indemnitor.get(key) if isinstance(indemnitor, dict) else None
+        if val:
+            return str(val)
+    for key in ("contact_phone", "phone", "recipient_phone", "indemnitor_phone"):
+        val = doc.get(key)
+        if val:
+            return str(val)
+    # communication_log last outbound/inbound with phone
+    for entry in reversed(doc.get("communication_log") or []):
+        if isinstance(entry, dict) and entry.get("phone"):
+            return str(entry["phone"])
+    return ""
+
+
+async def _mem0_context_for_lead(doc: dict) -> str:
+    """Optional Mem0 facts block for AI suggest/summary prompts."""
+    try:
+        from dashboard.services.mem0_service import format_memory_block, search_facts
+        phone = _extract_lead_phone(doc)
+        if not phone:
+            return ""
+        query = f"{doc.get('defendant_name', '')} {doc.get('county', '')} bail bond"
+        facts = await search_facts(phone, query)
+        return format_memory_block(facts) if facts else ""
+    except Exception:
+        return ""
+
+
 def _build_lead_summary_text(doc: dict) -> str:
     """Build a plain-text summary of a lead for OpenAI context."""
     parts = [
@@ -130,6 +167,16 @@ RULES:
 - Never give legal advice
 - Be conversational and natural
 - Use proper grammar but casual tone"""
+
+@agent_brain_api_bp.get("/agent-brain/memory/status")
+async def api_agent_brain_memory_status():
+    """Mem0 configuration status (no secrets)."""
+    try:
+        from dashboard.services.mem0_service import status_snapshot
+        return {"success": True, "mem0": status_snapshot()}
+    except Exception as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
 
 @agent_brain_api_bp.post("/agent-brain/opener")
 async def api_agent_brain_opener(request: Request):
@@ -211,9 +258,11 @@ async def api_agent_brain_suggest(request: Request):
             return JSONResponse({"error": "Lead not found"}, status_code=404)
 
         context_text = _build_lead_summary_text(doc)
+        mem0_block = await _mem0_context_for_lead(doc)
         user_prompt = (
             f"Generate {suggest_type} iMessage suggestions for this lead:\n\n"
             f"{context_text}\n\n"
+            f"{mem0_block}\n\n"
             f"Type: {suggest_type}\n"
             "Return 2-3 numbered suggestions."
         )
@@ -293,8 +342,10 @@ async def api_agent_brain_summary(request: Request):
             return JSONResponse({"error": "Lead not found"}, status_code=404)
 
         context_text = _build_lead_summary_text(doc)
+        mem0_block = await _mem0_context_for_lead(doc)
         user_prompt = (
-            f"Generate a lead intelligence briefing for this prospect:\n\n{context_text}"
+            f"Generate a lead intelligence briefing for this prospect:\n\n"
+            f"{context_text}\n\n{mem0_block}"
         )
 
         summary = await _call_openai(SUMMARY_SYSTEM, user_prompt, temperature=0.5, max_tokens=500)

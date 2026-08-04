@@ -371,6 +371,7 @@ Escalate immediately if:
 | `TWILIO_AUTH_TOKEN` | Optional | Twilio auth token |
 | `TWILIO_FROM_NUMBER` | Optional | Twilio sender number |
 | `OPENAI_API_KEY` | Optional | AI-powered enrichment + auto-reply |
+| `MEMO_API_KEY` | Optional | Mem0 long-term memory for Shannon (same key as GAS Script Property; alias `MEM0_API_KEY`) |
 | `DEFAULT_SURETY` | Optional | Default surety ID (`osi` or `palmetto`) |
 | `DASHBOARD_PUBLIC_URL` | Optional | `https://leads.shamrockbailbonds.biz` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Optional | GCP service account JSON path |

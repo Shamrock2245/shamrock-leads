@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.19.1] — 2026-08-04 (Mem0 long-term memory for Shannon)
+
+### Added
+- `dashboard/services/mem0_service.py` — Mem0 REST integration (httpx), GAS-compatible
+  - Env: **`MEMO_API_KEY`** (same as GAS Script Property) or alias `MEM0_API_KEY`
+  - `user_id` = last 10 phone digits (shares memories with voice Shannon / ElevenLabs)
+  - Fail-open when key missing or API errors
+- Agent Brain: search Mem0 before auto-reply; inject KNOWN FACTS; store exchange after reply
+- `GET /api/agent-brain/memory/status` · suggest/summary prompts enriched with Mem0 facts
+- Tests: `tests/test_mem0_service.py`
+
+### Ops
+- Copy `MEMO_API_KEY` from portal GAS Script Properties into leads production env (not in repo)
+
+---
+
 ## [2.19.0] — 2026-08-04 (NC waves 4–7 · CT harden · fleet 269 · data hygiene)
 
 ### Added

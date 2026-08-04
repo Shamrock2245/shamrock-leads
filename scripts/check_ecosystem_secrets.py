@@ -104,6 +104,7 @@ LEADS_RECOMMENDED = [
     "BLUEBUBBLES_URL_0178",
     "BLUEBUBBLES_PASSWORD_0178",
     "OPENAI_API_KEY",
+    "MEMO_API_KEY",  # Mem0 / Shannon long-term memory (GAS name; alias MEM0_API_KEY)
     "GOOGLE_GMAIL_REFRESH_TOKEN",
     "SWIPESIMPLE_PAYMENT_LINK",
 ]
@@ -127,6 +128,7 @@ PORTAL_DOCUMENTED = [
     "SIGNNOW_API_KEY / tokens",
     "TWILIO_*",
     "OPENAI_API_KEY",
+    "MEMO_API_KEY",  # Mem0 — GAS Script Property (voice Shannon); copy to leads env
     "ELEVENLABS_*",
     "TELEGRAM_BOT_TOKEN",
     "SLACK_*",
