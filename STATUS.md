@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-07-29  
+> **Last verified:** 2026-08-04  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
@@ -26,25 +26,25 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
-## Scale (authoritative — 2026-07-25)
+## Scale (authoritative — 2026-08-04)
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
-| **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler (Wave 2); legacy `scraper_<county>` IDs |
+| **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler; legacy `scraper_<county>` IDs |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
-| **NC** | **47** | `scrapers/counties_nc/` | + wave-7 Chatham/Stanly OCV · Orange PDF |
-| **TX** | **15** | `scrapers/counties_tx/` | + wave-4 Cameron, Brazoria, Galveston (Gulf Coast) |
-| **TN** | **9** | `scrapers/counties_tn/` | + wave-3 Williamson, Montgomery, Sumner |
+| **NC** | **47** | `scrapers/counties_nc/` | Waves 4–7: DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF |
+| **TX** | **15** | `scrapers/counties_tx/` | + Gulf Coast (Cameron, Brazoria, Galveston) |
+| **TN** | **9** | `scrapers/counties_tn/` | + Williamson, Montgomery, Sumner |
 | **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
 | **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
-| **CT** | **2** | `scrapers/counties_ct/` | Dockets hardened (~1.6k/run) · DOC A–Z list (~14k) |
+| **CT** | **2** | `scrapers/counties_ct/` | Statewide dockets (~1.6k/run) · CT DOC A–Z (~14k) — hardened 2026-08-04 |
 | **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
 | **Total** | **269** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
-**Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans`.
+**Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
-**Scaffold packages (no counties yet):** `counties_ct/`, `counties_ms/`, `counties_al/`.
+**Shared bases (recent):** `scrapers/dcn_base.py` (DevExpress), `scrapers/ocv_inmates_base.py` (OCV S3 inmates.json).
 
 ---
 
@@ -52,35 +52,32 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **198** registered county scrapers (FL/GA/SC/NC), scoring, Slack, Mongo | ✅ |
-| Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ July 14 |
-| Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, … | ✅ |
+| **269** registered scrapers (10 states), scoring, Slack, Mongo | ✅ 2026-08-04 |
+| Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
+| Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
-| **Multi-State Ops** tab + `/api/ops/*` (registry, state KPIs, live feed) | ✅ · **4 states** |
+| **Multi-State Ops** tab + `/api/ops/*` (registry-first KPIs, live feed, all 10 states) | ✅ · live registry |
 | **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
-| Lead Explorer **state** column + filter (FL/GA/SC/NC/TN/TX/LA) | ✅ July 16 |
-| Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ July 16 |
-| Lead Explorer API: `sort_map` includes `scraped_at` + `activity.scraped_last_hour` | ✅ July 19 |
-| Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ July 16 |
+| Lead Explorer **state** column + filter (all 10 states) | ✅ |
+| Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ |
+| Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ |
 | **Autonomous Proxy Engine (APE)** Warren + S5W2C + Stormsia | ✅ code · hub live |
-| Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ July 2026 |
+| Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ |
 | Omnibar → CRM search | ✅ |
-| Mongo index script expanded for CRM collections | ✅ |
+| Mongo upsert validation + `last_seen`/`scraped_at` + M0 oldest-first retention | ✅ 2026-08-04 |
+| Superadmin **Data Hygiene** (`/api/admin/hygiene/*` + UI) — purge test junk, repair mismatches | ✅ 2026-08-04 |
 | Webhooks fail-closed without secrets | ✅ |
 | Ecosystem secrets checklist | `scripts/check_ecosystem_secrets.py` |
 | Super CRM docs | `docs/SUPER_CRM.md`, `docs/ECOSYSTEM.md` |
-| SC registries / recon | `docs/SC_COUNTY_REGISTRY.md`, `docs/SC_RECON_RESULTS.md` |
-| NC registries / recon | `docs/NC_COUNTY_REGISTRY.md`, `docs/NC_RECON_RESULTS.md` |
+| SC / NC / CT registries | `docs/SC_COUNTY_REGISTRY.md`, `docs/NC_COUNTY_REGISTRY.md`, `docs/CT_COUNTY_REGISTRY.md` |
 | **Surety realignment (July 2026)** | ✅ |
-| &nbsp;&nbsp;`bonds.py` — `surety_id` + `insuranceCompany` both forwarded to GAS | ✅ |
-| &nbsp;&nbsp;Agent constants (Brendan O'Neal / P139768) in GAS + SignNow | ✅ |
-| &nbsp;&nbsp;`intake.py` — `surety_id` persisted to MongoDB `intake_queue` | ✅ |
-| **Bond check-in A+C (July 2026)** — transparent portal GPS + condition policy | ✅ code |
+| **Bond check-in A+C** — transparent portal GPS + condition policy | ✅ code |
 | **Traccar GPS (B)** continuous via in-stack Traccar Client / OsmAnd | ✅ rewired |
-| **Family Tree** tab + `/api/family-tree/*` (1st/2nd degree, soft-delete) | ✅ code 2026-07-26 |
-| **Wave-3 scrapers** NC/TN/TX (Buncombe, Johnston, Onslow, Williamson, Montgomery, Sumner, Cameron, Brazoria, Galveston) | ✅ code 2026-07-26 · total **256** |
-| **iMessage inbound replies** on desktop (webhook + poll + hydrate) | ✅ code 2026-07-26 · deploy required |
-| Scraper **Run** always JSON + county/state matching | ✅ code 2026-07-26 |
+| **Family Tree** tab + `/api/family-tree/*` | ✅ code |
+| **NC waves 4–7** (Pitt, DCN Moore/Lee/Halifax/Richmond, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF) | ✅ code 2026-08-04 · NC **47** |
+| **CT harden** (curl_cffi dockets + DOC A–Z list-first) | ✅ code 2026-08-04 |
+| **iMessage inbound replies** on desktop (webhook + poll + hydrate) | ✅ code · BB ops ongoing |
+| Scraper **Run** always JSON + county/state matching | ✅ |
 
 ---
 
@@ -143,22 +140,33 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 
 | Item | Status |
 |------|--------|
-| NC scrapers **registered** (39) but many still need first successful production scrape | ⏳ Run via Multi-State Ops / scheduler; wave-4 DCN list is partial (≤100/page) |
+| NC **47 registered** / 100 goal — many still need first successful production scrape | ⏳ Multi-State Ops / scheduler; DCN list partial (≤100/page); WAF metros (Wake/Guilford/Forsyth); more OCV app_ids |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
-| GA remaining counties beyond registered set | ⏳ Recon + wrappers |
-| TN wave-1 (Davidson/Knox live; Shelby TLS) | ⏳ Deepen + Hamilton/Rutherford |
-| TX wave-1 (Bexar/Dallas live; Harris browser) | ⏳ Tarrant/Travis + top-25 |
-| LA wave-1 (Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + EBR/Jefferson |
-| CT dockets + DOC | ✅ Hardened 2026-08-04 — production scrape next |
-| BlueBubbles production reliability (office Mac + tunnel) | ✅ Live 2026-07-23 (frp + BB 1.9.9); keep watchdog |
-| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ Set on VPS 2026-07-23 |
-| Atlas network restriction / rotated Mongo password if ever leaked | Ops |
+| GA remaining counties beyond registered set (74/159) | ⏳ Recon + wrappers |
+| TN (9 registered; Davidson/Knox live; Shelby TLS) | ⏳ Deepen + remaining metros |
+| TX (15 registered; Bexar/Dallas live; Harris browser) | ⏳ Expand top-25 |
+| LA (4 registered; Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + harden EBR/Jefferson |
+| CT dockets + DOC | ✅ Hardened 2026-08-04 — keep production scrapes scheduled |
+| BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
+| `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
+| Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (7 remaining) | ⏳ 5 blocked upstream (Bay/Gadsden/Gilchrist/Okeechobee/Suwannee), 1 WAF (Marion), 1 captcha-service (Lake) |
-| Defendants collection backfill | ✅ **4,580** defendants (3.7% of 130k arrests normalized) |
-| Local PDF stitcher full blank packet | ✅ 2026-07-10 · **2026-07-30** folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` (was `templates/blanks/`) · SignNow primary, Adobe Sign optional |
-| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 18) |
+| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service |
+| Defendants collection backfill | ⏳ ongoing normalize/batch |
+| Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · SignNow primary |
+| Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
+
+### Session note (2026-08-04)
+
+| Deliverable | Result |
+|-------------|--------|
+| NC waves 4–7 + shared `dcn_base` / `ocv_inmates_base` | ✅ NC **47** registered |
+| CT DOC + Statewide docket harden (`curl_cffi`, list-first DOC) | ✅ |
+| Multi-State Ops / Health / stats **registry-first** live KPIs | ✅ |
+| Mongo data-flow gaps + M0 oldest-first retention | ✅ |
+| Superadmin Data Hygiene (Jon Doe / test purge + mismatch repair) | ✅ |
+| Docs aligned to **269** fleet | ✅ this commit |
 
 ---
 
