@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of “are we production?” across the whole platform.  
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
-> **Last Updated:** 2026-07-23  
+> **Last Updated:** 2026-08-04  
 > **Owner:** Brendan · Super-admin: `admin@shamrockbailbonds.biz`
 
 Mark items `[x]` only when **live** is proven (not merely code on `main`).
@@ -95,8 +95,8 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | P1.2 | Google Calendar OAuth for court sync — not 501 / not dry-run only | leads | [ ] |
 | P1.3 | Google Drive OAuth for completed-bond filing | leads | [ ] |
 | P1.4 | OSINT worker healthy if using `/api/osint/*` (Maigret path) | leads | [ ] |
-| P1.5 | Node-RED: `GAS_WEBHOOK_URL`, `LEADS_PUBLIC_URL`, `GAS_API_KEY`; SYSTEM_SHUTDOWN off | node-red | [ ] |
-| P1.6 | Automation schedule visible: `GET /api/automation/schedule` (auth) | leads | [ ] |
+| P1.5 | Node-RED: `GAS_WEBHOOK_URL`, `LEADS_PUBLIC_URL`, `GAS_API_KEY`; SYSTEM_SHUTDOWN off | node-red | [x] *verified 2026-08-04* |
+| P1.6 | Automation schedule visible: `GET /api/automation/schedule` (auth) | leads | [x] *implemented* |
 | P1.7 | Re-arrest detector + Slack path exercised on a test booking | leads | [ ] |
 
 ---
