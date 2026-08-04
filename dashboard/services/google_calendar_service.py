@@ -200,10 +200,10 @@ class GoogleCalendarService:
         color_id = self.COLORS.get(event_type, self.COLORS['unknown'])
         
         defendant_name = email_data.get('defendant_name', 'Unknown Defendant')
+        defendant_email = email_data.get('defendant_email', '')
         county = email_data.get('county', '')
         judge = email_data.get('judge', '')
         location = email_data.get('location', '')
-        time_str = datetime_info.get('time_str', '')
         
         # Build event title — surfaces all 4 key fields visible in calendar views
         # Format: ⚖️ Name | County Co. | 9:00 AM | Courtroom 4A

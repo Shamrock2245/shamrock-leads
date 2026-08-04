@@ -32,6 +32,7 @@ from dashboard.extensions import (
     get_bb_server, format_phone, init_bluebubbles,
     update_bb_url, BB_CONFIG_API_KEY,
 )
+from dashboard.routers.helpers import serialize_doc
 
 legacy_bp = APIRouter(prefix="/api", tags=["legacy"])
 # ═══════════════════════════════════════════════════════════════════════════════

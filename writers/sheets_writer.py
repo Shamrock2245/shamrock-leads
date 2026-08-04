@@ -16,7 +16,7 @@ import os
 import json
 import base64
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import gspread
 from google.oauth2.service_account import Credentials
 from core.models import ArrestRecord
@@ -324,7 +324,7 @@ class SheetsWriter:
             except:
                 pass
 
-            timestamp = datetime.utcnow().isoformat()
+            timestamp = datetime.now(timezone.utc).isoformat()
             status = 'ERROR' if error else 'SUCCESS'
 
             log_row = [

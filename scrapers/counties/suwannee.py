@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import List
 
 from scrapers.base_scraper import BaseScraper
