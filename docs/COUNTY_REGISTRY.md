@@ -18,7 +18,7 @@
 ## Tier 1 — SWFL Core (7 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 1 | **Lee** | curl_cffi GET — sheriffleefl.org | `lee.py` | ✅ Active | 10 min | 2026-04-27 |
+| 1 | **Lee** | curl_cffi GET + origin DNS pin (`lee_origin`) — sheriffleefl.org public-api | `lee.py` | ✅ Active | 30 min | 2026-08-04 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
 | 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Needs **US residential** exit (Warren APE sticky or office SOCKS) | 90 min | 2026-07-16 |
 | 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |

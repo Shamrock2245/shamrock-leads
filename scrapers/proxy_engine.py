@@ -638,6 +638,7 @@ class StealthSession:
         allow_direct: bool = True,
         timeout: int = 30,
         impersonate: str = "chrome131",
+        curl_options: Optional[Dict[Any, Any]] = None,
     ):
         self.ape = ape or get_ape()
         self.prefer_residential = prefer_residential
@@ -645,6 +646,8 @@ class StealthSession:
         self.allow_direct = allow_direct
         self.timeout = timeout
         self.impersonate = impersonate or random.choice(_CHROME_IMPERSONATE)
+        # Optional libcurl opts (e.g. CURLOPT_RESOLVE for broken upstream DNS).
+        self.curl_options = dict(curl_options) if curl_options else None
         self._lock = threading.RLock()
         self._proxy: Optional[str] = None
         self._session = None
@@ -658,7 +661,10 @@ class StealthSession:
                 "curl_cffi is required for StealthSession. pip install curl_cffi"
             ) from exc
 
-        self._session = cffi_requests.Session()
+        session_kwargs: Dict[str, Any] = {}
+        if self.curl_options:
+            session_kwargs["curl_options"] = self.curl_options
+        self._session = cffi_requests.Session(**session_kwargs)
         self._apply_proxy(self._select_proxy())
 
     def _select_proxy(self) -> Optional[str]:
@@ -808,6 +814,7 @@ def create_stealth_session(
     sticky_session_id: Optional[str] = None,
     prefer_residential: bool = True,
     allow_direct: bool = True,
+    curl_options: Optional[Dict[Any, Any]] = None,
     **kwargs: Any,
 ) -> StealthSession:
     """Factory for a ready-to-use StealthSession bound to the global APE."""
@@ -816,6 +823,7 @@ def create_stealth_session(
         sticky_session_id=sticky_session_id,
         prefer_residential=prefer_residential,
         allow_direct=allow_direct,
+        curl_options=curl_options,
         **kwargs,
     )
 

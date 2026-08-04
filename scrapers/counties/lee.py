@@ -10,6 +10,8 @@ Features:
 - Per-booking charges API enrichment (bond, court, case data)
 - Base64 mugshot detection (v8.4 fix)
 - Stealth stack: APE StealthSession (curl_cffi Chrome JA3 + Warren/S5W2C/Stormsia)
+- Origin DNS pin: www A-record can point at a dead host; pin Host/SNI to working apex IP
+  via CURLOPT_RESOLVE (see scrapers/lee_origin.py)
 """
 
 import logging
@@ -23,12 +25,18 @@ import urllib.parse
 import os
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.lee_origin import (
+    LEE_BASE_URL,
+    invalidate_lee_origin_cache,
+    lee_curl_options,
+    lee_api_get,
+)
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
 # ── Config ──
-BASE_URL = "https://www.sheriffleefl.org"
+BASE_URL = LEE_BASE_URL  # https://www.sheriffleefl.org (DNS may be pinned — see lee_origin)
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
@@ -37,20 +45,21 @@ SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE off
 DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
 PAGE_SIZE = 50                 # Fixed: Lee API clamps max records per page to 50
 MAX_PAGES = 30                 # 30 × 50 = 1500 records max (enough for active roster + 30 days)
-MAX_ENRICH = 50                # Enriched up to 50 records per run to populate charges and bond amounts
+MAX_ENRICH = 25                # Keep enrichment modest — protect shared 12h API quota
 DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
 DETAIL_JITTER_S = 4.0          # Increased jitter
 RETRY_LIMIT = 2                # Outer retries (StealthSession also rotates proxies)
 BACKOFF_BASE_S = 5.0           # Increased from 2.0 — harder backoff on 429/503
 MAX_EXECUTION_S = 330
 CIRCUIT_BREAKER_THRESHOLD = 2  # Trip faster (was 3)
-CIRCUIT_BREAKER_COOLDOWN_S = 60  # Longer cooldown (was 45)
+CIRCUIT_BREAKER_COOLDOWN_S = 90  # Longer cooldown on 429/conn-refused spirals
 VARIANT_DELAY_S = 30           # Increased from 15 — save API quota between variant attempts
+PAGE_DELAY_S = 2.0             # Inter-page pause (was 1.5) — gentler on shared quota
 
 # Site-specific only — TLSFingerprinter / StealthSession owns User-Agent
 SITE_HEADERS = {
     "Accept": "application/json, text/html, */*;q=0.8",
-    "Referer": "https://www.sheriffleefl.org/",
+    "Referer": f"{BASE_URL}/",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
@@ -213,7 +222,7 @@ class LeeCountyScraper(BaseScraper):
                 break
 
             offset += PAGE_SIZE
-            time.sleep(1.5)
+            time.sleep(PAGE_DELAY_S)
 
         return all_records
 
@@ -562,7 +571,11 @@ class LeeCountyScraper(BaseScraper):
     # ── HTTP (APE StealthSession primary) ──
 
     def _get_stealth(self):
-        """Lazy-init sticky StealthSession (curl_cffi Chrome JA3 + APE residential)."""
+        """Lazy-init sticky StealthSession (curl_cffi Chrome JA3 + APE residential).
+
+        Pins www.sheriffleefl.org to a working origin IP so a dead www A-record
+        cannot black-hole the whole run (see scrapers/lee_origin.py).
+        """
         if self._stealth is False:
             return None
         if self._stealth is not None:
@@ -570,15 +583,24 @@ class LeeCountyScraper(BaseScraper):
         try:
             from scrapers.proxy_engine import create_stealth_session
 
+            curl_opts = lee_curl_options()
             self._stealth = create_stealth_session(
                 sticky_session_id="fl-lee-api",
+                # Prefer residential when available, but allow direct — Lee's
+                # public API is not Cloudflare-gated; dead www DNS was the real block.
                 prefer_residential=True,
                 allow_direct=True,
                 timeout=30,
                 impersonate="chrome131",
+                curl_options=curl_opts or None,
             )
             proxy = getattr(self._stealth, "proxy", None) or "direct"
-            logger.info("[Lee] StealthSession ready (proxy=%s)", proxy[:60] if proxy else "direct")
+            pin = "pinned" if curl_opts else "dns-default"
+            logger.info(
+                "[Lee] StealthSession ready (proxy=%s, origin=%s)",
+                (proxy[:60] if proxy else "direct"),
+                pin,
+            )
             return self._stealth
         except Exception as exc:
             logger.warning("[Lee] StealthSession unavailable (%s) — using fallbacks", exc)
@@ -594,14 +616,14 @@ class LeeCountyScraper(BaseScraper):
         self._stealth = None
 
     def _http_fetch(self, url: str, params: Dict[str, Any] = None):
-        """Fetch via APE StealthSession; fall back to Scrapfly / SOCKS curl_cffi."""
+        """Fetch via APE StealthSession; fall back to origin-pinned curl / Scrapfly."""
         if params:
             qs = urllib.parse.urlencode(params)
             full_url = f"{url}?{qs}"
         else:
             full_url = url
 
-        # ── Path 1: Stealth stack (preferred) ──
+        # ── Path 1: Stealth stack (preferred — sticky proxy + origin pin) ──
         stealth = self._get_stealth()
         if stealth is not None:
             try:
@@ -618,10 +640,68 @@ class LeeCountyScraper(BaseScraper):
                 if code in (403, 429, 503) and hasattr(stealth, "rotate_proxy"):
                     stealth.rotate_proxy()
             except Exception as exc:
-                logger.warning("[Lee] StealthSession error: %s — disabling for remainder of run", exc)
-                self._stealth = False
+                err = str(exc).lower()
+                # Dead www A-record / conn-refused → refresh origin pin
+                if any(
+                    token in err
+                    for token in (
+                        "couldn't connect",
+                        "connection refused",
+                        "failed to connect",
+                        "could not connect",
+                        "couldnt resolve",
+                        "couldn't resolve",
+                    )
+                ):
+                    logger.warning(
+                        "[Lee] StealthSession connect error (likely dead www DNS): %s — "
+                        "invalidating origin pin and re-initing session",
+                        exc,
+                    )
+                    invalidate_lee_origin_cache()
+                    try:
+                        stealth.close()
+                    except Exception:
+                        pass
+                    self._stealth = None  # allow re-init with fresh pin on next call
+                elif any(
+                    token in err
+                    for token in ("connect tunnel", "tunnel failed", "proxy", "502")
+                ):
+                    # APE/Warren CONNECT failure — drop sticky proxy, keep pin, try direct next
+                    logger.warning(
+                        "[Lee] StealthSession proxy tunnel error: %s — forcing direct origin pin",
+                        exc,
+                    )
+                    try:
+                        if hasattr(stealth, "_apply_proxy"):
+                            stealth._apply_proxy(None)
+                        elif hasattr(stealth, "rotate_proxy"):
+                            stealth.rotate_proxy()
+                    except Exception:
+                        pass
+                else:
+                    logger.warning(
+                        "[Lee] StealthSession error: %s — falling back to origin-pinned path",
+                        exc,
+                    )
+                    # Do not permanently disable; Path 2 will serve this request.
+                    # Next call can still retry stealth.
 
-        # ── Path 2: Scrapfly (optional env) ──
+        # ── Path 2: Origin-pinned direct curl_cffi (bypasses dead www A-record) ──
+        try:
+            resp = lee_api_get(full_url, headers=SITE_HEADERS, timeout=30, max_retries=2)
+            if resp is not None and getattr(resp, "status_code", 0) == 200:
+                return resp
+            code = getattr(resp, "status_code", "unknown") if resp else "none"
+            logger.warning("[Lee] origin-pinned GET non-200: HTTP %s", code)
+            if code in (429, 503):
+                # Don't keep hammering a throttled API this run
+                time.sleep(CIRCUIT_BREAKER_COOLDOWN_S)
+        except Exception as exc:
+            logger.warning("[Lee] origin-pinned GET failed: %s", exc)
+
+        # ── Path 3: Scrapfly (optional env) ──
         scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")
         if scrapfly_key:
             try:
@@ -652,11 +732,9 @@ class LeeCountyScraper(BaseScraper):
             except Exception as exc:
                 logger.warning("[Lee] Scrapfly fallback failed: %s", exc)
 
-        # ── Path 3: curl_cffi + SOCKS_PROXY / APE one-shot ──
+        # ── Path 4: curl_cffi + SOCKS_PROXY / APE one-shot (also origin-pinned) ──
         for attempt in range(RETRY_LIMIT):
             try:
-                from curl_cffi import requests as cffi_requests
-
                 proxy = None
                 if SOCKS_PROXY:
                     proxy = SOCKS_PROXY
@@ -666,10 +744,8 @@ class LeeCountyScraper(BaseScraper):
                     except Exception:
                         proxy = None
                 proxies = {"http": proxy, "https": proxy} if proxy else None
-                resp = cffi_requests.get(
+                resp = lee_api_get(
                     full_url,
-                    impersonate="chrome131",
-                    proxies=proxies,
                     headers={
                         **SITE_HEADERS,
                         "User-Agent": (
@@ -679,14 +755,16 @@ class LeeCountyScraper(BaseScraper):
                         ),
                     },
                     timeout=30,
+                    proxies=proxies,
+                    max_retries=1,
                 )
-                if resp.status_code == 200:
+                if resp is not None and resp.status_code == 200:
                     if proxy:
                         self.record_proxy_success(proxy)
                     return resp
-                if proxy and resp.status_code in (403, 429, 503):
+                if proxy and resp is not None and resp.status_code in (403, 429, 503):
                     self.record_proxy_failure(proxy)
-                if resp.status_code in (429, 500, 502, 503):
+                if resp is not None and resp.status_code in (429, 500, 502, 503):
                     sleep_s = BACKOFF_BASE_S * (2 ** attempt) + random.uniform(
                         0, BACKOFF_BASE_S
                     )
@@ -697,7 +775,7 @@ class LeeCountyScraper(BaseScraper):
                     continue
 
                 class MockEmptyResp:
-                    status_code = resp.status_code
+                    status_code = resp.status_code if resp is not None else 0
 
                     def json(self):
                         return {}
@@ -709,6 +787,7 @@ class LeeCountyScraper(BaseScraper):
                     logger.warning(
                         "[Lee] HTTP error, retrying in %.1fs: %s", sleep_s, e
                     )
+                    invalidate_lee_origin_cache()
                     time.sleep(sleep_s)
                 else:
                     logger.error("[Lee] HTTP fetch failed after retries: %s", full_url)

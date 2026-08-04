@@ -307,10 +307,30 @@ class FirstAppearanceWatcher:
             }
 
             # ── Lee County API direct charges fetch ──────────────────────────
+            # Use origin-pinned GET — www A-record can point at a dead host
+            # while the apex IP still serves the public API (see lee_origin).
             if county == "lee" and booking_id:
-                c_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges"
-                resp = requests.get(c_url, headers=headers, timeout=15)
-                if resp.status_code == 200:
+                try:
+                    from scrapers.lee_origin import lee_api_get
+
+                    resp = lee_api_get(
+                        f"/public-api/bookings/{booking_id}/charges",
+                        headers=headers,
+                        timeout=15,
+                        max_retries=2,
+                    )
+                except Exception as lee_exc:
+                    logger.debug(
+                        "FirstAppearanceWatcher: Lee origin pin failed, "
+                        "falling back to plain requests: %s",
+                        lee_exc,
+                    )
+                    c_url = (
+                        f"https://www.sheriffleefl.org/public-api/bookings/"
+                        f"{booking_id}/charges"
+                    )
+                    resp = requests.get(c_url, headers=headers, timeout=15)
+                if resp is not None and resp.status_code == 200:
                     try:
                         charges_json = resp.json()
                         if isinstance(charges_json, list) and charges_json:

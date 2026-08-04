@@ -116,20 +116,56 @@ async def ingest_url(url: str) -> dict:
 
 
 async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[dict]:
-    """Fetch booking info and charges directly from Lee County Sheriff's public API."""
+    """Fetch booking info and charges directly from Lee County Sheriff's public API.
+
+    Uses origin DNS pin (``scrapers.lee_origin``) because ``www.sheriffleefl.org``
+    A-record can point at a dead host while the apex origin still serves the API.
+    """
+    import asyncio
+
     headers = {"User-Agent": UA, "Accept": "application/json"}
-    booking_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}"
-    charges_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges"
 
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers, verify=False) as client:
-        b_resp = await client.get(booking_url)
-        c_resp = await client.get(charges_url)
+    def _fetch_both():
+        from scrapers.lee_origin import lee_api_get
 
-    if b_resp.status_code != 200:
+        b = lee_api_get(
+            f"/public-api/bookings/{booking_id}",
+            headers=headers,
+            timeout=20,
+            max_retries=2,
+        )
+        c = lee_api_get(
+            f"/public-api/bookings/{booking_id}/charges",
+            headers=headers,
+            timeout=20,
+            max_retries=2,
+        )
+        return b, c
+
+    try:
+        b_resp, c_resp = await asyncio.to_thread(_fetch_both)
+    except Exception as e:
+        log.warning("Lee origin-pinned ingest failed, trying plain httpx: %s", e)
+        booking_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}"
+        charges_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges"
+        async with httpx.AsyncClient(
+            timeout=20.0, follow_redirects=True, headers=headers, verify=False
+        ) as client:
+            b_resp = await client.get(booking_url)
+            c_resp = await client.get(charges_url)
+
+    if b_resp is None or b_resp.status_code != 200:
         return None
 
     b_data = b_resp.json() or {}
-    c_data = c_resp.json() if c_resp.status_code == 200 and isinstance(c_resp.json(), list) else []
+    c_data = []
+    if c_resp is not None and c_resp.status_code == 200:
+        try:
+            parsed_charges = c_resp.json()
+            if isinstance(parsed_charges, list):
+                c_data = parsed_charges
+        except Exception:
+            c_data = []
 
     first = _title_case_name(str(b_data.get("givenName") or b_data.get("firstName") or ""))
     middle = _title_case_name(str(b_data.get("middleName") or ""))

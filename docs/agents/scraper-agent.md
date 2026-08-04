@@ -78,9 +78,9 @@ Dashboard updates
 | Base URL | `https://www.sheriffleefl.org` |
 | Method | REST API — JSON responses (bookings API + charges API) |
 | Auth | None (public) |
-| Interval | 20 min |
+| Interval | 30 min |
 | Charges | Separate API call per booking (charge enrichment) |
-| Notes | Reference implementation. Highest volume SWFL county. |
+| Notes | Reference implementation. Highest volume SWFL county. **Origin pin** (`scrapers/lee_origin.py`): www A-record can point at a dead host; pin Host/SNI to working apex IP via `CURLOPT_RESOLVE`. Optional `LEE_ORIGIN_IP` env override. |
 
 #### Collier County ✅
 | Property | Value |
