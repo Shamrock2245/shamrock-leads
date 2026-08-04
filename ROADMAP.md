@@ -306,5 +306,5 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 | Miami-Dade scraper | Low | reCAPTCHA blocks; use ArcGIS daily dataset |
 | 16 rural counties | Low | Needs URL recon before scraper can be built |
 | WhatsApp Business | Medium | Twilio WhatsApp sandbox → Node-RED relay |
-| TTL index on audit_events | Medium | Add `expireAfterSeconds: 7776000` (90 days) |
+| TTL index on audit_events | ✅ Complete | Added `expireAfterSeconds: 7776000` (90 days) |
 | Nginx SSL cert auto-renewal | Low | Certbot cron for `leads.shamrockbailbonds.biz` |

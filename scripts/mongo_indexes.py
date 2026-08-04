@@ -284,6 +284,11 @@ def create_indexes():
     _safe_index(matches, [("Defendant_ID", ASCENDING)], name="idx_match_defendant", sparse=True)
     _safe_index(matches, [("status", ASCENDING)], name="idx_match_status")
 
+    print("\n📜 audit_events:")
+    audit = db["audit_events"]
+    _safe_index(audit, [("timestamp", ASCENDING)], name="idx_ttl_90d", expireAfterSeconds=90 * 24 * 3600)
+    _safe_index(audit, [("record_id", ASCENDING)], name="idx_audit_record")
+
     print("\n" + "=" * 60)
     print("✅ All indexes created successfully!")
 
@@ -303,6 +308,7 @@ def create_indexes():
         "tasks",
         "payments",
         "matches",
+        "audit_events",
     ]:
         coll = db[coll_name]
         idx_count = len(list(coll.list_indexes()))
