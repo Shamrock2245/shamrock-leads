@@ -57,7 +57,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        SCRAPER ENGINE                                │
 │                                                                      │
-│  231 County Scrapers across 10 States (Python 3.12)                   │
+│  269 County Scrapers across 10 States (Python 3.12)                   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │DrissionPage│  │ curl_cffi  │  │ requests +   │  │ Patchright │  │
 │  │ (Chromium) │  │(TLS spoof) │  │BeautifulSoup │  │ (Stealth)  │  │
@@ -158,7 +158,7 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 | ⚡ **Bond Intelligence** | `sl-bond-intelligence.js` | Multi-state bond portfolio analytics, risk tiering, regional performance |
 | 👤 **Defendants** | `defendants.js`, `sl-defendant-lifecycle.js` | Card grid with lifecycle notes, contact log, DNB/DNC, bond finalize |
 | 📱 **Outreach** | `sl-prospective.js` | Kanban pipeline (Contacted → Negotiating → Paperwork → Ready), iMessage bridge |
-| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 231 scrapers, error drill-down, manual triggers, auto-recovery |
+| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 269 scrapers, error drill-down, manual triggers, auto-recovery |
 | 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated) |
 | 📍 **Tracking** | `sl-tracking.js`, `sl-geo-intelligence.js` | GPS/check-in tracking, geofencing, Traccar integration |
 | 📥 **Intake Queue** | `sl-intake.js` | Wix/Telegram intake processing, defendant matching |
@@ -253,12 +253,12 @@ shamrock-leads/
 │   ├── southern_sw_base.py    # Southern Software (Georgia/SC/NC)
 │   ├── socrata_base.py        # Socrata Open Data (Georgia)
 │   ├── generic_adaptive.py    # Auto-detect scraper for unknown JMS
-│   ├── counties/              # Florida county scrapers (51 active)
+│   ├── counties/              # Florida county scrapers (67 active)
 │   ├── counties_ga/           # Georgia county scrapers (74 active)
 │   ├── counties_sc/           # South Carolina county scrapers (46 active)
-│   ├── counties_nc/           # North Carolina county scrapers (31 active)
-│   ├── counties_tx/           # Texas county scrapers (12 active)
-│   ├── counties_tn/           # Tennessee county scrapers (6 active)
+│   ├── counties_nc/           # North Carolina county scrapers (47 active)
+│   ├── counties_tx/           # Texas county scrapers (15 active)
+│   ├── counties_tn/           # Tennessee county scrapers (9 active)
 │   ├── counties_la/           # Louisiana parish scrapers (4 active)
 │   ├── counties_al/           # Alabama county scrapers (3 active)
 │   ├── counties_ct/           # Connecticut scrapers (2 active)
