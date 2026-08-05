@@ -213,6 +213,19 @@ class ALPREngine:
                 detections.append(det)
         return detections
 
+def _to_float(val: Any, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, (list, tuple)):
+        return _to_float(val[0], default=default) if val else default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
     def _item_to_detection(self, item: Any) -> Optional[PlateDetection]:
         if item is None:
             return None
@@ -231,43 +244,41 @@ class ALPREngine:
             state = item.get("state") or "FL"
             return PlateDetection(
                 plate_text=normalize_plate(str(text)),
-                confidence=float(conf or 0.0),
+                confidence=_to_float(conf),
                 state=str(state or "FL")[:4].upper(),
-                bounding_box=list(bbox) if bbox is not None else None,
+                bounding_box=list(bbox) if bbox is not None and hasattr(bbox, "__iter__") else None,
                 raw={k: v for k, v in item.items() if k not in ("image", "crop")},
             )
 
-        # Object-style result from fast-alpr
+        # Object-style result from fast-alpr (ALPRResult)
         text = (
             getattr(item, "plate", None)
             or getattr(item, "text", None)
             or getattr(item, "label", None)
             or ""
         )
-        # Nested OCR result
+        conf_val = getattr(item, "confidence", None) or getattr(item, "score", None)
+
+        # Nested OCR result in fast-alpr
         ocr = getattr(item, "ocr", None) or getattr(item, "recognition", None)
-        if ocr is not None and not text:
-            text = getattr(ocr, "text", None) or getattr(ocr, "label", None) or ""
-            conf = float(
-                getattr(ocr, "confidence", None)
-                or getattr(ocr, "score", None)
-                or getattr(item, "confidence", 0.0)
-                or 0.0
-            )
-        else:
-            conf = float(
-                getattr(item, "confidence", None)
-                or getattr(item, "score", None)
-                or 0.0
-            )
+        if ocr is not None:
+            if isinstance(ocr, (list, tuple)) and ocr:
+                ocr = ocr[0]
+            if not text:
+                text = getattr(ocr, "text", None) or getattr(ocr, "label", None) or getattr(ocr, "prediction", None) or ""
+            ocr_conf = getattr(ocr, "confidence", None) or getattr(ocr, "score", None)
+            if ocr_conf is not None:
+                conf_val = ocr_conf
+
         bbox = getattr(item, "bounding_box", None) or getattr(item, "bbox", None)
         if bbox is not None and hasattr(bbox, "tolist"):
             bbox = bbox.tolist()
+
         return PlateDetection(
             plate_text=normalize_plate(str(text)),
-            confidence=conf,
+            confidence=_to_float(conf_val),
             state="FL",
-            bounding_box=list(bbox) if bbox is not None else None,
+            bounding_box=list(bbox) if bbox is not None and hasattr(bbox, "__iter__") else None,
             raw={},
         )
 
