@@ -34,8 +34,9 @@ RUN pip install --no-cache-dir \
     requests \
     numpy \
     "opencv-python-headless>=4.8.0" \
+    "onnxruntime>=1.16.0" \
     "fast-alpr>=0.4.0" \
-    || pip install --no-cache-dir pymongo python-dotenv requests numpy opencv-python-headless
+    || pip install --no-cache-dir pymongo python-dotenv requests numpy opencv-python-headless onnxruntime
 
 # Application code
 COPY services/ /app/services/
