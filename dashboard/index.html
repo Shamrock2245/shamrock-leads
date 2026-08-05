@@ -130,6 +130,7 @@
       <button class="sidebar-btn" data-tab="tabPaperwork" onclick="SL.switchTab(this);SLPaperwork.load()"><span class="sidebar-btn-icon">📄</span> Paperwork Config</button>
       <button class="sidebar-btn" data-tab="tabReports" onclick="SL.switchTab(this);SLReports.load()"><span class="sidebar-btn-icon">📊</span> Reports</button>
       <button class="sidebar-btn" data-tab="tabPortal" onclick="SL.switchTab(this);SLPortal.init()"><span class="sidebar-btn-icon">📱</span> Client Portal</button>
+      <button class="sidebar-btn god-admin-only" data-tab="tabStaff" onclick="SL.switchTab(this);SLStaff&&SLStaff.init()" title="God-Admin: whitelist sub-agents &amp; forfeiture alert phones"><span class="sidebar-btn-icon">👥</span> Staff</button>
       <button class="sidebar-btn sidebar-btn-muted" data-tab="tabProspective" onclick="SL.switchTab(this);SLProspective.load();SLProspective.loadReviewQueue()" title="Legacy lead pipeline — prefer Bond Desk for writing bonds"><span class="sidebar-btn-icon">📞</span> Lead Pipeline <span class="badge" id="prospectiveBadge">—</span><span class="badge" id="reviewQueueBadge" style="display:none;background:#f59e0b;color:#000;margin-left:2px"></span></button>
 
       <!-- Intelligence collapsed by default (Twenty: hide secondary objects) -->
@@ -167,6 +168,7 @@
         <span class="omnibar-search-shortcut">⌘K</span>
       </div>
       <div class="omnibar-actions">
+        <div id="userIdentityBadge" style="font-size:12px;font-weight:600;padding:4px 10px;border-radius:10px;background:rgba(255,255,255,.06);white-space:nowrap" title="Session identity">…</div>
         <!-- Notification Bell -->
         <div class="notif-bell-wrapper" style="position:relative;display:inline-block;cursor:pointer" onclick="SLNotifications.toggle()">
           <span style="font-size:1.3rem" title="Notifications">🔔</span>
@@ -3532,6 +3534,8 @@
 
 <!-- Core path first (Lead Explorer + county catch-up). Heavy CDNs deferred. -->
 <script src="/sl-core.js?v=12"></script>
+<script src="/sl-rbac.js?v=1"></script>
+<script src="/sl-staff.js?v=1"></script>
 <script src="/sl-rearrest.js?v=4"></script>
 <script src="/sl-data.js?v=6"></script>
 <script src="/sl-features.js?v=12"></script>
@@ -4415,6 +4419,79 @@
     <a class="alpr-btn alpr-btn-primary" href="https://social.shamrockbailbonds.biz" target="_blank" rel="noopener">Open Social →</a>
   </div>
 </div><!-- end tabSocial -->
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     TAB: STAFF — God-Admin sub-agent whitelist + forfeiture phones
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabStaff">
+  <div class="alpr-wrap" style="padding:8px 4px 32px">
+    <div class="alpr-header" style="margin-bottom:18px">
+      <div>
+        <h2>👥 Staff &amp; Sub-Agents</h2>
+        <p style="color:var(--muted);margin:4px 0 0;font-size:0.9rem">
+          God-Admin only. Whitelist licensed sub-agents for restricted dashboard login,
+          and manage forfeiture alert phone numbers (BlueBubbles).
+        </p>
+      </div>
+    </div>
+
+    <div class="alpr-card" style="margin-bottom:18px">
+      <div class="alpr-card-title">🏷️ Whitelisted Sub-Agents</div>
+      <div class="alpr-form-row" style="margin:12px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+        <div class="alpr-field">
+          <label>Full name *</label>
+          <input type="text" id="staffAgentName" placeholder="John Smith" autocomplete="off" />
+        </div>
+        <div class="alpr-field">
+          <label>FL license # *</label>
+          <input type="text" id="staffAgentLicense" placeholder="P123456" autocomplete="off" />
+        </div>
+        <div class="alpr-field">
+          <label>Phone</label>
+          <input type="text" id="staffAgentPhone" placeholder="239-555-0100" autocomplete="off" />
+        </div>
+        <div class="alpr-field">
+          <label>Notes</label>
+          <input type="text" id="staffAgentNotes" placeholder="Optional" autocomplete="off" />
+        </div>
+        <div class="alpr-field" style="display:flex;align-items:flex-end">
+          <button type="button" class="alpr-btn alpr-btn-primary" style="width:100%" onclick="SLStaff.addAgent()">+ Whitelist Agent</button>
+        </div>
+      </div>
+      <div class="alpr-table-wrap">
+        <table class="alpr-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>License</th>
+              <th>Phone</th>
+              <th>Status</th>
+              <th>Whitelisted</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="staffAgentsBody">
+            <tr><td colspan="6" class="alpr-muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="alpr-card">
+      <div class="alpr-card-title">🚨 Forfeiture Alert Phones</div>
+      <p style="color:var(--muted);font-size:0.85rem;margin:8px 0 12px">
+        These numbers receive an immediate BlueBubbles text when a forfeiture/estreature
+        email is detected. One number per line.
+      </p>
+      <textarea id="staffForfeiturePhones" rows="5" style="width:100%;background:var(--surface,#0f172a);border:1px solid var(--border,#334155);border-radius:8px;color:var(--text,#e2e8f0);padding:12px;font-family:ui-monospace,monospace;font-size:0.9rem" placeholder="+12397849365&#10;+12399550178&#10;+12399550314"></textarea>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+        <button type="button" class="alpr-btn alpr-btn-primary" onclick="SLStaff.saveForfeiturePhones()">Save Phones</button>
+        <button type="button" class="alpr-btn" onclick="SLStaff.testForfeiture()">Send Test Alert</button>
+        <button type="button" class="alpr-btn" onclick="SLStaff.loadForfeiturePhones()">↻ Reload</button>
+      </div>
+    </div>
+  </div>
+</div><!-- end tabStaff -->
 
 <!-- ═══════════════════════════════════════════════════════════════════
      TAB: ALPR WATCH — FL511 plate hits / watchlist / image scan

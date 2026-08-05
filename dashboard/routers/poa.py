@@ -168,8 +168,15 @@ async def api_poa_inventory_summary():
 
 
 @poa_bp.get("/poa/list")
-async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=50), surety: str | None = Query(default=None), status: str | None = Query(default=None), search: str | None = Query(default=None)):
-    """Paginated list of all POA powers with filters."""
+async def api_poa_list(
+    request: Request,
+    page: int = Query(default=1),
+    limit: int = Query(default=50),
+    surety: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+):
+    """Paginated list of POA powers. Sub-agents only see powers assigned to them."""
     poa_inventory = get_collection("poa_inventory")
 
     page = max(1, int(page or 1))
@@ -178,7 +185,7 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
     status = (status or "").lower().strip()
     search = (search or "").strip()
 
-    match = {}
+    match: dict = {}
     if surety in ("osi", "palmetto"):
         match["surety_id"] = surety
     if status in ("available", "assigned", "voided"):
@@ -190,6 +197,13 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
             {"bond_case_id": {"$regex": search, "$options": "i"}},
         ]
 
+    try:
+        from dashboard.auth.agent_scope import merge_scope, poa_scope_query
+
+        match = merge_scope(match, poa_scope_query(request))
+    except Exception:
+        pass
+
     total = await poa_inventory.count_documents(match)
     pages = max(1, (total + limit - 1) // limit)
     skip = (page - 1) * limit
@@ -200,7 +214,8 @@ async def api_poa_list(page: int = Query(default=1), limit: int = Query(default=
          "surety_id": 1, "max_bond_value": 1, "status": 1,
          "bond_case_id": 1, "defendant_name": 1, "defendant_first_name": 1,
          "defendant_last_name": 1, "charge": 1, "appearance_bond_number": 1,
-         "used_at": 1, "expiration": 1, "date_executed": 1, "bond_amount": 1, "amount": 1},
+         "used_at": 1, "expiration": 1, "date_executed": 1, "bond_amount": 1, "amount": 1,
+         "assigned_to_agent": 1, "agent_license": 1},
     ).sort([("surety_id", 1), ("poa_prefix", 1), ("poa_number", 1)]).skip(skip).limit(limit)
 
     powers = []

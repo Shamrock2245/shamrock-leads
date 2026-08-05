@@ -1,24 +1,20 @@
 
 """
-ShamrockLeads — Gmail Discharge Monitor
-========================================
-Monitors admin@shamrockbailbonds.biz for court discharge / exoneration emails
-and automatically triggers bond exoneration via the tracking endpoint.
+ShamrockLeads — Gmail Discharge & Forfeiture Monitor
+=====================================================
+Monitors admin@shamrockbailbonds.biz for court discharge / exoneration AND
+forfeiture emails. Discharges trigger auto-exoneration. Forfeitures trigger
+immediate BlueBubbles iMessage/SMS alerts to configured phone numbers.
 
 Endpoints:
-  GET  /api/discharge-monitor/status       — health + last scan info
-  POST /api/discharge-monitor/scan         — trigger manual Gmail scan
-  POST /api/discharge-monitor/manual       — manually submit email body for parsing
-  GET  /api/discharge-monitor/queue        — view discharge_queue collection
-  POST /api/discharge-monitor/process      — process pending discharge_queue items
-  POST /api/discharge-monitor/test-parse   — dry-run parse without writing
-
-Gmail Setup (Feature J):
-  See docs/GMAIL_DISCHARGE_SETUP.md for the 5-step OAuth setup.
-  Required env vars: GMAIL_CREDENTIALS_JSON, DISCHARGE_GMAIL_LABEL
-
-When GMAIL_CREDENTIALS_JSON is not set, all scan endpoints return 501
-with setup instructions. The /manual and /queue endpoints always work.
+  GET  /api/discharge-monitor/status            — health + last scan info
+  POST /api/discharge-monitor/scan              — trigger manual Gmail scan
+  POST /api/discharge-monitor/manual            — manually submit email body
+  GET  /api/discharge-monitor/queue             — view discharge_queue
+  POST /api/discharge-monitor/process           — process pending items
+  POST /api/discharge-monitor/test-parse        — dry-run parse
+  GET  /api/discharge-monitor/forfeiture-phones  — list forfeiture alert phones
+  POST /api/discharge-monitor/forfeiture-phones  — update forfeiture alert phones (God-Admin)
 """
 import json
 import logging
@@ -293,6 +289,24 @@ async def discharge_scan():
             body = base64.urlsafe_b64decode(body_data + "==").decode("utf-8", errors="ignore") if body_data else ""
 
             parsed = _parse_discharge_email(subject, body)
+
+            # ── Forfeiture detection (parallel to discharge) ──
+            try:
+                from dashboard.services.forfeiture_alert_service import detect_forfeiture, send_forfeiture_alerts
+                forf = detect_forfeiture(subject, body)
+                if forf["is_forfeiture"] and forf["confidence"] >= 40:
+                    # Fire immediate BB alerts
+                    await send_forfeiture_alerts(
+                        defendant_name=forf.get("defendant_name") or parsed.get("defendant_name") or "Unknown",
+                        county=parsed.get("county") or "",
+                        case_number=forf.get("case_number") or "",
+                        bond_amount=forf.get("bond_amount") or 0,
+                        subject=subject,
+                    )
+                    logger.info("[discharge-scan] 🚨 Forfeiture alert fired for msg %s", msg_id)
+            except Exception as forf_err:
+                logger.error("[discharge-scan] Forfeiture detection error: %s", forf_err)
+
             if parsed["is_discharge"] and parsed["confidence"] >= 50:
                 await discharge_queue.insert_one({
                     "gmail_message_id": msg_id,
@@ -491,3 +505,57 @@ async def _auto_exonerate(booking_number: str, source: str) -> dict:
     except Exception as e:
         logger.error("[auto_exonerate] Error for %s: %s", booking_number, e)
         return {"success": False, "error": str(e)}
+
+
+# ── Forfeiture Alert Phone Management ─────────────────────────────────────────
+
+@discharge_monitor_bp.get("/discharge-monitor/forfeiture-phones")
+async def get_forfeiture_phones():
+    """List current forfeiture alert phone numbers."""
+    try:
+        from dashboard.services.forfeiture_alert_service import get_forfeiture_alert_phones
+        phones = await get_forfeiture_alert_phones()
+        return {"success": True, "phones": phones}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@discharge_monitor_bp.post("/discharge-monitor/forfeiture-phones")
+async def update_forfeiture_phones(request: Request):
+    """Update forfeiture alert phone numbers. God-Admin only."""
+    try:
+        from dashboard.auth.pin_middleware import session_is_god_admin
+        if not session_is_god_admin(request):
+            return JSONResponse({"error": "God-Admin access required"}, status_code=403)
+
+        data = await request.json() or {}
+        phones = data.get("phones", [])
+        if not isinstance(phones, list):
+            return JSONResponse({"error": "phones must be a list"}, status_code=400)
+
+        from dashboard.services.forfeiture_alert_service import set_forfeiture_alert_phones
+        result = await set_forfeiture_alert_phones(phones)
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@discharge_monitor_bp.post("/discharge-monitor/test-forfeiture")
+async def test_forfeiture_alert(request: Request):
+    """Send a test forfeiture alert to configured phones. God-Admin only."""
+    try:
+        from dashboard.auth.pin_middleware import session_is_god_admin
+        if not session_is_god_admin(request):
+            return JSONResponse({"error": "God-Admin access required"}, status_code=403)
+
+        from dashboard.services.forfeiture_alert_service import send_forfeiture_alerts
+        result = await send_forfeiture_alerts(
+            defendant_name="TEST ALERT",
+            county="Lee",
+            case_number="TEST-2026-001",
+            bond_amount=5000,
+            subject="[TEST] Forfeiture alert system verification",
+        )
+        return result
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

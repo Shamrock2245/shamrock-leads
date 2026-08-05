@@ -50,13 +50,20 @@ def _urgency(court_date: datetime | str | None) -> str:
 
 
 @calendar_bp.get("/calendar/events")
-async def calendar_events(start: str | None = Query(default=None), end: str | None = Query(default=None), county: str = Query(default="")):
+async def calendar_events(
+    request: Request,
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    county: str = Query(default=""),
+):
     """
     Returns court dates from active_bonds as calendar event objects.
     Query params:
       start  — ISO date string (default: today)
       end    — ISO date string (default: 90 days from today)
       county — filter by county (optional)
+
+    Sub-agents only see court dates on bonds they wrote.
     """
     try:
         db = get_db()
@@ -79,6 +86,13 @@ async def calendar_events(start: str | None = Query(default=None), end: str | No
         match: dict = {"court_date": {"$gte": start, "$lte": end}}
         if county:
             match["county"] = county
+
+        try:
+            from dashboard.auth.agent_scope import bond_scope_query, merge_scope
+
+            match = merge_scope(match, bond_scope_query(request))
+        except Exception:
+            pass
 
         bonds = await active_bonds_col.find(match, {
             "booking_number": 1, "defendant_name": 1, "county": 1,
@@ -413,6 +427,47 @@ async def calendar_sync_gcal(request: Request):
                 }
                 service.events().insert(calendarId=calendar_id, body=event).execute()
                 synced += 1
+
+                # ── Send BB text alerts to defendant + indemnitor ──────────
+                try:
+                    from dashboard.services.bb_client import send_imessage
+
+                    court_date_str = court_dt.strftime("%B %d, %Y")
+                    court_time_str = court_time or court_dt.strftime("%I:%M %p")
+                    loc_str = court_loc or f"{bond_county} County Courthouse"
+
+                    bb_msg = (
+                        f"⚖️ Court Date Reminder\n\n"
+                        f"👤 Defendant: {defendant_name}\n"
+                        f"📅 Date: {court_date_str}\n"
+                        f"🕐 Time: {court_time_str}\n"
+                        f"🏛️ Location: {loc_str}\n"
+                        f"📋 Case #: {case_num}\n\n"
+                        f"Missing court will result in a bond forfeiture.\n"
+                        f"— Shamrock Bail Bonds ☘️"
+                    )
+
+                    # Fetch full bond for phone numbers
+                    full_bond = await active_bonds.find_one(
+                        {"booking_number": booking_num},
+                        {"defendant_phone": 1, "indemnitor_phone": 1, "_id": 0}
+                    )
+                    phones_to_notify = set()
+                    if full_bond:
+                        if full_bond.get("defendant_phone"):
+                            phones_to_notify.add(full_bond["defendant_phone"])
+                        if full_bond.get("indemnitor_phone"):
+                            phones_to_notify.add(full_bond["indemnitor_phone"])
+
+                    for ph in phones_to_notify:
+                        try:
+                            await send_imessage(ph, bb_msg)
+                            logger.info("[sync-gcal] BB text sent to ...%s for %s", ph[-4:], booking_num)
+                        except Exception as sms_err:
+                            logger.warning("[sync-gcal] BB text failed to ...%s: %s", ph[-4:], sms_err)
+                except Exception as bb_err:
+                    logger.warning("[sync-gcal] BB alert error for %s: %s", booking_num, bb_err)
+
             except Exception as ev_err:
                 errors.append({"booking_number": bond.get("booking_number"), "error": str(ev_err)})
 

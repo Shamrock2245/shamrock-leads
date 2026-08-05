@@ -1,16 +1,18 @@
 """
 ShamrockLeads — FastAPI PIN Authentication Middleware
 
-Replaces the Quart session-based PIN gate (dashboard/auth/pin_auth.py)
-with a stateless signed-cookie approach using itsdangerous.
+Stateless signed-cookie approach using itsdangerous.
+Supports God-Admin (full access) and Sub-Agent (restricted) roles.
+
+Roles:
+  - god_admin: Full unrestricted access (PIN 224545 with no agent fields, or admin email)
+  - sub_agent: Restricted access — must be whitelisted in MongoDB `sub_agents` collection.
+               Sees only their own bonds, revenue, and assigned POAs.
 
 Usage in main.py:
     from dashboard.auth.pin_middleware import PinAuthMiddleware, mount_login_routes
     app.add_middleware(PinAuthMiddleware)
     mount_login_routes(app)
-
-Session payload includes email + role so admin@shamrockbailbonds.biz is
-recognized as super-admin across privileged endpoints.
 """
 from __future__ import annotations
 
@@ -44,9 +46,7 @@ OPEN_PATHS = frozenset({
     "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
 })
 
-
-# File extensions that are always public (static assets — JS, CSS, fonts, images)
-# These must load before the session cookie exists so the login page renders.
+# File extensions that are always public (static assets)
 _STATIC_EXTENSIONS = (
     ".js", ".css", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2",
     ".ttf", ".eot", ".webp", ".gif", ".json",
@@ -55,7 +55,7 @@ _STATIC_EXTENSIONS = (
 # Prefixes that bypass auth
 OPEN_PREFIXES = (
     "/api/webhooks/",
-    "/api/automation/",  # Node-RED / machine sweeps (GAS_API_KEY enforced in router)
+    "/api/automation/",
     "/g/",
     "/c/",
     "/api/portal/",
@@ -64,7 +64,7 @@ OPEN_PREFIXES = (
     "/api/traccar/device-status/",
 )
 
-# OAuth popup paths — login redirects + provider callbacks (no cookie in popup)
+# OAuth popup paths
 OAUTH_PREFIXES = (
     "/api/social/oauth/google/",
     "/api/social/oauth/twitter/",
@@ -72,15 +72,16 @@ OAUTH_PREFIXES = (
     "/api/social/oauth/meta/",
 )
 
+# Valid master PINs
+VALID_PINS = frozenset({DASHBOARD_PIN, "224545"})
+
 
 def _get_serializer() -> URLSafeTimedSerializer:
     """Build the cookie signer from SECRET_KEY (required in production)."""
     secret = os.getenv("SECRET_KEY", "").strip()
     if not secret:
-        # Dev-only fallback — never use a predictable PIN-derived secret in prod
         if os.getenv("ENV", os.getenv("ENVIRONMENT", "")).lower() in (
-            "production",
-            "prod",
+            "production", "prod",
         ) or os.getenv("REQUIRE_SECRET_KEY", "").lower() in ("1", "true", "yes"):
             raise RuntimeError(
                 "SECRET_KEY must be set for dashboard session cookies in production"
@@ -89,28 +90,30 @@ def _get_serializer() -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(secret)
 
 
-def _sign_token(email: str | None = None, role: str | None = None) -> str:
-    """Create a signed session token with optional identity claims."""
+def _sign_token(
+    email: str | None = None,
+    role: str | None = None,
+    agent_name: str | None = None,
+    license_number: str | None = None,
+) -> str:
+    """Create a signed session token with identity claims."""
     s = _get_serializer()
     payload: dict[str, Any] = {"auth": True, "t": int(time.time())}
     if email:
         payload["email"] = normalize_email(email)
         payload["role"] = role or resolve_role_for_email(email)
     else:
-        # PIN-only unlock still grants full CRM access; default identity is super admin
-        # so staff tools that check email/role treat the operator as admin.
         payload["email"] = PRIMARY_SUPER_ADMIN
-        payload["role"] = "admin"
+        payload["role"] = role or "god_admin"
+    if agent_name:
+        payload["agent_name"] = str(agent_name)
+    if license_number:
+        payload["license_number"] = str(license_number)
     return s.dumps(payload)
 
 
-def _verify_token(token: str) -> bool:
-    """Verify a signed session token (valid for 7 days)."""
-    return _load_session(token) is not None
-
-
 def _load_session(token: str | None) -> dict[str, Any] | None:
-    """Return session payload or None if invalid/expired."""
+    """Return session payload dict or None if invalid/expired."""
     if not token:
         return None
     try:
@@ -129,13 +132,27 @@ def get_session_from_request(request: Request) -> dict[str, Any] | None:
 
 
 def session_is_admin(request: Request) -> bool:
-    """True when the current session is super-admin or ADMIN_EMAILS allowlist."""
+    """True when the current session is god_admin or admin."""
     sess = get_session_from_request(request)
     if not sess:
         return False
-    if sess.get("role") == "admin":
+    if sess.get("role") in ("admin", "god_admin"):
         return True
     return is_admin_email(sess.get("email"))
+
+
+def session_is_god_admin(request: Request) -> bool:
+    """True only for God-Admin level access (never sub_agent)."""
+    sess = get_session_from_request(request)
+    if not sess:
+        return False
+    if sess.get("role") == "sub_agent":
+        return False
+    # god_admin (current) + legacy admin role + admin email allowlist
+    return (
+        sess.get("role") in ("god_admin", "admin")
+        or is_admin_email(sess.get("email"))
+    )
 
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
@@ -144,18 +161,12 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
     """Gate all routes behind PIN auth (except whitelisted paths)."""
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # No PIN configured → open access in dev only
         if not DASHBOARD_PIN:
             env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
             if env in ("production", "prod") or os.getenv("REQUIRE_DASHBOARD_PIN", "").lower() in (
-                "1",
-                "true",
-                "yes",
+                "1", "true", "yes",
             ):
-                return JSONResponse(
-                    {"error": "Dashboard PIN not configured"},
-                    status_code=503,
-                )
+                return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
             return await call_next(request)
 
         path = request.url.path
@@ -163,14 +174,14 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
             return await call_next(request)
 
-        if path.startswith("/static/") or path.endswith(_STATIC_EXTENSIONS):
+        if path.startswith("/static/") or any(path.endswith(ext) for ext in _STATIC_EXTENSIONS):
             return await call_next(request)
 
         if any(path.startswith(p) for p in OAUTH_PREFIXES):
             return await call_next(request)
 
         cookie = request.cookies.get(COOKIE_NAME)
-        sess = _verify_token(cookie) if cookie else None
+        sess = _load_session(cookie) if cookie else None
         if sess:
             request.state.sl_session = sess
             request.state.sl_email = sess.get("email") or PRIMARY_SUPER_ADMIN
@@ -180,6 +191,22 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
             request.state.sl_is_admin = (
                 sess.get("role") in ("admin", "god_admin") or is_admin_email(sess.get("email"))
             )
+            # Sub-agent hard gate: block restricted API prefixes server-side
+            if (
+                sess.get("role") == "sub_agent"
+                and path.startswith("/api/")
+            ):
+                from dashboard.auth.agent_scope import path_blocked_for_sub_agent
+
+                if path_blocked_for_sub_agent(path):
+                    return JSONResponse(
+                        {
+                            "error": "Access denied — sub-agent role cannot use this endpoint",
+                            "role": "sub_agent",
+                            "path": path,
+                        },
+                        status_code=403,
+                    )
             return await call_next(request)
 
         # Not authenticated
@@ -239,11 +266,11 @@ button.submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,
       <label for="email">Owner / Admin Email (optional)</label>
       <input type="email" name="email" id="email" placeholder="admin@shamrockbailbonds.biz" autocomplete="username">
     </div>
-    <label for="pin">Agency Master PIN (224545)</label>
+    <label for="pin">Agency Master PIN</label>
     <input type="password" name="pin" id="pin" maxlength="12" placeholder="••••••" autofocus autocomplete="current-password">
     <button type="submit" class="submit-btn" id="subBtnText">Unlock God-Admin Access</button>
     <div class="err" id="err"></div>
-    <div class="hint" id="loginHint">God-Admin grants full unrestricted control over all POA inventory, lead scoring, and system ops.</div>
+    <div class="hint" id="loginHint">God-Admin grants full unrestricted control over the entire system.</div>
   </form>
 </div>
 <script>
@@ -255,14 +282,14 @@ function switchLoginMode(m) {
   document.getElementById('godAdminFields').style.display = m === 'god' ? 'block' : 'none';
   document.getElementById('subAgentFields').style.display = m === 'sub' ? 'block' : 'none';
   document.getElementById('subBtnText').textContent = m === 'god' ? 'Unlock God-Admin Access' : 'Login as Sub-Agent';
-  document.getElementById('loginHint').textContent = m === 'god' 
-    ? 'God-Admin grants full unrestricted control over all POA inventory, lead scoring, and system ops.' 
-    : 'Sub-Agent login authenticates your issued POA powers and bond filings.';
+  document.getElementById('loginHint').textContent = m === 'god'
+    ? 'God-Admin grants full unrestricted control over the entire system.'
+    : 'Sub-Agent login requires whitelisted name and FL license number.';
 }
 (function(){
   const q=new URLSearchParams(location.search);
   if(q.get('reason')==='session_expired'){
-    document.getElementById('err').textContent='Session expired — enter PIN 224545 to continue.';
+    document.getElementById('err').textContent='Session expired — please log in again.';
   }
   const nextRaw=q.get('next')||'/';
   const next=(nextRaw.startsWith('/')&&!nextRaw.startsWith('//'))?nextRaw:'/';
@@ -279,7 +306,7 @@ function switchLoginMode(m) {
       body:JSON.stringify(payload)});
     if(r.ok){window.location=next}
     else{const j=await r.json().catch(()=>({}));
-      document.getElementById('err').textContent=j.error||'Invalid PIN (224545)';
+      document.getElementById('err').textContent=j.error||'Invalid credentials';
       document.getElementById('pin').value=''}
   });
 })();
@@ -288,6 +315,7 @@ function switchLoginMode(m) {
 
 def mount_login_routes(app):
     """Register /login GET and POST routes on the FastAPI app."""
+
     @app.get("/login", include_in_schema=False)
     async def login_page():
         return HTMLResponse(_LOGIN_HTML)
@@ -303,41 +331,81 @@ def mount_login_routes(app):
         agent_name = str(data.get("agent_name", "")).strip()
         license_number = str(data.get("license_number", "")).strip()
 
-        # Valid master PINs: 224545, 2245, or DASHBOARD_PIN
-        valid_pins = {DASHBOARD_PIN, "224545", "2245", "224545"}
-        if not DASHBOARD_PIN or pin in valid_pins:
-            if agent_name or license_number:
-                role = "sub_agent"
-                session_email = f"agent-{license_number or agent_name.lower().replace(' ', '-')}@shamrockbailbonds.biz"
-            else:
-                role = "god_admin"
-                session_email = email or PRIMARY_SUPER_ADMIN
+        if pin not in VALID_PINS:
+            return JSONResponse({"error": "Invalid PIN"}, status_code=401)
 
+        # ── Sub-Agent login ───────────────────────────────────────────────
+        if agent_name or license_number:
+            if not agent_name or not license_number:
+                return JSONResponse(
+                    {"error": "Both Agent Name and License Number are required"},
+                    status_code=400,
+                )
+            # Check whitelist in MongoDB
+            try:
+                from dashboard.extensions import get_collection
+                sub_agents = get_collection("sub_agents")
+                agent_doc = await sub_agents.find_one({
+                    "license_number": {"$regex": f"^{license_number}$", "$options": "i"},
+                    "is_active": True,
+                })
+                if not agent_doc:
+                    return JSONResponse(
+                        {"error": "Not whitelisted. Contact your agency administrator."},
+                        status_code=403,
+                    )
+                # Use the whitelisted name from DB (canonical)
+                canonical_name = agent_doc.get("agent_name", agent_name)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error("Sub-agent whitelist check failed: %s", exc)
+                return JSONResponse(
+                    {"error": "System error checking whitelist. Try again."},
+                    status_code=500,
+                )
+
+            role = "sub_agent"
+            session_email = f"agent-{license_number.lower()}@shamrockbailbonds.biz"
             token = _sign_token(
                 email=session_email,
                 role=role,
-                agent_name=agent_name or None,
-                license_number=license_number or None,
+                agent_name=canonical_name,
+                license_number=license_number.upper(),
             )
-            response = JSONResponse(
-                {
-                    "success": True,
-                    "email": session_email,
-                    "role": role,
-                    "agent_name": agent_name,
-                    "license_number": license_number,
-                    "is_admin": role == "god_admin" or is_admin_email(session_email),
-                }
-            )
-            response.set_cookie(
-                key=COOKIE_NAME,
-                value=token,
-                max_age=COOKIE_MAX_AGE,
-                httponly=True,
-                secure=is_https,
-                samesite="lax",
-                path="/",
-            )
-            return response
+            response = JSONResponse({
+                "success": True,
+                "email": session_email,
+                "role": role,
+                "agent_name": canonical_name,
+                "license_number": license_number.upper(),
+                "is_admin": False,
+            })
 
-        return JSONResponse({"error": "Invalid PIN"}, status_code=401)
+        # ── God-Admin login ───────────────────────────────────────────────
+        else:
+            role = "god_admin"
+            session_email = email or PRIMARY_SUPER_ADMIN
+            token = _sign_token(email=session_email, role=role)
+            response = JSONResponse({
+                "success": True,
+                "email": session_email,
+                "role": role,
+                "agent_name": "",
+                "license_number": "",
+                "is_admin": True,
+            })
+
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto") == "https"
+        )
+        response.set_cookie(
+            key=COOKIE_NAME,
+            value=token,
+            max_age=COOKIE_MAX_AGE,
+            httponly=True,
+            secure=is_https,
+            samesite="lax",
+            path="/",
+        )
+        return response

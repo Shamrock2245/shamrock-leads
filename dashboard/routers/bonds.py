@@ -539,12 +539,18 @@ async def api_write_bond(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @bonds_bp.get("/active-bonds")
-async def api_active_bonds_list(limit: int = 200):
-    """List all active bonds with risk scores, check-in status, and FTA intelligence."""
+async def api_active_bonds_list(request: Request, limit: int = 200):
+    """List active bonds with risk scores, check-in status, and FTA intelligence.
+
+    Sub-agents only receive bonds attributed to their license / writing agent.
+    """
     active_bonds = get_collection("active_bonds")
     try:
+        from dashboard.auth.agent_scope import bond_scope_query, merge_scope
+
         lim = max(1, min(int(limit or 200), 500))
-        cursor = active_bonds.find({}, {"_id": 0}).sort("created_at", -1).limit(lim)
+        match = merge_scope({}, bond_scope_query(request))
+        cursor = active_bonds.find(match, {"_id": 0}).sort("created_at", -1).limit(lim)
         bonds = await cursor.to_list(length=lim)
 
         # ── Bulk-enrich FTA intelligence from arrests for bonds missing it ─────
