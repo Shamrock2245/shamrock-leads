@@ -16,11 +16,20 @@ const SLInventory = (() => {
 
   // ── Open / Close Modal ──
   function open() {
-    document.getElementById('inventoryModal').classList.add('show');
-    loadSummary();
+    const modal = document.getElementById('inventoryModal');
+    if (modal) {
+      modal.style.display = 'flex';
+      modal.classList.add('show');
+      loadSummary();
+      loadDetailView();
+    }
   }
   function close() {
-    document.getElementById('inventoryModal').classList.remove('show');
+    const modal = document.getElementById('inventoryModal');
+    if (modal) {
+      modal.classList.remove('show');
+      modal.style.display = 'none';
+    }
   }
 
   // ── Load Summary (Tier Aggregation) ──
@@ -849,7 +858,7 @@ const SLInventory = (() => {
       banner = document.createElement('div');
       banner.id = bannerId;
       banner.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:8500;max-width:600px;width:calc(100% - 32px);border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:12px;font-size:13px;font-weight:600;box-shadow:0 4px 20px rgba(0,0,0,.4);cursor:pointer;transition:opacity .3s';
-      banner.onclick = function() { SLInventory.open(); };
+      banner.onclick = function() { if (window.SLInventory) window.SLInventory.open(); };
       document.body.appendChild(banner);
     }
     if (criticalTiers.length > 0) {
@@ -1002,4 +1011,6 @@ const SLInventory = (() => {
     runLiabilityReport,
   };
 })();
+
+window.SLInventory = SLInventory;
 

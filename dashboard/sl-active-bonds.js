@@ -173,8 +173,8 @@ async function _checkPoaStock() {
     if (lowStock.length === 0 && outOfStock.length === 0) { banner.style.display = 'none'; return; }
     banner.style.display = 'block';
     const isCritical = outOfStock.length > 0;
-    const manageLink = `<a href="#" onclick="event.preventDefault();if(window.SLInventory)SLInventory.open();else{var t=document.querySelector('.inv-tab-trigger');if(t)t.click();}" style="color:var(--warning);font-weight:600;text-decoration:underline;font-size:12px">Manage Inventory →</a>`;
-    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">`;
+    const manageLink = `<a href="#" onclick="event.preventDefault();if(window.SLInventory)window.SLInventory.open();" style="color:var(--warning);font-weight:600;text-decoration:underline;font-size:12px;cursor:pointer;">Manage Inventory →</a>`;
+    let html = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;" onclick="if(window.SLInventory)window.SLInventory.open();">`;
     html += `<span style="font-size:16px">${isCritical ? '🚨' : '⚠️'}</span>`;
     html += `<strong style="color:${isCritical ? 'var(--danger)' : 'var(--warning)'}">POA Inventory ${isCritical ? 'CRITICAL' : 'Low Stock'}</strong>`;
     html += `<span style="margin-left:8px">${manageLink}</span>`;
