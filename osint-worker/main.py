@@ -133,6 +133,8 @@ async def scan_v2(
         "spiderfoot",
         "ignorant",
         "toutatis",
+        "instaloader",
+        "exiftool",
         "snoop",
     }
     engines = [e for e in body.engines if e in valid_engines]

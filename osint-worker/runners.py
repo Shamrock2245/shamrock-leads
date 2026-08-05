@@ -185,6 +185,40 @@ def resolve_toutatis() -> Optional[str]:
     return None
 
 
+def resolve_instaloader() -> Optional[str]:
+    """Resolve instaloader package / CLI for Instagram media & profile metadata."""
+    candidates = [
+        os.getenv("INSTALOADER_PATH", "").strip(),
+        shutil.which("instaloader") or "",
+        "/usr/local/bin/instaloader",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("instaloader") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def resolve_exiftool() -> Optional[str]:
+    """Resolve exiftool CLI binary for image metadata & GPS extraction."""
+    candidates = [
+        os.getenv("EXIFTOOL_PATH", "").strip(),
+        shutil.which("exiftool") or "",
+        "/usr/bin/exiftool",
+        "/usr/local/bin/exiftool",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
 def get_instagram_session_id() -> str:
     """
     Instagram sessionid cookie for Toutatis.
@@ -401,6 +435,36 @@ def probe_tools() -> Dict[str, Any]:
             "browser cookie 'sessionid' from an Instagram login"
         )
 
+    # Instaloader
+    instaloader_cmd = resolve_instaloader()
+    instaloader_ok = False
+    instaloader_version = None
+    instaloader_error = None
+    instaloader_path = None
+
+    if instaloader_cmd == "python-module":
+        try:
+            import instaloader as _il  # noqa: F401
+
+            instaloader_ok = True
+            instaloader_version = getattr(_il, "__version__", "installed")
+            instaloader_path = f"{PYTHON_CMD} -m instaloader"
+        except Exception as e:
+            instaloader_error = str(e)[:200]
+    elif instaloader_cmd:
+        instaloader_ok = True
+        instaloader_path = instaloader_cmd
+        instaloader_version = "cli"
+    else:
+        instaloader_error = "not found — install with: pip install instaloader"
+
+    # ExifTool
+    exiftool_cmd = resolve_exiftool()
+    exiftool_ok = bool(exiftool_cmd)
+    exiftool_path = exiftool_cmd or "not found"
+    exiftool_version = "installed" if exiftool_ok else None
+    exiftool_error = None if exiftool_ok else "not found — install with apt-get install -y exiftool"
+
     return {
         "maigret": {
             "available": maigret_ok,
@@ -451,6 +515,20 @@ def probe_tools() -> Dict[str, Any]:
                 "Requires INSTAGRAM_SESSION_ID cookie."
             ),
         },
+        "instaloader": {
+            "available": instaloader_ok,
+            "path": instaloader_path or "not found",
+            "version": instaloader_version,
+            "error": instaloader_error,
+            "note": "Instagram username → bio text, HD avatar, external links & metrics.",
+        },
+        "exiftool": {
+            "available": exiftool_ok,
+            "path": exiftool_path,
+            "version": exiftool_version,
+            "error": exiftool_error,
+            "note": "Image URL/file → EXIF metadata, camera fingerprinting & GPS reverse geocoding.",
+        },
         "ready_for_scans": (
             maigret_ok
             or sherlock_ok
@@ -459,9 +537,11 @@ def probe_tools() -> Dict[str, Any]:
             or spiderfoot_ok
             or ignorant_ok
             or toutatis_ok
+            or instaloader_ok
+            or exiftool_ok
         ),
         "worker": True,
-        "version": "2.2.0",
+        "version": "2.3.0",
         "defaults": {
             "maigret_default": True,
             "sherlock_default": True,
@@ -1516,6 +1596,208 @@ async def run_toutatis(
     return result_meta
 
 
+async def run_instaloader(usernames: List[str]) -> Dict[str, Any]:
+    """
+    Run Instaloader profile metadata & HD avatar extraction for one or more Instagram usernames.
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "instaloader",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "accounts": [],
+        "entities": [],
+    }
+    users = [re.sub(r"^@", "", (u or "").strip()) for u in (usernames or []) if u and len((u or "").strip()) >= 2]
+    if not users:
+        result_meta["error"] = "no usernames provided for instaloader"
+        return result_meta
+
+    if not resolve_instaloader():
+        result_meta["error"] = "instaloader not installed"
+        return result_meta
+
+    def _scrape_one(u: str) -> Dict[str, Any]:
+        try:
+            import instaloader
+            L = instaloader.Instaloader(
+                download_pictures=False,
+                download_videos=False,
+                download_comments=False,
+                save_metadata=False,
+                quiet=True,
+            )
+            profile = instaloader.Profile.from_username(L.context, u)
+            return {
+                "username": profile.username,
+                "full_name": profile.full_name,
+                "biography": profile.biography,
+                "external_url": profile.external_url,
+                "profile_pic_url": profile.profile_pic_url,
+                "followers": profile.followers,
+                "followees": profile.followees,
+                "mediacount": profile.mediacount,
+                "is_private": profile.is_private,
+                "is_verified": profile.is_verified,
+                "business_category_name": profile.business_category_name,
+                "error": None,
+            }
+        except Exception as exc:
+            return {"username": u, "error": str(exc)}
+
+    try:
+        results = await asyncio.gather(*[asyncio.to_thread(_scrape_one, u) for u in users], return_exceptions=True)
+        all_accounts = []
+        all_entities = []
+        raw_by_user = {}
+        errors = []
+
+        for u, res in zip(users, results):
+            if isinstance(res, Exception) or not isinstance(res, dict) or res.get("error"):
+                err_msg = str(res.get("error") if isinstance(res, dict) else res)
+                errors.append(f"{u}: {err_msg}")
+                raw_by_user[u] = {"error": err_msg}
+                continue
+
+            raw_by_user[u] = res
+            account_url = f"https://www.instagram.com/{res['username']}/"
+            all_accounts.append({
+                "site": "Instagram",
+                "username": res["username"],
+                "url": account_url,
+                "source": "instaloader",
+                "category": "social",
+                "details": f"Followers: {res['followers']} | Following: {res['followees']} | Posts: {res['mediacount']} | Private: {res['is_private']}",
+            })
+            if res.get("full_name"):
+                all_entities.append({"type": "full_name", "value": res["full_name"], "source": "instaloader"})
+            if res.get("external_url"):
+                all_entities.append({"type": "website", "value": res["external_url"], "source": "instaloader"})
+            if res.get("biography"):
+                all_entities.append({"type": "bio", "value": res["biography"], "source": "instaloader"})
+
+        if not all_accounts and errors:
+            result_meta["error"] = "; ".join(errors)[:400]
+            return result_meta
+
+        result_meta.update({
+            "ok": True,
+            "raw": {"profiles": raw_by_user},
+            "accounts": all_accounts,
+            "entities": all_entities,
+        })
+        return result_meta
+
+    except Exception as exc:
+        result_meta["error"] = f"instaloader error: {exc}"
+        return result_meta
+
+
+async def run_exiftool(image_url_or_path: str) -> Dict[str, Any]:
+    """
+    Run ExifTool image metadata & GPS geolocation extraction.
+    Automatically resolves GPS coordinates to a physical address via OpenStreetMap Nominatim.
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "exiftool",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "metadata": {},
+        "gps": None,
+        "address": None,
+    }
+
+    exif_cmd = resolve_exiftool()
+    if not exif_cmd:
+        result_meta["error"] = "exiftool binary not installed"
+        return result_meta
+
+    if not image_url_or_path:
+        result_meta["error"] = "no image URL or file path provided"
+        return result_meta
+
+    tmp_path = None
+    target_file = image_url_or_path
+    if image_url_or_path.startswith(("http://", "https://")):
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(image_url_or_path)
+                resp.raise_for_status()
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+                tmp.write(resp.content)
+                tmp.close()
+                tmp_path = tmp.name
+                target_file = tmp_path
+        except Exception as exc:
+            result_meta["error"] = f"failed to download image: {exc}"
+            return result_meta
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            exif_cmd, "-j", "-n", target_file,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+        stdout_s = (stdout or b"").decode("utf-8", errors="replace")
+
+        if not stdout_s.strip():
+            result_meta["error"] = "exiftool returned empty output"
+            return result_meta
+
+        parsed = json.loads(stdout_s)
+        meta = parsed[0] if isinstance(parsed, list) and len(parsed) > 0 else {}
+
+        gps_data = None
+        address = None
+        if "GPSLatitude" in meta and "GPSLongitude" in meta:
+            lat = meta["GPSLatitude"]
+            lon = meta["GPSLongitude"]
+            alt = meta.get("GPSAltitude")
+            gps_data = {"latitude": lat, "longitude": lon, "altitude": alt}
+
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    geo_resp = await client.get(
+                        "https://nominatim.openstreetmap.org/reverse",
+                        params={"lat": lat, "lon": lon, "format": "json"},
+                        headers={"User-Agent": "ShamrockLeads-OSINT/1.0"},
+                    )
+                    if geo_resp.status_code == 200:
+                        address = geo_resp.json().get("display_name")
+            except Exception:
+                pass
+
+        result_meta.update({
+            "ok": True,
+            "raw": meta,
+            "metadata": {
+                "make": meta.get("Make"),
+                "model": meta.get("Model"),
+                "create_date": meta.get("CreateDate") or meta.get("DateTimeOriginal"),
+                "software": meta.get("Software"),
+                "image_width": meta.get("ImageWidth"),
+                "image_height": meta.get("ImageHeight"),
+            },
+            "gps": gps_data,
+            "address": address,
+        })
+        return result_meta
+
+    except Exception as exc:
+        result_meta["error"] = f"exiftool execution failed: {exc}"
+        return result_meta
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 async def run_ignorant(phone: str) -> Dict[str, Any]:
     """
     Run Ignorant phone-registration checks (Instagram, Snapchat, Amazon).
@@ -1893,6 +2175,21 @@ async def execute_scan_v2(
                 else:
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No usernames for toutatis"
+            elif engine == "instaloader":
+                if mg_users:
+                    tasks.append(run_instaloader(mg_users))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No usernames for instaloader"
+            elif engine == "exiftool":
+                target_img = email if (email and email.startswith(("http://", "https://"))) else None
+                if target_img:
+                    tasks.append(run_exiftool(target_img))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No image URL provided for exiftool (pass image URL in context/email field)"
             else:
                 progress[engine]["status"] = "skipped"
                 progress[engine]["error"] = f"No valid input for {engine}"

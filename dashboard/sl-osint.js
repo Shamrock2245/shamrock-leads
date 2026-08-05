@@ -112,7 +112,7 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis'];
+    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = info.available;

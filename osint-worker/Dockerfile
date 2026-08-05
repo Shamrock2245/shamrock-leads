@@ -17,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SHERLOCK_PATH=/usr/local/bin/sherlock
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git gcc libffi-dev \
+    curl git gcc libffi-dev exiftool \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -49,6 +49,10 @@ RUN pip install --no-cache-dir "ignorant>=1.2" \
 # Set INSTAGRAM_SESSION_ID / TOUTATIS_SESSION_ID on the worker to enable scans.
 RUN pip install --no-cache-dir "toutatis>=1.31" phonenumbers pycountry \
     && python -c "import toutatis; from toutatis.core import getInfo, advanced_lookup"
+
+# ── Instaloader (IG profile bio, avatar & metrics) ────────────────────
+RUN pip install --no-cache-dir instaloader \
+    && python -c "import instaloader"
 
 # ── Blackbird ─────────────────────────────────────────────────────────
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
