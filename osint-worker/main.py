@@ -2,7 +2,7 @@
 ShamrockLeads OSINT Worker v2
 ==============================
 Internal-only FastAPI service running Maigret, Sherlock, Blackbird,
-SpiderFoot, and Ignorant (phone registration checks).
+SpiderFoot, Ignorant (phone registration), and Toutatis (Instagram enrichment).
 The dashboard stores results in Mongo and handles auth/UI.
 
 Endpoints:
@@ -31,7 +31,7 @@ WORKER_KEY = os.getenv("OSINT_WORKER_KEY", "").strip()
 
 app = FastAPI(
     title="Shamrock OSINT Worker",
-    version="2.1.0",
+    version="2.2.0",
     docs_url=None,
     redoc_url=None,
 )
@@ -58,7 +58,7 @@ class ScanRequestV2(BaseModel):
     engines: List[str] = Field(
         default_factory=lambda: ["maigret"],
         description=(
-            "Engines to run: maigret, sherlock, blackbird, spiderfoot, ignorant"
+            "Engines: maigret, sherlock, blackbird, spiderfoot, ignorant, toutatis"
         ),
     )
     second_opinion: bool = False
@@ -73,7 +73,7 @@ def _check_key(x_worker_key: Optional[str]) -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "osint-worker", "version": "2.1.0"}
+    return {"status": "ok", "service": "osint-worker", "version": "2.2.0"}
 
 
 @app.get("/status")
@@ -132,6 +132,7 @@ async def scan_v2(
         "blackbird",
         "spiderfoot",
         "ignorant",
+        "toutatis",
         "snoop",
     }
     engines = [e for e in body.engines if e in valid_engines]

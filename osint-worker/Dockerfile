@@ -42,6 +42,11 @@ RUN pip install --no-cache-dir spiderfoot \
 RUN pip install --no-cache-dir "ignorant>=1.2" \
     || echo "WARNING: ignorant install failed"
 
+# ── Toutatis (Instagram username → email/phone via session cookie) ────
+# Requires INSTAGRAM_SESSION_ID / TOUTATIS_SESSION_ID on the worker.
+RUN pip install --no-cache-dir "toutatis>=1.31" phonenumbers pycountry \
+    || echo "WARNING: toutatis install failed"
+
 # ── Blackbird ─────────────────────────────────────────────────────────
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
     && pip install --no-cache-dir -r /opt/blackbird/requirements.txt \

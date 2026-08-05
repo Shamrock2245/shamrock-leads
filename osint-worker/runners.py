@@ -1,6 +1,6 @@
 """
-CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant — osint-worker v2
-Writable filesystem assumed (not read-only dashboard rootfs).
+CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant, Toutatis
+— osint-worker v2. Writable filesystem assumed (not read-only dashboard rootfs).
 """
 from __future__ import annotations
 
@@ -23,8 +23,10 @@ from defaults import (
     MAIGRET_SITE_TIMEOUT,
     MAIGRET_TIMEOUT,
     MAX_MAIGRET_USERNAMES,
+    MAX_TOUTATIS_USERNAMES,
     SHERLOCK_TIMEOUT,
     SPIDERFOOT_TIMEOUT,
+    TOUTATIS_TIMEOUT,
     assess_maigret_quality,
     dedupe_accounts,
     maigret_site_args,
@@ -168,6 +170,39 @@ def resolve_ignorant() -> Optional[str]:
     return None
 
 
+def resolve_toutatis() -> Optional[str]:
+    """Resolve toutatis package / CLI for Instagram username enrichment."""
+    candidates = [
+        os.getenv("TOUTATIS_PATH", "").strip(),
+        shutil.which("toutatis") or "",
+        "/usr/local/bin/toutatis",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("toutatis") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def get_instagram_session_id() -> str:
+    """
+    Instagram sessionid cookie for Toutatis.
+
+    Prefer ``INSTAGRAM_SESSION_ID`` (clear ops name); accept ``TOUTATIS_SESSION_ID``
+    as alias. Never log the raw value.
+    """
+    return (
+        os.getenv("INSTAGRAM_SESSION_ID", "").strip()
+        or os.getenv("TOUTATIS_SESSION_ID", "").strip()
+    )
+
+
 def parse_phone_for_ignorant(phone: str) -> Optional[Tuple[str, str]]:
     """
     Split a phone string into (country_code, national_number) for ignorant.
@@ -216,6 +251,8 @@ def probe_tools() -> Dict[str, Any]:
     spiderfoot_cmd = resolve_spiderfoot()
     bb_dir, bb_script = resolve_blackbird()
     ignorant_cmd = resolve_ignorant()
+    toutatis_cmd = resolve_toutatis()
+    ig_session = get_instagram_session_id()
 
     # Maigret
     maigret_ok = False
@@ -339,6 +376,36 @@ def probe_tools() -> Dict[str, Any]:
     else:
         ignorant_error = "not found — install with: pip install ignorant"
 
+    # Toutatis (Instagram username enrichment via session cookie)
+    toutatis_pkg = False
+    toutatis_version = None
+    toutatis_error = None
+    toutatis_path = None
+    if toutatis_cmd == "python-module":
+        try:
+            import toutatis as _tt  # noqa: F401
+
+            toutatis_pkg = True
+            toutatis_version = getattr(_tt, "__version__", "installed")
+            toutatis_path = f"{PYTHON_CMD} -m toutatis"
+        except Exception as e:
+            toutatis_error = str(e)[:200]
+    elif toutatis_cmd:
+        toutatis_pkg = True
+        toutatis_path = toutatis_cmd
+        toutatis_version = "cli"
+    else:
+        toutatis_error = "not found — install with: pip install toutatis"
+
+    session_configured = bool(ig_session)
+    # Runnable only when package + session cookie both present
+    toutatis_ok = toutatis_pkg and session_configured
+    if toutatis_pkg and not session_configured:
+        toutatis_error = (
+            "set INSTAGRAM_SESSION_ID (or TOUTATIS_SESSION_ID) on osint-worker — "
+            "browser cookie 'sessionid' from an Instagram login"
+        )
+
     return {
         "maigret": {
             "available": maigret_ok,
@@ -377,6 +444,18 @@ def probe_tools() -> Dict[str, Any]:
             "error": ignorant_error,
             "note": "Phone registration check (IG/Snap/Amazon). Does not message target.",
         },
+        "toutatis": {
+            "available": toutatis_ok,
+            "package_installed": toutatis_pkg,
+            "session_configured": session_configured,
+            "path": toutatis_path or "not found",
+            "version": toutatis_version,
+            "error": toutatis_error,
+            "note": (
+                "Instagram username → public/obfuscated email & phone. "
+                "Requires INSTAGRAM_SESSION_ID cookie."
+            ),
+        },
         "ready_for_scans": (
             maigret_ok
             or sherlock_ok
@@ -384,18 +463,21 @@ def probe_tools() -> Dict[str, Any]:
             or blackbird_ok
             or spiderfoot_ok
             or ignorant_ok
+            or toutatis_ok
         ),
         "worker": True,
-        "version": "2.1.0",
+        "version": "2.2.0",
         "defaults": {
             "maigret_default": True,
             "sherlock_default": True,
             "blackbird_default": False,
             "spiderfoot_default": False,
             "ignorant_default": False,
+            "toutatis_default": False,
             "blackbird_on_email": True,
             "spiderfoot_on_phone": True,
             "ignorant_on_phone": True,
+            "toutatis_on_username": True,
             "no_recursion": MAIGRET_NO_RECURSION,
         },
     }
@@ -770,6 +852,130 @@ def parse_ignorant_results(
             ),
             "relevance": "unreviewed",
         })
+    return accounts, entities
+
+
+def parse_toutatis_user(
+    user: Dict[str, Any],
+    *,
+    lookup: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Map Toutatis Instagram user dict + optional advanced_lookup into
+    (accounts, entities). Redacts nothing in structured fields — callers
+    must not log PII.
+    """
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not user or not isinstance(user, dict):
+        return accounts, entities
+
+    username = str(user.get("username") or "").strip()
+    if not username:
+        return accounts, entities
+
+    public_email = (user.get("public_email") or "").strip() or None
+    public_phone = None
+    if user.get("public_phone_number"):
+        cc = str(user.get("public_phone_country_code") or "").strip()
+        num = str(user.get("public_phone_number") or "").strip()
+        public_phone = f"+{cc} {num}".strip() if cc else num
+
+    obfuscated_email = None
+    obfuscated_phone = None
+    if isinstance(lookup, dict):
+        obfuscated_email = (lookup.get("obfuscated_email") or "").strip() or None
+        op = lookup.get("obfuscated_phone")
+        if op is not None and str(op).strip():
+            obfuscated_phone = str(op).strip()
+
+    pic = ""
+    try:
+        pic = (user.get("hd_profile_pic_url_info") or {}).get("url") or ""
+    except Exception:
+        pic = ""
+
+    profile_data = {
+        "user_id": str(user.get("userID") or user.get("pk") or user.get("id") or ""),
+        "full_name": user.get("full_name") or "",
+        "biography": (user.get("biography") or "")[:500],
+        "is_private": bool(user.get("is_private")),
+        "is_verified": bool(user.get("is_verified")),
+        "is_business": bool(user.get("is_business")),
+        "follower_count": user.get("follower_count"),
+        "following_count": user.get("following_count"),
+        "media_count": user.get("media_count"),
+        "external_url": user.get("external_url") or "",
+        "public_email": public_email,
+        "public_phone": public_phone,
+        "obfuscated_email": obfuscated_email,
+        "obfuscated_phone": obfuscated_phone,
+        "profile_pic": pic,
+        "is_whatsapp_linked": user.get("is_whatsapp_linked"),
+    }
+
+    accounts.append({
+        "platform": "Instagram",
+        "url": f"https://www.instagram.com/{username}/",
+        "username": username,
+        "profile_data": profile_data,
+        "source": "toutatis",
+        "confidence": "found",
+        "category": "social",
+        "relevance": "unreviewed",
+    })
+
+    if public_email:
+        entities.append({
+            "type": "email",
+            "value": public_email,
+            "source": "toutatis",
+            "module": "public_email",
+            "confidence": "high",
+            "context": f"@{username} public_email",
+            "relevance": "unreviewed",
+        })
+    if obfuscated_email:
+        entities.append({
+            "type": "email",
+            "value": obfuscated_email,
+            "source": "toutatis",
+            "module": "obfuscated_email",
+            "confidence": "medium",
+            "context": f"@{username} obfuscated_email",
+            "relevance": "unreviewed",
+        })
+    if public_phone:
+        entities.append({
+            "type": "phone",
+            "value": public_phone,
+            "source": "toutatis",
+            "module": "public_phone",
+            "confidence": "high",
+            "context": f"@{username} public_phone",
+            "relevance": "unreviewed",
+        })
+    if obfuscated_phone:
+        entities.append({
+            "type": "phone",
+            "value": obfuscated_phone,
+            "source": "toutatis",
+            "module": "obfuscated_phone",
+            "confidence": "medium",
+            "context": f"@{username} obfuscated_phone",
+            "relevance": "unreviewed",
+        })
+    if profile_data.get("full_name"):
+        entities.append({
+            "type": "name",
+            "value": str(profile_data["full_name"])[:200],
+            "source": "toutatis",
+            "module": "full_name",
+            "confidence": "medium",
+            "context": f"@{username}",
+            "relevance": "unreviewed",
+        })
+
     return accounts, entities
 
 
@@ -1152,6 +1358,169 @@ async def run_spiderfoot(
     return result_meta
 
 
+async def run_toutatis(
+    usernames: List[str],
+    *,
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Run Toutatis Instagram enrichment for one or more usernames.
+
+    Requires a valid Instagram ``sessionid`` cookie
+    (``INSTAGRAM_SESSION_ID`` / ``TOUTATIS_SESSION_ID``).
+    Never logs the session cookie or recovered PII at INFO level.
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "toutatis",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "accounts": [],
+        "entities": [],
+    }
+
+    users = [
+        re.sub(r"^@", "", (u or "").strip())
+        for u in (usernames or [])
+        if u and len((u or "").strip()) >= 2
+    ]
+    users = users[:MAX_TOUTATIS_USERNAMES]
+    if not users:
+        result_meta["error"] = "no usernames provided for toutatis"
+        return result_meta
+
+    if not resolve_toutatis():
+        result_meta["error"] = "toutatis not installed"
+        return result_meta
+
+    sid = (session_id or get_instagram_session_id()).strip()
+    if not sid:
+        result_meta["error"] = (
+            "INSTAGRAM_SESSION_ID not set — add Instagram browser cookie "
+            "'sessionid' to osint-worker env"
+        )
+        return result_meta
+
+    log.info(
+        "Toutatis scan usernames=%s session=%s",
+        [_redact(u) for u in users],
+        _redact(sid),
+    )
+
+    def _lookup_one(username: str) -> Dict[str, Any]:
+        from toutatis.core import advanced_lookup, getInfo
+
+        info = getInfo(username, sid, searchType="username")
+        if info.get("error") or not info.get("user"):
+            return {
+                "username": username,
+                "error": info.get("error") or "not found",
+                "user": None,
+                "lookup": None,
+            }
+        user = info["user"]
+        lookup_raw = advanced_lookup(user.get("username") or username)
+        lookup_user = None
+        if not lookup_raw.get("error") and isinstance(lookup_raw.get("user"), dict):
+            lu = lookup_raw["user"]
+            # Ignore "No users found" / rate messages without fields
+            if "obfuscated_email" in lu or "obfuscated_phone" in lu:
+                lookup_user = lu
+            elif lu.get("message") and "No users" not in str(lu.get("message")):
+                lookup_user = {"message": lu.get("message")}
+        return {
+            "username": username,
+            "error": None,
+            "user": user,
+            "lookup": lookup_user,
+            "lookup_error": lookup_raw.get("error"),
+        }
+
+    try:
+        all_accounts: List[Dict] = []
+        all_entities: List[Dict] = []
+        raw_by_user: Dict[str, Any] = {}
+        errors: List[str] = []
+        warnings: List[str] = []
+
+        async def _run_all() -> List[Dict[str, Any]]:
+            tasks = [
+                asyncio.to_thread(_lookup_one, u) for u in users
+            ]
+            return list(await asyncio.gather(*tasks, return_exceptions=True))
+
+        results = await asyncio.wait_for(
+            _run_all(), timeout=float(TOUTATIS_TIMEOUT)
+        )
+
+        for u, res in zip(users, results):
+            if isinstance(res, Exception):
+                errors.append(f"{u}: {res}")
+                raw_by_user[u] = {"error": str(res)}
+                continue
+            if not isinstance(res, dict):
+                errors.append(f"{u}: bad result")
+                continue
+            if res.get("error") or not res.get("user"):
+                errors.append(f"{u}: {res.get('error') or 'not found'}")
+                raw_by_user[u] = {"error": res.get("error")}
+                continue
+            if res.get("lookup_error") == "rate limit":
+                warnings.append(f"{u}: advanced_lookup rate-limited")
+
+            # Sanitize raw for storage — drop huge nested blobs, keep key fields
+            user = res["user"]
+            safe_raw = {
+                "username": user.get("username"),
+                "userID": user.get("userID") or user.get("pk"),
+                "full_name": user.get("full_name"),
+                "is_private": user.get("is_private"),
+                "is_verified": user.get("is_verified"),
+                "follower_count": user.get("follower_count"),
+                "following_count": user.get("following_count"),
+                "media_count": user.get("media_count"),
+                "has_public_email": bool(user.get("public_email")),
+                "has_public_phone": bool(user.get("public_phone_number")),
+                "has_obfuscated_email": bool(
+                    (res.get("lookup") or {}).get("obfuscated_email")
+                ),
+                "has_obfuscated_phone": bool(
+                    (res.get("lookup") or {}).get("obfuscated_phone")
+                ),
+            }
+            raw_by_user[u] = safe_raw
+
+            accts, ents = parse_toutatis_user(
+                user, lookup=res.get("lookup")
+            )
+            all_accounts.extend(accts)
+            all_entities.extend(ents)
+
+        if not all_accounts and errors:
+            result_meta["error"] = "; ".join(errors)[:400]
+            result_meta["raw"] = {"profiles": raw_by_user}
+            return result_meta
+
+        result_meta.update({
+            "ok": True,
+            "raw": {"profiles": raw_by_user},
+            "accounts": all_accounts,
+            "entities": all_entities,
+        })
+        if errors:
+            warnings.append(f"partial failures: {'; '.join(errors)[:200]}")
+        if warnings:
+            result_meta["warning"] = "; ".join(warnings)
+        return result_meta
+
+    except asyncio.TimeoutError:
+        result_meta["error"] = f"toutatis timed out after {TOUTATIS_TIMEOUT}s"
+    except Exception as exc:
+        result_meta["error"] = f"toutatis error: {exc}"
+    return result_meta
+
+
 async def run_ignorant(phone: str) -> Dict[str, Any]:
     """
     Run Ignorant phone-registration checks (Instagram, Snapchat, Amazon).
@@ -1522,6 +1891,13 @@ async def execute_scan_v2(
                 else:
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No phone number for ignorant"
+            elif engine == "toutatis":
+                if mg_users:
+                    tasks.append(run_toutatis(mg_users))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No usernames for toutatis"
             else:
                 progress[engine]["status"] = "skipped"
                 progress[engine]["error"] = f"No valid input for {engine}"

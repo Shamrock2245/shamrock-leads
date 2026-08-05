@@ -16,6 +16,7 @@ from runners import (  # noqa: E402
     parse_ignorant_results,
     parse_maigret_json,
     parse_phone_for_ignorant,
+    parse_toutatis_user,
 )
 from defaults import score_signals  # noqa: E402
 
@@ -122,15 +123,65 @@ def test_score_signals_phone_linked_social():
     assert any(s["signal_type"] == "phone_linked_social" for s in signals)
 
 
+def test_parse_toutatis_user_extracts_pii():
+    user = {
+        "username": "jdoe",
+        "userID": "123",
+        "full_name": "John Doe",
+        "biography": "hello",
+        "is_private": False,
+        "is_verified": False,
+        "is_business": False,
+        "follower_count": 10,
+        "following_count": 5,
+        "media_count": 2,
+        "external_url": "",
+        "public_email": "john@example.com",
+        "public_phone_number": "5550100",
+        "public_phone_country_code": "1",
+        "hd_profile_pic_url_info": {"url": "https://cdn.example/p.jpg"},
+    }
+    lookup = {"obfuscated_email": "jo***@example.com", "obfuscated_phone": "+1 ***0100"}
+    accounts, entities = parse_toutatis_user(user, lookup=lookup)
+    assert len(accounts) == 1
+    assert accounts[0]["source"] == "toutatis"
+    assert accounts[0]["username"] == "jdoe"
+    assert accounts[0]["profile_data"]["public_email"] == "john@example.com"
+    types = {e["type"] for e in entities}
+    assert "email" in types
+    assert "phone" in types
+    assert "name" in types
+
+
+def test_score_signals_toutatis_contact_pii():
+    accounts = [
+        {
+            "platform": "Instagram",
+            "source": "toutatis",
+            "profile_data": {
+                "public_email": "a@b.com",
+                "public_phone": "+1 555",
+            },
+        }
+    ]
+    score, signals = score_signals(accounts)
+    assert score >= 5
+    assert any(s["signal_type"] == "instagram_contact_pii" for s in signals)
+
+
 def test_probe_tools_structure():
     from runners import probe_tools
     probe = probe_tools()
     assert "maigret" in probe
     assert "blackbird" in probe
     assert "ignorant" in probe
+    assert "toutatis" in probe
     assert "ready_for_scans" in probe
     assert "defaults" in probe
     assert probe["defaults"].get("ignorant_on_phone") is True
+    assert probe["defaults"].get("toutatis_on_username") is True
+    # Without session cookie, package may install but not be runnable
+    assert "session_configured" in probe["toutatis"]
 
 
 def test_extract_importable_fields():

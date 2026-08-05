@@ -15,6 +15,8 @@ SHERLOCK_TIMEOUT = int(os.getenv("OSINT_SHERLOCK_TIMEOUT", "120"))
 BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
 SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
 IGNORANT_TIMEOUT = int(os.getenv("OSINT_IGNORANT_TIMEOUT", "45"))
+TOUTATIS_TIMEOUT = int(os.getenv("OSINT_TOUTATIS_TIMEOUT", "60"))
+MAX_TOUTATIS_USERNAMES = int(os.getenv("OSINT_MAX_TOUTATIS_USERNAMES", "3"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
 
 # ── Quick vs deep site coverage ───────────────────────────────────────────────
@@ -213,6 +215,27 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
                 "(Ignorant passive check — does not message the target.)"
             ),
             "source": "ignorant",
+        })
+
+    # Instagram PII enrichment (Toutatis): public/obfuscated email or phone on profile
+    toutatis_hits = [a for a in accounts if str(a.get("source") or "") == "toutatis"]
+    pii_hits = []
+    for a in toutatis_hits:
+        pd = a.get("profile_data") or {}
+        if pd.get("public_email") or pd.get("obfuscated_email"):
+            pii_hits.append("email")
+        if pd.get("public_phone") or pd.get("obfuscated_phone"):
+            pii_hits.append("phone")
+    if pii_hits:
+        score += min(15, 5 * len(set(pii_hits)) + 3 * len(toutatis_hits))
+        signals.append({
+            "signal_type": "instagram_contact_pii",
+            "severity": "high" if "email" in pii_hits and "phone" in pii_hits else "medium",
+            "detail": (
+                f"Toutatis recovered Instagram contact fields "
+                f"({', '.join(sorted(set(pii_hits)))}) on {len(toutatis_hits)} profile(s)."
+            ),
+            "source": "toutatis",
         })
 
     legal_keywords = {"arrest", "mugshot", "inmate", "offender", "warrant", "felony", "conviction"}

@@ -3,7 +3,7 @@ OSINT Intelligence API Router v2 — ShamrockLeads
 =================================================
 Admin-only endpoints for multi-engine OSINT research on defendants and indemnitors.
 
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
 
 All endpoints require admin authorization via:
   1. Signed session cookie with admin role, OR

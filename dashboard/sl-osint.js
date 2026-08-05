@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
    ShamrockLeads — OSINT Intelligence Workstation v2
    Admin-Only · Multi-Engine Platform
-   Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
+   Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
    ═══════════════════════════════════════════════════════════════════ */
 /* global SL */
 (function () {
@@ -84,6 +84,11 @@
       phoneInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
       phoneInput.addEventListener('change', () => _updateAdaptiveFields());
     }
+    const userInput = $('osintUsernames');
+    if (userInput) {
+      userInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
+      userInput.addEventListener('change', () => _updateAdaptiveFields());
+    }
   }
 
   function _debounce(fn, ms) {
@@ -107,14 +112,17 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant'];
+    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = info.available;
       const cls = available ? 'available' : 'unavailable';
       const version = info.version ? ` v${info.version}` : '';
       const note = info.note ? ` — ${info.note}` : '';
-      return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}">
+      const sess = eng === 'toutatis' && info.session_configured === false
+        ? ' — needs INSTAGRAM_SESSION_ID'
+        : '';
+      return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}${sess}">
         <span class="dot"></span>${eng.charAt(0).toUpperCase() + eng.slice(1)}${version}
       </span>`;
     }).join('');
@@ -158,6 +166,14 @@
         _selectedEngines.add('ignorant');
         _updateEngineChips();
       }
+    }
+
+    // Auto-suggest Toutatis when usernames look like handles and session is ready
+    const unames = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
+    const toutatisReady = _toolStatus?.toutatis?.available === true;
+    if (unames.length && toutatisReady && !_selectedEngines.has('toutatis')) {
+      _selectedEngines.add('toutatis');
+      _updateEngineChips();
     }
   }
 
