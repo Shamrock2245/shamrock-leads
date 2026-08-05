@@ -35,6 +35,15 @@ BOOKINGS_PATH = "/public-api/bookings"
 # Optional permanent override (ops / docker-compose). Prefer auto-discovery.
 _ENV_ORIGIN_IP = (os.getenv("LEE_ORIGIN_IP") or "").strip()
 
+# Known-good apex origin (sheriffleefl.org). www A-record often points at a
+# dead host (conn-refused). Keep this list updated if FDOT/LCSO relocates.
+# Probe may return 429 when rate-limited — that still means "IP is alive".
+_KNOWN_GOOD_ORIGIN_IPS: Sequence[str] = tuple(
+    ip.strip()
+    for ip in (os.getenv("LEE_KNOWN_ORIGIN_IPS") or "139.177.205.107").split(",")
+    if ip.strip()
+)
+
 # Cache discovery so every charges call does not re-probe.
 _cache_lock = threading.Lock()
 _cached_ip: Optional[str] = None
@@ -55,10 +64,13 @@ def _dns_ips(hostname: str) -> List[str]:
 
 
 def candidate_origin_ips() -> List[str]:
-    """Ordered IPs to try: env override, apex, then www (often dead)."""
+    """Ordered IPs to try: env override, known-good apex, DNS apex, then www (often dead)."""
     ordered: List[str] = []
     if _ENV_ORIGIN_IP:
         ordered.append(_ENV_ORIGIN_IP)
+    for ip in _KNOWN_GOOD_ORIGIN_IPS:
+        if ip not in ordered:
+            ordered.append(ip)
     for host in (LEE_APEX_HOST, LEE_HOST):
         for ip in _dns_ips(host):
             if ip not in ordered:
@@ -67,12 +79,29 @@ def candidate_origin_ips() -> List[str]:
 
 
 def _probe_ip(ip: str, timeout: float = 10.0) -> bool:
-    """Return True if this IP serves the public bookings API for Host www."""
+    """
+    Return True if this IP answers TLS for Host www on the public API.
+
+    HTTP 200 (JSON) is ideal. HTTP 429 means the origin is *alive* but our
+    source IP is rate-limited — still a valid pin target (use residential
+    egress to actually fetch data).
+
+    On 429 we trip the shared cooldown once, then stop probing further IPs.
+    """
     try:
         from curl_cffi import CurlOpt
         from curl_cffi import requests as cffi_requests
     except ImportError:
         return False
+
+    # Already throttled — do not spend more probe requests against the quota.
+    try:
+        from scrapers.lee_rate_limit import is_cooled_down
+
+        if is_cooled_down():
+            return True  # treat as reachable; caller will use pin + residential
+    except Exception:
+        pass
 
     url = f"{LEE_BASE_URL}{BOOKINGS_PATH}?limit=1&offset=0"
     try:
@@ -86,7 +115,20 @@ def _probe_ip(ip: str, timeout: float = 10.0) -> bool:
             timeout=timeout,
             curl_options={CurlOpt.RESOLVE: [f"{LEE_HOST}:443:{ip}"]},
         )
-        if resp.status_code != 200:
+        code = resp.status_code
+        if code == 429:
+            try:
+                from scrapers.lee_rate_limit import note_response
+
+                note_response(resp)
+            except Exception:
+                pass
+            logger.info(
+                "[Lee origin] probe %s → HTTP 429 (origin alive, source IP throttled)",
+                ip,
+            )
+            return True
+        if code != 200:
             return False
         # Prefer JSON body; empty list is still a valid healthy API.
         ctype = (resp.headers.get("content-type") or "").lower()
@@ -106,6 +148,8 @@ def discover_lee_origin_ip(
     Find a working origin IP for ``www.sheriffleefl.org``.
 
     Result is cached for ``LEE_ORIGIN_CACHE_TTL_S`` (default 5 min).
+    Falls back to known-good apex IPs even if live probe is inconclusive
+    (e.g. mid-cooldown) so CURLOPT_RESOLVE still bypasses the dead www A-record.
     """
     global _cached_ip, _cached_at
 
@@ -117,7 +161,25 @@ def discover_lee_origin_ip(
         ):
             return _cached_ip
 
-    for ip in candidate_origin_ips():
+    candidates = candidate_origin_ips()
+
+    # If we're already rate-limited, skip live probes entirely — pin known-good.
+    try:
+        from scrapers.lee_rate_limit import is_cooled_down
+
+        if is_cooled_down():
+            fallback = next(iter(_KNOWN_GOOD_ORIGIN_IPS), None) or (
+                candidates[0] if candidates else None
+            )
+            if fallback:
+                with _cache_lock:
+                    _cached_ip = fallback
+                    _cached_at = time.time()
+                return fallback
+    except Exception:
+        pass
+
+    for ip in candidates:
         if _probe_ip(ip, timeout=timeout):
             with _cache_lock:
                 _cached_ip = ip
@@ -129,10 +191,26 @@ def discover_lee_origin_ip(
             )
             return ip
 
+    # Last resort: pin known-good apex even without a successful probe so we
+    # never fall through to the dead www A-record (conn-refused).
+    fallback = next(iter(_KNOWN_GOOD_ORIGIN_IPS), None) or (
+        candidates[0] if candidates else None
+    )
+    if fallback:
+        with _cache_lock:
+            _cached_ip = fallback
+            _cached_at = time.time()
+        logger.warning(
+            "[Lee origin] probe inconclusive — using fallback pin %s → %s",
+            LEE_HOST,
+            fallback,
+        )
+        return fallback
+
     logger.warning(
         "[Lee origin] no working origin found for %s (candidates=%s)",
         LEE_HOST,
-        candidate_origin_ips(),
+        candidates,
     )
     with _cache_lock:
         # Negative cache briefly so we don't stampede probes.
@@ -144,6 +222,9 @@ def discover_lee_origin_ip(
 def lee_resolve_entries(ip: Optional[str] = None) -> List[str]:
     """CURLOPT_RESOLVE entries: ``host:port:address``."""
     pinned = ip or discover_lee_origin_ip()
+    if not pinned:
+        # Absolute last resort hardcode so callers never hit dead www DNS.
+        pinned = next(iter(_KNOWN_GOOD_ORIGIN_IPS), None)
     if not pinned:
         return []
     return [f"{LEE_HOST}:443:{pinned}"]
@@ -201,6 +282,18 @@ def lee_api_get(
     if headers:
         req_headers.update(headers)
 
+    # Shared 429 cooldown — do not dig the hole deeper
+    try:
+        from scrapers.lee_rate_limit import is_cooled_down, note_response, seconds_remaining
+
+        if is_cooled_down():
+            raise RuntimeError(
+                f"Lee public-api rate-limit cooldown active "
+                f"({seconds_remaining():.0f}s remaining)"
+            )
+    except ImportError:
+        note_response = None  # type: ignore
+
     last_exc: Optional[BaseException] = None
     for attempt in range(max(1, max_retries)):
         # Re-discover on later attempts in case the pin went stale.
@@ -222,6 +315,11 @@ def lee_api_get(
             finally:
                 try:
                     session.close()
+                except Exception:
+                    pass
+            if note_response is not None:
+                try:
+                    note_response(resp)
                 except Exception:
                     pass
             return resp

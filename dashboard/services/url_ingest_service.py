@@ -127,6 +127,17 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
 
     def _fetch_both():
         from scrapers.lee_origin import lee_api_get
+        try:
+            from scrapers.lee_rate_limit import is_cooled_down, seconds_remaining
+
+            if is_cooled_down():
+                log.warning(
+                    "Lee URL ingest skipped — rate-limit cooldown (%.0fs left)",
+                    seconds_remaining(),
+                )
+                return None
+        except Exception:
+            pass
 
         b = lee_api_get(
             f"/public-api/bookings/{booking_id}",

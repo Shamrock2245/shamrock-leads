@@ -31,30 +31,47 @@ from scrapers.lee_origin import (
     lee_curl_options,
     lee_api_get,
 )
+from scrapers.lee_rate_limit import (
+    is_cooled_down,
+    note_response,
+    seconds_remaining,
+    cooldown_status,
+)
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
 # ── Config ──
+# CRITICAL (2026-08): Lee public-api enforces ~480k req / 12h per source IP.
+# Burning past that freezes scrapes (dashboard stuck on last good booking).
+# Defaults are intentionally lean; raise only with residential egress + monitoring.
 BASE_URL = LEE_BASE_URL  # https://www.sheriffleefl.org (DNS may be pinned — see lee_origin)
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
 SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE offline
 
-DAYS_BACK = 30  # Reduced from 90 — stay under 480K/12hr API rate limit
+DAYS_BACK = int(os.getenv("LEE_DAYS_BACK", "3"))  # catch-up window (was 30 — too expensive)
 PAGE_SIZE = 50                 # Fixed: Lee API clamps max records per page to 50
-MAX_PAGES = 30                 # 30 × 50 = 1500 records max (enough for active roster + 30 days)
-MAX_ENRICH = 25                # Keep enrichment modest — protect shared 12h API quota
-DETAIL_DELAY_S = 8.0           # Increased from 4.0 — more breathing room
-DETAIL_JITTER_S = 4.0          # Increased jitter
+MAX_PAGES = int(os.getenv("LEE_MAX_PAGES", "6"))  # 6×50 = 300 (was 30 — 1500/run)
+MAX_ENRICH = int(os.getenv("LEE_MAX_ENRICH", "8"))  # was 25 — charges API is the quota killer
+DETAIL_DELAY_S = float(os.getenv("LEE_DETAIL_DELAY_S", "10.0"))
+DETAIL_JITTER_S = float(os.getenv("LEE_DETAIL_JITTER_S", "4.0"))
 RETRY_LIMIT = 2                # Outer retries (StealthSession also rotates proxies)
-BACKOFF_BASE_S = 5.0           # Increased from 2.0 — harder backoff on 429/503
+BACKOFF_BASE_S = 8.0
 MAX_EXECUTION_S = 330
-CIRCUIT_BREAKER_THRESHOLD = 2  # Trip faster (was 3)
-CIRCUIT_BREAKER_COOLDOWN_S = 90  # Longer cooldown on 429/conn-refused spirals
-VARIANT_DELAY_S = 30           # Increased from 15 — save API quota between variant attempts
-PAGE_DELAY_S = 2.0             # Inter-page pause (was 1.5) — gentler on shared quota
+CIRCUIT_BREAKER_THRESHOLD = 2
+CIRCUIT_BREAKER_COOLDOWN_S = 120
+VARIANT_DELAY_S = float(os.getenv("LEE_VARIANT_DELAY_S", "20"))
+PAGE_DELAY_S = float(os.getenv("LEE_PAGE_DELAY_S", "3.0"))
+# Prefer residential egress so we don't share the VPS /32 throttle bucket
+LEE_PREFER_RESIDENTIAL = os.getenv("LEE_PREFER_RESIDENTIAL", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+# When rate-limited, refuse bare direct IP entirely
+LEE_ALLOW_DIRECT = os.getenv("LEE_ALLOW_DIRECT", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # Site-specific only — TLSFingerprinter / StealthSession owns User-Agent
 SITE_HEADERS = {
@@ -91,43 +108,79 @@ class LeeCountyScraper(BaseScraper):
         start_time = time.time()
 
         try:
+            # Hard stop if Lee public-api /32 throttle is already tripped
+            if is_cooled_down():
+                st = cooldown_status()
+                logger.error(
+                    "[Lee] ⛔ Skipping scrape — rate-limit cooldown "
+                    "(%.0fs / %.1fh remaining). detail=%s",
+                    st["seconds_remaining"],
+                    st["seconds_remaining"] / 3600.0,
+                    st.get("last_429_detail") or "",
+                )
+                return []
+
             end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=DAYS_BACK)
-    
+
             logger.info(
-                f"📅 Date range: {start_date.strftime('%Y-%m-%d')} "
-                f"to {end_date.strftime('%Y-%m-%d')}"
+                "📅 Date range: %s to %s (max_pages=%s enrich=%s residential=%s)",
+                start_date.strftime("%Y-%m-%d"),
+                end_date.strftime("%Y-%m-%d"),
+                MAX_PAGES,
+                MAX_ENRICH,
+                LEE_PREFER_RESIDENTIAL,
             )
-    
+
             # Fetch raw bookings from API (try multiple query variants)
             raw_arrests = self._fetch_arrests(start_date, end_date)
             logger.info(f"📥 Total fetched: {len(raw_arrests)}")
-    
+
             if not raw_arrests:
                 return []
-    
+
+            # Prefer highest booking numbers first (newest) for enrichment budget
+            def _bn_key(r: Dict[str, Any]) -> int:
+                try:
+                    return int(
+                        str(
+                            r.get("bookingNumber")
+                            or r.get("booking_number")
+                            or r.get("id")
+                            or "0"
+                        ).lstrip("0")
+                        or "0"
+                    )
+                except (TypeError, ValueError):
+                    return 0
+
+            raw_arrests.sort(key=_bn_key, reverse=True)
+
             # Normalize raw API data → intermediate dicts
             normalized = []
             for raw in raw_arrests:
                 norm = self._normalize_record(raw)
                 if norm and norm.get("booking_number"):
                     normalized.append(norm)
-    
+
             logger.info(f"🔄 Normalized: {len(normalized)} records")
-    
-            # Enrich with charges API (bond/court/case data)
+
+            # Enrich with charges API (bond/court/case data) — newest first
             elapsed = time.time() - start_time
             remaining = MAX_EXECUTION_S - elapsed
             max_enrich = min(len(normalized), MAX_ENRICH)
-    
-            if remaining > 60 and max_enrich > 0:
-                logger.info(f"🔬 Enriching {max_enrich} records with charges API...")
+
+            if is_cooled_down():
+                logger.warning("[Lee] Rate-limit tripped mid-scrape — skipping enrichment")
+                final = normalized
+            elif remaining > 60 and max_enrich > 0:
+                logger.info(f"🔬 Enriching {max_enrich} newest records with charges API...")
                 enriched = self._enrich_with_charges(normalized[:max_enrich])
                 final = enriched + normalized[max_enrich:]
             else:
                 logger.info("⏭️ Skipping enrichment (low time budget)")
                 final = normalized
-    
+
             # Convert to ArrestRecord instances.
             # NOTE (July 2026): the per-county webhook broadcast was promoted to
             # BaseScraper.run() (_broadcast_scraper_events) so ALL counties emit
@@ -183,11 +236,19 @@ class LeeCountyScraper(BaseScraper):
     def _fetch_with_pagination(
         self, params: Dict[str, str]
     ) -> List[Dict[str, Any]]:
-        """Paginate through the API until exhausted."""
+        """Paginate through the API until exhausted (or rate-limited)."""
         all_records: List[Dict[str, Any]] = []
         offset = 0
 
         for page in range(MAX_PAGES):
+            if is_cooled_down():
+                logger.error(
+                    "[Lee] Aborting pagination — rate-limit cooldown "
+                    "(%.0fs left)",
+                    seconds_remaining(),
+                )
+                break
+
             query = {**params, "limit": PAGE_SIZE, "offset": offset}
             url = f"{BASE_URL}{BOOKINGS_API}"
 
@@ -197,15 +258,21 @@ class LeeCountyScraper(BaseScraper):
                 logger.info(f"📄 Page {page + 1} (offset: {offset})")
 
             resp = self._http_fetch(url, params=query)
-            if resp is None or resp.status_code != 200:
-                code = resp.status_code if resp else "unknown"
+            if resp is None:
+                logger.warning("⚠️ API returned no response")
+                break
+            if note_response(resp):
+                logger.error("[Lee] HTTP 429 — stopping pagination to protect quota")
+                break
+            if resp.status_code != 200:
+                code = resp.status_code
                 logger.warning(f"⚠️ API returned status {code}")
                 break
 
             try:
                 data = resp.json()
             except ValueError:
-                logger.warning("⚠️ Failed to parse JSON")
+                logger.warning("⚠️ Failed to parse JSON (likely HTML error page)")
                 break
 
             records = self._extract_records(data)
@@ -254,6 +321,13 @@ class LeeCountyScraper(BaseScraper):
         consecutive_failures = 0
 
         for i, base in enumerate(items):
+            if is_cooled_down():
+                logger.error(
+                    "[Lee] Stopping charges enrichment — rate-limit cooldown"
+                )
+                enriched.extend(items[i:])
+                break
+
             bn = base.get("booking_number", "")
             if not bn:
                 enriched.append(base)
@@ -272,6 +346,12 @@ class LeeCountyScraper(BaseScraper):
             try:
                 url = f"{BASE_URL}{CHARGES_API.format(booking_id=bn)}"
                 resp = self._http_fetch(url)
+
+                if resp is not None and note_response(resp):
+                    logger.error("[Lee] 429 on charges for %s — abort enrichment", bn)
+                    enriched.append(base)
+                    enriched.extend(items[i + 1 :])
+                    break
 
                 if resp is None or resp.status_code != 200:
                     code = resp.status_code if resp else "error"
@@ -584,12 +664,13 @@ class LeeCountyScraper(BaseScraper):
             from scrapers.proxy_engine import create_stealth_session
 
             curl_opts = lee_curl_options()
+            # Residential preferred: VPS /32 burns Lee's 480k/12h quota and freezes
+            # the whole county. allow_direct only when not already rate-limited.
+            allow_direct = LEE_ALLOW_DIRECT and not is_cooled_down()
             self._stealth = create_stealth_session(
                 sticky_session_id="fl-lee-api",
-                # Prefer residential when available, but allow direct — Lee's
-                # public API is not Cloudflare-gated; dead www DNS was the real block.
-                prefer_residential=True,
-                allow_direct=True,
+                prefer_residential=LEE_PREFER_RESIDENTIAL,
+                allow_direct=allow_direct,
                 timeout=30,
                 impersonate="chrome131",
                 curl_options=curl_opts or None,
@@ -617,6 +698,13 @@ class LeeCountyScraper(BaseScraper):
 
     def _http_fetch(self, url: str, params: Dict[str, Any] = None):
         """Fetch via APE StealthSession; fall back to origin-pinned curl / Scrapfly."""
+        if is_cooled_down():
+            logger.warning(
+                "[Lee] _http_fetch blocked — rate-limit cooldown (%.0fs left)",
+                seconds_remaining(),
+            )
+            return None
+
         if params:
             qs = urllib.parse.urlencode(params)
             full_url = f"{url}?{qs}"
@@ -630,14 +718,16 @@ class LeeCountyScraper(BaseScraper):
                 resp = stealth.get(
                     full_url,
                     headers=SITE_HEADERS,
-                    max_retries=max(3, RETRY_LIMIT + 1),
+                    max_retries=max(2, RETRY_LIMIT),
                     timeout=30,
                 )
+                if resp is not None and note_response(resp):
+                    return resp  # 429 — do not cascade to other paths
                 if resp is not None and getattr(resp, "status_code", 0) == 200:
                     return resp
                 code = getattr(resp, "status_code", "unknown") if resp else "none"
                 logger.warning("[Lee] StealthSession non-200: HTTP %s", code)
-                if code in (403, 429, 503) and hasattr(stealth, "rotate_proxy"):
+                if code in (403, 503) and hasattr(stealth, "rotate_proxy"):
                     stealth.rotate_proxy()
             except Exception as exc:
                 err = str(exc).lower()
@@ -689,17 +779,24 @@ class LeeCountyScraper(BaseScraper):
                     # Next call can still retry stealth.
 
         # ── Path 2: Origin-pinned direct curl_cffi (bypasses dead www A-record) ──
-        try:
-            resp = lee_api_get(full_url, headers=SITE_HEADERS, timeout=30, max_retries=2)
-            if resp is not None and getattr(resp, "status_code", 0) == 200:
-                return resp
-            code = getattr(resp, "status_code", "unknown") if resp else "none"
-            logger.warning("[Lee] origin-pinned GET non-200: HTTP %s", code)
-            if code in (429, 503):
-                # Don't keep hammering a throttled API this run
-                time.sleep(CIRCUIT_BREAKER_COOLDOWN_S)
-        except Exception as exc:
-            logger.warning("[Lee] origin-pinned GET failed: %s", exc)
+        # Skip bare-direct when already rate-limited or ops disabled direct.
+        if is_cooled_down():
+            return None
+        if not LEE_ALLOW_DIRECT:
+            logger.info("[Lee] LEE_ALLOW_DIRECT=false — skipping direct origin path")
+        else:
+            try:
+                resp = lee_api_get(full_url, headers=SITE_HEADERS, timeout=30, max_retries=1)
+                if resp is not None and note_response(resp):
+                    return resp  # 429 — stop cascade
+                if resp is not None and getattr(resp, "status_code", 0) == 200:
+                    return resp
+                code = getattr(resp, "status_code", "unknown") if resp else "none"
+                logger.warning("[Lee] origin-pinned GET non-200: HTTP %s", code)
+                if code in (503,):
+                    time.sleep(CIRCUIT_BREAKER_COOLDOWN_S)
+            except Exception as exc:
+                logger.warning("[Lee] origin-pinned GET failed: %s", exc)
 
         # ── Path 3: Scrapfly (optional env) ──
         scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")

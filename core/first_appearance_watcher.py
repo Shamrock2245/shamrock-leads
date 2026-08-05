@@ -309,7 +309,22 @@ class FirstAppearanceWatcher:
             # ── Lee County API direct charges fetch ──────────────────────────
             # Use origin-pinned GET — www A-record can point at a dead host
             # while the apex IP still serves the public API (see lee_origin).
+            # Skip entirely when the shared 429 cooldown is active so we do not
+            # dig the /32 rate-limit hole deeper (dashboard freezes on stale Lee).
             if county == "lee" and booking_id:
+                try:
+                    from scrapers.lee_rate_limit import is_cooled_down, seconds_remaining
+
+                    if is_cooled_down():
+                        logger.warning(
+                            "FirstAppearanceWatcher: Lee rate-limit cooldown "
+                            "(%.0fs left) — skip charges re-fetch for %s",
+                            seconds_remaining(),
+                            booking_id,
+                        )
+                        return None
+                except Exception:
+                    pass
                 try:
                     from scrapers.lee_origin import lee_api_get
 
@@ -317,7 +332,7 @@ class FirstAppearanceWatcher:
                         f"/public-api/bookings/{booking_id}/charges",
                         headers=headers,
                         timeout=15,
-                        max_retries=2,
+                        max_retries=1,
                     )
                 except Exception as lee_exc:
                     logger.debug(
