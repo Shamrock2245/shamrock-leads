@@ -51,9 +51,11 @@ RUN mkdir -p /app/scrapers /data/alpr_crops \
     && printf '' > /app/scrapers/__init__.py \
     && python -c "from services.alpr_engine import probe_alpr_deps; print(probe_alpr_deps())"
 
+ENV HOME=/home/appuser
+
 # Non-root
-RUN groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin appuser \
-    && chown -R appuser:appuser /app /data
+RUN groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser \
+    && chown -R appuser:appuser /app /data /home/appuser
 USER appuser
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=40s --retries=3 \
