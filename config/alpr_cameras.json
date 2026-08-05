@@ -1,0 +1,63 @@
+[
+  {
+    "id": "fl511_i75_mm136",
+    "name": "I-75 @ Colonial Blvd (MM 136)",
+    "county": "Lee",
+    "stream_url": "",
+    "stream_type": "jpeg",
+    "lat": 26.6042,
+    "lon": -81.8214,
+    "enabled": false,
+    "notes": "Set stream_url to live FL511 JPEG/HLS endpoint for this camera"
+  },
+  {
+    "id": "fl511_us41_mlk",
+    "name": "US-41 @ MLK Blvd",
+    "county": "Lee",
+    "stream_url": "",
+    "stream_type": "jpeg",
+    "lat": 26.6406,
+    "lon": -81.8723,
+    "enabled": false
+  },
+  {
+    "id": "fl511_midpoint_bridge",
+    "name": "Midpoint Bridge (Cape Coral)",
+    "county": "Lee",
+    "stream_url": "",
+    "stream_type": "hls",
+    "lat": 26.64,
+    "lon": -81.91,
+    "enabled": false
+  },
+  {
+    "id": "fl511_cape_coral_bridge",
+    "name": "Cape Coral Bridge",
+    "county": "Lee",
+    "stream_url": "",
+    "stream_type": "hls",
+    "lat": 26.562,
+    "lon": -81.942,
+    "enabled": false
+  },
+  {
+    "id": "fl511_i75_collier",
+    "name": "I-75 Collier County corridor",
+    "county": "Collier",
+    "stream_url": "",
+    "stream_type": "jpeg",
+    "lat": 26.142,
+    "lon": -81.571,
+    "enabled": false
+  },
+  {
+    "id": "fl511_i75_charlotte",
+    "name": "I-75 Charlotte County corridor",
+    "county": "Charlotte",
+    "stream_url": "",
+    "stream_type": "jpeg",
+    "lat": 26.934,
+    "lon": -81.953,
+    "enabled": false
+  }
+]

@@ -11,6 +11,8 @@ config/google-services.json
 !dashboard/manifest.json
 !package.json
 !package-lock.json
+!config/alpr_cameras.json
+
 
 # Python
 __pycache__/

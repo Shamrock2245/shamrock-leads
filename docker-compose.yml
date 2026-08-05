@@ -136,6 +136,50 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ── ALPR Worker (FL511 traffic cameras + Fast-ALPR) ──
+  # Optional profile: docker compose --profile alpr up -d alpr-worker
+  # Samples public DOT cameras, matches lpr_watchlist, Slack on hits.
+  alpr-worker:
+    profiles: ["alpr"]
+    build:
+      context: .
+      dockerfile: alpr-worker/Dockerfile
+    container_name: shamrock-alpr-worker
+    hostname: alpr-worker
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    env_file:
+      - .env
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - ALPR_ENABLED=${ALPR_ENABLED:-true}
+      - ALPR_FRAME_INTERVAL_S=${ALPR_FRAME_INTERVAL_S:-2.5}
+      - ALPR_MIN_CONFIDENCE=${ALPR_MIN_CONFIDENCE:-0.55}
+      - ALPR_STORE_ALL_HITS=${ALPR_STORE_ALL_HITS:-false}
+      - ALPR_CROPS_DIR=/data/alpr_crops
+      - ALPR_CAMERAS_FILE=/app/config/alpr_cameras.json
+      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-ShamrockBailDB}
+      - SLACK_WEBHOOK_LEADS=${SLACK_WEBHOOK_LEADS:-}
+      - SLACK_WEBHOOK_ALPR=${SLACK_WEBHOOK_ALPR:-}
+    volumes:
+      - alpr-crops:/data/alpr_crops
+      - ./config/alpr_cameras.json:/app/config/alpr_cameras.json:ro
+    networks:
+      - shamrock-net
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 1.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # ── Intelligence Dashboard (FastAPI + Uvicorn) ──
   dashboard:
     build:
@@ -573,6 +617,8 @@ volumes:
   node-red-data:
     driver: local
   dashboard-uploads:
+    driver: local
+  alpr-crops:
     driver: local
   traccar-data:
     driver: local

@@ -259,6 +259,16 @@ updated_at            : str (ISO)
 | `poa_inventory` | `{poa_number: 1}` | Unique | POA lookup |
 | `poa_inventory` | `{surety_id: 1, status: 1}` | Compound | Available POA queries |
 | `audit_events` | `{created_at: 1}` | TTL (90 days) | Auto-purge old events |
+| `lpr_hits` | `{plate_text: 1, timestamp: -1}` | Compound | ALPR history by plate |
+| `lpr_watchlist` | `{plate_text: 1}` | Unique | Active skip/watch plates |
+
+### ALPR / LPR (FL511 pipeline)
+
+| Collection | Purpose |
+|------------|---------|
+| `lpr_watchlist` | Plates to alert on (`plate_text`, `defendant_id`, `active`) |
+| `lpr_hits` | Detections / watchlist matches from ALPR worker |
+| `alpr_worker_status` | Worker heartbeat (`_id: alpr-worker`) for `/api/alpr/status` |
 
 ---
 
