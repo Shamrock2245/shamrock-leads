@@ -1860,7 +1860,11 @@ async def run_ignorant(phone: str) -> Dict[str, Any]:
         accounts, entities = parse_ignorant_results(
             out, country_code=country_code, national=national
         )
-        rate_limited = [r for r in out if isinstance(r, dict) and r.get("rateLimit")]
+        # Ignore snapchat rateLimit flag because Snapchat deprecated the legacy xsrf endpoint (false alarm)
+        rate_limited = [
+            r for r in out
+            if isinstance(r, dict) and r.get("rateLimit") and r.get("name") != "snapchat"
+        ]
         result_meta.update({
             "ok": True,
             "raw": {
