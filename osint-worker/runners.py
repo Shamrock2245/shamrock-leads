@@ -126,13 +126,8 @@ def resolve_spiderfoot() -> Optional[str]:
     for c in candidates:
         if c and os.path.isfile(c):
             return c
-    try:
-        import importlib.util
-        if importlib.util.find_spec("spiderfoot") is not None:
-            return "python-module"
-    except Exception:
-        pass
     return None
+
 
 
 def resolve_blackbird() -> tuple[Optional[str], Optional[str]]:

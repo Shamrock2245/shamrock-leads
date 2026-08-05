@@ -35,7 +35,9 @@ RUN pip install --no-cache-dir sherlock-project \
     || echo "WARNING: sherlock install failed"
 
 # ── SpiderFoot ────────────────────────────────────────────────────────
-RUN pip install --no-cache-dir spiderfoot \
+RUN git clone --depth 1 https://github.com/smicallef/spiderfoot /opt/spiderfoot \
+    && pip install --no-cache-dir -r /opt/spiderfoot/requirements.txt \
+    && chmod +x /opt/spiderfoot/sf.py \
     || echo "WARNING: spiderfoot install failed"
 
 # ── Ignorant (phone → IG / Snap / Amazon) — required, fail build if missing ──
@@ -73,7 +75,8 @@ print('OSINT engines OK:', p['version'])"
 
 RUN groupadd -r appuser && \
     useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser && \
-    chown -R appuser:appuser /app /home/appuser /opt/blackbird
+    mkdir -p /opt/spiderfoot && \
+    chown -R appuser:appuser /app /home/appuser /opt/blackbird /opt/spiderfoot
 
 USER appuser
 
