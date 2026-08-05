@@ -82,7 +82,7 @@ async def osint_status(
     x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
     x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
 ):
-    """Returns availability of all engines (incl. Ignorant) + queue depth."""
+    """Returns availability of all engines (incl. Ignorant + Toutatis) + queue depth."""
     _require_admin(request, x_admin_key, x_admin_token)
     svc = get_osint_service()
     tools = svc.probe_tools()

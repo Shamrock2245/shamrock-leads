@@ -1,12 +1,12 @@
 # ============================================
 # ShamrockLeads — OSINT Worker v2
-# Writable FS for Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant
+# Writable FS: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
 # Internal network only (no published ports)
 # ============================================
 FROM python:3.12-slim
 
 LABEL maintainer="Shamrock Active Software"
-LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant)"
+LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant + Toutatis)"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY osint-worker/requirements.txt /app/requirements.txt
+# requirements.txt includes ignorant + toutatis (+ httpx/trio/phonenumbers/…)
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # ── Maigret ───────────────────────────────────────────────────────────
@@ -37,15 +38,15 @@ RUN pip install --no-cache-dir sherlock-project \
 RUN pip install --no-cache-dir spiderfoot \
     || echo "WARNING: spiderfoot install failed"
 
-# ── Ignorant (phone → Instagram / Snapchat / Amazon registration) ─────
-# Does not alert the target number. Requires httpx + trio (in requirements).
+# ── Ignorant (phone → IG / Snap / Amazon) — required, fail build if missing ──
+# Does not alert the target number.
 RUN pip install --no-cache-dir "ignorant>=1.2" \
-    || echo "WARNING: ignorant install failed"
+    && python -c "import ignorant; from ignorant.core import import_submodules, get_functions, launch_module"
 
-# ── Toutatis (Instagram username → email/phone via session cookie) ────
-# Requires INSTAGRAM_SESSION_ID / TOUTATIS_SESSION_ID on the worker.
+# ── Toutatis (IG username enrichment) — package required; runtime needs cookie ──
+# Set INSTAGRAM_SESSION_ID / TOUTATIS_SESSION_ID on the worker to enable scans.
 RUN pip install --no-cache-dir "toutatis>=1.31" phonenumbers pycountry \
-    || echo "WARNING: toutatis install failed"
+    && python -c "import toutatis; from toutatis.core import getInfo, advanced_lookup"
 
 # ── Blackbird ─────────────────────────────────────────────────────────
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
@@ -58,6 +59,17 @@ RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
     || echo "WARNING: blackbird install failed"
 
 COPY osint-worker/ /app/
+
+# Final import smoke (catches COPY overwriting nothing; packages must resolve)
+RUN python -c "\
+import ignorant, toutatis; \
+from runners import resolve_ignorant, resolve_toutatis, probe_tools; \
+assert resolve_ignorant(), 'ignorant not resolvable'; \
+assert resolve_toutatis(), 'toutatis not resolvable'; \
+p = probe_tools(); \
+assert p['ignorant']['available'] is True, p['ignorant']; \
+assert p['toutatis']['package_installed'] is True, p['toutatis']; \
+print('OSINT engines OK:', p['version'])"
 
 RUN groupadd -r appuser && \
     useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser && \

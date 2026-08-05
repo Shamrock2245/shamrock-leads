@@ -148,6 +148,21 @@ class OSINTService:
 
         engines_list = [e.value for e in req.engines]
 
+        # second_opinion: force username dual-engine + optional phone/IG enrichment
+        if req.second_opinion:
+            for eng in ("maigret", "sherlock", "blackbird"):
+                if eng not in engines_list:
+                    engines_list.append(eng)
+            if req.phone and str(req.phone).strip() and "ignorant" not in engines_list:
+                engines_list.append("ignorant")
+            if usernames and "toutatis" not in engines_list:
+                engines_list.append("toutatis")
+
+        # Phone present → ensure Ignorant is in the plan (UI usually does this;
+        # cover API/automation callers that only pass engines=[maigret]).
+        if req.phone and str(req.phone).strip() and "ignorant" not in engines_list:
+            engines_list.append("ignorant")
+
         # Build progress dict
         progress = {}
         for engine in engines_list:

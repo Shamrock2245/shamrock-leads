@@ -1031,8 +1031,13 @@ async def osint_worker_status(request: Request, api_key: str = ""):
             "ready_for_scans": bool(tools.get("ready_for_scans")),
             "worker_reachable": bool(tools.get("worker_reachable", True)),
             "worker_url": tools.get("worker_url"),
+            "worker_version": tools.get("version"),
             "maigret": tools.get("maigret"),
+            "sherlock": tools.get("sherlock"),
             "blackbird": tools.get("blackbird"),
+            "spiderfoot": tools.get("spiderfoot"),
+            "ignorant": tools.get("ignorant"),
+            "toutatis": tools.get("toutatis"),
             "defaults": tools.get("defaults"),
             "ts": datetime.now(timezone.utc).isoformat(),
         }

@@ -184,6 +184,28 @@ def test_probe_tools_structure():
     assert "session_configured" in probe["toutatis"]
 
 
+@pytest.mark.asyncio
+async def test_run_toutatis_fails_closed_without_session(monkeypatch):
+    from runners import run_toutatis
+
+    monkeypatch.delenv("INSTAGRAM_SESSION_ID", raising=False)
+    monkeypatch.delenv("TOUTATIS_SESSION_ID", raising=False)
+    result = await run_toutatis(["someuser"])
+    assert result["ok"] is False
+    assert "SESSION" in (result.get("error") or "").upper() or "session" in (
+        result.get("error") or ""
+    ).lower()
+
+
+@pytest.mark.asyncio
+async def test_run_ignorant_invalid_phone():
+    from runners import run_ignorant
+
+    result = await run_ignorant("12")
+    assert result["ok"] is False
+    assert result.get("error")
+
+
 def test_extract_importable_fields():
     from dashboard.services.osint_service import OSINTService
     svc = OSINTService()
