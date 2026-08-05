@@ -85,6 +85,7 @@ class ALPRStreamManager:
                     "last_frame_at": s.last_frame_at or None,
                     "last_error": s.last_error,
                     "stream_type": s.stream_type,
+                    "stream_url": s.stream_url,
                 }
                 for s in self.streams.values()
             ],

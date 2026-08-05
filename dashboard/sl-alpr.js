@@ -23,6 +23,8 @@
     addWatch,
     scanImage,
     stopPoll,
+    viewCameraModal,
+    refreshFl511Cameras,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -174,30 +176,120 @@
 
   function _renderStreamTable(list) {
     if (!list || !list.length) {
-      return `<div class="alpr-muted" style="margin-top:12px">No live stream telemetry yet. Start worker with <code>docker compose --profile alpr up -d alpr-worker</code> and set camera URLs in <code>config/alpr_cameras.json</code>.</div>`;
+      return `
+        <div class="alpr-card" style="margin-top:14px">
+          <div class="alpr-card-header" style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="alpr-card-title">Live FL511 Camera Streams (Statewide)</div>
+            <button class="btn btn-sm btn-primary" onclick="SLALPR.refreshFl511Cameras()" style="background:#0ea5e9;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;color:#fff;font-weight:600;">🔄 Refresh Statewide Feeds</button>
+          </div>
+          <div class="alpr-muted" style="margin-top:12px">No active stream telemetry yet. Click "Refresh Statewide Feeds" above or start worker with <code>docker compose --profile alpr up -d alpr-worker</code>.</div>
+        </div>`;
     }
     const rows = list
       .map(
         (s) => `
       <tr>
-        <td>${esc(s.name || s.id)}</td>
+        <td><strong>${esc(s.name || s.id)}</strong> <div style="font-size:0.75rem;color:#94a3b8;">ID: ${esc(s.id)}</div></td>
         <td><span class="alpr-pill ${s.connected ? 'ok' : 'off'}">${s.connected ? 'live' : 'down'}</span></td>
-        <td>${esc(s.stream_type || '—')}</td>
+        <td>${esc(s.stream_type || 'jpeg')}</td>
         <td>${esc(s.frames_ok ?? 0)} / ${esc(s.frames_fail ?? 0)}</td>
-        <td class="alpr-muted">${esc(s.last_error || '—')}</td>
+        <td>
+          <button class="btn btn-sm" onclick="SLALPR.viewCameraModal('${esc(s.id)}', '${esc(s.name || s.id)}', '${esc(s.stream_url || ('https://fl511.com/map/Cctv/' + String(s.id).replace('fl511_', '')))}')" style="background:#0284c7;color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:0.8rem;cursor:pointer;font-weight:600;">👁️ View Feed</button>
+        </td>
       </tr>`
       )
       .join('');
     return `
       <div class="alpr-card" style="margin-top:14px">
-        <div class="alpr-card-title">Camera streams</div>
+        <div class="alpr-card-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div class="alpr-card-title">Live FL511 Camera Streams (${list.length} active feeds)</div>
+          <button class="btn btn-sm" onclick="SLALPR.refreshFl511Cameras()" style="background:#0ea5e9;color:#fff;border:none;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:0.85rem;font-weight:600;">🔄 Refresh 284 Statewide Feeds</button>
+        </div>
         <div class="alpr-table-wrap">
           <table class="alpr-table">
-            <thead><tr><th>Camera</th><th>Status</th><th>Type</th><th>OK / Fail</th><th>Last error</th></tr></thead>
+            <thead><tr><th>Camera</th><th>Status</th><th>Type</th><th>OK / Fail</th><th>Live View</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
       </div>`;
+  }
+
+  let _liveModalTimer = null;
+
+  function viewCameraModal(id, name, streamUrl) {
+    const liveImgUrl = streamUrl && streamUrl.startsWith('http') ? streamUrl : `https://fl511.com/map/Cctv/${String(id).replace('fl511_', '')}`;
+    const modalId = 'alprCamViewModal';
+    let overlay = document.getElementById(modalId);
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = modalId;
+      overlay.className = 'modal-overlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);';
+      document.body.appendChild(overlay);
+    }
+
+    overlay.innerHTML = `
+      <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;width:90%;max-width:750px;padding:20px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.8);color:#f8fafc;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid #1e293b;padding-bottom:10px;">
+          <div>
+            <h3 style="margin:0;font-size:1.1rem;color:#38bdf8;">📹 Live Traffic Camera: ${esc(name)}</h3>
+            <div style="font-size:0.8rem;color:#94a3b8;margin-top:2px;">Camera ID: <code>${esc(id)}</code> · Real-Time Auto-Refresh 2.5s</div>
+          </div>
+          <button id="closeCamModalBtn" style="background:#334155;border:none;color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font-weight:600;">✕ Close</button>
+        </div>
+        <div style="text-align:center;background:#020617;border-radius:8px;padding:12px;min-height:340px;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #1e293b;position:relative;">
+          <img id="alprLiveImg" src="${esc(liveImgUrl)}?t=${Date.now()}" style="max-width:100%;max-height:480px;border-radius:6px;object-fit:contain;" onerror="this.src='${esc(liveImgUrl)}';" />
+          <div style="position:absolute;bottom:16px;right:16px;background:rgba(15,23,42,0.85);color:#38bdf8;padding:4px 10px;border-radius:20px;font-size:0.75rem;font-weight:600;border:1px solid #0ea5e9;">🔴 LIVE SNAPSHOT</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;">
+          <a href="${esc(liveImgUrl)}" target="_blank" style="color:#0ea5e9;font-size:0.85rem;text-decoration:none;font-weight:500;">🔗 Open Full Resolution Stream ↗</a>
+          <button id="refreshCamModalBtn" style="background:#0ea5e9;border:none;color:#fff;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:0.85rem;font-weight:600;">🔄 Instant Refresh</button>
+        </div>
+      </div>
+    `;
+
+    overlay.style.display = 'flex';
+
+    if (_liveModalTimer) clearInterval(_liveModalTimer);
+    _liveModalTimer = setInterval(() => {
+      const img = document.getElementById('alprLiveImg');
+      if (img) {
+        img.src = `${liveImgUrl}?t=${Date.now()}`;
+      }
+    }, 2500);
+
+    const closeBtn = document.getElementById('closeCamModalBtn');
+    if (closeBtn) {
+      closeBtn.onclick = () => {
+        if (_liveModalTimer) clearInterval(_liveModalTimer);
+        overlay.style.display = 'none';
+      };
+    }
+    const refreshBtn = document.getElementById('refreshCamModalBtn');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        const img = document.getElementById('alprLiveImg');
+        if (img) img.src = `${liveImgUrl}?t=${Date.now()}`;
+      };
+    }
+  }
+
+  async function refreshFl511Cameras() {
+    toast('Resolving live FL511 traffic cameras across Florida…', 'info');
+    try {
+      const r = await fetch(`${API}/api/alpr/refresh-cameras`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: headers(true),
+        body: JSON.stringify({}),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      toast(`✅ Resolved ${data.resolved_count} live FL511 cameras statewide!`, 'ok');
+      await refreshStatus();
+    } catch (e) {
+      toast(`Failed to refresh FL511 cameras: ${e.message}`, 'error');
+    }
   }
 
   async function searchHits() {

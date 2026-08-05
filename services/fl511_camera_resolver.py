@@ -23,8 +23,19 @@ FL511_API_URL = "https://fl511.com/List/GetData/Cameras"
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config" / "alpr_cameras.json"
 
-# Priority SWFL counties for bond/skip LPR surveillance
-TARGET_COUNTIES = ["Lee", "Collier", "Charlotte", "Hendry", "Sarasota", "Manatee", "Hillsborough", "Pinellas", "Orange", "Miami-Dade"]
+# Expanded Florida counties for statewide bond/skip LPR surveillance
+TARGET_COUNTIES = [
+    # SWFL Core
+    "Lee", "Collier", "Charlotte", "Hendry", "Glades", "DeSoto",
+    # Suncoast & Tampa Bay
+    "Sarasota", "Manatee", "Hillsborough", "Pinellas", "Pasco", "Hernando",
+    # Central FL & I-4 Corridor
+    "Polk", "Orange", "Osceola", "Seminole", "Lake", "Volusia", "Brevard",
+    # South Florida & East Coast
+    "Palm Beach", "Broward", "Miami-Dade", "Monroe", "Martin", "St. Lucie", "Indian River",
+    # North & Northwest FL
+    "Marion", "Alachua", "Duval", "St. Johns", "Leon", "Escambia", "Okaloosa", "Bay",
+]
 
 
 def fetch_fl511_cameras_for_county(county: str, max_records: int = 200) -> List[Dict[str, Any]]:
