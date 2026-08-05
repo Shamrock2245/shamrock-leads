@@ -101,6 +101,14 @@ def run_forever() -> None:
         logger.error("Mongo init failed: %s — cannot run ALPR worker", exc)
         raise
 
+    # Auto-resolve live FL511 cameras on startup
+    if os.getenv("ALPR_AUTO_RESOLVE_FL511", "true").strip().lower() in {"1", "true", "yes"}:
+        try:
+            from services.fl511_camera_resolver import resolve_and_save_swfl_cameras
+            resolve_and_save_swfl_cameras()
+        except Exception as exc:
+            logger.warning("FL511 camera auto-resolver failed on startup: %s", exc)
+
     streams = ALPRStreamManager()
     cycle = 0
     hits_total = 0

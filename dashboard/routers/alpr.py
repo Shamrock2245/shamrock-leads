@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, File, Header, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from dashboard.auth.pin_middleware import get_session_from_request, session_is_admin
@@ -127,6 +127,28 @@ async def alpr_status(
             "frame_interval_s": os.getenv("ALPR_FRAME_INTERVAL_S", "2.5"),
         },
     }
+
+
+@router.post("/refresh-cameras")
+async def alpr_refresh_cameras(
+    request: Request,
+    counties: Optional[List[str]] = Body(None),
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Trigger live FL511 camera resolution & update config/alpr_cameras.json."""
+    _require_staff(request, x_admin_key, x_admin_token)
+    try:
+        from services.fl511_camera_resolver import resolve_and_save_swfl_cameras
+        cams = resolve_and_save_swfl_cameras(counties=counties)
+        return {
+            "ok": True,
+            "resolved_count": len(cams),
+            "counties": counties or ["Lee", "Collier", "Charlotte", "Hendry", "Sarasota", "Manatee", "Hillsborough", "Pinellas", "Orange", "Miami-Dade"],
+            "cameras": cams[:10],
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh FL511 cameras: {exc}")
 
 
 # ── Hits ──────────────────────────────────────────────────────────────────────
