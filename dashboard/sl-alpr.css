@@ -278,3 +278,28 @@
   text-decoration: none;
   padding: 12px 22px;
 }
+
+/* Live camera feed modal — dedicated class so global .modal-overlay:not(.show)
+   { display:none !important } never hides the viewer. */
+.alpr-live-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 10050;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  padding: 16px;
+}
+.alpr-live-modal-overlay.show {
+  display: flex !important;
+  pointer-events: auto !important;
+}
+.alpr-live-modal {
+  max-height: 92vh;
+  overflow: auto;
+}
+.alpr-view-feed-btn:hover {
+  filter: brightness(1.08);
+}

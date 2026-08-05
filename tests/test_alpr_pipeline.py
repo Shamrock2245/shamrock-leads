@@ -131,3 +131,22 @@ def test_alpr_router_importable():
     assert any(p and "hits" in p for p in paths)
     assert any(p and "watchlist" in p for p in paths)
     assert any(p and "scan-image" in p for p in paths)
+    assert any(p and "snapshot" in p for p in paths)
+
+
+def test_fl511_jpeg_url_guards_hosts():
+    from dashboard.routers.alpr import _fl511_jpeg_url, _registry_stream_list
+
+    assert _fl511_jpeg_url({"id": "fl511_44", "stream_url": "https://fl511.com/map/Cctv/44"}).endswith("/44")
+    assert _fl511_jpeg_url({"id": "fl511_44", "stream_url": "/map/Cctv/44"}).startswith("https://fl511.com")
+    # Untrusted host falls back to FL511 map endpoint
+    url = _fl511_jpeg_url({"id": "fl511_99", "stream_url": "https://evil.example/x.jpg"})
+    assert "fl511.com" in url and "99" in url
+
+    merged = _registry_stream_list(
+        [{"id": "fl511_1", "name": "Cam", "stream_url": "https://fl511.com/map/Cctv/1", "enabled": True, "stream_type": "jpeg"}],
+        {"streams": [{"id": "fl511_1", "connected": True, "frames_ok": 3, "frames_fail": 0}]},
+    )
+    assert len(merged) == 1
+    assert merged[0]["connected"] is True
+    assert merged[0]["stream_url"].startswith("https://fl511.com")
