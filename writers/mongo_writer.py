@@ -14,6 +14,7 @@ from typing import List, Dict, Any, Optional
 
 from pymongo import MongoClient, UpdateOne, ASCENDING, DESCENDING
 from pymongo.collection import Collection
+from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
 from config.settings import settings
@@ -48,8 +49,48 @@ class MongoWriter:
         self.ingestion_log: Collection = self.db["ingestion_log"]
         self.scraper_status: Collection = self.db["scraper_status"]
 
-        # Ensure indexes on first use
-        self._ensure_indexes()
+        # Ensure indexes on first use — must not crash writer init
+        # (a failed writer = zero scrapes written to Mongo system-wide).
+        try:
+            self._ensure_indexes()
+        except Exception as idx_err:
+            logger.error(
+                "⚠️ MongoDB index ensure failed (writer will still run): %s",
+                idx_err,
+            )
+
+    @staticmethod
+    def _safe_create_index(collection: Collection, keys, **kwargs) -> None:
+        """
+        create_index that recovers from IndexKeySpecsConflict (code 86).
+
+        Happens when an index name already exists with different options
+        (e.g. sparse=True vs non-sparse). Drop + recreate; never abort writer init.
+        """
+        name = kwargs.get("name")
+        try:
+            collection.create_index(keys, **kwargs)
+            return
+        except OperationFailure as exc:
+            # 85 IndexOptionsConflict, 86 IndexKeySpecsConflict
+            if getattr(exc, "code", None) not in (85, 86):
+                raise
+            if not name:
+                logger.warning("Index conflict without name on %s: %s", collection.name, exc)
+                return
+            try:
+                collection.drop_index(name)
+                logger.info("♻️ Dropped conflicting index %s on %s — recreating", name, collection.name)
+                collection.create_index(keys, **kwargs)
+            except Exception as retry_err:
+                logger.warning(
+                    "⚠️ Could not recreate index %s on %s: %s",
+                    name,
+                    collection.name,
+                    retry_err,
+                )
+        except Exception as exc:
+            logger.warning("⚠️ create_index %s on %s failed: %s", name, collection.name, exc)
 
     def _ensure_indexes(self):
         """Create indexes for fast dedup lookups and queries."""
@@ -73,42 +114,49 @@ class MongoWriter:
             )
         except Exception as backfill_err:
             logger.warning(f"⚠️ arrests.state backfill skipped: {backfill_err}")
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("state", ASCENDING), ("county", ASCENDING), ("booking_number", ASCENDING)],
             unique=True,
             name="dedup_state_county_booking",
         )
         # Query indexes
-        self.arrests.create_index([("county", ASCENDING)], name="idx_county")
-        self.arrests.create_index([("state", ASCENDING)], name="idx_state")
-        self.arrests.create_index([("booking_date", DESCENDING)], name="idx_booking_date")
-        self.arrests.create_index([("lead_score", DESCENDING)], name="idx_lead_score")
-        self.arrests.create_index([("status", ASCENDING)], name="idx_status")
-        self.arrests.create_index(
+        self._safe_create_index(self.arrests, [("county", ASCENDING)], name="idx_county")
+        self._safe_create_index(self.arrests, [("state", ASCENDING)], name="idx_state")
+        self._safe_create_index(self.arrests, [("booking_date", DESCENDING)], name="idx_booking_date")
+        self._safe_create_index(self.arrests, [("lead_score", DESCENDING)], name="idx_lead_score")
+        self._safe_create_index(self.arrests, [("status", ASCENDING)], name="idx_status")
+        self._safe_create_index(
+            self.arrests,
             [("lead_status", ASCENDING), ("county", ASCENDING)],
             name="idx_lead_status_county",
         )
         # Retention / "oldest first" eviction indexes (M0 512MB guard)
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("updated_at", ASCENDING)],
             name="idx_updated_at",
         )
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("created_at", ASCENDING)],
             name="idx_created_at",
         )
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("scraped_at", DESCENDING)],
             name="idx_scraped_at",
             sparse=True,
         )
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("state", ASCENDING), ("lead_status", ASCENDING), ("updated_at", ASCENDING)],
             name="idx_state_lead_updated",
         )
 
         # Leads collection indexes
-        self.leads.create_index(
+        self._safe_create_index(
+            self.leads,
             [("arrest_id", ASCENDING), ("tenant_id", ASCENDING)],
             unique=True,
             name="dedup_lead",
@@ -130,21 +178,24 @@ class MongoWriter:
             )
         except Exception as backfill_err:
             logger.warning(f"⚠️ scraper_status.state backfill skipped: {backfill_err}")
-        self.scraper_status.create_index(
+        self._safe_create_index(
+            self.scraper_status,
             [("state", ASCENDING), ("county", ASCENDING)],
             unique=True,
             name="idx_scraper_status_state_county",
         )
 
         # FTA intelligence fields (populated by hybrid_scorer via base_scraper)
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("fta_risk_level", ASCENDING), ("fta_risk_score", DESCENDING)],
             name="idx_fta_risk",
             sparse=True,
         )
 
         # Phase 2: defendant_id back-reference on arrests (sparse — only set after normalization)
-        self.arrests.create_index(
+        self._safe_create_index(
+            self.arrests,
             [("defendant_id", ASCENDING)],
             name="idx_defendant_id",
             sparse=True,
