@@ -2,6 +2,7 @@ from __future__ import annotations
 from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Request
 from dashboard.deps import get_settings
+import os
 """
 ShamrockLeads — Phase 6: Paperwork Generation API Blueprint
 
