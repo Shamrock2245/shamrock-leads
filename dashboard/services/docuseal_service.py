@@ -654,6 +654,30 @@ class DocuSealService:
         }
 
 
+def resolve_template_id_for_surety(surety_id: str = "osi") -> Optional[str]:
+    """
+    Env-based template IDs until admin maps all packet docs in DocuSeal UI.
+
+      DOCUSEAL_TEMPLATE_ID          — default / fallback
+      DOCUSEAL_TEMPLATE_ID_OSI      — OSI combined packet template
+      DOCUSEAL_TEMPLATE_ID_PALMETTO — Palmetto combined packet template
+    """
+    surety = (surety_id or "osi").lower().strip()
+    if surety == "palmetto":
+        tid = (
+            os.getenv("DOCUSEAL_TEMPLATE_ID_PALMETTO")
+            or os.getenv("DOCUSEAL_TEMPLATE_ID")
+            or ""
+        ).strip()
+    else:
+        tid = (
+            os.getenv("DOCUSEAL_TEMPLATE_ID_OSI")
+            or os.getenv("DOCUSEAL_TEMPLATE_ID")
+            or ""
+        ).strip()
+    return tid or None
+
+
 def get_docuseal_service() -> DocuSealService:
     """Factory for FastAPI routes."""
     return DocuSealService()

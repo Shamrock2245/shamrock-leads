@@ -1018,7 +1018,7 @@ const SLPaperwork = {
       return;
     }
 
-    const provider = document.getElementById('pwApProvider')?.value || 'signnow';
+    const provider = document.getElementById('pwApProvider')?.value || 'docuseal';
     this._setApStatus('Finalizing: hydrate → flatten → send…', 'info');
 
     const body = {
@@ -1052,9 +1052,11 @@ const SLPaperwork = {
       if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
 
       const link = data.signing_link ? `\nSigning link: ${data.signing_link}` : '';
+      const ds = data.send_results?.docuseal;
       const sn = data.send_results?.signnow;
       const ad = data.send_results?.adobe;
       let providerMsg = '';
+      if (ds) providerMsg += ds.success ? ' DocuSeal ✓' : ` DocuSeal ✗ (${ds.error || 'fail'})`;
       if (sn) providerMsg += sn.success ? ' SignNow ✓' : ` SignNow ✗ (${sn.error || 'fail'})`;
       if (ad) providerMsg += ad.success ? ' Adobe ✓' : ` Adobe ✗ (${ad.error || 'fail'})`;
 

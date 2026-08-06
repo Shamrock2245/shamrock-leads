@@ -727,6 +727,9 @@ async def send_via_adobe(
     return result
 
 
+_ESIGN_PROVIDERS = frozenset({"docuseal", "signnow", "adobe", "both", "none"})
+
+
 async def resolve_client_esign_provider(
     *,
     preferred: Optional[str] = None,
@@ -736,11 +739,13 @@ async def resolve_client_esign_provider(
 ) -> str:
     """
     E-sign provider is chosen per client (indemnitor first, then defendant, then bond),
-    not per PDF. Values: signnow | adobe | none
+    not per PDF. Values: docuseal | signnow | adobe | both | none
+
+    Default: DOCUSEAL (self-hosted, $0) via DEFAULT_ESIGN_PROVIDER.
     """
     from dashboard.extensions import get_collection
 
-    if preferred in ("signnow", "adobe", "none", "both"):
+    if preferred in _ESIGN_PROVIDERS:
         return preferred
 
     async def _from_doc(col_name: str, query: dict) -> Optional[str]:
@@ -750,7 +755,7 @@ async def resolve_client_esign_provider(
         if not doc:
             return None
         p = (doc.get("esign_provider") or doc.get("Esign_Provider") or "").lower().strip()
-        return p if p in ("signnow", "adobe", "none", "both") else None
+        return p if p in _ESIGN_PROVIDERS else None
 
     for col, q in (
         ("indemnitors", {"$or": [{"Indemnitor_ID": indemnitor_id}, {"indemnitor_id": indemnitor_id}]} if indemnitor_id else None),
@@ -762,7 +767,7 @@ async def resolve_client_esign_provider(
         found = await _from_doc(col, q)
         if found:
             return found
-    return os.getenv("DEFAULT_ESIGN_PROVIDER", "signnow").lower()
+    return os.getenv("DEFAULT_ESIGN_PROVIDER", "docuseal").lower()
 
 
 async def save_client_esign_provider(
@@ -776,8 +781,8 @@ async def save_client_esign_provider(
     from dashboard.extensions import get_collection
 
     provider = (provider or "").lower().strip()
-    if provider not in ("signnow", "adobe", "none", "both"):
-        raise ValueError("provider must be signnow | adobe | both | none")
+    if provider not in _ESIGN_PROVIDERS:
+        raise ValueError("provider must be docuseal | signnow | adobe | both | none")
 
     now = datetime.now(timezone.utc)
     updated = []

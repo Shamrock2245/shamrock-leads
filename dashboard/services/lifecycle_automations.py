@@ -3,7 +3,8 @@ Lifecycle automations — staff-first cron jobs for the bond chain.
 
 Jobs (all fail closed, no unsolicited client contact):
   1. Forfeiture portfolio scan → risk scores + Slack top risks
-  2. SignNow status poller → sync packet status from API
+  2. SignNow status poller → sync packet status from API (legacy)
+  2b. DocuSeal status poller → sync open DocuSeal submissions
   3. Signed packet → collect-payment task + Slack
   4. Compliance task backfill for active bonds
   5. Matching backlog review digest (batch_match + Slack)
@@ -377,6 +378,105 @@ class LifecycleAutomations:
                 await post_slack("\n".join(lines))
             except Exception as e:
                 logger.debug("[signnow-poll] slack: %s", e)
+
+        return results
+
+    async def run_docuseal_poller(self, config: Optional[dict] = None) -> dict:
+        """
+        Poll DocuSeal for open submissions; mark completed; file to Drive if needed.
+        Backup for missed webhooks (same spirit as SignNow poller).
+        """
+        cfg = config or {}
+        limit = min(int(cfg.get("limit") or 40), 100)
+
+        from dashboard.services.docuseal_service import DocuSealService
+
+        ds = DocuSealService()
+        if not ds.is_configured:
+            return {
+                "ok": False,
+                "error": "DOCUSEAL_API_KEY not configured",
+                "scanned": 0,
+                "skipped": True,
+            }
+
+        packets = self.db["paperwork_packets"]
+        cursor = packets.find({
+            "esign_provider": "docuseal",
+            "status": {"$in": [
+                "pending_signature", "delivered", "sent", "pending", "open",
+                "pending_esign", "finalized",
+            ]},
+            "docuseal_submission_id": {"$exists": True, "$ne": None},
+            "docuseal_status": {"$nin": ["completed", "signed"]},
+        }).limit(limit)
+
+        results = {
+            "ok": True,
+            "scanned": 0,
+            "signed": 0,
+            "still_pending": 0,
+            "errors": 0,
+            "filed_drive": 0,
+            "signed_packets": [],
+        }
+
+        async for packet in cursor:
+            results["scanned"] += 1
+            packet_id = packet.get("packet_id") or str(packet.get("_id", ""))
+            sub_id = packet.get("docuseal_submission_id")
+            if not sub_id:
+                continue
+            try:
+                sub = await ds.get_submission(sub_id)
+                status = (sub.get("status") or "").lower()
+                if status in ("completed", "complete", "signed"):
+                    drive_url = packet.get("signed_pdf_drive_url") or packet.get("drive_link")
+                    if not drive_url and bool(cfg.get("file_to_drive", True)):
+                        try:
+                            pdf = await ds.download_combined_pdf(sub_id)
+                            filed = ds.file_signed_pdf_to_drive(
+                                pdf,
+                                defendant_name=packet.get("defendant_name") or "Unknown",
+                                surety_id=packet.get("surety_id") or "osi",
+                                packet_id=packet_id,
+                                booking_number=_booking(packet),
+                            )
+                            if filed.get("ok"):
+                                drive_url = filed.get("drive_url")
+                                results["filed_drive"] += 1
+                        except Exception as de:
+                            logger.warning("[docuseal-poll] drive %s: %s", packet_id, de)
+
+                    update = {
+                        "status": "signed",
+                        "docuseal_status": "completed",
+                        "signnow_status": "signed",
+                        "signed_at": _now_iso(),
+                        "docuseal_polled_at": _now_iso(),
+                    }
+                    if drive_url:
+                        update["signed_pdf_drive_url"] = drive_url
+                        update["drive_link"] = drive_url
+                    await packets.update_one({"_id": packet["_id"]}, {"$set": update})
+                    results["signed"] += 1
+                    results["signed_packets"].append({
+                        "packet_id": packet_id,
+                        "booking_number": _booking(packet),
+                        "defendant": packet.get("defendant_name") or "Unknown",
+                    })
+                else:
+                    await packets.update_one(
+                        {"_id": packet["_id"]},
+                        {"$set": {
+                            "docuseal_status": status or packet.get("docuseal_status") or "pending",
+                            "docuseal_polled_at": _now_iso(),
+                        }},
+                    )
+                    results["still_pending"] += 1
+            except Exception as e:
+                results["errors"] += 1
+                logger.warning("[docuseal-poll] packet %s: %s", packet_id, e)
 
         return results
 

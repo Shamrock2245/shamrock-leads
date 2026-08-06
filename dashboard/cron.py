@@ -609,6 +609,33 @@ async def _run_signnow_poller():
         logger.debug("[SignNowPoller] skipped: %s", result.get("error"))
 
 
+async def _run_docuseal_poller():
+    from dashboard.services.lifecycle_automations import LifecycleAutomations
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("docuseal_poller") or {}
+    if cfg.get("enabled") is False:
+        return
+    result = await LifecycleAutomations(db).run_docuseal_poller(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "docuseal_poller",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("signed"):
+        logger.info(
+            "[DocuSealPoller] signed=%s drive=%s pending=%s errors=%s",
+            result.get("signed"),
+            result.get("filed_drive"),
+            result.get("still_pending"),
+            result.get("errors"),
+        )
+    elif result.get("skipped"):
+        logger.debug("[DocuSealPoller] skipped: %s", result.get("error"))
+
+
 async def _run_swipesimple_gmail_poll():
     """Poll Gmail for SwipeSimple bond receipts (school amounts left to GAS)."""
     from dashboard.services.swipesimple_receipt_poller import run_swipesimple_receipt_poll
@@ -710,6 +737,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("watchdog",           "Watchdog",            300,  60, _run_watchdog),
     CronDef("forfeiture_scan",    "ForfeitureScan",    14400, 300, _run_forfeiture_scan, default_enabled=True),
     CronDef("signnow_poller",     "SignNowPoller",      1800, 210, _run_signnow_poller, default_enabled=True),
+    CronDef("docuseal_poller",    "DocuSealPoller",     1800, 210, _run_docuseal_poller, default_enabled=True),
     CronDef("swipesimple_gmail_poll", "SwipeSimpleGmail", 300, 120, _run_swipesimple_gmail_poll, default_enabled=True),
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),

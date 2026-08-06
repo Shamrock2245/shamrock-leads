@@ -215,7 +215,8 @@ def packet_composition(surety: str = "osi") -> Dict[str, Any]:
         "shared_legal_docs": shared_legal,
         "packet_order": list(PACKET_DOC_ORDER),
         "print_only": list(PRINT_ONLY_DOC_ORDER),
-        "esign_providers": ["signnow", "adobe", "both", "none"],
+        "esign_providers": ["docuseal", "signnow", "adobe", "both", "none"],
+        "esign_default": "docuseal",
         "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
     }
 

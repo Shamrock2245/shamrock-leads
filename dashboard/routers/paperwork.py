@@ -155,6 +155,11 @@ async def paperwork_config():
             "local_pdf": local_pdf,
             "esign_providers": ["docuseal", "signnow", "adobe", "both", "none"],
             "esign_default": "docuseal",
+            "docuseal": {
+                "configured": bool(os.getenv("DOCUSEAL_API_KEY")),
+                "url": os.getenv("DOCUSEAL_URL", "https://sign.shamrockbailbonds.biz"),
+                "webhook": "/api/webhooks/docuseal",
+            },
             "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
             "counts": {
                 "osi": len(osi),
@@ -486,7 +491,7 @@ async def generate_packet(request: Request, intake_id: str):
                 "doc_id": f"{packet_id}-IND",
                 "type": DOC_INDEMNITY,
                 "label": "Indemnity Agreement",
-                "status": "pending_signnow",
+                "status": "pending_esign",
                 "generated_at": now.isoformat(),
             })
 
@@ -496,7 +501,7 @@ async def generate_packet(request: Request, intake_id: str):
                 "doc_id": f"{packet_id}-SSA",
                 "type": DOC_SSA_RELEASE,
                 "label": "SSA Release",
-                "status": "pending_signnow",
+                "status": "pending_esign",
                 "generated_at": now.isoformat(),
             })
 
@@ -506,7 +511,7 @@ async def generate_packet(request: Request, intake_id: str):
                 "doc_id": f"{packet_id}-POA",
                 "type": DOC_POA,
                 "label": "Power of Attorney",
-                "status": "pending_signnow",
+                "status": "pending_esign",
                 "generated_at": now.isoformat(),
             })
 
@@ -547,9 +552,12 @@ async def generate_packet(request: Request, intake_id: str):
             "created_at": now,
             "updated_at": now,
             "delivered_via": None,
+            "esign_provider": "docuseal",
             "signnow_invite_id": None,
-            "signnow_document_id": None,            # populated on SignNow push
+            "signnow_document_id": None,            # legacy SignNow
             "signnow_status": None,
+            "docuseal_submission_id": None,         # populated on DocuSeal push
+            "docuseal_status": None,
             "packet_version": 1,                    # policy Rule 3
             "voided": False,
         }
@@ -1579,6 +1587,7 @@ async def packet_builder_context(request: Request):
             "small_bond_max": SMALL_BOND_MAX,
             "esign_provider": client_provider,
             "providers": {
+                "docuseal": bool(os.getenv("DOCUSEAL_API_KEY")),
                 "signnow": True,
                 "adobe_pdf_services": astat["pdf_services"]["configured"],
                 "adobe_sign": astat["acrobat_sign"]["configured"],
@@ -1601,7 +1610,7 @@ async def packet_builder_finalize(request: Request):
       - assemble docs from drag-drop rules + extra catalog keys
       - attach extra uploaded PDFs
       - flatten into a single PDF when possible
-      - send to SignNow and/or Adobe for signature
+      - send to DocuSeal (default) and/or SignNow / Adobe for signature
     """
     try:
         body = (await request.json()) or {}
@@ -1648,8 +1657,8 @@ async def packet_builder_finalize(request: Request):
             defendant_id=ctx.get("defendant_id") or body.get("defendant_id"),
             bond_case_id=ctx.get("bond_case_id") or body.get("bond_case_id"),
         )
-        if provider not in ("signnow", "adobe", "both", "none"):
-            provider = "signnow"
+        if provider not in ("docuseal", "signnow", "adobe", "both", "none"):
+            provider = "docuseal"
 
         # Persist preference when staff explicitly chose a provider in the UI
         if body.get("provider") and body.get("save_esign_preference", True):
@@ -1862,10 +1871,92 @@ async def packet_builder_finalize(request: Request):
         send_results: dict = {}
         signnow_result: dict = {}
         adobe_result: dict = {}
+        docuseal_result: dict = {}
         status = "finalized"
         signing_link = ""
 
-        # ── SignNow ──
+        # ── DocuSeal (default / self-hosted OSS) ──
+        if provider == "docuseal":
+            try:
+                from dashboard.services.docuseal_service import (
+                    get_docuseal_service,
+                    resolve_template_id_for_surety,
+                )
+
+                ds = get_docuseal_service()
+                template_id = (
+                    body.get("docuseal_template_id")
+                    or body.get("template_id")
+                    or resolve_template_id_for_surety(surety_id)
+                )
+                if not ds.is_configured:
+                    send_results["docuseal"] = {
+                        "success": False,
+                        "error": "docuseal_not_configured",
+                        "hint": "Set DOCUSEAL_URL + DOCUSEAL_API_KEY after admin login",
+                    }
+                elif not template_id:
+                    send_results["docuseal"] = {
+                        "success": False,
+                        "error": "template_id_required",
+                        "hint": (
+                            "Set DOCUSEAL_TEMPLATE_ID_OSI / DOCUSEAL_TEMPLATE_ID_PALMETTO "
+                            "or pass template_id in the request"
+                        ),
+                    }
+                else:
+                    bond_data = {
+                        **intake_doc,
+                        "defendant_name": def_.get("name") or intake_doc.get("defendant_name"),
+                        "indemnitor_name": ind.get("name") or intake_doc.get("indemnitor_name"),
+                        "indemnitor_email": ind.get("email") or intake_doc.get("indemnitor_email"),
+                        "indemnitor_phone": ind.get("phone") or intake_doc.get("indemnitor_phone"),
+                        "defendant_email": def_.get("email") or "",
+                        "defendant_phone": def_.get("phone") or "",
+                        "county": ctx.get("county") or intake_doc.get("defendant_county"),
+                        "case_number": ctx.get("case_number") or intake_doc.get("case_number"),
+                        "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
+                        "booking_number": ctx.get("booking_number") or intake_doc.get("defendant_booking_number"),
+                        "court_date": ctx.get("court_date") or "TBN",
+                        "surety_id": surety_id,
+                    }
+                    docuseal_result = await ds.create_submission_for_packet(
+                        template_id=template_id,
+                        packet_id=packet_id,
+                        bond_data=bond_data,
+                        send_email=bool(body.get("send_email", False)),
+                        include_defendant=bool(body.get("include_defendant", True)),
+                    )
+                    links = [
+                        s.get("sign_url")
+                        for s in (docuseal_result.get("submitters") or [])
+                        if s.get("sign_url")
+                    ]
+                    # Prefer indemnitor link first for staff clipboard
+                    signing_link = links[0] if links else ""
+                    status = "pending_signature"
+                    send_results["docuseal"] = {
+                        "success": True,
+                        "submission_id": docuseal_result.get("submission_id"),
+                        "template_id": template_id,
+                        "submitters": docuseal_result.get("submitters"),
+                        "signing_link": signing_link,
+                        "sign_links": links,
+                    }
+            except Exception as ds_exc:
+                logger.exception("DocuSeal finalize failed for packet %s", packet_id)
+                send_results["docuseal"] = {"success": False, "error": str(ds_exc)[:400]}
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": f"DocuSeal failed: {ds_exc}",
+                        "packet_id": packet_id,
+                        "send_results": send_results,
+                    },
+                    status_code=502,
+                )
+
+        # ── SignNow (legacy) ──
         if provider in ("signnow", "both"):
             try:
                 from dashboard.services.signnow_packet_service import SignNowPacketService
@@ -2007,10 +2098,16 @@ async def packet_builder_finalize(request: Request):
             "hydration_score": audit.get("hydration_score"),
             "field_map_keys": list(fields.keys())[:80],
             "send_results": send_results,
+            "esign_provider": provider,
             "signnow_document_ids": (signnow_result or {}).get("document_ids") or [],
             "signnow_group_id": (signnow_result or {}).get("group_id") or "",
             "signnow_invite_id": (signnow_result or {}).get("invite_id"),
             "signnow_status": "sent" if (signnow_result or {}).get("document_ids") else None,
+            "docuseal_submission_id": (docuseal_result or {}).get("submission_id"),
+            "docuseal_template_id": (send_results.get("docuseal") or {}).get("template_id"),
+            "docuseal_submitters": (docuseal_result or {}).get("submitters") or [],
+            "docuseal_status": "sent" if (docuseal_result or {}).get("submission_id") else None,
+            "docuseal_sent_at": now.isoformat() if (docuseal_result or {}).get("submission_id") else None,
             "adobe_agreement_id": (adobe_result or {}).get("agreement_id"),
             "signing_link": signing_link,
             "provider": provider,

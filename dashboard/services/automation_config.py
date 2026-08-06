@@ -88,12 +88,20 @@ DEFAULT_CONFIG = {
         "interval_seconds": 14400,      # 4 hours
     },
 
-    # ── SignNow status poller + collect-payment tasks ──
+    # ── SignNow status poller + collect-payment tasks (legacy packets) ──
     "signnow_poller": {
         "enabled": True,
         "limit": 40,
         "create_payment_tasks": True,
         "slack_digest": True,
+        "interval_seconds": 1800,       # 30 minutes
+    },
+
+    # ── DocuSeal status poller (backup if webhooks miss) ──
+    "docuseal_poller": {
+        "enabled": True,
+        "limit": 40,
+        "file_to_drive": True,
         "interval_seconds": 1800,       # 30 minutes
     },
 

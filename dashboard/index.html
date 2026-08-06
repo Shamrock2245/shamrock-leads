@@ -5112,7 +5112,8 @@
               </label>
               <label style="font-size:12px;color:#94a3b8" title="Applies to this client’s entire packet, not each PDF">Client e-sign destination</label>
               <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="Saved on the client — all docs in the packet use this">
-                <option value="signnow">SignNow (e-sign)</option>
+                <option value="docuseal" selected>DocuSeal (self-hosted · default)</option>
+                <option value="signnow">SignNow (legacy e-sign)</option>
                 <option value="adobe">Adobe Acrobat Sign (e-sign)</option>
                 <option value="both">Both SignNow + Adobe Sign</option>
                 <option value="none">Finalize / flatten only (no e-sign send)</option>

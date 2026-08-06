@@ -139,3 +139,34 @@ def test_verify_docuseal_signature():
         assert verify_docuseal_signature(body, sig) is True
         assert verify_docuseal_signature(body, "deadbeef") is False
         assert verify_docuseal_signature(body, f"sha256={sig}") is True
+
+
+def test_resolve_template_id_for_surety():
+    from dashboard.services.docuseal_service import resolve_template_id_for_surety
+
+    with patch.dict(
+        os.environ,
+        {
+            "DOCUSEAL_TEMPLATE_ID": "99",
+            "DOCUSEAL_TEMPLATE_ID_OSI": "11",
+            "DOCUSEAL_TEMPLATE_ID_PALMETTO": "22",
+        },
+        clear=False,
+    ):
+        assert resolve_template_id_for_surety("osi") == "11"
+        assert resolve_template_id_for_surety("palmetto") == "22"
+        assert resolve_template_id_for_surety("unknown") == "11"
+
+
+@pytest.mark.asyncio
+async def test_default_esign_provider_is_docuseal():
+    from dashboard.services.packet_builder_service import resolve_client_esign_provider
+
+    with patch.dict(os.environ, {"DEFAULT_ESIGN_PROVIDER": "docuseal"}, clear=False):
+        # No indemnitor/defendant/bond IDs → env default, no DB
+        p = await resolve_client_esign_provider(preferred=None)
+        assert p == "docuseal"
+        p2 = await resolve_client_esign_provider(preferred="docuseal")
+        assert p2 == "docuseal"
+        p3 = await resolve_client_esign_provider(preferred="signnow")
+        assert p3 == "signnow"
