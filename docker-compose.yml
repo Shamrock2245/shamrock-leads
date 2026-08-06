@@ -613,6 +613,81 @@ services:
         max-size: "5m"
         max-file: "2"
 
+  # ── DocuSeal: open-source e-sign (replaces SignNow for new packets) ──
+  # Upstream: https://github.com/docusealco/docuseal
+  # Start: docker compose --profile paperwork up -d
+  # Public: https://sign.shamrockbailbonds.biz → host :5300
+  # See docs/PAPERWORK_PORTAL_DOCUSEAL.md
+  docuseal:
+    image: docuseal/docuseal:latest
+    container_name: shamrock-docuseal
+    hostname: docuseal
+    restart: unless-stopped
+    profiles:
+      - paperwork
+    environment:
+      DATABASE_URL: "postgresql://docuseal:${DOCUSEAL_DB_PASSWORD:-shamrock_docuseal_2026}@docuseal-postgres:5432/docuseal"
+      # Set HOST so app generates correct absolute URLs behind nginx
+      FORCE_SSL: "${DOCUSEAL_HOST:-sign.shamrockbailbonds.biz}"
+      # Optional branding (company name shown in UI)
+      # LOGO / white-label extras: configure in DocuSeal admin after first login
+    ports:
+      - "5300:3000"
+    volumes:
+      - docuseal-data:/data/docuseal
+    depends_on:
+      docuseal-postgres:
+        condition: service_healthy
+    networks:
+      - shamrock-net
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-f",
+          "http://127.0.0.1:3000/",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  docuseal-postgres:
+    image: postgres:16-alpine
+    container_name: shamrock-docuseal-postgres
+    restart: unless-stopped
+    profiles:
+      - paperwork
+    environment:
+      POSTGRES_USER: docuseal
+      POSTGRES_PASSWORD: "${DOCUSEAL_DB_PASSWORD:-shamrock_docuseal_2026}"
+      POSTGRES_DB: docuseal
+    volumes:
+      # Named volume — back up daily (Postiz lesson: never lose signing DB)
+      - docuseal-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuseal -d docuseal"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - shamrock-net
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 volumes:
   node-red-data:
     driver: local
@@ -633,4 +708,8 @@ volumes:
   temporal-postgres-data:
     driver: local
   temporal-elasticsearch-data:
+    driver: local
+  docuseal-data:
+    driver: local
+  docuseal-postgres-data:
     driver: local
