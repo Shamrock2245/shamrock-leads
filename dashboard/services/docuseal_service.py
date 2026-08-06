@@ -103,7 +103,10 @@ class DocuSealService:
                 "DocuSeal not configured — set DOCUSEAL_URL and DOCUSEAL_API_KEY "
                 "(create API key in DocuSeal admin after first login)"
             )
-        url = f"{self.base_url}{path if path.startswith('/') else '/' + path}"
+        p = path if path.startswith("/") else "/" + path
+        if not p.startswith("/api/"):
+            p = f"/api{p}"
+        url = f"{self.base_url}{p}"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.request(
                 method,
