@@ -97,6 +97,15 @@ DEFAULT_CONFIG = {
         "interval_seconds": 1800,       # 30 minutes
     },
 
+    # ── SwipeSimple Gmail receipt poll (bond premiums; school $199/$649 left to GAS) ──
+    # Same pattern as BailSchoolPayments.js pollSwipeSimpleReceipts
+    "swipesimple_gmail_poll": {
+        "enabled": True,
+        "limit": 20,
+        "mark_read": True,
+        "interval_seconds": 300,        # 5 minutes
+    },
+
     # ── Compliance task backfill for active bonds ──
     "compliance_backfill": {
         "enabled": True,

@@ -952,3 +952,298 @@ async def adobe_pdf_services_webhook(request: Request):
         logger.exception("[adobe_pdf_webhook] handler error")
         # Return 200 ack when possible to avoid Adobe temporary ban after 50 errors / 10 min
         return JSONResponse(status_code=200, content={"ack": "done", "handler_error": str(exc)[:120]})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DocuSeal webhooks (self-hosted e-sign)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
+    """
+    Verify DocuSeal webhook HMAC (when DOCUSEAL_WEBHOOK_SECRET is set).
+
+    Fail-closed in production if secret configured and signature missing/invalid.
+    If secret is empty: allow in DEBUG only (same pattern as SignNow).
+    """
+    secret = os.getenv("DOCUSEAL_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        if os.getenv("DEBUG", "false").lower() == "true":
+            logger.warning("[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET unset — allowing in DEBUG")
+            return True
+        # Allow first boot before secret is set, but log loudly
+        logger.warning(
+            "[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET not set — accepting "
+            "(set secret in DocuSeal admin + env for production)"
+        )
+        return True
+
+    if not signature:
+        logger.warning("[docuseal_webhook] missing signature header — rejecting")
+        return False
+
+    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    # Accept hex or sha256=hex forms
+    sig = signature.strip().lower()
+    if sig.startswith("sha256="):
+        sig = sig[7:]
+    return hmac.compare_digest(expected, sig)
+
+
+@webhooks_bp.post("/webhooks/docuseal")
+async def docuseal_webhook(request: Request):
+    """
+    Handle DocuSeal form/submission webhooks.
+
+    Events of interest:
+      - form.completed       — one submitter finished
+      - submission.completed — all submitters finished → download PDF + Drive
+
+    Configure in DocuSeal admin → Webhooks →
+      URL: https://leads.shamrockbailbonds.biz/api/webhooks/docuseal
+    """
+    from dashboard.routers.events import publish_event
+    from dashboard.services.docuseal_service import DocuSealService
+
+    raw = await request.body()
+    signature = (
+        request.headers.get("X-DocuSeal-Signature")
+        or request.headers.get("X-Webhook-Signature")
+        or request.headers.get("X-Signature")
+        or ""
+    )
+    if not verify_docuseal_signature(raw, signature):
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+
+    try:
+        data = await request.json() or {}
+    except Exception:
+        import json as _json
+
+        try:
+            data = _json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            data = {}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    event_type = (
+        data.get("event_type")
+        or data.get("event")
+        or data.get("type")
+        or "unknown"
+    )
+    # Nested data payload (DocuSeal often wraps under "data")
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+
+    audit_events = get_collection("audit_events")
+    await audit_events.insert_one(
+        {
+            "source": "docuseal_webhook",
+            "event_type": event_type,
+            "payload": data,
+            "timestamp": now_iso,
+        }
+    )
+    logger.info("[docuseal_webhook] event=%s", event_type)
+
+    # Only act on completion-style events
+    complete_events = {
+        "form.completed",
+        "submission.completed",
+        "form_completed",
+        "submission_completed",
+        "completed",
+    }
+    if str(event_type).lower() not in complete_events and "complet" not in str(event_type).lower():
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "action": "logged_only", "event": event_type},
+        )
+
+    submission_id = (
+        payload.get("submission_id")
+        or payload.get("id")
+        or (payload.get("submission") or {}).get("id")
+        or data.get("submission_id")
+        or ""
+    )
+    # form.completed is per-submitter — submission id may be nested
+    if not submission_id and payload.get("submission"):
+        submission_id = payload["submission"].get("id") if isinstance(payload["submission"], dict) else ""
+
+    # external_id / metadata packet binding
+    external_id = payload.get("external_id") or ""
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    packet_id_hint = metadata.get("packet_id") or ""
+    if not packet_id_hint and external_id and ":" in str(external_id):
+        packet_id_hint = str(external_id).split(":")[0]
+
+    packets_col = get_collection("paperwork_packets")
+    packet = None
+    if submission_id:
+        packet = await packets_col.find_one(
+            {
+                "$or": [
+                    {"docuseal_submission_id": submission_id},
+                    {"docuseal_submission_id": str(submission_id)},
+                    {"docuseal_submission_id": int(submission_id) if str(submission_id).isdigit() else submission_id},
+                ]
+            }
+        )
+    if not packet and packet_id_hint:
+        packet = await packets_col.find_one({"packet_id": packet_id_hint})
+
+    if not packet:
+        logger.warning(
+            "[docuseal_webhook] no packet for submission_id=%s packet_hint=%s",
+            submission_id,
+            packet_id_hint,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "warning": "packet_not_found", "submission_id": submission_id},
+        )
+
+    packet_id = packet.get("packet_id", "")
+    defendant_name = packet.get("defendant_name", "Unknown")
+    booking_number = packet.get("booking_number") or packet.get("defendant_booking_number") or ""
+    surety_id = (packet.get("surety_id") or packet.get("insurance_company") or "osi").lower().strip()
+
+    # Partial form complete (one party) vs full submission
+    is_full = "submission" in str(event_type).lower()
+
+    if not is_full:
+        # Track individual submitter completion
+        role = payload.get("role") or metadata.get("party_role") or ""
+        await packets_col.update_one(
+            {"packet_id": packet_id},
+            {
+                "$set": {
+                    "docuseal_last_event": event_type,
+                    "docuseal_last_event_at": now_iso,
+                    f"docuseal_parties.{role or 'unknown'}.completed_at": now_iso,
+                    "esign_provider": "docuseal",
+                },
+                "$addToSet": {"docuseal_completed_roles": role or "unknown"},
+            },
+        )
+        await publish_event(
+            "docuseal_form_completed",
+            {
+                "packet_id": packet_id,
+                "submission_id": submission_id,
+                "role": role,
+                "defendant_name": defendant_name,
+            },
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "action": "party_recorded", "packet_id": packet_id},
+        )
+
+    # ── Full submission complete → download + Drive ─────────────────────────
+    drive_url = None
+    drive_folder_id = None
+    pdf_bytes = None
+    ds = DocuSealService()
+    if submission_id and ds.is_configured:
+        try:
+            pdf_bytes = await ds.download_combined_pdf(submission_id)
+        except Exception as exc:
+            logger.error("[docuseal_webhook] PDF download failed: %s", exc)
+
+    if pdf_bytes:
+        try:
+            filed = ds.file_signed_pdf_to_drive(
+                pdf_bytes,
+                defendant_name=defendant_name,
+                surety_id=surety_id,
+                packet_id=packet_id,
+                booking_number=booking_number,
+            )
+            if filed.get("ok"):
+                drive_url = filed.get("drive_url")
+                drive_folder_id = filed.get("drive_folder_id")
+            else:
+                logger.warning("[docuseal_webhook] Drive file failed: %s", filed.get("error"))
+        except Exception as exc:
+            logger.error("[docuseal_webhook] Drive upload error: %s", exc)
+
+    packet_update = {
+        "status": "signed",
+        "esign_provider": "docuseal",
+        "docuseal_status": "completed",
+        "signnow_status": "signed",  # legacy dashboard filters
+        "signed_at": now_iso,
+        "docuseal_submission_id": submission_id,
+        "docuseal_last_event": event_type,
+        "docuseal_last_event_at": now_iso,
+    }
+    if drive_url:
+        packet_update["signed_pdf_drive_url"] = drive_url
+        packet_update["drive_link"] = drive_url
+    if drive_folder_id:
+        packet_update["drive_folder_id"] = drive_folder_id
+        packet_update["signed_pdf_drive_id"] = drive_folder_id
+
+    await packets_col.update_one({"packet_id": packet_id}, {"$set": packet_update})
+
+    # Bond case update
+    bond_cases = get_collection("bond_cases")
+    bond_case_id = packet.get("bond_case_id")
+    bond_query = {"bond_case_id": bond_case_id} if bond_case_id else {"packet_id": packet_id}
+    bond_update = {
+        "Packet_Status": "signed",
+        "Signature_Status": "signed",
+        "signed_at": now_iso,
+        "esign_provider": "docuseal",
+    }
+    if drive_url:
+        bond_update["signed_pdf_drive_url"] = drive_url
+    await bond_cases.update_one(bond_query, {"$set": bond_update})
+
+    await publish_event(
+        "docuseal_submission_completed",
+        {
+            "packet_id": packet_id,
+            "submission_id": submission_id,
+            "defendant_name": defendant_name,
+            "drive_url": drive_url,
+            "booking_number": booking_number,
+        },
+    )
+
+    # Slack (non-PII)
+    try:
+        import httpx
+
+        slack = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL") or ""
+        if slack:
+            async with httpx.AsyncClient(timeout=8) as client:
+                await client.post(
+                    slack,
+                    json={
+                        "text": (
+                            f":white_check_mark: *DocuSeal packet signed* — "
+                            f"`{packet_id}` | {defendant_name}"
+                            f"{' | Drive filed' if drive_url else ' | Drive pending'}"
+                        )
+                    },
+                )
+    except Exception as exc:
+        logger.debug("[docuseal_webhook] slack failed: %s", exc)
+
+    logger.info(
+        "[docuseal_webhook] submission complete packet=%s drive=%s",
+        packet_id,
+        bool(drive_url),
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": True,
+            "action": "signed_and_filed",
+            "packet_id": packet_id,
+            "submission_id": submission_id,
+            "drive_url": drive_url,
+        },
+    )

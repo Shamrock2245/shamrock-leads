@@ -329,3 +329,47 @@ class GmailReaderService:
         except Exception as e:
             logger.error("[GmailReader] get_labels failed: %s", e)
             return []
+
+    def search_messages(self, query: str, max_results: int = 20) -> List[Dict[str, Any]]:
+        """
+        Generic Gmail search → list of parsed message dicts.
+
+        Used by SwipeSimple receipt poller (same Gmail inbox utility as court email).
+        """
+        service = self.authenticate()
+        if not service:
+            return []
+        try:
+            results = service.users().messages().list(
+                userId="me",
+                q=query,
+                maxResults=min(max_results, 50),
+            ).execute()
+            messages = results.get("messages", [])
+            out: List[Dict[str, Any]] = []
+            for stub in messages:
+                try:
+                    detail = self._get_message_detail(service, stub["id"])
+                    if detail:
+                        out.append(detail)
+                except Exception as e:
+                    logger.warning(
+                        "[GmailReader] search parse failed id=%s: %s",
+                        stub.get("id"),
+                        e,
+                    )
+            return out
+        except Exception as e:
+            logger.error("[GmailReader] search_messages failed: %s", e)
+            return []
+
+    def get_message_details(self, message_id: str) -> Optional[Dict[str, Any]]:
+        """Public alias used by court_email_scheduler + tests."""
+        service = self.authenticate()
+        if not service or not message_id:
+            return None
+        try:
+            return self._get_message_detail(service, message_id)
+        except Exception as e:
+            logger.error("[GmailReader] get_message_details failed: %s", e)
+            return None

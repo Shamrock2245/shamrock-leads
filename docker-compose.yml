@@ -627,10 +627,10 @@ services:
       - paperwork
     environment:
       DATABASE_URL: "postgresql://docuseal:${DOCUSEAL_DB_PASSWORD:-shamrock_docuseal_2026}@docuseal-postgres:5432/docuseal"
-      # Set HOST so app generates correct absolute URLs behind nginx
-      FORCE_SSL: "${DOCUSEAL_HOST:-sign.shamrockbailbonds.biz}"
-      # Optional branding (company name shown in UI)
-      # LOGO / white-label extras: configure in DocuSeal admin after first login
+      # Public hostname for sign links (behind nginx TLS)
+      HOST: "${DOCUSEAL_HOST:-sign.shamrockbailbonds.biz}"
+      FORCE_SSL: "true"
+      # Optional branding: configure in DocuSeal admin after first login
     ports:
       - "5300:3000"
     volumes:

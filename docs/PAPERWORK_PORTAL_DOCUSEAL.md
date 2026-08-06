@@ -46,42 +46,44 @@ We are **not** inventing a new CRM — we are adding a **role-scoped portal** an
 
 ### 3.1 Indemnitor (`/i/:token` or magic link → PIN)
 
-1. Unlock with **6-digit PIN** (after magic link or staff-issued access).
-2. **Selfie** (required) + **ID scan** (required).
-3. **OCR** pre-fills legal name, DOB, address, DL#, etc.
-4. **Address confirmation modal:** “Is this address correct?” → Yes / No → if No, edit address.
-5. Complete any remaining indemnitor fields not filled by OCR.
+Order is fixed (no skip):
+
+1. **Unlock** with **6-digit PIN** — required *in addition to* magic link (or the PIN they set after first login / staff-issued access).
+2. **Selfie** (required) + **government ID upload** (required).
+3. **OCR** pre-fills legal name, DOB, address, DL#, expiration, etc.
+4. **Address confirmation modal:** “Is this address correct?” → **Yes** keeps OCR value / **No** opens editable address fields.
+5. Complete **remaining fields not filled by OCR** (phone, employer, relationship, etc.).
 6. **Initial + sign** via embedded DocuSeal submitter form.
-7. Status written back to Mongo + audit_events.
+7. Status written back to Mongo + `audit_events`.
 
-### 3.2 Defendant (`/d/:token`)
+### 3.2 Defendant (`/d/:token`) — full parity with indemnitor
 
-Same structure as indemnitor:
+Defendant is **not** a lighter path. Same gates:
 
-1. PIN unlock  
-2. Selfie **required**  
-3. ID scan **required**  
-4. OCR pre-fill + **address confirmation popup**  
-5. Remaining defendant fields  
-6. Initial + sign (DocuSeal)
+1. **6-digit PIN unlock**  
+2. **Selfie required**  
+3. **ID upload required**  
+4. **OCR pre-fill** + **address confirmation popup** (correct? if not, correct it)  
+5. **Remaining defendant fields** not filled by OCR  
+6. **Initial + sign** (DocuSeal)
 
-OCR name/address values hydrate **every packet field** where defendant/indemnitor identity appears for the selected surety template set.
+**Packet hydration rule:** OCR identity for the party maps into **every template field** where that party’s name/address/DOB/DL appears across the **entire** OSI or Palmetto packet (not a single form page). Rules are the same for both sureties; field *keys* differ slightly per template set.
 
-### 3.3 Staff exception — post bond without complete paperwork
+### 3.3 Staff exception — post bond without complete paperwork / payment
 
-If staff posts a bond before payment and/or all signatures:
+If a bond is posted **without** full payment and/or all signatures, it is **blocked** unless staff completes the in-app exception modal:
 
-1. Staff opens **exception modal** in portal staff surface (or Bond Desk).
-2. **Second staff PIN** (6-digit staff paperwork PIN or dashboard PIN — separate secret recommended).
-3. Required fields:
-   - Reason (enum + free text)
-   - Expected paperwork completion date/time
-   - Acknowledgments (checkboxes):
-     - Premium is due regardless of circumstance  
-     - Party remains liable for full premium if they elect to proceed  
-     - Company policy accepted  
-4. Immutable `audit_events` row + bond status note.
-5. Portal remains open for parties to finish selfie/ID/sign later.
+1. Staff opens **exception modal** (`/staff/...` or Bond Desk deep-link).
+2. **Second PIN input** (6-digit `PAPERWORK_STAFF_EXCEPTION_PIN` — separate from party PINs and recommended separate from agency dashboard PIN).
+3. Required fields (cannot submit incomplete):
+   - **Reason** (enum + free text) — why posting early  
+   - **Expected paperwork completion** date/time (when docs *will* be finished)  
+   - **Acknowledgments** (all required checkboxes):
+     - Premium is due **no matter the circumstance**  
+     - Party remains **liable for the full premium** if they choose to do the bond  
+     - Company policy accepted by staff on record  
+4. Immutable `audit_events` row + bond status note; exception cannot be silent.
+5. Portal stays open for indemnitor/defendant to finish selfie / ID / remaining fields / sign.
 
 ### 3.4 POA change after transaction
 
@@ -92,36 +94,41 @@ If staff posts a bond before payment and/or all signatures:
 
 ---
 
-## 4. OCR architecture (open source)
+## 4. OCR architecture (open source only)
 
-### Decision: **PaddleOCR primary**
+### Decision: **PaddleOCR primary** (no cloud ID vendors)
 
-From stack + your Grok OCR shortlist:
+Your Grok shortlist (desktop screenshot 2026-08-06) + what we already ship:
 
-| Engine | Role |
-|--------|------|
-| **PaddleOCR** | Primary for FL DL / ID photos (layout + multilingual) |
-| **Tesseract** | Lightweight fallback (already in Docker images) |
-| EasyOCR | Optional secondary vote |
-| ddddocr | Keep for captchas only — **not** for IDs |
+| Engine | In stack today? | Role for paperwork |
+|--------|-----------------|--------------------|
+| **PaddleOCR** | Yes (`requirements.txt` optional + captcha ensemble) | **Primary** — FL DL / ID photos, layout-aware |
+| **Tesseract** | Yes (Docker binary + CLI) | Fallback for clean printed lines |
+| **EasyOCR** | Optional extra | Secondary vote if Paddle confidence low |
+| **Surya** | Not installed | Optional later for multi-page / layout docs — **not** required for DL face |
+| **ddddocr** | Yes | Captchas only — **never** for government IDs |
+
+**Why PaddleOCR:** already in our OCR ensemble (`scrapers/captcha_ocr.py`), free/open-source, strongest production layout OCR on the shortlist, no per-scan SaaS cost, runs on the VPS.
 
 **Pipeline:**
 
 ```
-ID image upload
-  → preprocess (deskew, contrast, crop)
-  → PaddleOCR text lines
-  → field parser (regex + keyword anchors for Name / DOB / Address / DL / Exp)
+ID image upload (portal, authenticated)
+  → store under identity_media (encrypted path rules)
+  → preprocess (deskew, contrast, crop card region)
+  → PaddleOCR text lines (+ Tesseract fallback)
+  → field parser (regex + keyword anchors: Name / DOB / Address / DL / Exp)
   → optional PDF417 barcode decode if present (AAMVA)
   → return structured IdOcrResult
-  → UI confirm address modal
-  → map into bond packet prefill (OSI vs Palmetto field keys)
+  → UI: address confirm modal → remaining fields form
+  → map into bond packet prefill for ALL indemnitor or defendant slots
+      (OSI vs Palmetto field key maps)
 ```
 
 Implementation module (planned): `services/id_ocr_service.py`  
-API (portal): `POST /api/paperwork/ocr/id` (authenticated session).
+API (portal): `POST /api/paperwork/ocr/id` (session + role scoped).
 
-**PII:** ID images stored under identity media rules; never log raw DL numbers to Slack/console.
+**PII:** ID images stored under identity media rules; never log raw DL numbers, full addresses, or SSNs to Slack/console.
 
 ---
 
@@ -244,16 +251,153 @@ bond_exceptions
 
 ---
 
-## 7. Portal UX (dark mode)
+## 7. Packet composition (source of truth: `templates/`)
 
-- Default: system preference; user toggle → `localStorage` key `sl-paperwork-theme`
-- Dark palette aligned with Super CRM (slate + shamrock green)
-- Mobile-first (selfie + ID on phone)
-- Progress stepper: Unlock → Identity → Confirm → Form → Sign → Done
+Staff starts the workflow from the dashboard (**Write Bond** / **✍️ Bond** on
+`leads.shamrockbailbonds.biz`). Agent selects **surety** (OSI or Palmetto) at
+workflow start → that choice selects which surety folder is merged with the
+always-on Shamrock agnostic set.
+
+Local blanks live under:
+
+```
+templates/
+├── surety-agnostic-shamrock/   # EVERY bond (both sureties)
+├── osi/                        # When surety_id = osi
+└── palmetto/                   # When surety_id = palmetto
+```
+
+| Surety chosen | Packet = |
+|---------------|----------|
+| **OSI** | `surety-agnostic-shamrock/*` + `osi/*` |
+| **Palmetto** | `surety-agnostic-shamrock/*` + `palmetto/*` (+ shared legal from `osi/`: promissory-note, disclosure-form) |
+
+Hydration reuses the existing field maps in:
+
+- `dashboard/services/signnow_packet_service.py` (→ retarget to DocuSeal)
+- `dashboard/bond_pdf_service.py` (appearance bonds)
+- `dashboard/paperwork_pdf_service.py` (stitch / paths)
+- Dashboard Write Bond modal (`sl-features.js` → `POST /api/write-bond`)
+
+### 7.1 Surety-agnostic (every bond)
+
+| Document | File | Who acts | Notes |
+|----------|------|----------|-------|
+| **Cover / header** | `paperwork-header.pdf` | — (first page of every packet) | Packet page 1 |
+| **FAQ — Cosigners** | `faq-cosigners.pdf` | Indemnitor **and** defendant **initial** | Both parties initial so each understands the other’s role |
+| **FAQ — Defendants** | `faq-defendants.pdf` | Indemnitor **and** defendant **initial** | Same dual-role initial requirement |
+| **Master waiver** | `master-waiver.pdf` | Every indemnitor **and** defendant **sign** | Multi-indemnitor: **each** indemnitor must sign |
+| **SSA release** | `ssa-release.pdf` | Every non-agent person on the bond | **Every indemnitor** + **defendant** (agents do **not** sign) |
+| **Payment plan** | `payment-plan.pdf` | Indemnitor (primary) | Include **only if balance remains** after down payment / premium schedule |
+
+### 7.2 Surety-specific (folder selected by agent)
+
+| Document | OSI | Palmetto | Multiplication |
+|----------|-----|----------|----------------|
+| Appearance bond | `Appearance Bond blank.pdf` | `Shamrock Palmetto Official Appearance Bond.pdf` | **1 PDF per criminal charge** (print / wet-ink — not e-sign) |
+| Indemnity agreement | `indemnity-agreement.pdf` | `indemnity-agreement-palmetto.pdf` | **Per indemnitor** |
+| Defendant application | `defendant-application.pdf` | `defendant-application-palmetto.pdf` | Static / per defendant |
+| Surety terms | `surety-terms.pdf` | `surety-terms-palmetto.pdf` | Shared |
+| Collateral receipt | `collateral-receipt.pdf` | `collateral-receipt-palmetto.pdf` | Serialized receipt # (OCR locate field; see §7.5) |
+| Promissory note | `promissory-note.pdf` (shared legal) | same | Shared |
+| Disclosure | `disclosure-form.pdf` (shared legal) | same | Shared |
+
+### 7.3 Appearance bond fill rules (OSI + Palmetto)
+
+Implemented today in `dashboard/bond_pdf_service.py` — keep identical under DocuSeal era
+(appearance bonds stay **print / wet-ink / jail**, not portal e-sign).
+
+| Rule | Detail |
+|------|--------|
+| **One form per charge** | N charges → N appearance bond PDFs |
+| **One POA per appearance bond** | Never reuse a power number across charges |
+| **Multiple case numbers OK** | One defendant may have several cases; case # may repeat across counts on same case |
+| **Penal amount** | Full bond amount for that charge written in the bond body / amount fields |
+| **Premium** | `premium = max(100.0, bond_amount * 0.10)` — 10% of penal, **minimum $100** |
+| **Written premium** | Words: `WrittenPremiumAmount` (OSI) / `writtenPremiumAmount` / `writtenPremiumAmountField` (Palmetto) |
+| **Numeric premium** | Digits: `NumericPremiumAmount` (OSI) / `calculatedPremiumField` (Palmetto) |
+| **Court date unknown** | Put **`TBN`** (“To Be Notified”) in court date; **skip / leave blank court time** when date is TBN or out-of-county / not yet set |
+| **Readable fill** | Use auto-scaling fonts so long names/addresses still fit and remain legible after fill (`_set_widget_value_with_scaling`) |
+
+OSI key fields (actual PDF widgets):  
+`DefFirstName`, `DefLastName`, `DefAddress`, `DefCounty`, `DefCharge1`/`DefCharge1Line2`,
+`BondAmountCharge1`, `CaseNum`, `PowerNum`, `CourtDate`, `CourtTime`,
+`WrittenPremiumAmount`, `NumericPremiumAmount`, agent/agency fields, …
+
+Palmetto key fields:  
+`defendantNameField`, `DefendantAddress`, `countyField`, `numericBondAmount`,
+`chargesField1`/`chargesField2`, `powerNumField`, `CourtDateAndTimeField`,
+`writtenPremiumAmount` / `writtenPremiumAmountField`, `calculatedPremiumField`, …
+
+### 7.4 Multi-indemnitor + multi-signer rules
+
+- Cases may have **1..N indemnitors**. Every document that requires an indemnitor signature
+  must collect **all** of them (master waiver, SSA release, indemnity agreement copies, FAQ initials).
+- Defendant always signs their own roles (FAQ initials, master waiver, SSA, defendant application as applicable).
+- DocuSeal submitters: one submitter identity per person (role + email/phone + portal PIN).
+- Portal PINs: staff assigns from Write Bond / packet finalize on the dashboard (case-scoped, 6-digit).
+
+### 7.5 Collateral receipt serial numbers
+
+- Physical / pre-printed collateral receipts carry **serialized numbers**.
+- On scan/upload (or when preparing fill), **OCR** detects the printed serial location and
+  maps it into the receipt form (do not invent serials).
+- PaddleOCR primary (same open-source stack as ID OCR).
+
+### 7.6 Kiosk mode (staff + walk-in)
+
+Dashboard already surfaces **Kiosk (iPad) / Side-by-Side In Person** intake channel.
+
+Kiosk mode for paperwork must support:
+
+1. Staff selects surety (OSI / Palmetto)  
+2. Walk through packet checklist (agnostic + surety set)  
+3. Manual field override **or** full auto-hydrate from lead / match / charge_details  
+4. Issue PIN(s) + open portal (or hand tablet to party for selfie/ID/sign)  
+5. Exception path (second staff PIN) if posting without complete payment/signatures  
+
+Kiosk is not a separate product — same DocuSeal templates + same hydration, full-screen staff UX.
+
+### 7.7 Post-sign archive → Google Drive
+
+When **all required parties** have signed (DocuSeal webhooks complete):
+
+1. Merge final PDFs  
+2. Upload under **Completed Bonds**:  
+   `https://drive.google.com/drive/folders/1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs`  
+3. Hierarchy (already partially implemented in `bond_lifecycle.py` / `bonds.py`):  
+   `Completed Bonds / {Surety label} / {Defendant folder} / signed packet`  
+4. Env: `COMPLETED_BONDS_FOLDER_ID` / `GOOGLE_DRIVE_OUTPUT_FOLDER_ID` = that folder ID  
+
+Legacy SignNow completion path already uploads here — DocuSeal webhook must call the same Drive helper.
+
+### 7.8 Write Bond → portal PIN handoff
+
+```
+Dashboard (leads.…)  Write Bond / ✍️ Bond
+  → choose surety (OSI | Palmetto)
+  → charges / POAs / case #s / court date (or TBN)
+  → hydrate packet from lead + indemnitor(s) + defendant
+  → generate appearance bonds (print-only) + DocuSeal submission (e-sign set)
+  → assign 6-digit PIN(s) for indemnitor(s) and defendant
+  → send magic link / SMS / hand tablet (kiosk)
+  → parties complete selfie + ID + remaining fields + initials/sign
+  → webhooks → Mongo + Drive Completed Bonds
+```
 
 ---
 
-## 8. Security / compliance
+## 8. Portal UX (dark mode)
+
+- Default: system preference; user toggle → `localStorage` key `sl-paperwork-theme`
+- Dark palette aligned with Super CRM (slate + shamrock green)
+- Mobile-first (selfie + ID on phone); **kiosk** full-screen variant for office iPad
+- Progress stepper: Unlock → Identity → Confirm → Form → Sign → Done
+- Form field text must remain **readable** after party/staff entry (font size floors, wrap, scale)
+
+---
+
+## 9. Security / compliance
 
 - Fail closed: no packet without validated match + bond case + surety  
 - Portal PINs ≠ agency dashboard PIN  
@@ -261,25 +405,37 @@ bond_exceptions
 - Minimize PII in logs  
 - All portal routes `noindex` + robots disallow  
 - DocuSeal webhooks HMAC-verified  
+- Appearance bonds never leave the print/wet-ink path for jail filing  
 
 ---
 
-## 9. Implementation roadmap
+## 10. Implementation roadmap
 
 | Slice | Deliverable |
 |-------|-------------|
 | **S0** | This doc + DocuSeal compose profile + nginx conf + brand assets |
-| **S1** | DocuSeal live on VPS (`sign.…`), admin login, template upload smoke |
+| **S1** | **Code done:** `docuseal_service.py`, webhook `/api/webhooks/docuseal`, packet push `/api/paperwork/{id}/docuseal`, health/templates. **Ops remaining:** VPS `compose --profile paperwork`, DNS/TLS, admin API key, template upload, webhook URL in DocuSeal admin. |
+| **S1b** | SwipeSimple Gmail receipt poller for **bond** payments (school $199/$649 left to GAS) — `swipesimple_receipt_poller.py` + cron 5m |
 | **S2** | `id_ocr_service` (PaddleOCR) + staff-facing test endpoint |
 | **S3** | Portal shell: magic link + 6-digit PIN + dark mode + branding |
 | **S4** | Indemnitor + defendant identity flow (selfie, ID, address confirm) |
-| **S5** | DocuSeal embed + webhook → packet complete |
-| **S6** | Staff exception modal + POA-only post-edit |
-| **S7** | Deprecate SignNow for new bonds |
+| **S5** | Multi-submitter polish + sign-link handoff from Write Bond + webhook → Drive Completed Bonds (Drive helper already wired) |
+| **S6** | Staff exception modal + POA-only post-edit + **kiosk mode** walkthrough |
+| **S7** | Dual-role FAQ initials fields + collateral serial OCR + deprecate SignNow for new bonds |
+
+### S1 API surface (dashboard)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/paperwork/docuseal/health` | API key + reachability |
+| GET | `/api/paperwork/docuseal/templates` | List DocuSeal templates |
+| POST | `/api/paperwork/{packet_id}/docuseal` | Create multi-party submission (sign links, no forced email) |
+| POST | `/api/webhooks/docuseal` | form/submission complete → Mongo + Drive Completed Bonds |
+| POST | `/api/paperwork/docuseal/poll-swipesimple` | Manual Gmail SwipeSimple receipt poll |
 
 ---
 
-## 10. Ops commands
+## 11. Ops commands
 
 ```bash
 # Start DocuSeal stack
@@ -292,15 +448,18 @@ docker exec shamrock-docuseal-postgres pg_dump -U docuseal docuseal | gzip > /op
 
 ---
 
-## 11. Related docs
+## 12. Related docs
 
+- Template inventory: `templates/README.md`  
 - Surety rules: `docs/policies/surety-policy.md`  
 - Matching: `docs/policies/matching-policy.md`  
 - Signature policy: update to DocuSeal in S5  
 - Brand: `BRAND.md` + `docs/brand/shamrock_logo_transparent.png`  
+- Appearance bond code: `dashboard/bond_pdf_service.py`  
+- Packet manifest / hydration: `dashboard/services/signnow_packet_service.py` (migrate → DocuSeal service)  
 
 ---
 
 **Owner:** Shamrock platform  
 **Last updated:** 2026-08-06  
-**Sign-off:** Product decisions locked per Brendan greenlight + adjustments (defendant ID/selfie parity, 6-digit PIN, open-source OCR, DocuSeal, staff exception second PIN, POA-only post-edit, dark mode).
+**Sign-off:** Product decisions locked per Brendan greenlight + packet walkthrough (agnostic forms dual-initials, multi-indemnitor, appearance bond 10%/$100 + TBN, collateral OCR serials, kiosk, Drive Completed Bonds, Write Bond PIN handoff).

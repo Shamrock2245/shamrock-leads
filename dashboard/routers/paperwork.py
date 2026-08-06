@@ -153,7 +153,8 @@ async def paperwork_config():
             "template_map": {"osi": osi, "palmetto": palmetto},
             "doc_rules": doc_rules,
             "local_pdf": local_pdf,
-            "esign_providers": ["signnow", "adobe", "both", "none"],
+            "esign_providers": ["docuseal", "signnow", "adobe", "both", "none"],
+            "esign_default": "docuseal",
             "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
             "counts": {
                 "osi": len(osi),
@@ -2259,3 +2260,171 @@ async def paperwork_pdf_extract(request: Request):
     except Exception as exc:
         logger.exception("pdf-extract error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DocuSeal (self-hosted e-sign) — S1 service surface
+# ─────────────────────────────────────────────────────────────────────────────
+
+@paperwork_bp.get("/paperwork/docuseal/health")
+async def docuseal_health():
+    """Connectivity check for self-hosted DocuSeal (API key + URL)."""
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    svc = get_docuseal_service()
+    result = await svc.health()
+    code = 200 if result.get("ok") or not result.get("configured") else 502
+    if not result.get("configured"):
+        code = 503
+    return JSONResponse(result, status_code=code)
+
+
+@paperwork_bp.get("/paperwork/docuseal/templates")
+async def docuseal_list_templates(q: str = "", limit: int = 50):
+    """List templates from DocuSeal (for Write Bond template picker)."""
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+    try:
+        data = await svc.list_templates(q=q or None, limit=limit)
+        return {"success": True, "templates": data}
+    except Exception as exc:
+        logger.exception("docuseal templates list failed")
+        return JSONResponse({"success": False, "error": str(exc)[:300]}, status_code=502)
+
+
+@paperwork_bp.post("/paperwork/{packet_id}/docuseal")
+async def paperwork_push_docuseal(packet_id: str, request: Request):
+    """
+    Create a DocuSeal submission for an existing paperwork packet.
+
+    Body JSON:
+      template_id: int|str (required until packet stores default)
+      send_email: bool (default false — portal/PIN owns delivery)
+      include_defendant: bool (default true)
+      indemnitors: optional [{name, email, phone}]
+      defendant: optional {name, email, phone}
+      bond_data: optional override fields for prefill
+    """
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    packet = await _load_packet(packet_id)
+    if not packet:
+        return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        body = {}
+
+    template_id = body.get("template_id") or packet.get("docuseal_template_id")
+    if not template_id:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "template_id_required",
+                "hint": "Upload templates in DocuSeal admin, then pass template_id",
+            },
+            status_code=400,
+        )
+
+    # Hydration source: explicit bond_data > packet > intake
+    bond_data = dict(body.get("bond_data") or {})
+    for k in (
+        "defendant_name",
+        "indemnitor_name",
+        "indemnitor_email",
+        "indemnitor_phone",
+        "county",
+        "case_number",
+        "poa_number",
+        "booking_number",
+        "court_date",
+        "surety_id",
+    ):
+        if k not in bond_data and packet.get(k):
+            bond_data[k] = packet.get(k)
+
+    if packet.get("intake_id") and not bond_data.get("defendant_name"):
+        intake = await _load_intake(packet["intake_id"])
+        if intake:
+            bond_data.setdefault("defendant_name", intake.get("defendant_name"))
+            bond_data.setdefault("indemnitor_name", intake.get("indemnitor_name"))
+            bond_data.setdefault("indemnitor_email", intake.get("indemnitor_email"))
+            bond_data.setdefault("indemnitor_phone", intake.get("indemnitor_phone"))
+            bond_data.setdefault("county", intake.get("county"))
+            bond_data.setdefault("booking_number", intake.get("booking_number"))
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+
+    try:
+        result = await svc.create_submission_for_packet(
+            template_id=template_id,
+            packet_id=packet_id,
+            bond_data=bond_data,
+            indemnitors=body.get("indemnitors"),
+            defendant=body.get("defendant"),
+            send_email=bool(body.get("send_email", False)),
+            include_defendant=bool(body.get("include_defendant", True)),
+            completed_redirect_url=body.get("completed_redirect_url"),
+        )
+    except Exception as exc:
+        logger.exception("docuseal create submission failed packet=%s", packet_id)
+        return JSONResponse(
+            {"success": False, "error": str(exc)[:400]},
+            status_code=502,
+        )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await get_collection("paperwork_packets").update_one(
+        {"packet_id": packet_id},
+        {
+            "$set": {
+                "esign_provider": "docuseal",
+                "docuseal_template_id": template_id,
+                "docuseal_submission_id": result.get("submission_id"),
+                "docuseal_submitters": result.get("submitters"),
+                "docuseal_status": "sent",
+                "docuseal_sent_at": now_iso,
+                "status": packet.get("status") if packet.get("status") == "signed" else "sent",
+            }
+        },
+    )
+
+    return {
+        "success": True,
+        "packet_id": packet_id,
+        "esign_provider": "docuseal",
+        "submission_id": result.get("submission_id"),
+        "submitters": result.get("submitters"),
+        "sign_links": [
+            {"role": s.get("role"), "email": s.get("email"), "sign_url": s.get("sign_url")}
+            for s in (result.get("submitters") or [])
+        ],
+    }
+
+
+@paperwork_bp.post("/paperwork/docuseal/poll-swipesimple")
+async def paperwork_poll_swipesimple(request: Request):
+    """
+    Manual trigger: poll Gmail for SwipeSimple bond receipts
+    (same inbox utility as Bail School GAS poller; school amounts skipped).
+    """
+    from dashboard.services.swipesimple_receipt_poller import run_swipesimple_receipt_poll
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        body = {}
+    result = await run_swipesimple_receipt_poll(body)
+    return result
