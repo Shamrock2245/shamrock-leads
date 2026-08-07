@@ -19,6 +19,7 @@ from dashboard.deps import get_collection
 logger = logging.getLogger(__name__)
 
 pin_portal_router = APIRouter(prefix="/api/portal", tags=["pin_portal"])
+portal_page_router = APIRouter(tags=["pin_portal_pages"])
 
 # 6-digit PIN OTP store in MongoDB `portal_pins`
 # pin -> {phone, intake_id, booking_number, expires_at}
@@ -170,8 +171,9 @@ async def verify_portal_pin(req: VerifyPinRequest):
     }
 
 
-@pin_portal_router.get("/", response_class=HTMLResponse)
-@pin_portal_router.get("/paperwork", response_class=HTMLResponse)
+@portal_page_router.get("/", response_class=HTMLResponse)
+@portal_page_router.get("/done", response_class=HTMLResponse)
+@portal_page_router.get("/paperwork", response_class=HTMLResponse)
 @pin_portal_router.get("/portal-ui", response_class=HTMLResponse)
 @pin_portal_router.get("/done", response_class=HTMLResponse)
 async def get_portal_ui(request: Request):
