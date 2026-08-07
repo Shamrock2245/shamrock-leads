@@ -617,56 +617,95 @@ def _amount_to_words(amount: float) -> str:
     return result
 
 
+def _widget_base_name(field_name: Optional[str]) -> str:
+    """Strip Acrobat clone suffixes like 'Arrest/case No [193]' → 'Arrest/case No'."""
+    name = str(field_name or "").strip()
+    if not name:
+        return ""
+    m = re.match(r"^(.*?)(?:\s*\[\d+\])\s*$", name)
+    return (m.group(1).strip() if m else name)
+
+
 def _set_widget_value_with_scaling(widget, val, default_font_size=10):
     """
     Writes a value to a PDF form widget, automatically scaling the font size
     to prevent visual text clipping or boundary overflow.
     """
     val_str = str(val if val is not None else "").strip()
-    if not val_str:
-        widget.field_value = ""
-        widget.update()
-        return
+    try:
+        if not val_str:
+            widget.field_value = ""
+            widget.update()
+            return
 
-    rect = getattr(widget, "rect", None)
-    if not rect:
-        widget.text_fontsize = default_font_size
+        rect = getattr(widget, "rect", None)
+        if not rect:
+            widget.text_fontsize = default_font_size
+            widget.field_value = val_str
+            widget.update()
+            return
+
+        width = max(1.0, float(rect.x1 - rect.x0))
+        height = max(1.0, float(rect.y1 - rect.y0))
+
+        # Normalize newline characters
+        val_str = val_str.replace("\r\n", "\n").replace("\r", "\n")
+        lines = val_str.split("\n")
+        max_line_len = max((len(line) for line in lines), default=0)
+        num_lines = max(1, len(lines))
+
+        # Estimate width per char as font_size * char_width_multiplier
+        char_width_multiplier = 0.45
+
+        # 1. Size constraint by width
+        if max_line_len > 0:
+            size_by_width = width / (max_line_len * char_width_multiplier)
+        else:
+            size_by_width = default_font_size
+
+        # 2. Size constraint by height
+        if num_lines > 1:
+            size_by_height = height / (num_lines * 1.25)
+        else:
+            size_by_height = height * 0.8
+
+        font_size = min(default_font_size, size_by_width, size_by_height)
+
+        # Cap lower bound to keep it legible (5.5 is readable on high-DPI screens/print)
+        font_size = max(5.5, font_size)
+
+        widget.text_fontsize = font_size
         widget.field_value = val_str
         widget.update()
-        return
+    except Exception as exc:
+        # Never abort a full bond package on a single widget failure
+        logger.warning(
+            "[appearance-bond] widget write failed field=%s: %s",
+            getattr(widget, "field_name", "?"),
+            exc,
+        )
+        try:
+            widget.field_value = val_str
+            widget.update()
+        except Exception:
+            pass
 
-    width = rect.x1 - rect.x0
-    height = rect.y1 - rect.y0
-    
-    # Normalize newline characters
-    val_str = val_str.replace("\r\n", "\n").replace("\r", "\n")
-    lines = val_str.split("\n")
-    max_line_len = max(len(line) for line in lines) if lines else 0
-    num_lines = len(lines)
-    
-    # Estimate width per char as font_size * char_width_multiplier
-    char_width_multiplier = 0.45
-    
-    # 1. Size constraint by width
-    if max_line_len > 0:
-        size_by_width = width / (max_line_len * char_width_multiplier)
-    else:
-        size_by_width = default_font_size
-        
-    # 2. Size constraint by height
-    if num_lines > 1:
-        size_by_height = height / (num_lines * 1.25)
-    else:
-        size_by_height = height * 0.8
-        
-    font_size = min(default_font_size, size_by_width, size_by_height)
-    
-    # Cap lower bound to keep it legible (5.5 is readable on high-DPI screens/print)
-    font_size = max(5.5, font_size)
-    
-    widget.text_fontsize = font_size
-    widget.field_value = val_str
-    widget.update()
+
+def _apply_field_values(page, field_values: dict, font_sizes: Optional[dict] = None) -> None:
+    """Write values to form widgets; match base field names (handles [n] suffixes)."""
+    font_sizes = font_sizes or {}
+    for widget in page.widgets() or []:
+        raw_name = widget.field_name or ""
+        base = _widget_base_name(raw_name)
+        if raw_name in field_values:
+            key = raw_name
+        elif base in field_values:
+            key = base
+        else:
+            continue
+        val = field_values[key]
+        default_fs = font_sizes.get(key) or font_sizes.get(base) or 10
+        _set_widget_value_with_scaling(widget, val, default_font_size=default_fs)
 
 
 def fill_osi_bond(data: dict) -> bytes:
@@ -764,19 +803,15 @@ def fill_osi_bond(data: dict) -> bytes:
         "AgencyDetails": 8,
         "IndNameandDefName": 9,
     }
-    
-    # Write values to form fields
-    for widget in page.widgets():
-        field_name = widget.field_name
-        if field_name in field_values:
-            val = field_values[field_name]
-            default_fs = font_sizes.get(field_name, 10)
-            _set_widget_value_with_scaling(widget, val, default_font_size=default_fs)
-            
+
+    _apply_field_values(page, field_values, font_sizes)
+
     # Output
     buf = io.BytesIO()
-    doc.save(buf)
-    doc.close()
+    try:
+        doc.save(buf)
+    finally:
+        doc.close()
     buf.seek(0)
     return buf.read()
 
@@ -865,17 +900,14 @@ def fill_palmetto_bond(data: dict) -> bytes:
         "DefendantAddress": 8.5,
         "writtenPremiumAmount": 8.5,
     }
-    
-    for widget in page.widgets():
-        field_name = widget.field_name
-        if field_name in field_values:
-            val = field_values[field_name]
-            default_fs = font_sizes.get(field_name, 10)
-            _set_widget_value_with_scaling(widget, val, default_font_size=default_fs)
-            
+
+    _apply_field_values(page, field_values, font_sizes)
+
     buf = io.BytesIO()
-    doc.save(buf)
-    doc.close()
+    try:
+        doc.save(buf)
+    finally:
+        doc.close()
     buf.seek(0)
     return buf.read()
 

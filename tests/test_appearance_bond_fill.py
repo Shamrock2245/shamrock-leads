@@ -127,3 +127,35 @@ def test_fill_osi_does_not_put_booking_in_casenum():
 def test_placeholder_charge():
     assert _is_placeholder_charge("Unspecified Charge")
     assert not _is_placeholder_charge("DRUGS-POSSESS")
+
+
+def test_widget_base_name_strips_suffix():
+    from dashboard.bond_pdf_service import _widget_base_name
+    assert _widget_base_name("Arrest/case No [193]") == "Arrest/case No"
+    assert _widget_base_name("CaseNum") == "CaseNum"
+    assert _widget_base_name("") == ""
+
+
+def test_merge_charge_rows_preserves_poa_and_fixes_placeholders():
+    from dashboard.routers.bonds import _merge_charge_rows_with_db
+    req = [{
+        "charge": "Unspecified Charge",
+        "case_number": "1029767",
+        "court_date": "TBN",
+        "poa_number": "OSI6 20132136",
+        "bond_amount": 5000,
+    }]
+    db = [{
+        "charge": "DRUGS-POSSESS - POSSESS CONTROLLED SUBSTANCE W/O PRESCRIPTION",
+        "case_number": "26CF016741",
+        "court_date": "9/8/2026",
+        "court_time": "8:30:00 AM",
+        "bond_amount": 5000,
+    }]
+    out = {"court_date": "9/8/2026", "court_time": "8:30:00 AM", "case_number": "26CF016741"}
+    merged = _merge_charge_rows_with_db(req, db, "1029767", out)
+    assert len(merged) == 1
+    assert merged[0]["poa_number"] == "OSI6 20132136"
+    assert "DRUGS" in merged[0]["charge"]
+    assert merged[0]["case_number"] == "26CF016741"
+    assert merged[0]["court_date"] == "9/8/2026"

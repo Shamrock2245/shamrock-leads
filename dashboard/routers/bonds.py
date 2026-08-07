@@ -1414,24 +1414,117 @@ async def api_appearance_bond_batch(request: Request):
 
 
 def _appearance_charge_is_placeholder(text) -> bool:
-    s = str(text or "").strip().lower()
-    return s in ("", "unspecified charge", "no charge specified", "unknown", "n/a", "none")
+    """Delegate to bond_pdf_service (single source of truth)."""
+    from dashboard.bond_pdf_service import _is_placeholder_charge
+    return _is_placeholder_charge(text)
 
 
 def _appearance_case_is_booking(case_number, booking) -> bool:
-    """True when case_number is blank or identical to the arrest/booking number."""
-    case = str(case_number or "").strip()
-    book = str(booking or "").strip()
-    if not case:
-        return True
-    if not book:
-        return False
-    if case == book:
-        return True
-    import re as _re
-    cd, bd = _re.sub(r"\D", "", case), _re.sub(r"\D", "", book)
-    # Pure-digit case that matches booking digits = booking misused as case
-    return bool(cd and bd and cd == bd and not _re.search(r"[A-Za-z]", case))
+    """Delegate to bond_pdf_service (single source of truth)."""
+    from dashboard.bond_pdf_service import _is_booking_as_case
+    return _is_booking_as_case(case_number, booking)
+
+
+def _merge_charge_rows_with_db(req_details: list, db_cd: list, booking: str, out: dict) -> list:
+    """
+    Patch modal charge rows with Mongo data without losing agent POAs/amounts.
+
+    For each request row:
+      - Replace placeholder charge text from DB
+      - Replace booking-as-case with real court case #
+      - Replace TBN court date/time when DB/top-level has a real hearing
+    If request rows are all placeholders and DB has rows, rebuild from DB
+    then re-apply POAs/amounts from the request by index.
+    """
+    if not isinstance(req_details, list):
+        req_details = []
+    if not isinstance(db_cd, list):
+        db_cd = []
+
+    lead_case = str(out.get("case_number") or "").strip()
+    if _appearance_case_is_booking(lead_case, booking):
+        lead_case = ""
+
+    all_placeholder = bool(req_details) and all(
+        _appearance_charge_is_placeholder(
+            (r.get("charge") if isinstance(r, dict) else r)
+        )
+        for r in req_details
+    )
+
+    # Rebuild from DB when every modal charge is a placeholder
+    if all_placeholder and db_cd:
+        merged = []
+        for i, src in enumerate(db_cd):
+            if not isinstance(src, dict):
+                continue
+            req = req_details[i] if i < len(req_details) and isinstance(req_details[i], dict) else {}
+            charge = src.get("charge") or src.get("description") or ""
+            if _appearance_charge_is_placeholder(charge):
+                continue
+            case_num = str(src.get("case_number") or lead_case or "").strip()
+            if _appearance_case_is_booking(case_num, booking):
+                case_num = lead_case
+            court_date = str(
+                src.get("court_date") or out.get("court_date") or "TBN"
+            ).strip() or "TBN"
+            court_time = str(
+                src.get("court_time") or out.get("court_time") or ""
+            ).strip()
+            merged.append({
+                "charge": charge,
+                "bond_amount": req.get("bond_amount", src.get("bond_amount", src.get("amount", 0))),
+                "case_number": case_num,
+                "poa_number": req.get("poa_number") or req.get("poa_full") or "",
+                "bond_type": req.get("bond_type") or src.get("bond_type") or "Surety",
+                "court_date": court_date,
+                "court_time": court_time,
+                "county": req.get("county") or src.get("county") or out.get("county") or "",
+            })
+        return merged if merged else req_details
+
+    # Row-by-row patch (preserve agent edits)
+    patched = []
+    for i, r in enumerate(req_details):
+        if not isinstance(r, dict):
+            r = {"charge": str(r)}
+        else:
+            r = dict(r)
+        src = {}
+        if i < len(db_cd) and isinstance(db_cd[i], dict):
+            src = db_cd[i]
+        elif db_cd and isinstance(db_cd[0], dict):
+            src = db_cd[0]
+
+        if _appearance_charge_is_placeholder(r.get("charge")):
+            alt = src.get("charge") or src.get("description") or ""
+            if not _appearance_charge_is_placeholder(alt):
+                r["charge"] = alt
+
+        if _appearance_case_is_booking(r.get("case_number"), booking):
+            r["case_number"] = (
+                src.get("case_number")
+                or lead_case
+                or ""
+            )
+            if _appearance_case_is_booking(r.get("case_number"), booking):
+                r["case_number"] = lead_case or ""
+
+        cd = str(r.get("court_date") or "").strip()
+        if not cd or cd.upper() in ("TBN", "TBD"):
+            r["court_date"] = (
+                src.get("court_date")
+                or out.get("court_date")
+                or "TBN"
+            )
+        if not str(r.get("court_time") or "").strip():
+            r["court_time"] = src.get("court_time") or out.get("court_time") or ""
+
+        if not r.get("county"):
+            r["county"] = src.get("county") or out.get("county") or ""
+
+        patched.append(r)
+    return patched
 
 
 async def _hydrate_appearance_bond_payload(d: dict) -> dict:
@@ -1523,74 +1616,52 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
             out["bond_amount"] = _pick("bond_amount", "Bond_Amount", "bond", default=0)
             out["bond"] = out["bond_amount"]
 
-        # Charge details: replace empty / "Unspecified Charge" rows from Mongo
+        # Charge details: patch modal placeholders from Mongo (keep agent POAs)
         db_cd = (
             (lead or {}).get("charge_details")
             or (lead or {}).get("Charge_Details")
             or (ab or {}).get("charge_details")
             or []
         )
+        if not isinstance(db_cd, list):
+            db_cd = []
         req_details = out.get("charge_details") or out.get("charge_list") or []
-        needs_charge_fix = False
-        if not req_details and not out.get("charges"):
-            needs_charge_fix = True
-        elif isinstance(req_details, list) and req_details:
-            # Any placeholder charge text or booking-as-case on every row
-            if all(
-                _appearance_charge_is_placeholder(
-                    (r.get("charge") if isinstance(r, dict) else r)
-                )
-                for r in req_details
-            ):
-                needs_charge_fix = True
-            elif all(
-                isinstance(r, dict)
-                and _appearance_case_is_booking(r.get("case_number"), booking)
-                for r in req_details
-            ) and db_cd:
-                # Keep user POAs/amounts but patch case/charge/court from DB per index
-                for i, r in enumerate(req_details):
-                    if not isinstance(r, dict):
-                        continue
-                    src = db_cd[i] if i < len(db_cd) and isinstance(db_cd[i], dict) else (
-                        db_cd[0] if db_cd and isinstance(db_cd[0], dict) else {}
-                    )
-                    if _appearance_charge_is_placeholder(r.get("charge")) and src.get("charge"):
-                        r["charge"] = src.get("charge") or src.get("description") or r.get("charge")
-                    if _appearance_case_is_booking(r.get("case_number"), booking):
-                        r["case_number"] = (
-                            src.get("case_number")
-                            or (lead or {}).get("case_number")
-                            or (lead or {}).get("Case_Number")
-                            or ""
-                        )
-                    if not r.get("court_date") or str(r.get("court_date")).upper() in ("TBN", "TBD"):
-                        r["court_date"] = (
-                            src.get("court_date")
-                            or out.get("court_date")
-                            or "TBN"
-                        )
-                    if not r.get("court_time"):
-                        r["court_time"] = src.get("court_time") or out.get("court_time") or ""
-                out["charge_details"] = req_details
+        if not isinstance(req_details, list):
+            req_details = []
 
-        if needs_charge_fix:
-            if db_cd:
+        if req_details or db_cd:
+            # Always run merge when either side has structured rows
+            if req_details and db_cd:
+                out["charge_details"] = _merge_charge_rows_with_db(
+                    req_details, db_cd, booking, out,
+                )
+                out.pop("charge_list", None)
+            elif not req_details and db_cd:
                 out["charge_details"] = db_cd
                 out.pop("charge_list", None)
-            else:
-                ch = _pick("charges", "Charges", "charge", prefer_db=True, default="")
-                if ch:
-                    out["charges"] = ch
-                    # Drop placeholder charge_details so normalize uses charges string
-                    if isinstance(req_details, list) and all(
-                        _appearance_charge_is_placeholder(
-                            (r.get("charge") if isinstance(r, dict) else r)
-                        )
-                        for r in req_details
-                    ):
-                        out.pop("charge_details", None)
-                        out.pop("charge_list", None)
+            elif req_details and not db_cd:
+                # Still scrub booking-as-case / TBN using top-level out fields
+                out["charge_details"] = _merge_charge_rows_with_db(
+                    req_details, [], booking, out,
+                )
+                out.pop("charge_list", None)
+
+        # Fall back to free-text charges from arrest record when still empty
+        effective = out.get("charge_details") or out.get("charge_list") or []
+        has_real_charge = False
+        if isinstance(effective, list):
+            for r in effective:
+                ch = r.get("charge") if isinstance(r, dict) else r
+                if not _appearance_charge_is_placeholder(ch):
+                    has_real_charge = True
+                    break
+        if not has_real_charge and not out.get("charges"):
+            ch = _pick("charges", "Charges", "charge", prefer_db=True, default="")
+            if ch and not _appearance_charge_is_placeholder(ch):
+                out["charges"] = ch
+                # Drop empty/placeholder structured rows so normalize uses charges string
+                out.pop("charge_details", None)
+                out.pop("charge_list", None)
 
         # Top-level case_number from lead when still empty
         if not str(out.get("case_number") or "").strip():
