@@ -408,7 +408,18 @@ class DocuSealService:
         if name:
             s["name"] = name
         if phone:
-            s["phone"] = phone
+            raw_phone = str(phone).strip()
+            digits = "".join(ch for ch in raw_phone if ch.isdigit())
+            if digits:
+                if not raw_phone.startswith("+"):
+                    if len(digits) == 10:
+                        s["phone"] = f"+1{digits}"
+                    elif len(digits) == 11 and digits.startswith("1"):
+                        s["phone"] = f"+{digits}"
+                    else:
+                        s["phone"] = f"+{digits}"
+                else:
+                    s["phone"] = raw_phone
         if external_id:
             s["external_id"] = external_id
         if values:
