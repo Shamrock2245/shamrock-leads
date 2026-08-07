@@ -48,16 +48,16 @@ def get_bb_client(phone: Optional[str] = None):
         BlueBubblesClient instance, or None if no server is configured.
     """
     try:
-        from dashboard.extensions import BB_SERVERS, get_bb_server, init_bluebubbles
+        import dashboard.extensions as ext
         from dashboard.routers.bb_private_api import BlueBubblesClient
 
-        if not BB_SERVERS:
-            init_bluebubbles()
+        if not ext.BB_SERVERS:
+            ext.init_bluebubbles()
 
         if phone:
-            server = get_bb_server(phone)
+            server = ext.get_bb_server(phone)
         else:
-            server = next(iter(BB_SERVERS.values()), None)
+            server = next(iter(ext.BB_SERVERS.values()), None)
 
         if not server:
             logger.warning("[bb_client] No BlueBubbles server configured for phone=%s", _mask(phone))
@@ -107,7 +107,9 @@ async def _send_message_direct(phone: str, message: str) -> dict:
     bb = get_bb_client(phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
-    chat_guid = f"any;-;{phone}"
+    from dashboard.extensions import format_phone
+    e164 = format_phone(phone) or (f"+1{phone}" if len(phone) == 10 else phone)
+    chat_guid = f"any;-;{e164}"
     try:
         return await bb.send_text(chat_guid, message)
     except Exception as exc:
