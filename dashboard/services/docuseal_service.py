@@ -395,14 +395,33 @@ class DocuSealService:
             or def_.get("county")
             or ""
         )
+        if county and not county.lower().endswith("county"):
+            county_full = f"{county} County"
+        else:
+            county_full = county or "Lee County"
+
+        court_type = (
+            bond_data.get("court_type")
+            or bond_data.get("CourtType")
+            or "County/Circuit"
+        )
+
         case_number = (
             bond_data.get("case_number")
             or bond_data.get("Case_Number")
             or def_.get("caseNumber")
             or def_.get("case_number")
             or ""
-        )
-        poa = bond_data.get("poa_number") or bond_data.get("POA_Number") or ""
+        ).strip()
+        if not case_number:
+            case_number = "TBN"
+
+        poa_raw = bond_data.get("poa_number") or bond_data.get("POA_Number") or bond_data.get("poa_numbers") or ""
+        if isinstance(poa_raw, list):
+            poa = str(poa_raw[0]) if poa_raw else ""
+        else:
+            poa = str(poa_raw).split(",")[0].strip()
+
         booking = (
             bond_data.get("booking_number")
             or bond_data.get("defendant_booking_number")
@@ -412,6 +431,27 @@ class DocuSealService:
         court_date = bond_data.get("court_date") or def_.get("court_date") or "TBN"
         if not str(court_date).strip():
             court_date = "TBN"
+
+        # Format Charges Summary (truncated cleanly if > 3 charges)
+        charges_raw = bond_data.get("charges") or bond_data.get("charge_details") or def_.get("charges") or []
+        charges_list = []
+        if isinstance(charges_raw, list):
+            for c in charges_raw:
+                if isinstance(c, dict):
+                    desc = c.get("charge") or c.get("description") or c.get("name") or ""
+                else:
+                    desc = str(c)
+                if desc.strip():
+                    charges_list.append(desc.strip())
+        elif isinstance(charges_raw, str) and charges_raw.strip():
+            charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+
+        if len(charges_list) > 3:
+            charges_summary = ", ".join(charges_list[:3]) + " (see case file)"
+        elif charges_list:
+            charges_summary = ", ".join(charges_list)
+        else:
+            charges_summary = bond_data.get("charges_summary") or "As charged"
 
         ind_address = (
             bond_data.get("indemnitor_address")
@@ -449,7 +489,28 @@ class DocuSealService:
         bond_formatted_dollar = f"${bond_float:,.2f}" if bond_float > 0 else ""
         bond_words = _amount_to_words(bond_float) if bond_float > 0 else ""
 
-        prem_float = max(100.0, bond_float * 0.10) if bond_float > 0 else 0.0
+        # Calculate Florida Statutory Premium (10% per charge, $100 min per charge)
+        explicit_prem = bond_data.get("premium_amount") or bond_data.get("premium") or bond_data.get("total_premium")
+        if explicit_prem is not None:
+            try:
+                prem_float = float(str(explicit_prem).replace("$", "").replace(",", "").strip())
+            except (ValueError, TypeError):
+                prem_float = 0.0
+        elif isinstance(charges_raw, list) and charges_raw and any(isinstance(c, dict) and "bond_amount" in c for c in charges_raw):
+            prem_float = 0.0
+            for c in charges_raw:
+                if isinstance(c, dict):
+                    try:
+                        amt = float(str(c.get("bond_amount", 0)).replace("$", "").replace(",", "").strip())
+                        if amt > 0:
+                            prem_float += max(100.0, amt * 0.10)
+                    except (ValueError, TypeError):
+                        pass
+            if prem_float == 0.0 and bond_float > 0:
+                prem_float = max(100.0, bond_float * 0.10)
+        else:
+            prem_float = max(100.0, bond_float * 0.10) if bond_float > 0 else 0.0
+
         prem_formatted = f"{prem_float:,.2f}" if prem_float > 0 else ""
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
@@ -464,6 +525,11 @@ class DocuSealService:
             "IndName": indemnitor_name,
             "county": county,
             "County": county,
+            "county_full": county_full,
+            "court_type": court_type,
+            "CourtType": court_type,
+            "charges_summary": charges_summary,
+            "charges": charges_summary,
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,
