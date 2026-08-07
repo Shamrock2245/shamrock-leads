@@ -35,16 +35,55 @@ DEFAULT_DOCUSEAL_URL = "https://sign.shamrockbailbonds.biz"
 DEFAULT_COMPLETED_BONDS_FOLDER = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
 
 # Role names used on DocuSeal templates (must match field role assignment in UI)
+# Template ID 1 (OSI combined packet): Indemnitor (pink), Defendant (blue),
+# Co-Indemnitor (optional), Bondsman (agent).
 ROLE_INDEMNITOR = "Indemnitor"
 ROLE_DEFENDANT = "Defendant"
-ROLE_INDEMNITOR_N = "Indemnitor {n}"  # multi-indemnitor templates
+ROLE_CO_INDEMNITOR = "Co-Indemnitor"
+ROLE_BONDSMAN = "Bondsman"
+ROLE_INDEMNITOR_N = "Indemnitor {n}"  # 3rd+ indemnitor if template has more roles
+
+
+def _safe_money(val: Any) -> float:
+    """Parse currency-ish values without raising; None/blank → 0.0."""
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        try:
+            f = float(val)
+            if f != f:  # NaN
+                return 0.0
+            return f
+        except (ValueError, TypeError, OverflowError):
+            return 0.0
+    s = str(val).strip()
+    if not s or s.lower() in ("none", "null", "n/a", "tbd"):
+        return 0.0
+    # Keep digits, dot, minus
+    cleaned = "".join(ch for ch in s if ch.isdigit() or ch in ".-")
+    if cleaned in ("", ".", "-", "-."):
+        return 0.0
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def _number_to_words(n: int) -> str:
-    if n <= 0:
+    """Integer to English words (USD dollars portion). Safe for n >= 0."""
+    try:
+        n = int(n)
+    except (ValueError, TypeError):
         return "Zero"
-    units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
-             "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+    if n < 0:
+        return "Zero"
+    if n == 0:
+        return "Zero"
+    units = [
+        "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+        "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
+        "Eighteen", "Nineteen",
+    ]
     tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
     if n < 20:
         return units[n]
@@ -52,19 +91,48 @@ def _number_to_words(n: int) -> str:
         return tens[n // 10] + (" " + units[n % 10] if n % 10 != 0 else "")
     if n < 1000:
         return units[n // 100] + " Hundred" + (" " + _number_to_words(n % 100) if n % 100 != 0 else "")
-    if n < 1000000:
-        return _number_to_words(n // 1000) + " Thousand" + (" " + _number_to_words(n % 1000) if n % 1000 != 0 else "")
+    if n < 1_000_000:
+        return _number_to_words(n // 1000) + " Thousand" + (
+            " " + _number_to_words(n % 1000) if n % 1000 != 0 else ""
+        )
+    if n < 1_000_000_000:
+        return _number_to_words(n // 1_000_000) + " Million" + (
+            " " + _number_to_words(n % 1_000_000) if n % 1_000_000 != 0 else ""
+        )
     return str(n)
 
 
 def _amount_to_words(val: Any) -> str:
-    try:
-        clean = float(str(val).replace("$", "").replace(",", "").strip())
-    except (ValueError, TypeError):
-        return str(val or "")
+    """Currency amount → 'Five Thousand and 00/100' style (never raises)."""
+    clean = _safe_money(val)
+    if clean <= 0:
+        return ""
     dollars = int(clean)
     cents = int(round((clean - dollars) * 100))
+    if cents >= 100:
+        dollars += 1
+        cents = 0
     return f"{_number_to_words(dollars)} and {cents:02d}/100"
+
+
+def _role_for_indemnitor_index(idx: int) -> str:
+    """Map indemnitor list index → DocuSeal template role name."""
+    if idx <= 0:
+        return ROLE_INDEMNITOR
+    if idx == 1:
+        return ROLE_CO_INDEMNITOR
+    return ROLE_INDEMNITOR_N.format(n=idx + 1)
+
+
+def _nonempty_party(p: Any) -> bool:
+    """True if party dict has usable name, email, or phone."""
+    if not isinstance(p, dict):
+        return False
+    for k in ("name", "full_name", "email", "phone", "first_name", "firstName", "last_name", "lastName"):
+        v = p.get(k)
+        if v is not None and str(v).strip():
+            return True
+    return False
 
 
 class DocuSealService:
@@ -484,33 +552,34 @@ class DocuSealService:
             or def_.get("bond_amount")
             or 0
         )
-        try:
-            bond_float = float(str(raw_bond_amt).replace("$", "").replace(",", "").strip())
-        except (ValueError, TypeError):
-            bond_float = 0.0
+        bond_float = _safe_money(raw_bond_amt)
+        # If no top-level bond amount, sum charge rows
+        if bond_float <= 0 and isinstance(charges_raw, list):
+            for c in charges_raw:
+                if isinstance(c, dict):
+                    bond_float += _safe_money(
+                        c.get("bond_amount") or c.get("amount") or c.get("bond")
+                    )
 
         bond_formatted = f"{bond_float:,.2f}" if bond_float > 0 else ""
         bond_formatted_dollar = f"${bond_float:,.2f}" if bond_float > 0 else ""
         bond_words = _amount_to_words(bond_float) if bond_float > 0 else ""
 
-        # Calculate Florida Statutory Premium (10% per charge, $100 min per charge)
+        # Florida statutory premium: 10% per charge, $100 minimum per charge
         explicit_prem = bond_data.get("premium_amount") or bond_data.get("premium") or bond_data.get("total_premium")
-        if explicit_prem is not None:
-            try:
-                prem_float = float(str(explicit_prem).replace("$", "").replace(",", "").strip())
-            except (ValueError, TypeError):
-                prem_float = 0.0
-        elif isinstance(charges_raw, list) and charges_raw and any(isinstance(c, dict) and "bond_amount" in c for c in charges_raw):
+        if explicit_prem is not None and str(explicit_prem).strip() != "":
+            prem_float = _safe_money(explicit_prem)
+        elif isinstance(charges_raw, list) and any(
+            isinstance(c, dict) and _safe_money(c.get("bond_amount") or c.get("amount") or c.get("bond")) > 0
+            for c in charges_raw
+        ):
             prem_float = 0.0
             for c in charges_raw:
                 if isinstance(c, dict):
-                    try:
-                        amt = float(str(c.get("bond_amount", 0)).replace("$", "").replace(",", "").strip())
-                        if amt > 0:
-                            prem_float += max(100.0, amt * 0.10)
-                    except (ValueError, TypeError):
-                        pass
-            if prem_float == 0.0 and bond_float > 0:
+                    amt = _safe_money(c.get("bond_amount") or c.get("amount") or c.get("bond"))
+                    if amt > 0:
+                        prem_float += max(100.0, amt * 0.10)
+            if prem_float <= 0 and bond_float > 0:
                 prem_float = max(100.0, bond_float * 0.10)
         else:
             prem_float = max(100.0, bond_float * 0.10) if bond_float > 0 else 0.0
@@ -528,12 +597,10 @@ class DocuSealService:
                 c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
                 c_case = charge_obj.get("case_number") or case_number
                 c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
-                c_amt_raw = charge_obj.get("bond_amount") or 0
-                try:
-                    c_amt_float = float(str(c_amt_raw).replace("$", "").replace(",", "").strip())
-                    c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
-                except (ValueError, TypeError):
-                    c_amt_str = str(c_amt_raw) if c_amt_raw else ""
+                c_amt_float = _safe_money(
+                    charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
+                )
+                c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
                 c_case = case_number
@@ -623,11 +690,14 @@ class DocuSealService:
             "defendant_ssn": bond_data.get("defendant_ssn") or def_.get("ssn") or "",
             "defendant_city": bond_data.get("defendant_city") or def_.get("city") or "",
             "defendant_state": bond_data.get("defendant_state") or def_.get("state") or "FL",
+            "defendant_zip": bond_data.get("defendant_zip") or def_.get("zip") or def_.get("zipcode") or "",
             "defendant_children_names_ages": bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
             "children_names_ages_1": bond_data.get("children_names_ages_1") or bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
             "children_names_ages_2": bond_data.get("children_names_ages_2") or "",
             "children_school_1": bond_data.get("children_school_1") or bond_data.get("children_school") or "",
-            "ssa_other_records_text": "any and all for location purposes",
+            "children_school_2": bond_data.get("children_school_2") or "",
+            "ssa_release_reason": bond_data.get("ssa_release_reason") or "Bail bond underwriting and supervision",
+            "ssa_other_records_text": bond_data.get("ssa_other_records_text") or "any and all for location purposes",
             "down_payment_amount": bond_data.get("down_payment_amount") or bond_data.get("down_payment") or "",
             "balance_financed_amount": bond_data.get("balance_financed_amount") or bond_data.get("balance_financed") or "",
             "number_of_payments": bond_data.get("number_of_payments") or bond_data.get("num_payments") or "",
@@ -647,6 +717,9 @@ class DocuSealService:
             "indemnitor_dob": bond_data.get("indemnitor_dob") or ind.get("dob") or "",
             "indemnitor_dl": bond_data.get("indemnitor_dl") or ind.get("dl") or ind.get("dl_number") or "",
             "indemnitor_ssn": bond_data.get("indemnitor_ssn") or ind.get("ssn") or "",
+            "indemnitor_city": bond_data.get("indemnitor_city") or ind.get("city") or "",
+            "indemnitor_state": bond_data.get("indemnitor_state") or ind.get("state") or "FL",
+            "indemnitor_zip": bond_data.get("indemnitor_zip") or ind.get("zip") or "",
             "relationship": bond_data.get("relationship") or ind.get("relationship") or "",
             "indemnitor_relationship": bond_data.get("relationship") or ind.get("relationship") or "",
             "indemnitor_city_state_zip": bond_data.get("indemnitor_city_state_zip") or ind.get("city_state_zip") or "",
@@ -654,10 +727,15 @@ class DocuSealService:
             "indemnitor_employer_phone": bond_data.get("indemnitor_employer_phone") or ind.get("employer_phone") or "",
             "indemnitor_employer_address": bond_data.get("indemnitor_employer_address") or ind.get("employer_address") or "",
             "AgencyName": "Shamrock Bail Bonds",
+            "agency_name": "Shamrock Bail Bonds",
             "AgentName": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
+            "agent_name": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
             "AgentLicense": os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "agent_license": os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "bondsman_name": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
+            "bondsman_license": os.getenv("BOND_AGENT_LICENSE", "P139768"),
         }
-        # Drop empty strings so DocuSeal doesn't overwrite blank
+        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
         return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
 
     def normalize_create_response(self, raw: Any) -> Dict[str, Any]:
@@ -732,32 +810,42 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         values = self.prefill_values_from_bond(bond_data)
 
-        # Collect indemnitors
+        # Collect indemnitors (primary + co-indemnitors)
         inds: List[Dict[str, Any]] = []
         if indemnitors:
-            inds = list(indemnitors)
-        elif bond_data.get("indemnitors"):
-            inds = list(bond_data["indemnitors"])
-        else:
-            inds = [
-                {
-                    "name": values.get("indemnitor_name") or bond_data.get("indemnitor_name"),
-                    "email": values.get("indemnitor_email") or bond_data.get("indemnitor_email"),
-                    "phone": values.get("indemnitor_phone") or bond_data.get("indemnitor_phone"),
-                }
-            ]
-        inds = [i for i in inds if i]
+            inds = [i for i in indemnitors if _nonempty_party(i)]
+        elif isinstance(bond_data.get("indemnitors"), list):
+            inds = [i for i in bond_data["indemnitors"] if _nonempty_party(i)]
+        if not inds:
+            primary = {
+                "name": values.get("indemnitor_name") or bond_data.get("indemnitor_name"),
+                "email": values.get("indemnitor_email") or bond_data.get("indemnitor_email"),
+                "phone": values.get("indemnitor_phone") or bond_data.get("indemnitor_phone"),
+            }
+            if _nonempty_party(primary):
+                inds = [primary]
 
         submitters: List[Dict[str, Any]] = []
         for idx, ind in enumerate(inds):
-            role = ROLE_INDEMNITOR if idx == 0 else ROLE_INDEMNITOR_N.format(n=idx + 1)
-            # Many templates only define "Indemnitor" once — use that for first,
-            # extra indemnitors need multi-role template fields.
-            if idx == 0:
-                role = ROLE_INDEMNITOR
+            # Template roles: Indemnitor, Co-Indemnitor, Indemnitor 3+
+            role = _role_for_indemnitor_index(idx)
             email = (ind.get("email") or "").strip()
-            name = (ind.get("name") or ind.get("full_name") or "").strip()
+            name = (
+                ind.get("name")
+                or ind.get("full_name")
+                or " ".join(
+                    filter(
+                        None,
+                        [
+                            ind.get("firstName") or ind.get("first_name"),
+                            ind.get("lastName") or ind.get("last_name"),
+                        ],
+                    )
+                )
+                or ""
+            ).strip()
             phone = (ind.get("phone") or "").strip()
+            party_role = "indemnitor" if idx == 0 else "co_indemnitor"
             submitters.append(
                 self.build_submitter(
                     role=role,
@@ -768,7 +856,7 @@ class DocuSealService:
                     values=values,
                     metadata={
                         "packet_id": packet_id,
-                        "party_role": "indemnitor",
+                        "party_role": party_role,
                         "indemnitor_index": idx,
                     },
                     send_email=send_email,
@@ -777,7 +865,7 @@ class DocuSealService:
             )
 
         if include_defendant:
-            def_info = defendant or {}
+            def_info = defendant if isinstance(defendant, dict) else {}
             def_name = (
                 def_info.get("name")
                 or values.get("defendant_name")
@@ -807,6 +895,31 @@ class DocuSealService:
                         "party_role": "defendant",
                     },
                     send_email=send_email,
+                    order=len(submitters),
+                )
+            )
+
+        # Optional Bondsman / agent role (template may require signature block)
+        include_bondsman = bool(
+            bond_data.get("include_bondsman")
+            or os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "false").lower() in ("1", "true", "yes")
+        )
+        if include_bondsman:
+            agent_name = os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
+            agent_email = (
+                bond_data.get("bondsman_email")
+                or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
+            )
+            submitters.append(
+                self.build_submitter(
+                    role=ROLE_BONDSMAN,
+                    email=agent_email,
+                    name=agent_name,
+                    phone=os.getenv("BOND_AGENT_PHONE", "2393322245"),
+                    external_id=f"{packet_id}:bondsman",
+                    values=values,
+                    metadata={"packet_id": packet_id, "party_role": "bondsman"},
+                    send_email=False,
                     order=len(submitters),
                 )
             )
@@ -848,8 +961,12 @@ class DocuSealService:
         """
         from dashboard.services.google_drive_service import GoogleDriveService
 
+        if not pdf_bytes:
+            return {"ok": False, "error": "empty_pdf"}
+
         drive = GoogleDriveService()
         if not drive.is_configured:
+            logger.warning("[docuseal] Google Drive OAuth not configured — skip archive")
             return {"ok": False, "error": "google_drive_not_configured"}
 
         root = (
@@ -862,27 +979,44 @@ class DocuSealService:
             surety = "osi"
         surety_label = surety.upper()
 
-        surety_folder = drive.get_or_create_folder(surety_label, root)
-        if not surety_folder:
-            return {"ok": False, "error": "surety_folder_failed"}
-
         date_str = datetime.now().strftime("%Y%m%d")
         safe = (defendant_name or "Unknown").replace("/", "-").strip() or "Unknown"
         folder_name = f"{safe.replace(' ', '_')}_{date_str}"
-        def_folder = drive.get_or_create_folder(folder_name, surety_folder)
-        if not def_folder:
-            return {"ok": False, "error": "defendant_folder_failed"}
-
         booking_part = (booking_number or "nobooking")[:32]
         pkt = (packet_id or "packet")[:24]
         filename = f"SIGNED_{safe.replace(' ', '_')}_{booking_part}_{pkt}_docuseal.pdf"
-        link = drive.upload_pdf(pdf_bytes, filename, def_folder)
+
+        # Prefer Completed Bonds / {Surety} / {Defendant_YYYYMMDD}/
+        # Fall back to surety folder, then root, if nested create fails.
+        upload_folder = None
+        try:
+            surety_folder = drive.get_or_create_folder(surety_label, root)
+            if surety_folder:
+                upload_folder = drive.get_or_create_folder(folder_name, surety_folder) or surety_folder
+            else:
+                logger.warning(
+                    "[docuseal] surety folder failed — uploading under Completed Bonds root"
+                )
+                upload_folder = root
+        except Exception as exc:
+            logger.warning("[docuseal] Drive folder create error: %s — using root", exc)
+            upload_folder = root
+
+        if not upload_folder:
+            return {"ok": False, "error": "no_upload_folder"}
+
+        try:
+            link = drive.upload_pdf(pdf_bytes, filename, upload_folder)
+        except Exception as exc:
+            logger.error("[docuseal] Drive upload exception: %s", exc)
+            return {"ok": False, "error": f"upload_exception:{exc}"[:200]}
+
         if not link:
             return {"ok": False, "error": "upload_failed"}
         return {
             "ok": True,
             "drive_url": link,
-            "drive_folder_id": def_folder,
+            "drive_folder_id": upload_folder,
             "filename": filename,
             "surety": surety_label,
         }

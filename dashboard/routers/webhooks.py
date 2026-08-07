@@ -997,6 +997,7 @@ async def docuseal_webhook(request: Request):
     Events of interest:
       - form.completed       — one submitter finished
       - submission.completed — all submitters finished → download PDF + Drive
+      - form.declined / submission.expired / submission.created — audit + status
 
     Configure in DocuSeal admin → Webhooks →
       URL: https://leads.shamrockbailbonds.biz/api/webhooks/docuseal
@@ -1031,33 +1032,27 @@ async def docuseal_webhook(request: Request):
         or data.get("type")
         or "unknown"
     )
+    event_l = str(event_type).lower().strip()
     # Nested data payload (DocuSeal often wraps under "data")
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    if not isinstance(payload, dict):
+        payload = {}
 
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one(
-        {
-            "source": "docuseal_webhook",
-            "event_type": event_type,
-            "payload": data,
-            "timestamp": now_iso,
-        }
-    )
-    logger.info("[docuseal_webhook] event=%s", event_type)
-
-    # Only act on completion-style events
-    complete_events = {
-        "form.completed",
-        "submission.completed",
-        "form_completed",
-        "submission_completed",
-        "completed",
-    }
-    if str(event_type).lower() not in complete_events and "complet" not in str(event_type).lower():
-        return JSONResponse(
-            status_code=200,
-            content={"success": True, "action": "logged_only", "event": event_type},
+    # Audit first (immutable) — strip oversized raw blobs later if needed
+    try:
+        audit_events = get_collection("audit_events")
+        await audit_events.insert_one(
+            {
+                "source": "docuseal_webhook",
+                "event_type": event_type,
+                "payload": data,
+                "timestamp": now_iso,
+            }
         )
+    except Exception as audit_exc:
+        logger.warning("[docuseal_webhook] audit insert failed: %s", audit_exc)
+
+    logger.info("[docuseal_webhook] event=%s", event_type)
 
     submission_id = (
         payload.get("submission_id")
@@ -1067,10 +1062,9 @@ async def docuseal_webhook(request: Request):
         or ""
     )
     # form.completed is per-submitter — submission id may be nested
-    if not submission_id and payload.get("submission"):
-        submission_id = payload["submission"].get("id") if isinstance(payload["submission"], dict) else ""
+    if not submission_id and isinstance(payload.get("submission"), dict):
+        submission_id = payload["submission"].get("id") or ""
 
-    # external_id / metadata packet binding
     external_id = payload.get("external_id") or ""
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     packet_id_hint = metadata.get("packet_id") or ""
@@ -1078,19 +1072,92 @@ async def docuseal_webhook(request: Request):
         packet_id_hint = str(external_id).split(":")[0]
 
     packets_col = get_collection("paperwork_packets")
-    packet = None
-    if submission_id:
-        packet = await packets_col.find_one(
-            {
-                "$or": [
-                    {"docuseal_submission_id": submission_id},
-                    {"docuseal_submission_id": str(submission_id)},
-                    {"docuseal_submission_id": int(submission_id) if str(submission_id).isdigit() else submission_id},
-                ]
-            }
+
+    async def _find_packet():
+        pkt = None
+        if submission_id:
+            sid = submission_id
+            or_clause = [
+                {"docuseal_submission_id": sid},
+                {"docuseal_submission_id": str(sid)},
+            ]
+            if str(sid).isdigit():
+                or_clause.append({"docuseal_submission_id": int(sid)})
+            pkt = await packets_col.find_one({"$or": or_clause})
+        if not pkt and packet_id_hint:
+            pkt = await packets_col.find_one({"packet_id": packet_id_hint})
+        return pkt
+
+    # Lifecycle events that do not complete the packet
+    lifecycle_status_map = {
+        "form.declined": "declined",
+        "form_declined": "declined",
+        "submission.declined": "declined",
+        "submission.expired": "expired",
+        "submission_expired": "expired",
+        "submission.created": "sent",
+        "submission_created": "sent",
+        "form.started": "in_progress",
+        "form.viewed": "viewed",
+    }
+    if event_l in lifecycle_status_map or any(
+        x in event_l for x in ("declin", "expir", "created", "started", "viewed")
+    ) and "complet" not in event_l:
+        st = lifecycle_status_map.get(event_l)
+        if not st:
+            if "declin" in event_l:
+                st = "declined"
+            elif "expir" in event_l:
+                st = "expired"
+            elif "created" in event_l:
+                st = "sent"
+            else:
+                st = "in_progress"
+        packet = await _find_packet()
+        if packet:
+            await packets_col.update_one(
+                {"packet_id": packet.get("packet_id")},
+                {
+                    "$set": {
+                        "docuseal_last_event": event_type,
+                        "docuseal_last_event_at": now_iso,
+                        "docuseal_status": st,
+                        "esign_provider": "docuseal",
+                        **({"status": st} if st in ("declined", "expired") else {}),
+                    }
+                },
+            )
+            try:
+                await publish_event(
+                    f"docuseal_{st}",
+                    {
+                        "packet_id": packet.get("packet_id"),
+                        "submission_id": submission_id,
+                        "event": event_type,
+                    },
+                )
+            except Exception:
+                pass
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "action": "lifecycle_logged", "event": event_type, "status": st},
         )
-    if not packet and packet_id_hint:
-        packet = await packets_col.find_one({"packet_id": packet_id_hint})
+
+    # Completion-style events
+    complete_events = {
+        "form.completed",
+        "submission.completed",
+        "form_completed",
+        "submission_completed",
+        "completed",
+    }
+    if event_l not in complete_events and "complet" not in event_l:
+        return JSONResponse(
+            status_code=200,
+            content={"success": True, "action": "logged_only", "event": event_type},
+        )
+
+    packet = await _find_packet()
 
     if not packet:
         logger.warning(
@@ -1108,33 +1175,46 @@ async def docuseal_webhook(request: Request):
     booking_number = packet.get("booking_number") or packet.get("defendant_booking_number") or ""
     surety_id = (packet.get("surety_id") or packet.get("insurance_company") or "osi").lower().strip()
 
-    # Partial form complete (one party) vs full submission
-    is_full = "submission" in str(event_type).lower()
+    # Full completion: submission.* OR bare "completed" with a submission_id
+    is_full = (
+        "submission" in event_l
+        or event_l in ("completed", "submission_completed")
+        or (event_l == "completed" and bool(submission_id))
+    )
+    # form.completed alone is per-party
+    if event_l.startswith("form.") and "submission" not in event_l:
+        is_full = False
 
     if not is_full:
-        # Track individual submitter completion
+        # Track individual submitter completion (do not Drive-file yet)
         role = payload.get("role") or metadata.get("party_role") or ""
+        # Sanitize role for dotted Mongo keys
+        role_key = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in str(role or "unknown"))[:64]
         await packets_col.update_one(
             {"packet_id": packet_id},
             {
                 "$set": {
                     "docuseal_last_event": event_type,
                     "docuseal_last_event_at": now_iso,
-                    f"docuseal_parties.{role or 'unknown'}.completed_at": now_iso,
+                    f"docuseal_parties.{role_key}.completed_at": now_iso,
                     "esign_provider": "docuseal",
+                    "docuseal_status": "partially_signed",
                 },
                 "$addToSet": {"docuseal_completed_roles": role or "unknown"},
             },
         )
-        await publish_event(
-            "docuseal_form_completed",
-            {
-                "packet_id": packet_id,
-                "submission_id": submission_id,
-                "role": role,
-                "defendant_name": defendant_name,
-            },
-        )
+        try:
+            await publish_event(
+                "docuseal_form_completed",
+                {
+                    "packet_id": packet_id,
+                    "submission_id": submission_id,
+                    "role": role,
+                    "defendant_name": defendant_name,
+                },
+            )
+        except Exception:
+            pass
         return JSONResponse(
             status_code=200,
             content={"success": True, "action": "party_recorded", "packet_id": packet_id},
