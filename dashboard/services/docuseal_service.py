@@ -34,14 +34,14 @@ DEFAULT_DOCUSEAL_URL = "https://sign.shamrockbailbonds.biz"
 # Completed Bonds Drive folder (also COMPLETED_BONDS_FOLDER_ID / GOOGLE_DRIVE_OUTPUT_FOLDER_ID)
 DEFAULT_COMPLETED_BONDS_FOLDER = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
 
-# Role names used on DocuSeal templates (must match field role assignment in UI)
-# Template ID 1 (OSI combined packet): Indemnitor (pink), Defendant (blue),
-# Co-Indemnitor (optional), Bondsman (agent).
-ROLE_INDEMNITOR = "Indemnitor"
+# Role names MUST match DocuSeal template submitter names exactly
+# (live template 1 "shamrock-osi-paperwork-complete"):
+#   indemnitor | Defendant | Coindemnitor | Bondsman
+ROLE_INDEMNITOR = "indemnitor"
 ROLE_DEFENDANT = "Defendant"
-ROLE_CO_INDEMNITOR = "Co-Indemnitor"
+ROLE_CO_INDEMNITOR = "Coindemnitor"
 ROLE_BONDSMAN = "Bondsman"
-ROLE_INDEMNITOR_N = "Indemnitor {n}"  # 3rd+ indemnitor if template has more roles
+ROLE_INDEMNITOR_N = "Coindemnitor"  # template only has one co-role; reuse Coindemnitor
 
 
 def _safe_money(val: Any) -> float:

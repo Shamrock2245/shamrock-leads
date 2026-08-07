@@ -1804,66 +1804,76 @@ async def packet_builder_finalize(request: Request):
             },
         }
 
-        # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback
+        # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
+        # DocuSeal uses its own template set — skip heavy stitch/flatten unless staff
+        # forces it (force_flatten) or provider needs a merged PDF (signnow/adobe).
         flat_bytes = b""
         flat_b64 = ""
         adobe_pdf_meta: dict = {}
-        try:
-            pdf_parts = []
-            part_names = []
+        need_flatten = (
+            provider in ("signnow", "adobe", "both", "none")
+            or bool(body.get("force_flatten") or body.get("flatten"))
+            or bool(extras)
+        )
+        if not need_flatten and provider == "docuseal":
+            adobe_pdf_meta = {
+                "skipped": True,
+                "reason": "docuseal_uses_template_prefill_not_local_stitch",
+            }
+        else:
             try:
-                from dashboard.paperwork_pdf_service import generate_full_packet
-                stitched = generate_full_packet(intake_doc, surety=surety_id)
-                if isinstance(stitched, (bytes, bytearray)) and stitched:
-                    pdf_parts.append(bytes(stitched))
-                    part_names.append("core-packet.pdf")
-            except Exception as stitch_exc:
-                logger.debug("local stitch unavailable: %s", stitch_exc)
-            for ex in extras:
-                fname = (ex.get("filename") or "").lower()
-                ctype = (ex.get("content_type") or "").lower()
-                if fname.endswith(".pdf") or "pdf" in ctype:
-                    pdf_parts.append(ex["bytes"])
-                    part_names.append(ex.get("filename") or "extra.pdf")
+                pdf_parts = []
+                part_names = []
+                try:
+                    from dashboard.paperwork_pdf_service import generate_full_packet
+                    stitched = generate_full_packet(intake_doc, surety=surety_id)
+                    if isinstance(stitched, (bytes, bytearray)) and stitched:
+                        pdf_parts.append(bytes(stitched))
+                        part_names.append("core-packet.pdf")
+                except Exception as stitch_exc:
+                    logger.debug("local stitch unavailable: %s", stitch_exc)
+                for ex in extras:
+                    fname = (ex.get("filename") or "").lower()
+                    ctype = (ex.get("content_type") or "").lower()
+                    if fname.endswith(".pdf") or "pdf" in ctype:
+                        pdf_parts.append(ex["bytes"])
+                        part_names.append(ex.get("filename") or "extra.pdf")
 
-            if pdf_parts:
-                adobe_pdf = get_adobe_pdf_client()
-                if adobe_pdf.configured:
-                    # Auto-Tag optional (howto: --report, --shift_headings)
-                    # https://developer.adobe.com/document-services/docs/overview/pdf-accessibility-auto-tag-api/howtos/accessibility-auto-tag-api
-                    def _opt_bool(key):
-                        if key not in body:
-                            return None
-                        return bool(body.get(key))
+                if pdf_parts:
+                    adobe_pdf = get_adobe_pdf_client()
+                    if adobe_pdf.configured:
+                        def _opt_bool(key):
+                            if key not in body:
+                                return None
+                            return bool(body.get(key))
 
-                    built = await adobe_pdf.build_flattened_packet(
-                        pdf_parts,
-                        field_map=fields,
-                        names=part_names,
-                        autotag=_opt_bool("autotag"),
-                        autotag_report=_opt_bool("autotag_report"),
-                        autotag_shift_headings=_opt_bool("autotag_shift_headings"),
-                    )
-                    adobe_pdf_meta = {
-                        k: v for k, v in built.items() if k != "pdf_bytes"
-                    }
-                    if built.get("success") and built.get("pdf_bytes"):
-                        flat_bytes = built["pdf_bytes"]
+                        built = await adobe_pdf.build_flattened_packet(
+                            pdf_parts,
+                            field_map=fields,
+                            names=part_names,
+                            autotag=_opt_bool("autotag"),
+                            autotag_report=_opt_bool("autotag_report"),
+                            autotag_shift_headings=_opt_bool("autotag_shift_headings"),
+                        )
+                        adobe_pdf_meta = {
+                            k: v for k, v in built.items() if k != "pdf_bytes"
+                        }
+                        if built.get("success") and built.get("pdf_bytes"):
+                            flat_bytes = built["pdf_bytes"]
+                        else:
+                            flat_bytes = flatten_pdf_bytes(pdf_parts)
+                            adobe_pdf_meta["fallback"] = "local_flatten"
+                            adobe_pdf_meta["adobe_error"] = built.get("error")
                     else:
-                        flat_bytes = flatten_pdf_bytes(pdf_parts)
-                        adobe_pdf_meta["fallback"] = "local_flatten"
-                        adobe_pdf_meta["adobe_error"] = built.get("error")
-                else:
-                    # Local fill+merge when Adobe PDF Services not configured
-                    filled_parts = []
-                    for part in pdf_parts:
-                        blob, _meta = await adobe_pdf.fill_and_flatten_local_first(part, fields)
-                        filled_parts.append(blob or part)
-                    flat_bytes = flatten_pdf_bytes(filled_parts)
-                    adobe_pdf_meta = {"adobe_pdf_configured": False, "engine": "local"}
-        except Exception as flat_exc:
-            logger.warning("flatten failed: %s", flat_exc)
-            adobe_pdf_meta = {"error": str(flat_exc)}
+                        filled_parts = []
+                        for part in pdf_parts:
+                            blob, _meta = await adobe_pdf.fill_and_flatten_local_first(part, fields)
+                            filled_parts.append(blob or part)
+                        flat_bytes = flatten_pdf_bytes(filled_parts)
+                        adobe_pdf_meta = {"adobe_pdf_configured": False, "engine": "local"}
+            except Exception as flat_exc:
+                logger.warning("flatten failed: %s", flat_exc)
+                adobe_pdf_meta = {"error": str(flat_exc)}
 
         if flat_bytes:
             import base64 as _b64
@@ -2463,17 +2473,15 @@ async def docuseal_prefill_preview(request: Request):
         or resolve_template_id_for_surety(surety_id)
     )
 
-    # Predicted submitter roles (no API call)
+    # Predicted submitter roles (must match live DocuSeal template names)
     inds = bond_data.get("indemnitors") or []
     roles = []
     if inds:
-        roles.append(ROLE_INDEMNITOR)
+        roles.append(ROLE_INDEMNITOR)  # "indemnitor"
         if len(inds) > 1:
-            roles.append(ROLE_CO_INDEMNITOR)
-            for i in range(2, len(inds)):
-                roles.append(f"Indemnitor {i + 1}")
+            roles.append(ROLE_CO_INDEMNITOR)  # "Coindemnitor"
     if body.get("include_defendant", True):
-        roles.append(ROLE_DEFENDANT)
+        roles.append(ROLE_DEFENDANT)  # "Defendant"
 
     ready = readiness_report(bond_data, surety_id=surety_id)
     return {
