@@ -93,6 +93,8 @@ app = FastAPI(
 # ── CORS ── restrict to known origins in production ──
 _ALLOWED_ORIGINS = [
     "https://leads.shamrockbailbonds.biz",
+    "https://paperwork.shamrockbailbonds.biz",
+    "https://sign.shamrockbailbonds.biz",
     "http://178.156.179.237:8088",
     "http://localhost:5050",
     "http://localhost:8088",
@@ -197,8 +199,17 @@ async def health_live():
 # SPA fallback. Mounted LAST so API routes take priority.
 
 @app.get("/", include_in_schema=False)
-async def index():
-    """Serve dashboard index.html."""
+async def index(request: Request):
+    """Serve staff CRM dashboard, or indemnitor portal on paperwork host.
+
+    Two PIN access points must stay separate:
+      - leads.shamrockbailbonds.biz / :8088 → staff Auto-CRM (index.html)
+      - paperwork.shamrockbailbonds.biz → indemnitor OTP portal
+    """
+    host = (request.headers.get("host") or request.url.hostname or "").lower().split(":")[0]
+    if "paperwork.shamrockbailbonds.biz" in host or host.startswith("paperwork.") or host == "paperwork.localhost":
+        from dashboard.routers.pin_portal import get_portal_ui
+        return await get_portal_ui(request)
     return FileResponse(os.path.join(DASHBOARD_DIR, "index.html"))
 
 

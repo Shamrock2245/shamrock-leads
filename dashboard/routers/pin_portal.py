@@ -259,6 +259,15 @@ async def verify_portal_pin(req: VerifyPinRequest):
     }
 
 
+def _is_paperwork_host(request: Request) -> bool:
+    host = (request.headers.get("host") or request.url.hostname or "").lower().split(":")[0]
+    return (
+        "paperwork.shamrockbailbonds.biz" in host
+        or host.startswith("paperwork.")
+        or host == "paperwork.localhost"
+    )
+
+
 @portal_page_router.get("/", response_class=HTMLResponse)
 @portal_page_router.get("/done", response_class=HTMLResponse)
 @portal_page_router.get("/paperwork", response_class=HTMLResponse)
@@ -268,8 +277,20 @@ async def get_portal_ui(request: Request):
     """
     Render lightweight mobile PWA UI for paperwork.shamrockbailbonds.biz
     and /done completion page.
+
+    Host separation:
+      - paperwork.*  → indemnitor portal at /
+      - leads.* / IP → staff CRM (handled by main.index; this handler must not steal it)
     """
-    if request.url.path.endswith("/done"):
+    path = request.url.path or "/"
+    # Never hijack staff CRM root on leads host
+    if path == "/" and not _is_paperwork_host(request):
+        from fastapi.responses import FileResponse
+        import os as _os
+        dashboard_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        return FileResponse(_os.path.join(dashboard_dir, "index.html"))
+
+    if path.endswith("/done"):
         html_done = """<!DOCTYPE html>
 <html lang="en">
 <head>

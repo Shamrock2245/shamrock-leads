@@ -1,7 +1,6 @@
 """
 Tests for Mobile PIN Portal Router (paperwork.shamrockbailbonds.biz)
 """
-import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 from dashboard.main import app
@@ -49,8 +48,8 @@ def test_send_pin_via_bluebubbles_mock():
 
     with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins_col), \
          patch("dashboard.services.bb_client.send_message_universal", new_callable=AsyncMock) as mock_send:
-        mock_send.return_value = {"success": True, "sent": True, "channel": "imessage"}
-        
+        mock_send.return_value = {"success": True, "sent": True, "queued": False, "channel": "imessage"}
+
         payload = {"phone": "2395550199"}
         response = client.post("/api/portal/send-pin", json=payload, follow_redirects=True)
         assert response.status_code == 200
@@ -61,7 +60,7 @@ def test_send_pin_via_bluebubbles_mock():
 
 
 def test_send_pin_accepts_queued_bb_shape():
-    """Regression: live BB returns status=queued without sent/queued booleans."""
+    """Regression: live BB returned status=queued without sent/queued booleans → false 503."""
     mock_pins_col = MagicMock()
     mock_pins_col.update_one = AsyncMock()
 
@@ -79,7 +78,7 @@ def test_send_pin_accepts_queued_bb_shape():
             json={"phone": "2395550100"},
             follow_redirects=True,
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
         data = response.json()
         assert data["success"] is True
         assert data["queued"] is True

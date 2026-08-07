@@ -39,12 +39,20 @@ DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "224545")
 COOKIE_NAME = "sl_session"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
-# Paths that bypass auth entirely
+# Paths that bypass auth entirely.
+# NOTE: "/" is NOT open by default — staff dashboard requires PIN.
+# Indemnitor portal host (paperwork.*) is handled host-aware in dispatch().
 OPEN_PATHS = frozenset({
-    "/", "/done", "/paperwork", "/login", "/health", "/health/live", "/api/stats",
+    "/done", "/paperwork", "/login", "/health", "/health/live", "/api/stats",
     "/docs", "/redoc", "/openapi.json",
     "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
 })
+
+# Hostnames that serve the public indemnitor PIN portal (not staff CRM)
+PAPERWORK_HOST_MARKERS = (
+    "paperwork.shamrockbailbonds.biz",
+    "paperwork.",
+)
 
 # File extensions that are always public (static assets)
 _STATIC_EXTENSIONS = (
@@ -159,8 +167,21 @@ def session_is_god_admin(request: Request) -> bool:
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
 
+def _is_paperwork_host(request: Request) -> bool:
+    """True when request is for the public indemnitor portal host."""
+    host = (request.headers.get("host") or request.url.hostname or "").lower()
+    # strip port if present
+    host = host.split(":")[0]
+    return any(m in host for m in PAPERWORK_HOST_MARKERS) or host == "paperwork.localhost"
+
+
 class PinAuthMiddleware(BaseHTTPMiddleware):
-    """Gate all routes behind PIN auth (except whitelisted paths)."""
+    """Gate all routes behind staff PIN auth (except whitelisted paths).
+
+    Two distinct access points:
+      - leads.shamrockbailbonds.biz  → staff Auto-CRM (PIN / sub-agent login)
+      - paperwork.shamrockbailbonds.biz → indemnitor portal (OTP PIN, public pages)
+    """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if not DASHBOARD_PIN:
@@ -172,6 +193,10 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
+
+        # Indemnitor host: public root portal pages (not staff CRM)
+        if path == "/" and _is_paperwork_host(request):
+            return await call_next(request)
 
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
             return await call_next(request)
