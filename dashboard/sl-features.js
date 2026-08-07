@@ -310,20 +310,35 @@ function openBondModal(nameOrLead, bond, county, booking) {
       </div>
     </div>
     <div class="wb-section">
-      <div class="wb-section-label">Appearance Bonds — One Per Charge (${chargeList.length})</div>
+      <div class="wb-section-label">Appearance Bonds — Print / Wet-Ink (one form per charge)</div>
       <div id="pdfPreviewArea" style="background:var(--panel);border-radius:8px;padding:16px">
-        <p style="color:var(--muted);margin:0 0 12px;font-size:12px">One blank Appearance Bond will be generated per charge, pre-populated with defendant info.</p>
+        <p style="color:var(--muted);margin:0 0 12px;font-size:12px;line-height:1.45">
+          <strong style="color:var(--text)">Not e-signed.</strong>
+          Fills OSI/Palmetto appearance bond PDFs from this modal (POA, case #, amounts, TBN court date).
+          Package is <strong>uncollated · 2 copies per charge</strong> (office file + jail).
+          Assign POAs below first for best results.
+        </p>
         <div id="chargeBondList" style="display:flex;flex-direction:column;gap:8px">
           ${chargeList.map((ch, i) => `
             <div class="charge-bond-row" style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--bg);border-radius:6px">
               <span class="charge-bond-num" style="font-size:11px;color:var(--muted);min-width:20px">#${i+1}</span>
               <span class="charge-bond-desc" style="flex:1;font-size:12px">${ch}</span>
               <button class="btn-export" style="font-size:11px;padding:4px 10px;margin-right:4px" onclick="editBond('${encodeURIComponent(ch)}', ${i+1})">✏️ Edit</button>
-              <button class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadBond('${encodeURIComponent(ch)}', ${i+1})">📄 Print</button>
+              <button class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadBond('${encodeURIComponent(ch)}', ${i+1})" title="Single charge · 2 copies">📄 1×</button>
             </div>`).join('')}
         </div>
-        <div style="margin-top:12px;text-align:center">
-          <button class="btn-export" onclick="downloadAllBonds()">Download All (${chargeList.length}) Bonds</button>
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:8px;align-items:stretch">
+          <button type="button" id="btnPrintAppearancePackage" class="btn-export"
+            style="font-size:14px;padding:12px 16px;font-weight:700;background:linear-gradient(135deg,rgba(16,185,129,0.25),rgba(59,130,246,0.2));color:#6ee7b7;border:1px solid rgba(16,185,129,0.45);border-radius:8px;cursor:pointer"
+            onclick="printAppearanceBondPackage()"
+            title="Merged uncollated PDF · 2 copies per charge · wet-ink ready">
+            🖨️ Print Appearance Bonds — ${chargeList.length} charge${chargeList.length === 1 ? '' : 's'} × 2 copies
+          </button>
+          <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+            <button type="button" class="btn-export" style="font-size:11px;padding:4px 10px" onclick="printAppearanceBondPackage({dryRun:true})">📋 Preview plan</button>
+            <button type="button" class="btn-export" style="font-size:11px;padding:4px 10px" onclick="downloadAllBonds(1)" title="1 copy per charge only">1× only</button>
+          </div>
+          <p id="printPackageStatus" style="margin:0;font-size:11px;color:var(--muted);text-align:center"></p>
         </div>
       </div>
     </div>
@@ -808,64 +823,173 @@ function downloadBond(chargeEncoded, idx) {
   window.open(`${API}/api/appearance-bond-pdf?${params}`, '_blank');
 }
 
-async function downloadAllBonds(copiesPerCharge = 2) {
+/**
+ * Build charge_details payload from Write Bond modal (POA, case, amounts, court).
+ */
+function _collectAppearanceBondChargesFromModal() {
   const data = window._bondModalData;
-  if (!data || !data.chargeList) return;
+  if (!data || !data.chargeList) return [];
+  return data.chargeList.map((ch, i) => {
+    const poaInp = document.getElementById(`poaInput_${i}`);
+    const caseInp = document.getElementById(`caseNumInput_${i}`);
+    const amtInp = document.getElementById(`chargeAmtInput_${i}`);
+    const countyInp = document.getElementById(`countyInput_${i}`);
+    const courtDateInp = document.getElementById(`courtDateInput_${i}`);
+    const desc = typeof ch === 'string' ? ch : (ch.charge || ch.description || '');
+    return {
+      charge: desc,
+      poa_number: (poaInp ? poaInp.value.trim() : '')
+        || (data.poaNumbers && data.poaNumbers[i] ? (data.poaNumbers[i].poa_full || data.poaNumbers[i].poa_number) : '')
+        || '',
+      case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
+      bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : (data.bond || 0),
+      county: (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee',
+      court_date: (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN',
+      court_time: (data.lead && data.lead.court_time) || '',
+      bond_type: 'Surety',
+    };
+  });
+}
+
+/**
+ * Primary CTA: merged uncollated print package (N charges × 2 copies).
+ * Wet-ink only — never DocuSeal / SignNow.
+ *
+ * @param {{ dryRun?: boolean, copies?: number }} opts
+ */
+async function printAppearanceBondPackage(opts = {}) {
+  const data = window._bondModalData;
+  if (!data || !data.chargeList || !data.chargeList.length) {
+    if (typeof toast === 'function') toast('No charges to print', 'error');
+    return;
+  }
+  const dryRun = !!opts.dryRun;
+  const copies = opts.copies != null ? opts.copies : 2;
+  const statusEl = document.getElementById('printPackageStatus');
+  const charges = _collectAppearanceBondChargesFromModal();
+  const missingPoa = charges.filter(c => !c.poa_number).length;
+  const missingCase = charges.filter(c => !c.case_number).length;
 
   const payload = {
     name: data.name,
+    defendant_name: data.name,
     booking: data.booking,
+    booking_number: data.booking,
     county: data.county,
-    surety: data.surety,
-    date: data.date,
-    dob: data.lead.dob || '',
-    address: data.lead.address || '',
-    copies: copiesPerCharge,
-    charges: data.chargeList.map((ch, i) => {
-      const poaInp = document.getElementById(`poaInput_${i}`);
-      const caseInp = document.getElementById(`caseNumInput_${i}`);
-      const amtInp = document.getElementById(`chargeAmtInput_${i}`);
-      const countyInp = document.getElementById(`countyInput_${i}`);
-      const courtDateInp = document.getElementById(`courtDateInput_${i}`);
-      return {
-        charge: ch,
-        poa_number: (poaInp ? poaInp.value.trim() : '') || (data.poaNumbers && data.poaNumbers[i] ? data.poaNumbers[i].poa_full : ''),
-        case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
-        bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : data.bond,
-        county: (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee',
-        court_date: (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN'
-      };
-    })
+    surety: data.surety || 'osi',
+    date: data.date || new Date().toLocaleDateString('en-US'),
+    dob: (data.lead && (data.lead.dob || data.lead.date_of_birth)) || '',
+    address: (data.lead && (data.lead.address || data.lead.home_address)) || '',
+    court_date: (data.lead && data.lead.court_date) || 'TBN',
+    court_time: (data.lead && data.lead.court_time) || '',
+    court_type: (data.lead && data.lead.court_type) || '',
+    indemnitor_name: (data.indemnitors && data.indemnitors[0] && data.indemnitors[0].name) || data.indemnitor_name || '',
+    bond_amount: data.bond,
+    charge_details: charges,
+    copies,
+    dry_run: dryRun,
   };
 
+  if (statusEl) {
+    statusEl.textContent = dryRun
+      ? 'Building plan…'
+      : `Generating ${charges.length} charge(s) × ${copies} copies (uncollated)…`;
+    statusEl.style.color = 'var(--muted)';
+  }
+  if (typeof toast === 'function') {
+    toast(
+      dryRun
+        ? `Preview: ${charges.length} appearance bond(s)…`
+        : `🖨️ Building print package (${charges.length}×${copies})…`,
+      'info'
+    );
+  }
+
   try {
-    if (typeof toast === 'function') toast(`Generating ${data.chargeList.length} bond package (2x each, uncollated)...`, 'info');
-    const res = await fetch(`${API}/api/appearance-bond-batch`, {
+    const res = await fetch(`${API}/api/appearance-bonds/print-package`, {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`Batch generation failed (${res.status})`);
+
+    if (dryRun) {
+      const plan = await res.json();
+      if (!res.ok || !plan.success) throw new Error(plan.error || `HTTP ${res.status}`);
+      const warn = [];
+      if (plan.warnings?.missing_poa_indices?.length) {
+        warn.push(`Missing POA on charge(s): ${plan.warnings.missing_poa_indices.map(i => i + 1).join(', ')}`);
+      }
+      if (plan.warnings?.missing_case_indices?.length) {
+        warn.push(`Missing case # on charge(s): ${plan.warnings.missing_case_indices.map(i => i + 1).join(', ')}`);
+      }
+      const lines = (plan.plan || []).map(p =>
+        `#${(p.charge_index || 0) + 1} ${p.charge || '?'} · $${Number(p.bond_amount || 0).toLocaleString()} · case ${p.case_number || '—'} · POA ${p.poa_number || 'MISSING'}`
+      ).join('\n');
+      alert(
+        `Appearance bond plan (${plan.surety || 'osi'})\n` +
+        `${plan.message || ''}\n` +
+        `Ready: ${plan.ready ? 'YES' : 'NO — fill POA/case first'}\n\n` +
+        lines +
+        (warn.length ? `\n\n⚠️ ${warn.join('\n')}` : '')
+      );
+      if (statusEl) {
+        statusEl.textContent = plan.ready
+          ? `Plan OK · ${plan.page_estimate} pages · wet-ink print`
+          : `Plan has gaps · ${warn.join(' · ') || 'check POA/case'}`;
+        statusEl.style.color = plan.ready ? '#6ee7b7' : '#fbbf24';
+      }
+      return;
+    }
+
+    if (!res.ok) {
+      let errMsg = `Print package failed (${res.status})`;
+      try {
+        const errJ = await res.json();
+        errMsg = errJ.error || errMsg;
+      } catch (_) { /* blob error body */ }
+      throw new Error(errMsg);
+    }
+
     const driveUrl = res.headers.get('x-drive-url') || '';
+    const chargeCount = res.headers.get('x-charge-count') || String(charges.length);
+    const missPoa = res.headers.get('x-missing-poa') || '';
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const safeName = (data.name || 'defendant').replace(/[^A-Za-z0-9_-]/g, '_');
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Uncollated_Appearance_Bonds_${(data.surety||'osi').toUpperCase()}_${safeName}.pdf`;
+    a.download = `AppearanceBonds_${(data.surety || 'osi').toUpperCase()}_${safeName}_${chargeCount}ch_x${copies}_UNSIGNED_PRINT.pdf`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Open in new tab for quick print (popup may be blocked)
+    try { window.open(url, '_blank'); } catch (_) { /* ignore */ }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
 
-    let msg = '🖨️ PDF package ready for uncollated printing!';
-    if (driveUrl) {
-      msg += ` · 📁 <a href="${driveUrl}" target="_blank" style="color:#c084fc;text-decoration:underline">Filed to Drive</a>`;
+    let msg = `🖨️ Print package ready · ${chargeCount} form(s) × ${copies} copies (file + jail) · unsigned / wet-ink`;
+    if (missPoa) msg += ` · ⚠️ missing POA on charge index ${missPoa}`;
+    if (missingPoa) msg += ` · ${missingPoa} charge(s) had empty POA in form`;
+    if (driveUrl) msg += ` · Drive filed`;
+    if (typeof toast === 'function') toast(msg, missPoa || missingPoa ? 'warning' : 'success');
+    if (statusEl) {
+      statusEl.innerHTML = msg + (driveUrl
+        ? ` · <a href="${driveUrl}" target="_blank" style="color:#c084fc">Drive</a>`
+        : '');
+      statusEl.style.color = '#6ee7b7';
     }
-    if (typeof toast === 'function') toast(msg, 'success');
   } catch (err) {
     if (typeof toast === 'function') toast(`Error: ${err.message}`, 'error');
+    if (statusEl) {
+      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.style.color = '#f87171';
+    }
   }
+}
+
+/** @deprecated use printAppearanceBondPackage — kept for older onclick handlers */
+async function downloadAllBonds(copiesPerCharge = 2) {
+  return printAppearanceBondPackage({ copies: copiesPerCharge });
 }
 
 function selectSurety(s) {
@@ -2157,7 +2281,7 @@ window.SL = { toggleTheme, switchTab, toggleNavGroup, restoreNavGroups, toggleCo
   buildDefCountyOptions, updateDefCountyLabel,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
   goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
-  clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, registerActiveBond,
+  clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, printAppearanceBondPackage, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody, updateBondAmount,
   onWriteBondAmountChange, saveWriteBondAmount, refreshDefendantFromSource,
   triggerSignNowPhase1, triggerSignNowPhase2,
@@ -2174,6 +2298,10 @@ if (document.readyState === 'loading') {
 // Expose for inline handlers on defendant cards
 window.updateBondAmount = updateBondAmount;
 window.onWriteBondAmountChange = onWriteBondAmountChange;
+window.printAppearanceBondPackage = printAppearanceBondPackage;
+window.downloadAllBonds = downloadAllBonds;
+window.downloadBond = downloadBond;
+window.editBond = editBond;
 window.saveWriteBondAmount = saveWriteBondAmount;
 window.refreshDefendantFromSource = refreshDefendantFromSource;
 

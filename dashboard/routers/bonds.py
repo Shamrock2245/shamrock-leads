@@ -2,7 +2,9 @@ from __future__ import annotations
 
 """
 ShamrockLeads — Bonds API Blueprint
-Endpoints: /api/write-bond, /api/active-bonds (CRUD), /api/appearance-bond-pdf
+Endpoints: /api/write-bond, /api/active-bonds (CRUD),
+           /api/appearance-bond-pdf, /api/appearance-bond-batch,
+           /api/appearance-bonds/print-package
 """
 
 import json as json_lib
@@ -1407,6 +1409,335 @@ async def api_appearance_bond_batch(request: Request):
         traceback.print_exc()
         return JSONResponse({"error": f"Batch PDF generation failed: {str(e)}"}, status_code=500)
 
+
+
+
+
+async def _hydrate_appearance_bond_payload(d: dict) -> dict:
+    """
+    Merge request body with arrest/lead/active_bond records when booking is known.
+    Ensures print package auto-fills name, address, DOB, charges, amounts, etc.
+    """
+    out = dict(d or {})
+    booking = (
+        out.get("booking")
+        or out.get("booking_number")
+        or out.get("Booking_Number")
+        or ""
+    )
+    booking = str(booking).strip()
+    if not booking:
+        return out
+
+    try:
+        lead = await get_collection("arrests").find_one(
+            {"$or": [{"Booking_Number": booking}, {"booking_number": booking}]},
+            {"_id": 0},
+        )
+        if not lead:
+            lead = await get_collection("prospective_bonds").find_one(
+                {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]},
+                {"_id": 0},
+            ) or {}
+        ab = await get_collection("active_bonds").find_one(
+            {"$or": [{"booking_number": booking}, {"BookingNumber": booking}]},
+            {"_id": 0},
+        ) or {}
+
+        def _pick(*keys, default=""):
+            for src in (out, ab, lead or {}):
+                if not isinstance(src, dict):
+                    continue
+                for k in keys:
+                    v = src.get(k)
+                    if v is not None and str(v).strip() != "":
+                        return v
+            return default
+
+        out.setdefault("booking", booking)
+        out.setdefault("booking_number", booking)
+        out["name"] = _pick("name", "defendant_name", "Full_Name", "full_name", default=out.get("name", ""))
+        out["defendant_name"] = out["name"]
+        out["county"] = _pick("county", "County", default=out.get("county", ""))
+        out["address"] = _pick(
+            "address", "defendant_address", "Address", "Home_Address",
+            default=out.get("address", ""),
+        )
+        out["dob"] = _pick("dob", "date_of_birth", "DOB", "Date_of_Birth", default=out.get("dob", ""))
+        out["court_date"] = _pick("court_date", "Court_Date", default=out.get("court_date") or "TBN")
+        out["court_time"] = _pick("court_time", "Court_Time", default=out.get("court_time", ""))
+        out["court_type"] = _pick("court_type", "Court_Type", default=out.get("court_type", ""))
+        out["indemnitor_name"] = _pick(
+            "indemnitor_name", "Indemnitor_Name", default=out.get("indemnitor_name", "")
+        )
+        if not out.get("bond") and not out.get("bond_amount"):
+            out["bond_amount"] = _pick("bond_amount", "Bond_Amount", "bond", default=0)
+            out["bond"] = out["bond_amount"]
+
+        if not (out.get("charge_details") or out.get("charge_list") or out.get("charges")):
+            cd = (
+                (lead or {}).get("charge_details")
+                or (lead or {}).get("Charge_Details")
+                or (ab or {}).get("charge_details")
+                or []
+            )
+            if cd:
+                out["charge_details"] = cd
+            else:
+                ch = _pick("charges", "Charges", "charge", default="")
+                if ch:
+                    out["charges"] = ch
+
+        if not out.get("poa_numbers") and not out.get("poa_number"):
+            poas = (ab or {}).get("poa_numbers") or (ab or {}).get("POA_Numbers")
+            if poas:
+                out["poa_numbers"] = poas
+            else:
+                one = (ab or {}).get("poa_number") or (ab or {}).get("POA_Number")
+                if one:
+                    out["poa_number"] = one
+
+        surety = (
+            out.get("surety")
+            or (ab or {}).get("surety_id")
+            or (ab or {}).get("insurance_company")
+            or "osi"
+        )
+        out["surety"] = str(surety).lower().strip()
+        if out["surety"] not in ("osi", "palmetto"):
+            out["surety"] = "osi"
+    except Exception as exc:
+        logger.warning("[appearance-print] hydrate failed booking=%s: %s", booking, exc)
+    return out
+
+
+@bonds_bp.api_route("/appearance-bonds/print-package", methods=["POST"])
+async def api_appearance_bonds_print_package(request: Request):
+    """
+    Canonical print button: 1 filled form per charge, uncollated merge,
+    default 2 copies per charge (office file + jail). UNSIGNED / wet-ink only.
+    """
+    try:
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+            describe_appearance_bonds,
+            appearance_bond_procedure_meta,
+        )
+
+        d = await request.json() or {}
+        d = await _hydrate_appearance_bond_payload(d)
+
+        surety = (d.get("surety") or "osi").lower().strip()
+        if surety not in ("osi", "palmetto"):
+            surety = "osi"
+
+        try:
+            copies = int(d.get("copies") or d.get("copies_per_charge") or 2)
+        except (TypeError, ValueError):
+            copies = 2
+        if copies < 1:
+            copies = 1
+
+        charges_data = (
+            d.get("charge_details")
+            or d.get("charge_list")
+            or d.get("charges")
+            or []
+        )
+        if isinstance(charges_data, str):
+            parts = [c.strip() for c in re.split(r"[|\n;]", charges_data) if c.strip()]
+            if not parts and charges_data.strip():
+                parts = [charges_data.strip()]
+            charges_data = [{"charge": p} for p in parts]
+
+        charge_details = []
+        if isinstance(charges_data, list) and charges_data:
+            for ch in charges_data:
+                if not isinstance(ch, dict):
+                    ch = {"charge": str(ch)}
+                charge_details.append({
+                    "charge": ch.get("charge") or ch.get("description") or ch.get("name") or "",
+                    "bond_amount": ch.get(
+                        "bond_amount",
+                        ch.get("amount", ch.get("bond", d.get("bond") or d.get("bond_amount") or 0)),
+                    ),
+                    "case_number": (
+                        ch.get("case_number")
+                        or ch.get("appearance_bond_number")
+                        or d.get("case_number")
+                        or ""
+                    ),
+                    "poa_number": (
+                        ch.get("poa_number")
+                        or ch.get("poa_full")
+                        or ch.get("POA_Number")
+                        or ""
+                    ),
+                    "bond_type": ch.get("bond_type") or "Surety",
+                    "court_date": ch.get("court_date") or d.get("court_date") or "TBN",
+                    "court_time": ch.get("court_time") or d.get("court_time") or "",
+                    "county": ch.get("county") or d.get("county") or "",
+                })
+
+        poa_list = d.get("poa_numbers") or []
+        if isinstance(poa_list, str):
+            poa_list = [x.strip() for x in poa_list.split(",") if x.strip()]
+        if isinstance(poa_list, list):
+            for i, row in enumerate(charge_details):
+                if not row.get("poa_number") and i < len(poa_list):
+                    p = poa_list[i]
+                    if isinstance(p, dict):
+                        row["poa_number"] = p.get("poa_full") or p.get("poa_number") or ""
+                    else:
+                        row["poa_number"] = str(p)
+
+        if d.get("poa_number") and charge_details and not charge_details[0].get("poa_number"):
+            charge_details[0]["poa_number"] = d.get("poa_number")
+
+        charge_details = [c for c in charge_details if (c.get("charge") or "").strip()]
+        if not charge_details:
+            return JSONResponse(
+                {
+                    "error": "No charges provided",
+                    "hint": "Send charge_details[] or charges, or booking_number with arrest data",
+                },
+                status_code=400,
+            )
+
+        b_data = {
+            "name": d.get("name") or d.get("defendant_name") or "",
+            "defendant_name": d.get("name") or d.get("defendant_name") or "",
+            "first_name": d.get("first_name") or "",
+            "last_name": d.get("last_name") or "",
+            "booking_number": d.get("booking") or d.get("booking_number") or "",
+            "county": d.get("county") or "",
+            "court_date": d.get("court_date") or "TBN",
+            "court_time": d.get("court_time") or "",
+            "court_type": d.get("court_type") or "",
+            "surety": surety,
+            "bond_date": d.get("date") or d.get("bond_date") or datetime.now().strftime("%m/%d/%Y"),
+            "dob": d.get("dob") or d.get("date_of_birth") or "",
+            "address": d.get("address") or d.get("defendant_address") or "",
+            "indemnitor_name": d.get("indemnitor_name") or "",
+            "charge_details": charge_details,
+            "case_number": d.get("case_number") or "",
+            "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
+            "poa_numbers": [c.get("poa_number") for c in charge_details],
+            "copies_per_charge": copies,
+        }
+
+        plan = describe_appearance_bonds(b_data)
+        missing_poa = [p for p in plan if not p.get("poa_number")]
+        missing_case = [p for p in plan if not p.get("case_number")]
+        proc = appearance_bond_procedure_meta()
+
+        dry_run = str(d.get("dry_run") or "").lower() in ("1", "true", "yes")
+        if dry_run:
+            return {
+                "success": True,
+                "dry_run": True,
+                "surety": surety,
+                "charge_count": len(plan),
+                "copies_per_charge": copies,
+                "page_estimate": len(plan) * copies,
+                "plan": plan,
+                "ready": len(missing_poa) == 0 and len(missing_case) == 0,
+                "warnings": {
+                    "missing_poa_indices": [p["charge_index"] for p in missing_poa],
+                    "missing_case_indices": [p["charge_index"] for p in missing_case],
+                },
+                "procedure": proc,
+                "message": (
+                    f"{len(plan)} charge(s) × {copies} copies = {len(plan) * copies} pages · "
+                    "unsigned print / wet-ink / jail"
+                ),
+            }
+
+        pdf_list = generate_appearance_bonds(b_data, template=surety)
+        if not pdf_list:
+            return JSONResponse({"error": "No appearance bond PDFs generated"}, status_code=400)
+
+        stored = []
+        try:
+            stored = store_appearance_bond_pdfs(
+                pdf_list,
+                bond_data=b_data,
+                surety=surety,
+                packet_id=d.get("packet_id"),
+                booking_number=b_data.get("booking_number"),
+            )
+        except Exception as store_exc:
+            logger.warning("[print-package] store failed: %s", store_exc)
+
+        merged_pdf = merge_uncollated_bonds(pdf_list, copies_per_charge=copies)
+        safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", b_data.get("name") or "defendant")[:40]
+        n = len(pdf_list)
+        filename = (
+            f"AppearanceBonds_{surety.upper()}_{safe_name}_"
+            f"{n}ch_x{copies}_UNSIGNED_PRINT.pdf"
+        )
+
+        drive_url = ""
+        try:
+            from dashboard.services.google_drive_service import GoogleDriveService
+            drive_service = GoogleDriveService()
+            if drive_service.is_configured:
+                root_folder_id = (
+                    os.getenv("COMPLETED_BONDS_FOLDER_ID")
+                    or os.getenv("GOOGLE_DRIVE_CASES_FOLDER_ID")
+                    or "root"
+                )
+                surety_label = (
+                    "OSI Appearance Bonds" if surety == "osi" else "Palmetto Appearance Bonds"
+                )
+                surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
+                if surety_folder_id:
+                    def_folder = drive_service.get_or_create_folder(
+                        f"{safe_name}_{b_data.get('booking_number') or 'nobk'}",
+                        surety_folder_id,
+                    )
+                    if def_folder:
+                        drive_url = drive_service.upload_pdf(merged_pdf, filename, def_folder) or ""
+        except Exception as drive_err:
+            logger.warning("[print-package] drive skip: %s", drive_err)
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": (
+                "x-drive-url, x-charge-count, x-copies-per-charge, "
+                "x-appearance-bond-print-only, x-missing-poa, x-missing-case"
+            ),
+            "X-Appearance-Bond-Print-Only": "1",
+            "X-Appearance-Bond-Signature": "wet_ink_live",
+            "X-Charge-Count": str(n),
+            "X-Copies-Per-Charge": str(copies),
+            "X-Page-Estimate": str(n * copies),
+            "X-Missing-Poa": ",".join(str(p["charge_index"]) for p in missing_poa),
+            "X-Missing-Case": ",".join(str(p["charge_index"]) for p in missing_case),
+            "x-drive-url": drive_url or "",
+        }
+        if stored:
+            headers["X-Stored-Count"] = str(len(stored))
+
+        logger.info(
+            "[print-package] surety=%s charges=%s copies=%s pages=%s booking=%s missing_poa=%s",
+            surety, n, copies, n * copies, b_data.get("booking_number"), len(missing_poa),
+        )
+        return Response(merged_pdf, media_type="application/pdf", headers=headers)
+
+    except FileNotFoundError as e:
+        return JSONResponse(
+            {
+                "error": f"Template not found: {e}",
+                "hint": "Ensure templates/osi/Appearance Bond blank.pdf is deployed",
+            },
+            status_code=404,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse({"error": f"Print package failed: {e}"}, status_code=500)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -258,6 +258,13 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
                         or ""
                     ).strip(),
                     "bond_type": str(item.get("bond_type") or item.get("bondType") or "Surety").strip(),
+                    "court_date": str(
+                        item.get("court_date") or item.get("CourtDate") or ""
+                    ).strip(),
+                    "court_time": str(
+                        item.get("court_time") or item.get("CourtTime") or ""
+                    ).strip(),
+                    "county": str(item.get("county") or item.get("County") or "").strip(),
                     "index": i,
                 })
             else:
@@ -269,6 +276,9 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
                         "case_number": "",
                         "poa_number": "",
                         "bond_type": "Surety",
+                        "court_date": "",
+                        "court_time": "",
+                        "county": "",
                         "index": i,
                     })
 
@@ -283,6 +293,9 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
                 "case_number": "",
                 "poa_number": "",
                 "bond_type": "Surety",
+                "court_date": "",
+                "court_time": "",
+                "county": "",
                 "index": i,
             })
 
@@ -293,6 +306,9 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
             "case_number": str(bond_data.get("case_number") or "").strip(),
             "poa_number": "",
             "bond_type": "Surety",
+            "court_date": "",
+            "court_time": "",
+            "county": "",
             "index": 0,
         }]
 
@@ -714,6 +730,16 @@ def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[by
     missing_poa = []
     missing_case = []
 
+    default_court = (
+        bond_data.get("court_date")
+        or bond_data.get("defendant_court_date")
+        or "TBN"
+    )
+    if not str(default_court).strip():
+        default_court = "TBN"
+    default_time = bond_data.get("court_time") or bond_data.get("defendant_court_time") or ""
+    default_county = bond_data.get("county") or bond_data.get("defendant_county") or ""
+
     for row in rows:
         charge_data = dict(bond_data)
         charge_data["charge"] = row["charge"]
@@ -723,6 +749,22 @@ def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[by
         charge_data["bond_type"] = row.get("bond_type") or "Surety"
         charge_data["charge_index"] = row.get("index", 0)
         charge_data["surety"] = surety
+        # Per-charge court/county with TBN default for unknown dates
+        cd = (row.get("court_date") or "").strip() or str(default_court).strip() or "TBN"
+        charge_data["court_date"] = cd
+        charge_data["defendant_court_date"] = cd
+        if cd.upper() == "TBN":
+            charge_data["court_time"] = ""
+            charge_data["defendant_court_time"] = ""
+        else:
+            ct = (row.get("court_time") or "").strip() or str(default_time).strip()
+            charge_data["court_time"] = ct
+            charge_data["defendant_court_time"] = ct
+        if row.get("county"):
+            charge_data["county"] = row["county"]
+            charge_data["defendant_county"] = row["county"]
+        elif default_county:
+            charge_data["county"] = default_county
 
         if not charge_data["poa_number"]:
             missing_poa.append(row["index"])
