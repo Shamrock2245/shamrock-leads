@@ -2,9 +2,11 @@
 ShamrockLeads — Mobile PIN Portal Router (paperwork.shamrockbailbonds.biz)
 ========================================================================
 Serves mobile PWA UI and fast 6-digit OTP PIN authentication for indemnitor e-signing.
-Bypasses traditional passwords; clients log in using a 6-digit PIN sent via SMS / Telegram.
+OTP is delivered exclusively via BlueBubbles (iMessage / green SMS through Messages).
+Never routes client text through Twilio.
 """
 import os
+import re
 import random
 import logging
 from datetime import datetime, timezone, timedelta
@@ -24,6 +26,9 @@ portal_page_router = APIRouter(tags=["pin_portal_pages"])
 # 6-digit PIN OTP store in MongoDB `portal_pins`
 # pin -> {phone, intake_id, booking_number, expires_at}
 
+_TEST_PHONE = "2395550199"
+_MASTER_PIN = "224545"
+
 
 class SendPinRequest(BaseModel):
     phone: str
@@ -36,19 +41,91 @@ class VerifyPinRequest(BaseModel):
     pin: str
 
 
+def _digits_phone(raw: str) -> str:
+    return "".join(ch for ch in (raw or "") if ch.isdigit())[-10:]
+
+
+def _extract_signing_link_from_packet(doc: Optional[dict]) -> str:
+    """Pull the best DocuSeal/sign URL from a paperwork_packets document."""
+    if not doc or not isinstance(doc, dict):
+        return ""
+    for key in ("signing_link", "magic_link", "sign_url", "embed_src"):
+        val = doc.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            return val
+    links = doc.get("sign_links") or []
+    if isinstance(links, list):
+        for u in links:
+            if isinstance(u, str) and u.startswith("http"):
+                return u
+    submitters = doc.get("docuseal_submitters") or doc.get("submitters") or []
+    if isinstance(submitters, list):
+        for s in submitters:
+            if not isinstance(s, dict):
+                continue
+            for k in ("sign_url", "embed_src", "slug"):
+                v = s.get(k)
+                if isinstance(v, str) and v.startswith("http"):
+                    return v
+            slug = s.get("slug")
+            if isinstance(slug, str) and slug and not slug.startswith("http"):
+                host = (
+                    os.getenv("DOCUSEAL_URL")
+                    or os.getenv("DOCUSEAL_HOST")
+                    or "https://sign.shamrockbailbonds.biz"
+                ).rstrip("/")
+                if not host.startswith("http"):
+                    host = f"https://{host}"
+                return f"{host}/s/{slug}"
+    return ""
+
+
+async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str = "") -> str:
+    """Find the newest packet for this phone/booking/intake and return its sign URL."""
+    packets = get_collection("paperwork_packets")
+    phone = _digits_phone(phone_str)
+    or_clauses = []
+    if booking:
+        or_clauses.append({"booking_number": booking})
+        or_clauses.append({"Booking_Number": booking})
+    if intake:
+        or_clauses.append({"intake_id": intake})
+    if phone:
+        # Match last 10 digits whether stored as 10-digit or E.164
+        phone_pat = re.escape(phone) + r"$"
+        or_clauses.extend([
+            {"indemnitor_phone": {"$regex": phone_pat}},
+            {"delivered_to": {"$regex": phone_pat}},
+            {"signer_phone": {"$regex": phone_pat}},
+            {"defendant_phone": {"$regex": phone_pat}},
+        ])
+    if not or_clauses:
+        return ""
+
+    doc = await packets.find_one({"$or": or_clauses}, sort=[("created_at", -1)])
+    if not doc:
+        # Fallback: newest non-voided packet with any docuseal link (admin testing)
+        return ""
+    return _extract_signing_link_from_packet(doc)
+
+
 @pin_portal_router.post("/send-pin")
 async def send_portal_pin(req: SendPinRequest):
     """
-    Generate & dispatch a 6-digit OTP PIN to client's phone via iMessage / SMS.
+    Generate & dispatch a 6-digit OTP PIN via BlueBubbles only (iMessage/SMS).
+    Queued sends (BB temporarily down) still count as success — never Twilio.
     """
-    clean_phone = "".join(ch for ch in req.phone if ch.isdigit())[-10:]
+    clean_phone = _digits_phone(req.phone)
     if not clean_phone or len(clean_phone) < 10:
-        return JSONResponse({"success": False, "error": "Invalid 10-digit phone number"}, status_code=400)
+        return JSONResponse(
+            {"success": False, "error": "Invalid 10-digit phone number"},
+            status_code=400,
+        )
 
-    # Master dev PIN for testing
     otp_pin = f"{random.randint(100000, 999999)}"
-    if req.phone == "2395550199":
-        otp_pin = "224545"
+    # Deterministic lab PIN for staff smoke (not a production client path)
+    if clean_phone == _TEST_PHONE or req.phone.replace(" ", "") == _TEST_PHONE:
+        otp_pin = _MASTER_PIN
 
     pins_col = get_collection("portal_pins")
     now = datetime.now(timezone.utc)
@@ -70,34 +147,55 @@ async def send_portal_pin(req: SendPinRequest):
         upsert=True,
     )
 
-    logger.info("[PIN Portal] Generated PIN %s for phone %s", otp_pin, clean_phone)
+    logger.info("[PIN Portal] Generated PIN for phone ...%s", clean_phone[-4:])
 
-    # Send OTP PIN strictly via BlueBubbles (send_message_universal) — NO Twilio fallback
     try:
-        from dashboard.services.bb_client import send_message_universal
-        msg = f"Your Shamrock Bail Bonds e-sign verification PIN is: {otp_pin}. Valid for 15 minutes."
-        send_res = await send_message_universal(clean_phone, msg)
-        logger.info("[PIN Portal] send_message_universal result: %s", send_res)
-        
-        sent_ok = send_res.get("sent", False) or send_res.get("queued", False)
-        if not sent_ok:
-            return JSONResponse({
-                "success": False,
-                "error": f"Messaging unavailable: {send_res.get('error', 'send failed')}",
-                "channel": send_res.get("channel", "failed")
-            }, status_code=503)
+        from dashboard.services.bb_client import (
+            send_message_universal,
+            normalize_bb_send_result,
+            bb_send_accepted,
+        )
+        msg = (
+            f"Your Shamrock Bail Bonds e-sign verification PIN is: {otp_pin}. "
+            f"Valid for 15 minutes."
+        )
+        raw = await send_message_universal(clean_phone, msg)
+        send_res = normalize_bb_send_result(raw)
+        logger.info(
+            "[PIN Portal] BB send channel=%s sent=%s queued=%s phone=...%s",
+            send_res.get("channel"),
+            send_res.get("sent"),
+            send_res.get("queued"),
+            clean_phone[-4:],
+        )
 
+        if not bb_send_accepted(send_res):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": f"Messaging unavailable: {send_res.get('error', 'send failed')}",
+                    "channel": send_res.get("channel", "failed"),
+                },
+                status_code=503,
+            )
+
+        env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+        debug_ok = env not in ("production", "prod")
         return {
             "success": True,
             "phone": clean_phone,
             "channel": send_res.get("channel", "imessage"),
-            "queued": send_res.get("queued", False),
+            "sent": bool(send_res.get("sent")),
+            "queued": bool(send_res.get("queued")),
             "expires_in_minutes": 15,
-            "debug_pin": otp_pin if os.getenv("ENV") != "production" else None
+            "debug_pin": otp_pin if debug_ok else None,
         }
     except Exception as exc:
         logger.error("[PIN Portal] Send PIN exception: %s", exc)
-        return JSONResponse({"success": False, "error": f"Send error: {exc}"}, status_code=500)
+        return JSONResponse(
+            {"success": False, "error": "Send error — BlueBubbles unreachable"},
+            status_code=500,
+        )
 
 
 @pin_portal_router.post("/verify-pin")
@@ -105,28 +203,11 @@ async def verify_portal_pin(req: VerifyPinRequest):
     """
     Verify 6-digit OTP PIN and return session token + packet deep-link signing URL.
     """
-    clean_phone = "".join(ch for ch in req.phone if ch.isdigit())[-10:]
-    input_pin = req.pin.strip()
+    clean_phone = _digits_phone(req.phone)
+    input_pin = (req.pin or "").strip()
 
-    # Look up packet signing link helper
-    async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str = "") -> str:
-        packets = get_collection("paperwork_packets")
-        query = {"$or": []}
-        if booking:
-            query["$or"].append({"booking_number": booking})
-        if intake:
-            query["$or"].append({"intake_id": intake})
-        query["$or"].extend([
-            {"indemnitor_phone": {"$regex": phone_str}},
-            {"signer_email": {"$regex": phone_str}},
-        ])
-        doc = await packets.find_one(query, sort=[("created_at", -1)])
-        if doc:
-            return doc.get("signing_link") or (doc.get("docuseal_submitters") or [{}])[0].get("sign_url") or ""
-        return ""
-
-    # Master admin bypass
-    if input_pin == "224545":
+    # Master admin bypass (staff smoke)
+    if input_pin == _MASTER_PIN:
         link = await _resolve_signing_link(clean_phone)
         return {
             "success": True,
@@ -141,23 +222,30 @@ async def verify_portal_pin(req: VerifyPinRequest):
     pin_doc = await pins_col.find_one({"phone": clean_phone, "pin": input_pin})
 
     if not pin_doc:
-        return JSONResponse({"success": False, "error": "Invalid PIN or phone number"}, status_code=401)
+        return JSONResponse(
+            {"success": False, "error": "Invalid PIN or phone number"},
+            status_code=401,
+        )
 
-    # Check expiration
     expires_at_str = pin_doc.get("expires_at")
     if expires_at_str:
         try:
             expires_at = datetime.fromisoformat(expires_at_str)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             if datetime.now(timezone.utc) > expires_at:
-                return JSONResponse({"success": False, "error": "PIN has expired"}, status_code=401)
+                return JSONResponse(
+                    {"success": False, "error": "PIN has expired"},
+                    status_code=401,
+                )
         except ValueError:
             pass
 
     await pins_col.update_one({"_id": pin_doc["_id"]}, {"$set": {"verified": True}})
     link = await _resolve_signing_link(
         clean_phone,
-        booking=pin_doc.get("booking_number", ""),
-        intake=pin_doc.get("intake_id", "")
+        booking=pin_doc.get("booking_number", "") or "",
+        intake=pin_doc.get("intake_id", "") or "",
     )
 
     return {
@@ -257,7 +345,11 @@ async def get_portal_ui(request: Request):
             if (d.success) {
                 document.getElementById('step-phone').style.display = 'none';
                 document.getElementById('step-pin').style.display = 'block';
-                document.getElementById('status').textContent = 'PIN sent via SMS!';
+                let how = 'iMessage / text';
+                if (d.channel === 'imessage') how = 'iMessage';
+                else if (d.channel === 'sms') how = 'text message';
+                else if (d.queued || d.channel === 'queued') how = 'message queue (delivering shortly)';
+                document.getElementById('status').textContent = 'PIN sent via ' + how + '. Check your phone.';
             } else {
                 document.getElementById('status').textContent = 'Error: ' + (d.error || 'Failed');
             }
@@ -274,8 +366,13 @@ async def get_portal_ui(request: Request):
             });
             const d = await r.json();
             if (d.success) {
-                document.getElementById('status').textContent = '✅ Verified! Loading e-sign packet...';
-                window.location.href = d.signing_link || 'https://sign.shamrockbailbonds.biz';
+                if (d.signing_link) {
+                    document.getElementById('status').textContent = '✅ Verified! Opening your e-sign packet...';
+                    window.location.href = d.signing_link;
+                } else {
+                    document.getElementById('status').textContent =
+                        '✅ Verified — no packet linked to this phone yet. Call (239) 332-2245 and we will send your signing link.';
+                }
             } else {
                 document.getElementById('status').textContent = '❌ ' + (d.error || 'Invalid PIN');
             }

@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--name", default="Defendant", help="Defendant full name")
     parser.add_argument("--county", default="Lee", help="County")
     parser.add_argument("--phone", default="", help="Defendant phone number for SMS dispatch")
-    parser.add_argument("--send-sms", action="store_true", help="Send SMS setup link via Twilio")
+    parser.add_argument("--send-sms", action="store_true", help="Send setup link via BlueBubbles iMessage/SMS")
     parser.add_argument("--json", action="store_true", help="Output JSON result only")
 
     args = parser.parse_args()
@@ -115,8 +115,10 @@ def main():
                 f"Questions? (239) 332-2245 ☘️"
             )
             import asyncio
-            sms_res = asyncio.run(send_message_universal(args.phone, msg))
-            config["sms_sent"] = bool(sms_res.get("sent") or sms_res.get("queued"))
+            from dashboard.services.bb_client import bb_send_accepted, normalize_bb_send_result
+            sms_res = normalize_bb_send_result(asyncio.run(send_message_universal(args.phone, msg)))
+            config["sms_sent"] = bb_send_accepted(sms_res)
+            config["sms_channel"] = sms_res.get("channel")
             if not args.json:
                 print(f"📱 BlueBubbles setup text dispatch: {'✅ Sent/Queued' if config['sms_sent'] else '❌ Failed'}")
         except Exception as e:

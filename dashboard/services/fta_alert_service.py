@@ -8,8 +8,8 @@ a multi-channel escalation pipeline:
   Level 2 (24–48h after FTA): Send iMessage via BlueBubbles to defendant + indemnitors
   Level 3 (48h+ after FTA):   Flag bond for surrender review, Telegram + in-app
 
-Primary channel: BlueBubbles iMessage (auto-routes to SMS/RCS for non-iPhones)
-Fallback: Twilio SMS (only when BB server is unreachable)
+Primary channel: BlueBubbles iMessage (auto-routes to SMS/RCS for non-iPhones).
+If BB is offline, messages queue for retry + staff alert — never Twilio client text.
 
 Runs via cron every 4 hours.
 """
@@ -321,13 +321,22 @@ class FTAAlertService:
         sent = 0
         for phone in phones[:6]:
             result = await self._send_bb(phone, message)
-            success = result.get("sent", False) or result.get("queued", False)
+            from dashboard.services.bb_client import normalize_bb_send_result, bb_send_accepted
+            result = normalize_bb_send_result(result)
+            success = bb_send_accepted(result)
             if success:
                 sent += 1
                 channel = result.get("channel", "imessage")
-                log.info("[FTAAlert][%s] BB message (%s) to ...%s (status=%s)", context, channel, phone[-4:], "sent" if result.get("sent") else "queued")
+                log.info(
+                    "[FTAAlert][%s] BB message (%s) to ...%s (status=%s)",
+                    context, channel, phone[-4:],
+                    "sent" if result.get("sent") else "queued",
+                )
             else:
-                log.warning("[FTAAlert][%s] BB send failed/queued for ...%s: %s", context, phone[-4:], result.get("error"))
+                log.warning(
+                    "[FTAAlert][%s] BB send failed for ...%s: %s",
+                    context, phone[-4:], result.get("error"),
+                )
 
             try:
                 await self.db["outbound_messages"].insert_one({
@@ -346,10 +355,10 @@ class FTAAlertService:
         return sent
 
     async def _send_bb(self, phone: str, message: str) -> dict:
-        """Send via BlueBubbles (send_message_universal). Returns status dict."""
+        """Send via BlueBubbles (send_message_universal). Returns normalized status dict."""
         try:
-            from dashboard.services.bb_client import send_message_universal
-            return await send_message_universal(phone, message)
+            from dashboard.services.bb_client import send_message_universal, normalize_bb_send_result
+            return normalize_bb_send_result(await send_message_universal(phone, message))
         except Exception as e:
             log.debug("[FTAAlert] BB send exception for ...%s: %s", phone[-4:], e)
             return {"success": False, "sent": False, "queued": False, "error": str(e)}

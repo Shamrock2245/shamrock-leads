@@ -248,19 +248,26 @@ async def send_portal_link(request: Request):
             f"☘️ Shamrock Bail Bonds (239) 332-2245"
         )
 
-    send_result = {"success": False, "error": "No messaging channel available"}
+    send_result = {"success": False, "sent": False, "queued": False, "error": "No messaging channel available"}
     try:
-        from dashboard.services.bb_client import send_message_universal
-        send_result = await send_message_universal(phone, msg)
+        from dashboard.services.bb_client import (
+            send_message_universal,
+            normalize_bb_send_result,
+            bb_send_accepted,
+        )
+        send_result = normalize_bb_send_result(await send_message_universal(phone, msg))
+        accepted = bb_send_accepted(send_result)
     except Exception as e:
         logger.warning("Portal link send via BB failed: %s", e)
-        send_result = {"success": False, "error": str(e)}
+        send_result = {"success": False, "sent": False, "queued": False, "error": str(e)}
+        accepted = False
 
     return {
         "token_generated": True,
         "url": portal_url,
-        "message_sent": send_result.get("success", False),
+        "message_sent": accepted,
         "channel": send_result.get("channel", "unknown"),
+        "queued": bool(send_result.get("queued")),
         "booking_number": booking_number,
         "role": role,
     }

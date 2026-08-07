@@ -18,7 +18,7 @@ Usage:
     bb = get_default_bb_client()          # always returns first configured server
 """
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -147,6 +147,77 @@ async def send_imessage(
     return await _send_message_direct(phone, message)
 
 
+def normalize_bb_send_result(result: Optional[dict]) -> dict:
+    """
+    Normalize BlueBubbles send responses into a stable shape for all callers.
+
+    Always returns:
+      success: bool  — accepted by BB stack (sent OR queued for retry)
+      sent:    bool  — delivered immediately via Messages
+      queued:  bool  — stored in outreach_queue for background retry
+      channel: str   — imessage | sms | queued | failed
+    """
+    if not result or not isinstance(result, dict):
+        return {
+            "success": False,
+            "sent": False,
+            "queued": False,
+            "channel": "failed",
+            "error": "empty_result",
+        }
+
+    channel = (result.get("channel") or result.get("status") or "").lower()
+    status = (result.get("status") or "").lower()
+    explicit_sent = bool(result.get("sent"))
+    explicit_queued = bool(result.get("queued")) or status == "queued" or channel == "queued"
+    # Direct send success: success True without queued channel
+    if explicit_sent or (
+        result.get("success")
+        and channel in ("imessage", "sms", "rcs")
+        and not explicit_queued
+    ):
+        out_channel = channel if channel in ("imessage", "sms", "rcs") else "imessage"
+        return {
+            **result,
+            "success": True,
+            "sent": True,
+            "queued": False,
+            "channel": out_channel,
+        }
+    if explicit_queued or (result.get("success") and channel == "queued"):
+        return {
+            **result,
+            "success": True,
+            "sent": False,
+            "queued": True,
+            "channel": "queued",
+            "status": "queued",
+        }
+    if result.get("success"):
+        # Ambiguous success — treat as accepted (legacy callers)
+        return {
+            **result,
+            "success": True,
+            "sent": bool(result.get("sent", True)),
+            "queued": bool(result.get("queued", False)),
+            "channel": channel or "imessage",
+        }
+    return {
+        **result,
+        "success": False,
+        "sent": False,
+        "queued": False,
+        "channel": channel or "failed",
+        "error": result.get("error") or "send_failed",
+    }
+
+
+def bb_send_accepted(result: Optional[dict]) -> bool:
+    """True if message was sent immediately or queued for BB retry (never Twilio)."""
+    n = normalize_bb_send_result(result)
+    return bool(n.get("sent") or n.get("queued") or n.get("success"))
+
+
 async def send_message_universal(
     phone: str,
     message: str,
@@ -164,25 +235,41 @@ async def send_message_universal(
     then attempts direct dispatch. If direct dispatch fails, the message remains
     pending in the queue for background retries and returns a queued status.
 
+    Client text NEVER routes through Twilio.
+
     Args:
         phone:    Recipient phone number (E.164 or 10-digit)
         message:  Message text to send
         method:   BlueBubbles send method ("private-api" or "apple-script")
 
     Returns:
-        { success: bool, channel: "imessage"|"sms"|"queued"|"failed", ... }
+        {
+          success: bool,
+          sent: bool,
+          queued: bool,
+          channel: "imessage"|"sms"|"queued"|"failed",
+          queued_id?: str,
+          error?: str,
+          data?: any,
+        }
     """
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
-    
+
     # 1. Write to outreach queue first
     queue_id = await enqueue_message(phone, message, context="universal")
-    
+
     bb = get_bb_client(phone)
     if not bb:
         logger.error("[bb_client] No BB server configured for %s", _mask(phone))
         # Leave it in the queue to retry in case server gets configured/restored later
-        return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": "no_bb_server"}
+        return normalize_bb_send_result({
+            "success": True,
+            "status": "queued",
+            "channel": "queued",
+            "queued_id": queue_id,
+            "error": "no_bb_server",
+        })
 
     # 2. Check iMessage availability for channel reporting (not routing)
     channel = "sms"  # default assumption
@@ -197,19 +284,52 @@ async def send_message_universal(
     try:
         result = await _send_message_direct(phone, message)
         if result.get("success"):
-            logger.info("[bb_client] ✅ Message sent to ...%s via %s (Queue ID: %s)", phone[-4:], channel, queue_id)
+            logger.info(
+                "[bb_client] ✅ Message sent to %s via %s (Queue ID: %s)",
+                _mask(phone), channel, queue_id,
+            )
             # Update queue record to sent
             await get_collection("outreach_queue").update_one(
                 {"_id": ObjectId(queue_id)},
-                {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}}
+                {
+                    "$set": {
+                        "status": "sent",
+                        "sent_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
             )
-            return {"success": True, "channel": channel, "data": result.get("data")}
-        else:
-            logger.warning("[bb_client] Direct BB send failed for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, result.get("error"))
-            return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": result.get("error")}
+            return normalize_bb_send_result({
+                "success": True,
+                "sent": True,
+                "queued": False,
+                "channel": channel,
+                "queued_id": queue_id,
+                "data": result.get("data"),
+            })
+        logger.warning(
+            "[bb_client] Direct BB send failed for %s, remains queued (Queue ID: %s): %s",
+            _mask(phone), queue_id, result.get("error"),
+        )
+        return normalize_bb_send_result({
+            "success": True,
+            "status": "queued",
+            "channel": "queued",
+            "queued_id": queue_id,
+            "error": result.get("error"),
+        })
     except Exception as exc:
-        logger.error("[bb_client] Direct BB send exception for %s, remains queued (Queue ID: %s): %s", _mask(phone), queue_id, exc)
-        return {"success": True, "status": "queued", "channel": "queued", "queued_id": queue_id, "error": str(exc)}
+        logger.error(
+            "[bb_client] Direct BB send exception for %s, remains queued (Queue ID: %s): %s",
+            _mask(phone), queue_id, exc,
+        )
+        return normalize_bb_send_result({
+            "success": True,
+            "status": "queued",
+            "channel": "queued",
+            "queued_id": queue_id,
+            "error": str(exc),
+        })
 
 
 async def send_imessage_with_attachment(

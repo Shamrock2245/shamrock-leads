@@ -437,14 +437,20 @@ async def send_checkin_link(
 
     send_result: dict = {"success": False, "error": "No messaging channel available"}
     try:
-        from dashboard.services.bb_client import send_message_universal
-        send_result = await send_message_universal(phone, msg)
-        sent_ok = send_result.get("sent", False) or send_result.get("queued", False)
-        if not sent_ok:
-            logger.warning("[checkin_enroll] BB send/queue failed for %s: %s", booking_number, send_result.get("error"))
+        from dashboard.services.bb_client import (
+            send_message_universal,
+            normalize_bb_send_result,
+            bb_send_accepted,
+        )
+        send_result = normalize_bb_send_result(await send_message_universal(phone, msg))
+        if not bb_send_accepted(send_result):
+            logger.warning(
+                "[checkin_enroll] BB send/queue failed for %s: %s",
+                booking_number, send_result.get("error"),
+            )
     except Exception as e:
         logger.warning("[checkin_enroll] BB send exception: %s", e)
-        send_result = {"success": False, "error": str(e)}
+        send_result = {"success": False, "sent": False, "queued": False, "error": str(e)}
 
     now = _now()
     await active_bonds.update_one(
