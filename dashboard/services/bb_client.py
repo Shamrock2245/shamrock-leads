@@ -48,8 +48,11 @@ def get_bb_client(phone: Optional[str] = None):
         BlueBubblesClient instance, or None if no server is configured.
     """
     try:
-        from dashboard.extensions import BB_SERVERS, get_bb_server
+        from dashboard.extensions import BB_SERVERS, get_bb_server, init_bluebubbles
         from dashboard.routers.bb_private_api import BlueBubblesClient
+
+        if not BB_SERVERS:
+            init_bluebubbles()
 
         if phone:
             server = get_bb_server(phone)

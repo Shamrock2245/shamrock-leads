@@ -124,6 +124,8 @@ def update_bb_url(suffix: str, new_url: str):
 
 def get_bb_server(from_number: str):
     """Look up the BlueBubbles server config for a given from_number."""
+    if not BB_SERVERS:
+        init_bluebubbles()
     if from_number in BB_SERVERS:
         return BB_SERVERS[from_number]
     for key, srv in BB_SERVERS.items():
