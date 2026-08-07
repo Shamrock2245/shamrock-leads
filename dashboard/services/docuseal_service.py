@@ -425,6 +425,7 @@ class DocuSealService:
             "today_date": today_slash,
             "today_date_long": today_long,
             "date_written_out": today_long,
+            "bond_date_written": today_long,
             "formatted_date": today_long,
             "indemnitor_address": ind_address,
             "defendant_address": def_address,
