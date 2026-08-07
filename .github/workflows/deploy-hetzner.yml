@@ -161,10 +161,39 @@ jobs:
             export COMPOSE_DOCKER_CLI_BUILD=1
             docker compose build shamrock-leads dashboard osint-worker
 
+            # ── Clear compose name conflicts (hash-prefix orphans block recreate) ──
+            # Failed/partial deploys leave containers like "abc123_shamrock-leads" while
+            # the canonical name is still held — compose then fails with:
+            #   Conflict. The container name "/shamrock-leads" is already in use
+            # Do NOT docker compose down the whole project — that would stop
+            # long-lived profile services (Postiz, DocuSeal, Temporal, frps).
+            echo ""
+            echo "🧹 Clearing container name conflicts (core stack only)..."
+            for name in shamrock-leads shamrock-dashboard shamrock-osint-worker shamrock-obscura shamrock-traccar; do
+              docker rm -f "$name" 2>/dev/null || true
+            done
+            # Hash-prefixed orphans from failed renames (e.g. c10e04090edd_shamrock-leads)
+            docker ps -a --format '{{.Names}}' 2>/dev/null \
+              | grep -E '^[a-f0-9]+_shamrock-(leads|dashboard|osint|obscura|traccar)' \
+              | while read -r n; do
+                  echo "   removing orphan $n"
+                  docker rm -f "$n" 2>/dev/null || true
+                done
+
             # ── Rolling restart ────────────────────────────────────
             echo ""
             echo "🔄 Starting stack..."
-            docker compose up -d --remove-orphans --force-recreate
+            # Prefer force-recreate of services we just built; fall back once if name conflict returns
+            if ! docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker obscura traccar; then
+              echo "   ⚠️ compose up failed — second pass after hard name clear"
+              for name in shamrock-leads shamrock-dashboard shamrock-osint-worker shamrock-obscura shamrock-traccar; do
+                docker rm -f "$name" 2>/dev/null || true
+              done
+              docker ps -a --format '{{.Names}}' 2>/dev/null \
+                | grep -E '^[a-f0-9]+_shamrock-(leads|dashboard|osint|obscura|traccar)' \
+                | while read -r n; do docker rm -f "$n" 2>/dev/null || true; done
+              docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker obscura traccar
+            fi
 
             # ── Postiz healthcheck fix + optional social stack refresh ──
             if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then
