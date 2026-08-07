@@ -40,6 +40,33 @@ ROLE_DEFENDANT = "Defendant"
 ROLE_INDEMNITOR_N = "Indemnitor {n}"  # multi-indemnitor templates
 
 
+def _number_to_words(n: int) -> str:
+    if n <= 0:
+        return "Zero"
+    units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+             "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"]
+    tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+    if n < 20:
+        return units[n]
+    if n < 100:
+        return tens[n // 10] + (" " + units[n % 10] if n % 10 != 0 else "")
+    if n < 1000:
+        return units[n // 100] + " Hundred" + (" " + _number_to_words(n % 100) if n % 100 != 0 else "")
+    if n < 1000000:
+        return _number_to_words(n // 1000) + " Thousand" + (" " + _number_to_words(n % 1000) if n % 1000 != 0 else "")
+    return str(n)
+
+
+def _amount_to_words(val: Any) -> str:
+    try:
+        clean = float(str(val).replace("$", "").replace(",", "").strip())
+    except (ValueError, TypeError):
+        return str(val or "")
+    dollars = int(clean)
+    cents = int(round((clean - dollars) * 100))
+    return f"{_number_to_words(dollars)} and {cents:02d}/100"
+
+
 class DocuSealService:
     """
     Thin async client for DocuSeal REST API + packet helpers.
@@ -403,6 +430,27 @@ class DocuSealService:
         today_slash = now.strftime("%m/%d/%Y")
         today_long = now.strftime("%B %d, %Y").replace(" 0", " ")  # e.g. August 7, 2026
 
+        raw_bond_amt = (
+            bond_data.get("bond_amount")
+            or bond_data.get("total_bond_amount")
+            or bond_data.get("bond_amount_raw")
+            or def_.get("bond_amount")
+            or 0
+        )
+        try:
+            bond_float = float(str(raw_bond_amt).replace("$", "").replace(",", "").strip())
+        except (ValueError, TypeError):
+            bond_float = 0.0
+
+        bond_formatted = f"{bond_float:,.2f}" if bond_float > 0 else ""
+        bond_formatted_dollar = f"${bond_float:,.2f}" if bond_float > 0 else ""
+        bond_words = _amount_to_words(bond_float) if bond_float > 0 else ""
+
+        prem_float = max(100.0, bond_float * 0.10) if bond_float > 0 else 0.0
+        prem_formatted = f"{prem_float:,.2f}" if prem_float > 0 else ""
+        prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
+        prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
+
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
             "defendant_name": defendant_name,
@@ -427,6 +475,20 @@ class DocuSealService:
             "date_written_out": today_long,
             "bond_date_written": today_long,
             "formatted_date": today_long,
+            "numeric_full_bond_amount": bond_formatted,
+            "numeric_full_bond_amount_dollar": bond_formatted_dollar,
+            "bond_amount": bond_formatted_dollar,
+            "bond_amount_numeric": bond_formatted,
+            "bond_amount_words": bond_words,
+            "bond_amount_written": bond_words,
+            "full_bond_amount_words": bond_words,
+            "numeric_premium": prem_formatted,
+            "numeric_premium_dollar": prem_formatted_dollar,
+            "premium_amount": prem_formatted_dollar,
+            "premium_numeric": prem_formatted,
+            "premium_words": prem_words,
+            "premium_written": prem_words,
+            "written_premium": prem_words,
             "indemnitor_address": ind_address,
             "defendant_address": def_address,
             "DefAddress": def_address,
