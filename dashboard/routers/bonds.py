@@ -1413,10 +1413,34 @@ async def api_appearance_bond_batch(request: Request):
 
 
 
+def _appearance_charge_is_placeholder(text) -> bool:
+    s = str(text or "").strip().lower()
+    return s in ("", "unspecified charge", "no charge specified", "unknown", "n/a", "none")
+
+
+def _appearance_case_is_booking(case_number, booking) -> bool:
+    """True when case_number is blank or identical to the arrest/booking number."""
+    case = str(case_number or "").strip()
+    book = str(booking or "").strip()
+    if not case:
+        return True
+    if not book:
+        return False
+    if case == book:
+        return True
+    import re as _re
+    cd, bd = _re.sub(r"\D", "", case), _re.sub(r"\D", "", book)
+    # Pure-digit case that matches booking digits = booking misused as case
+    return bool(cd and bd and cd == bd and not _re.search(r"[A-Za-z]", case))
+
+
 async def _hydrate_appearance_bond_payload(d: dict) -> dict:
     """
     Merge request body with arrest/lead/active_bond records when booking is known.
     Ensures print package auto-fills name, address, DOB, charges, amounts, etc.
+
+    Replaces modal *placeholders* (Unspecified Charge, booking-as-case, TBN when
+    Mongo has a real court date) so bad defaults never win over scraped data.
     """
     out = dict(d or {})
     booking = (
@@ -1444,8 +1468,10 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
             {"_id": 0},
         ) or {}
 
-        def _pick(*keys, default=""):
-            for src in (out, ab, lead or {}):
+        def _pick(*keys, default="", prefer_db=False):
+            """prefer_db=True: lead/active_bond win over empty/placeholder request values."""
+            sources = (lead or {}, ab, out) if prefer_db else (out, ab, lead or {})
+            for src in sources:
                 if not isinstance(src, dict):
                     continue
                 for k in keys:
@@ -1464,9 +1490,32 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
             default=out.get("address", ""),
         )
         out["dob"] = _pick("dob", "date_of_birth", "DOB", "Date_of_Birth", default=out.get("dob", ""))
-        out["court_date"] = _pick("court_date", "Court_Date", default=out.get("court_date") or "TBN")
-        out["court_time"] = _pick("court_time", "Court_Time", default=out.get("court_time", ""))
-        out["court_type"] = _pick("court_type", "Court_Type", default=out.get("court_type", ""))
+
+        # Court date: prefer Mongo when request is missing/TBN
+        req_cd = str(out.get("court_date") or "").strip()
+        if not req_cd or req_cd.upper() in ("TBN", "TBD"):
+            out["court_date"] = _pick(
+                "court_date", "Court_Date", prefer_db=True, default=req_cd or "TBN",
+            )
+        else:
+            out["court_date"] = req_cd
+        req_ct = str(out.get("court_time") or "").strip()
+        if not req_ct:
+            out["court_time"] = _pick(
+                "court_time", "Court_Time", prefer_db=True, default="",
+            )
+        out["court_type"] = _pick(
+            "court_type", "Court_Type", prefer_db=True, default=out.get("court_type", ""),
+        )
+
+        # Case number: never keep booking number as case; prefer Mongo Case_Number
+        req_case = str(out.get("case_number") or "").strip()
+        if _appearance_case_is_booking(req_case, booking):
+            out["case_number"] = _pick(
+                "case_number", "Case_Number", prefer_db=True, default="",
+            )
+            if _appearance_case_is_booking(out.get("case_number"), booking):
+                out["case_number"] = ""
         out["indemnitor_name"] = _pick(
             "indemnitor_name", "Indemnitor_Name", default=out.get("indemnitor_name", "")
         )
@@ -1474,19 +1523,88 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
             out["bond_amount"] = _pick("bond_amount", "Bond_Amount", "bond", default=0)
             out["bond"] = out["bond_amount"]
 
-        if not (out.get("charge_details") or out.get("charge_list") or out.get("charges")):
-            cd = (
-                (lead or {}).get("charge_details")
-                or (lead or {}).get("Charge_Details")
-                or (ab or {}).get("charge_details")
-                or []
-            )
-            if cd:
-                out["charge_details"] = cd
+        # Charge details: replace empty / "Unspecified Charge" rows from Mongo
+        db_cd = (
+            (lead or {}).get("charge_details")
+            or (lead or {}).get("Charge_Details")
+            or (ab or {}).get("charge_details")
+            or []
+        )
+        req_details = out.get("charge_details") or out.get("charge_list") or []
+        needs_charge_fix = False
+        if not req_details and not out.get("charges"):
+            needs_charge_fix = True
+        elif isinstance(req_details, list) and req_details:
+            # Any placeholder charge text or booking-as-case on every row
+            if all(
+                _appearance_charge_is_placeholder(
+                    (r.get("charge") if isinstance(r, dict) else r)
+                )
+                for r in req_details
+            ):
+                needs_charge_fix = True
+            elif all(
+                isinstance(r, dict)
+                and _appearance_case_is_booking(r.get("case_number"), booking)
+                for r in req_details
+            ) and db_cd:
+                # Keep user POAs/amounts but patch case/charge/court from DB per index
+                for i, r in enumerate(req_details):
+                    if not isinstance(r, dict):
+                        continue
+                    src = db_cd[i] if i < len(db_cd) and isinstance(db_cd[i], dict) else (
+                        db_cd[0] if db_cd and isinstance(db_cd[0], dict) else {}
+                    )
+                    if _appearance_charge_is_placeholder(r.get("charge")) and src.get("charge"):
+                        r["charge"] = src.get("charge") or src.get("description") or r.get("charge")
+                    if _appearance_case_is_booking(r.get("case_number"), booking):
+                        r["case_number"] = (
+                            src.get("case_number")
+                            or (lead or {}).get("case_number")
+                            or (lead or {}).get("Case_Number")
+                            or ""
+                        )
+                    if not r.get("court_date") or str(r.get("court_date")).upper() in ("TBN", "TBD"):
+                        r["court_date"] = (
+                            src.get("court_date")
+                            or out.get("court_date")
+                            or "TBN"
+                        )
+                    if not r.get("court_time"):
+                        r["court_time"] = src.get("court_time") or out.get("court_time") or ""
+                out["charge_details"] = req_details
+
+        if needs_charge_fix:
+            if db_cd:
+                out["charge_details"] = db_cd
+                out.pop("charge_list", None)
             else:
-                ch = _pick("charges", "Charges", "charge", default="")
+                ch = _pick("charges", "Charges", "charge", prefer_db=True, default="")
                 if ch:
                     out["charges"] = ch
+                    # Drop placeholder charge_details so normalize uses charges string
+                    if isinstance(req_details, list) and all(
+                        _appearance_charge_is_placeholder(
+                            (r.get("charge") if isinstance(r, dict) else r)
+                        )
+                        for r in req_details
+                    ):
+                        out.pop("charge_details", None)
+                        out.pop("charge_list", None)
+
+        # Top-level case_number from lead when still empty
+        if not str(out.get("case_number") or "").strip():
+            # Prefer first charge_details case
+            for r in (out.get("charge_details") or []):
+                if isinstance(r, dict) and r.get("case_number") and not _appearance_case_is_booking(
+                    r.get("case_number"), booking
+                ):
+                    out["case_number"] = r["case_number"]
+                    break
+            if not str(out.get("case_number") or "").strip():
+                out["case_number"] = _pick(
+                    "case_number", "Case_Number", prefer_db=True, default="",
+                )
 
         if not out.get("poa_numbers") and not out.get("poa_number"):
             poas = (ab or {}).get("poa_numbers") or (ab or {}).get("POA_Numbers")
@@ -1552,23 +1670,37 @@ async def api_appearance_bonds_print_package(request: Request):
                 parts = [charges_data.strip()]
             charges_data = [{"charge": p} for p in parts]
 
+        booking_for_case = str(d.get("booking") or d.get("booking_number") or "").strip()
+        top_case = str(d.get("case_number") or "").strip()
+        if _appearance_case_is_booking(top_case, booking_for_case):
+            top_case = ""
+
         charge_details = []
         if isinstance(charges_data, list) and charges_data:
             for ch in charges_data:
                 if not isinstance(ch, dict):
                     ch = {"charge": str(ch)}
+                c_case = str(
+                    ch.get("case_number")
+                    or ch.get("appearance_bond_number")
+                    or top_case
+                    or ""
+                ).strip()
+                if _appearance_case_is_booking(c_case, booking_for_case):
+                    c_case = top_case  # already cleaned, or ""
+                c_charge = ch.get("charge") or ch.get("description") or ch.get("name") or ""
+                if _appearance_charge_is_placeholder(c_charge):
+                    c_charge = ""
+                c_court = str(ch.get("court_date") or d.get("court_date") or "").strip()
+                if not c_court or c_court.upper() in ("TBN", "TBD"):
+                    c_court = str(d.get("court_date") or "TBN").strip() or "TBN"
                 charge_details.append({
-                    "charge": ch.get("charge") or ch.get("description") or ch.get("name") or "",
+                    "charge": c_charge,
                     "bond_amount": ch.get(
                         "bond_amount",
                         ch.get("amount", ch.get("bond", d.get("bond") or d.get("bond_amount") or 0)),
                     ),
-                    "case_number": (
-                        ch.get("case_number")
-                        or ch.get("appearance_bond_number")
-                        or d.get("case_number")
-                        or ""
-                    ),
+                    "case_number": c_case,
                     "poa_number": (
                         ch.get("poa_number")
                         or ch.get("poa_full")
@@ -1576,7 +1708,7 @@ async def api_appearance_bonds_print_package(request: Request):
                         or ""
                     ),
                     "bond_type": ch.get("bond_type") or "Surety",
-                    "court_date": ch.get("court_date") or d.get("court_date") or "TBN",
+                    "court_date": c_court,
                     "court_time": ch.get("court_time") or d.get("court_time") or "",
                     "county": ch.get("county") or d.get("county") or "",
                 })
@@ -1597,6 +1729,22 @@ async def api_appearance_bonds_print_package(request: Request):
             charge_details[0]["poa_number"] = d.get("poa_number")
 
         charge_details = [c for c in charge_details if (c.get("charge") or "").strip()]
+        # If modal sent only placeholders and hydrate put DB charges on `charges` string, expand now
+        if not charge_details and d.get("charges"):
+            parts = [c.strip() for c in re.split(r"[|\n;]", str(d.get("charges"))) if c.strip()]
+            for p in parts:
+                if _appearance_charge_is_placeholder(p):
+                    continue
+                charge_details.append({
+                    "charge": p,
+                    "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
+                    "case_number": top_case,
+                    "poa_number": "",
+                    "bond_type": "Surety",
+                    "court_date": d.get("court_date") or "TBN",
+                    "court_time": d.get("court_time") or "",
+                    "county": d.get("county") or "",
+                })
         if not charge_details:
             return JSONResponse(
                 {

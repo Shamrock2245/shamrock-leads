@@ -326,11 +326,35 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
     )
     default_case = str(bond_data.get("case_number") or bond_data.get("Case_Number") or "").strip()
 
+    booking_number = str(
+        bond_data.get("booking_number")
+        or bond_data.get("booking")
+        or bond_data.get("Booking_Number")
+        or ""
+    ).strip()
+    # Never treat booking/arrest number as a court case number
+    if _is_booking_as_case(default_case, booking_number):
+        default_case = ""
+    case_list = [c for c in case_list if not _is_booking_as_case(c, booking_number)]
+
+    default_court_date = str(
+        bond_data.get("court_date") or bond_data.get("Court_Date") or ""
+    ).strip()
+    default_court_time = str(
+        bond_data.get("court_time") or bond_data.get("Court_Time") or ""
+    ).strip()
+    if default_court_date:
+        d_cd, d_ct = _split_court_datetime(default_court_date, default_court_time)
+        default_court_date, default_court_time = d_cd, d_ct
+
     for i, row in enumerate(rows):
         if not row.get("poa_number"):
             if i < len(poa_list):
                 row["poa_number"] = poa_list[i]
             # Do NOT fall back to poa_list[0] for later charges — one POA per charge only
+        # Reject booking-as-case pollution from modal defaults
+        if _is_booking_as_case(row.get("case_number"), booking_number):
+            row["case_number"] = ""
         if not row.get("case_number"):
             if i < len(case_list):
                 row["case_number"] = case_list[i]
@@ -338,6 +362,15 @@ def normalize_charge_rows(bond_data: dict) -> List[Dict[str, Any]]:
                 # Single case number on the defendant/case may apply to every count
                 # on that case; multiple case_numbers list takes precedence above.
                 row["case_number"] = default_case
+        # Court date/time defaults (never leave empty→TBN when parent has a real date)
+        cd = str(row.get("court_date") or "").strip()
+        ct = str(row.get("court_time") or "").strip()
+        if not cd or cd.upper() in ("TBN", "TBD"):
+            cd, ct = default_court_date or cd, ct or default_court_time
+        if cd:
+            cd, ct = _split_court_datetime(cd, ct)
+        row["court_date"] = cd
+        row["court_time"] = ct
         row["index"] = i
 
     return rows
@@ -353,6 +386,114 @@ def _split_charge(charge_text: str, max_line1: int = 80) -> tuple:
     if split_idx == -1:
         split_idx = max_line1
     return charge_text[:split_idx].strip(), charge_text[split_idx:].strip()
+
+
+_PLACEHOLDER_CHARGES = frozenset({
+    "",
+    "unspecified charge",
+    "no charge specified",
+    "unknown",
+    "n/a",
+    "none",
+})
+
+
+def _is_placeholder_charge(text: Any) -> bool:
+    s = str(text or "").strip().lower()
+    return s in _PLACEHOLDER_CHARGES
+
+
+def _digits_only(val: Any) -> str:
+    return re.sub(r"\D", "", str(val or ""))
+
+
+def _is_booking_as_case(case_number: Any, booking_number: Any) -> bool:
+    """True when case_number is empty or is just the booking/arrest number (wrong field)."""
+    case = str(case_number or "").strip()
+    booking = str(booking_number or "").strip()
+    if not case:
+        return True
+    if not booking:
+        return False
+    if case == booking:
+        return True
+    # Compare digit cores (26CF016741 vs 1029767 never match; 1029767 vs 1029767 does)
+    cd, bd = _digits_only(case), _digits_only(booking)
+    return bool(cd and bd and cd == bd and not re.search(r"[A-Za-z]", case))
+
+
+def _parse_defendant_name(
+    full_name: str = "",
+    first_name: str = "",
+    last_name: str = "",
+) -> tuple[str, str]:
+    """
+    Return (first_name, last_name).
+
+    Supports jail formats:
+      - LAST, FIRST MIDDLE  (Lee / most FL rosters)
+      - FIRST MIDDLE LAST
+    """
+    first_name = str(first_name or "").strip()
+    last_name = str(last_name or "").strip()
+    if first_name or last_name:
+        return first_name, last_name
+
+    full = str(full_name or "").strip()
+    if not full:
+        return "", ""
+
+    if "," in full:
+        last_part, rest = full.split(",", 1)
+        return rest.strip(), last_part.strip()
+
+    parts = full.split()
+    if len(parts) >= 2:
+        return " ".join(parts[:-1]), parts[-1]
+    return "", parts[0]
+
+
+def _split_court_datetime(court_date: Any, court_time: Any = "") -> tuple[str, str]:
+    """
+    Normalize court date + time.
+
+    Accepts:
+      - separate court_date / court_time
+      - combined "9/8/2026, 8:30:00 AM" or "9/8/2026 8:30 AM"
+      - ISO datetime strings
+    Returns (date_display, time_display). Empty time when unknown (not TBN).
+    """
+    time_out = str(court_time or "").strip()
+    raw = str(court_date or "").strip()
+    if not raw or raw.upper() in ("TBN", "TBD", "N/A", "NONE"):
+        return ("TBN" if not raw else raw.upper() if raw.upper() in ("TBN", "TBD") else raw), time_out
+
+    # Combined date + time in one field
+    combined = raw
+    # "9/8/2026, 8:30:00 AM" or "9/8/2026 8:30:00 AM"
+    m = re.match(
+        r"^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)\s*$",
+        combined,
+    )
+    if m:
+        return m.group(1).strip(), (time_out or m.group(2).strip())
+
+    # ISO datetime
+    try:
+        iso = combined.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(iso)
+        date_fmt = dt.strftime("%-m/%-d/%Y") if hasattr(dt, "strftime") else dt.strftime("%m/%d/%Y")
+        # Portable month/day without leading zeros
+        date_fmt = f"{dt.month}/{dt.day}/{dt.year}"
+        time_fmt = dt.strftime("%I:%M:%S %p").lstrip("0")
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0 and not time_out:
+            return date_fmt, time_out
+        return date_fmt, time_out or time_fmt
+    except ValueError:
+        pass
+
+    # Date only formats already in raw
+    return raw, time_out
 
 
 def _parse_date_parts(date_input) -> dict:
@@ -548,23 +689,37 @@ def fill_osi_bond(data: dict) -> bytes:
     bond_amount = _safe_float(data.get("bond_amount", 0))
     premium = max(100.0, bond_amount * 0.10)
     date_parts = _parse_date_parts(data.get("bond_date", ""))
-    charge_line1, charge_line2 = _split_charge(data.get("charge", ""))
+    charge_raw = data.get("charge") or data.get("charges") or ""
+    if _is_placeholder_charge(charge_raw):
+        charge_raw = ""
+    charge_line1, charge_line2 = _split_charge(charge_raw)
     
-    # Full name parsing
+    # Full name parsing (LAST, FIRST MIDDLE for FL jail rosters)
     full_name = data.get("name") or data.get("defendant_name") or ""
-    first_name = data.get("first_name") or ""
-    last_name = data.get("last_name") or ""
-    if not first_name and not last_name and full_name:
-        parts = full_name.strip().split()
-        if len(parts) >= 2:
-            last_name = parts[-1]
-            first_name = " ".join(parts[:-1])
-        elif parts:
-            last_name = parts[0]
+    first_name, last_name = _parse_defendant_name(
+        full_name,
+        first_name=data.get("first_name") or "",
+        last_name=data.get("last_name") or "",
+    )
             
-    booking_number = data.get("booking_number") or data.get("defendant_booking_number") or ""
+    booking_number = str(
+        data.get("booking_number") or data.get("defendant_booking_number") or ""
+    ).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
+
+    case_number = str(
+        data.get("case_number") or data.get("defendant_case_number") or ""
+    ).strip()
+    # Arrest # stays in Arrest/case No; CaseNum is court case only (never booking)
+    if _is_booking_as_case(case_number, booking_number):
+        case_number = ""
+
+    court_date_raw = data.get("court_date") or data.get("defendant_court_date") or ""
+    court_time_raw = data.get("court_time") or data.get("defendant_court_time") or ""
+    court_date, court_time = _split_court_datetime(court_date_raw, court_time_raw)
+    if not court_date:
+        court_date = "TBN"
     
     # Indemnitor + Defendant display name
     indemnitor = data.get("indemnitor_name", "")
@@ -577,11 +732,11 @@ def fill_osi_bond(data: dict) -> bytes:
         "DefCounty": county,
         "DefCourtType": data.get("court_type") or data.get("defendant_court_type") or "",
         "BondAmountCharge1": f"${bond_amount:,.2f}",
-        "DefCharge1": charge_line1,
+        "DefCharge1": charge_line1 or "No Charge Specified",
         "DefCharge1Line2": charge_line2,
-        "CourtDate": data.get("court_date") or data.get("defendant_court_date") or "TBN",
-        "CourtTime": data.get("court_time") or data.get("defendant_court_time") or "",
-        "CaseNum": data.get("case_number") or data.get("defendant_case_number") or "",
+        "CourtDate": court_date,
+        "CourtTime": court_time if str(court_date).upper() != "TBN" else "",
+        "CaseNum": case_number,
         "Arrest/case No": booking_number,
         "DefAddress": address,
         "DayDD": date_parts["day"],
@@ -645,27 +800,47 @@ def fill_palmetto_bond(data: dict) -> bytes:
     bond_amount = _safe_float(data.get("bond_amount", 0))
     premium = max(100.0, bond_amount * 0.10)
     date_parts = _parse_date_parts(data.get("bond_date", ""))
-    charge_line1, charge_line2 = _split_charge(data.get("charge", ""))
-    
+
+    charge_raw = data.get("charge") or data.get("charges") or ""
+    if _is_placeholder_charge(charge_raw):
+        charge_raw = ""
+    charge_line1, charge_line2 = _split_charge(charge_raw)
+
     full_name = data.get("name") or data.get("defendant_name") or ""
-    booking_number = data.get("booking_number") or data.get("defendant_booking_number") or ""
+    booking_number = str(
+        data.get("booking_number") or data.get("defendant_booking_number") or ""
+    ).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
-    
-    court_datetime = data.get("court_date") or data.get("defendant_court_date") or "TBN"
-    court_time = data.get("court_time") or data.get("defendant_court_time") or ""
-    if court_time and court_datetime != "TBN":
-        court_datetime = f"{court_datetime} {court_time}".strip()
+
+    case_number = str(
+        data.get("case_number") or data.get("defendant_case_number") or ""
+    ).strip()
+    if _is_booking_as_case(case_number, booking_number):
+        case_number = ""
+
+    court_date, court_time = _split_court_datetime(
+        data.get("court_date") or data.get("defendant_court_date") or "",
+        data.get("court_time") or data.get("defendant_court_time") or "",
+    )
+    if not court_date:
+        court_date = "TBN"
+    if court_time and str(court_date).upper() != "TBN":
+        court_datetime = f"{court_date} {court_time}".strip()
+    else:
+        court_datetime = court_date
     
     # ── Field Mapping ──
     field_values = {
         "defendantNameField": full_name,
         "countyField": county,
         "numericBondAmount": f"${bond_amount:,.2f}",
-        "chargesField1": charge_line1,
+        "chargesField1": charge_line1 or "No Charge Specified",
         "chargesField2": charge_line2,
         "CourtDateAndTimeField": court_datetime,
         "ArrestNumberField": booking_number,
+        # Some Palmetto revisions use a separate case field; safe no-op if absent
+        "CaseNumberField": case_number,
         "DefendantAddress": address,
         "powerNumField": data.get("poa_number", ""),
         "dayField": date_parts["day"],

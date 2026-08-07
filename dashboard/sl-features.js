@@ -246,15 +246,121 @@ function renderHealth() {
   }).join('');
 }
 
+// ── Write Bond Modal helpers ──
+function _isPlaceholderCharge(text) {
+  const s = String(text || '').trim().toLowerCase();
+  return !s || s === 'unspecified charge' || s === 'no charge specified' || s === 'unknown' || s === 'n/a' || s === 'none';
+}
+
+function _isBookingAsCase(caseNum, booking) {
+  const c = String(caseNum || '').trim();
+  const b = String(booking || '').trim();
+  if (!c) return true;
+  if (!b) return false;
+  if (c === b) return true;
+  const cd = c.replace(/\D/g, '');
+  const bd = b.replace(/\D/g, '');
+  // Pure-digit "case" that matches booking = booking misused as case #
+  return !!(cd && bd && cd === bd && !/[A-Za-z]/.test(c));
+}
+
+/** Pull court case # from lead (never use booking/arrest #). */
+function _leadCaseNumber(lead, booking) {
+  if (!lead) return '';
+  const candidates = [
+    lead.case_number, lead.Case_Number, lead.caseNumber,
+    lead.appearance_bond_number,
+  ];
+  // Prefer first charge_details case when top-level empty
+  const details = lead.charge_details || lead.Charge_Details || [];
+  if (Array.isArray(details)) {
+    for (const d of details) {
+      if (d && typeof d === 'object' && d.case_number) candidates.push(d.case_number);
+    }
+  }
+  for (const c of candidates) {
+    const s = String(c || '').trim();
+    if (s && !_isBookingAsCase(s, booking)) return s;
+  }
+  return '';
+}
+
+/** Court date + time from lead (supports combined "9/8/2026, 8:30:00 AM"). */
+function _leadCourtDateTime(lead) {
+  if (!lead) return { date: 'TBN', time: '' };
+  let date = String(lead.court_date || lead.Court_Date || '').trim();
+  let time = String(lead.court_time || lead.Court_Time || '').trim();
+  // From charge_details hearing if top-level missing
+  if (!date || date.toUpperCase() === 'TBN' || date.toUpperCase() === 'TBD') {
+    const details = lead.charge_details || lead.Charge_Details || [];
+    if (Array.isArray(details)) {
+      for (const d of details) {
+        if (d && d.court_date && String(d.court_date).toUpperCase() !== 'TBN') {
+          date = String(d.court_date).trim();
+          if (!time && d.court_time) time = String(d.court_time).trim();
+          break;
+        }
+      }
+    }
+  }
+  // Combined date+time in one field
+  const m = date.match(/^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)\s*$/);
+  if (m) {
+    date = m[1];
+    time = time || m[2];
+  }
+  if (!date) date = 'TBN';
+  return { date, time };
+}
+
+/** Build charge description list from lead.charges / charge_details / Charges. */
+function _extractChargeListFromLead(lead) {
+  if (!lead) return [];
+  const details = lead.charge_details || lead.Charge_Details;
+  if (Array.isArray(details) && details.length) {
+    const fromDetails = details.map((d) => {
+      if (typeof d === 'string') return d.trim();
+      return String(d.charge || d.description || d.charge_desc || d.offenseDescription || '').trim();
+    }).filter((c) => !_isPlaceholderCharge(c));
+    if (fromDetails.length) return fromDetails;
+  }
+  const raw = lead.charges || lead.Charges || lead.charge || '';
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((c) => (typeof c === 'string' ? c : (c.charge || c.description || '')).trim())
+      .filter((c) => !_isPlaceholderCharge(c));
+  }
+  const s = String(raw).trim();
+  if (!s) return [];
+  // Prefer pipe / newline / semicolon; avoid splitting statute commas
+  let parts;
+  if (s.includes('|')) parts = s.split('|');
+  else if (s.includes('\n')) parts = s.split('\n');
+  else if (s.includes(';')) parts = s.split(';');
+  else parts = [s];
+  return parts.map((c) => c.trim()).filter((c) => !_isPlaceholderCharge(c));
+}
+
 // ── Write Bond Modal ──
 // openBondModal accepts a full lead object OR individual fields for backwards compat
 function openBondModal(nameOrLead, bond, county, booking) {
   let lead = {};
   if (typeof nameOrLead === 'object' && nameOrLead !== null) {
-    lead = nameOrLead;
+    lead = { ...nameOrLead };
   } else {
     // Legacy call: openBondModal(name, bond, county, booking)
-    lead = { full_name: nameOrLead, bond_amount: bond, county: county, booking_number: booking };
+    // Prefer full lead from _leadMap when available so charges/case/court are present
+    const bk = booking || '';
+    const fromMap = (typeof window._leadMap === 'object' && window._leadMap && bk)
+      ? window._leadMap[bk]
+      : null;
+    lead = fromMap
+      ? { ...fromMap }
+      : { full_name: nameOrLead, bond_amount: bond, county: county, booking_number: booking };
+    if (!lead.full_name && nameOrLead) lead.full_name = nameOrLead;
+    if (bond != null && lead.bond_amount == null) lead.bond_amount = bond;
+    if (county && !lead.county) lead.county = county;
+    if (booking && !lead.booking_number) lead.booking_number = booking;
   }
 
   const name = lead.full_name || 'Unknown';
@@ -264,9 +370,10 @@ function openBondModal(nameOrLead, bond, county, booking) {
   const premium = Math.max(100, bondAmt * 0.1);
   const transferFee = (bondAmt > 25000 || ['Lee','Charlotte'].includes(cnty)) ? 0 : 125;
 
-  // Parse charges into individual bonds (one per charge)
-  const chargesRaw = lead.charges || '';
-  const chargeList = chargesRaw ? chargesRaw.split('|').map(c => c.trim()).filter(Boolean) : ['Unspecified Charge'];
+  // Parse charges into individual bonds (one per charge).
+  // Prefer structured charge_details (Lee/API) over pipe-delimited charges string.
+  const chargeList = _extractChargeListFromLead(lead);
+  const chargesRaw = chargeList.join(' | ');
 
   document.getElementById('bondModal').classList.add('show');
 
@@ -452,10 +559,30 @@ function openBondModal(nameOrLead, bond, county, booking) {
 
 
   // Store full lead data for submit
+  const leadCase = _leadCaseNumber(lead, bkNum);
+  const leadCourt = _leadCourtDateTime(lead);
+  // Enrich lead object so POA rows + collectors see correct case/court (not booking)
+  lead.case_number = lead.case_number || lead.Case_Number || leadCase;
+  lead.court_date = lead.court_date || lead.Court_Date || leadCourt.date;
+  lead.court_time = lead.court_time || lead.Court_Time || leadCourt.time;
+  lead.court_type = lead.court_type || lead.Court_Type || '';
+  lead.charges = lead.charges || lead.Charges || chargesRaw;
+  if (!lead.charge_details && !lead.Charge_Details && chargeList.length) {
+    lead.charge_details = chargeList.map((ch) => ({
+      charge: ch,
+      case_number: leadCase,
+      court_date: leadCourt.date,
+      court_time: leadCourt.time,
+    }));
+  }
+
   window._bondModalData = {
     lead,
     name, bond: bondAmt, county: cnty, booking: bkNum,
     charges: chargesRaw, chargeList,
+    case_number: leadCase,
+    court_date: leadCourt.date,
+    court_time: leadCourt.time,
     surety: 'osi',
     date: new Date().toLocaleDateString('en-US'),
     poaNumbers: [],  // will be populated by fetchPoaNumbers()
@@ -599,9 +726,16 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
     const prefix = data.prefix || '';
     const availInTier = data.available_in_tier || 0;
     const availTotal = data.available_total || 0;
-    const defaultCaseNum = (window._bondModalData && window._bondModalData.booking) ? window._bondModalData.booking : '';
-    const defaultCounty = (window._bondModalData && window._bondModalData.county) ? window._bondModalData.county : 'Lee';
-    const defaultCourtDate = (window._bondModalData && window._bondModalData.lead && window._bondModalData.lead.court_date) ? window._bondModalData.lead.court_date : 'TBN';
+    const modal = window._bondModalData || {};
+    const lead = modal.lead || {};
+    // Case # is court case (e.g. 26CF016741) — NEVER booking/arrest number
+    const defaultCaseNum = modal.case_number
+      || _leadCaseNumber(lead, modal.booking)
+      || '';
+    const defaultCounty = modal.county || lead.county || 'Lee';
+    const courtPair = _leadCourtDateTime(lead);
+    const defaultCourtDate = modal.court_date || courtPair.date || 'TBN';
+    const defaultCourtTime = modal.court_time || courtPair.time || '';
     const perChargeBond = count > 0 ? (bondAmt / count) : bondAmt;
 
     // Build per-charge POA & Case Number input rows
@@ -627,11 +761,12 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
             </div>
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Court Date</label>
-              <input type="text" id="courtDateInput_${i}" class="charge-court-input" value="${defaultCourtDate}" placeholder="TBN" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+              <input type="text" id="courtDateInput_${i}" class="charge-court-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].court_date) ? lead.charge_details[i].court_date : defaultCourtDate}" placeholder="TBN or 9/8/2026" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
             </div>
             <div>
-              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Case #</label>
-              <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${defaultCaseNum}" placeholder="Case #" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Case # (court — not booking)</label>
+              <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].case_number && !_isBookingAsCase(lead.charge_details[i].case_number, modal.booking)) ? lead.charge_details[i].case_number : defaultCaseNum}" placeholder="e.g. 26CF016741" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+              <input type="hidden" id="courtTimeInput_${i}" class="charge-court-time-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].court_time) ? lead.charge_details[i].court_time : defaultCourtTime}" />
             </div>
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>
@@ -791,19 +926,29 @@ function downloadBond(chargeEncoded, idx) {
   const inputEl = document.getElementById(`poaInput_${idx - 1}`);
   const poaFull = (inputEl ? inputEl.value.trim() : '') || poaEntry.poa_full || '';
   const caseInp = document.getElementById(`caseNumInput_${idx - 1}`);
-  const caseNum = (caseInp ? caseInp.value.trim() : '') || data.booking || '';
+  let caseNum = (caseInp ? caseInp.value.trim() : '')
+    || data.case_number
+    || _leadCaseNumber(data.lead, data.booking)
+    || '';
+  if (_isBookingAsCase(caseNum, data.booking)) caseNum = '';
   const amtInp = document.getElementById(`chargeAmtInput_${idx - 1}`);
   const chargeAmt = amtInp ? (parseFloat(amtInp.value) || 0) : data.bond;
   const countyInp = document.getElementById(`countyInput_${idx - 1}`);
   const countyVal = (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee';
   const courtDateInp = document.getElementById(`courtDateInput_${idx - 1}`);
-  const courtDateVal = (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN';
+  const courtTimeInp = document.getElementById(`courtTimeInput_${idx - 1}`);
+  const courtPair = _leadCourtDateTime(data.lead);
+  let courtDateVal = (courtDateInp ? courtDateInp.value.trim() : '')
+    || data.court_date || courtPair.date || 'TBN';
+  let courtTimeVal = (courtTimeInp ? courtTimeInp.value.trim() : '')
+    || data.court_time || courtPair.time || '';
 
   const params = new URLSearchParams({
     name: data.name, booking: data.booking, county: countyVal,
     bond: chargeAmt, charge, surety, date: data.date,
     dob: data.lead.dob || '', address: data.lead.address || '',
     court_date: courtDateVal,
+    court_time: courtTimeVal,
     case_number: caseNum,
     poa_number: poaFull,
     copies: '2',
@@ -818,23 +963,41 @@ function downloadBond(chargeEncoded, idx) {
 function _collectAppearanceBondChargesFromModal() {
   const data = window._bondModalData;
   if (!data || !data.chargeList) return [];
+  const booking = data.booking || '';
+  const fallbackCase = data.case_number || _leadCaseNumber(data.lead, booking) || '';
+  const courtPair = _leadCourtDateTime(data.lead);
   return data.chargeList.map((ch, i) => {
     const poaInp = document.getElementById(`poaInput_${i}`);
     const caseInp = document.getElementById(`caseNumInput_${i}`);
     const amtInp = document.getElementById(`chargeAmtInput_${i}`);
     const countyInp = document.getElementById(`countyInput_${i}`);
     const courtDateInp = document.getElementById(`courtDateInput_${i}`);
-    const desc = typeof ch === 'string' ? ch : (ch.charge || ch.description || '');
+    const courtTimeInp = document.getElementById(`courtTimeInput_${i}`);
+    let desc = typeof ch === 'string' ? ch : (ch.charge || ch.description || '');
+    if (_isPlaceholderCharge(desc)) desc = '';
+    let caseNum = (caseInp ? caseInp.value.trim() : '') || fallbackCase;
+    if (_isBookingAsCase(caseNum, booking)) caseNum = fallbackCase;
+    if (_isBookingAsCase(caseNum, booking)) caseNum = '';
+    let courtDate = (courtDateInp ? courtDateInp.value.trim() : '')
+      || data.court_date || courtPair.date || 'TBN';
+    let courtTime = (courtTimeInp ? courtTimeInp.value.trim() : '')
+      || data.court_time || courtPair.time || '';
+    // Split combined "9/8/2026, 8:30:00 AM" if agent typed it into date field
+    const m = courtDate.match(/^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})[,\s]+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)\s*$/);
+    if (m) {
+      courtDate = m[1];
+      courtTime = courtTime || m[2];
+    }
     return {
       charge: desc,
       poa_number: (poaInp ? poaInp.value.trim() : '')
         || (data.poaNumbers && data.poaNumbers[i] ? (data.poaNumbers[i].poa_full || data.poaNumbers[i].poa_number) : '')
         || '',
-      case_number: (caseInp ? caseInp.value.trim() : '') || data.booking || '',
+      case_number: caseNum,
       bond_amount: amtInp ? (parseFloat(amtInp.value) || 0) : (data.bond || 0),
       county: (countyInp ? countyInp.value.trim() : '') || data.county || 'Lee',
-      court_date: (courtDateInp ? courtDateInp.value.trim() : '') || (data.lead && data.lead.court_date) || 'TBN',
-      court_time: (data.lead && data.lead.court_time) || '',
+      court_date: courtDate,
+      court_time: courtTime,
       bond_type: 'Surety',
     };
   });
@@ -859,6 +1022,7 @@ async function printAppearanceBondPackage(opts = {}) {
   const missingPoa = charges.filter(c => !c.poa_number).length;
   const missingCase = charges.filter(c => !c.case_number).length;
 
+  const courtPair = _leadCourtDateTime(data.lead);
   const payload = {
     name: data.name,
     defendant_name: data.name,
@@ -868,10 +1032,11 @@ async function printAppearanceBondPackage(opts = {}) {
     surety: data.surety || 'osi',
     date: data.date || new Date().toLocaleDateString('en-US'),
     dob: (data.lead && (data.lead.dob || data.lead.date_of_birth)) || '',
-    address: (data.lead && (data.lead.address || data.lead.home_address)) || '',
-    court_date: (data.lead && data.lead.court_date) || 'TBN',
-    court_time: (data.lead && data.lead.court_time) || '',
-    court_type: (data.lead && data.lead.court_type) || '',
+    address: (data.lead && (data.lead.address || data.lead.home_address || data.lead.Address)) || '',
+    court_date: data.court_date || (data.lead && data.lead.court_date) || courtPair.date || 'TBN',
+    court_time: data.court_time || (data.lead && data.lead.court_time) || courtPair.time || '',
+    court_type: (data.lead && (data.lead.court_type || data.lead.Court_Type)) || '',
+    case_number: data.case_number || _leadCaseNumber(data.lead, data.booking) || '',
     indemnitor_name: (data.indemnitors && data.indemnitors[0] && data.indemnitors[0].name) || data.indemnitor_name || '',
     bond_amount: data.bond,
     charge_details: charges,
