@@ -418,9 +418,13 @@ class DocuSealService:
 
         poa_raw = bond_data.get("poa_number") or bond_data.get("POA_Number") or bond_data.get("poa_numbers") or ""
         if isinstance(poa_raw, list):
-            poa = str(poa_raw[0]) if poa_raw else ""
+            poa_list = [str(x).strip() for x in poa_raw if str(x).strip()]
+            poa = poa_list[0] if poa_list else ""
+            poa_all = ", ".join(poa_list)
         else:
-            poa = str(poa_raw).split(",")[0].strip()
+            poa_list = [x.strip() for x in str(poa_raw).split(",") if x.strip()]
+            poa = poa_list[0] if poa_list else ""
+            poa_all = ", ".join(poa_list)
 
         booking = (
             bond_data.get("booking_number")
@@ -534,6 +538,10 @@ class DocuSealService:
             "CaseNum": case_number,
             "poa_number": poa,
             "PowerNum": poa,
+            "all_poa_numbers": poa_all or poa,
+            "poa_numbers": poa_all or poa,
+            "bond_numbers": poa_all or poa,
+            "BondNumbers": poa_all or poa,
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
