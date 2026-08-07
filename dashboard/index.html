@@ -4652,7 +4652,7 @@
       <div class="header-banner glass-panel">
         <div class="header-content">
           <h1>Document Operations & E-Signature Hub</h1>
-          <p>Twenty CRM Architecture — Live document packet pipeline, SignNow field hydration audit, and 1-click execution.</p>
+          <p>Twenty CRM Architecture — DocuSeal e-sign pipeline, field hydration audit, and 1-click packet execution.</p>
         </div>
         <div class="header-actions">
           <button class="btn btn-primary" onclick="SLPaperwork.load()">
@@ -4996,7 +4996,7 @@
           </div>
           <div class="inv-modal-body" style="display:flex;flex-direction:column;gap:14px">
             <p style="margin:0;font-size:12px;color:var(--muted,#94a3b8)">
-              Auto-fills from the defendant ↔ indemnitor matching system. Drag extra docs into this case packet, authorize self-indemnitor for small bonds (PIN), then flatten &amp; send to SignNow or Adobe.
+              Auto-fills from the defendant ↔ indemnitor matching system. Drag extra docs into this case packet, authorize self-indemnitor for small bonds (PIN), then hydrate &amp; send via <strong style="color:#4ade80">DocuSeal</strong> (self-hosted e-sign). Appearance bonds remain print / wet-ink.
             </p>
 
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
@@ -5110,13 +5110,10 @@
               <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
                 <input type="checkbox" id="pwApPaymentPlan" checked> Include payment-plan docs
               </label>
-              <label style="font-size:12px;color:#94a3b8" title="Applies to this client’s entire packet, not each PDF">Client e-sign destination</label>
-              <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="Saved on the client — all docs in the packet use this">
-                <option value="docuseal" selected>DocuSeal (self-hosted · default)</option>
-                <option value="signnow">SignNow (legacy e-sign)</option>
-                <option value="adobe">Adobe Acrobat Sign (e-sign)</option>
-                <option value="both">Both SignNow + Adobe Sign</option>
-                <option value="none">Finalize / flatten only (no e-sign send)</option>
+              <label style="font-size:12px;color:#94a3b8" title="E-sign is DocuSeal only for new packets">E-sign provider</label>
+              <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="DocuSeal only — SignNow retired for new work">
+                <option value="docuseal" selected>☘️ DocuSeal (self-hosted · only)</option>
+                <option value="none">Finalize / preview only (no send)</option>
               </select>
               <span id="pwApAdobePdfBadge" style="font-size:11px;color:#64748b">PDF Services: —</span>
             </div>

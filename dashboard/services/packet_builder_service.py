@@ -727,7 +727,27 @@ async def send_via_adobe(
     return result
 
 
-_ESIGN_PROVIDERS = frozenset({"docuseal", "signnow", "adobe", "both", "none"})
+# Active workflow: DocuSeal only. Legacy providers accepted only if ALLOW_LEGACY_ESIGN=true.
+_ESIGN_ACTIVE = frozenset({"docuseal", "none"})
+_ESIGN_LEGACY = frozenset({"signnow", "adobe", "both"})
+_ESIGN_PROVIDERS = _ESIGN_ACTIVE | _ESIGN_LEGACY
+
+
+def _legacy_esign_allowed() -> bool:
+    return os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() in ("1", "true", "yes")
+
+
+def _normalize_esign_provider(p: Optional[str]) -> str:
+    """Map any preferred/stored value to the active e-sign policy."""
+    p = (p or "").lower().strip()
+    if p in ("", "default"):
+        return "docuseal"
+    if p in _ESIGN_LEGACY and not _legacy_esign_allowed():
+        # Hard cutover: never send new packets to SignNow/Adobe unless explicitly allowed
+        return "docuseal"
+    if p in _ESIGN_PROVIDERS:
+        return p
+    return "docuseal"
 
 
 async def resolve_client_esign_provider(
@@ -738,15 +758,15 @@ async def resolve_client_esign_provider(
     bond_case_id: Optional[str] = None,
 ) -> str:
     """
-    E-sign provider is chosen per client (indemnitor first, then defendant, then bond),
-    not per PDF. Values: docuseal | signnow | adobe | both | none
+    E-sign provider for the packet. **DocuSeal is the only active provider**
+    unless ALLOW_LEGACY_ESIGN=true (emergency / historical).
 
-    Default: DOCUSEAL (self-hosted, $0) via DEFAULT_ESIGN_PROVIDER.
+    Values: docuseal | none  (+ signnow|adobe|both only with legacy flag)
     """
     from dashboard.extensions import get_collection
 
-    if preferred in _ESIGN_PROVIDERS:
-        return preferred
+    if preferred is not None and str(preferred).strip() != "":
+        return _normalize_esign_provider(preferred)
 
     async def _from_doc(col_name: str, query: dict) -> Optional[str]:
         if not query:
@@ -755,7 +775,7 @@ async def resolve_client_esign_provider(
         if not doc:
             return None
         p = (doc.get("esign_provider") or doc.get("Esign_Provider") or "").lower().strip()
-        return p if p in _ESIGN_PROVIDERS else None
+        return p if p else None
 
     for col, q in (
         ("indemnitors", {"$or": [{"Indemnitor_ID": indemnitor_id}, {"indemnitor_id": indemnitor_id}]} if indemnitor_id else None),
@@ -766,8 +786,8 @@ async def resolve_client_esign_provider(
             continue
         found = await _from_doc(col, q)
         if found:
-            return found
-    return os.getenv("DEFAULT_ESIGN_PROVIDER", "docuseal").lower()
+            return _normalize_esign_provider(found)
+    return _normalize_esign_provider(os.getenv("DEFAULT_ESIGN_PROVIDER", "docuseal"))
 
 
 async def save_client_esign_provider(
@@ -780,9 +800,9 @@ async def save_client_esign_provider(
     """Persist per-client e-sign preference (whole packet / all docs for that client)."""
     from dashboard.extensions import get_collection
 
-    provider = (provider or "").lower().strip()
+    provider = _normalize_esign_provider(provider)
     if provider not in _ESIGN_PROVIDERS:
-        raise ValueError("provider must be docuseal | signnow | adobe | both | none")
+        raise ValueError("provider must be docuseal | none (or legacy with ALLOW_LEGACY_ESIGN)")
 
     now = datetime.now(timezone.utc)
     updated = []

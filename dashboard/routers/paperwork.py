@@ -154,12 +154,15 @@ async def paperwork_config():
             "template_map": {"osi": osi, "palmetto": palmetto},
             "doc_rules": doc_rules,
             "local_pdf": local_pdf,
-            "esign_providers": ["docuseal", "signnow", "adobe", "both", "none"],
+            "esign_providers": ["docuseal", "none"],
             "esign_default": "docuseal",
+            "esign_policy": "docuseal_only",
+            "legacy_esign_allowed": os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() in ("1", "true", "yes"),
             "docuseal": {
                 "configured": bool(os.getenv("DOCUSEAL_API_KEY")),
                 "url": os.getenv("DOCUSEAL_URL", "https://sign.shamrockbailbonds.biz"),
                 "webhook": "/api/webhooks/docuseal",
+                "template_id_osi": os.getenv("DOCUSEAL_TEMPLATE_ID_OSI") or os.getenv("DOCUSEAL_TEMPLATE_ID") or "",
             },
             "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
             "counts": {
@@ -870,21 +873,23 @@ async def deliver_packet(request: Request, packet_id: str):
 @paperwork_bp.post("/paperwork/{packet_id}/signnow")
 async def push_to_signnow(request: Request, packet_id: str):
     """
-    Push the paperwork packet to SignNow for e-signature.
-
-    Policy compliance:
-      Rule 1: Warns if bond_case_id is not set on the packet.
-      Rule 2: Passes surety_id (template set) to SignNowPacketService.
-      Rule 3: Rejects if packet is already signed (no in-place mutation).
-      Rule 4: Passes phase and signer_email explicitly.
-
-    Body (all optional — defaults to packet/intake values):
-      phase:          1 (indemnitor) or 2 (post-approval). Default: 1.
-      surety_id:      "osi" or "palmetto". Default: packet.template.
-      signer_email:   Override indemnitor email.
-      poa_number:     Required for phase 2.
-      telegram_chat_id: If set, also sends signing link via Telegram.
+    LEGACY — SignNow push. Disabled for new work unless ALLOW_LEGACY_ESIGN=true.
+    Use POST /api/paperwork/{packet_id}/docuseal or packet/finalize with provider=docuseal.
     """
+    if os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() not in ("1", "true", "yes"):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "signnow_retired",
+                "message": (
+                    "SignNow is no longer used for new bond packets. "
+                    "Use DocuSeal: POST /api/paperwork/packet/finalize with provider=docuseal "
+                    "or POST /api/paperwork/{packet_id}/docuseal."
+                ),
+                "use": "docuseal",
+            },
+            status_code=410,
+        )
     try:
         data = (await request.json()) or {}
 
@@ -1658,8 +1663,9 @@ async def packet_builder_finalize(request: Request):
             defendant_id=ctx.get("defendant_id") or body.get("defendant_id"),
             bond_case_id=ctx.get("bond_case_id") or body.get("bond_case_id"),
         )
-        if provider not in ("docuseal", "signnow", "adobe", "both", "none"):
-            provider = "docuseal"
+        # DocuSeal-only for new packets (maps legacy preferences to docuseal)
+        from dashboard.services.packet_builder_service import _normalize_esign_provider
+        provider = _normalize_esign_provider(provider)
 
         # Persist preference when staff explicitly chose a provider in the UI
         if body.get("provider") and body.get("save_esign_preference", True):

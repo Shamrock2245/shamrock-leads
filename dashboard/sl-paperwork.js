@@ -948,17 +948,20 @@ const SLPaperwork = {
         src.textContent = `Sources: ${sources}${small}`;
       }
 
-      // Per-client e-sign preference (whole packet)
+      // E-sign is DocuSeal-only for new packets
       const prov = document.getElementById('pwApProvider');
-      const preferred = data.esign_provider || data.context?.esign_provider;
-      if (prov && preferred) prov.value = preferred;
+      if (prov) {
+        const preferred = data.esign_provider || data.context?.esign_provider || 'docuseal';
+        prov.value = (preferred === 'none') ? 'none' : 'docuseal';
+      }
 
       const pdfBadge = document.getElementById('pwApAdobePdfBadge');
       if (pdfBadge) {
-        const pdfOk = data.providers?.adobe_pdf_services || data.adobe?.pdf_services?.configured;
-        const signOk = data.providers?.adobe_sign || data.adobe?.acrobat_sign?.configured;
-        pdfBadge.textContent = `PDF Services: ${pdfOk ? 'ready' : 'off'} · Acrobat Sign: ${signOk ? 'ready' : 'needs key'}`;
-        pdfBadge.style.color = pdfOk ? '#4ade80' : '#94a3b8';
+        const dsOk = data.providers?.docuseal;
+        pdfBadge.textContent = dsOk
+          ? 'DocuSeal: ready · e-sign only'
+          : 'DocuSeal: check API key / health';
+        pdfBadge.style.color = dsOk ? '#4ade80' : '#fbbf24';
       }
 
       this._setApStatus('Context loaded — review fields, pick this client’s e-sign destination, then flatten & send.', 'success');
@@ -1070,8 +1073,15 @@ const SLPaperwork = {
       return;
     }
 
-    const provider = document.getElementById('pwApProvider')?.value || 'docuseal';
-    this._setApStatus('Finalizing: hydrate → flatten → send…', 'info');
+    let provider = document.getElementById('pwApProvider')?.value || 'docuseal';
+    // SignNow/Adobe retired for new packets — force DocuSeal
+    if (provider === 'signnow' || provider === 'adobe' || provider === 'both') {
+      provider = 'docuseal';
+    }
+    this._setApStatus(
+      provider === 'none' ? 'Finalizing (no e-sign send)…' : 'Hydrating DocuSeal packet…',
+      'info'
+    );
 
     const body = {
       ...this._lookupBody(),
@@ -1105,12 +1115,8 @@ const SLPaperwork = {
 
       const link = data.signing_link ? `\nSigning link: ${data.signing_link}` : '';
       const ds = data.send_results?.docuseal;
-      const sn = data.send_results?.signnow;
-      const ad = data.send_results?.adobe;
       let providerMsg = '';
       if (ds) providerMsg += ds.success ? ' DocuSeal ✓' : ` DocuSeal ✗ (${ds.error || 'fail'})`;
-      if (sn) providerMsg += sn.success ? ' SignNow ✓' : ` SignNow ✗ (${sn.error || 'fail'})`;
-      if (ad) providerMsg += ad.success ? ' Adobe ✓' : ` Adobe ✗ (${ad.error || 'fail'})`;
 
       this._setApStatus(
         `Packet ${data.packet_id} finalized · hydration ${data.hydration?.hydration_score ?? '—'}% · flattened=${data.flattened}${providerMsg}`,

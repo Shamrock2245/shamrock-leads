@@ -736,7 +736,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("bounty_hunter",      "BountyHunter",       3600, 120, _run_bounty_hunter),
     CronDef("watchdog",           "Watchdog",            300,  60, _run_watchdog),
     CronDef("forfeiture_scan",    "ForfeitureScan",    14400, 300, _run_forfeiture_scan, default_enabled=True),
-    CronDef("signnow_poller",     "SignNowPoller",      1800, 210, _run_signnow_poller, default_enabled=True),
+    CronDef("signnow_poller",     "SignNowPoller",      1800, 210, _run_signnow_poller, default_enabled=False),
     CronDef("docuseal_poller",    "DocuSealPoller",     1800, 210, _run_docuseal_poller, default_enabled=True),
     CronDef("swipesimple_gmail_poll", "SwipeSimpleGmail", 300, 120, _run_swipesimple_gmail_poll, default_enabled=True),
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),

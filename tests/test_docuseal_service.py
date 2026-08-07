@@ -287,11 +287,20 @@ def test_build_bond_data_from_dashboard_merges_charges():
 async def test_default_esign_provider_is_docuseal():
     from dashboard.services.packet_builder_service import resolve_client_esign_provider
 
-    with patch.dict(os.environ, {"DEFAULT_ESIGN_PROVIDER": "docuseal"}, clear=False):
+    with patch.dict(
+        os.environ,
+        {"DEFAULT_ESIGN_PROVIDER": "docuseal", "ALLOW_LEGACY_ESIGN": "false"},
+        clear=False,
+    ):
         # No indemnitor/defendant/bond IDs → env default, no DB
         p = await resolve_client_esign_provider(preferred=None)
         assert p == "docuseal"
         p2 = await resolve_client_esign_provider(preferred="docuseal")
         assert p2 == "docuseal"
+        # SignNow preferred is forced to DocuSeal unless ALLOW_LEGACY_ESIGN
         p3 = await resolve_client_esign_provider(preferred="signnow")
-        assert p3 == "signnow"
+        assert p3 == "docuseal"
+
+    with patch.dict(os.environ, {"ALLOW_LEGACY_ESIGN": "true"}, clear=False):
+        p4 = await resolve_client_esign_provider(preferred="signnow")
+        assert p4 == "signnow"

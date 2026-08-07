@@ -88,9 +88,9 @@ DEFAULT_CONFIG = {
         "interval_seconds": 14400,      # 4 hours
     },
 
-    # ── SignNow status poller + collect-payment tasks (legacy packets) ──
+    # ── SignNow status poller (LEGACY packets only — off by default) ──
     "signnow_poller": {
-        "enabled": True,
+        "enabled": False,
         "limit": 40,
         "create_payment_tasks": True,
         "slack_digest": True,

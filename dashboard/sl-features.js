@@ -356,46 +356,35 @@ function openBondModal(nameOrLead, bond, county, booking) {
     </div>
     <div id="bondSubmitStatus" style="display:none;margin-top:12px;padding:10px;border-radius:6px;text-align:center"></div>
 
-    <div class="wb-section" id="signnowSection">
-      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        📝 Configure Paperwork & E-Sign Packet (DocuSeal)
+    <div class="wb-section" id="docusealSection" style="border:1px solid rgba(34,197,94,0.25);border-radius:12px;padding:14px;background:linear-gradient(145deg,rgba(6,78,59,0.15),rgba(15,23,42,0.6))">
+      <div class="wb-section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        ☘️ E-Sign Packet — DocuSeal
         <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span>
-        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,0.12);color:#22c55e;margin-left:auto">🛡️ DocuSeal Templates</span>
+        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,0.18);color:#4ade80;margin-left:auto;font-weight:600">self-hosted · OSI/Palmetto</span>
+      </div>
+      <p style="margin:0 0 12px;font-size:12px;color:var(--muted);line-height:1.45">
+        Prefills the combined bond packet from this bond (charges, POAs, premium, parties) and creates
+        secure signing links on <strong style="color:#86efac">sign.shamrockbailbonds.biz</strong>.
+        Appearance bonds stay print/wet-ink (button above). <em>SignNow is no longer used for new packets.</em>
+      </p>
+
+      <div style="font-size:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;padding:10px;background:rgba(15,23,42,0.5);border-radius:8px;border:1px solid rgba(51,65,85,0.6)">
+        <div style="color:#94a3b8">✓ Header · FAQs · Indemnity · App</div>
+        <div style="color:#94a3b8">✓ Disclosure · Note · Waiver · SSA</div>
+        <div style="color:#94a3b8">✓ Surety terms · Collateral · Payment plan</div>
+        <div style="color:#64748b">🖨️ Appearance bonds = print package</div>
       </div>
 
-      <div style="margin-top:8px;font-size:13px">
-        <label style="display:block;margin-bottom:4px;font-weight:600">Routing Scenario</label>
-        <select id="routingScenarioSelect" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-          <option value="all-in-one">All-in-One (Indemnitor -> Defendant -> Agent Sequential)</option>
-          <option value="phase1_2">Phase 1 (Indemnitor First) -> Phase 2 (Defendant & Agent Later)</option>
-          <option value="kiosk">Kiosk Mode (Side-by-Side In Person)</option>
-        </select>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn-export" id="btnSendDocuSeal" onclick="triggerDocuSealPacket()"
+          style="font-size:14px;padding:12px 18px;font-weight:700;background:linear-gradient(135deg,rgba(34,197,94,0.35),rgba(16,185,129,0.25));color:#bbf7d0;border:1px solid rgba(74,222,128,0.5);border-radius:10px;cursor:pointer;box-shadow:0 0 20px rgba(34,197,94,0.12)">
+          🚀 Send DocuSeal Packet
+        </button>
+        <button type="button" class="btn-export" onclick="printAppearanceBondPackage()" style="font-size:12px;padding:10px 14px">
+          🖨️ Print appearance bonds
+        </button>
       </div>
-
-      <div style="margin-top:12px;font-size:13px">
-        <label style="display:block;margin-bottom:4px;font-weight:600">Select Forms to Include</label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--bg);padding:10px;border-radius:6px;border:1px solid var(--border)">
-          <label><input type="checkbox" class="doc-chk" value="paperwork-header" checked> Cover Sheet / Header</label>
-          <label><input type="checkbox" class="doc-chk" value="faq-cosigners" checked> FAQ (Co-Signers)</label>
-          <label><input type="checkbox" class="doc-chk" value="faq-defendants" checked> FAQ (Defendants)</label>
-          <label><input type="checkbox" class="doc-chk" value="indemnity-agreement" checked> Indemnity Agreement</label>
-          <label><input type="checkbox" class="doc-chk" value="promissory-note" checked> Promissory Note</label>
-          <label><input type="checkbox" class="doc-chk" value="defendant-application" checked> Defendant Application</label>
-          <label><input type="checkbox" class="doc-chk" value="disclosure-form" checked> Disclosure Form</label>
-          <label><input type="checkbox" class="doc-chk" value="master-waiver" checked> Master Waiver</label>
-          <label><input type="checkbox" class="doc-chk" value="ssa-release" checked> SSA Release</label>
-          <label><input type="checkbox" class="doc-chk" value="surety-terms" checked> Surety Terms</label>
-          <label><input type="checkbox" class="doc-chk" value="collateral-receipt" checked> Collateral Receipt</label>
-          <label><input type="checkbox" class="doc-chk" value="payment-plan" checked> Payment Plan</label>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-        <button class="btn-export" id="btnSendDocuSeal" onclick="triggerDocuSealPacket()" style="background:rgba(34,197,94,0.2);color:#22c55e;font-weight:600">🚀 Send DocuSeal Packet</button>
-        <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Legacy SignNow)</button>
-        <button class="btn-export" id="btnSendPacket" onclick="triggerSignNowPacket()" style="background:rgba(245,158,11,0.15);color:#f59e0b">📨 Custom SignNow Packet</button>
-      </div>
-      <div id="sn-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+      <div id="sn-status" style="margin-top:10px;font-size:12px;color:var(--muted);min-height:1.2em"></div>
     </div>
 
     <div class="wb-section" id="outreachSection">
@@ -996,17 +985,17 @@ function selectSurety(s) {
   window._bondModalData.surety = s;
   document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
   document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');
-  // Update the SignNow surety badge to reflect which template set will be used
+  // DocuSeal surety badge (template set for selected surety)
   const snBadge = document.getElementById('sn-surety-badge');
   if (snBadge) {
     if (s === 'palmetto') {
-      snBadge.textContent = '\uD83C\uDF34 Palmetto Templates';
-      snBadge.style.background = 'rgba(34,197,94,0.12)';
-      snBadge.style.color = '#22c55e';
+      snBadge.textContent = '🌴 Palmetto · DocuSeal';
+      snBadge.style.background = 'rgba(34,197,94,0.18)';
+      snBadge.style.color = '#4ade80';
     } else {
-      snBadge.textContent = '\uD83D\uDEE1\uFE0F OSI Templates';
-      snBadge.style.background = 'rgba(59,130,246,0.12)';
-      snBadge.style.color = '#60a5fa';
+      snBadge.textContent = '🛡️ OSI · DocuSeal';
+      snBadge.style.background = 'rgba(34,197,94,0.18)';
+      snBadge.style.color = '#4ade80';
     }
   }
   // Re-fetch POA numbers for the newly selected surety
@@ -2507,8 +2496,8 @@ function openBondFromActiveBond(bond) {
   const surety = (rawSurety.includes('palm') || rawSurety.includes('psc')) ? 'palmetto' : 'osi';
   setTimeout(() => {
     selectSurety(surety);
-    // Scroll to the SignNow section
-    const snSection = document.getElementById('signnowSection');
+    // Scroll to DocuSeal e-sign section
+    const snSection = document.getElementById('docusealSection') || document.getElementById('signnowSection');
     if (snSection) snSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, 150);
 }

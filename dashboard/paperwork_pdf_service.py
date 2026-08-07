@@ -8,9 +8,9 @@ Packet composition rule
 
 Defendant fields come from arrest-lead scrape data; indemnitor fields come from
 intake / match / dashboard. This module hydrates blanks, stitches the packet,
-and leaves e-sign to SignNow (primary) or Adobe Sign (optional) after flatten.
+and leaves e-sign to DocuSeal (primary; SignNow retired for new packets).
 
-PRIMARY production path remains SignNowPacketService (cloud templates).
+PRIMARY production path is DocuSeal (self-hosted templates + prefill).
 This module is for local stitch / Adobe PDF Services fill / offline preview.
 """
 from __future__ import annotations
@@ -215,7 +215,7 @@ def packet_composition(surety: str = "osi") -> Dict[str, Any]:
         "shared_legal_docs": shared_legal,
         "packet_order": list(PACKET_DOC_ORDER),
         "print_only": list(PRINT_ONLY_DOC_ORDER),
-        "esign_providers": ["docuseal", "signnow", "adobe", "both", "none"],
+        "esign_providers": ["docuseal", "none"],
         "esign_default": "docuseal",
         "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
     }

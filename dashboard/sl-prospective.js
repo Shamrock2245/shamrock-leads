@@ -1004,7 +1004,7 @@ window.SLProspective = (function () {
   async function officialize(bk) {
     var bond = _data.find(function(b) { return b.booking_number === bk; });
     if (!bond) return;
-    if (!confirm('Officialize bond for ' + (bond.defendant_name || bk) + '?\n\nThis will create the bond record and trigger the SignNow paperwork workflow.')) return;
+    if (!confirm('Officialize bond for ' + (bond.defendant_name || bk) + '?\n\nThis will create the bond record and open the DocuSeal paperwork workflow.')) return;
     try {
       var r = await fetch(API + '/api/prospective-bonds/' + encodeURIComponent(bk) + '/officialize', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'Brendan' })

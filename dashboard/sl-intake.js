@@ -68,7 +68,7 @@ const SLIntake = (() => {
       { id: 'address', label: 'Indemnitor address', ok: !!_val(ind.address) || address.length > 4, required: true },
       { id: 'relation', label: 'Relationship', ok: !!_val(ind.relationship), required: false },
       { id: 'dob', label: 'Indemnitor DOB', ok: !!_val(ind.dob), required: false },
-      { id: 'email', label: 'Indemnitor email (SignNow)', ok: !!_val(ind.email), required: false },
+      { id: 'email', label: 'Indemnitor email (DocuSeal)', ok: !!_val(ind.email), required: false },
       { id: 'refs', label: 'At least 1 reference', ok: !!(_val(ind.ref1Name) || _val(ind.ref1Phone)), required: false },
       { id: 'match', label: 'Defendant matched', ok: matched, required: true },
     ];
