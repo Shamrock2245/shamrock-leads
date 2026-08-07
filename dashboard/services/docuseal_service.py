@@ -429,6 +429,9 @@ class DocuSealService:
         today_iso = now.strftime("%Y-%m-%d")
         today_slash = now.strftime("%m/%d/%Y")
         today_long = now.strftime("%B %d, %Y").replace(" 0", " ")  # e.g. August 7, 2026
+        today_day = str(now.day)                                  # e.g. 7
+        today_month = now.strftime("%B")                          # e.g. August
+        today_year_2digit = now.strftime("%y")                    # e.g. 26
 
         raw_bond_amt = (
             bond_data.get("bond_amount")
@@ -475,6 +478,12 @@ class DocuSealService:
             "date_written_out": today_long,
             "bond_date_written": today_long,
             "formatted_date": today_long,
+            "today_day": today_day,
+            "bond_date_day": today_day,
+            "today_month": today_month,
+            "bond_date_month": today_month,
+            "today_year_2digit": today_year_2digit,
+            "bond_date_year_2digit": today_year_2digit,
             "numeric_full_bond_amount": bond_formatted,
             "numeric_full_bond_amount_dollar": bond_formatted_dollar,
             "bond_amount": bond_formatted_dollar,
