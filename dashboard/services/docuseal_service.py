@@ -398,6 +398,11 @@ class DocuSealService:
             or ""
         )
 
+        now = datetime.now(timezone.utc)
+        today_iso = now.strftime("%Y-%m-%d")
+        today_slash = now.strftime("%m/%d/%Y")
+        today_long = now.strftime("%B %d, %Y").replace(" 0", " ")  # e.g. August 7, 2026
+
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
             "defendant_name": defendant_name,
@@ -415,6 +420,12 @@ class DocuSealService:
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
+            "date": today_long,
+            "Date": today_long,
+            "today_date": today_slash,
+            "today_date_long": today_long,
+            "date_written_out": today_long,
+            "formatted_date": today_long,
             "indemnitor_address": ind_address,
             "defendant_address": def_address,
             "DefAddress": def_address,
