@@ -519,8 +519,46 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
+        # Build 4-row per-charge breakdown for legal schedule tables
+        row_fields = {}
+        for i in range(1, 5):
+            idx = i - 1
+            charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
+            if isinstance(charge_obj, dict):
+                c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
+                c_case = charge_obj.get("case_number") or case_number
+                c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_raw = charge_obj.get("bond_amount") or 0
+                try:
+                    c_amt_float = float(str(c_amt_raw).replace("$", "").replace(",", "").strip())
+                    c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+                except (ValueError, TypeError):
+                    c_amt_str = str(c_amt_raw) if c_amt_raw else ""
+            elif isinstance(charge_obj, str) and charge_obj.strip():
+                c_desc = charge_obj.strip()
+                c_case = case_number
+                c_poa = poa_list[idx] if idx < len(poa_list) else poa
+                c_amt_str = bond_formatted if idx == 0 else ""
+            elif idx == 0 and charges_summary:
+                c_desc = charges_summary
+                c_case = case_number
+                c_poa = poa
+                c_amt_str = bond_formatted
+            else:
+                c_desc, c_case, c_poa, c_amt_str = "", "", "", ""
+
+            row_fields[f"offense_{i}"] = c_desc
+            row_fields[f"charge_{i}"] = c_desc
+            row_fields[f"case_number_{i}"] = c_case
+            row_fields[f"case_{i}"] = c_case
+            row_fields[f"poa_number_{i}"] = c_poa
+            row_fields[f"poa_{i}"] = c_poa
+            row_fields[f"bond_amount_{i}"] = c_amt_str
+            row_fields[f"numeric_bond_amount_{i}"] = c_amt_str
+
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
+            **row_fields,
             "defendant_name": defendant_name,
             "DefendantName": defendant_name,
             "FullName": indemnitor_name or defendant_name,
