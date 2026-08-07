@@ -2524,53 +2524,97 @@ async function triggerDocuSealPacket() {
 
   if (snStatus) snStatus.textContent = 'Creating DocuSeal submission...';
   try {
-    let signerEmail = (data.lead && data.lead.indemnitor_email) || '';
-    let signerName = (data.lead && data.lead.indemnitor_name) || '';
+    let signerEmail = (data.lead && (data.lead.indemnitor_email || data.lead.email)) || '';
+    let signerName = (data.lead && (data.lead.indemnitor_name || data.lead.full_name)) || '';
+    if (data.indemnitors && data.indemnitors[0]) {
+      signerEmail = signerEmail || data.indemnitors[0].email || '';
+      signerName = signerName || data.indemnitors[0].name || '';
+    }
     if (!signerEmail) {
       signerEmail = prompt('Enter indemnitor email for DocuSeal signature:') || '';
       if (!signerEmail) { if (snStatus) snStatus.textContent = 'Cancelled.'; return; }
       signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
     }
 
+    // Prefer live charge grid from modal (POA / case / amounts per charge)
+    const chargeDetails = (typeof _collectAppearanceBondChargesFromModal === 'function')
+      ? _collectAppearanceBondChargesFromModal()
+      : [];
+
     const payload = {
-      intake_id: (data.lead && data.lead._intake_id) || '',
       booking_number: data.booking,
-      signer_email: signerEmail,
-      signer_name: signerName,
+      county: data.county || (data.lead && data.lead.county) || '',
       surety_id: data.surety || 'osi',
       poa_number: poaNumber,
       provider: 'docuseal',
+      signer_email: signerEmail,
+      include_payment_plan: true,
+      include_defendant: true,
+      send_email: false,
+      charge_details: chargeDetails,
       field_overrides: {
-        defendant_name: (data.lead && data.lead.defendant_name) || data.defendantName || '',
+        defendant_name: data.name || (data.lead && (data.lead.full_name || data.lead.defendant_name)) || '',
         indemnitor_name: signerName,
         indemnitor_email: signerEmail,
-        case_number: (data.lead && data.lead.case_number) || data.booking || '',
+        case_number: (document.getElementById('caseNumInput_0')?.value || '').trim()
+          || (data.lead && data.lead.case_number) || data.booking || '',
         poa_number: poaNumber,
         bond_amount: data.bond || 0,
-      }
+        booking_number: data.booking || '',
+        defendant_address: (data.lead && (data.lead.address || data.lead.home_address)) || '',
+        court_date: (data.lead && data.lead.court_date) || 'TBN',
+      },
     };
+    if (data.intake_id) payload.intake_id = data.intake_id;
+    if (data.lead && data.lead._intake_id) payload.intake_id = data.lead._intake_id;
 
     const r = await fetch(`${API}/api/paperwork/packet/finalize`, {
       method: 'POST',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const result = await r.json();
-    if (result.status === 'success' || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.success)) {
-      const link = result.signing_link || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.signing_link) || '#';
-      if (snStatus) snStatus.innerHTML = `✅ <strong>DocuSeal Packet Created!</strong> <a href="${link}" target="_blank" style="color:#22c55e;font-weight:bold;text-decoration:underline;margin-left:8px">Open Signing Link</a>`;
-      if (phaseBadge) { phaseBadge.textContent = 'DocuSeal Live'; phaseBadge.style.background = 'rgba(34,197,94,0.2)'; phaseBadge.style.color = '#22c55e'; }
-      toast('DocuSeal e-sign link generated!', 'success');
+    const result = await r.json().catch(() => ({}));
+    // finalize returns { success: true, status: 'pending_signature', send_results: { docuseal: { success, signing_link } } }
+    const ds = (result.send_results && result.send_results.docuseal) || {};
+    const ok = r.ok && (result.success === true || ds.success === true);
+    if (ok) {
+      const link = result.signing_link || ds.signing_link
+        || (ds.sign_links && ds.sign_links[0])
+        || (ds.submitters && ds.submitters[0] && ds.submitters[0].sign_url)
+        || '';
+      const links = ds.sign_links || (ds.submitters || []).map(s => s.sign_url).filter(Boolean);
+      let linkHtml = link
+        ? `<a href="${link}" target="_blank" rel="noopener" style="color:#22c55e;font-weight:bold;text-decoration:underline;margin-left:8px">Open indemnitor link</a>`
+        : ' <span style="color:#fbbf24">(no link returned — check DOCUSEAL_API_KEY / template)</span>';
+      if (links.length > 1) {
+        linkHtml += links.slice(1).map((u, i) =>
+          ` <a href="${u}" target="_blank" rel="noopener" style="color:#93c5fd;margin-left:6px">Signer ${i + 2}</a>`
+        ).join('');
+      }
+      if (snStatus) {
+        snStatus.innerHTML = `✅ <strong>DocuSeal packet ready</strong> · ${result.packet_id || ''}${linkHtml}`;
+      }
+      if (phaseBadge) {
+        phaseBadge.textContent = 'DocuSeal Live';
+        phaseBadge.style.background = 'rgba(34,197,94,0.2)';
+        phaseBadge.style.color = '#22c55e';
+      }
+      toast(link ? 'DocuSeal e-sign link generated!' : 'DocuSeal packet created (check template/API)', link ? 'success' : 'warning');
+      if (link) {
+        try { await navigator.clipboard.writeText(link); toast('Signing link copied', 'info'); } catch (_) { /* ignore */ }
+      }
     } else {
-      const err = result.error || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.error) || 'DocuSeal send failed';
+      const err = result.error || ds.error || ds.hint || `DocuSeal send failed (HTTP ${r.status})`;
       if (snStatus) snStatus.textContent = `❌ ${err}`;
       toast(err, 'error');
     }
-  } catch(e) {
+  } catch (e) {
     if (snStatus) snStatus.textContent = `❌ Network error: ${e.message}`;
     toast('Network error', 'error');
   }
 }
+window.triggerDocuSealPacket = triggerDocuSealPacket;
 
 async function triggerSignNowPacket() {
   const data = window._bondModalData;

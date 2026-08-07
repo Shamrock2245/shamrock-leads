@@ -1,7 +1,8 @@
 """
 ShamrockLeads — Unsigned Paperwork Auto-Chase Service
 =====================================================
-Automatically follows up on SignNow packets that haven't been signed.
+Automatically follows up on e-sign packets (DocuSeal or legacy SignNow)
+that haven't been signed.
 
 Chase sequence:
   T+2h   : iMessage nudge → "Your bail paperwork is still waiting..."
@@ -228,7 +229,26 @@ class PaperworkChaseService:
             return
 
         defendant_name = packet.get("defendant_name", "your loved one")
-        magic_link = packet.get("magic_link", "https://shamrockbailbonds.biz")
+        # Prefer live e-sign URL (DocuSeal submitter link) over marketing homepage
+        magic_link = (
+            packet.get("signing_link")
+            or packet.get("magic_link")
+            or ""
+        )
+        if not magic_link:
+            submitters = packet.get("docuseal_submitters") or []
+            if isinstance(submitters, list):
+                for s in submitters:
+                    if isinstance(s, dict) and (s.get("sign_url") or s.get("embed_src")):
+                        magic_link = s.get("sign_url") or s.get("embed_src")
+                        break
+        if not magic_link:
+            # Last resort — staff can still call; avoid wrong SignNow/homepage dead ends
+            magic_link = (
+                os.getenv("PAPERWORK_PUBLIC_URL")
+                or os.getenv("DASHBOARD_PUBLIC_URL")
+                or "https://leads.shamrockbailbonds.biz"
+            )
 
         if nudge_level == 1:
             message = (
