@@ -323,81 +323,297 @@ async def get_portal_ui(request: Request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Shamrock Bail Bonds — Mobile E-Sign Portal</title>
+    <title>Shamrock Bail Bonds — Official E-Sign Paperwork Portal</title>
+    <script src="https://sign.shamrockbailbonds.biz/js/form.js" defer></script>
     <style>
-        :root { --bg: #0b0f19; --card: #151c2c; --accent: #22c55e; --text: #f8fafc; --muted: #94a3b8; }
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 20px; text-align: center; }
-        .card { background: var(--card); border-radius: 16px; padding: 24px; max-width: 400px; margin: 40px auto; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        h1 { font-size: 20px; margin-bottom: 8px; color: var(--accent); }
-        p { font-size: 14px; color: var(--muted); line-height: 1.5; }
-        input { width: 100%; padding: 14px; margin: 12px 0; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3); color: var(--text); font-size: 18px; text-align: center; box-sizing: border-box; }
-        button { width: 100%; padding: 14px; background: var(--accent); color: #000; font-weight: 700; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 10px; }
-        .status { margin-top: 14px; font-size: 13px; }
+        :root {
+            --bg: #0b0f19;
+            --card: #151c2c;
+            --accent: #22c55e;
+            --accent-hover: #16a34a;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --border: rgba(255, 255, 255, 0.08);
+            --emerald-glow: rgba(34, 197, 94, 0.2);
+        }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .navbar {
+            background: rgba(21, 28, 44, 0.9);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 18px;
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .brand-logo { font-size: 22px; }
+        .call-btn {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--accent);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+        .call-btn:hover { background: var(--accent); color: #000; }
+        .container {
+            flex: 1;
+            max-width: 900px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 20px 16px;
+            box-sizing: border-box;
+        }
+        .card {
+            background: var(--card);
+            border-radius: 16px;
+            padding: 28px 20px;
+            max-width: 420px;
+            margin: 30px auto;
+            border: 1px solid var(--border);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+        h1 { font-size: 20px; margin: 0 0 8px 0; color: var(--text); }
+        p { font-size: 14px; color: var(--muted); line-height: 1.5; margin: 0 0 16px 0; }
+        input {
+            width: 100%;
+            padding: 14px;
+            margin: 12px 0;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0,0,0,0.4);
+            color: var(--text);
+            font-size: 18px;
+            text-align: center;
+            box-sizing: border-box;
+            outline: none;
+            transition: border-color 0.2s ease;
+        }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--emerald-glow); }
+        .btn-primary {
+            width: 100%;
+            padding: 14px;
+            background: var(--accent);
+            color: #000;
+            font-weight: 700;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.2s ease;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .status { margin-top: 16px; font-size: 13px; color: var(--muted); line-height: 1.4; }
+        .status.error { color: #ef4444; }
+        .status.success { color: var(--accent); }
+        
+        /* Embedded E-Sign Component Frame */
+        #esign-frame {
+            display: none;
+            background: var(--card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+            margin-top: 10px;
+        }
+        .esign-bar {
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid var(--border);
+            padding: 14px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .esign-title { font-weight: 700; font-size: 15px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+        .esign-badge { background: rgba(34,197,94,0.15); color: var(--accent); font-size: 12px; padding: 4px 10px; border-radius: 12px; font-weight: 600; }
+        docuseal-form {
+            width: 100%;
+            min-height: 750px;
+            border: none;
+            display: block;
+        }
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 16px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: auto;
+        }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1>☘️ Shamrock Bail Bonds</h1>
-        <p>Enter your phone number to receive your 6-digit access PIN for mobile e-signing.</p>
-        
-        <div id="step-phone">
-            <input type="tel" id="phoneInput" placeholder="(239) 555-0199">
-            <button onclick="sendPin()">Send Access PIN</button>
+    <header class="navbar">
+        <a href="/" class="brand">
+            <span class="brand-logo">☘️</span>
+            <span>Shamrock Paperwork</span>
+        </a>
+        <a href="tel:2393322245" class="call-btn">
+            <span>📞</span>
+            <span>(239) 332-2245</span>
+        </a>
+    </header>
+
+    <main class="container">
+        <!-- Auth Card: 6-Digit OTP PIN -->
+        <div id="auth-card" class="card">
+            <h1>☘️ Official E-Sign Portal</h1>
+            <p>Enter your phone number to receive your 6-digit access PIN for mobile e-signing.</p>
+            
+            <div id="step-phone">
+                <input type="tel" id="phoneInput" placeholder="(239) 555-0199" autocomplete="tel">
+                <button class="btn-primary" onclick="sendPin()">Send Access PIN</button>
+            </div>
+
+            <div id="step-pin" style="display:none">
+                <input type="number" id="pinInput" placeholder="6-Digit PIN" maxlength="6" inputmode="numeric">
+                <button class="btn-primary" onclick="verifyPin()">Verify & Open Paperwork</button>
+            </div>
+
+            <div id="status" class="status"></div>
         </div>
 
-        <div id="step-pin" style="display:none">
-            <input type="number" id="pinInput" placeholder="6-Digit PIN" maxlength="6">
-            <button onclick="verifyPin()">Verify & Enter Portal</button>
+        <!-- Embedded DocuSeal E-Sign Frame -->
+        <div id="esign-frame">
+            <div class="esign-bar">
+                <div class="esign-title">
+                    <span>☘️</span>
+                    <span>Indemnitor Bond Agreement Packet</span>
+                </div>
+                <div class="esign-badge">14 Documents</div>
+            </div>
+            <div id="docuseal-mount"></div>
         </div>
+    </main>
 
-        <div id="status" class="status"></div>
-    </div>
+    <footer>
+        ☘️ Shamrock Bail Bonds — 1528 Broadway, Ft. Myers, FL 33901 — 24/7 Licensing & Surety Operations
+    </footer>
 
     <script>
+        function checkUrlDirectLink() {
+            const params = new URLSearchParams(window.location.search);
+            const link = params.get('link') || params.get('s') || params.get('url');
+            if (link && link.startsWith('http')) {
+                openDocuSealForm(link);
+            }
+        }
+
+        function openDocuSealForm(signUrl) {
+            document.getElementById('auth-card').style.display = 'none';
+            const frame = document.getElementById('esign-frame');
+            const mount = document.getElementById('docuseal-mount');
+            frame.style.display = 'block';
+            mount.innerHTML = '';
+
+            const dsForm = document.createElement('docuseal-form');
+            dsForm.setAttribute('data-src', signUrl);
+            dsForm.id = 'embeddedDocuSeal';
+            mount.appendChild(dsForm);
+
+            // Listen for DocuSeal form completed event
+            dsForm.addEventListener('completed', (e) => {
+                console.log('[Shamrock E-Sign] DocuSeal form completed event:', e.detail);
+                window.location.href = '/done';
+            });
+        }
+
         async function sendPin() {
             const phone = document.getElementById('phoneInput').value;
-            document.getElementById('status').textContent = 'Sending PIN...';
-            const r = await fetch('/api/portal/send-pin', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({phone})
-            });
-            const d = await r.json();
-            if (d.success) {
-                document.getElementById('step-phone').style.display = 'none';
-                document.getElementById('step-pin').style.display = 'block';
-                let how = 'iMessage / text';
-                if (d.channel === 'imessage') how = 'iMessage';
-                else if (d.channel === 'sms') how = 'text message';
-                else if (d.queued || d.channel === 'queued') how = 'message queue (delivering shortly)';
-                document.getElementById('status').textContent = 'PIN sent via ' + how + '. Check your phone.';
-            } else {
-                document.getElementById('status').textContent = 'Error: ' + (d.error || 'Failed');
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status';
+            statusEl.textContent = 'Sending PIN via BlueBubbles...';
+            
+            try {
+                const r = await fetch('/api/portal/send-pin', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({phone})
+                });
+                const d = await r.json();
+                if (d.success) {
+                    document.getElementById('step-phone').style.display = 'none';
+                    document.getElementById('step-pin').style.display = 'block';
+                    let how = 'iMessage / text';
+                    if (d.channel === 'imessage') how = 'iMessage';
+                    else if (d.channel === 'sms') how = 'text message';
+                    else if (d.queued || d.channel === 'queued') how = 'message queue (delivering shortly)';
+                    statusEl.className = 'status success';
+                    statusEl.textContent = '✅ PIN sent via ' + how + '. Check your phone.';
+                } else {
+                    statusEl.className = 'status error';
+                    statusEl.textContent = '❌ Error: ' + (d.error || 'Failed to send PIN');
+                }
+            } catch (err) {
+                statusEl.className = 'status error';
+                statusEl.textContent = '❌ Network error sending PIN';
             }
         }
 
         async function verifyPin() {
             const phone = document.getElementById('phoneInput').value;
             const pin = document.getElementById('pinInput').value;
-            document.getElementById('status').textContent = 'Verifying...';
-            const r = await fetch('/api/portal/verify-pin', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({phone, pin})
-            });
-            const d = await r.json();
-            if (d.success) {
-                if (d.signing_link) {
-                    document.getElementById('status').textContent = '✅ Verified! Opening your e-sign packet...';
-                    window.location.href = d.signing_link;
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status';
+            statusEl.textContent = 'Verifying PIN...';
+            
+            try {
+                const r = await fetch('/api/portal/verify-pin', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({phone, pin})
+                });
+                const d = await r.json();
+                if (d.success) {
+                    if (d.signing_link) {
+                        statusEl.className = 'status success';
+                        statusEl.textContent = '✅ Verified! Opening your e-sign packet...';
+                        openDocuSealForm(d.signing_link);
+                    } else {
+                        statusEl.className = 'status success';
+                        statusEl.textContent = '✅ Verified — no active packet linked to this phone yet. Call (239) 332-2245 and we will generate your signing link.';
+                    }
                 } else {
-                    document.getElementById('status').textContent =
-                        '✅ Verified — no packet linked to this phone yet. Call (239) 332-2245 and we will send your signing link.';
+                    statusEl.className = 'status error';
+                    statusEl.textContent = '❌ ' + (d.error || 'Invalid PIN');
                 }
-            } else {
-                document.getElementById('status').textContent = '❌ ' + (d.error || 'Invalid PIN');
+            } catch (err) {
+                statusEl.className = 'status error';
+                statusEl.textContent = '❌ Network error verifying PIN';
             }
         }
+
+        // Auto-check on load for direct signing link in query string
+        window.addEventListener('DOMContentLoaded', checkUrlDirectLink);
     </script>
 </body>
 </html>"""

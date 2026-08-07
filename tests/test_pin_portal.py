@@ -15,7 +15,7 @@ def test_portal_ui_route():
     response = client.get("/api/portal/portal-ui", follow_redirects=True)
     assert response.status_code == 200
     assert "Shamrock Bail Bonds" in response.text
-    assert "Mobile E-Sign Portal" in response.text
+    assert "Official E-Sign Paperwork Portal" in response.text
 
 
 def test_done_landing_page():
