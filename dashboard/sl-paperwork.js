@@ -989,6 +989,58 @@ const SLPaperwork = {
     }
   },
 
+  /**
+   * Dry-run DocuSeal prefill from current adaptive packet context.
+   * Does NOT create a submission — use before Flatten & Send for OSI alignment.
+   */
+  async previewDocuSealPrefill() {
+    this._setApStatus('Building DocuSeal prefill preview…', 'info');
+    const selfInd = !!document.getElementById('pwApSelfIndemnitor')?.checked;
+    const pin = document.getElementById('pwApSelfPin')?.value || '';
+    const body = {
+      ...this._lookupBody(),
+      self_indemnitor: selfInd,
+      authorization_pin: pin,
+      surety_id: document.getElementById('pwApSurety')?.value || 'osi',
+      field_overrides: this._collectFieldOverrides(),
+      poa_number: document.getElementById('pwApPoa')?.value || '',
+      include_defendant: true,
+    };
+    try {
+      const res = await fetch('/api/paperwork/docuseal/prefill-preview', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+
+      const pf = data.prefill || {};
+      const keyLines = Object.keys(pf).sort().map(k => `${k}: ${pf[k]}`).join('\n');
+      const msg = [
+        `DocuSeal prefill · ${data.surety_id?.toUpperCase() || 'OSI'}`,
+        `Template ID: ${data.template_id || 'NOT SET'} · keys: ${data.prefill_key_count || 0}`,
+        `Can send: ${data.can_send ? 'YES' : 'NO'} · ${data.hint || ''}`,
+        `Roles: ${(data.submitter_roles || []).join(' → ') || '—'}`,
+        `Premium: ${data.premium_preview || '—'} · Charges: ${data.charges_summary || '—'}`,
+        '',
+        keyLines.slice(0, 3500) + (keyLines.length > 3500 ? '\n…' : ''),
+      ].join('\n');
+
+      this._setApStatus(
+        data.can_send
+          ? `DocuSeal prefill ready (${data.prefill_key_count} fields) · template ${data.template_id}`
+          : `DocuSeal not ready: ${data.hint || 'check env / names'}`,
+        data.can_send ? 'success' : 'error'
+      );
+      alert(msg);
+    } catch (err) {
+      this._setApStatus(`DocuSeal prefill preview failed: ${err.message}`, 'error');
+      alert(`DocuSeal prefill preview failed: ${err.message}`);
+    }
+  },
+
   _collectFieldOverrides() {
     return {
       defendant_name: document.getElementById('pwApDefName')?.value || '',

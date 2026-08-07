@@ -484,9 +484,8 @@ class DocuSealService:
             or def_.get("caseNumber")
             or def_.get("case_number")
             or ""
-        ).strip()
-        if not case_number:
-            case_number = "TBN"
+        )
+        case_number = str(case_number or "").strip()
 
         poa_raw = bond_data.get("poa_number") or bond_data.get("POA_Number") or bond_data.get("poa_numbers") or ""
         if isinstance(poa_raw, list):
@@ -509,18 +508,37 @@ class DocuSealService:
             court_date = "TBN"
 
         # Format Charges Summary (truncated cleanly if > 3 charges)
-        charges_raw = bond_data.get("charges") or bond_data.get("charge_details") or def_.get("charges") or []
+        # Prefer structured charge_details (Write Bond / lead explorer) over free-text charges
+        charges_raw = (
+            bond_data.get("charge_details")
+            or bond_data.get("charge_list")
+            or bond_data.get("charges")
+            or def_.get("charge_details")
+            or def_.get("charges")
+            or []
+        )
         charges_list = []
         if isinstance(charges_raw, list):
             for c in charges_raw:
                 if isinstance(c, dict):
                     desc = c.get("charge") or c.get("description") or c.get("name") or ""
                 else:
-                    desc = str(c)
+                    desc = str(c) if c is not None else ""
                 if desc.strip():
                     charges_list.append(desc.strip())
         elif isinstance(charges_raw, str) and charges_raw.strip():
             charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+
+        # Primary case # from first structured charge if top-level missing
+        if not case_number and isinstance(charges_raw, list):
+            for c in charges_raw:
+                if isinstance(c, dict):
+                    cn = str(c.get("case_number") or c.get("Case_Number") or "").strip()
+                    if cn:
+                        case_number = cn
+                        break
+        if not case_number:
+            case_number = "TBN"
 
         if len(charges_list) > 3:
             charges_summary = ", ".join(charges_list[:3]) + " (see case file)"
@@ -1030,24 +1048,204 @@ def resolve_template_id_for_surety(surety_id: str = "osi") -> Optional[str]:
     """
     Env-based template IDs until admin maps all packet docs in DocuSeal UI.
 
-      DOCUSEAL_TEMPLATE_ID          — default / fallback
-      DOCUSEAL_TEMPLATE_ID_OSI      — OSI combined packet template
-      DOCUSEAL_TEMPLATE_ID_PALMETTO — Palmetto combined packet template
+      DOCUSEAL_TEMPLATE_ID_OSI      — OSI combined packet (preferred for osi)
+      DOCUSEAL_TEMPLATE_ID          — OSI fallback
+      DOCUSEAL_TEMPLATE_ID_PALMETTO — Palmetto only (no silent OSI fallback)
+
+    Palmetto requires its own template id so we never send Palmetto bonds
+    to the OSI DocuSeal form by accident.
     """
     surety = (surety_id or "osi").lower().strip()
     if surety == "palmetto":
-        tid = (
-            os.getenv("DOCUSEAL_TEMPLATE_ID_PALMETTO")
-            or os.getenv("DOCUSEAL_TEMPLATE_ID")
-            or ""
-        ).strip()
-    else:
-        tid = (
-            os.getenv("DOCUSEAL_TEMPLATE_ID_OSI")
-            or os.getenv("DOCUSEAL_TEMPLATE_ID")
-            or ""
-        ).strip()
+        tid = (os.getenv("DOCUSEAL_TEMPLATE_ID_PALMETTO") or "").strip()
+        return tid or None
+    tid = (
+        os.getenv("DOCUSEAL_TEMPLATE_ID_OSI")
+        or os.getenv("DOCUSEAL_TEMPLATE_ID")
+        or ""
+    ).strip()
     return tid or None
+
+
+def build_bond_data_from_dashboard(
+    *,
+    ctx: Optional[Dict[str, Any]] = None,
+    intake_doc: Optional[Dict[str, Any]] = None,
+    field_overrides: Optional[Dict[str, Any]] = None,
+    body: Optional[Dict[str, Any]] = None,
+    surety_id: str = "osi",
+) -> Dict[str, Any]:
+    """
+    Merge packet-builder context + UI overrides into the shape expected by
+    prefill_values_from_bond / create_submission_for_packet.
+
+    This is the single alignment point between the dashboard and DocuSeal.
+    """
+    ctx = ctx or {}
+    intake_doc = intake_doc or {}
+    overrides = field_overrides if isinstance(field_overrides, dict) else {}
+    body = body if isinstance(body, dict) else {}
+    def_ = ctx.get("defendant") if isinstance(ctx.get("defendant"), dict) else {}
+    ind = ctx.get("indemnitor") if isinstance(ctx.get("indemnitor"), dict) else {}
+
+    # Structured charges from lead / write-bond / body
+    charge_details = (
+        body.get("charge_details")
+        or body.get("charge_list")
+        or ctx.get("charge_details")
+        or ctx.get("charge_list")
+        or intake_doc.get("charge_details")
+        or intake_doc.get("charge_list")
+    )
+    charges = ctx.get("charges") or intake_doc.get("charges") or body.get("charges")
+
+    bond_amount = (
+        overrides.get("bond_amount")
+        or body.get("bond_amount")
+        or ctx.get("bond_amount")
+        or intake_doc.get("bond_amount")
+        or 0
+    )
+    premium_amount = (
+        body.get("premium_amount")
+        or ctx.get("premium_amount")
+        or intake_doc.get("premium_amount")
+    )
+
+    poa = (
+        overrides.get("poa_number")
+        or body.get("poa_number")
+        or ctx.get("poa_number")
+        or ""
+    )
+    # Multi-POA list if provided
+    poa_numbers = body.get("poa_numbers") or ctx.get("poa_numbers") or poa
+
+    bond_data: Dict[str, Any] = {
+        **intake_doc,
+        "surety_id": (surety_id or ctx.get("surety_id") or "osi").lower(),
+        "defendant": def_ or intake_doc.get("defendant") or {},
+        "indemnitor": ind or intake_doc.get("indemnitor") or {},
+        "defendant_name": overrides.get("defendant_name")
+            or def_.get("name")
+            or intake_doc.get("defendant_name")
+            or ctx.get("defendant_name")
+            or "",
+        "defendant_dob": overrides.get("defendant_dob") or def_.get("dob") or "",
+        "defendant_phone": overrides.get("defendant_phone") or def_.get("phone") or "",
+        "defendant_email": overrides.get("defendant_email") or def_.get("email") or "",
+        "defendant_address": overrides.get("defendant_address") or def_.get("address") or "",
+        "defendant_city": def_.get("city") or "",
+        "defendant_state": def_.get("state") or "FL",
+        "defendant_zip": def_.get("zip") or "",
+        "defendant_dl": def_.get("dl") or "",
+        "defendant_dl_state": def_.get("dl_state") or "FL",
+        "defendant_ssn": def_.get("ssn") or "",
+        "indemnitor_name": overrides.get("indemnitor_name")
+            or ind.get("name")
+            or intake_doc.get("indemnitor_name")
+            or "",
+        "indemnitor_phone": overrides.get("indemnitor_phone")
+            or ind.get("phone")
+            or intake_doc.get("indemnitor_phone")
+            or "",
+        "indemnitor_email": overrides.get("indemnitor_email")
+            or ind.get("email")
+            or intake_doc.get("indemnitor_email")
+            or body.get("signer_email")
+            or "",
+        "indemnitor_address": overrides.get("indemnitor_address") or ind.get("address") or "",
+        "indemnitor_dob": overrides.get("indemnitor_dob") or ind.get("dob") or "",
+        "indemnitor_dl": ind.get("dl") or "",
+        "indemnitor_ssn": ind.get("ssn") or "",
+        "indemnitor_city": ind.get("city") or "",
+        "indemnitor_state": ind.get("state") or "FL",
+        "indemnitor_zip": ind.get("zip") or "",
+        "relationship": ind.get("relationship") or "",
+        "county": ctx.get("county") or intake_doc.get("defendant_county") or intake_doc.get("county") or "",
+        "case_number": overrides.get("case_number")
+            or ctx.get("case_number")
+            or intake_doc.get("case_number")
+            or "",
+        "booking_number": overrides.get("booking_number")
+            or ctx.get("booking_number")
+            or intake_doc.get("defendant_booking_number")
+            or "",
+        "poa_number": poa,
+        "poa_numbers": poa_numbers,
+        "bond_amount": bond_amount,
+        "premium_amount": premium_amount,
+        "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
+        "charges": charges,
+        "charge_details": charge_details,
+        # Payment plan (optional UI / body)
+        "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment"),
+        "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed"),
+        "number_of_payments": body.get("number_of_payments") or body.get("num_payments"),
+        "payment_amount": body.get("payment_amount"),
+        "first_payment_due_date": body.get("first_payment_due_date") or body.get("first_due_date"),
+        "final_payment_due_date": body.get("final_payment_due_date") or body.get("final_due_date"),
+        "payment_due_date_1": body.get("payment_due_date_1"),
+        "payment_amount_1": body.get("payment_amount_1"),
+        "payment_due_date_2": body.get("payment_due_date_2"),
+        "payment_amount_2": body.get("payment_amount_2"),
+        "payment_due_date_3": body.get("payment_due_date_3"),
+        "payment_amount_3": body.get("payment_amount_3"),
+        "payment_due_date_4": body.get("payment_due_date_4"),
+        "payment_amount_4": body.get("payment_amount_4"),
+    }
+
+    # Multi-indemnitor list for Co-Indemnitor role
+    inds = body.get("indemnitors") or ctx.get("indemnitors") or intake_doc.get("indemnitors")
+    if isinstance(inds, list) and inds:
+        bond_data["indemnitors"] = inds
+    else:
+        bond_data["indemnitors"] = [
+            {
+                "name": bond_data.get("indemnitor_name"),
+                "email": bond_data.get("indemnitor_email"),
+                "phone": bond_data.get("indemnitor_phone"),
+            }
+        ]
+
+    return bond_data
+
+
+def readiness_report(bond_data: Optional[Dict[str, Any]] = None, surety_id: str = "osi") -> Dict[str, Any]:
+    """
+    Dashboard-facing readiness check: env + template + sample prefill key count.
+    """
+    svc = get_docuseal_service()
+    tid = resolve_template_id_for_surety(surety_id)
+    values = DocuSealService.prefill_values_from_bond(bond_data or {})
+    required_for_sign = ["defendant_name", "indemnitor_name", "county"]
+    missing = [k for k in required_for_sign if not values.get(k)]
+    return {
+        "configured": svc.is_configured,
+        "public_url": svc.public_url,
+        "base_url": svc.base_url,
+        "surety_id": surety_id,
+        "template_id": tid,
+        "template_ready": bool(tid),
+        "prefill_key_count": len(values),
+        "prefill_keys": sorted(values.keys()),
+        "sample_values": {k: values[k] for k in sorted(values.keys())[:40]},
+        "missing_core_fields": missing,
+        "ready_to_send": bool(svc.is_configured and tid and not missing),
+        "hints": [
+            h
+            for h in [
+                None if svc.is_configured else "Set DOCUSEAL_API_KEY (+ DOCUSEAL_URL)",
+                None if tid else (
+                    "Set DOCUSEAL_TEMPLATE_ID_PALMETTO for Palmetto"
+                    if surety_id == "palmetto"
+                    else "Set DOCUSEAL_TEMPLATE_ID_OSI or DOCUSEAL_TEMPLATE_ID"
+                ),
+                None if not missing else f"Missing prefill: {', '.join(missing)}",
+            ]
+            if h
+        ],
+    }
 
 
 def get_docuseal_service() -> DocuSealService:

@@ -234,6 +234,50 @@ def test_resolve_template_id_for_surety():
         assert resolve_template_id_for_surety("palmetto") == "22"
         assert resolve_template_id_for_surety("unknown") == "11"
 
+    # Palmetto must not silently use OSI template
+    with patch.dict(
+        os.environ,
+        {
+            "DOCUSEAL_TEMPLATE_ID": "1",
+            "DOCUSEAL_TEMPLATE_ID_OSI": "1",
+            "DOCUSEAL_TEMPLATE_ID_PALMETTO": "",
+        },
+        clear=False,
+    ):
+        assert resolve_template_id_for_surety("osi") == "1"
+        assert resolve_template_id_for_surety("palmetto") is None
+
+
+def test_build_bond_data_from_dashboard_merges_charges():
+    from dashboard.services.docuseal_service import (
+        build_bond_data_from_dashboard,
+        DocuSealService,
+    )
+
+    bond = build_bond_data_from_dashboard(
+        ctx={
+            "county": "Lee",
+            "bond_amount": 5000,
+            "defendant": {"name": "Def Person", "address": "1 Main"},
+            "indemnitor": {"name": "Ind Person", "email": "i@x.com", "phone": "2395551212"},
+            "charges": "OLD TEXT",
+        },
+        body={
+            "charge_details": [
+                {"charge": "BATTERY", "bond_amount": 2500, "case_number": "26-CF-1", "poa_number": "P1"},
+                {"charge": "RESIST", "bond_amount": 2500, "case_number": "26-CF-1", "poa_number": "P2"},
+            ],
+            "poa_number": "P1",
+        },
+        field_overrides={"case_number": "26-CF-1"},
+        surety_id="osi",
+    )
+    vals = DocuSealService.prefill_values_from_bond(bond)
+    assert vals["offense_1"] == "BATTERY"
+    assert vals["poa_number_2"] == "P2"
+    assert vals["CaseNum"] == "26-CF-1"
+    assert vals["numeric_premium"] == "500.00"
+
 
 @pytest.mark.asyncio
 async def test_default_esign_provider_is_docuseal():

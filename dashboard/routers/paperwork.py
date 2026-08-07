@@ -1906,25 +1906,20 @@ async def packet_builder_finalize(request: Request):
                         ),
                     }
                 else:
-                    bond_data = {
-                        **intake_doc,
-                        "defendant_name": def_.get("name") or intake_doc.get("defendant_name"),
-                        "indemnitor_name": ind.get("name") or intake_doc.get("indemnitor_name"),
-                        "indemnitor_email": ind.get("email") or intake_doc.get("indemnitor_email"),
-                        "indemnitor_phone": ind.get("phone") or intake_doc.get("indemnitor_phone"),
-                        "defendant_email": def_.get("email") or "",
-                        "defendant_phone": def_.get("phone") or "",
-                        "county": ctx.get("county") or intake_doc.get("defendant_county"),
-                        "case_number": ctx.get("case_number") or intake_doc.get("case_number"),
-                        "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
-                        "booking_number": ctx.get("booking_number") or intake_doc.get("defendant_booking_number"),
-                        "court_date": ctx.get("court_date") or "TBN",
-                        "surety_id": surety_id,
-                    }
+                    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
+
+                    bond_data = build_bond_data_from_dashboard(
+                        ctx=ctx,
+                        intake_doc=intake_doc,
+                        field_overrides=overrides if isinstance(overrides, dict) else {},
+                        body=body,
+                        surety_id=surety_id,
+                    )
                     docuseal_result = await ds.create_submission_for_packet(
                         template_id=template_id,
                         packet_id=packet_id,
                         bond_data=bond_data,
+                        indemnitors=bond_data.get("indemnitors"),
                         send_email=bool(body.get("send_email", False)),
                         include_defendant=bool(body.get("include_defendant", True)),
                     )
@@ -2365,16 +2360,150 @@ async def paperwork_pdf_extract(request: Request):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @paperwork_bp.get("/paperwork/docuseal/health")
-async def docuseal_health():
-    """Connectivity check for self-hosted DocuSeal (API key + URL)."""
-    from dashboard.services.docuseal_service import get_docuseal_service
+async def docuseal_health(surety_id: str = "osi"):
+    """Connectivity + OSI/Palmetto template readiness for dashboard prefill."""
+    from dashboard.services.docuseal_service import get_docuseal_service, readiness_report
 
     svc = get_docuseal_service()
     result = await svc.health()
+    ready = readiness_report(surety_id=(surety_id or "osi").lower())
+    result["readiness"] = ready
+    result["ready_to_prefill"] = bool(ready.get("ready_to_send") is False and ready.get("configured") and ready.get("template_ready"))
+    # ready_to_send needs names; health without bond is "infra ready"
+    result["infra_ready"] = bool(svc.is_configured and ready.get("template_ready"))
     code = 200 if result.get("ok") or not result.get("configured") else 502
     if not result.get("configured"):
         code = 503
     return JSONResponse(result, status_code=code)
+
+
+@paperwork_bp.post("/paperwork/docuseal/prefill-preview")
+async def docuseal_prefill_preview(request: Request):
+    """
+    Dry-run: resolve case context → DocuSeal field map (no submission created).
+
+    Staff uses this from Adaptive Packet "Preview DocuSeal Prefill" to confirm
+    OSI template alignment before Flatten & Send.
+    """
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+
+    from dashboard.services.packet_builder_service import (
+        resolve_case_context,
+        apply_self_indemnitor,
+        SMALL_BOND_MAX,
+    )
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+        resolve_template_id_for_surety,
+        readiness_report,
+        ROLE_INDEMNITOR,
+        ROLE_CO_INDEMNITOR,
+        ROLE_DEFENDANT,
+    )
+
+    surety_id = (body.get("surety_id") or "osi").lower().strip()
+    if surety_id not in ("osi", "palmetto"):
+        surety_id = "osi"
+
+    ctx = await resolve_case_context(
+        intake_id=body.get("intake_id"),
+        match_id=body.get("match_id"),
+        defendant_id=body.get("defendant_id"),
+        booking_number=body.get("booking_number"),
+        county=body.get("county"),
+        bond_case_id=body.get("bond_case_id"),
+        packet_id=body.get("packet_id"),
+    )
+    if body.get("self_indemnitor"):
+        pin = body.get("authorization_pin") or body.get("pin") or ""
+        try:
+            ctx = apply_self_indemnitor(ctx, pin)
+        except PermissionError as pe:
+            return JSONResponse({"success": False, "error": str(pe)}, status_code=403)
+
+    # Apply same field overrides as finalize
+    overrides = body.get("field_overrides") or {}
+    if isinstance(overrides, dict):
+        def_ = ctx.setdefault("defendant", {})
+        ind = ctx.setdefault("indemnitor", {})
+        for k, v in overrides.items():
+            if v is None or str(v).strip() == "":
+                continue
+            if k.startswith("defendant_") and k != "defendant_name":
+                def_[k.replace("defendant_", "")] = v
+            elif k == "defendant_name":
+                def_["name"] = v
+            elif k.startswith("indemnitor_") and k != "indemnitor_name":
+                ind[k.replace("indemnitor_", "")] = v
+            elif k == "indemnitor_name":
+                ind["name"] = v
+            elif k in ("case_number", "booking_number", "poa_number", "bond_amount", "court_date"):
+                if k == "bond_amount":
+                    try:
+                        ctx[k] = float(str(v).replace("$", "").replace(",", ""))
+                    except ValueError:
+                        ctx[k] = v
+                else:
+                    ctx[k] = v
+
+    bond_data = build_bond_data_from_dashboard(
+        ctx=ctx,
+        field_overrides=overrides if isinstance(overrides, dict) else {},
+        body=body,
+        surety_id=surety_id,
+    )
+    values = DocuSealService.prefill_values_from_bond(bond_data)
+    template_id = (
+        body.get("docuseal_template_id")
+        or body.get("template_id")
+        or resolve_template_id_for_surety(surety_id)
+    )
+
+    # Predicted submitter roles (no API call)
+    inds = bond_data.get("indemnitors") or []
+    roles = []
+    if inds:
+        roles.append(ROLE_INDEMNITOR)
+        if len(inds) > 1:
+            roles.append(ROLE_CO_INDEMNITOR)
+            for i in range(2, len(inds)):
+                roles.append(f"Indemnitor {i + 1}")
+    if body.get("include_defendant", True):
+        roles.append(ROLE_DEFENDANT)
+
+    ready = readiness_report(bond_data, surety_id=surety_id)
+    return {
+        "success": True,
+        "dry_run": True,
+        "surety_id": surety_id,
+        "template_id": template_id,
+        "template_ready": bool(template_id),
+        "prefill": values,
+        "prefill_key_count": len(values),
+        "submitter_roles": roles,
+        "readiness": ready,
+        "infra_ready": ready.get("configured") and bool(template_id),
+        "can_send": bool(
+            ready.get("configured")
+            and template_id
+            and values.get("defendant_name")
+            and values.get("indemnitor_name")
+        ),
+        "context_sources": ctx.get("sources") or [],
+        "bond_amount": bond_data.get("bond_amount"),
+        "premium_preview": values.get("numeric_premium_dollar") or values.get("premium_amount"),
+        "charges_summary": values.get("charges_summary"),
+        "hint": (
+            "Prefill looks good — use Flatten & Send with DocuSeal selected."
+            if (ready.get("configured") and template_id and values.get("defendant_name"))
+            else "; ".join(ready.get("hints") or ["Review missing fields / env"])
+        ),
+        "small_bond_max": SMALL_BOND_MAX,
+    }
 
 
 @paperwork_bp.get("/paperwork/docuseal/templates")
