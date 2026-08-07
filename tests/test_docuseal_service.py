@@ -8,7 +8,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dashboard.services.docuseal_service import DocuSealService, ROLE_INDEMNITOR, ROLE_DEFENDANT
+from dashboard.services.docuseal_service import (
+    DocuSealService,
+    ROLE_INDEMNITOR,
+    ROLE_DEFENDANT,
+    ROLE_CO_INDEMNITOR,
+    _safe_money,
+    _amount_to_words,
+    _number_to_words,
+)
 from dashboard.services.swipesimple_receipt_poller import parse_swipesimple_receipt
 
 
@@ -24,13 +32,41 @@ def test_prefill_values_from_bond():
             "booking_number": "BK123",
             "court_date": "",
             "indemnitor_email": "john@example.com",
+            "bond_amount": 5000,
+            "charge_details": [
+                {"charge": "BATTERY", "bond_amount": 1000, "case_number": "26-CF-100", "poa_number": "POA1"},
+                {"charge": "RESIST", "bond_amount": 1000, "case_number": "26-CF-100", "poa_number": "POA2"},
+            ],
         }
     )
     assert vals["defendant_name"] == "Jane Doe"
     assert vals["IndemnitorName"] == "John Cosigner"
     assert vals["CaseNum"] == "26-CF-100"
-    assert vals["PowerNum"] == "OSI3 20134296"
+    assert vals["PowerNum"] == "POA1" or vals["PowerNum"] == "OSI3 20134296"
     assert vals["CourtDate"] == "TBN"  # empty → TBN
+    assert vals["today_day"]
+    assert vals["today_month"]
+    assert vals["today_year_2digit"]
+    assert vals["offense_1"] == "BATTERY"
+    assert vals["offense_2"] == "RESIST"
+    assert vals["poa_number_1"] == "POA1"
+    assert vals["poa_number_2"] == "POA2"
+    # Premium: max(100, 100) + max(100, 100) = 200
+    assert vals["numeric_premium"] == "200.00"
+    assert "Two Hundred" in vals["written_premium"]
+    assert vals["numeric_full_bond_amount"] == "5,000.00"
+    assert vals["ssa_release_reason"]
+
+
+def test_safe_money_edge_cases():
+    assert _safe_money(None) == 0.0
+    assert _safe_money("") == 0.0
+    assert _safe_money("$1,250.50") == 1250.50
+    assert _safe_money("n/a") == 0.0
+    assert _safe_money({"x": 1}) == 0.0  # weird type
+    assert _amount_to_words(5000) == "Five Thousand and 00/100"
+    assert _number_to_words(0) == "Zero"
+    assert _amount_to_words(None) == ""
 
 
 def test_sign_url_for_slug_uses_public_url():
@@ -127,6 +163,47 @@ async def test_create_submission_for_packet_calls_api():
         assert ROLE_DEFENDANT in roles
         assert result["submission_id"] == 500
         assert len(result["submitters"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_multi_cosigner_roles():
+    """Indemnitor + Co-Indemnitor + Defendant — no dropped links."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    fake = [
+        {"id": 1, "submission_id": 9, "role": ROLE_INDEMNITOR, "slug": "a", "email": "a@x.com"},
+        {"id": 2, "submission_id": 9, "role": ROLE_CO_INDEMNITOR, "slug": "b", "email": "b@x.com"},
+        {"id": 3, "submission_id": 9, "role": ROLE_DEFENDANT, "slug": "c", "email": "c@x.com"},
+    ]
+    with patch.object(svc, "create_submission", new=AsyncMock(return_value=fake)) as m:
+        result = await svc.create_submission_for_packet(
+            template_id=1,
+            packet_id="pkt-multi",
+            bond_data={"defendant_name": "D", "defendant_email": "d@x.com"},
+            indemnitors=[
+                {"name": "A", "email": "a@x.com"},
+                {"name": "B", "email": "b@x.com"},
+            ],
+        )
+        roles = [s["role"] for s in m.await_args.kwargs["submitters"]]
+        assert roles == [ROLE_INDEMNITOR, ROLE_CO_INDEMNITOR, ROLE_DEFENDANT]
+        assert len(result["submitters"]) == 3
+        assert all(s.get("sign_url") for s in result["submitters"])
+
+
+def test_prefill_never_raises_on_garbage():
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    # Must not raise KeyError / TypeError / ValueError
+    vals = svc.prefill_values_from_bond(
+        {
+            "bond_amount": None,
+            "charges": [None, {"bond_amount": "nope"}, "THEFT"],
+            "poa_number": None,
+            "defendant": "not-a-dict",
+            "indemnitor": None,
+            "premium_amount": "",
+        }
+    )
+    assert isinstance(vals, dict)
 
 
 def test_verify_docuseal_signature():

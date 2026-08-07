@@ -46,7 +46,9 @@ ROLE_INDEMNITOR_N = "Indemnitor {n}"  # 3rd+ indemnitor if template has more rol
 
 def _safe_money(val: Any) -> float:
     """Parse currency-ish values without raising; None/blank → 0.0."""
-    if val is None:
+    if val is None or isinstance(val, (dict, list, tuple, set)):
+        return 0.0
+    if isinstance(val, bool):
         return 0.0
     if isinstance(val, (int, float)):
         try:
@@ -56,7 +58,9 @@ def _safe_money(val: Any) -> float:
             return f
         except (ValueError, TypeError, OverflowError):
             return 0.0
-    s = str(val).strip()
+    if not isinstance(val, str):
+        return 0.0
+    s = val.strip()
     if not s or s.lower() in ("none", "null", "n/a", "tbd"):
         return 0.0
     # Keep digits, dot, minus

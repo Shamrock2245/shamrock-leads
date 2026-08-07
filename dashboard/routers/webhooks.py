@@ -1100,9 +1100,11 @@ async def docuseal_webhook(request: Request):
         "form.started": "in_progress",
         "form.viewed": "viewed",
     }
-    if event_l in lifecycle_status_map or any(
-        x in event_l for x in ("declin", "expir", "created", "started", "viewed")
-    ) and "complet" not in event_l:
+    is_lifecycle = event_l in lifecycle_status_map or (
+        "complet" not in event_l
+        and any(x in event_l for x in ("declin", "expir", "created", "started", "viewed"))
+    )
+    if is_lifecycle:
         st = lifecycle_status_map.get(event_l)
         if not st:
             if "declin" in event_l:

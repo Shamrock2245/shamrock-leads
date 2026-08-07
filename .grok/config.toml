@@ -1,0 +1,15 @@
+# ShamrockLeads — Grok project config
+# DocuSeal is self-hosted; automation goes through dashboard API (DOCUSEAL_API_KEY)
+# and optional DOCUSEAL_MCP_TOKEN for HTTP MCP clients.
+
+[mcp]
+max_output_bytes = 40000
+
+# Official DocuSeal cloud MCP (optional — only if using cloud templates).
+# Self-hosted OSI packets use DOCUSEAL_URL + DOCUSEAL_API_KEY in the app env.
+# Uncomment and set token if you use https://mcp.docuseal.com against cloud:
+#
+# [mcp_servers.docuseal]
+# url = "https://mcp.docuseal.com"
+# headers = { "X-Auth-Token" = "${DOCUSEAL_MCP_TOKEN}" }
+# enabled = false
