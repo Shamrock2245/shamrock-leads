@@ -1169,6 +1169,143 @@ async def api_active_bonds_process_missed():
 # APPEARANCE BOND PDF
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _build_appearance_bond_data(d: dict):
+    """
+    Normalize a (preferably hydrated) request dict into bond_data for PDF fill.
+
+    Returns:
+      (b_data: dict, error: Optional[str])
+    """
+    d = d or {}
+    surety = (d.get("surety") or "osi").lower().strip()
+    if surety not in ("osi", "palmetto"):
+        surety = "osi"
+
+    charges_data = (
+        d.get("charge_details")
+        or d.get("charge_list")
+        or d.get("charges")
+        or d.get("charge")
+        or []
+    )
+    if isinstance(charges_data, str):
+        parts = [c.strip() for c in re.split(r"[|\n;]", charges_data) if c.strip()]
+        if not parts and charges_data.strip():
+            parts = [charges_data.strip()]
+        charges_data = [{"charge": p} for p in parts]
+    elif not isinstance(charges_data, list):
+        charges_data = []
+
+    booking_for_case = str(d.get("booking") or d.get("booking_number") or "").strip()
+    top_case = str(d.get("case_number") or "").strip()
+    if _appearance_case_is_booking(top_case, booking_for_case):
+        top_case = ""
+
+    charge_details = []
+    for ch in charges_data:
+        if not isinstance(ch, dict):
+            ch = {"charge": str(ch)}
+        c_case = str(
+            ch.get("case_number")
+            or ch.get("appearance_bond_number")
+            or top_case
+            or ""
+        ).strip()
+        if _appearance_case_is_booking(c_case, booking_for_case):
+            c_case = top_case
+        c_charge = ch.get("charge") or ch.get("description") or ch.get("name") or ""
+        if _appearance_charge_is_placeholder(c_charge):
+            c_charge = ""
+        c_court = str(ch.get("court_date") or d.get("court_date") or "").strip()
+        if not c_court or c_court.upper() in ("TBN", "TBD"):
+            c_court = str(d.get("court_date") or "TBN").strip() or "TBN"
+        charge_details.append({
+            "charge": c_charge,
+            "bond_amount": ch.get(
+                "bond_amount",
+                ch.get("amount", ch.get("bond", d.get("bond") or d.get("bond_amount") or 0)),
+            ),
+            "case_number": c_case,
+            "poa_number": (
+                ch.get("poa_number")
+                or ch.get("poa_full")
+                or ch.get("POA_Number")
+                or ""
+            ),
+            "bond_type": ch.get("bond_type") or "Surety",
+            "court_date": c_court,
+            "court_time": ch.get("court_time") or d.get("court_time") or "",
+            "county": ch.get("county") or d.get("county") or "",
+        })
+
+    poa_list = d.get("poa_numbers") or []
+    if isinstance(poa_list, str):
+        poa_list = [x.strip() for x in poa_list.split(",") if x.strip()]
+    if isinstance(poa_list, list):
+        for i, row in enumerate(charge_details):
+            if not row.get("poa_number") and i < len(poa_list):
+                p = poa_list[i]
+                if isinstance(p, dict):
+                    row["poa_number"] = p.get("poa_full") or p.get("poa_number") or ""
+                else:
+                    row["poa_number"] = str(p)
+
+    if d.get("poa_number") and charge_details and not charge_details[0].get("poa_number"):
+        charge_details[0]["poa_number"] = d.get("poa_number")
+
+    charge_details = [c for c in charge_details if (c.get("charge") or "").strip()]
+    if not charge_details and d.get("charges"):
+        parts = [c.strip() for c in re.split(r"[|\n;]", str(d.get("charges"))) if c.strip()]
+        for p in parts:
+            if _appearance_charge_is_placeholder(p):
+                continue
+            charge_details.append({
+                "charge": p,
+                "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
+                "case_number": top_case,
+                "poa_number": d.get("poa_number") or "",
+                "bond_type": "Surety",
+                "court_date": d.get("court_date") or "TBN",
+                "court_time": d.get("court_time") or "",
+                "county": d.get("county") or "",
+            })
+
+    # Single-charge GET often sends only `charge` — already handled above
+    if not charge_details:
+        return {}, "No charges provided — send charge_details[], charges, or booking with arrest data"
+
+    # Clean top-level case
+    case_number = str(d.get("case_number") or top_case or "").strip()
+    if _appearance_case_is_booking(case_number, booking_for_case):
+        case_number = top_case or next(
+            (c.get("case_number") for c in charge_details if c.get("case_number")),
+            "",
+        )
+
+    b_data = {
+        "name": d.get("name") or d.get("defendant_name") or "",
+        "defendant_name": d.get("name") or d.get("defendant_name") or "",
+        "first_name": d.get("first_name") or "",
+        "last_name": d.get("last_name") or "",
+        "booking_number": booking_for_case or d.get("booking") or d.get("booking_number") or "",
+        "county": d.get("county") or "",
+        "court_date": d.get("court_date") or "TBN",
+        "court_time": d.get("court_time") or "",
+        "court_type": d.get("court_type") or "",
+        "surety": surety,
+        "bond_date": d.get("date") or d.get("bond_date") or datetime.now().strftime("%m/%d/%Y"),
+        "dob": d.get("dob") or d.get("date_of_birth") or "",
+        "address": d.get("address") or d.get("defendant_address") or "",
+        "indemnitor_name": d.get("indemnitor_name") or "",
+        "charge_details": charge_details,
+        "case_number": case_number,
+        "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
+        "poa_numbers": [c.get("poa_number") for c in charge_details],
+        "poa_number": d.get("poa_number") or (charge_details[0].get("poa_number") if charge_details else ""),
+    }
+    return b_data, None
+
+
 @bonds_bp.api_route("/appearance-bond-pdf", methods=["GET", "POST"])
 async def api_appearance_bond_pdf(request: Request):
     """
@@ -1181,6 +1318,9 @@ async def api_appearance_bond_pdf(request: Request):
         name, booking, county, bond, charge(s), charge_details, surety, date, dob,
         address, court_date, court_time, case_number(s), poa_number(s), court_type,
         first_name, last_name, indemnitor_name, copies, uncollated, store
+
+    Hydrates from Mongo arrest/lead records when booking is present so 1×/Edit
+    buttons get the same charge/case/court fill as print-package.
     """
     try:
         from dashboard.bond_pdf_service import (
@@ -1199,41 +1339,36 @@ async def api_appearance_bond_pdf(request: Request):
             except Exception:
                 d = {}
 
-        def _p(key, default=""):
-            return d.get(key, _qp.get(key, default))
+        # Merge query params into body for hydrate (GET uses query only)
+        for k, v in _qp.items():
+            if k not in d or d.get(k) in (None, ""):
+                d[k] = v
 
-        surety = (_p("surety", "osi") or "osi").lower().strip()
-        data = {
-            "name": _p("name") or _p("defendant_name", ""),
-            "defendant_name": _p("name") or _p("defendant_name", ""),
-            "first_name": _p("first_name", ""),
-            "last_name": _p("last_name", ""),
-            "booking_number": _p("booking") or _p("booking_number", ""),
-            "county": _p("county", ""),
-            "bond_amount": _p("bond") or _p("bond_amount", "0"),
-            "charge": _p("charge", ""),
-            "charges": _p("charges") or _p("charge", ""),
-            "charge_details": d.get("charge_details") or d.get("charge_list") or [],
-            "surety": surety,
-            "bond_date": _p("date") or _p("bond_date") or datetime.now().strftime("%m/%d/%Y"),
-            "dob": _p("dob") or _p("date_of_birth", ""),
-            "address": _p("address", ""),
-            "court_date": _p("court_date", ""),
-            "court_time": _p("court_time", ""),
-            "case_number": _p("case_number", ""),
-            "case_numbers": d.get("case_numbers") or _p("case_numbers", ""),
-            "poa_number": _p("poa_number", ""),
-            "poa_numbers": d.get("poa_numbers") or _p("poa_numbers", ""),
-            "court_type": _p("court_type", ""),
-            "indemnitor_name": _p("indemnitor_name", ""),
-        }
+        # Alias common GET param names
+        if d.get("booking") and not d.get("booking_number"):
+            d["booking_number"] = d["booking"]
+        if d.get("bond") and not d.get("bond_amount"):
+            d["bond_amount"] = d["bond"]
+        if d.get("charge") and not d.get("charges") and not d.get("charge_details"):
+            d["charges"] = d["charge"]
 
+        d = await _hydrate_appearance_bond_payload(d)
+        data, err = _build_appearance_bond_data(d)
+        if err:
+            return JSONResponse(
+                {"error": err, "hint": "Include booking_number so we can load arrest data"},
+                status_code=400,
+            )
+
+        surety = data.get("surety") or "osi"
         try:
-            copies_count = int(_p("copies", "2") or "2")
+            copies_count = int(d.get("copies") or d.get("copies_per_charge") or "2")
         except (TypeError, ValueError):
             copies_count = 2
-        if _p("uncollated", "") in ("true", "1", "yes") or copies_count > 1:
+        if str(d.get("uncollated", "")).lower() in ("true", "1", "yes") or copies_count > 1:
             copies_count = max(2, copies_count)
+        if copies_count < 1:
+            copies_count = 1
 
         pdf_list = generate_appearance_bonds(data, template=surety)
         if not pdf_list:
@@ -1241,7 +1376,7 @@ async def api_appearance_bond_pdf(request: Request):
 
         # Persist unsigned print files (best-effort)
         stored = []
-        if str(_p("store", "1")).lower() not in ("0", "false", "no"):
+        if str(d.get("store", "1")).lower() not in ("0", "false", "no"):
             try:
                 stored = store_appearance_bond_pdfs(
                     pdf_list,
@@ -1264,6 +1399,12 @@ async def api_appearance_bond_pdf(request: Request):
             "X-Appearance-Bond-Print-Only": "1",
             "X-Appearance-Bond-Signature": "wet_ink_live",
             "X-Appearance-Bond-Count": str(len(pdf_list)),
+            "X-Appearance-Bond-Charge": (data.get("charge_details") or [{}])[0].get("charge", "")[:120],
+            "X-Appearance-Bond-Case": str(
+                (data.get("charge_details") or [{}])[0].get("case_number")
+                or data.get("case_number")
+                or ""
+            )[:80],
         }
         if stored:
             headers["X-Appearance-Bond-Stored"] = stored[0].get("file_path", "")[:200]
@@ -1290,7 +1431,7 @@ async def api_appearance_bond_batch(request: Request):
     """
     Print-ready package: one appearance bond per charge, uncollated copies
     (default 2×: Court + Agency). UNSIGNED files for wet-ink → jail.
-    Never e-signed.
+    Never e-signed. Hydrates arrest data when booking is present.
     """
     try:
         from dashboard.bond_pdf_service import (
@@ -1299,10 +1440,11 @@ async def api_appearance_bond_batch(request: Request):
             store_appearance_bond_pdfs,
         )
         d = await request.json() or {}
-        surety = (d.get("surety") or "osi").lower().strip()
-        charges_data = d.get("charges") or d.get("charge_details") or d.get("charge_list") or []
-        if not charges_data:
-            return JSONResponse({"error": "No charges provided for batch appearance bond"}, status_code=400)
+        d = await _hydrate_appearance_bond_payload(d)
+        b_data, err = _build_appearance_bond_data(d)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        surety = b_data.get("surety") or "osi"
         try:
             copies = int(d.get("copies", 2) or 2)
         except (TypeError, ValueError):
@@ -1310,34 +1452,6 @@ async def api_appearance_bond_batch(request: Request):
         if copies < 1:
             copies = 1
 
-        # Normalize charge rows into structured charge_details (1 POA + case per charge)
-        charge_details = []
-        for ch in charges_data:
-            if not isinstance(ch, dict):
-                ch = {"charge": str(ch)}
-            charge_details.append({
-                "charge": ch.get("charge") or ch.get("description") or "",
-                "bond_amount": ch.get("bond_amount", ch.get("amount", d.get("bond", 0))),
-                "case_number": ch.get("case_number") or d.get("case_number") or "",
-                "poa_number": ch.get("poa_number") or ch.get("poa_full") or "",
-                "bond_type": ch.get("bond_type") or "Surety",
-            })
-
-        b_data = {
-            "name": d.get("name", ""),
-            "defendant_name": d.get("name", ""),
-            "booking_number": d.get("booking") or d.get("booking_number", ""),
-            "county": d.get("county", ""),
-            "court_date": d.get("court_date", ""),
-            "surety": surety,
-            "bond_date": d.get("date", datetime.now().strftime("%m/%d/%Y")),
-            "dob": d.get("dob", ""),
-            "address": d.get("address", ""),
-            "indemnitor_name": d.get("indemnitor_name", ""),
-            "charge_details": charge_details,
-            "case_number": d.get("case_number", ""),
-            "poa_numbers": d.get("poa_numbers") or [c.get("poa_number") for c in charge_details],
-        }
         pdf_list = generate_appearance_bonds(b_data, template=surety)
 
         if not pdf_list:
@@ -1718,10 +1832,6 @@ async def api_appearance_bonds_print_package(request: Request):
         d = await request.json() or {}
         d = await _hydrate_appearance_bond_payload(d)
 
-        surety = (d.get("surety") or "osi").lower().strip()
-        if surety not in ("osi", "palmetto"):
-            surety = "osi"
-
         try:
             copies = int(d.get("copies") or d.get("copies_per_charge") or 2)
         except (TypeError, ValueError):
@@ -1729,123 +1839,17 @@ async def api_appearance_bonds_print_package(request: Request):
         if copies < 1:
             copies = 1
 
-        charges_data = (
-            d.get("charge_details")
-            or d.get("charge_list")
-            or d.get("charges")
-            or []
-        )
-        if isinstance(charges_data, str):
-            parts = [c.strip() for c in re.split(r"[|\n;]", charges_data) if c.strip()]
-            if not parts and charges_data.strip():
-                parts = [charges_data.strip()]
-            charges_data = [{"charge": p} for p in parts]
-
-        booking_for_case = str(d.get("booking") or d.get("booking_number") or "").strip()
-        top_case = str(d.get("case_number") or "").strip()
-        if _appearance_case_is_booking(top_case, booking_for_case):
-            top_case = ""
-
-        charge_details = []
-        if isinstance(charges_data, list) and charges_data:
-            for ch in charges_data:
-                if not isinstance(ch, dict):
-                    ch = {"charge": str(ch)}
-                c_case = str(
-                    ch.get("case_number")
-                    or ch.get("appearance_bond_number")
-                    or top_case
-                    or ""
-                ).strip()
-                if _appearance_case_is_booking(c_case, booking_for_case):
-                    c_case = top_case  # already cleaned, or ""
-                c_charge = ch.get("charge") or ch.get("description") or ch.get("name") or ""
-                if _appearance_charge_is_placeholder(c_charge):
-                    c_charge = ""
-                c_court = str(ch.get("court_date") or d.get("court_date") or "").strip()
-                if not c_court or c_court.upper() in ("TBN", "TBD"):
-                    c_court = str(d.get("court_date") or "TBN").strip() or "TBN"
-                charge_details.append({
-                    "charge": c_charge,
-                    "bond_amount": ch.get(
-                        "bond_amount",
-                        ch.get("amount", ch.get("bond", d.get("bond") or d.get("bond_amount") or 0)),
-                    ),
-                    "case_number": c_case,
-                    "poa_number": (
-                        ch.get("poa_number")
-                        or ch.get("poa_full")
-                        or ch.get("POA_Number")
-                        or ""
-                    ),
-                    "bond_type": ch.get("bond_type") or "Surety",
-                    "court_date": c_court,
-                    "court_time": ch.get("court_time") or d.get("court_time") or "",
-                    "county": ch.get("county") or d.get("county") or "",
-                })
-
-        poa_list = d.get("poa_numbers") or []
-        if isinstance(poa_list, str):
-            poa_list = [x.strip() for x in poa_list.split(",") if x.strip()]
-        if isinstance(poa_list, list):
-            for i, row in enumerate(charge_details):
-                if not row.get("poa_number") and i < len(poa_list):
-                    p = poa_list[i]
-                    if isinstance(p, dict):
-                        row["poa_number"] = p.get("poa_full") or p.get("poa_number") or ""
-                    else:
-                        row["poa_number"] = str(p)
-
-        if d.get("poa_number") and charge_details and not charge_details[0].get("poa_number"):
-            charge_details[0]["poa_number"] = d.get("poa_number")
-
-        charge_details = [c for c in charge_details if (c.get("charge") or "").strip()]
-        # If modal sent only placeholders and hydrate put DB charges on `charges` string, expand now
-        if not charge_details and d.get("charges"):
-            parts = [c.strip() for c in re.split(r"[|\n;]", str(d.get("charges"))) if c.strip()]
-            for p in parts:
-                if _appearance_charge_is_placeholder(p):
-                    continue
-                charge_details.append({
-                    "charge": p,
-                    "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
-                    "case_number": top_case,
-                    "poa_number": "",
-                    "bond_type": "Surety",
-                    "court_date": d.get("court_date") or "TBN",
-                    "court_time": d.get("court_time") or "",
-                    "county": d.get("county") or "",
-                })
-        if not charge_details:
+        b_data, err = _build_appearance_bond_data(d)
+        if err:
             return JSONResponse(
                 {
-                    "error": "No charges provided",
+                    "error": err,
                     "hint": "Send charge_details[] or charges, or booking_number with arrest data",
                 },
                 status_code=400,
             )
-
-        b_data = {
-            "name": d.get("name") or d.get("defendant_name") or "",
-            "defendant_name": d.get("name") or d.get("defendant_name") or "",
-            "first_name": d.get("first_name") or "",
-            "last_name": d.get("last_name") or "",
-            "booking_number": d.get("booking") or d.get("booking_number") or "",
-            "county": d.get("county") or "",
-            "court_date": d.get("court_date") or "TBN",
-            "court_time": d.get("court_time") or "",
-            "court_type": d.get("court_type") or "",
-            "surety": surety,
-            "bond_date": d.get("date") or d.get("bond_date") or datetime.now().strftime("%m/%d/%Y"),
-            "dob": d.get("dob") or d.get("date_of_birth") or "",
-            "address": d.get("address") or d.get("defendant_address") or "",
-            "indemnitor_name": d.get("indemnitor_name") or "",
-            "charge_details": charge_details,
-            "case_number": d.get("case_number") or "",
-            "bond_amount": d.get("bond_amount") or d.get("bond") or 0,
-            "poa_numbers": [c.get("poa_number") for c in charge_details],
-            "copies_per_charge": copies,
-        }
+        surety = b_data.get("surety") or "osi"
+        b_data["copies_per_charge"] = copies
 
         plan = describe_appearance_bonds(b_data)
         missing_poa = [p for p in plan if not p.get("poa_number")]

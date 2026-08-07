@@ -159,3 +159,41 @@ def test_merge_charge_rows_preserves_poa_and_fixes_placeholders():
     assert "DRUGS" in merged[0]["charge"]
     assert merged[0]["case_number"] == "26CF016741"
     assert merged[0]["court_date"] == "9/8/2026"
+
+
+def test_build_appearance_bond_data_single_charge_get_shape():
+    """1× / Edit path sends flat charge + booking — must produce charge_details."""
+    from dashboard.routers.bonds import _build_appearance_bond_data
+    b_data, err = _build_appearance_bond_data({
+        "name": "PERKINS, MICHAEL JAMES",
+        "booking": "1029767",
+        "booking_number": "1029767",
+        "county": "Lee",
+        "bond": 5000,
+        "charge": "DRUGS-POSSESS - POSSESS CONTROLLED SUBSTANCE W/O PRESCRIPTION",
+        "case_number": "26CF016741",
+        "court_date": "9/8/2026",
+        "court_time": "8:30:00 AM",
+        "poa_number": "OSI6 20132136",
+        "surety": "osi",
+    })
+    assert err is None
+    assert b_data["booking_number"] == "1029767"
+    assert b_data["case_number"] == "26CF016741"
+    assert len(b_data["charge_details"]) == 1
+    assert "DRUGS" in b_data["charge_details"][0]["charge"]
+    assert b_data["charge_details"][0]["case_number"] == "26CF016741"
+    assert b_data["charge_details"][0]["poa_number"] == "OSI6 20132136"
+
+
+def test_build_rejects_booking_as_only_case():
+    from dashboard.routers.bonds import _build_appearance_bond_data
+    b_data, err = _build_appearance_bond_data({
+        "booking_number": "1029767",
+        "case_number": "1029767",
+        "charge": "TEST CHARGE",
+        "bond": 1000,
+    })
+    assert err is None
+    assert b_data["case_number"] in ("", None) or b_data["case_number"] != "1029767"
+    assert b_data["charge_details"][0]["case_number"] in ("", None)

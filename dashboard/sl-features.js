@@ -754,7 +754,7 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
             <span style="font-size:12px;font-weight:700;color:var(--text)">Charge #${i+1}: ${ch}</span>
             ${fillDownBtn}
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;align-items:center">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;gap:8px;align-items:center">
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">County (Appearance Bond)</label>
               <input type="text" id="countyInput_${i}" class="charge-county-input" value="${defaultCounty}" placeholder="e.g. Pinellas" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
@@ -764,9 +764,12 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
               <input type="text" id="courtDateInput_${i}" class="charge-court-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].court_date) ? lead.charge_details[i].court_date : defaultCourtDate}" placeholder="TBN or 9/8/2026" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
             </div>
             <div>
+              <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Court Time</label>
+              <input type="text" id="courtTimeInput_${i}" class="charge-court-time-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].court_time) ? lead.charge_details[i].court_time : defaultCourtTime}" placeholder="8:30:00 AM" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
+            </div>
+            <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Case # (court — not booking)</label>
               <input type="text" id="caseNumInput_${i}" class="charge-case-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].case_number && !_isBookingAsCase(lead.charge_details[i].case_number, modal.booking)) ? lead.charge_details[i].case_number : defaultCaseNum}" placeholder="e.g. 26CF016741" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;width:100%;box-sizing:border-box" />
-              <input type="hidden" id="courtTimeInput_${i}" class="charge-court-time-input" value="${(lead.charge_details && lead.charge_details[i] && lead.charge_details[i].court_time) ? lead.charge_details[i].court_time : defaultCourtTime}" />
             </div>
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>

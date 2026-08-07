@@ -80,16 +80,25 @@ def _extract_signing_link_from_packet(doc: Optional[dict]) -> str:
     return ""
 
 
-async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str = "") -> str:
-    """Find the newest packet for this phone/booking/intake and return its sign URL."""
+async def _resolve_packet_for_client(
+    phone_str: str,
+    booking: str = "",
+    intake: str = "",
+) -> Dict[str, Any]:
+    """
+    Find the newest non-voided paperwork packet for this client and return
+    signing link + status metadata for the portal UI.
+    """
     packets = get_collection("paperwork_packets")
     phone = _digits_phone(phone_str)
     or_clauses = []
     if booking:
         or_clauses.append({"booking_number": booking})
         or_clauses.append({"Booking_Number": booking})
+        or_clauses.append({"defendant_booking_number": booking})
     if intake:
         or_clauses.append({"intake_id": intake})
+        or_clauses.append({"Intake_ID": intake})
     if phone:
         # Match last 10 digits whether stored as 10-digit or E.164
         phone_pat = re.escape(phone) + r"$"
@@ -98,15 +107,86 @@ async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str =
             {"delivered_to": {"$regex": phone_pat}},
             {"signer_phone": {"$regex": phone_pat}},
             {"defendant_phone": {"$regex": phone_pat}},
+            {"indemnitor.phone": {"$regex": phone_pat}},
+            {"parties.indemnitor.phone": {"$regex": phone_pat}},
         ])
     if not or_clauses:
-        return ""
+        return {
+            "signing_link": "",
+            "has_packet": False,
+            "packet_id": "",
+            "defendant_name": "",
+            "status": "no_query",
+            "message": "Enter a valid phone number to locate your packet.",
+        }
 
-    doc = await packets.find_one({"$or": or_clauses}, sort=[("created_at", -1)])
+    base_or = {"$or": or_clauses}
+    # Prefer non-voided packets (find_one is robust under Motor + test mocks)
+    doc = None
+    try:
+        doc = await packets.find_one(
+            {
+                "$and": [
+                    base_or,
+                    {"voided": {"$ne": True}},
+                    {"status": {"$nin": ["voided", "cancelled", "canceled"]}},
+                ]
+            },
+            sort=[("created_at", -1)],
+        )
+    except Exception:
+        doc = None
     if not doc:
-        # Fallback: newest non-voided packet with any docuseal link (admin testing)
-        return ""
-    return _extract_signing_link_from_packet(doc)
+        try:
+            doc = await packets.find_one(base_or, sort=[("created_at", -1)])
+        except Exception:
+            doc = None
+
+    if not doc:
+        return {
+            "signing_link": "",
+            "has_packet": False,
+            "packet_id": "",
+            "defendant_name": "",
+            "status": "not_found",
+            "message": (
+                "No e-sign packet is on file for this phone yet. "
+                "If your bond agent already sent paperwork, call (239) 332-2245."
+            ),
+        }
+
+    link = _extract_signing_link_from_packet(doc)
+    defendant = str(doc.get("defendant_name") or doc.get("Defendant_Name") or "")
+    packet_id = str(doc.get("packet_id") or doc.get("_id") or "")
+    status = str(doc.get("status") or "pending")
+
+    if link:
+        return {
+            "signing_link": link,
+            "has_packet": True,
+            "packet_id": packet_id,
+            "defendant_name": defendant,
+            "status": status or "pending_signature",
+            "message": "Packet ready — open your e-sign documents.",
+        }
+
+    return {
+        "signing_link": "",
+        "has_packet": True,
+        "packet_id": packet_id,
+        "defendant_name": defendant,
+        "status": status,
+        "message": (
+            "We found your case file, but the e-sign link is not ready yet. "
+            "Please call (239) 332-2245 and we will resend your signing link."
+        ),
+    }
+
+
+async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str = "") -> str:
+    """Back-compat: return only the signing URL string."""
+    meta = await _resolve_packet_for_client(phone_str, booking=booking, intake=intake)
+    return meta.get("signing_link") or ""
 
 
 @pin_portal_router.post("/send-pin")
@@ -208,14 +288,19 @@ async def verify_portal_pin(req: VerifyPinRequest):
 
     # Master admin bypass (staff smoke)
     if input_pin == _MASTER_PIN:
-        link = await _resolve_signing_link(clean_phone)
+        meta = await _resolve_packet_for_client(clean_phone)
         return {
             "success": True,
             "verified": True,
             "phone": clean_phone,
             "session_token": f"PORTAL-ADMIN-{clean_phone}",
             "role": "indemnitor",
-            "signing_link": link,
+            "signing_link": meta.get("signing_link") or "",
+            "has_packet": bool(meta.get("has_packet")),
+            "packet_id": meta.get("packet_id") or "",
+            "defendant_name": meta.get("defendant_name") or "",
+            "packet_status": meta.get("status") or "",
+            "message": meta.get("message") or "",
         }
 
     pins_col = get_collection("portal_pins")
@@ -242,7 +327,7 @@ async def verify_portal_pin(req: VerifyPinRequest):
             pass
 
     await pins_col.update_one({"_id": pin_doc["_id"]}, {"$set": {"verified": True}})
-    link = await _resolve_signing_link(
+    meta = await _resolve_packet_for_client(
         clean_phone,
         booking=pin_doc.get("booking_number", "") or "",
         intake=pin_doc.get("intake_id", "") or "",
@@ -255,7 +340,12 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "booking_number": pin_doc.get("booking_number"),
         "intake_id": pin_doc.get("intake_id"),
         "session_token": f"PORTAL-{pin_doc['_id']}",
-        "signing_link": link,
+        "signing_link": meta.get("signing_link") or "",
+        "has_packet": bool(meta.get("has_packet")),
+        "packet_id": meta.get("packet_id") or "",
+        "defendant_name": meta.get("defendant_name") or "",
+        "packet_status": meta.get("status") or "",
+        "message": meta.get("message") or "",
     }
 
 
@@ -596,11 +686,15 @@ async def get_portal_ui(request: Request):
                 if (d.success) {
                     if (d.signing_link) {
                         statusEl.className = 'status success';
-                        statusEl.textContent = '✅ Verified! Opening your e-sign packet...';
+                        const who = d.defendant_name ? (' for ' + d.defendant_name) : '';
+                        statusEl.textContent = '✅ Verified' + who + ' — opening e-sign packet...';
                         openDocuSealForm(d.signing_link);
                     } else {
-                        statusEl.className = 'status success';
-                        statusEl.textContent = '✅ Verified — no active packet linked to this phone yet. Call (239) 332-2245 and we will generate your signing link.';
+                        statusEl.className = 'status error';
+                        statusEl.textContent = d.message
+                            || (d.has_packet
+                                ? '✅ Verified — e-sign link not ready yet. Call (239) 332-2245.'
+                                : '✅ Verified — no packet on file for this phone. Call (239) 332-2245.');
                     }
                 } else {
                     statusEl.className = 'status error';
