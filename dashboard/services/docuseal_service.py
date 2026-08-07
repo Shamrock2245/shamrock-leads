@@ -530,6 +530,8 @@ class DocuSealService:
             "county": county,
             "County": county,
             "county_full": county_full,
+            "state": "FL",
+            "State": "FL",
             "court_type": court_type,
             "CourtType": court_type,
             "charges_summary": charges_summary,
