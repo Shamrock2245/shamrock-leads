@@ -889,12 +889,25 @@ async def imessage_status():
     if not BB_SERVERS:
         return {"connected": False, "servers": [], "reason": "No BlueBubbles servers configured in .env"}
 
+    from config.tailscale import ts_config
     servers = []
     any_connected = False
     any_private_api = False
     for phone_key, srv in BB_SERVERS.items():
-        entry = {"phone": phone_key, "label": srv["label"], "email": srv["email"], "connected": False}
+        url_str = srv["url"]
+        path_in_use = "tailscale" if ("100." in url_str or ts_config.imac_hostname in url_str) else ("ngrok" if "ngrok" in url_str else ("frp" if "12434" in url_str or "frp" in url_str else "other"))
+        entry = {
+            "phone": phone_key,
+            "label": srv["label"],
+            "email": srv["email"],
+            "url": url_str,
+            "path_in_use": path_in_use,
+            "connected": False,
+            "latency_ms": None,
+        }
         try:
+            import time
+            start_time = time.time()
             async with httpx.AsyncClient() as client:
                 r = await client.get(
                     f"{srv['url']}/api/v1/server/info",
@@ -906,22 +919,26 @@ async def imessage_status():
                     },
                     timeout=5,
                 )
+                elapsed_ms = round((time.time() - start_time) * 1000, 1)
                 data = r.json()
                 if r.status_code == 200:
                     entry["connected"] = True
+                    entry["latency_ms"] = elapsed_ms
                     entry["private_api"] = data.get("data", {}).get("private_api", False)
                     entry["os_version"] = data.get("data", {}).get("os_version", "")
                     any_connected = True
                     if entry.get("private_api"):
                         any_private_api = True
-        except Exception:
-            entry["error"] = "unreachable"
+        except Exception as exc:
+            entry["error"] = f"unreachable: {exc}"
         servers.append(entry)
 
     return {
         "connected": any_connected,
         "private_api": any_private_api,
         "server_count": len(BB_SERVERS),
+        "tailscale_enabled": ts_config.enabled,
+        "tailscale_imac_reachable": ts_config.is_imac_reachable(),
         "servers": servers,
     }
 

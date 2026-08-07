@@ -59,6 +59,8 @@ OPEN_PREFIXES = (
     "/g/",
     "/c/",
     "/api/portal",
+    "/done",
+    "/paperwork",
     "/api/config/bluebubbles-url",
     "/traccar/setup/",
     "/api/traccar/device-status/",

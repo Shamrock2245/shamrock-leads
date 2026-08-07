@@ -253,15 +253,8 @@ async def send_portal_link(request: Request):
         from dashboard.services.bb_client import send_message_universal
         send_result = await send_message_universal(phone, msg)
     except Exception as e:
-        logger.warning("Portal link send via iMessage failed: %s", e)
-        try:
-            from dashboard.services.twilio_service import TwilioService
-            twilio = TwilioService()
-            sms_result = twilio.send_sms(phone, msg)
-            send_result = {"success": True, "channel": "sms", "sid": sms_result}
-        except Exception as sms_err:
-            logger.warning("Portal link send via SMS also failed: %s", sms_err)
-            send_result = {"success": False, "error": str(sms_err)}
+        logger.warning("Portal link send via BB failed: %s", e)
+        send_result = {"success": False, "error": str(e)}
 
     return {
         "token_generated": True,

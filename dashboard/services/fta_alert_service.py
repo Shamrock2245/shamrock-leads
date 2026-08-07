@@ -313,23 +313,21 @@ class FTAAlertService:
     async def _send_bb_to_phones(self, phones: list, message: str,
                                   booking_number: str, context: str) -> int:
         """
-        Send a message to all phones via BlueBubbles iMessage.
-        Falls back to Twilio SMS if BB is unavailable.
-        Returns number of successful sends.
+        Send a message to all phones via BlueBubbles iMessage/SMS stack.
+        If BlueBubbles is offline, send_message_universal queues the message
+        and alerts staff on Slack — Twilio is never used for client text.
+        Returns number of successful/queued sends.
         """
         sent = 0
         for phone in phones[:6]:
-            success = await self._send_bb(phone, message)
+            result = await self._send_bb(phone, message)
+            success = result.get("sent", False) or result.get("queued", False)
             if success:
                 sent += 1
-                log.info("[FTAAlert][%s] BB message sent to ...%s", context, phone[-4:])
+                channel = result.get("channel", "imessage")
+                log.info("[FTAAlert][%s] BB message (%s) to ...%s (status=%s)", context, channel, phone[-4:], "sent" if result.get("sent") else "queued")
             else:
-                fallback_sent = await self._send_twilio_fallback(phone, message)
-                if fallback_sent:
-                    sent += 1
-                    log.info("[FTAAlert][%s] Twilio fallback sent to ...%s", context, phone[-4:])
-                else:
-                    log.warning("[FTAAlert][%s] All channels failed for ...%s", context, phone[-4:])
+                log.warning("[FTAAlert][%s] BB send failed/queued for ...%s: %s", context, phone[-4:], result.get("error"))
 
             try:
                 await self.db["outbound_messages"].insert_one({
@@ -337,8 +335,9 @@ class FTAAlertService:
                     "phone": phone,
                     "message": message,
                     "context": context,
-                    "channel": "bb_imessage",
+                    "channel": result.get("channel", "bluebubbles"),
                     "success": success,
+                    "queued": result.get("queued", False),
                     "sent_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception:
@@ -346,31 +345,14 @@ class FTAAlertService:
 
         return sent
 
-    async def _send_bb(self, phone: str, message: str) -> bool:
-        """Send via BlueBubbles. Returns True on success."""
+    async def _send_bb(self, phone: str, message: str) -> dict:
+        """Send via BlueBubbles (send_message_universal). Returns status dict."""
         try:
             from dashboard.services.bb_client import send_message_universal
-            result = await send_message_universal(phone, message)
-            return result.get("success", False)
+            return await send_message_universal(phone, message)
         except Exception as e:
-            log.debug("[FTAAlert] BB send failed for ...%s: %s", phone[-4:], e)
-            return False
-
-    async def _send_twilio_fallback(self, phone: str, message: str) -> bool:
-        """
-        Twilio SMS fallback — only used when BlueBubbles is unreachable.
-        Returns True on success.
-        """
-        try:
-            from dashboard.services.twilio_service import TwilioService
-            twilio = TwilioService()
-            if not twilio._is_configured():
-                return False
-            await twilio.send_sms(to=phone, body=message)
-            return True
-        except Exception as e:
-            log.debug("[FTAAlert] Twilio fallback failed for ...%s: %s", phone[-4:], e)
-            return False
+            log.debug("[FTAAlert] BB send exception for ...%s: %s", phone[-4:], e)
+            return {"success": False, "sent": False, "queued": False, "error": str(e)}
 
     @staticmethod
     def _first_name(full_name: str) -> str:

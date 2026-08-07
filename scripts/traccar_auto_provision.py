@@ -103,10 +103,10 @@ def main():
         if not args.json:
             print(f"⚠️ Traccar API registration notice: {e}")
 
-    # Optionally send SMS via Twilio if requested
+    # Send setup text via BlueBubbles if requested
     if args.send_sms and args.phone:
         try:
-            from dashboard.services.twilio_service import send_sms
+            from dashboard.services.bb_client import send_message_universal
             msg = (
                 f"Hi {args.name} — Shamrock Bail Bonds GPS Setup:\n\n"
                 f"1) Download 'Traccar Client' from App Store / Google Play\n"
@@ -115,10 +115,10 @@ def main():
                 f"Questions? (239) 332-2245 ☘️"
             )
             import asyncio
-            sms_res = asyncio.run(send_sms(args.phone, msg))
-            config["sms_sent"] = bool(sms_res.get("success"))
+            sms_res = asyncio.run(send_message_universal(args.phone, msg))
+            config["sms_sent"] = bool(sms_res.get("sent") or sms_res.get("queued"))
             if not args.json:
-                print(f"📱 SMS setup dispatch: {'✅ Sent' if config['sms_sent'] else '❌ Failed'}")
+                print(f"📱 BlueBubbles setup text dispatch: {'✅ Sent/Queued' if config['sms_sent'] else '❌ Failed'}")
         except Exception as e:
             config["sms_sent"] = False
             config["sms_error"] = str(e)

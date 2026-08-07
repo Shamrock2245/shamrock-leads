@@ -439,18 +439,12 @@ async def send_checkin_link(
     try:
         from dashboard.services.bb_client import send_message_universal
         send_result = await send_message_universal(phone, msg)
-        if send_result.get("success"):
-            send_result["channel"] = send_result.get("channel") or "imessage"
+        sent_ok = send_result.get("sent", False) or send_result.get("queued", False)
+        if not sent_ok:
+            logger.warning("[checkin_enroll] BB send/queue failed for %s: %s", booking_number, send_result.get("error"))
     except Exception as e:
-        logger.warning("[checkin_enroll] iMessage send failed: %s", e)
-        try:
-            from dashboard.services.twilio_service import TwilioService
-            twilio = TwilioService()
-            sms_result = twilio.send_sms(phone, msg)
-            send_result = {"success": True, "channel": "sms", "sid": str(sms_result)}
-        except Exception as sms_err:
-            logger.warning("[checkin_enroll] SMS fallback failed: %s", sms_err)
-            send_result = {"success": False, "error": str(sms_err)}
+        logger.warning("[checkin_enroll] BB send exception: %s", e)
+        send_result = {"success": False, "error": str(e)}
 
     now = _now()
     await active_bonds.update_one(

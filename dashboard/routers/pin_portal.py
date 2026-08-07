@@ -71,34 +71,69 @@ async def send_portal_pin(req: SendPinRequest):
 
     logger.info("[PIN Portal] Generated PIN %s for phone %s", otp_pin, clean_phone)
 
-    # Send SMS / iMessage via BlueBubbles / Twilio in background
+    # Send OTP PIN strictly via BlueBubbles (send_message_universal) — NO Twilio fallback
     try:
-        from dashboard.services.outreach_sequencer import OutreachSequencer
-        outreach = OutreachSequencer()
+        from dashboard.services.bb_client import send_message_universal
         msg = f"Your Shamrock Bail Bonds e-sign verification PIN is: {otp_pin}. Valid for 15 minutes."
-        await outreach.send_text(clean_phone, msg)
-    except Exception as exc:
-        logger.warning("[PIN Portal] Outreach send warning: %s", exc)
+        send_res = await send_message_universal(clean_phone, msg)
+        logger.info("[PIN Portal] send_message_universal result: %s", send_res)
+        
+        sent_ok = send_res.get("sent", False) or send_res.get("queued", False)
+        if not sent_ok:
+            return JSONResponse({
+                "success": False,
+                "error": f"Messaging unavailable: {send_res.get('error', 'send failed')}",
+                "channel": send_res.get("channel", "failed")
+            }, status_code=503)
 
-    return {"success": True, "phone": clean_phone, "expires_in_minutes": 15, "debug_pin": otp_pin if os.getenv("ENV") != "production" else None}
+        return {
+            "success": True,
+            "phone": clean_phone,
+            "channel": send_res.get("channel", "imessage"),
+            "queued": send_res.get("queued", False),
+            "expires_in_minutes": 15,
+            "debug_pin": otp_pin if os.getenv("ENV") != "production" else None
+        }
+    except Exception as exc:
+        logger.error("[PIN Portal] Send PIN exception: %s", exc)
+        return JSONResponse({"success": False, "error": f"Send error: {exc}"}, status_code=500)
 
 
 @pin_portal_router.post("/verify-pin")
 async def verify_portal_pin(req: VerifyPinRequest):
     """
-    Verify 6-digit OTP PIN and return session token + packet metadata.
+    Verify 6-digit OTP PIN and return session token + packet deep-link signing URL.
     """
     clean_phone = "".join(ch for ch in req.phone if ch.isdigit())[-10:]
     input_pin = req.pin.strip()
 
+    # Look up packet signing link helper
+    async def _resolve_signing_link(phone_str: str, booking: str = "", intake: str = "") -> str:
+        packets = get_collection("paperwork_packets")
+        query = {"$or": []}
+        if booking:
+            query["$or"].append({"booking_number": booking})
+        if intake:
+            query["$or"].append({"intake_id": intake})
+        query["$or"].extend([
+            {"indemnitor_phone": {"$regex": phone_str}},
+            {"signer_email": {"$regex": phone_str}},
+        ])
+        doc = await packets.find_one(query, sort=[("created_at", -1)])
+        if doc:
+            return doc.get("signing_link") or (doc.get("docuseal_submitters") or [{}])[0].get("sign_url") or ""
+        return ""
+
     # Master admin bypass
     if input_pin == "224545":
+        link = await _resolve_signing_link(clean_phone)
         return {
             "success": True,
             "verified": True,
             "phone": clean_phone,
             "session_token": f"PORTAL-ADMIN-{clean_phone}",
             "role": "indemnitor",
+            "signing_link": link,
         }
 
     pins_col = get_collection("portal_pins")
@@ -118,6 +153,11 @@ async def verify_portal_pin(req: VerifyPinRequest):
             pass
 
     await pins_col.update_one({"_id": pin_doc["_id"]}, {"$set": {"verified": True}})
+    link = await _resolve_signing_link(
+        clean_phone,
+        booking=pin_doc.get("booking_number", ""),
+        intake=pin_doc.get("intake_id", "")
+    )
 
     return {
         "success": True,
@@ -126,14 +166,47 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "booking_number": pin_doc.get("booking_number"),
         "intake_id": pin_doc.get("intake_id"),
         "session_token": f"PORTAL-{pin_doc['_id']}",
+        "signing_link": link,
     }
 
 
+@pin_portal_router.get("/", response_class=HTMLResponse)
+@pin_portal_router.get("/paperwork", response_class=HTMLResponse)
 @pin_portal_router.get("/portal-ui", response_class=HTMLResponse)
-async def get_portal_ui():
+@pin_portal_router.get("/done", response_class=HTMLResponse)
+async def get_portal_ui(request: Request):
     """
     Render lightweight mobile PWA UI for paperwork.shamrockbailbonds.biz
+    and /done completion page.
     """
+    if request.url.path.endswith("/done"):
+        html_done = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Shamrock Bail Bonds — Document Packet Complete</title>
+    <style>
+        :root { --bg: #0b0f19; --card: #151c2c; --accent: #22c55e; --text: #f8fafc; --muted: #94a3b8; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 20px; text-align: center; }
+        .card { background: var(--card); border-radius: 16px; padding: 32px 24px; max-width: 400px; margin: 40px auto; border: 1px solid rgba(34,197,94,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .icon { font-size: 48px; margin-bottom: 12px; }
+        h1 { font-size: 22px; margin-bottom: 8px; color: var(--accent); }
+        p { font-size: 14px; color: var(--muted); line-height: 1.6; }
+        .btn { display: inline-block; width: 100%; padding: 14px; background: var(--accent); color: #000; font-weight: 700; border-radius: 8px; text-decoration: none; margin-top: 20px; box-sizing: border-box; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">✅</div>
+        <h1>Paperwork Successfully Signed!</h1>
+        <p>Thank you. Your document packet has been securely signed and submitted. Our bond agents have been alerted and are processing your release.</p>
+        <p>A copy of your signed paperwork has been filed to Drive and sent to your email.</p>
+        <a href="tel:2393322245" class="btn">📞 Call Office: (239) 332-2245</a>
+    </div>
+</body>
+</html>"""
+        return HTMLResponse(content=html_done)
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -200,7 +273,7 @@ async def get_portal_ui():
             const d = await r.json();
             if (d.success) {
                 document.getElementById('status').textContent = '✅ Verified! Loading e-sign packet...';
-                window.location.href = 'https://sign.shamrockbailbonds.biz';
+                window.location.href = d.signing_link || 'https://sign.shamrockbailbonds.biz';
             } else {
                 document.getElementById('status').textContent = '❌ ' + (d.error || 'Invalid PIN');
             }
