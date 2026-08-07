@@ -358,16 +358,16 @@ function openBondModal(nameOrLead, bond, county, booking) {
 
     <div class="wb-section" id="signnowSection">
       <div class="wb-section-label" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        📝 Configure Paperwork & SignNow Packet
+        📝 Configure Paperwork & E-Sign Packet (DocuSeal)
         <span id="sn-phase-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted)">Not Sent</span>
-        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(59,130,246,0.12);color:#60a5fa;margin-left:auto">🛡️ Templates</span>
+        <span id="sn-surety-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:rgba(34,197,94,0.12);color:#22c55e;margin-left:auto">🛡️ DocuSeal Templates</span>
       </div>
 
       <div style="margin-top:8px;font-size:13px">
         <label style="display:block;margin-bottom:4px;font-weight:600">Routing Scenario</label>
         <select id="routingScenarioSelect" style="width:100%;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)">
-          <option value="phase1_2">Phase 1 (Indemnitor First) -> Phase 2 (Defendant & Agent Later)</option>
           <option value="all-in-one">All-in-One (Indemnitor -> Defendant -> Agent Sequential)</option>
+          <option value="phase1_2">Phase 1 (Indemnitor First) -> Phase 2 (Defendant & Agent Later)</option>
           <option value="kiosk">Kiosk Mode (Side-by-Side In Person)</option>
         </select>
       </div>
@@ -391,9 +391,9 @@ function openBondModal(nameOrLead, bond, county, booking) {
       </div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-        <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Indemnitor)</button>
-        <button class="btn-export" id="btnPhase2" onclick="triggerSignNowPhase2()" style="background:rgba(34,197,94,0.15);color:var(--success)" disabled>📨 Send Phase 2 (Post-Approval)</button>
-        <button class="btn-export" id="btnSendPacket" onclick="triggerSignNowPacket()" style="background:rgba(245,158,11,0.15);color:#f59e0b">📨 Send Custom Packet</button>
+        <button class="btn-export" id="btnSendDocuSeal" onclick="triggerDocuSealPacket()" style="background:rgba(34,197,94,0.2);color:#22c55e;font-weight:600">🚀 Send DocuSeal Packet</button>
+        <button class="btn-export" id="btnPhase1" onclick="triggerSignNowPhase1()" style="background:rgba(59,130,246,0.15);color:#60a5fa">📨 Send Phase 1 (Legacy SignNow)</button>
+        <button class="btn-export" id="btnSendPacket" onclick="triggerSignNowPacket()" style="background:rgba(245,158,11,0.15);color:#f59e0b">📨 Custom SignNow Packet</button>
       </div>
       <div id="sn-status" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
     </div>
@@ -2514,9 +2514,63 @@ function openBondFromActiveBond(bond) {
 }
 window.openBondFromActiveBond = openBondFromActiveBond;
 
-// ── Init ──
-loadDashboard();
-populateSavedViews();
+async function triggerDocuSealPacket() {
+  const data = window._bondModalData;
+  if (!data) { toast('No bond data', 'error'); return; }
+  const snStatus = document.getElementById('sn-status');
+  const phaseBadge = document.getElementById('sn-phase-badge');
+  const poaInput = document.getElementById('poaInput_0');
+  const poaNumber = poaInput ? poaInput.value.trim() : '';
+
+  if (snStatus) snStatus.textContent = 'Creating DocuSeal submission...';
+  try {
+    let signerEmail = (data.lead && data.lead.indemnitor_email) || '';
+    let signerName = (data.lead && data.lead.indemnitor_name) || '';
+    if (!signerEmail) {
+      signerEmail = prompt('Enter indemnitor email for DocuSeal signature:') || '';
+      if (!signerEmail) { if (snStatus) snStatus.textContent = 'Cancelled.'; return; }
+      signerName = prompt('Enter indemnitor full name:') || 'Indemnitor';
+    }
+
+    const payload = {
+      intake_id: (data.lead && data.lead._intake_id) || '',
+      booking_number: data.booking,
+      signer_email: signerEmail,
+      signer_name: signerName,
+      surety_id: data.surety || 'osi',
+      poa_number: poaNumber,
+      provider: 'docuseal',
+      field_overrides: {
+        defendant_name: (data.lead && data.lead.defendant_name) || data.defendantName || '',
+        indemnitor_name: signerName,
+        indemnitor_email: signerEmail,
+        case_number: (data.lead && data.lead.case_number) || data.booking || '',
+        poa_number: poaNumber,
+        bond_amount: data.bond || 0,
+      }
+    };
+
+    const r = await fetch(`${API}/api/paperwork/packet/finalize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await r.json();
+    if (result.status === 'success' || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.success)) {
+      const link = result.signing_link || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.signing_link) || '#';
+      if (snStatus) snStatus.innerHTML = `✅ <strong>DocuSeal Packet Created!</strong> <a href="${link}" target="_blank" style="color:#22c55e;font-weight:bold;text-decoration:underline;margin-left:8px">Open Signing Link</a>`;
+      if (phaseBadge) { phaseBadge.textContent = 'DocuSeal Live'; phaseBadge.style.background = 'rgba(34,197,94,0.2)'; phaseBadge.style.color = '#22c55e'; }
+      toast('DocuSeal e-sign link generated!', 'success');
+    } else {
+      const err = result.error || (result.send_results && result.send_results.docuseal && result.send_results.docuseal.error) || 'DocuSeal send failed';
+      if (snStatus) snStatus.textContent = `❌ ${err}`;
+      toast(err, 'error');
+    }
+  } catch(e) {
+    if (snStatus) snStatus.textContent = `❌ Network error: ${e.message}`;
+    toast('Network error', 'error');
+  }
+}
 
 async function triggerSignNowPacket() {
   const data = window._bondModalData;

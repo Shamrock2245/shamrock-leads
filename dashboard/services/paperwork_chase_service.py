@@ -80,10 +80,13 @@ class PaperworkChaseService:
             "mode": mode,
         }
 
-        # Find packets in pending_signature or delivered status
+        # Find packets in pending_signature or delivered status (DocuSeal or SignNow)
         cursor = self.packets.find({
             "status": {"$in": ["pending_signature", "delivered"]},
-            "signnow_status": {"$in": ["sent", None]},
+            "$or": [
+                {"docuseal_status": {"$in": ["sent", None]}},
+                {"signnow_status": {"$in": ["sent", None]}},
+            ],
         })
 
         async for packet in cursor:
@@ -91,7 +94,12 @@ class PaperworkChaseService:
             packet_id = packet.get("packet_id", "")
 
             # Determine packet age
-            created_at = packet.get("signnow_sent_at") or packet.get("delivered_at") or packet.get("created_at")
+            created_at = (
+                packet.get("docuseal_sent_at")
+                or packet.get("signnow_sent_at")
+                or packet.get("delivered_at")
+                or packet.get("created_at")
+            )
             if not created_at:
                 continue
 
