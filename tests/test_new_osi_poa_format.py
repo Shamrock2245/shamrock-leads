@@ -127,3 +127,30 @@ def test_api_poa_upload_text_file(client):
         assert data["success"] is True
         assert data["extracted_count"] == 5
         assert "OSI-P3-116-26-0001" in data["extracted"]
+
+
+def test_binary_image_does_not_skip_ocr(client):
+    """Regression: decoding PNG as UTF-8 used to produce garbage and skip OCR."""
+    # Minimal valid 1x1 PNG
+    import base64
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    ocr_text = "$3,000 3 OSI-P3-116-26-0001 to OSI-P3-116-26-0003 4-Feb-27\n"
+
+    with patch("dashboard.routers.poa._extract_text_from_image", return_value=ocr_text) as mock_ocr:
+        files = {"file": ("receipt.png", png, "image/png")}
+        res = client.post("/api/poa/upload-image", files=files)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["method"] == "ocr"
+        assert data["extracted_count"] == 3
+        mock_ocr.assert_called_once()
+
+
+def test_parse_poa_ocr_noisy_spacing():
+    noisy = "OSI P3-116-26-0001 to OSI-P3-116-26-0002 4-Feb-27"
+    items = parse_poa_receipt_text(noisy)
+    assert len(items) >= 2
+    assert items[0]["poa_number"].startswith("OSI-P3")

@@ -3158,8 +3158,8 @@
              ondrop="SLInventory.handleDrop(event)" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')">
           <div class="inv-upload-icon">📄</div>
           <div class="inv-upload-text">Drop image here or <span class="inv-upload-link">browse files</span></div>
-          <div class="inv-upload-hint">Supports JPG, PNG, PDF — we'll extract POA serial numbers via OCR</div>
-          <input type="file" id="invFileInput" accept="image/*,.pdf" style="display:none" onchange="SLInventory.handleUpload(this)">
+          <div class="inv-upload-hint">Supports JPG, PNG, PDF, TXT (max 25MB) — extracts OSI/Palmetto power ranges via OCR</div>
+          <input type="file" id="invFileInput" accept="image/*,.pdf,.txt,.csv,text/plain" style="display:none" onchange="SLInventory.handleUpload(this)">
         </div>
         <div id="invUploadResult" class="inv-upload-result"></div>
       </div>

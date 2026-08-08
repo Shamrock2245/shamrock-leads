@@ -1,4 +1,3 @@
-
 """
 ShamrockLeads — POA Inventory API Blueprint
 Endpoints: /api/poa/next, /api/poa/assign, /api/poa/inventory,
@@ -6,6 +5,7 @@ Endpoints: /api/poa/next, /api/poa/assign, /api/poa/inventory,
            /api/poa/release, /api/poa/reassign, /api/poa/restore
 """
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -17,6 +17,7 @@ from dashboard.services.poa_service import (
     determine_surety_from_prefix,
 )
 
+logger = logging.getLogger(__name__)
 poa_bp = APIRouter(prefix="/api", tags=["poa"])
 @poa_bp.get("/poa/next")
 async def api_poa_next(surety: str | None = Query(default=None), bond_amount: int = Query(default=0), count: int = Query(default=1)):
@@ -393,6 +394,23 @@ async def api_poa_execute(request: Request):
 
 
 
+def _normalize_poa_ocr_text(text: str) -> str:
+    """Normalize common OCR mistakes before serial extraction."""
+    import re
+    if not text:
+        return ""
+    t = text.replace("\u00a0", " ")
+    # Common OCR letter confusions near POA prefixes
+    t = re.sub(r"\bOSl[\- ]", "OSI-", t, flags=re.IGNORECASE)  # l vs I
+    t = re.sub(r"\b0SI[\- ]", "OSI-", t, flags=re.IGNORECASE)  # 0 vs O
+    t = re.sub(r"\bOSI\s+P\s*", "OSI-P", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bOSI\-P\s+(\d)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bPSC\s+(\d)", r"PSC\1", t, flags=re.IGNORECASE)
+    # Collapse multi-spaces but keep newlines for line parser
+    t = re.sub(r"[ \t]+", " ", t)
+    return t
+
+
 def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]:
     """
     Parse text from PDF, OCR image, or text file to extract structured POA powers.
@@ -401,20 +419,23 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
     $6,000  13  OSI-P6-116-26-0001 to OSI-P6-116-26-0013  4-Feb-27
     $16,000 16  OSI-P16-116-26-0001 to OSI-P16-116-26-0016 4-Feb-27
     $51,000  4  OSI-P51-116-26-0001 to OSI-P51-116-26-0004 4-Feb-27
+    Also supports legacy forms: OSI3 20134295 to 20134324, PSC5 2644670-2644777
     """
     import re
     from dashboard.services.poa_service import parse_max_bond_from_prefix, determine_surety_from_prefix
 
+    text = _normalize_poa_ocr_text(text or "")
     results = []
     lines = text.splitlines()
 
     # Pattern for OSI / Palmetto range lines
     # e.g. "$3,000 17 OSI-P3-116-26-0001 to OSI-P3-116-26-0017 4-Feb-27"
     # or "OSI-P3-116-26-0001 to OSI-P3-116-26-0017"
+    # or "OSI3 20134295 to 20134324"
     range_regex = re.compile(
         r"(?:(?P<val>\$[\d,]+)\s+)?(?:(?P<qty>\d+)\s+)?"
-        r"(?P<start>[A-Za-z0-9\-]+)\s+(?:to|\-|THRU)\s+(?P<end>[A-Za-z0-9\-]+)"
-        r"(?:\s+(?P<exp>\d{1,2}\-[A-Za-z]{3}\-\d{2,4}|\d{4}\-\d{2}\-\d{2}))?",
+        r"(?P<start>[A-Za-z0-9][A-Za-z0-9\-]*)\s+(?:to|\-|–|—|THRU)\s+(?P<end>[A-Za-z0-9][A-Za-z0-9\-]*)"
+        r"(?:\s+(?P<exp>\d{1,2}\-[A-Za-z]{3}\-\d{2,4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}\-\d{2}\-\d{2}))?",
         re.IGNORECASE,
     )
 
@@ -490,9 +511,16 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
                     continue
 
         # Single POA pattern match if line wasn't a range
-        m_single = re.search(r"\b(OSI-P\d+[\w\-]+|OSI\d+[\w\-]+|PSC\d+[\w\-]+)\b", line_s, re.IGNORECASE)
-        if m_single:
-            poa_num = m_single.group(1).strip()
+        # New OSI book: OSI-P3-116-26-0001 · legacy: OSI3-20134295 · PSC5-2644670
+        for m_single in re.finditer(
+            r"\b(OSI-P\d+(?:-\d+)+|OSI\d+(?:-\d+)?|PSC\d+(?:-\d+)?)\b",
+            line_s,
+            re.IGNORECASE,
+        ):
+            poa_num = m_single.group(1).strip().upper()
+            # Skip bare tier labels without a serial (e.g. OSI-P3 alone)
+            if re.fullmatch(r"(OSI-P\d+|OSI\d+|PSC\d+)", poa_num, re.IGNORECASE):
+                continue
             surety_id = determine_surety_from_prefix(poa_num) or default_surety
             max_bond = parse_max_bond_from_prefix(poa_num)
             pfx_match = re.search(r"^(OSI-?P?\d+|PSC\d+|PAL\d+)", poa_num, re.IGNORECASE)
@@ -506,7 +534,99 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
                 "expiration": None,
             })
 
-    return results
+    # Deduplicate while preserving order
+    seen = set()
+    deduped = []
+    for item in results:
+        key = (item.get("surety_id"), item.get("poa_number"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _looks_like_text_file(filename: str, content_bytes: bytes) -> bool:
+    """True only for real text/CSV uploads — never binary images."""
+    name = (filename or "").lower()
+    if name.endswith((".txt", ".csv", ".tsv", ".log", ".md")):
+        return True
+    if name.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp", ".pdf")):
+        return False
+    # Magic-byte guards
+    if content_bytes.startswith(b"%PDF") or content_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return False
+    if content_bytes[:2] in (b"\xff\xd8", b"II", b"MM") or content_bytes[:4] in (b"RIFF", b"GIF8"):
+        return False
+    # Heuristic: mostly printable → treat as text
+    sample = content_bytes[:2048]
+    if not sample:
+        return False
+    printable = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13))
+    return (printable / len(sample)) > 0.85
+
+
+def _extract_text_from_pdf(content_bytes: bytes) -> str:
+    import io
+    text = ""
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(content_bytes))
+        for page in reader.pages:
+            text += (page.extract_text() or "") + "\n"
+    except Exception as exc:
+        logger.warning("pypdf extract failed: %s", exc)
+    if len((text or "").strip()) >= 20:
+        return text
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
+            parts = []
+            for page in pdf.pages:
+                parts.append(page.extract_text() or "")
+            text = "\n".join(parts)
+    except Exception as exc:
+        logger.warning("pdfplumber extract failed: %s", exc)
+    return text or ""
+
+
+def _extract_text_from_image(content_bytes: bytes) -> str:
+    """OCR a receipt image. Prefer tesseract (document OCR); ddddocr is captcha-oriented."""
+    import io
+    text = ""
+    try:
+        from PIL import Image, ImageOps, ImageFilter
+        img = Image.open(io.BytesIO(content_bytes))
+        # HEIC / CMYK / RGBA → RGB for tesseract
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        # Light preprocess: grayscale + mild contrast for receipt scans
+        gray = ImageOps.grayscale(img)
+        gray = ImageOps.autocontrast(gray)
+        try:
+            gray = gray.filter(ImageFilter.SHARPEN)
+        except Exception:
+            pass
+        try:
+            import pytesseract
+            # PSM 6 = assume a uniform block of text (receipt tables)
+            text = pytesseract.image_to_string(gray, config="--psm 6") or ""
+            if len(text.strip()) < 20:
+                text = (pytesseract.image_to_string(img, config="--psm 4") or "") or text
+        except Exception as tess_exc:
+            logger.warning("pytesseract failed: %s", tess_exc)
+            text = ""
+        if len((text or "").strip()) < 10:
+            try:
+                import ddddocr
+                ocr = ddddocr.DdddOcr(show_ad=False)
+                # ddddocr expects bytes; better for short strings than full pages
+                text = ocr.classification(content_bytes) or text
+            except Exception as ddd_exc:
+                logger.warning("ddddocr fallback failed: %s", ddd_exc)
+    except Exception as exc:
+        logger.warning("Image OCR error: %s", exc)
+    return text or ""
 
 
 @poa_bp.post("/poa/upload-image")
@@ -514,64 +634,115 @@ async def api_poa_upload_image(request: Request):
     """
     Upload and parse a POA inventory receipt (PDF, image, or text file).
     Extracts structured power numbers, max bond values, quantities, and expiration dates.
+
+    IMPORTANT: never UTF-8-decode binary images — that produced garbage text and
+    skipped OCR, which caused "No POA serial numbers could be extracted".
     """
-    form = await request.form()
+    try:
+        form = await request.form()
+    except Exception as exc:
+        return JSONResponse(
+            {"success": False, "error": f"Could not read upload form (file too large or invalid): {exc}"},
+            status_code=400,
+        )
+
     file_obj = form.get("file")
-    surety_id = str(form.get("surety_id", "osi")).lower().strip()
+    surety_id = str(form.get("surety_id", "osi")).lower().strip() or "osi"
 
     if not file_obj:
-        return JSONResponse({"error": "No file uploaded"}, status_code=400)
+        return JSONResponse({"success": False, "error": "No file uploaded"}, status_code=400)
 
     filename = getattr(file_obj, "filename", "") or "file"
-    content_bytes = await file_obj.read()
+    try:
+        content_bytes = await file_obj.read()
+    except Exception as exc:
+        return JSONResponse(
+            {"success": False, "error": f"Failed to read uploaded file: {exc}"},
+            status_code=400,
+        )
+
+    if not content_bytes:
+        return JSONResponse({"success": False, "error": "Uploaded file is empty"}, status_code=400)
+
+    # Soft limit messaging (nginx may already reject larger with HTML 413)
+    size_mb = len(content_bytes) / (1024 * 1024)
+    if size_mb > 24:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"File is {size_mb:.1f}MB — max is 25MB. Compress the photo or use a PDF export.",
+            },
+            status_code=413,
+        )
+
+    name_l = filename.lower()
+    is_pdf = name_l.endswith(".pdf") or content_bytes.startswith(b"%PDF")
+    is_image = (
+        name_l.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp"))
+        or content_bytes.startswith(b"\x89PNG")
+        or content_bytes[:2] == b"\xff\xd8"
+        or content_bytes[:4] in (b"RIFF", b"GIF8")
+    )
+    is_text = _looks_like_text_file(filename, content_bytes)
 
     extracted_text = ""
+    method = "none"
 
-    # 1. Parse PDF file if PDF
-    if filename.lower().endswith(".pdf") or content_bytes.startswith(b"%PDF"):
-        try:
-            import io
-            import pypdf
-            reader = pypdf.PdfReader(io.BytesIO(content_bytes))
-            for page in reader.pages:
-                extracted_text += (page.extract_text() or "") + "\n"
-        except Exception:
-            try:
-                import pdfplumber, io
-                with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
-                    for page in pdf.pages:
-                        extracted_text += (page.extract_text() or "") + "\n"
-            except Exception as exc:
-                print(f"⚠️ PDF extraction error: {exc}")
-
-    # 2. Text / CSV / TSV file
-    if not extracted_text:
-        try:
+    try:
+        if is_pdf:
+            extracted_text = _extract_text_from_pdf(content_bytes)
+            method = "pdf"
+            # Scanned PDF with no text layer → rasterize first page via pdf2image if available,
+            # else ask user for a photo; also try OCR on embedded images is out of scope.
+            if len((extracted_text or "").strip()) < 20:
+                # Fallback: some "PDFs" are actually images wrapped poorly — try OCR on raw bytes
+                ocr_try = _extract_text_from_image(content_bytes)
+                if len((ocr_try or "").strip()) > len((extracted_text or "").strip()):
+                    extracted_text = ocr_try
+                    method = "pdf+ocr"
+        elif is_image:
+            extracted_text = _extract_text_from_image(content_bytes)
+            method = "ocr"
+        elif is_text:
             extracted_text = content_bytes.decode("utf-8", errors="ignore")
-        except Exception:
-            pass
-
-    # 3. Image OCR if image file and text is empty
-    if not extracted_text or len(extracted_text.strip()) < 10:
-        try:
-            import io
-            from PIL import Image
-            img = Image.open(io.BytesIO(content_bytes))
-            try:
-                import pytesseract
-                extracted_text = pytesseract.image_to_string(img)
-            except Exception:
+            method = "text"
+        else:
+            # Unknown: try PDF → image → text in that order without treating binary as text first
+            if content_bytes.startswith(b"%PDF"):
+                extracted_text = _extract_text_from_pdf(content_bytes)
+                method = "pdf"
+            else:
                 try:
-                    import ddddocr
-                    ocr = ddddocr.DdddOcr(show_ad=False)
-                    extracted_text = ocr.classification(content_bytes)
+                    from PIL import Image
+                    import io
+                    Image.open(io.BytesIO(content_bytes))
+                    extracted_text = _extract_text_from_image(content_bytes)
+                    method = "ocr"
                 except Exception:
-                    pass
-        except Exception as exc:
-            print(f"⚠️ Image OCR error: {exc}")
+                    if _looks_like_text_file(filename, content_bytes):
+                        extracted_text = content_bytes.decode("utf-8", errors="ignore")
+                        method = "text"
+    except Exception as exc:
+        logger.exception("POA upload extract error: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": f"Failed to process file: {exc}"},
+            status_code=500,
+        )
 
-    if not extracted_text:
-        return JSONResponse({"error": "Could not read text from uploaded file. Please ensure it is a valid PDF or receipt image."}, status_code=400)
+    if not (extracted_text or "").strip():
+        return JSONResponse(
+            {
+                "success": False,
+                "error": (
+                    "Could not read text from this file. "
+                    "Use a clear photo/scan of the power receipt (JPG/PNG) or a text PDF. "
+                    "HEIC from iPhone may need to be saved as JPEG first if OCR is unavailable."
+                ),
+                "filename": filename,
+                "method": method,
+            },
+            status_code=400,
+        )
 
     parsed_items = parse_poa_receipt_text(extracted_text, default_surety=surety_id)
     extracted_serials = [item["poa_number"] for item in parsed_items]
@@ -579,10 +750,16 @@ async def api_poa_upload_image(request: Request):
     return {
         "success": True,
         "filename": filename,
+        "method": method,
         "extracted_count": len(extracted_serials),
         "extracted": extracted_serials,
         "items": parsed_items,
-        "raw_text_preview": extracted_text[:500],
+        "raw_text_preview": (extracted_text or "")[:800],
+        "message": (
+            None
+            if extracted_serials
+            else "Text was read but no POA serials matched. Check the preview or use manual entry."
+        ),
     }
 
 

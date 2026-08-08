@@ -813,29 +813,58 @@ const SLInventory = (() => {
 
   async function processUpload(file) {
     const resultEl = document.getElementById('invUploadResult');
-    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Analyzing ${file.name}…</span></div>`;
+    if (!file) return;
+    const sizeMb = (file.size || 0) / (1024 * 1024);
+    if (sizeMb > 25) {
+      resultEl.innerHTML = `<div class="inv-upload-error">❌ File is ${sizeMb.toFixed(1)}MB (max 25MB). Export a smaller PDF or compress the photo.</div>`;
+      return;
+    }
+    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Analyzing ${file.name} (${sizeMb.toFixed(1)}MB)…</span></div>`;
     try {
       const formData = new FormData();
       formData.append('file', file);
       const surety = document.getElementById('addSurety')?.value || 'osi';
       formData.append('surety_id', surety);
 
-      const r = await fetch(`${API}/api/poa/upload-image`, { method: 'POST', body: formData });
-      const d = await r.json();
-      if (d.error) {
-        resultEl.innerHTML = `<div class="inv-upload-error">❌ ${d.error}</div>`;
+      const r = await fetch(`${API}/api/poa/upload-image`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin',
+      });
+      const raw = await r.text();
+      let d = {};
+      try {
+        d = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        // HTML error pages (nginx 413/502, login redirect) parse as Unexpected token '<'
+        const snippet = (raw || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+        resultEl.innerHTML = `<div class="inv-upload-error">❌ Upload failed (HTTP ${r.status}). ${
+          r.status === 413
+            ? 'File too large for the server — compress the image or use a smaller PDF.'
+            : r.status === 401 || r.status === 403 || /login/i.test(raw)
+              ? 'Session expired — refresh the page and log in again.'
+              : snippet || 'Server returned a non-JSON response. Try again or use manual entry.'
+        }</div>`;
+        return;
+      }
+      if (!r.ok || d.error || d.success === false) {
+        resultEl.innerHTML = `<div class="inv-upload-error">❌ ${d.error || `Upload failed (HTTP ${r.status})`}</div>`;
         return;
       }
       const extracted = d.extracted || [];
       const items = d.items || [];
       if (extracted.length === 0) {
-        resultEl.innerHTML = `<div class="inv-upload-warn">⚠️ No POA serial numbers could be extracted from this file. Try a clearer receipt image/PDF or use manual entry.</div>`;
+        const preview = (d.raw_text_preview || '').trim();
+        const previewHtml = preview
+          ? `<details style="margin-top:8px;font-size:11px;color:var(--muted,#94a3b8)"><summary>OCR text preview</summary><pre style="white-space:pre-wrap;max-height:120px;overflow:auto;margin:6px 0 0">${preview.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</pre></details>`
+          : '';
+        resultEl.innerHTML = `<div class="inv-upload-warn">⚠️ No POA serial numbers could be extracted from this file. Try a clearer receipt photo/PDF, or use manual entry below.${previewHtml}</div>`;
         return;
       }
       window._lastUploadedPOAItems = items;
       resultEl.innerHTML = `
         <div class="inv-upload-success">
-          <div class="inv-upload-count">✅ Found ${extracted.length} POA power number(s) in receipt</div>
+          <div class="inv-upload-count">✅ Found ${extracted.length} POA power number(s) in receipt${d.method ? ` <span style="opacity:.7;font-weight:400">(${d.method})</span>` : ''}</div>
           <div class="inv-extracted-list">${extracted.map(e => `<span class="inv-extracted-num">${e}</span>`).join('')}</div>
           <div class="inv-upload-confirm-row">
             <button class="inv-btn-submit" onclick="SLInventory.confirmUploadedPOAs()">✅ Add All ${extracted.length} Powers to Inventory</button>
