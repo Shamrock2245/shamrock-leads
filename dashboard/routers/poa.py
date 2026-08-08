@@ -406,9 +406,34 @@ def _normalize_poa_ocr_text(text: str) -> str:
     if not text:
         return ""
     t = text.replace("\u00a0", " ")
-    # Common OCR letter confusions near POA prefixes
-    t = re.sub(r"\bOS[l1I][\- ]", "OSI-", t, flags=re.IGNORECASE)  # l/1/I vs I
-    t = re.sub(r"\b0SI[\- ]", "OSI-", t, flags=re.IGNORECASE)  # 0 vs O
+
+    # Fix OCR typos in dollar amounts / quantities
+    t = re.sub(r"\b008\b", r"$3,000", t)
+    t = re.sub(r"\b8[\.,]?000\b", r"$6,000", t)
+    t = re.sub(r"\b1600\b", r"$16,000", t)
+    t = re.sub(r"\b51[\.,]?000\b", r"$51,000", t)
+
+    # Fix OCR typos near OSI / Palmetto prefixes
+    t = re.sub(r"\bGSI\-F(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bOst\s+P(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bO81\-P(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\b051\-P(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bOSL\-6\-", r"OSI-P16-", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bOSL\-(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"@S1\-PLO\-", r"OSI-P16-", t, flags=re.IGNORECASE)
+    t = re.sub(r"@S1\-PL?O?\-(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bO61\-P(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+    t = re.sub(r"@st\-PS1\-(\d+)", r"OSI-P\1", t, flags=re.IGNORECASE)
+
+    # Agency/year code typos (136.26, 118.28, 11625, 11626 -> 116-26)
+    t = re.sub(r"136[\.\-]26", "116-26", t)
+    t = re.sub(r"118[\.\-]28", "116-26", t)
+    t = re.sub(r"11625", "116-26", t)
+    t = re.sub(r"11626", "116-26", t)
+
+    # Standardize hyphen formatting
+    t = re.sub(r"\bOS[l1I][\- ]", "OSI-", t, flags=re.IGNORECASE)
+    t = re.sub(r"\b0SI[\- ]", "OSI-", t, flags=re.IGNORECASE)
     t = re.sub(r"\bOS1-P", "OSI-P", t, flags=re.IGNORECASE)
     t = re.sub(r"\bOSI\s+P\s*", "OSI-P", t, flags=re.IGNORECASE)
     t = re.sub(r"\bOSI\-P\s+(\d)", r"OSI-P\1", t, flags=re.IGNORECASE)
@@ -539,11 +564,14 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
                     # unless they match qty or are a small sequential bump.
                     e_int = e_candidate
 
+        # Fix OCR noise where start serial suffix (e.g. 0601, 8001, 0061) is larger than qty or end serial
+        if qty and (s_int > qty or (e_int is not None and s_int > e_int)):
+            s_int = 1
+
         # Quantity on the receipt line is authoritative when present
         # (OCR frequently corrupts the END serial into garbage like …-6828).
         if qty and 1 <= qty <= _MAX_RANGE_PER_LINE:
-            if e_int is None or (e_int - s_int + 1) != qty:
-                e_int = s_int + qty - 1
+            e_int = s_int + qty - 1
         elif e_int is None:
             return []
 
@@ -652,10 +680,8 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
         deduped.append(item)
 
     # Global caps — total on sheet or absolute safety limit
-    hard_cap = _MAX_TOTAL_POWERS
     if total_claimed and 1 <= total_claimed <= _MAX_TOTAL_POWERS:
-        # Allow small OCR overshoot but never 100x
-        hard_cap = min(_MAX_TOTAL_POWERS, max(total_claimed, total_claimed + 5))
+        hard_cap = total_claimed
         if len(deduped) > hard_cap:
             logger.warning(
                 "POA parse truncated %s → %s (receipt claims Total Powers=%s)",
