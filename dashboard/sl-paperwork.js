@@ -138,7 +138,7 @@ const SLPaperwork = {
           <div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">
             <button type="button" class="inv-btn" onclick="SLPaperwork.openAdaptivePacketModal({packet_id:'${this._esc(pid)}'})" style="font-size:10px;padding:2px 6px;color:#a78bfa" title="Open adaptive packet builder for this case">🎯 Packet</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.showHydrationAudit('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px" title="Audit field hydration completeness">🔍 Audit</button>
-            <button type="button" class="inv-btn" onclick="SLPaperwork.openSwipeSimpleModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#38bdf8" title="SwipeSimple credit card link">💳 Card</button>
+            <button type="button" class="inv-btn" onclick="SLPaperwork.openSwipeSimpleModal('${this._esc(pid)}', ${amt}, '${this._esc(p.indemnitor_phone || p.phone || '')}', '${this._esc(p.indemnitor_email || p.email || '')}')" style="font-size:10px;padding:2px 6px;color:#38bdf8" title="SwipeSimple credit card link">💳 Card</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.openCashModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#4ade80" title="Log cash payment">💵 Cash</button>
             ${p.drive_url ? `<a href="${this._esc(p.drive_url)}" target="_blank" class="inv-btn" style="font-size:10px;padding:2px 6px;color:#c084fc" title="View signed PDF folder in Drive">☁️ Drive</a>` : ''}
             ${status !== 'voided' ? `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px;color:#34d399" title="Deliver via BlueBubbles iMessage / SMS">📱 Deliver</button>` : ''}
@@ -182,11 +182,15 @@ const SLPaperwork = {
   /* ─────────────────────────────────────────────────────────────────────────────
    * SwipeSimple & Cash Payment Handlers
    * ───────────────────────────────────────────────────────────────────────────── */
-  openSwipeSimpleModal(packetId = 'GENERAL', amount = 500.0) {
+  openSwipeSimpleModal(packetId = 'GENERAL', amount = 500.0, phone = '', email = '') {
     this._activePacketId = packetId;
     const modal = document.getElementById('pwSwipeSimpleModal');
     const amtEl = document.getElementById('pwSwipeSimpleAmount');
+    const phoneEl = document.getElementById('pwSwipeSimplePhone');
+    const emailEl = document.getElementById('pwSwipeSimpleEmail');
     if (amtEl) amtEl.value = amount;
+    if (phoneEl && phone) phoneEl.value = phone;
+    if (emailEl && email) emailEl.value = email;
     if (modal) { modal.style.display = 'flex'; modal.classList.add('active'); }
   },
 
@@ -198,18 +202,37 @@ const SLPaperwork = {
   async sendSwipeSimpleLink() {
     const amount = parseFloat(document.getElementById('pwSwipeSimpleAmount')?.value || '0');
     const phone = document.getElementById('pwSwipeSimplePhone')?.value || '';
+    const email = document.getElementById('pwSwipeSimpleEmail')?.value || '';
+    const deliver_text = document.getElementById('pwSwipeSimpleCheckText')?.checked ?? true;
+    const deliver_email = document.getElementById('pwSwipeSimpleCheckEmail')?.checked ?? true;
 
     try {
       const res = await fetch('/api/paperwork/payment/swipesimple-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ packet_id: this._activePacketId, amount, phone, deliver: true }),
+        body: JSON.stringify({
+          packet_id: this._activePacketId,
+          amount,
+          phone,
+          email,
+          deliver: true,
+          deliver_text,
+          deliver_email,
+        }),
       });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch SwipeSimple link');
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to dispatch SwipeSimple payment request');
 
-      alert(`💳 SwipeSimple payment link dispatched successfully!${data.delivered ? ` (Delivered to ${data.recipient})` : ''}`);
+      const statusMsgs = [];
+      if (data.text_delivered) statusMsgs.push(`Text delivered to ${data.recipient_phone}`);
+      else if (deliver_text && phone) statusMsgs.push(`Text failed (${data.text_error || 'unreachable'})`);
+
+      if (data.email_delivered) statusMsgs.push(`Email delivered to ${data.recipient_email}`);
+      else if (deliver_email && email) statusMsgs.push(`Email failed (${data.email_error || 'unreachable'})`);
+
+      const summary = statusMsgs.length > 0 ? statusMsgs.join(' · ') : 'Payment link generated';
+      alert(`💳 SwipeSimple payment request processed!\nAmount: $${data.amount?.toLocaleString('en-US', { minimumFractionDigits: 2 }) || amount}\n${summary}`);
       this.closeSwipeSimpleModal();
     } catch (err) {
       alert(`❌ Error: ${err.message}`);

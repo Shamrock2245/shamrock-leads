@@ -644,20 +644,36 @@ const SLIndemnitor = (() => {
 
   async function sendPaymentLink() {
     const bond = _data.find(b => b.booking_number === _currentBk);
-    const phone = bond?.indemnitor?.phone || '';
-    const link = $('indPaymentLink')?.querySelector('a')?.href;
-    if (!phone) { toast('No phone number', 'error'); return; }
-    if (!link) { toast('Generate link first', 'warn'); return; }
+    const phone = bond?.indemnitor?.phone || bond?.indemnitor_phone || '';
+    const email = bond?.indemnitor?.email || bond?.indemnitor_email || '';
+    const amount = Number(bond?.premium_amount || bond?.total_premium || 0) || 0;
+    if (!phone && !email) { toast('No phone or email on file', 'error'); return; }
     try {
-      await fetch(`${API}/api/imessage/send`, {
-        method: 'POST', headers: {'Content-Type':'application/json'},
+      const r = await fetch(`${API}/api/paperwork/payment/swipesimple-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({
-          phone, message: `Hi! Here's your secure payment link for the bail bond:\n${link}\n\n— Shamrock Bail Bonds`,
-          from_number: '2399550178', booking_number: _currentBk,
-        })
+          booking_number: _currentBk,
+          defendant_name: bond?.defendant_name || '',
+          phone,
+          email,
+          amount,
+          deliver: true,
+          deliver_text: !!phone,
+          deliver_email: !!email,
+        }),
       });
-      toast('📱 Payment link sent!', 'success');
-    } catch(e) { toast('Send failed: '+e.message, 'error'); }
+      const d = await r.json();
+      if (d.success && (d.text_delivered || d.email_delivered)) {
+        const via = [];
+        if (d.text_delivered) via.push(d.text_queued ? 'iMessage/SMS (queued)' : 'iMessage/SMS');
+        if (d.email_delivered) via.push('Email');
+        toast(`💳 Payment link sent via ${via.join(' & ')}`, 'success');
+      } else {
+        toast(d.text_error || d.email_error || 'Send failed', 'error');
+      }
+    } catch (e) { toast('Send failed: ' + e.message, 'error'); }
   }
 
   // ── Hydration from external sources ──

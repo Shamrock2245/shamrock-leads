@@ -22,7 +22,9 @@ jobs:
   deploy:
     name: Deploy ShamrockLeads
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Core stack builds (~8–12m). osint-worker spiderfoot is NOT rebuilt on every
+    # push — that step alone was blowing the 20m SSH command_timeout.
+    timeout-minutes: 35
 
     steps:
       # Fail fast with a clear message if the VPS is unreachable (e.g. Tailscale
@@ -53,7 +55,8 @@ jobs:
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
           # Long builds (pip + docker) need a live TCP channel; defaults can drop.
-          command_timeout: 20m
+          # 30m covers cold pip layers for shamrock-leads + dashboard only.
+          command_timeout: 30m
           timeout: 60s
           envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |
@@ -154,12 +157,24 @@ jobs:
             echo "🦀 Ensuring Obscura image..."
             docker pull h4ckf0r0day/obscura:latest || echo "   ⚠️ Obscura pull failed (will use cached)"
 
-            # ── Rebuild Docker images (only locally-built services) ──
+            # ── Rebuild core Docker images (skip osint-worker / alpr on every push) ──
+            # osint-worker installs spiderfoot from source and regularly exceeds the
+            # SSH command timeout. Rebuild it only when its Dockerfile/context changes.
             echo ""
-            echo "🐳 Rebuilding Docker images..."
+            echo "🐳 Rebuilding Docker images (core: shamrock-leads + dashboard)..."
             export DOCKER_BUILDKIT=1
             export COMPOSE_DOCKER_CLI_BUILD=1
-            docker compose build shamrock-leads dashboard osint-worker
+            REBUILD_OSINT=0
+            if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(Dockerfile\.osint|osint/|docker-compose\.yml)'; then
+              REBUILD_OSINT=1
+              echo "   📡 osint-worker context changed — will rebuild"
+            else
+              echo "   ⏭️  osint-worker unchanged — leaving running image"
+            fi
+            docker compose build shamrock-leads dashboard
+            if [ "$REBUILD_OSINT" = "1" ]; then
+              docker compose build osint-worker || echo "   ⚠️ osint-worker build failed (non-fatal)"
+            fi
 
             # ── Clear compose name conflicts (hash-prefix orphans block recreate) ──
             # Failed/partial deploys leave containers like "abc123_shamrock-leads" while
@@ -169,9 +184,12 @@ jobs:
             # long-lived profile services (Postiz, DocuSeal, Temporal, frps).
             echo ""
             echo "🧹 Clearing container name conflicts (core stack only)..."
-            for name in shamrock-leads shamrock-dashboard shamrock-osint-worker shamrock-obscura shamrock-traccar; do
+            for name in shamrock-leads shamrock-dashboard shamrock-obscura shamrock-traccar; do
               docker rm -f "$name" 2>/dev/null || true
             done
+            if [ "$REBUILD_OSINT" = "1" ]; then
+              docker rm -f shamrock-osint-worker 2>/dev/null || true
+            fi
             # Hash-prefixed orphans from failed renames (e.g. c10e04090edd_shamrock-leads)
             docker ps -a --format '{{.Names}}' 2>/dev/null \
               | grep -E '^[a-f0-9]+_shamrock-(leads|dashboard|osint|obscura|traccar)' \
@@ -184,16 +202,27 @@ jobs:
             echo ""
             echo "🔄 Starting stack..."
             # Prefer force-recreate of services we just built; fall back once if name conflict returns
-            if ! docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker obscura traccar; then
+            UP_SERVICES="shamrock-leads dashboard obscura traccar"
+            if [ "$REBUILD_OSINT" = "1" ]; then
+              UP_SERVICES="$UP_SERVICES osint-worker"
+            fi
+            if ! docker compose up -d --remove-orphans --force-recreate $UP_SERVICES; then
               echo "   ⚠️ compose up failed — second pass after hard name clear"
-              for name in shamrock-leads shamrock-dashboard shamrock-osint-worker shamrock-obscura shamrock-traccar; do
+              for name in shamrock-leads shamrock-dashboard shamrock-obscura shamrock-traccar; do
                 docker rm -f "$name" 2>/dev/null || true
               done
               docker ps -a --format '{{.Names}}' 2>/dev/null \
                 | grep -E '^[a-f0-9]+_shamrock-(leads|dashboard|osint|obscura|traccar)' \
                 | while read -r n; do docker rm -f "$n" 2>/dev/null || true; done
-              docker compose up -d --remove-orphans --force-recreate shamrock-leads dashboard osint-worker obscura traccar
+              docker compose up -d --remove-orphans --force-recreate $UP_SERVICES
             fi
+            # Keep osint-worker up if we skipped rebuild
+            docker compose up -d osint-worker 2>/dev/null || true
+
+            # DocuSeal (paperwork profile) — ensure signing is up for portal tests
+            echo ""
+            echo "✍️  Ensuring DocuSeal (paperwork profile)..."
+            docker compose --profile paperwork up -d docuseal-postgres docuseal 2>/dev/null || true
 
             # ── Postiz healthcheck fix + optional social stack refresh ──
             if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then

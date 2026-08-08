@@ -819,21 +819,24 @@ async def get_portal_ui(request: Request):
         }
 
         function openLinkFromPaste() {
-            const raw = (document.getElementById('linkInput').value || '').trim();
+            let raw = (document.getElementById('linkInput').value || '').trim();
+            raw = raw.replace(/^["']|["']$/g, '');
             const statusEl = document.getElementById('status');
             if (!raw) {
                 statusEl.className = 'status error';
                 statusEl.textContent = 'Paste a DocuSeal signing URL first.';
                 return;
             }
-            // Accept full URL or slug path
+            // Accept full URL, domain-relative, or slug path
             let url = raw;
-            if (!url.startsWith('http')) {
-                if (url.startsWith('/s/') || url.startsWith('s/')) {
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                if (url.startsWith('sign.') || url.startsWith('docuseal.') || url.startsWith('paperwork.')) {
+                    url = 'https://' + url;
+                } else if (url.startsWith('/s/') || url.startsWith('s/')) {
                     url = 'https://sign.shamrockbailbonds.biz' + (url.startsWith('/') ? url : '/' + url);
                 } else {
                     statusEl.className = 'status error';
-                    statusEl.textContent = 'URL must start with https://sign.shamrockbailbonds.biz/...';
+                    statusEl.textContent = 'URL must start with https://... or be a valid signing link.';
                     return;
                 }
             }

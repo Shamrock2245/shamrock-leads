@@ -1337,34 +1337,44 @@ if (document.readyState === 'loading') {
  * Send SwipeSimple payment link to indemnitor via iMessage.
  * Falls back to copying the link if BB is offline.
  */
-window.sendPaymentLink = async function (bookingNumber, defendantName, phone) {
+window.sendPaymentLink = async function (bookingNumber, defendantName, phone, email = '', amount = 0) {
   const paymentLink = window._SWIPESIMPLE_LINK || 'https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd';
   const cleanPhone = (phone || '').replace(/\D/g, '');
 
-  if (!cleanPhone) {
-    // No phone — just copy the link
+  if (!cleanPhone && !email) {
     try { await navigator.clipboard.writeText(paymentLink); } catch (e) { /* ignore */ }
-    toast('No phone on file — payment link copied to clipboard', 'warning');
+    toast('No contact info on file — payment link copied to clipboard', 'warning');
     return;
   }
 
-  const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Please complete payment at your earliest convenience. Questions? Call us at (239) 224-5454.`;
-
   try {
-    const r = await fetch('/api/imessage/send', {
+    const r = await fetch('/api/paperwork/payment/swipesimple-link', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: '+1' + cleanPhone.slice(-10), message }),
+      body: JSON.stringify({
+        booking_number: bookingNumber,
+        defendant_name: defendantName,
+        phone,
+        email,
+        amount,
+        deliver: true,
+        deliver_text: true,
+        deliver_email: true,
+      }),
     });
     const d = await r.json();
-    if (d.success) {
-      toast(`💳 Payment link sent to ${phone} via iMessage`, 'success');
+    if (d.success && (d.text_delivered || d.email_delivered)) {
+      const msgs = [];
+      if (d.text_delivered) msgs.push('iMessage/SMS');
+      if (d.email_delivered) msgs.push('Email');
+      toast(`💳 Payment link dispatched via ${msgs.join(' & ')}!`, 'success');
     } else {
-      // BB offline — fallback: open SMS
+      const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Please complete payment at your earliest convenience. Questions? Call us at (239) 224-5454.`;
       window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
-      toast('BB offline — opened SMS fallback', 'warning');
+      toast('Opened SMS fallback', 'warning');
     }
   } catch (e) {
+    const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Questions? Call us at (239) 224-5454.`;
     window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
     toast('Opened SMS fallback', 'warning');
   }

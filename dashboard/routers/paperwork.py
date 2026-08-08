@@ -37,10 +37,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from dashboard.extensions import get_collection
-from dashboard.services.bb_client import get_bb_client
+from dashboard.services.bb_client import (
+    get_bb_client,
+    send_message_universal,
+    normalize_bb_send_result,
+    bb_send_accepted,
+)
 
 logger = logging.getLogger(__name__)
 paperwork_bp = APIRouter(prefix="/api", tags=["paperwork"])
+
+
+def _packet_lookup_filter(packet_id: str) -> dict:
+    """Safe Mongo filter for packet_id / ObjectId without invalid _id casts."""
+    clauses: list[dict] = [{"packet_id": packet_id}]
+    try:
+        from bson import ObjectId
+        if ObjectId.is_valid(packet_id):
+            clauses.append({"_id": ObjectId(packet_id)})
+    except Exception:
+        pass
+    return {"$or": clauses} if len(clauses) > 1 else clauses[0]
 # ── Template paths ─────────────────────────────────────────────────────────
 _DOCKER_TEMPLATES = Path("/app/templates")
 _LOCAL_TEMPLATES = Path(__file__).resolve().parent.parent.parent / "templates"
@@ -1396,34 +1413,298 @@ async def validate_signnow_templates():
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.post("/paperwork/payment/swipesimple-link")
 async def generate_swipesimple_link(request: Request):
-    """Generate SwipeSimple checkout URL and optionally deliver via BlueBubbles iMessage/SMS."""
+    """
+    Generate SwipeSimple checkout URL and deliver via BlueBubbles (iMessage/SMS)
+    and/or Gmail email once the bond's premium amount has been confirmed.
+
+    Payload options:
+        packet_id: Optional paperwork packet ID
+        booking_number: Optional county booking/case number
+        amount: Confirmed premium amount (numeric)
+        phone: Recipient cell phone for iMessage/SMS
+        email: Recipient email address for payment request email
+        deliver: Bool (default True) — master toggle to dispatch link
+        deliver_text: Bool (default True) — send BlueBubbles text
+        deliver_email: Bool (default True) — send Gmail email
+        defendant_name: Optional defendant full name
+    """
     try:
-        body = await request.json()
-        packet_id = body.get("packet_id", "")
-        amount = body.get("amount", 0.0)
-        phone = body.get("phone", "")
-        deliver = body.get("deliver", False)
+        body = await request.json() if request else {}
+        packet_id = (body.get("packet_id") or "").strip()
+        booking_number = (body.get("booking_number") or "").strip()
+        phone = (body.get("phone") or "").strip()
+        email_addr = (body.get("email") or body.get("email_address") or "").strip()
+        amount_val = body.get("amount")
+        defendant_name = (body.get("defendant_name") or "").strip()
 
-        swipesimple_url = "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
-        recipient = phone or "client"
+        deliver_master = body.get("deliver", True)
+        deliver_text = body.get("deliver_text", deliver_master)
+        deliver_email = body.get("deliver_email", deliver_master)
 
-        delivered = False
-        if deliver and phone:
+        # Context Fallback: Hydrate missing fields from MongoDB
+        packet_doc = None
+        if packet_id:
+            pkts = get_collection("paperwork_packets")
             try:
-                bb = get_bb_client()
-                msg = f"💳 Shamrock Bail Bonds — Pay Premium Online: {swipesimple_url}\nAmount Due: ${amount:,.2f}"
-                res = await bb.send_message(phone=phone, message=msg)
-                delivered = bool(res and res.get("success"))
-            except Exception as bb_err:
-                logger.warning("SwipeSimple iMessage delivery warning: %s", bb_err)
+                packet_doc = await pkts.find_one(_packet_lookup_filter(packet_id))
+            except Exception as lookup_err:
+                logger.warning("SwipeSimple packet lookup failed: %s", lookup_err)
+                packet_doc = None
+
+        bonds_col = get_collection("active_bonds")
+        bond_doc = None
+        if booking_number:
+            bond_doc = await bonds_col.find_one({"booking_number": booking_number})
+        elif packet_doc and packet_doc.get("booking_number"):
+            booking_number = str(packet_doc.get("booking_number") or "").strip()
+            if booking_number:
+                bond_doc = await bonds_col.find_one({"booking_number": booking_number})
+
+        intake_doc = None
+        if packet_doc and packet_doc.get("intake_id"):
+            intake_col = get_collection("intake_queue")
+            intake_id = str(packet_doc.get("intake_id") or "").strip()
+            intake_clauses: list[dict] = [{"intake_id": intake_id}]
+            try:
+                from bson import ObjectId
+                if ObjectId.is_valid(intake_id):
+                    intake_clauses.append({"_id": ObjectId(intake_id)})
+            except Exception:
+                pass
+            try:
+                intake_doc = await intake_col.find_one(
+                    {"$or": intake_clauses} if len(intake_clauses) > 1 else intake_clauses[0]
+                )
+            except Exception:
+                intake_doc = None
+
+        # Resolve phone
+        if not phone:
+            phone = (
+                (packet_doc.get("indemnitor_phone") if packet_doc else "")
+                or (packet_doc.get("phone") if packet_doc else "")
+                or (intake_doc.get("indemnitor_phone") if intake_doc else "")
+                or (bond_doc.get("indemnitor_phone") if bond_doc else "")
+                or ((bond_doc.get("indemnitor") or {}).get("phone") if bond_doc else "")
+                or ""
+            )
+        phone = str(phone or "").strip()
+
+        # Resolve email
+        if not email_addr:
+            email_addr = (
+                (packet_doc.get("indemnitor_email") if packet_doc else "")
+                or (packet_doc.get("email") if packet_doc else "")
+                or (intake_doc.get("indemnitor_email") if intake_doc else "")
+                or (bond_doc.get("indemnitor_email") if bond_doc else "")
+                or ((bond_doc.get("indemnitor") or {}).get("email") if bond_doc else "")
+                or ""
+            )
+        email_addr = str(email_addr or "").strip()
+
+        # Resolve defendant name
+        if not defendant_name:
+            defendant_name = (
+                (packet_doc.get("defendant_name") if packet_doc else "")
+                or (bond_doc.get("defendant_name") if bond_doc else "")
+                or (intake_doc.get("defendant_name") if intake_doc else "")
+                or "Client"
+            )
+        defendant_name = str(defendant_name or "Client").strip() or "Client"
+
+        # Resolve amount
+        try:
+            amount = float(amount_val) if amount_val is not None else 0.0
+        except (TypeError, ValueError):
+            amount = 0.0
+
+        if amount <= 0.0:
+            try:
+                if packet_doc and (packet_doc.get("premium_amount") or packet_doc.get("numeric_premium_dollar")):
+                    amount = float(packet_doc.get("premium_amount") or packet_doc.get("numeric_premium_dollar") or 0.0)
+                elif bond_doc and (bond_doc.get("premium_amount") or bond_doc.get("total_premium")):
+                    amount = float(bond_doc.get("premium_amount") or bond_doc.get("total_premium") or 0.0)
+                elif intake_doc and intake_doc.get("premium_amount"):
+                    amount = float(intake_doc.get("premium_amount") or 0.0)
+            except (TypeError, ValueError):
+                amount = 0.0
+
+        swipesimple_url = (os.getenv("SWIPESIMPLE_PAYMENT_LINK") or "").strip()
+        if not swipesimple_url:
+            try:
+                swipesimple_url = (getattr(get_settings(), "SWIPESIMPLE_PAYMENT_LINK", None) or "").strip()
+            except Exception:
+                swipesimple_url = ""
+        if not swipesimple_url:
+            swipesimple_url = "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
+
+        text_delivered = False
+        text_queued = False
+        text_channel = None
+        email_delivered = False
+        text_error = None
+        email_error = None
+
+        # 1) Deliver text via BlueBubbles (queue + retry; never Twilio)
+        if deliver_text and phone:
+            clean_phone = "".join(ch for ch in phone if ch.isdigit())
+            if len(clean_phone) >= 10:
+                try:
+                    amount_str = f"${amount:,.2f}" if amount > 0 else "Confirmed Amount"
+                    msg = (
+                        f"💳 Shamrock Bail Bonds — Payment Request\n"
+                        f"Defendant: {defendant_name}\n"
+                        f"Case / Booking: {booking_number or 'N/A'}\n"
+                        f"Confirmed Premium Amount: {amount_str}\n\n"
+                        f"Pay Online via SwipeSimple:\n{swipesimple_url}\n\n"
+                        f"Questions? Call or text us 24/7 at (239) 224-5454."
+                    )
+                    raw = await send_message_universal(phone, msg)
+                    send_res = normalize_bb_send_result(raw)
+                    text_delivered = bb_send_accepted(send_res)
+                    text_queued = bool(send_res.get("queued"))
+                    text_channel = send_res.get("channel")
+                    if not text_delivered:
+                        text_error = send_res.get("error") or "bb_send_failed"
+                except Exception as bb_err:
+                    text_error = str(bb_err)[:200]
+                    logger.warning("SwipeSimple BlueBubbles delivery warning: %s", bb_err)
+            else:
+                text_error = "invalid_phone"
+
+        # 2) Deliver email via Gmail API
+        if deliver_email and email_addr and "@" in email_addr:
+            try:
+                from dashboard.services.gmail_reader import GmailReaderService
+                gmail_svc = GmailReaderService()
+                if gmail_svc.is_configured:
+                    amount_str = f"${amount:,.2f}" if amount > 0 else "Confirmed Amount"
+                    subject = f"Shamrock Bail Bonds — Payment Request ({amount_str})"
+                    body_text = (
+                        f"Shamrock Bail Bonds — Payment Request\n\n"
+                        f"Defendant Name: {defendant_name}\n"
+                        f"Case / Booking Number: {booking_number or 'N/A'}\n"
+                        f"Confirmed Premium Amount: {amount_str}\n\n"
+                        f"Please click the link below to securely pay your bond premium online via SwipeSimple:\n"
+                        f"{swipesimple_url}\n\n"
+                        f"Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901\n"
+                        f"24/7 Phone / Text: (239) 224-5454\n"
+                    )
+                    body_html = f"""
+                    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 20px; background-color: #0f172a; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b;">
+                      <div style="text-align: center; padding-bottom: 16px; border-bottom: 1px solid #334155;">
+                        <h2 style="color: #10b981; margin: 0; font-size: 22px; letter-spacing: 0.5px;">☘️ SHAMROCK BAIL BONDS</h2>
+                        <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Fast. Frictionless. Everywhere.</p>
+                      </div>
+                      <div style="padding: 20px 0;">
+                        <h3 style="color: #ffffff; margin-top: 0;">Payment Request — Confirmed Bond Premium</h3>
+                        <p style="color: #cbd5e1; font-size: 14px; line-height: 1.5;">
+                          Your bond paperwork and premium amount have been verified. You can securely pay online using credit/debit card via SwipeSimple below:
+                        </p>
+                        <div style="background-color: #1e293b; border-radius: 8px; padding: 16px; margin: 16px 0; border: 1px solid #334155;">
+                          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                            <tr>
+                              <td style="color: #94a3b8; padding: 4px 0;">Defendant:</td>
+                              <td style="color: #ffffff; font-weight: 600; text-align: right;">{defendant_name}</td>
+                            </tr>
+                            <tr>
+                              <td style="color: #94a3b8; padding: 4px 0;">Booking / Case #:</td>
+                              <td style="color: #ffffff; font-weight: 600; text-align: right;">{booking_number or 'N/A'}</td>
+                            </tr>
+                            <tr style="border-top: 1px dashed #475569;">
+                              <td style="color: #10b981; font-weight: 700; padding: 8px 0 0 0; font-size: 15px;">Confirmed Premium:</td>
+                              <td style="color: #10b981; font-weight: 700; text-align: right; padding: 8px 0 0 0; font-size: 18px;">{amount_str}</td>
+                            </tr>
+                          </table>
+                        </div>
+                        <div style="text-align: center; margin: 24px 0;">
+                          <a href="{swipesimple_url}" target="_blank" style="background-color: #10b981; color: #ffffff; padding: 14px 28px; font-size: 15px; font-weight: 700; text-decoration: none; border-radius: 8px; display: inline-block; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
+                            💳 Pay {amount_str} Online Now
+                          </a>
+                        </div>
+                        <p style="color: #64748b; font-size: 12px; text-align: center;">
+                          Direct Link: <a href="{swipesimple_url}" style="color: #38bdf8; word-break: break-all;">{swipesimple_url}</a>
+                        </p>
+                      </div>
+                      <div style="border-top: 1px solid #334155; padding-top: 14px; text-align: center; font-size: 12px; color: #64748b;">
+                        <p style="margin: 2px 0;">Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901</p>
+                        <p style="margin: 2px 0;">24/7 Support: (239) 224-5454 | admin@shamrockbailbonds.biz</p>
+                      </div>
+                    </div>
+                    """
+                    mail_res = gmail_svc.send_email(
+                        to=email_addr,
+                        subject=subject,
+                        body_text=body_text,
+                        body_html=body_html,
+                    )
+                    email_delivered = bool(mail_res and mail_res.get("success"))
+                    if not email_delivered:
+                        email_error = mail_res.get("error") if mail_res else "email_failed"
+                else:
+                    email_error = "gmail_not_configured"
+            except Exception as mail_err:
+                email_error = str(mail_err)[:200]
+                logger.warning("SwipeSimple Gmail delivery warning: %s", mail_err)
+
+        # Audit & Database Record Logging
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if packet_id:
+            try:
+                pkts = get_collection("paperwork_packets")
+                await pkts.update_one(
+                    _packet_lookup_filter(packet_id),
+                    {
+                        "$set": {
+                            "last_payment_link_sent_at": now_iso,
+                            "last_payment_amount": amount,
+                            "payment_link_delivered_text": text_delivered,
+                            "payment_link_delivered_email": email_delivered,
+                            "payment_link_text_channel": text_channel,
+                            "payment_link_text_queued": text_queued,
+                        },
+                        "$inc": {"payment_link_sent_count": 1},
+                    },
+                )
+            except Exception as db_err:
+                logger.warning("Failed to update paperwork_packets record: %s", db_err)
+
+        try:
+            disp_col = get_collection("payment_dispatches")
+            await disp_col.insert_one({
+                "packet_id": packet_id,
+                "booking_number": booking_number,
+                "amount": amount,
+                "phone": phone,
+                "email": email_addr,
+                "swipesimple_url": swipesimple_url,
+                "text_delivered": text_delivered,
+                "text_queued": text_queued,
+                "text_channel": text_channel,
+                "text_error": text_error,
+                "email_delivered": email_delivered,
+                "email_error": email_error,
+                "created_at": now_iso,
+            })
+        except Exception as log_err:
+            logger.warning("Failed to log payment dispatch record: %s", log_err)
 
         return {
             "success": True,
             "packet_id": packet_id,
+            "booking_number": booking_number,
             "amount": amount,
             "payment_link": swipesimple_url,
-            "delivered": delivered,
-            "recipient": recipient,
+            "delivered": (text_delivered or email_delivered),
+            "text_delivered": text_delivered,
+            "text_queued": text_queued,
+            "text_channel": text_channel,
+            "text_error": text_error,
+            "email_delivered": email_delivered,
+            "email_error": email_error,
+            "recipient_phone": phone,
+            "recipient_email": email_addr,
+            "defendant_name": defendant_name,
         }
     except Exception as exc:
         logger.exception("swipesimple-link error: %s", exc)
