@@ -41,17 +41,23 @@ def register_trigger(key: str, event: asyncio.Event) -> None:
 
 
 # ── All controllable service keys ──────────────────────────────────────────
+# Must include every CronDef name in dashboard/cron.py so Service Control can
+# toggle/trigger every real FastAPI background job (not only a subset).
 ALL_SERVICE_KEYS = {
+    # Messaging / queue (must be toggleable — BB delivery depends on this)
+    "outreach_queue",
     # Revenue Automation
     "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
-    "poa_low_stock", "surety_weekly_reports",
+    "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
-    "forfeiture_scan", "signnow_poller", "compliance_backfill", "matching_backlog",
+    "forfeiture_scan", "signnow_poller", "docuseal_poller", "swipesimple_gmail_poll",
+    "compliance_backfill", "matching_backlog", "overdue_tasks",
     # Intelligence Pipeline
-    "docket_monitor", "court_intel", "nlp_enrichment",
+    "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
     "court_reminders", "rearrest_detection", "delinquency_scanner",
-    "court_email", "bb_health", "data_retention",
+    "fta_alert", "missed_payment", "court_email", "bb_health", "data_retention",
+    "bounty_hunter", "watchdog",
     # Geo Intelligence
     "geo_intelligence", "findmy_geofence",
     # Content
@@ -63,30 +69,40 @@ ALL_SERVICE_KEYS = {
     "nr_bounty_hunter", "nr_watchdog", "nr_gas_scheduler", "nr_intake_pipeline",
     "nr_revenue_snapshot", "nr_the_scout", "nr_staff_performance", "nr_weather_posting",
     "nr_review_harvester", "nr_payment_reminders", "nr_no_show_escalation",
-    "nr_whatsapp_campaigns", "nr_signnow_tracker", "nr_bond_renewal",
+    "nr_whatsapp_campaigns", "nr_signnow_tracker", "nr_docuseal_tracker", "nr_bond_renewal",
 }
 
 # Service metadata for frontend rendering
 SERVICE_META = {
-    "speed_to_contact":    {"name": "Speed-to-Contact",    "icon": "🚀", "category": "revenue",  "desc": "Queue hot-lead outreach for approval (review mode)"},
-    "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Unsigned packet chase — review/staff/full_auto"},
+    "outreach_queue":      {"name": "Outreach Queue Drain", "icon": "📬", "category": "revenue",  "desc": "Every 30s: send queued iMessage/SMS via BlueBubbles (PIN, chase, outreach)"},
+    "speed_to_contact":    {"name": "Speed-to-Contact",    "icon": "🚀", "category": "revenue",  "desc": "Queue hot-lead outreach for approval (review mode → full_auto)"},
+    "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Unsigned DocuSeal packet chase via BB (review/staff/full_auto)"},
     "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intakes (review by default)"},
+    "drip_scanner":        {"name": "Drip Scanner",        "icon": "💧", "category": "revenue",  "desc": "Advance outreach drip sequences (day 0/1/3/7)"},
     "poa_low_stock":       {"name": "POA Low Stock",       "icon": "📕", "category": "revenue",  "desc": "Slack when POA inventory tiers run low"},
     "surety_weekly_reports": {"name": "Surety Weekly Reports", "icon": "📊", "category": "revenue", "desc": "Official OSI/Palmetto weekly XLSX into Mongo"},
     "forfeiture_scan":     {"name": "Forfeiture Scan",     "icon": "🔴", "category": "lifecycle", "desc": "Score active bonds; Slack high/critical risk"},
-    "signnow_poller":      {"name": "SignNow Poller",      "icon": "✍️", "category": "lifecycle", "desc": "Sync packet status; collect-payment tasks"},
+    "docuseal_poller":     {"name": "DocuSeal Poller",     "icon": "☘️", "category": "lifecycle", "desc": "Poll DocuSeal for completed packets; Drive archive backup"},
+    "swipesimple_gmail_poll": {"name": "SwipeSimple Gmail", "icon": "💳", "category": "lifecycle", "desc": "Poll Gmail for SwipeSimple bond premium receipts"},
+    "signnow_poller":      {"name": "SignNow Poller (legacy)", "icon": "✍️", "category": "lifecycle", "desc": "LEGACY only — old SignNow packets; off by default"},
     "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
     "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
-    "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages"},
+    "overdue_tasks":       {"name": "Overdue Tasks",       "icon": "⏰", "category": "lifecycle", "desc": "Flag overdue staff tasks / SLA breaches"},
+    "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages (Shannon)"},
+    "alpha_engine":        {"name": "Alpha Engine",        "icon": "🧬", "category": "intel",    "desc": "Deep enrichment / ranking pass on hot inventory"},
     "docket_monitor":      {"name": "Docket Monitor",      "icon": "⚖️", "category": "intel",    "desc": "CourtListener docket scan for active bonds"},
     "court_intel":         {"name": "Court Intelligence",  "icon": "🏛️", "category": "intel",    "desc": "Court opinion ingestion (30-day window)"},
     "nlp_enrichment":      {"name": "NLP Enrichment",      "icon": "🧠", "category": "intel",    "desc": "Charge analysis & FTA risk scoring"},
-    "court_reminders":     {"name": "Court Reminders",     "icon": "📅", "category": "monitor",  "desc": "4-touch SMS court date reminders"},
+    "court_reminders":     {"name": "Court Reminders",     "icon": "📅", "category": "monitor",  "desc": "4-touch court date reminders via BlueBubbles"},
     "rearrest_detection":  {"name": "Re-Arrest Detection", "icon": "🔁", "category": "monitor",  "desc": "Cross-reference new arrests vs active bonds"},
     "delinquency_scanner": {"name": "Delinquency Scanner", "icon": "💳", "category": "monitor",  "desc": "Flag overdue payment plans (>30 days)"},
+    "fta_alert":           {"name": "FTA Alert Engine",    "icon": "🚨", "category": "monitor",  "desc": "Multi-level FTA escalation (staff → BB → surrender)"},
+    "missed_payment":      {"name": "Missed Payment Alert","icon": "💸", "category": "monitor",  "desc": "Alert staff on missed premium installments"},
     "court_email":         {"name": "Court Email Scanner",  "icon": "📧", "category": "monitor",  "desc": "Gmail discharge/exoneration pipeline"},
     "bb_health":           {"name": "iMessage Health",     "icon": "📱", "category": "monitor",  "desc": "BlueBubbles bridge connectivity monitor"},
     "data_retention":      {"name": "Data Retention",      "icon": "🗑️", "category": "monitor",  "desc": "Weekly purge of old low-value records"},
+    "bounty_hunter":       {"name": "Bounty Hunter",       "icon": "🎯", "category": "geo",      "desc": "Python fugitive / skip-trace monitor cycle"},
+    "watchdog":            {"name": "System Watchdog",     "icon": "🐕", "category": "monitor",  "desc": "FastAPI-side health watchdog (scrapers/BB/disk)"},
     "geo_intelligence":    {"name": "GPS Tracking",        "icon": "📡", "category": "geo",      "desc": "Traccar device telemetry & geofence monitoring"},
     "findmy_geofence":     {"name": "FindMy Geofence",    "icon": "🔍", "category": "geo",      "desc": "Lee County boundary breach detection"},
     "blog_publisher":      {"name": "Blog Publisher",      "icon": "✍️", "category": "content",  "desc": "Auto-publish scheduled posts to Wix Blog"},
@@ -95,14 +111,14 @@ SERVICE_META = {
     "daily_ops_digest":       {"name": "Daily Ops Digest",       "icon": "📰", "category": "monitor",  "desc": "7:30 AM ET: arrest counts, state breakdown, fleet health → Slack #ops-daily"},
     "scraper_health_webhook": {"name": "Scraper Health Webhook",  "icon": "🚨", "category": "monitor",  "desc": "Every 15 min: diff error state; alert new failures → Slack #scraper-alerts"},
     "fta_alert_relay":        {"name": "FTA Alert Relay",         "icon": "🎯", "category": "monitor",  "desc": "Every 30 min: trigger re-arrest detection; relay FTA hits → Slack #fta-alerts"},
-    "bond_status_sync":       {"name": "Bond Status Sync",        "icon": "🔄", "category": "lifecycle", "desc": "Every 4 hrs: trigger SignNow poller then Wix sync in sequence"},
+    "bond_status_sync":       {"name": "Bond Status Sync",        "icon": "🔄", "category": "lifecycle", "desc": "Every 4 hrs: DocuSeal poller then Wix sync in sequence"},
     # Node-RED only flows (read-only visibility — no Python loop, NR is the runtime)
     "nr_social_autopilot":    {"name": "Social Auto-Pilot",       "icon": "📱", "category": "content",  "desc": "[Node-RED] Scheduled social posts via Postiz"},
     "nr_court_clerk":         {"name": "The Court Clerk",         "icon": "⚖️", "category": "intel",    "desc": "[Node-RED] Court date polling & calendar sync"},
     "nr_the_closer":          {"name": "The Closer",              "icon": "🤝", "category": "revenue",  "desc": "[Node-RED] Follow-up sequence for warm leads"},
     "nr_morning_briefing":    {"name": "Morning Briefing",        "icon": "☀️", "category": "monitor",  "desc": "[Node-RED] 7 AM briefing digest to Slack"},
-    "nr_bounty_hunter":       {"name": "The Bounty Hunter",       "icon": "🔍", "category": "geo",      "desc": "[Node-RED] Fugitive monitoring & Slack alerts"},
-    "nr_watchdog":            {"name": "Watchdog",                "icon": "🐕", "category": "monitor",  "desc": "[Node-RED] Every 5 min system health watchdog"},
+    "nr_bounty_hunter":       {"name": "The Bounty Hunter (NR)",  "icon": "🔍", "category": "geo",      "desc": "[Node-RED] Fugitive monitoring & Slack alerts"},
+    "nr_watchdog":            {"name": "Watchdog (NR)",           "icon": "🐕", "category": "monitor",  "desc": "[Node-RED] Every 5 min system health watchdog"},
     "nr_gas_scheduler":       {"name": "GAS Scheduler",           "icon": "⏰", "category": "other",    "desc": "[Node-RED] Google Apps Script cron dispatcher"},
     "nr_intake_pipeline":     {"name": "Intake Pipeline",         "icon": "📥", "category": "lifecycle", "desc": "[Node-RED] Intake form webhook → MongoDB"},
     "nr_revenue_snapshot":    {"name": "Revenue Snapshot",        "icon": "💰", "category": "revenue",  "desc": "[Node-RED] Daily revenue metrics snapshot"},
@@ -110,10 +126,11 @@ SERVICE_META = {
     "nr_staff_performance":   {"name": "Staff Performance",       "icon": "📊", "category": "monitor",  "desc": "[Node-RED] Agent KPI tracker"},
     "nr_weather_posting":     {"name": "Weather Posting",         "icon": "⛅", "category": "content",  "desc": "[Node-RED] Weather-triggered social content"},
     "nr_review_harvester":    {"name": "Review Harvester",        "icon": "⭐", "category": "content",  "desc": "[Node-RED] Google/Yelp review aggregator"},
-    "nr_payment_reminders":   {"name": "Payment Reminders",       "icon": "💳", "category": "revenue",  "desc": "[Node-RED] Overdue payment SMS/iMessage reminders"},
+    "nr_payment_reminders":   {"name": "Payment Reminders",       "icon": "💳", "category": "revenue",  "desc": "[Node-RED] Overdue payment iMessage reminders"},
     "nr_no_show_escalation":  {"name": "No-Show Escalation",      "icon": "⚠️", "category": "lifecycle", "desc": "[Node-RED] Court no-show detection & escalation"},
-    "nr_whatsapp_campaigns":  {"name": "WhatsApp Campaigns",      "icon": "💬", "category": "revenue",  "desc": "[Node-RED] WhatsApp outreach campaigns"},
-    "nr_signnow_tracker":     {"name": "SignNow Tracker",         "icon": "✍️", "category": "lifecycle", "desc": "[Node-RED] SignNow packet status tracker"},
+    "nr_whatsapp_campaigns":  {"name": "WhatsApp Campaigns",      "icon": "💬", "category": "revenue",  "desc": "[Node-RED] WhatsApp outreach campaigns (optional)"},
+    "nr_signnow_tracker":     {"name": "SignNow Tracker (legacy)","icon": "✍️", "category": "lifecycle", "desc": "[Node-RED] Legacy SignNow packet tracker"},
+    "nr_docuseal_tracker":    {"name": "DocuSeal Tracker",        "icon": "☘️", "category": "lifecycle", "desc": "[Node-RED] DocuSeal packet status (if NR flow enabled)"},
     "nr_bond_renewal":        {"name": "Bond Renewal Reminders",  "icon": "🔔", "category": "lifecycle", "desc": "[Node-RED] Bond renewal date reminders"},
 }
 

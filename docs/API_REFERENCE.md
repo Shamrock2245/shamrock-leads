@@ -1,9 +1,9 @@
 # API_REFERENCE.md — ShamrockLeads REST API
 
-> **Last Updated:** 2026-07-25
-> **Base URL:** `https://leads.shamrockbailbonds.biz` (production) / `http://localhost:5050` (dev)
-> **Auth:** Dashboard PIN via session cookie / X-API-Key for cron & automation routes
-> **Framework:** FastAPI with 66+ APIRouter blueprint modules
+> **Last Updated:** 2026-08-08  
+> **Base URL:** `https://leads.shamrockbailbonds.biz` (production) / `http://localhost:5050` (dev)  
+> **Auth:** Dashboard PIN via session cookie / X-API-Key for cron & automation routes  
+> **Framework:** FastAPI with 60+ APIRouter modules · **E-sign default:** DocuSeal (self-hosted)
 
 ---
 
@@ -69,9 +69,18 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 ### Bond Lifecycle (`dashboard/api/bond_lifecycle.py`)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/bond-lifecycle/initiate-signing` | Start SignNow signing flow |
-| POST | `/api/bond-lifecycle/signnow-webhook` | SignNow `document.complete` webhook |
+| POST | `/api/bond-lifecycle/initiate-signing` | Start e-sign flow (prefer DocuSeal finalize) |
+| POST | `/api/bond-lifecycle/signnow-webhook` | Legacy SignNow complete webhook |
 | POST | `/api/bond-lifecycle/process-court-email` | Process court discharge email |
+
+### Automations (Service Control — `dashboard/routers/automation_control.py`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/automation/status` | All cron/NR jobs + last run |
+| GET | `/api/automation/config` | Master toggles / modes |
+| POST | `/api/automation/config` | Partial config update |
+| POST | `/api/automation/toggle/{key}` | Enable/disable one job |
+| POST | `/api/automation/trigger/{key}` | Fire one cycle now |
 
 ### Prospective Bonds (`dashboard/api/prospective_bonds.py`)
 | Method | Endpoint | Description |
@@ -118,11 +127,38 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 
 ## Paperwork & Signatures
 
-### Paperwork (`dashboard/api/paperwork.py`)
+### DocuSeal + Paperwork (primary — `dashboard/routers/paperwork.py`)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/paperwork/generate` | Generate SignNow packet |
-| POST | `/api/paperwork/deliver` | Send packet to indemnitor |
+| POST | `/api/paperwork/packet/finalize` | Create DocuSeal submission + signing links (new packets) |
+| POST | `/api/paperwork/docuseal/prefill-preview` | Preview field hydration before send |
+| GET | `/api/paperwork/docuseal/health` | DocuSeal API connectivity |
+| GET | `/api/paperwork/docuseal/templates` | List templates |
+| POST | `/api/paperwork/docuseal/poll-swipesimple` | Manual SwipeSimple Gmail receipt poll |
+| POST | `/api/webhooks/docuseal` | DocuSeal completion webhook |
+| POST | `/api/paperwork/{id}/deliver` | Deliver signing link via BlueBubbles |
+| GET | `/api/paperwork/all` | List packets |
+| GET | `/api/paperwork/{id}/hydration-audit` | Prefill completeness audit |
+
+### Appearance bonds (print / wet-ink — never e-sign)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/appearance-bonds/print-package` | N charges × 2 copies uncollated (hydrates Mongo) |
+| GET/POST | `/api/appearance-bond-pdf` | Single/multi charge PDF (hydrates Mongo) |
+| POST | `/api/appearance-bond-batch` | Batch uncollated package |
+
+### Indemnitor PIN portal (`paperwork.shamrockbailbonds.biz`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/portal/portal-ui` | Mobile PIN / e-sign shell |
+| POST | `/api/portal/send-pin` | 6-digit OTP via BlueBubbles only |
+| POST | `/api/portal/verify-pin` | Verify OTP → DocuSeal deep-link metadata |
+
+### Paperwork (legacy SignNow paths — keep for old packets only)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/paperwork/generate` | Legacy SignNow generate (not for new work) |
+| POST | `/api/paperwork/deliver` | Deliver packet link |
 | GET | `/api/paperwork/packets/<bond_id>` | List packets for bond |
 | GET | `/api/paperwork/status/<packet_id>` | Check packet signing status |
 

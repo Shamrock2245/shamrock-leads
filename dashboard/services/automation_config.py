@@ -8,12 +8,15 @@ Enable via dashboard toggle or API call.
 
 Config stored in MongoDB `automation_config` collection as a single document.
 
-Automations controlled:
+Automations controlled (see also dashboard/cron.py CRON_REGISTRY):
   1. Speed-to-Contact   — Auto-start outreach for hot leads
-  2. Paperwork Chase    — Auto-nudge unsigned SignNow packets
+  2. Paperwork Chase    — Auto-nudge unsigned DocuSeal packets (BB)
   3. Intake Recovery    — Auto-recover abandoned intakes
   4. Auto-Reply AI      — AI responds to inbound iMessages
-  5. FindMy Geofence    — Alert on Lee County boundary breach
+  5. DocuSeal Poller    — Backup signed-packet sync + Drive archive
+  6. SwipeSimple Gmail  — Bond premium receipt reconciliation
+  7. Outreach Queue     — Drain queued BlueBubbles sends
+  8. FindMy Geofence    — Alert on Lee County boundary breach
 """
 import logging
 from datetime import datetime, timezone
@@ -39,7 +42,7 @@ DEFAULT_CONFIG = {
         "slack_digest": True,
     },
 
-    # ── Unsigned Paperwork Chase ──
+    # ── Unsigned Paperwork Chase (DocuSeal packets; BlueBubbles delivery) ──
     "paperwork_chase": {
         "enabled": True,
         "mode": "review",               # "review" | "staff_only" | "full_auto"
@@ -48,6 +51,29 @@ DEFAULT_CONFIG = {
         "staff_alert_hours": 24,        # Slack alert to staff after 24 hours
         "max_nudges": 3,                # Max nudges per packet
         "interval_seconds": 3600,       # Check every hour
+        "slack_digest": True,
+        "provider": "docuseal",         # new packets; legacy signnow rows still chased if present
+    },
+
+    # ── Outreach queue drain (PIN OTP, chase, universal BB sends) ──
+    "outreach_queue": {
+        "enabled": True,
+        "interval_seconds": 30,
+        "batch_size": 25,
+        "slack_on_dead_letter": True,
+    },
+
+    # ── FTA multi-level alert engine ──
+    "fta_alert": {
+        "enabled": True,
+        "interval_seconds": 14400,
+        "slack_digest": True,
+    },
+
+    # ── Missed payment alerts ──
+    "missed_payment": {
+        "enabled": True,
+        "interval_seconds": 43200,
         "slack_digest": True,
     },
 
