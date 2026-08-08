@@ -1001,6 +1001,46 @@ const SLIndemnitor = (() => {
     }
   }
 
+  function handleModalIdDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) processModalIdScan(files[0]);
+  }
+
+  function handleModalIdUpload(input) {
+    if (input.files && input.files.length > 0) processModalIdScan(input.files[0]);
+  }
+
+  async function processModalIdScan(file) {
+    toast('📷 Scanning ID / Passport with AI…', 'info');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const r = await fetch(`${API}/api/id/scan-ocr`, { method: 'POST', body: formData });
+      const d = await r.json();
+      if (!d.success || !d.extracted) {
+        toast(`❌ ${d.error || 'Could not read ID photo'}`, 'error');
+        return;
+      }
+      const ext = d.extracted;
+
+      // Auto-fill fields in #recordBondModal
+      if ($('baIndemName') && ext.full_name) $('baIndemName').value = ext.full_name;
+      if ($('baIndemDL') && ext.dl_number) $('baIndemDL').value = ext.dl_number;
+      if ($('baIndemDLState') && ext.dl_state) $('baIndemDLState').value = ext.dl_state;
+      if ($('baIndemDOB') && ext.dob) $('baIndemDOB').value = ext.dob;
+      if ($('baIndemAddress') && ext.address) $('baIndemAddress').value = ext.address;
+      if ($('baIndemCity') && ext.city) $('baIndemCity').value = ext.city;
+      if ($('baIndemState') && ext.state) $('baIndemState').value = ext.state;
+      if ($('baIndemZip') && ext.zip) $('baIndemZip').value = ext.zip;
+
+      toast(`✅ Auto-filled indemnitor info for ${ext.full_name || 'scanned ID'}!`, 'ok');
+    } catch (err) {
+      toast(`❌ ID scan failed: ${err.message}`, 'error');
+    }
+  }
+
   return {
     load, debounceSearch, openDetail, closeDetail,
     switchSubTab, saveProfile, toggleDoc,
@@ -1011,6 +1051,7 @@ const SLIndemnitor = (() => {
     showNewForm, backToSearch, submitAddForm,
     // KYC Uploads + ID slots
     handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,
+    handleModalIdUpload, handleModalIdDrop,
     // View mode toggle
     toggleViewMode,
     // Link unlinked indemnitor → bond

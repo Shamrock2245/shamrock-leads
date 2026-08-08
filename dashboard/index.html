@@ -3239,6 +3239,13 @@
             </div>
           </label>
 
+          <!-- ID / Driver License AI Auto-Fill Dropzone -->
+          <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(59,130,246,0.08);border:1px dashed #3b82f6;text-align:center;cursor:pointer" onclick="document.getElementById('baIdScanFileInput').click()" ondragover="event.preventDefault()" ondrop="SLIndemnitor&&SLIndemnitor.handleModalIdDrop(event)">
+            <span style="font-size:18px">🪪</span> <strong style="color:#60a5fa;font-size:13px">Scan ID / Driver License / Passport to Auto-Fill</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">Tap to upload or snap photo — auto-fills Name, DL#, DOB, Address, City, State, Zip</div>
+            <input type="file" id="baIdScanFileInput" accept="image/*,application/pdf" style="display:none" onchange="SLIndemnitor&&SLIndemnitor.handleModalIdUpload(this)">
+          </div>
+
           <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr;gap:10px">
             <div class="ba-field">
               <label class="ba-label">Indemnitor Name</label>

@@ -84,8 +84,48 @@ from dashboard.services.identity_media_service import (
     save_upload_file,
     slot_map_from_uploads,
 )
+from dashboard.services.id_scanner_service import IDScannerService
 
 ALLOWED_UPLOAD_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "gif", "webp", "heic"}
+
+
+@router.post("/id/scan-ocr")
+@router.post("/indemnitors/scan-id")
+async def api_scan_id_ocr(request: Request):
+    """
+    Scan Driver License / State ID / Passport photo or PDF page.
+    Extracts structured indemnitor fields (Name, DL#, DOB, Address, City, State, Zip, Sex)
+    for instant form auto-fill.
+    """
+    import base64
+
+    content_type = request.headers.get("content-type", "")
+    image_bytes = b""
+    filename = ""
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file_obj = form.get("file") or form.get("image") or form.get("id_photo")
+        if file_obj and hasattr(file_obj, "read"):
+            filename = getattr(file_obj, "filename", "") or "id_photo"
+            image_bytes = await file_obj.read()
+    else:
+        try:
+            body = (await request.json()) or {}
+            raw_b64 = body.get("image_b64") or body.get("image") or body.get("b64") or ""
+            filename = body.get("filename", "id_photo.jpg")
+            if raw_b64:
+                if "," in raw_b64:
+                    raw_b64 = raw_b64.split(",", 1)[1]
+                image_bytes = base64.b64decode(raw_b64)
+        except Exception:
+            pass
+
+    if not image_bytes:
+        return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
+
+    result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
+    return JSONResponse(result, status_code=200 if result.get("success") else 400)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

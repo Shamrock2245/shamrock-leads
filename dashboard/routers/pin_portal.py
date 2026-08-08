@@ -653,6 +653,46 @@ async def get_portal_ui(request: Request):
             -webkit-user-select: none;
             user-select: none;
         }
+        .id-scan-dropzone {
+            border: 2px dashed #3b82f6;
+            border-radius: 12px;
+            background: rgba(59, 130, 246, 0.06);
+            padding: 26px 18px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-top: 14px;
+        }
+        .id-scan-dropzone:hover, .id-scan-dropzone.dragover {
+            border-color: #60a5fa;
+            background: rgba(59, 130, 246, 0.15);
+        }
+        .id-extracted-card {
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid #10b981;
+            border-radius: 10px;
+            padding: 14px;
+            margin-top: 12px;
+            text-align: left;
+            font-size: 13px;
+        }
+        .id-extracted-title {
+            color: #34d399;
+            font-weight: 700;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .id-extracted-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            color: #e2e8f0;
+            border-bottom: 1px dashed rgba(255,255,255,0.1);
+        }
+        .id-extracted-row:last-child { border-bottom: none; }
+        .id-extracted-label { color: #94a3b8; font-weight: 500; }
         footer {
             border-top: 1px solid var(--border);
             padding: 14px max(16px, var(--safe-r)) max(16px, var(--safe-b)) max(16px, var(--safe-l));
@@ -717,13 +757,28 @@ async def get_portal_ui(request: Request):
         </div>
 
         <div class="tabs" id="authTabs">
-            <button type="button" class="tab active" id="tabPin" onclick="showAuthTab('pin')">📱 Phone PIN</button>
+            <button type="button" class="tab active" id="tabScanId" onclick="showAuthTab('scan')">🪪 Step 1: Scan ID / Passport</button>
+            <button type="button" class="tab" id="tabPin" onclick="showAuthTab('pin')">📱 Step 2: Phone PIN</button>
             <button type="button" class="tab" id="tabLink" onclick="showAuthTab('link')">🔗 Signing link</button>
         </div>
 
         <!-- Auth Card: 6-Digit OTP PIN -->
         <div id="auth-card" class="card">
-            <div id="panel-pin">
+            <!-- Step 1: ID / Passport AI Scan -->
+            <div id="panel-scan-id">
+                <h1>🪪 Step 1: Scan ID or Passport</h1>
+                <p>Snap a photo or upload your Driver's License, State ID, or Passport to verify identity and auto-fill paperwork.</p>
+                <div class="id-scan-dropzone" onclick="document.getElementById('portalIdFileInput').click()" ondragover="event.preventDefault()" ondrop="handlePortalIdDrop(event)">
+                    <span style="font-size:36px;display:block;margin-bottom:8px">📸</span>
+                    <strong>Tap to take photo or drop ID file here</strong>
+                    <span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Supports Driver's License (FL &amp; all US states), State ID, or Passport</span>
+                    <input type="file" id="portalIdFileInput" accept="image/*,application/pdf" style="display:none" onchange="handlePortalIdUpload(this)">
+                </div>
+                <div id="portalIdResult" style="margin-top:12px"></div>
+                <button type="button" class="btn-secondary" style="margin-top:12px;width:100%" onclick="showAuthTab('pin')">Skip to Phone PIN →</button>
+            </div>
+
+            <div id="panel-pin" style="display:none">
                 <h1>☘️ Official E-Sign Portal</h1>
                 <p>Enter your phone number to receive a 6-digit PIN (iMessage / text). Works on phone or iPad.</p>
                 <div id="step-phone">
@@ -784,16 +839,67 @@ async def get_portal_ui(request: Request):
         }
 
         function showAuthTab(which) {
+            const scan = document.getElementById('panel-scan-id');
             const pin = document.getElementById('panel-pin');
             const link = document.getElementById('panel-link');
+            const tabScan = document.getElementById('tabScanId');
             const tabPin = document.getElementById('tabPin');
             const tabLink = document.getElementById('tabLink');
-            if (!pin || !link) return;
-            const useLink = which === 'link';
-            pin.style.display = useLink ? 'none' : 'block';
-            link.style.display = useLink ? 'block' : 'none';
-            if (tabPin) tabPin.classList.toggle('active', !useLink);
-            if (tabLink) tabLink.classList.toggle('active', useLink);
+
+            if (scan) scan.style.display = which === 'scan' ? 'block' : 'none';
+            if (pin) pin.style.display = which === 'pin' ? 'block' : 'none';
+            if (link) link.style.display = which === 'link' ? 'block' : 'none';
+
+            if (tabScan) tabScan.classList.toggle('active', which === 'scan');
+            if (tabPin) tabPin.classList.toggle('active', which === 'pin');
+            if (tabLink) tabLink.classList.toggle('active', which === 'link');
+        }
+
+        function handlePortalIdDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const files = e.dataTransfer?.files;
+            if (files && files.length > 0) processPortalIdScan(files[0]);
+        }
+
+        function handlePortalIdUpload(input) {
+            if (input.files && input.files.length > 0) processPortalIdScan(input.files[0]);
+        }
+
+        async function processPortalIdScan(file) {
+            const resEl = document.getElementById('portalIdResult');
+            if (!resEl) return;
+            resEl.innerHTML = '<div class="status" style="display:block">📷 Scanning ID / Driver License / Passport with AI...</div>';
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const r = await fetch('/api/id/scan-ocr', { method: 'POST', body: formData });
+                const d = await r.json();
+
+                if (!d.success || !d.extracted) {
+                    resEl.innerHTML = `<div class="status error" style="display:block">❌ ${d.error || 'Could not read ID photo. Try taking a clearer photo.'}</div>`;
+                    return;
+                }
+
+                const ext = d.extracted;
+                try { localStorage.setItem('sl_indemnitor_scanned_profile', JSON.stringify(ext)); } catch (e) {}
+
+                resEl.innerHTML = `
+                    <div class="id-extracted-card">
+                        <div class="id-extracted-title">✅ ID Verified &amp; Info Extracted</div>
+                        ${ext.full_name ? `<div class="id-extracted-row"><span class="id-extracted-label">Name:</span><strong>${ext.full_name}</strong></div>` : ''}
+                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#:</span><span>${ext.dl_number} (${ext.dl_state || 'FL'})</span></div>` : ''}
+                        ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB:</span><span>${ext.dob}</span></div>` : ''}
+                        ${ext.address ? `<div class="id-extracted-row"><span class="id-extracted-label">Address:</span><span>${ext.address}, ${ext.city || ''} ${ext.state || ''} ${ext.zip || ''}</span></div>` : ''}
+                        <div style="margin-top:10px;text-align:right">
+                            <button type="button" class="btn-primary" style="min-height:40px;font-size:14px;padding:8px 16px" onclick="showAuthTab('pin')">Proceed to Step 2: PIN →</button>
+                        </div>
+                    </div>
+                `;
+            } catch (err) {
+                resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${err.message}</div>`;
+            }
         }
 
         function checkUrlDirectLink() {
