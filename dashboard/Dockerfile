@@ -11,8 +11,13 @@ LABEL description="ShamrockLeads Dashboard API (FastAPI/Uvicorn)"
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+# tesseract = POA power-sheet / receipt OCR (upload-image). Without it, only
+# ddddocr (captcha-oriented) is available and multi-line receipts fail.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl libxml2-dev libxslt-dev libyaml-dev \
+    curl \
+    libxml2-dev libxslt-dev libyaml-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

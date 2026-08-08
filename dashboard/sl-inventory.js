@@ -811,12 +811,27 @@ const SLInventory = (() => {
     if (input.files && input.files.length > 0) processUpload(input.files[0]);
   }
 
+  /** Parse pasted receipt text client→server without a file (OCR fallback). */
+  async function processPastedText() {
+    const resultEl = document.getElementById('invUploadResult');
+    const ta = document.getElementById('invPasteText');
+    const text = (ta?.value || '').trim();
+    if (!text || text.length < 10) {
+      resultEl.innerHTML = `<div class="inv-upload-error">❌ Paste the receipt lines first (include OSI-P… / PSC… ranges).</div>`;
+      return;
+    }
+    // Build a tiny text "file" so the same backend path is used
+    const blob = new Blob([text], { type: 'text/plain' });
+    const file = new File([blob], 'pasted-receipt.txt', { type: 'text/plain' });
+    return processUpload(file);
+  }
+
   async function processUpload(file) {
     const resultEl = document.getElementById('invUploadResult');
     if (!file) return;
     const sizeMb = (file.size || 0) / (1024 * 1024);
-    if (sizeMb > 25) {
-      resultEl.innerHTML = `<div class="inv-upload-error">❌ File is ${sizeMb.toFixed(1)}MB (max 25MB). Export a smaller PDF or compress the photo.</div>`;
+    if (sizeMb > 50) {
+      resultEl.innerHTML = `<div class="inv-upload-error">❌ File is ${sizeMb.toFixed(1)}MB (max 50MB). Export a smaller PDF or compress the photo.</div>`;
       return;
     }
     resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Analyzing ${file.name} (${sizeMb.toFixed(1)}MB)…</span></div>`;
@@ -875,6 +890,9 @@ const SLInventory = (() => {
       resultEl.innerHTML = `<div class="inv-upload-error">❌ Upload failed: ${e.message}</div>`;
     }
   }
+
+  // expose paste handler for inline onclick
+  window.SLInventoryProcessPaste = processPastedText;
 
   async function confirmUploadedPOAs(serials, surety) {
     const resultEl = document.getElementById('invUploadResult');
@@ -1061,7 +1079,7 @@ const SLInventory = (() => {
     applyFilter, searchFilter, detailPage,
     showAddForm, submitAdd, updatePrefixOptions, autoFillMaxBond,
     openAssignDialog, voidPower, reassignPower, restorePower,
-    handleUpload, handleDrop, confirmUploadedPOAs,
+    handleUpload, handleDrop, processUpload, processPastedText, confirmUploadedPOAs,
     checkLowStockBanner: _checkLowStockBanner,
     _autoCalcPremium,
     // Bulk selection + charge mapping

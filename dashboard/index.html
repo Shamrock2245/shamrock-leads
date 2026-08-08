@@ -3158,8 +3158,13 @@
              ondrop="SLInventory.handleDrop(event)" ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')">
           <div class="inv-upload-icon">📄</div>
           <div class="inv-upload-text">Drop image here or <span class="inv-upload-link">browse files</span></div>
-          <div class="inv-upload-hint">Supports JPG, PNG, PDF, TXT (max 25MB) — extracts OSI/Palmetto power ranges via OCR</div>
+          <div class="inv-upload-hint">Supports JPG, PNG, PDF, TXT (max 50MB) — extracts OSI/Palmetto power ranges via OCR</div>
           <input type="file" id="invFileInput" accept="image/*,.pdf,.txt,.csv,text/plain" style="display:none" onchange="SLInventory.handleUpload(this)">
+        </div>
+        <div style="margin-top:12px">
+          <div class="inv-add-title" style="font-size:12px;margin-bottom:6px">…or paste receipt text</div>
+          <textarea id="invPasteText" class="inv-add-input" rows="4" placeholder="e.g. $3,000  17  OSI-P3-116-26-0001 to OSI-P3-116-26-0017  4-Feb-27" style="width:100%;resize:vertical;font-family:ui-monospace,monospace;font-size:12px"></textarea>
+          <button type="button" class="inv-btn-submit" style="margin-top:8px" onclick="SLInventory.processPastedText && SLInventory.processPastedText()">📋 Parse Pasted Text</button>
         </div>
         <div id="invUploadResult" class="inv-upload-result"></div>
       </div>

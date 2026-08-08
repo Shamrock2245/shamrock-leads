@@ -590,9 +590,34 @@ def _extract_text_from_pdf(content_bytes: bytes) -> str:
     return text or ""
 
 
+def _tesseract_cli(image_path: str, psm: int = 6) -> str:
+    """Run system tesseract binary (dashboard Dockerfile installs it)."""
+    import shutil
+    import subprocess
+    if not shutil.which("tesseract"):
+        return ""
+    try:
+        proc = subprocess.run(
+            ["tesseract", image_path, "stdout", "--psm", str(psm), "-l", "eng"],
+            capture_output=True,
+            timeout=90,
+            check=False,
+        )
+        out = (proc.stdout or b"").decode("utf-8", errors="ignore")
+        if proc.returncode != 0 and not out.strip():
+            err = (proc.stderr or b"").decode("utf-8", errors="ignore")[:200]
+            logger.warning("tesseract exit %s: %s", proc.returncode, err)
+        return out
+    except Exception as exc:
+        logger.warning("tesseract CLI failed: %s", exc)
+        return ""
+
+
 def _extract_text_from_image(content_bytes: bytes) -> str:
-    """OCR a receipt image. Prefer tesseract (document OCR); ddddocr is captcha-oriented."""
+    """OCR a receipt image. Prefer tesseract (document OCR); ddddocr is captcha-oriented only."""
     import io
+    import os
+    import tempfile
     text = ""
     try:
         from PIL import Image, ImageOps, ImageFilter
@@ -607,20 +632,37 @@ def _extract_text_from_image(content_bytes: bytes) -> str:
             gray = gray.filter(ImageFilter.SHARPEN)
         except Exception:
             pass
-        try:
-            import pytesseract
-            # PSM 6 = assume a uniform block of text (receipt tables)
-            text = pytesseract.image_to_string(gray, config="--psm 6") or ""
-            if len(text.strip()) < 20:
-                text = (pytesseract.image_to_string(img, config="--psm 4") or "") or text
-        except Exception as tess_exc:
-            logger.warning("pytesseract failed: %s", tess_exc)
-            text = ""
+
+        with tempfile.TemporaryDirectory(prefix="poa_ocr_") as tmp:
+            gray_path = os.path.join(tmp, "gray.png")
+            color_path = os.path.join(tmp, "color.png")
+            gray.save(gray_path, format="PNG")
+            img.save(color_path, format="PNG")
+
+            # System binary first (reliable in Docker; no pytesseract required)
+            text = _tesseract_cli(gray_path, psm=6)
+            if len((text or "").strip()) < 20:
+                alt = _tesseract_cli(color_path, psm=4)
+                if len((alt or "").strip()) > len((text or "").strip()):
+                    text = alt
+            if len((text or "").strip()) < 20:
+                alt = _tesseract_cli(gray_path, psm=3)
+                if len((alt or "").strip()) > len((text or "").strip()):
+                    text = alt
+
+            # Optional python wrapper if installed
+            if len((text or "").strip()) < 15:
+                try:
+                    import pytesseract
+                    text = pytesseract.image_to_string(gray, config="--psm 6") or text
+                except Exception as tess_exc:
+                    logger.debug("pytesseract unavailable/failed: %s", tess_exc)
+
         if len((text or "").strip()) < 10:
+            # ddddocr is for short captchas — last-ditch only
             try:
                 import ddddocr
                 ocr = ddddocr.DdddOcr(show_ad=False)
-                # ddddocr expects bytes; better for short strings than full pages
                 text = ocr.classification(content_bytes) or text
             except Exception as ddd_exc:
                 logger.warning("ddddocr fallback failed: %s", ddd_exc)
@@ -664,13 +706,13 @@ async def api_poa_upload_image(request: Request):
     if not content_bytes:
         return JSONResponse({"success": False, "error": "Uploaded file is empty"}, status_code=400)
 
-    # Soft limit messaging (nginx may already reject larger with HTML 413)
+    # Soft limit messaging (nginx default used to be 1m → false 413 on 2–3MB photos)
     size_mb = len(content_bytes) / (1024 * 1024)
-    if size_mb > 24:
+    if size_mb > 50:
         return JSONResponse(
             {
                 "success": False,
-                "error": f"File is {size_mb:.1f}MB — max is 25MB. Compress the photo or use a PDF export.",
+                "error": f"File is {size_mb:.1f}MB — max is 50MB. Compress the photo or use a PDF export.",
             },
             status_code=413,
         )
