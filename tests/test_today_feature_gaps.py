@@ -122,7 +122,7 @@ async def test_check_poa_inventory_thresholds_low_stock():
     assert len(result["low_stock"]) >= 1
     first = result["low_stock"][0]
     assert first["available"] == 2
-    assert first["prefix"] in {p for _, p in TIERS["osi"] + TIERS["palmetto"]}
+    assert first["prefix"] in {item[1] for item in TIERS["osi"] + TIERS["palmetto"]}
     assert first["tier"] == first["prefix"]
 
 

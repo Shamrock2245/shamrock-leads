@@ -8,8 +8,12 @@ from dashboard.extensions import POA_RECEIPT_DATA
 # ── POA Tier Definitions ──
 TIERS = {
     "osi": [
-        (3000, "OSI3"), (6000, "OSI6"), (16000, "OSI16"),
-        (51000, "OSI51"), (101000, "OSI101"), (251000, "OSI251"),
+        (3000, "OSI-P3", "OSI3"),
+        (6000, "OSI-P6", "OSI6"),
+        (16000, "OSI-P16", "OSI16"),
+        (51000, "OSI-P51", "OSI51"),
+        (101000, "OSI-P101", "OSI101"),
+        (251000, "OSI-P251", "OSI251"),
     ],
     "palmetto": [
         (2000, "PSC2"), (5000, "PSC5"), (15000, "PSC15"), (25000, "PSC25"),
@@ -18,17 +22,54 @@ TIERS = {
 }
 
 
+def determine_surety_from_prefix(prefix: str) -> str:
+    """Return 'osi' or 'palmetto' based on prefix string."""
+    clean = str(prefix or "").strip().lower()
+    if clean.startswith("osi") or "osi-p" in clean:
+        return "osi"
+    return "palmetto"
+
+
+def parse_max_bond_from_prefix(prefix: str) -> float:
+    """
+    Extract the max bond value for a given prefix.
+    Supports OSI-P3-116-26-, OSI-P3, OSI3, PSC5, etc.
+    """
+    pfx = str(prefix or "").strip().upper()
+    import re
+    # Check OSI-P<number> format
+    m = re.search(r"OSI-?P?(\d+)", pfx)
+    if m:
+        num = int(m.group(1))
+        # Match against known tier caps
+        tier_map = {3: 3000, 6: 6000, 16: 16000, 51: 51000, 101: 101000, 251: 251000}
+        if num in tier_map:
+            return float(tier_map[num])
+        return float(num * 1000) if num < 1000 else float(num)
+
+    # Check PSC<number> format
+    m_psc = re.search(r"PSC(\d+)", pfx)
+    if m_psc:
+        num = int(m_psc.group(1))
+        return float(num * 1000)
+
+    return 0.0
+
+
 def get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
     Return the smallest POA prefix that covers the bond amount for the given surety.
-    OSI tiers:     OSI3→$3k, OSI6→$6k, OSI16→$16k, OSI51→$51k, OSI101→$101k, OSI251→$251k
+    OSI tiers:     OSI-P3 / OSI3→$3k, OSI-P6 / OSI6→$6k, OSI-P16 / OSI16→$16k, OSI-P51 / OSI51→$51k
     Palmetto tiers: PSC2->$2k, PSC5->$5k, PSC15->$15k, PSC25->$25k, PSC50->$50k, PSC75->$75k, PSC105->$105k
     """
-    for cap, prefix in TIERS.get(surety_id.lower(), []):
+    for item in TIERS.get(surety_id.lower(), []):
+        cap = item[0]
+        prefix = item[1]
         if bond_amount <= cap:
             return prefix
     # Bond exceeds all tiers — return highest available
-    return TIERS.get(surety_id.lower(), [(0, "UNKNOWN")])[-1][1]
+    last = TIERS.get(surety_id.lower(), [(0, "UNKNOWN")])[-1]
+    return last[1]
 
 
 async def seed_poa_inventory(poa_inventory):
@@ -125,12 +166,17 @@ async def check_poa_inventory_thresholds(
     low_stock: list[dict] = []
 
     for surety_id, prefix_list in TIERS.items():
-        for cap, prefix in prefix_list:
+        for item in prefix_list:
+            cap = item[0]
+            prefix = item[1]
             # Seeded inventory uses lowercase "available"; tolerate case variants.
             count = await db.poa_inventory.count_documents({
                 "surety_id": surety_id,
-                "poa_prefix": prefix,
                 "status": {"$in": ["available", "Available", "AVAILABLE"]},
+                "$or": [
+                    {"poa_prefix": prefix},
+                    {"poa_prefix": {"$regex": f"^{prefix}", "$options": "i"}},
+                ],
             })
             if count <= threshold:
                 low_stock.append({

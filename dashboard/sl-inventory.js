@@ -760,15 +760,41 @@ const SLInventory = (() => {
     const surety = document.getElementById('addSurety').value;
     const select = document.getElementById('addPrefix');
     const prefixes = surety === 'osi'
-      ? [{ v: 'OSI3', l: 'OSI3 — ≤ $3K' }, { v: 'OSI6', l: 'OSI6 — ≤ $6K' }, { v: 'OSI16', l: 'OSI16 — ≤ $16K' }, { v: 'OSI51', l: 'OSI51 — ≤ $51K' }, { v: 'OSI101', l: 'OSI101 — ≤ $101K' }, { v: 'OSI251', l: 'OSI251 — ≤ $251K' }]
-      : [{ v: 'PSC2', l: 'PSC2 — ≤ $2K' }, { v: 'PSC5', l: 'PSC5 — ≤ $5K' }, { v: 'PSC15', l: 'PSC15 — ≤ $15K' }, { v: 'PSC25', l: 'PSC25 — ≤ $25K' }, { v: 'PSC50', l: 'PSC50 — ≤ $50K' }, { v: 'PSC75', l: 'PSC75 — ≤ $75K' }, { v: 'PSC105', l: 'PSC105 — ≤ $105K' }];
+      ? [
+          { v: 'OSI-P3-116-26-', l: 'OSI-P3-116-26- — ≤ $3K (New Format)' },
+          { v: 'OSI-P6-116-26-', l: 'OSI-P6-116-26- — ≤ $6K (New Format)' },
+          { v: 'OSI-P16-116-26-', l: 'OSI-P16-116-26- — ≤ $16K (New Format)' },
+          { v: 'OSI-P51-116-26-', l: 'OSI-P51-116-26- — ≤ $51K (New Format)' },
+          { v: 'OSI-P101-116-26-', l: 'OSI-P101-116-26- — ≤ $101K (New Format)' },
+          { v: 'OSI-P251-116-26-', l: 'OSI-P251-116-26- — ≤ $251K (New Format)' },
+          { v: 'OSI3', l: 'OSI3 — ≤ $3K (Legacy)' },
+          { v: 'OSI6', l: 'OSI6 — ≤ $6K (Legacy)' },
+          { v: 'OSI16', l: 'OSI16 — ≤ $16K (Legacy)' },
+          { v: 'OSI51', l: 'OSI51 — ≤ $51K (Legacy)' },
+          { v: 'OSI101', l: 'OSI101 — ≤ $101K (Legacy)' },
+          { v: 'OSI251', l: 'OSI251 — ≤ $251K (Legacy)' }
+        ]
+      : [
+          { v: 'PSC2', l: 'PSC2 — ≤ $2K' },
+          { v: 'PSC5', l: 'PSC5 — ≤ $5K' },
+          { v: 'PSC15', l: 'PSC15 — ≤ $15K' },
+          { v: 'PSC25', l: 'PSC25 — ≤ $25K' },
+          { v: 'PSC50', l: 'PSC50 — ≤ $50K' },
+          { v: 'PSC75', l: 'PSC75 — ≤ $75K' },
+          { v: 'PSC105', l: 'PSC105 — ≤ $105K' }
+        ];
     select.innerHTML = prefixes.map(p => `<option value="${p.v}">${p.l}</option>`).join('');
     autoFillMaxBond();
   }
 
   function autoFillMaxBond() {
     const prefix = document.getElementById('addPrefix').value;
-    const bondMap = { OSI3: 3000, OSI6: 6000, OSI16: 16000, OSI51: 51000, OSI101: 101000, OSI251: 251000, PSC2: 2000, PSC5: 5000, PSC15: 15000, PSC25: 25000, PSC50: 50000, PSC75: 75000, PSC105: 105000 };
+    const bondMap = {
+      'OSI-P3-116-26-': 3000, 'OSI-P6-116-26-': 6000, 'OSI-P16-116-26-': 16000,
+      'OSI-P51-116-26-': 51000, 'OSI-P101-116-26-': 101000, 'OSI-P251-116-26-': 251000,
+      OSI3: 3000, OSI6: 6000, OSI16: 16000, OSI51: 51000, OSI101: 101000, OSI251: 251000,
+      PSC2: 2000, PSC5: 5000, PSC15: 15000, PSC25: 25000, PSC50: 50000, PSC75: 75000, PSC105: 105000
+    };
     document.getElementById('addMaxBond').value = bondMap[prefix] || 0;
   }
 
@@ -801,16 +827,18 @@ const SLInventory = (() => {
         return;
       }
       const extracted = d.extracted || [];
+      const items = d.items || [];
       if (extracted.length === 0) {
-        resultEl.innerHTML = `<div class="inv-upload-warn">⚠️ No POA serial numbers could be extracted from this image. Try a clearer image or use manual entry.</div>`;
+        resultEl.innerHTML = `<div class="inv-upload-warn">⚠️ No POA serial numbers could be extracted from this file. Try a clearer receipt image/PDF or use manual entry.</div>`;
         return;
       }
+      window._lastUploadedPOAItems = items;
       resultEl.innerHTML = `
         <div class="inv-upload-success">
-          <div class="inv-upload-count">✅ Found ${extracted.length} POA serial number(s)</div>
+          <div class="inv-upload-count">✅ Found ${extracted.length} POA power number(s) in receipt</div>
           <div class="inv-extracted-list">${extracted.map(e => `<span class="inv-extracted-num">${e}</span>`).join('')}</div>
           <div class="inv-upload-confirm-row">
-            <button class="inv-btn-submit" onclick="SLInventory.confirmUploadedPOAs(${JSON.stringify(extracted).replace(/"/g, '&quot;')}, '${surety}')">✅ Add All to Inventory</button>
+            <button class="inv-btn-submit" onclick="SLInventory.confirmUploadedPOAs()">✅ Add All ${extracted.length} Powers to Inventory</button>
             <button class="inv-btn-cancel" onclick="document.getElementById('invUploadResult').innerHTML=''">Cancel</button>
           </div>
         </div>`;
@@ -821,25 +849,31 @@ const SLInventory = (() => {
 
   async function confirmUploadedPOAs(serials, surety) {
     const resultEl = document.getElementById('invUploadResult');
-    const prefix = document.getElementById('addPrefix')?.value || 'OSI3';
-    const maxBond = parseInt(document.getElementById('addMaxBond')?.value || '3000');
-    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Adding ${serials.length} powers…</span></div>`;
-    let added = 0;
-    for (const serial of serials) {
-      try {
-        const r = await fetch(`${API}/api/poa/add`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ surety_id: surety, poa_prefix: prefix, start: serial, end: serial, max_bond_value: maxBond }),
-        });
-        const d = await r.json();
-        if (d.count) added += d.count;
-      } catch (_) { /* skip */ }
+    const items = window._lastUploadedPOAItems || [];
+    const suretyId = surety || document.getElementById('addSurety')?.value || 'osi';
+    resultEl.innerHTML = `<div class="inv-loading"><div class="btn-spinner"></div><span>Adding powers to inventory…</span></div>`;
+
+    try {
+      let payload = { surety_id: suretyId };
+      if (items.length > 0) {
+        payload.items = items;
+      } else if (serials && serials.length > 0) {
+        payload.items = serials.map(s => ({ poa_number: s, surety_id: suretyId }));
+      }
+      const r = await fetch(`${API}/api/poa/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      const added = d.count || 0;
+      resultEl.innerHTML = `<div class="inv-upload-success">✅ Added ${added} power(s) to inventory (${d.skipped || 0} skipped/duplicate)</div>`;
+      toast('success', `Added ${added} POAs to inventory`);
+      loadSummary();
+      setTimeout(() => { resultEl.innerHTML = ''; }, 5000);
+    } catch (err) {
+      resultEl.innerHTML = `<div class="inv-upload-error">❌ Failed adding powers: ${err.message}</div>`;
     }
-    resultEl.innerHTML = `<div class="inv-upload-success">✅ Added ${added} of ${serials.length} power(s) to inventory</div>`;
-    toast('success', `Added ${added} OCR-extracted POAs`);
-    loadSummary();
-    setTimeout(() => { resultEl.innerHTML = ''; }, 5000);
   }
 
   // ── Low-Stock Global Banner ──────────────────────────────────────────────

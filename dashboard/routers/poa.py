@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
-from dashboard.services.poa_service import get_poa_tier_for_bond
+from dashboard.services.poa_service import (
+    get_poa_tier_for_bond,
+    parse_max_bond_from_prefix,
+    determine_surety_from_prefix,
+)
 
 poa_bp = APIRouter(prefix="/api", tags=["poa"])
 @poa_bp.get("/poa/next")
@@ -389,17 +393,258 @@ async def api_poa_execute(request: Request):
 
 
 
+def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]:
+    """
+    Parse text from PDF, OCR image, or text file to extract structured POA powers.
+    Matches lines like:
+    $3,000  17  OSI-P3-116-26-0001 to OSI-P3-116-26-0017  4-Feb-27
+    $6,000  13  OSI-P6-116-26-0001 to OSI-P6-116-26-0013  4-Feb-27
+    $16,000 16  OSI-P16-116-26-0001 to OSI-P16-116-26-0016 4-Feb-27
+    $51,000  4  OSI-P51-116-26-0001 to OSI-P51-116-26-0004 4-Feb-27
+    """
+    import re
+    from dashboard.services.poa_service import parse_max_bond_from_prefix, determine_surety_from_prefix
+
+    results = []
+    lines = text.splitlines()
+
+    # Pattern for OSI / Palmetto range lines
+    # e.g. "$3,000 17 OSI-P3-116-26-0001 to OSI-P3-116-26-0017 4-Feb-27"
+    # or "OSI-P3-116-26-0001 to OSI-P3-116-26-0017"
+    range_regex = re.compile(
+        r"(?:(?P<val>\$[\d,]+)\s+)?(?:(?P<qty>\d+)\s+)?"
+        r"(?P<start>[A-Za-z0-9\-]+)\s+(?:to|\-|THRU)\s+(?P<end>[A-Za-z0-9\-]+)"
+        r"(?:\s+(?P<exp>\d{1,2}\-[A-Za-z]{3}\-\d{2,4}|\d{4}\-\d{2}\-\d{2}))?",
+        re.IGNORECASE,
+    )
+
+    def parse_exp_date(exp_str):
+        if not exp_str:
+            return None
+        exp_clean = exp_str.strip()
+        # Parse 4-Feb-27 or 4-Feb-2027
+        m = re.match(r"^(\d{1,2})\-([A-Za-z]{3})\-(\d{2,4})$", exp_clean)
+        if m:
+            d, mon, y = m.groups()
+            months = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+            m_num = months.get(mon.lower(), 12)
+            year_num = int(y)
+            if year_num < 100:
+                year_num += 2000
+            return f"{year_num:04d}-{m_num:02d}-{int(d):02d}"
+        return exp_clean
+
+    for line in lines:
+        line_s = line.strip()
+        if not line_s:
+            continue
+        m = range_regex.search(line_s)
+        if m:
+            start_str = m.group("start")
+            end_str = m.group("end")
+            val_str = m.group("val")
+            exp_str = m.group("exp")
+
+            # Extract numeric suffix from start & end
+            m_start = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", start_str)
+            m_end = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", end_str)
+
+            if m_start and m_end:
+                prefix_stem = m_start.group(1)
+                s_digits = m_start.group(2) or m_start.group(3) or m_start.group(4)
+                e_digits = m_end.group(2) or m_end.group(3) or m_end.group(4)
+
+                if s_digits and e_digits:
+                    s_int = int(s_digits)
+                    e_int = int(e_digits)
+                    pad_len = len(s_digits)
+                    delim = "-" if "-" in start_str else (" " if " " in start_str else "")
+
+                    max_bond = 0.0
+                    if val_str:
+                        try:
+                            max_bond = float(val_str.replace("$", "").replace(",", ""))
+                        except ValueError:
+                            pass
+                    if not max_bond:
+                        max_bond = parse_max_bond_from_prefix(start_str)
+
+                    surety_id = determine_surety_from_prefix(start_str) or default_surety
+                    exp_formatted = parse_exp_date(exp_str)
+
+                    # Extract tier prefix (e.g., OSI-P3 or OSI3)
+                    pfx_match = re.search(r"^(OSI-?P?\d+|PSC\d+|PAL\d+)", start_str, re.IGNORECASE)
+                    poa_prefix = pfx_match.group(1).upper() if pfx_match else prefix_stem
+
+                    for seq in range(s_int, e_int + 1):
+                        seq_str = f"{seq:0{pad_len}d}"
+                        poa_num = f"{prefix_stem}{delim}{seq_str}"
+                        results.append({
+                            "poa_number": poa_num,
+                            "poa_prefix": poa_prefix,
+                            "poa_full": poa_num,
+                            "max_bond_value": max_bond,
+                            "surety_id": surety_id,
+                            "expiration": exp_formatted,
+                        })
+                    continue
+
+        # Single POA pattern match if line wasn't a range
+        m_single = re.search(r"\b(OSI-P\d+[\w\-]+|OSI\d+[\w\-]+|PSC\d+[\w\-]+)\b", line_s, re.IGNORECASE)
+        if m_single:
+            poa_num = m_single.group(1).strip()
+            surety_id = determine_surety_from_prefix(poa_num) or default_surety
+            max_bond = parse_max_bond_from_prefix(poa_num)
+            pfx_match = re.search(r"^(OSI-?P?\d+|PSC\d+|PAL\d+)", poa_num, re.IGNORECASE)
+            poa_prefix = pfx_match.group(1).upper() if pfx_match else "OSI"
+            results.append({
+                "poa_number": poa_num,
+                "poa_prefix": poa_prefix,
+                "poa_full": poa_num,
+                "max_bond_value": max_bond,
+                "surety_id": surety_id,
+                "expiration": None,
+            })
+
+    return results
+
+
+@poa_bp.post("/poa/upload-image")
+async def api_poa_upload_image(request: Request):
+    """
+    Upload and parse a POA inventory receipt (PDF, image, or text file).
+    Extracts structured power numbers, max bond values, quantities, and expiration dates.
+    """
+    form = await request.form()
+    file_obj = form.get("file")
+    surety_id = str(form.get("surety_id", "osi")).lower().strip()
+
+    if not file_obj:
+        return JSONResponse({"error": "No file uploaded"}, status_code=400)
+
+    filename = getattr(file_obj, "filename", "") or "file"
+    content_bytes = await file_obj.read()
+
+    extracted_text = ""
+
+    # 1. Parse PDF file if PDF
+    if filename.lower().endswith(".pdf") or content_bytes.startswith(b"%PDF"):
+        try:
+            import io
+            import pypdf
+            reader = pypdf.PdfReader(io.BytesIO(content_bytes))
+            for page in reader.pages:
+                extracted_text += (page.extract_text() or "") + "\n"
+        except Exception:
+            try:
+                import pdfplumber, io
+                with pdfplumber.open(io.BytesIO(content_bytes)) as pdf:
+                    for page in pdf.pages:
+                        extracted_text += (page.extract_text() or "") + "\n"
+            except Exception as exc:
+                print(f"⚠️ PDF extraction error: {exc}")
+
+    # 2. Text / CSV / TSV file
+    if not extracted_text:
+        try:
+            extracted_text = content_bytes.decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+
+    # 3. Image OCR if image file and text is empty
+    if not extracted_text or len(extracted_text.strip()) < 10:
+        try:
+            import io
+            from PIL import Image
+            img = Image.open(io.BytesIO(content_bytes))
+            try:
+                import pytesseract
+                extracted_text = pytesseract.image_to_string(img)
+            except Exception:
+                try:
+                    import ddddocr
+                    ocr = ddddocr.DdddOcr(show_ad=False)
+                    extracted_text = ocr.classification(content_bytes)
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"⚠️ Image OCR error: {exc}")
+
+    if not extracted_text:
+        return JSONResponse({"error": "Could not read text from uploaded file. Please ensure it is a valid PDF or receipt image."}, status_code=400)
+
+    parsed_items = parse_poa_receipt_text(extracted_text, default_surety=surety_id)
+    extracted_serials = [item["poa_number"] for item in parsed_items]
+
+    return {
+        "success": True,
+        "filename": filename,
+        "extracted_count": len(extracted_serials),
+        "extracted": extracted_serials,
+        "items": parsed_items,
+        "raw_text_preview": extracted_text[:500],
+    }
+
+
 @poa_bp.post("/poa/add")
 async def api_poa_add(request: Request):
-    """Add one or more POA numbers to inventory (manual replenishment)."""
+    """Add one or more POA numbers to inventory (manual replenishment or upload confirmation)."""
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
 
+    # Support adding structured items directly (from upload confirmation)
+    items = body.get("items", [])
+    if items and isinstance(items, list):
+        docs = []
+        skipped = 0
+        now_str = datetime.now(timezone.utc).isoformat()
+        for item in items:
+            p_num = str(item.get("poa_number", "")).strip()
+            s_id = str(item.get("surety_id", body.get("surety_id", "osi"))).lower().strip()
+            p_prefix = str(item.get("poa_prefix", body.get("poa_prefix", "OSI-P3"))).strip()
+            max_val = float(item.get("max_bond_value") or body.get("max_bond_value") or parse_max_bond_from_prefix(p_prefix) or 3000)
+            exp = item.get("expiration") or body.get("expiration")
+
+            if not p_num:
+                continue
+            existing = await poa_inventory.find_one({"poa_number": p_num, "surety_id": s_id})
+            if existing:
+                skipped += 1
+                continue
+
+            docs.append({
+                "surety_id": s_id,
+                "poa_prefix": p_prefix,
+                "poa_number": p_num,
+                "poa_full": item.get("poa_full", p_num),
+                "max_bond_value": max_val,
+                "status": "available",
+                "expiration": exp,
+                "book_number": f"upload_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
+                "assigned_to_agent": "Brendan O'Neal",
+                "received_at": now_str,
+                "bond_case_id": None,
+                "used_at": None,
+            })
+
+        if docs:
+            await poa_inventory.insert_many(docs, ordered=False)
+
+        return {
+            "success": True,
+            "count": len(docs),
+            "skipped": skipped,
+            "surety_id": body.get("surety_id", "osi"),
+        }
+
+    # Manual form addition (start & end)
     surety_id = str(body.get("surety_id", "")).lower().strip()
     poa_prefix = str(body.get("poa_prefix", "")).strip()
     start = str(body.get("start", "")).strip()
     end = str(body.get("end", start)).strip()
     max_bond = body.get("max_bond_value", 0)
+    if not max_bond:
+        max_bond = parse_max_bond_from_prefix(poa_prefix)
     expiration = body.get("expiration")
 
     if not surety_id or surety_id not in ("osi", "palmetto"):
@@ -407,11 +652,28 @@ async def api_poa_add(request: Request):
     if not poa_prefix or not start:
         return JSONResponse({"error": "poa_prefix and start are required"}, status_code=400)
 
-    try:
-        start_int = int(start)
-        end_int = int(end)
-    except ValueError:
-        return JSONResponse({"error": "start and end must be numeric"}, status_code=400)
+    import re
+    # Check if start is full string like OSI-P3-116-26-0001
+    m_start = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", start)
+    m_end = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", end)
+
+    if m_start and m_end and (m_start.group(2) or m_start.group(3) or m_start.group(4)):
+        prefix_stem = m_start.group(1)
+        s_digits = m_start.group(2) or m_start.group(3) or m_start.group(4)
+        e_digits = m_end.group(2) or m_end.group(3) or m_end.group(4) or s_digits
+        start_int = int(s_digits)
+        end_int = int(e_digits)
+        pad_len = len(s_digits)
+        delim = "-" if "-" in start else (" " if " " in start else "")
+    else:
+        try:
+            start_int = int(start)
+            end_int = int(end)
+            pad_len = len(start)
+            prefix_stem = poa_prefix
+            delim = " " if not poa_prefix.endswith("-") else ""
+        except ValueError:
+            return JSONResponse({"error": "start and end serial numbers must be numeric"}, status_code=400)
 
     if end_int < start_int:
         return JSONResponse({"error": "end must be >= start"}, status_code=400)
@@ -420,22 +682,31 @@ async def api_poa_add(request: Request):
 
     docs = []
     skipped = 0
+    now_str = datetime.now(timezone.utc).isoformat()
+
     for serial in range(start_int, end_int + 1):
-        existing = await poa_inventory.find_one({"poa_number": str(serial), "surety_id": surety_id})
+        seq_str = f"{serial:0{pad_len}d}"
+        if prefix_stem == poa_prefix:
+            poa_num = f"{poa_prefix}{delim}{seq_str}".strip()
+        else:
+            poa_num = f"{prefix_stem}{delim}{seq_str}".strip()
+
+        existing = await poa_inventory.find_one({"poa_number": poa_num, "surety_id": surety_id})
         if existing:
             skipped += 1
             continue
+
         docs.append({
             "surety_id": surety_id,
             "poa_prefix": poa_prefix,
-            "poa_number": str(serial),
-            "poa_full": f"{poa_prefix} {serial}",
-            "max_bond_value": max_bond,
+            "poa_number": poa_num,
+            "poa_full": poa_num,
+            "max_bond_value": float(max_bond or 0),
             "status": "available",
             "expiration": expiration,
             "book_number": f"manual_{datetime.now(timezone.utc).strftime('%Y%m%d')}",
             "assigned_to_agent": "Brendan O'Neal",
-            "received_at": datetime.now(timezone.utc).isoformat(),
+            "received_at": now_str,
             "bond_case_id": None,
             "used_at": None,
         })
