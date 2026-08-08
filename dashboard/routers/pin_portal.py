@@ -385,16 +385,21 @@ async def get_portal_ui(request: Request):
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0b0f19">
     <title>Shamrock Bail Bonds — Document Packet Complete</title>
     <style>
         :root { --bg: #0b0f19; --card: #151c2c; --accent: #22c55e; --text: #f8fafc; --muted: #94a3b8; }
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 20px; text-align: center; }
-        .card { background: var(--card); border-radius: 16px; padding: 32px 24px; max-width: 400px; margin: 40px auto; border: 1px solid rgba(34,197,94,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); text-align: center; min-height: 100dvh; }
+        .card { background: var(--card); border-radius: 16px; padding: 32px 24px; max-width: 480px; margin: 40px auto; border: 1px solid rgba(34,197,94,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .icon { font-size: 48px; margin-bottom: 12px; }
         h1 { font-size: 22px; margin-bottom: 8px; color: var(--accent); }
-        p { font-size: 14px; color: var(--muted); line-height: 1.6; }
-        .btn { display: inline-block; width: 100%; padding: 14px; background: var(--accent); color: #000; font-weight: 700; border-radius: 8px; text-decoration: none; margin-top: 20px; box-sizing: border-box; }
+        p { font-size: 15px; color: var(--muted); line-height: 1.6; }
+        .btn { display: inline-block; width: 100%; padding: 16px; background: var(--accent); color: #000; font-weight: 700; border-radius: 12px; text-decoration: none; margin-top: 16px; min-height: 48px; font-size: 16px; }
+        @media (min-width: 768px) { .card { max-width: 560px; padding: 40px 32px; } h1 { font-size: 26px; } }
     </style>
 </head>
 <body>
@@ -404,6 +409,7 @@ async def get_portal_ui(request: Request):
         <p>Thank you. Your document packet has been securely signed and submitted. Our bond agents have been alerted and are processing your release.</p>
         <p>A copy of your signed paperwork has been filed to Drive and sent to your email.</p>
         <a href="tel:2393322245" class="btn">📞 Call Office: (239) 332-2245</a>
+        <a href="/" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Sign another packet</a>
     </div>
 </body>
 </html>"""
@@ -412,7 +418,14 @@ async def get_portal_ui(request: Request):
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- Allow pinch-zoom for form review; Apple Pencil signatures need full touch surface -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Shamrock Sign">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0b0f19">
+    <meta name="format-detection" content="telephone=yes">
     <title>Shamrock Bail Bonds — Official E-Sign Paperwork Portal</title>
     <script src="https://sign.shamrockbailbonds.biz/js/form.js" defer></script>
     <style>
@@ -425,24 +438,58 @@ async def get_portal_ui(request: Request):
             --muted: #94a3b8;
             --border: rgba(255, 255, 255, 0.08);
             --emerald-glow: rgba(34, 197, 94, 0.2);
+            --safe-t: env(safe-area-inset-top, 0px);
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-l: env(safe-area-inset-left, 0px);
+            --safe-r: env(safe-area-inset-right, 0px);
         }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { height: 100%; }
         body {
             margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             background: var(--bg);
             color: var(--text);
-            min-height: 100vh;
+            min-height: 100dvh;
             display: flex;
             flex-direction: column;
+            touch-action: manipulation;
+            overscroll-behavior-y: contain;
+        }
+        body.signing-mode { overflow: hidden; }
+        body.signing-mode .navbar,
+        body.signing-mode footer { display: none; }
+        body.signing-mode .container {
+            max-width: 100%;
+            padding: 0;
+            margin: 0;
+            flex: 1;
+            min-height: 100dvh;
+        }
+        body.signing-mode #esign-frame {
+            margin: 0;
+            border-radius: 0;
+            border: none;
+            min-height: 100dvh;
+            display: flex !important;
+            flex-direction: column;
+        }
+        body.signing-mode #docuseal-mount,
+        body.signing-mode docuseal-form {
+            flex: 1;
+            min-height: calc(100dvh - 52px);
+            height: calc(100dvh - 52px);
         }
         .navbar {
-            background: rgba(21, 28, 44, 0.9);
+            background: rgba(21, 28, 44, 0.95);
             backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--border);
-            padding: 14px 20px;
+            padding: calc(12px + var(--safe-t)) max(16px, var(--safe-r)) 12px max(16px, var(--safe-l));
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 10px;
             position: sticky;
             top: 0;
             z-index: 100;
@@ -452,112 +499,196 @@ async def get_portal_ui(request: Request):
             align-items: center;
             gap: 10px;
             font-weight: 700;
-            font-size: 18px;
+            font-size: 17px;
             color: var(--accent);
             text-decoration: none;
         }
         .brand-logo { font-size: 22px; }
-        .call-btn {
+        .nav-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .call-btn, .mode-btn {
             background: rgba(34, 197, 94, 0.15);
             color: var(--accent);
             border: 1px solid rgba(34, 197, 94, 0.3);
-            padding: 8px 14px;
+            padding: 10px 14px;
             border-radius: 20px;
             font-size: 13px;
             font-weight: 600;
             text-decoration: none;
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 6px;
-            transition: all 0.2s ease;
+            min-height: 44px;
+            cursor: pointer;
+            font-family: inherit;
         }
-        .call-btn:hover { background: var(--accent); color: #000; }
+        .mode-btn { background: rgba(59,130,246,0.15); color: #93c5fd; border-color: rgba(59,130,246,0.35); }
+        .call-btn:hover, .mode-btn:hover { filter: brightness(1.1); }
         .container {
             flex: 1;
-            max-width: 900px;
+            max-width: 960px;
             width: 100%;
             margin: 0 auto;
-            padding: 20px 16px;
-            box-sizing: border-box;
+            padding: 16px max(16px, var(--safe-r)) max(20px, var(--safe-b)) max(16px, var(--safe-l));
         }
         .card {
             background: var(--card);
             border-radius: 16px;
-            padding: 28px 20px;
-            max-width: 420px;
-            margin: 30px auto;
+            padding: 24px 20px;
+            max-width: 440px;
+            margin: 20px auto;
             border: 1px solid var(--border);
             box-shadow: 0 12px 40px rgba(0,0,0,0.5);
             text-align: center;
         }
         h1 { font-size: 20px; margin: 0 0 8px 0; color: var(--text); }
-        p { font-size: 14px; color: var(--muted); line-height: 1.5; margin: 0 0 16px 0; }
-        input {
+        p { font-size: 14px; color: var(--muted); line-height: 1.5; margin: 0 0 14px 0; }
+        .hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+        .tabs {
+            display: flex; gap: 8px; margin: 0 auto 14px; max-width: 440px;
+        }
+        .tab {
+            flex: 1; min-height: 44px; border-radius: 10px; border: 1px solid var(--border);
+            background: rgba(255,255,255,0.04); color: var(--muted); font-weight: 600; font-size: 13px;
+            cursor: pointer; font-family: inherit;
+        }
+        .tab.active { background: rgba(34,197,94,0.18); color: var(--accent); border-color: rgba(34,197,94,0.4); }
+        input, textarea {
             width: 100%;
             padding: 14px;
-            margin: 12px 0;
-            border-radius: 10px;
+            margin: 10px 0;
+            border-radius: 12px;
             border: 1px solid rgba(255,255,255,0.15);
             background: rgba(0,0,0,0.4);
             color: var(--text);
-            font-size: 18px;
+            font-size: 16px; /* iOS: prevents auto-zoom */
             text-align: center;
-            box-sizing: border-box;
             outline: none;
-            transition: border-color 0.2s ease;
+            font-family: inherit;
+            touch-action: manipulation;
         }
-        input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--emerald-glow); }
+        textarea { min-height: 72px; text-align: left; resize: vertical; }
+        input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--emerald-glow); }
         .btn-primary {
             width: 100%;
-            padding: 14px;
+            padding: 16px;
             background: var(--accent);
             color: #000;
             font-weight: 700;
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             font-size: 16px;
             cursor: pointer;
             margin-top: 10px;
-            transition: background 0.2s ease;
+            min-height: 52px;
+            touch-action: manipulation;
+            font-family: inherit;
         }
-        .btn-primary:hover { background: var(--accent-hover); }
-        .status { margin-top: 16px; font-size: 13px; color: var(--muted); line-height: 1.4; }
-        .status.error { color: #ef4444; }
+        .btn-primary:active { transform: scale(0.99); }
+        .btn-secondary {
+            width: 100%; padding: 14px; margin-top: 8px; min-height: 48px;
+            background: transparent; color: var(--accent); border: 1px solid rgba(34,197,94,0.4);
+            border-radius: 12px; font-weight: 600; font-size: 15px; cursor: pointer; font-family: inherit;
+        }
+        .status { margin-top: 14px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+        .status.error { color: #f87171; }
         .status.success { color: var(--accent); }
+        .ipad-banner {
+            display: none;
+            max-width: 960px; margin: 0 auto 12px; padding: 12px 14px;
+            background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.35);
+            border-radius: 12px; color: #bfdbfe; font-size: 13px; line-height: 1.45; text-align: left;
+        }
+        .ipad-banner strong { color: #93c5fd; }
+        body.in-person .ipad-banner { display: block; }
         
-        /* Embedded E-Sign Component Frame */
+        /* Embedded E-Sign — optimized for Apple Pencil / finger */
         #esign-frame {
             display: none;
-            background: var(--card);
+            background: #fff;
             border-radius: 16px;
             border: 1px solid var(--border);
             overflow: hidden;
             box-shadow: 0 16px 48px rgba(0,0,0,0.6);
             margin-top: 10px;
+            /* Critical for stylus signature capture */
+            touch-action: auto;
+            -webkit-overflow-scrolling: touch;
         }
         .esign-bar {
-            background: rgba(255,255,255,0.03);
-            border-bottom: 1px solid var(--border);
-            padding: 14px 20px;
+            background: #0f172a;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            padding: 10px 14px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+            min-height: 52px;
         }
-        .esign-title { font-weight: 700; font-size: 15px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
-        .esign-badge { background: rgba(34,197,94,0.15); color: var(--accent); font-size: 12px; padding: 4px 10px; border-radius: 12px; font-weight: 600; }
+        .esign-title { font-weight: 700; font-size: 14px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+        .esign-badge { background: rgba(34,197,94,0.15); color: var(--accent); font-size: 12px; padding: 6px 10px; border-radius: 12px; font-weight: 600; }
+        .esign-bar-actions { display: flex; gap: 8px; align-items: center; }
+        .esign-bar-actions button {
+            min-height: 40px; padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.06); color: #e2e8f0; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+        }
+        #docuseal-mount {
+            width: 100%;
+            min-height: min(78vh, 900px);
+            background: #fff;
+            /* Pen/finger: do not block pointer events */
+            touch-action: auto;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+        }
         docuseal-form {
             width: 100%;
-            min-height: 750px;
+            min-height: min(78vh, 900px);
             border: none;
             display: block;
+            touch-action: auto;
+        }
+        /* DocuSeal canvas/signature areas — allow free pen strokes */
+        docuseal-form, docuseal-form * {
+            -webkit-user-select: none;
+            user-select: none;
         }
         footer {
             border-top: 1px solid var(--border);
-            padding: 16px;
+            padding: 14px max(16px, var(--safe-r)) max(16px, var(--safe-b)) max(16px, var(--safe-l));
             text-align: center;
             font-size: 12px;
             color: var(--muted);
             margin-top: auto;
+        }
+        /* Phone */
+        @media (max-width: 640px) {
+            .brand span:last-child { font-size: 15px; }
+            .call-btn span:last-child { display: none; }
+            .card { margin: 12px auto; padding: 22px 16px; }
+            #docuseal-mount, docuseal-form { min-height: 70vh; }
+        }
+        /* iPad / tablet — in-person signing desk */
+        @media (min-width: 768px) {
+            .card { max-width: 520px; padding: 32px 28px; }
+            h1 { font-size: 24px; }
+            p { font-size: 15px; }
+            .btn-primary { min-height: 56px; font-size: 17px; }
+            .container { max-width: 1100px; padding: 20px 24px; }
+            #docuseal-mount, docuseal-form { min-height: min(82vh, 1100px); }
+            .esign-title { font-size: 16px; }
+        }
+        @media (min-width: 1024px) and (pointer: coarse) {
+            /* iPad Pro-class with touch */
+            .container { max-width: 100%; }
+            #docuseal-mount, docuseal-form { min-height: calc(100dvh - 120px); }
+        }
+        @media (orientation: landscape) and (min-width: 768px) {
+            body.signing-mode #docuseal-mount,
+            body.signing-mode docuseal-form {
+                min-height: calc(100dvh - 48px);
+                height: calc(100dvh - 48px);
+            }
         }
     </style>
 </head>
@@ -567,28 +698,51 @@ async def get_portal_ui(request: Request):
             <span class="brand-logo">☘️</span>
             <span>Shamrock Paperwork</span>
         </a>
-        <a href="tel:2393322245" class="call-btn">
-            <span>📞</span>
-            <span>(239) 332-2245</span>
-        </a>
+        <div class="nav-actions">
+            <button type="button" class="mode-btn" id="btnInPerson" onclick="toggleInPersonMode()" title="Full-screen iPad + Apple Pencil signing">
+                ✍️ iPad / In-person
+            </button>
+            <a href="tel:2393322245" class="call-btn">
+                <span>📞</span>
+                <span>(239) 332-2245</span>
+            </a>
+        </div>
     </header>
 
     <main class="container">
+        <div class="ipad-banner" id="ipadBanner">
+            <strong>In-person mode (iPad + Apple Pencil):</strong>
+            Use the signing link from Write Bond / DocuSeal, or paste it below.
+            Hold the iPad in landscape for the largest signature pad. Stylus strokes are captured on the white form area.
+        </div>
+
+        <div class="tabs" id="authTabs">
+            <button type="button" class="tab active" id="tabPin" onclick="showAuthTab('pin')">📱 Phone PIN</button>
+            <button type="button" class="tab" id="tabLink" onclick="showAuthTab('link')">🔗 Signing link</button>
+        </div>
+
         <!-- Auth Card: 6-Digit OTP PIN -->
         <div id="auth-card" class="card">
-            <h1>☘️ Official E-Sign Portal</h1>
-            <p>Enter your phone number to receive your 6-digit access PIN for mobile e-signing.</p>
-            
-            <div id="step-phone">
-                <input type="tel" id="phoneInput" placeholder="(239) 555-0199" autocomplete="tel">
-                <button class="btn-primary" onclick="sendPin()">Send Access PIN</button>
+            <div id="panel-pin">
+                <h1>☘️ Official E-Sign Portal</h1>
+                <p>Enter your phone number to receive a 6-digit PIN (iMessage / text). Works on phone or iPad.</p>
+                <div id="step-phone">
+                    <input type="tel" id="phoneInput" placeholder="(239) 555-0199" autocomplete="tel" inputmode="tel" enterkeyhint="send">
+                    <button type="button" class="btn-primary" onclick="sendPin()">Send Access PIN</button>
+                </div>
+                <div id="step-pin" style="display:none">
+                    <input type="text" id="pinInput" placeholder="6-Digit PIN" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" enterkeyhint="go">
+                    <button type="button" class="btn-primary" onclick="verifyPin()">Verify &amp; Open Paperwork</button>
+                    <button type="button" class="btn-secondary" onclick="resetPinFlow()">Use a different phone</button>
+                </div>
             </div>
-
-            <div id="step-pin" style="display:none">
-                <input type="number" id="pinInput" placeholder="6-Digit PIN" maxlength="6" inputmode="numeric">
-                <button class="btn-primary" onclick="verifyPin()">Verify & Open Paperwork</button>
+            <div id="panel-link" style="display:none">
+                <h1>✍️ In-person / iPad sign</h1>
+                <p>Paste the DocuSeal signing URL from the dashboard (or open a link that already includes <code>?link=</code>).</p>
+                <textarea id="linkInput" placeholder="https://sign.shamrockbailbonds.biz/s/..." autocomplete="off"></textarea>
+                <button type="button" class="btn-primary" onclick="openLinkFromPaste()">Open packet for signing</button>
+                <p class="hint">Staff: after Send DocuSeal, copy the indemnitor sign URL and open it here on the office iPad.</p>
             </div>
-
             <div id="status" class="status"></div>
         </div>
 
@@ -597,44 +751,165 @@ async def get_portal_ui(request: Request):
             <div class="esign-bar">
                 <div class="esign-title">
                     <span>☘️</span>
-                    <span>Indemnitor Bond Agreement Packet</span>
+                    <span id="esignTitleText">Bond Agreement Packet</span>
                 </div>
-                <div class="esign-badge">14 Documents</div>
+                <div class="esign-bar-actions">
+                    <span class="esign-badge" id="esignBadge">E-Sign</span>
+                    <button type="button" onclick="toggleFullscreenSign()" title="Fill the screen for Apple Pencil">⛶ Full screen</button>
+                    <button type="button" onclick="exitSigning()" title="Back to PIN / link">← Back</button>
+                </div>
             </div>
             <div id="docuseal-mount"></div>
         </div>
     </main>
 
     <footer>
-        ☘️ Shamrock Bail Bonds — 1528 Broadway, Ft. Myers, FL 33901 — 24/7 Licensing & Surety Operations
+        ☘️ Shamrock Bail Bonds — 1528 Broadway, Ft. Myers, FL 33901 — Phone · iPad · Apple Pencil ready
     </footer>
 
     <script>
+        let inPerson = false;
+
+        function isTabletOrTouch() {
+            return window.matchMedia('(pointer: coarse)').matches || Math.min(screen.width, screen.height) >= 768;
+        }
+
+        function toggleInPersonMode(force) {
+            inPerson = typeof force === 'boolean' ? force : !inPerson;
+            document.body.classList.toggle('in-person', inPerson);
+            const btn = document.getElementById('btnInPerson');
+            if (btn) btn.textContent = inPerson ? '✓ In-person on' : '✍️ iPad / In-person';
+            if (inPerson) showAuthTab('link');
+            try { localStorage.setItem('sl_portal_in_person', inPerson ? '1' : '0'); } catch (e) {}
+        }
+
+        function showAuthTab(which) {
+            const pin = document.getElementById('panel-pin');
+            const link = document.getElementById('panel-link');
+            const tabPin = document.getElementById('tabPin');
+            const tabLink = document.getElementById('tabLink');
+            if (!pin || !link) return;
+            const useLink = which === 'link';
+            pin.style.display = useLink ? 'none' : 'block';
+            link.style.display = useLink ? 'block' : 'none';
+            if (tabPin) tabPin.classList.toggle('active', !useLink);
+            if (tabLink) tabLink.classList.toggle('active', useLink);
+        }
+
         function checkUrlDirectLink() {
             const params = new URLSearchParams(window.location.search);
-            const link = params.get('link') || params.get('s') || params.get('url');
-            if (link && link.startsWith('http')) {
-                openDocuSealForm(link);
+            const link = params.get('link') || params.get('s') || params.get('url') || params.get('src');
+            const mode = params.get('mode') || params.get('kiosk') || '';
+            if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk' || params.get('inperson') === '1') {
+                toggleInPersonMode(true);
+            } else {
+                try {
+                    if (localStorage.getItem('sl_portal_in_person') === '1' || isTabletOrTouch()) {
+                        // Soft-enable banner on tablets without forcing link tab
+                        document.body.classList.add('in-person');
+                        const btn = document.getElementById('btnInPerson');
+                        if (btn) btn.textContent = '✓ In-person on';
+                        inPerson = true;
+                    }
+                } catch (e) {}
+            }
+            if (link && (link.startsWith('http://') || link.startsWith('https://'))) {
+                openDocuSealForm(link, { fullscreen: inPerson || isTabletOrTouch() });
             }
         }
 
-        function openDocuSealForm(signUrl) {
-            document.getElementById('auth-card').style.display = 'none';
+        function openLinkFromPaste() {
+            const raw = (document.getElementById('linkInput').value || '').trim();
+            const statusEl = document.getElementById('status');
+            if (!raw) {
+                statusEl.className = 'status error';
+                statusEl.textContent = 'Paste a DocuSeal signing URL first.';
+                return;
+            }
+            // Accept full URL or slug path
+            let url = raw;
+            if (!url.startsWith('http')) {
+                if (url.startsWith('/s/') || url.startsWith('s/')) {
+                    url = 'https://sign.shamrockbailbonds.biz' + (url.startsWith('/') ? url : '/' + url);
+                } else {
+                    statusEl.className = 'status error';
+                    statusEl.textContent = 'URL must start with https://sign.shamrockbailbonds.biz/...';
+                    return;
+                }
+            }
+            openDocuSealForm(url, { fullscreen: true });
+        }
+
+        function openDocuSealForm(signUrl, opts) {
+            opts = opts || {};
+            const auth = document.getElementById('auth-card');
+            const tabs = document.getElementById('authTabs');
+            if (auth) auth.style.display = 'none';
+            if (tabs) tabs.style.display = 'none';
             const frame = document.getElementById('esign-frame');
             const mount = document.getElementById('docuseal-mount');
             frame.style.display = 'block';
             mount.innerHTML = '';
 
+            if (opts.fullscreen || inPerson || isTabletOrTouch()) {
+                document.body.classList.add('signing-mode');
+            }
+
             const dsForm = document.createElement('docuseal-form');
             dsForm.setAttribute('data-src', signUrl);
+            // Expand fields; keep title minimal for more signature canvas on iPad
+            dsForm.setAttribute('data-expand', 'true');
+            dsForm.setAttribute('data-minimize', 'false');
+            dsForm.setAttribute('data-with-title', 'false');
+            dsForm.setAttribute('data-send-copy-email', 'false');
+            dsForm.setAttribute('data-go-to-last', 'false');
             dsForm.id = 'embeddedDocuSeal';
+            // Allow stylus / multi-touch on the host element
+            dsForm.style.touchAction = 'auto';
+            dsForm.style.minHeight = '100%';
             mount.appendChild(dsForm);
 
-            // Listen for DocuSeal form completed event
-            dsForm.addEventListener('completed', (e) => {
-                console.log('[Shamrock E-Sign] DocuSeal form completed event:', e.detail);
+            const title = document.getElementById('esignTitleText');
+            if (title) title.textContent = opts.title || 'Bond Agreement Packet — Sign with finger or Apple Pencil';
+
+            dsForm.addEventListener('completed', function () {
                 window.location.href = '/done';
             });
+            // Some DocuSeal builds emit load errors without crashing
+            dsForm.addEventListener('error', function () {
+                const statusEl = document.getElementById('status');
+                if (statusEl) {
+                    if (auth) auth.style.display = 'block';
+                    statusEl.className = 'status error';
+                    statusEl.textContent = 'Could not load signing form. Check the link or call (239) 332-2245.';
+                }
+            });
+
+            // Scroll signing surface into view (iPad Safari)
+            try { frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
+        }
+
+        function toggleFullscreenSign() {
+            document.body.classList.toggle('signing-mode');
+        }
+
+        function exitSigning() {
+            document.body.classList.remove('signing-mode');
+            const frame = document.getElementById('esign-frame');
+            const mount = document.getElementById('docuseal-mount');
+            const auth = document.getElementById('auth-card');
+            const tabs = document.getElementById('authTabs');
+            if (frame) frame.style.display = 'none';
+            if (mount) mount.innerHTML = '';
+            if (auth) auth.style.display = 'block';
+            if (tabs) tabs.style.display = 'flex';
+        }
+
+        function resetPinFlow() {
+            document.getElementById('step-phone').style.display = 'block';
+            document.getElementById('step-pin').style.display = 'none';
+            document.getElementById('pinInput').value = '';
+            document.getElementById('status').textContent = '';
         }
 
         async function sendPin() {
@@ -642,7 +917,6 @@ async def get_portal_ui(request: Request):
             const statusEl = document.getElementById('status');
             statusEl.className = 'status';
             statusEl.textContent = 'Sending PIN via BlueBubbles...';
-            
             try {
                 const r = await fetch('/api/portal/send-pin', {
                     method: 'POST',
@@ -659,6 +933,7 @@ async def get_portal_ui(request: Request):
                     else if (d.queued || d.channel === 'queued') how = 'message queue (delivering shortly)';
                     statusEl.className = 'status success';
                     statusEl.textContent = '✅ PIN sent via ' + how + '. Check your phone.';
+                    try { document.getElementById('pinInput').focus(); } catch (e) {}
                 } else {
                     statusEl.className = 'status error';
                     statusEl.textContent = '❌ Error: ' + (d.error || 'Failed to send PIN');
@@ -675,7 +950,6 @@ async def get_portal_ui(request: Request):
             const statusEl = document.getElementById('status');
             statusEl.className = 'status';
             statusEl.textContent = 'Verifying PIN...';
-            
             try {
                 const r = await fetch('/api/portal/verify-pin', {
                     method: 'POST',
@@ -688,7 +962,10 @@ async def get_portal_ui(request: Request):
                         statusEl.className = 'status success';
                         const who = d.defendant_name ? (' for ' + d.defendant_name) : '';
                         statusEl.textContent = '✅ Verified' + who + ' — opening e-sign packet...';
-                        openDocuSealForm(d.signing_link);
+                        openDocuSealForm(d.signing_link, {
+                            title: d.defendant_name ? ('Packet — ' + d.defendant_name) : 'Bond Agreement Packet',
+                            fullscreen: inPerson || isTabletOrTouch(),
+                        });
                     } else {
                         statusEl.className = 'status error';
                         statusEl.textContent = d.message
@@ -706,8 +983,21 @@ async def get_portal_ui(request: Request):
             }
         }
 
-        // Auto-check on load for direct signing link in query string
+        // Enter key handlers
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            const t = e.target && e.target.id;
+            if (t === 'phoneInput') { e.preventDefault(); sendPin(); }
+            if (t === 'pinInput') { e.preventDefault(); verifyPin(); }
+        });
+
         window.addEventListener('DOMContentLoaded', checkUrlDirectLink);
+        // Prevent accidental pull-to-refresh during pen signing on iOS
+        document.addEventListener('touchmove', function (e) {
+            if (document.body.classList.contains('signing-mode') && e.touches.length > 1) {
+                /* allow pinch */ return;
+            }
+        }, { passive: true });
     </script>
 </body>
 </html>"""

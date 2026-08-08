@@ -2741,16 +2741,23 @@ async function triggerDocuSealPacket() {
         || (ds.submitters && ds.submitters[0] && ds.submitters[0].sign_url)
         || '';
       const links = ds.sign_links || (ds.submitters || []).map(s => s.sign_url).filter(Boolean);
+      const portalBase = 'https://paperwork.shamrockbailbonds.biz';
+      const ipadUrl = link
+        ? `${portalBase}/?mode=ipad&link=${encodeURIComponent(link)}`
+        : `${portalBase}/?mode=ipad`;
       let linkHtml = link
         ? `<a href="${link}" target="_blank" rel="noopener" style="color:#22c55e;font-weight:bold;text-decoration:underline;margin-left:8px">Open indemnitor link</a>`
+          + `<a href="${ipadUrl}" target="_blank" rel="noopener" style="color:#93c5fd;font-weight:700;text-decoration:underline;margin-left:10px">✍️ Open on iPad (in-person)</a>`
         : ' <span style="color:#fbbf24">(no link returned — check DOCUSEAL_API_KEY / template)</span>';
       if (links.length > 1) {
         linkHtml += links.slice(1).map((u, i) =>
           ` <a href="${u}" target="_blank" rel="noopener" style="color:#93c5fd;margin-left:6px">Signer ${i + 2}</a>`
+          + ` <a href="${portalBase}/?mode=ipad&link=${encodeURIComponent(u)}" target="_blank" rel="noopener" style="color:#86efac;margin-left:4px">iPad</a>`
         ).join('');
       }
       if (snStatus) {
-        snStatus.innerHTML = `✅ <strong>DocuSeal packet ready</strong> · ${result.packet_id || ''}${linkHtml}`;
+        snStatus.innerHTML = `✅ <strong>DocuSeal packet ready</strong> · ${result.packet_id || ''}${linkHtml}`
+          + `<div style="margin-top:8px;font-size:11px;color:var(--muted)">In-person: open the iPad link on the office tablet · Apple Pencil works in the white form area · or send the PIN portal link to the indemnitor phone</div>`;
       }
       if (phaseBadge) {
         phaseBadge.textContent = 'DocuSeal Live';

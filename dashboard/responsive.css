@@ -377,6 +377,31 @@ html{scroll-behavior:smooth}
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* Write Bond: charge/POA grid scrolls horizontally on iPad portrait */
+  .poa-charge-row > div[style*="grid-template-columns"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  #bondModal .wb-section { padding: 12px 0; }
+  #btnPrintAppearancePackage { min-height: 52px !important; font-size: 15px !important; }
+  #btnSendDocuSeal { min-height: 52px !important; }
+}
+
+/* Phone: Write Bond modal stacks charge fields */
+@media (max-width: 640px) {
+  .poa-charge-row label { font-size: 11px !important; }
+  #bondModalBody { max-height: none; }
+  #bondModal .insurer-selector { flex-wrap: wrap; }
+  #bondModal .insurer-pill { min-height: 48px; flex: 1 1 45%; }
+}
+
+/* Stylus-friendly: never clip pen input inside scrollers */
+@media (pointer: fine) and (hover: none), (pointer: coarse) {
+  canvas, [class*="signature"], [class*="sign-pad"] {
+    touch-action: none;
+  }
+}
 }
 
 /* ═══════════════════════════════════════════════════════
