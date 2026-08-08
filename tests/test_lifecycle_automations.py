@@ -41,7 +41,7 @@ class TestLifecycleConfigAndCron:
     def test_defaults_enabled(self):
         for key in (
             "forfeiture_scan",
-            "signnow_poller",
+            "docuseal_poller",
             "compliance_backfill",
             "matching_backlog",
         ):
@@ -52,7 +52,7 @@ class TestLifecycleConfigAndCron:
         names = {c.name: c for c in CRON_REGISTRY}
         for key in (
             "forfeiture_scan",
-            "signnow_poller",
+            "docuseal_poller",
             "compliance_backfill",
             "matching_backlog",
         ):

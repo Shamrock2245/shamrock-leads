@@ -39,6 +39,19 @@ def normalize_plate(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(text).upper())
 
 
+def _to_float(val: Any, default: float = 0.0) -> float:
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, (list, tuple)):
+        return _to_float(val[0], default=default) if val else default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def probe_alpr_deps() -> Dict[str, Any]:
     """Return availability of vision stack (no model load)."""
     out: Dict[str, Any] = {
@@ -212,19 +225,6 @@ class ALPREngine:
             if det and det.confidence >= self.min_confidence and det.plate_text:
                 detections.append(det)
         return detections
-
-def _to_float(val: Any, default: float = 0.0) -> float:
-    if val is None:
-        return default
-    if isinstance(val, (int, float)):
-        return float(val)
-    if isinstance(val, (list, tuple)):
-        return _to_float(val[0], default=default) if val else default
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
-
 
     def _item_to_detection(self, item: Any) -> Optional[PlateDetection]:
         if item is None:

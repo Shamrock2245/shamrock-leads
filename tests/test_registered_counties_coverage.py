@@ -38,10 +38,10 @@ def test_wave2_fl_counties_are_registered():
     assert not missing, f"Wave-2 FL counties missing from REGISTERED_COUNTIES: {sorted(missing)}"
 
 
-def test_fl_is_full_67_and_total_256():
+def test_fl_is_full_67_and_total_269():
     fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)")]
     assert len(fl) == 67, f"Expected 67 FL counties, got {len(fl)}"
-    assert len(REGISTERED_COUNTIES) == 256, f"Expected 256 total, got {len(REGISTERED_COUNTIES)}"
+    assert len(REGISTERED_COUNTIES) == 269, f"Expected 269 total, got {len(REGISTERED_COUNTIES)}"
 
 
 # Wave-3 NC/TN/TX metros (2026-07-26)

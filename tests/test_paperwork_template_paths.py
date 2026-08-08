@@ -68,7 +68,7 @@ def test_packet_composition_rule():
     assert "surety-agnostic-shamrock + osi" in osi["rule"]
     assert "surety-agnostic-shamrock + palmetto" in pal["rule"]
     assert "signnow" in osi["esign_providers"]
-    assert "adobe" in osi["esign_providers"]
+    assert "docuseal" in osi["esign_providers"]
 
 
 def test_list_available_blanks_complete_for_osi():
