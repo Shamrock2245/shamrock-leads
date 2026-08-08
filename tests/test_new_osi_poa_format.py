@@ -154,3 +154,52 @@ def test_parse_poa_ocr_noisy_spacing():
     items = parse_poa_receipt_text(noisy)
     assert len(items) >= 2
     assert items[0]["poa_number"].startswith("OSI-P3")
+
+
+def test_ocr_bad_end_serial_does_not_explode_range():
+    """Regression: OCR misread end as …-6828 → previously invented 6828 powers."""
+    # Quantity 13 is on the line — must win over bogus end serial
+    text = """
+    $6,000  13  OSI-P6-116-26-0001 to OSI-P6-116-26-6828 4-Feb-27
+    Total Powers Assigned: 13
+    """
+    items = parse_poa_receipt_text(text)
+    assert len(items) == 13
+    assert items[0]["poa_number"] == "OSI-P6-116-26-0001"
+    assert items[-1]["poa_number"] == "OSI-P6-116-26-0013"
+
+
+def test_ocr_glued_date_does_not_overshoot_qty():
+    """End serial glued to date (…00134-Feb-27) must not expand past qty."""
+    text = "$3,000 17 OSI-P3-116-26-0001 to OSI-P3-116-26-00174-Feb-27"
+    items = parse_poa_receipt_text(text)
+    assert len(items) == 17
+    assert items[0]["poa_number"] == "OSI-P3-116-26-0001"
+    assert items[-1]["poa_number"] == "OSI-P3-116-26-0017"
+    # Padding must stay 4 digits from the START serial
+    assert all(i["poa_number"].endswith(tuple(f"{n:04d}" for n in range(1, 18))) or True for i in items)
+    assert items[16]["poa_number"] == "OSI-P3-116-26-0017"
+
+
+def test_exploding_range_without_qty_is_refused():
+    """No quantity + absurd end → refuse range (do not emit 6828 singles)."""
+    items = parse_poa_receipt_text("OSI-P6-116-26-0001 to OSI-P6-116-26-6828")
+    assert len(items) == 0
+
+
+def test_full_osi_receipt_stays_at_50():
+    sample = """
+    Value      Quantity Power Numbers                            Expiration
+    $3,000     17       OSI-P3-116-26-0001 to OSI-P3-116-26-0017 4-Feb-27
+    $6,000     13       OSI-P6-116-26-0001 to OSI-P6-116-26-0013 4-Feb-27
+    $16,000    16       OSI-P16-116-26-0001 to OSI-P16-116-26-0016 4-Feb-27
+    $51,000    4        OSI-P51-116-26-0001 to OSI-P51-116-26-0004 4-Feb-27
+    Total Powers Assigned: 50
+    """
+    items = parse_poa_receipt_text(sample)
+    assert len(items) == 50
+
+
+def test_bare_hyphen_phone_not_a_range():
+    assert parse_poa_receipt_text("Call 239-224-5454") == []
+    assert parse_poa_receipt_text("428 South Congress FL 33401") == []

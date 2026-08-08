@@ -877,10 +877,20 @@ const SLInventory = (() => {
         return;
       }
       window._lastUploadedPOAItems = items;
+      // Don't render thousands of chips if a parse bug slips through
+      const preview = extracted.slice(0, 80);
+      const more = extracted.length > preview.length
+        ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">…and ${extracted.length - preview.length} more</div>`
+        : '';
+      const warn = extracted.length > 200
+        ? `<div class="inv-upload-warn" style="margin:8px 0">⚠️ ${extracted.length} powers is unusually high for one receipt. Double-check before adding. Typical OSI sheets are ~50.</div>`
+        : '';
       resultEl.innerHTML = `
         <div class="inv-upload-success">
           <div class="inv-upload-count">✅ Found ${extracted.length} POA power number(s) in receipt${d.method ? ` <span style="opacity:.7;font-weight:400">(${d.method})</span>` : ''}</div>
-          <div class="inv-extracted-list">${extracted.map(e => `<span class="inv-extracted-num">${e}</span>`).join('')}</div>
+          ${warn}
+          <div class="inv-extracted-list">${preview.map(e => `<span class="inv-extracted-num">${e}</span>`).join('')}</div>
+          ${more}
           <div class="inv-upload-confirm-row">
             <button class="inv-btn-submit" onclick="SLInventory.confirmUploadedPOAs()">✅ Add All ${extracted.length} Powers to Inventory</button>
             <button class="inv-btn-cancel" onclick="document.getElementById('invUploadResult').innerHTML=''">Cancel</button>

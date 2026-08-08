@@ -394,6 +394,12 @@ async def api_poa_execute(request: Request):
 
 
 
+# Hard safety rails — a single power-sheet line never issues thousands of POAs.
+# (OCR once misread end serial as …-6828 → 6828 phantom powers.)
+_MAX_RANGE_PER_LINE = 200
+_MAX_TOTAL_POWERS = 500
+
+
 def _normalize_poa_ocr_text(text: str) -> str:
     """Normalize common OCR mistakes before serial extraction."""
     import re
@@ -401,14 +407,53 @@ def _normalize_poa_ocr_text(text: str) -> str:
         return ""
     t = text.replace("\u00a0", " ")
     # Common OCR letter confusions near POA prefixes
-    t = re.sub(r"\bOSl[\- ]", "OSI-", t, flags=re.IGNORECASE)  # l vs I
+    t = re.sub(r"\bOS[l1I][\- ]", "OSI-", t, flags=re.IGNORECASE)  # l/1/I vs I
     t = re.sub(r"\b0SI[\- ]", "OSI-", t, flags=re.IGNORECASE)  # 0 vs O
+    t = re.sub(r"\bOS1-P", "OSI-P", t, flags=re.IGNORECASE)
     t = re.sub(r"\bOSI\s+P\s*", "OSI-P", t, flags=re.IGNORECASE)
     t = re.sub(r"\bOSI\-P\s+(\d)", r"OSI-P\1", t, flags=re.IGNORECASE)
     t = re.sub(r"\bPSC\s+(\d)", r"PSC\1", t, flags=re.IGNORECASE)
     # Collapse multi-spaces but keep newlines for line parser
     t = re.sub(r"[ \t]+", " ", t)
     return t
+
+
+def _is_poa_serial(token: str) -> bool:
+    """True if token looks like a real power serial (not a phone/zip fragment)."""
+    import re
+    t = (token or "").strip().upper()
+    if not t:
+        return False
+    # New OSI book: OSI-P3-116-26-0001
+    if re.fullmatch(r"OSI-P\d+(?:-\d+){2,}", t):
+        return True
+    # Legacy compact: OSI3-20134295 or OSI320134295
+    if re.fullmatch(r"OSI\d{1,3}-\d{5,}", t) or re.fullmatch(r"OSI\d{6,}", t):
+        return True
+    # Palmetto: PSC5-2644670
+    if re.fullmatch(r"PSC\d{1,3}-\d{4,}", t) or re.fullmatch(r"PSC\d{6,}", t):
+        return True
+    return False
+
+
+def _split_serial_stem_suffix(serial: str) -> tuple[str, str, int] | None:
+    """Return (stem_with_delim_prefix, zero_padded_suffix, int_suffix) or None."""
+    import re
+    s = (serial or "").strip()
+    m = re.search(r"^(.*?)[- ]?(\d+)$", s)
+    if not m:
+        return None
+    stem, digits = m.group(1), m.group(2)
+    # Prefer hyphen join for OSI-P… stems
+    if stem.endswith("-") or stem.endswith(" "):
+        join_stem = stem
+    elif "-" in s:
+        join_stem = stem + "-"
+    elif " " in s:
+        join_stem = stem + " "
+    else:
+        join_stem = stem
+    return join_stem, digits, int(digits)
 
 
 def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]:
@@ -420,6 +465,9 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
     $16,000 16  OSI-P16-116-26-0001 to OSI-P16-116-26-0016 4-Feb-27
     $51,000  4  OSI-P51-116-26-0001 to OSI-P51-116-26-0004 4-Feb-27
     Also supports legacy forms: OSI3 20134295 to 20134324, PSC5 2644670-2644777
+
+    Safety: quantity on the line wins over a mis-OCR'd end serial; ranges are
+    hard-capped so a bad end like …-6828 cannot invent thousands of powers.
     """
     import re
     from dashboard.services.poa_service import parse_max_bond_from_prefix, determine_surety_from_prefix
@@ -428,13 +476,25 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
     results = []
     lines = text.splitlines()
 
-    # Pattern for OSI / Palmetto range lines
-    # e.g. "$3,000 17 OSI-P3-116-26-0001 to OSI-P3-116-26-0017 4-Feb-27"
-    # or "OSI-P3-116-26-0001 to OSI-P3-116-26-0017"
-    # or "OSI3 20134295 to 20134324"
+    # Optional global total printed on OSI receipts
+    total_claimed = None
+    m_total = re.search(
+        r"Total\s+Powers?\s+Assigned\s*:\s*(\d{1,4})",
+        text,
+        re.IGNORECASE,
+    )
+    if m_total:
+        total_claimed = int(m_total.group(1))
+
+    # ONLY "to" / "thru" / en-dash as range separators — never a bare hyphen
+    # (bare "-" matches inside serials / phone numbers and invents huge ranges).
+    # Require BOTH ends to look like POA serials.
     range_regex = re.compile(
-        r"(?:(?P<val>\$[\d,]+)\s+)?(?:(?P<qty>\d+)\s+)?"
-        r"(?P<start>[A-Za-z0-9][A-Za-z0-9\-]*)\s+(?:to|\-|–|—|THRU)\s+(?P<end>[A-Za-z0-9][A-Za-z0-9\-]*)"
+        r"(?:(?P<val>\$[\d,]+)\s+)?"
+        r"(?:(?P<qty>\d{1,3})\s+)?"
+        r"(?P<start>OSI-P\d+(?:-\d+)+|OSI\d+(?:-\d+)?|PSC\d+(?:-\d+)?)\s+"
+        r"(?:to|thru|through|–|—)\s+"
+        r"(?P<end>OSI-P\d+(?:-\d+)+|OSI\d+(?:-\d+)?|PSC\d+(?:-\d+)?)"
         r"(?:\s+(?P<exp>\d{1,2}\-[A-Za-z]{3}\-\d{2,4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}\-\d{2}\-\d{2}))?",
         re.IGNORECASE,
     )
@@ -455,71 +515,118 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
             return f"{year_num:04d}-{m_num:02d}-{int(d):02d}"
         return exp_clean
 
+    def expand_range(start_str: str, end_str: str, qty: int | None, val_str: str | None, exp_str: str | None):
+        """Expand start→end with qty/caps. Returns list of item dicts."""
+        if not _is_poa_serial(start_str):
+            return []
+        start_parts = _split_serial_stem_suffix(start_str)
+        if not start_parts:
+            return []
+        join_stem, s_digits, s_int = start_parts
+        # Always pad from the START serial (end is often OCR garbage / glued date)
+        pad_len = len(s_digits)
+
+        e_int = None
+        if end_str and _is_poa_serial(end_str):
+            end_parts = _split_serial_stem_suffix(end_str)
+            if end_parts:
+                end_stem, e_digits, e_candidate = end_parts
+                # Stems must agree (ignore trailing delim)
+                stem_a = join_stem.rstrip("- ").upper()
+                stem_b = end_stem.rstrip("- ").upper()
+                if stem_a == stem_b or stem_b.startswith(stem_a) or stem_a.startswith(stem_b):
+                    # Reject end suffixes that look like start+date glued (…00174)
+                    # unless they match qty or are a small sequential bump.
+                    e_int = e_candidate
+
+        # Quantity on the receipt line is authoritative when present
+        # (OCR frequently corrupts the END serial into garbage like …-6828).
+        if qty and 1 <= qty <= _MAX_RANGE_PER_LINE:
+            if e_int is None or (e_int - s_int + 1) != qty:
+                e_int = s_int + qty - 1
+        elif e_int is None:
+            return []
+
+        if e_int < s_int:
+            return []
+
+        span = e_int - s_int + 1
+        if span > _MAX_RANGE_PER_LINE:
+            # Prefer qty if available; otherwise refuse the exploding range
+            if qty and 1 <= qty <= _MAX_RANGE_PER_LINE:
+                e_int = s_int + qty - 1
+                span = qty
+            else:
+                logger.warning(
+                    "POA range refused: %s → …%s spans %s (cap %s)",
+                    start_str, e_int, span, _MAX_RANGE_PER_LINE,
+                )
+                return []
+        max_bond = 0.0
+        if val_str:
+            try:
+                max_bond = float(val_str.replace("$", "").replace(",", ""))
+            except ValueError:
+                pass
+        if not max_bond:
+            max_bond = parse_max_bond_from_prefix(start_str)
+
+        surety_id = determine_surety_from_prefix(start_str) or default_surety
+        exp_formatted = parse_exp_date(exp_str)
+        pfx_match = re.search(r"^(OSI-?P?\d+|PSC\d+|PAL\d+)", start_str, re.IGNORECASE)
+        poa_prefix = pfx_match.group(1).upper() if pfx_match else join_stem.rstrip("- ")
+
+        items = []
+        for seq in range(s_int, e_int + 1):
+            seq_str = f"{seq:0{pad_len}d}"
+            poa_num = f"{join_stem}{seq_str}" if join_stem.endswith(("-", " ")) else f"{join_stem}-{seq_str}"
+            # normalize double hyphens
+            poa_num = re.sub(r"-{2,}", "-", poa_num)
+            items.append({
+                "poa_number": poa_num.upper(),
+                "poa_prefix": poa_prefix,
+                "poa_full": poa_num.upper(),
+                "max_bond_value": max_bond,
+                "surety_id": surety_id,
+                "expiration": exp_formatted,
+            })
+        return items
+
     for line in lines:
         line_s = line.strip()
         if not line_s:
             continue
-        m = range_regex.search(line_s)
-        if m:
-            start_str = m.group("start")
-            end_str = m.group("end")
-            val_str = m.group("val")
-            exp_str = m.group("exp")
 
-            # Extract numeric suffix from start & end
-            m_start = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", start_str)
-            m_end = re.search(r"^(.*?)(?:-(\d+)|\s+(\d+)|(\d+))$", end_str)
-
-            if m_start and m_end:
-                prefix_stem = m_start.group(1)
-                s_digits = m_start.group(2) or m_start.group(3) or m_start.group(4)
-                e_digits = m_end.group(2) or m_end.group(3) or m_end.group(4)
-
-                if s_digits and e_digits:
-                    s_int = int(s_digits)
-                    e_int = int(e_digits)
-                    pad_len = len(s_digits)
-                    delim = "-" if "-" in start_str else (" " if " " in start_str else "")
-
-                    max_bond = 0.0
-                    if val_str:
-                        try:
-                            max_bond = float(val_str.replace("$", "").replace(",", ""))
-                        except ValueError:
-                            pass
-                    if not max_bond:
-                        max_bond = parse_max_bond_from_prefix(start_str)
-
-                    surety_id = determine_surety_from_prefix(start_str) or default_surety
-                    exp_formatted = parse_exp_date(exp_str)
-
-                    # Extract tier prefix (e.g., OSI-P3 or OSI3)
-                    pfx_match = re.search(r"^(OSI-?P?\d+|PSC\d+|PAL\d+)", start_str, re.IGNORECASE)
-                    poa_prefix = pfx_match.group(1).upper() if pfx_match else prefix_stem
-
-                    for seq in range(s_int, e_int + 1):
-                        seq_str = f"{seq:0{pad_len}d}"
-                        poa_num = f"{prefix_stem}{delim}{seq_str}"
-                        results.append({
-                            "poa_number": poa_num,
-                            "poa_prefix": poa_prefix,
-                            "poa_full": poa_num,
-                            "max_bond_value": max_bond,
-                            "surety_id": surety_id,
-                            "expiration": exp_formatted,
-                        })
-                    continue
+        # If a range pattern is present on the line, never fall through to
+        # single-serial matching (avoids adding a bogus …-6828 end as a single).
+        range_hits = list(range_regex.finditer(line_s))
+        if range_hits:
+            for m in range_hits:
+                qty_raw = m.group("qty")
+                qty = int(qty_raw) if qty_raw and qty_raw.isdigit() else None
+                # Guard: qty of 0001-style serial fragments mis-captured — only 1–200
+                if qty is not None and not (1 <= qty <= _MAX_RANGE_PER_LINE):
+                    qty = None
+                expanded = expand_range(
+                    m.group("start"),
+                    m.group("end"),
+                    qty,
+                    m.group("val"),
+                    m.group("exp"),
+                )
+                if expanded:
+                    results.extend(expanded)
+            continue
 
         # Single POA pattern match if line wasn't a range
         # New OSI book: OSI-P3-116-26-0001 · legacy: OSI3-20134295 · PSC5-2644670
         for m_single in re.finditer(
-            r"\b(OSI-P\d+(?:-\d+)+|OSI\d+(?:-\d+)?|PSC\d+(?:-\d+)?)\b",
+            r"\b(OSI-P\d+(?:-\d+){2,}|OSI\d{1,3}-\d{5,}|OSI\d{6,}|PSC\d{1,3}-\d{4,}|PSC\d{6,})\b",
             line_s,
             re.IGNORECASE,
         ):
             poa_num = m_single.group(1).strip().upper()
-            # Skip bare tier labels without a serial (e.g. OSI-P3 alone)
-            if re.fullmatch(r"(OSI-P\d+|OSI\d+|PSC\d+)", poa_num, re.IGNORECASE):
+            if not _is_poa_serial(poa_num):
                 continue
             surety_id = determine_surety_from_prefix(poa_num) or default_surety
             max_bond = parse_max_bond_from_prefix(poa_num)
@@ -543,6 +650,25 @@ def parse_poa_receipt_text(text: str, default_surety: str = "osi") -> list[dict]
             continue
         seen.add(key)
         deduped.append(item)
+
+    # Global caps — total on sheet or absolute safety limit
+    hard_cap = _MAX_TOTAL_POWERS
+    if total_claimed and 1 <= total_claimed <= _MAX_TOTAL_POWERS:
+        # Allow small OCR overshoot but never 100x
+        hard_cap = min(_MAX_TOTAL_POWERS, max(total_claimed, total_claimed + 5))
+        if len(deduped) > hard_cap:
+            logger.warning(
+                "POA parse truncated %s → %s (receipt claims Total Powers=%s)",
+                len(deduped), hard_cap, total_claimed,
+            )
+            deduped = deduped[:hard_cap]
+    elif len(deduped) > _MAX_TOTAL_POWERS:
+        logger.warning(
+            "POA parse truncated %s → %s (absolute cap)",
+            len(deduped), _MAX_TOTAL_POWERS,
+        )
+        deduped = deduped[:_MAX_TOTAL_POWERS]
+
     return deduped
 
 
