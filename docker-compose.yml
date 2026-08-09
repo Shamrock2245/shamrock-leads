@@ -374,6 +374,7 @@ services:
       BACKEND_INTERNAL_URL: "http://localhost:3000"
       # ── Auth ── REQUIRED: set POSTIZ_JWT_SECRET in .env (never use default in prod)
       JWT_SECRET: "${POSTIZ_JWT_SECRET:-shamrock-postiz-jwt-secret-change-me}"
+      AGENT_API_KEY: "${POSTIZ_API_KEY:-152d712b1704c7dcde0035fb227570661b1e302c58782b03849c05fae91261a}"
       # ── Database ── REQUIRED: set POSTIZ_DB_PASSWORD in .env
       DATABASE_URL: "postgresql://postiz:${POSTIZ_DB_PASSWORD:-shamrock_postiz_2026}@postiz-postgres:5432/postiz"
       REDIS_URL: "redis://postiz-redis:6379"
