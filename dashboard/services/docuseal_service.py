@@ -1012,12 +1012,20 @@ class DocuSealService:
             surety = "osi"
         surety_label = surety.upper()
 
+        mmddyy = datetime.now().strftime("%m%d%y")
+        safe_full = (defendant_name or "Unknown").replace("/", "-").strip() or "Unknown"
+
+        # Extract defendant's last name (handles "Doe, John" or "John Doe")
+        if "," in safe_full:
+            last_name = safe_full.split(",")[0].strip()
+        else:
+            parts = safe_full.split()
+            last_name = parts[-1].strip() if parts else "Unknown"
+
+        last_name_clean = re.sub(r"[^\w\-]", "", last_name.replace(" ", "_")) or "Unknown"
         date_str = datetime.now().strftime("%Y%m%d")
-        safe = (defendant_name or "Unknown").replace("/", "-").strip() or "Unknown"
-        folder_name = f"{safe.replace(' ', '_')}_{date_str}"
-        booking_part = (booking_number or "nobooking")[:32]
-        pkt = (packet_id or "packet")[:24]
-        filename = f"SIGNED_{safe.replace(' ', '_')}_{booking_part}_{pkt}_docuseal.pdf"
+        folder_name = f"{safe_full.replace(' ', '_')}_{date_str}"
+        filename = f"{last_name_clean}_{mmddyy}_{surety_label}.pdf"
 
         # Prefer Completed Bonds / {Surety} / {Defendant_YYYYMMDD}/
         # Fall back to surety folder, then root, if nested create fails.
