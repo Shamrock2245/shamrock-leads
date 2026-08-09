@@ -44,8 +44,11 @@
     <img src="https://static.wixstatic.com/media/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg/v1/fill/w_192%2Ch_192%2Clg_1%2Cusm_0.66_1.00_0.01/7dd020_d04ce5d52c63454a869b8b71f1305e11%7Emv2.jpg" alt="Shamrock" class="header-logo" style="height:36px;margin-right:10px;vertical-align:middle">
     <h1>ShamrockLeads <small>Multi-State Arrest Intelligence · FL · GA · SC · NC · TN · TX · LA · CT · AL · MS</small></h1>
   </div>
-  <div class="header-right" style="display:flex;align-items:center;gap:10px">
-    <!-- Device Mode Dropdown (Sleek Glassmorphic Styling) -->
+    <div class="header-right" style="display:flex;align-items:center;gap:10px">
+      <button class="sl-btn" onclick="SLHelp.toggle()" title="Ecosystem Guide & Help (Press F1)" style="display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.4);color:#34d399;font-weight:700;padding:6px 12px;border-radius:10px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:12px">
+        📖 Help <span style="font-size:10px;opacity:0.7;background:rgba(0,0,0,0.3);padding:2px 5px;border-radius:4px;font-family:monospace">F1</span>
+      </button>
+      <!-- Device Mode Dropdown (Sleek Glassmorphic Styling) -->
     <div class="device-selector-glow" style="display:inline-flex;align-items:center;gap:8px;background:rgba(30,41,59,0.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(52,211,153,0.35);border-radius:10px;padding:5px 12px;box-shadow:0 4px 20px rgba(0,0,0,0.25), 0 0 12px rgba(16,185,129,0.15);transition:all 0.2s ease" title="Device Layout Mode (Desktop, iPad Pro, iPhone, Android)">
       <span id="deviceModeBadge" style="font-size:14px;filter:drop-shadow(0 0 4px rgba(52,211,153,0.6))">⚡</span>
       <select id="deviceModeSelect" onchange="SLDevice.setMode(this.value)" style="background:none;border:none;color:#e2e8f0;font-size:12px;font-weight:700;font-family:'Space Grotesk',sans-serif;cursor:pointer;outline:none;padding-right:4px">
@@ -5829,8 +5832,70 @@
 <script defer src="/sl-automations.js?v=2"></script>
 <script defer src="/sl-relationships.js?v=1"></script>
 <script defer src="/sl-family-tree.js?v=1"></script>
-<link rel="stylesheet" href="/sl-bond-intelligence.css?v=1">
-<link rel="stylesheet" href="/sl-multi-state.css?v=2">
+<!-- ═══ IN-APP ECOSYSTEM HELP DRAWER (F1) ═══ -->
+<div id="slHelpDrawer" style="display:none;position:fixed;top:0;right:-480px;width:460px;height:100vh;background:#0f172a;border-left:1px solid #334155;z-index:10005;transition:right 0.3s cubic-bezier(0.16,1,0.3,1);box-shadow:-12px 0 40px rgba(0,0,0,0.5);display:flex;flex-direction:column;font-family:'Space Grotesk',sans-serif">
+  <div style="padding:16px 20px;background:#1e293b;border-bottom:1px solid #334155;display:flex;align-items:center;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">📖</span>
+      <div>
+        <h3 style="margin:0;font-size:16px;color:#f8fafc">Ecosystem Guide & SOP</h3>
+        <span style="font-size:11px;color:#94a3b8">Interactive Contextual Help (F1)</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <a href="/guide" target="_blank" style="background:#22c55e;color:#022c22;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;text-decoration:none">Full Manual ↗</a>
+      <button onclick="SLHelp.close()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;padding:4px 8px">&times;</button>
+    </div>
+  </div>
+
+  <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:20px">
+    <!-- Active Tab Context Banner -->
+    <div id="slHelpContextBanner" style="background:rgba(51,65,85,0.4);border:1px solid #334155;border-radius:10px;padding:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <span style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:#38bdf8;text-transform:uppercase">CURRENT SCREEN FOCUS</span>
+        <span id="slHelpActiveTabName" style="font-size:11px;background:#0284c7;color:#fff;padding:2px 8px;border-radius:10px;font-weight:700">Lead Explorer</span>
+      </div>
+      <div id="slHelpContextText" style="font-size:13px;color:#e2e8f0;line-height:1.5">
+        Select a lead row to view 0-100 lead score breakdown, OSINT contacts, and start bond recording.
+      </div>
+    </div>
+
+    <!-- POSTIZ NORMAL PERSON WALKTHROUGH WIZARD -->
+    <div style="background:linear-gradient(135deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));border:1px solid rgba(52,211,153,0.3);border-radius:12px;padding:18px;box-shadow:0 4px 20px rgba(0,0,0,0.3)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">📲</span>
+          <span style="font-size:14px;font-weight:700;color:#34d399">Postiz Social Media Guide</span>
+        </div>
+        <span id="postizStepIndicator" style="font-size:11px;color:#94a3b8;font-family:monospace">Step 1 of 5</span>
+      </div>
+
+      <!-- Slide Container -->
+      <div id="postizSlideContent" style="min-height:160px;font-size:13px;color:#cbd5e1;line-height:1.6">
+        <!-- Injected dynamically by SLHelp -->
+      </div>
+
+      <!-- Wizard Controls -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
+        <button id="postizPrevBtn" onclick="SLHelp.prevSlide()" style="background:#1e293b;border:1px solid #475569;color:#e2e8f0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">← Previous</button>
+        <button id="postizNextBtn" onclick="SLHelp.nextSlide()" style="background:#059669;border:none;color:#fff;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Next Step →</button>
+      </div>
+    </div>
+
+    <!-- Quick Keyboard Shortcuts Card -->
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:10px;padding:14px">
+      <h4 style="margin:0 0 10px 0;font-size:13px;color:#f8fafc">⌨️ Key Keyboard Shortcuts</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+        <div style="background:#0f172a;padding:6px 10px;border-radius:6px;border:1px solid #334155"><kbd style="background:#334155;padding:2px 6px;border-radius:4px">F1</kbd> Open/Close Help</div>
+        <div style="background:#0f172a;padding:6px 10px;border-radius:6px;border:1px solid #334155"><kbd style="background:#334155;padding:2px 6px;border-radius:4px">Ctrl+K</kbd> Omnibar Search</div>
+        <div style="background:#0f172a;padding:6px 10px;border-radius:6px;border:1px solid #334155"><kbd style="background:#334155;padding:2px 6px;border-radius:4px">Esc</kbd> Close Active Modal</div>
+        <div style="background:#0f172a;padding:6px 10px;border-radius:6px;border:1px solid #334155"><kbd style="background:#334155;padding:2px 6px;border-radius:4px">Alt+N</kbd> Record New Bond</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script defer src="/sl-help.js?v=1"></script>
 <script defer src="/sl-bond-intelligence.js?v=3"></script>
 <script defer src="/sl-multi-state.js?v=3"></script>
 </body>
