@@ -5860,25 +5860,31 @@
       </div>
     </div>
 
-    <!-- POSTIZ NORMAL PERSON WALKTHROUGH WIZARD -->
+    <!-- DUAL GUIDE WIZARD (Auto-CRM + Postiz) -->
     <div style="background:linear-gradient(135deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));border:1px solid rgba(52,211,153,0.3);border-radius:12px;padding:18px;box-shadow:0 4px 20px rgba(0,0,0,0.3)">
+      <!-- Mode Tabs -->
+      <div style="display:flex;gap:6px;margin-bottom:14px;background:#0f172a;padding:4px;border-radius:8px;border:1px solid #334155">
+        <button id="slGuideTabCRM" onclick="SLHelp.setGuideMode('crm')" style="flex:1;background:#059669;color:#fff;border:none;padding:6px;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer">☘️ Auto-CRM Guide</button>
+        <button id="slGuideTabSocial" onclick="SLHelp.setGuideMode('social')" style="flex:1;background:#1e293b;color:#94a3b8;border:none;padding:6px;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer">📲 Social Media Guide</button>
+      </div>
+
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:18px">📲</span>
-          <span style="font-size:14px;font-weight:700;color:#34d399">Postiz Social Media Guide</span>
+          <span style="font-size:18px">📖</span>
+          <span id="wizardGuideTitle" style="font-size:14px;font-weight:700;color:#34d399">ShamrockLeads Auto-CRM Guide</span>
         </div>
-        <span id="postizStepIndicator" style="font-size:11px;color:#94a3b8;font-family:monospace">Step 1 of 5</span>
+        <span id="wizardStepIndicator" style="font-size:11px;color:#94a3b8;font-family:monospace">Step 1 of 5</span>
       </div>
 
       <!-- Slide Container -->
-      <div id="postizSlideContent" style="min-height:160px;font-size:13px;color:#cbd5e1;line-height:1.6">
+      <div id="wizardSlideContent" style="min-height:160px;font-size:13px;color:#cbd5e1;line-height:1.6">
         <!-- Injected dynamically by SLHelp -->
       </div>
 
       <!-- Wizard Controls -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
-        <button id="postizPrevBtn" onclick="SLHelp.prevSlide()" style="background:#1e293b;border:1px solid #475569;color:#e2e8f0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">← Previous</button>
-        <button id="postizNextBtn" onclick="SLHelp.nextSlide()" style="background:#059669;border:none;color:#fff;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Next Step →</button>
+        <button id="wizardPrevBtn" onclick="SLHelp.prevSlide()" style="background:#1e293b;border:1px solid #475569;color:#e2e8f0;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">← Previous</button>
+        <button id="wizardNextBtn" onclick="SLHelp.nextSlide()" style="background:#059669;border:none;color:#fff;padding:6px 16px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">Next Step →</button>
       </div>
     </div>
 

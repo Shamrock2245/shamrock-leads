@@ -1,24 +1,87 @@
 /**
- * ShamrockLeads — In-App Ecosystem Help Drawer & Postiz Wizard (SLHelp)
- * Controls F1 shortcut, drawer toggling, contextual tab detection, and Postiz slides.
+ * ShamrockLeads — In-App Ecosystem Help Drawer & Dual Guide Wizard (SLHelp)
+ * Controls F1 shortcut, drawer toggling, contextual tab detection, and interactive wizards
+ * for both ShamrockLeads Auto-CRM (leads.shamrockbailbonds.biz) and Postiz Social Media (social.shamrockbailbonds.biz).
  */
 (function() {
   'use strict';
 
-  let currentSlide = 0;
+  let activeGuide = 'crm'; // 'crm' or 'social'
+  let currentSlideCRM = 0;
+  let currentSlideSocial = 0;
   let isOpen = false;
+
+  const CRM_SLIDES = [
+    {
+      title: "Step 1: Lead Explorer & Scoring Engine",
+      content: `
+        <p style="margin-bottom:8px">Real-time arrest records from <strong>269 scrapers across 10 states</strong> populate here instantly.</p>
+        <ul style="padding-left:18px;margin-bottom:8px">
+          <li>🔥 <strong style="color:#ef4444">Hot Leads (80–100)</strong>: High bond, cash/surety, clear charges. Triggers Slack alert to <code>#leads</code> + iMessage queue.</li>
+          <li>🟡 <strong style="color:#f59e0b">Warm Leads (50–79)</strong>: Standard booking records logged for follow-up.</li>
+          <li>❄️ <strong style="color:#94a3b8">Disqualified (<50)</strong>: $0 bond, ROR, or capital/federal charges.</li>
+        </ul>
+        <p style="font-size:11px;color:#38bdf8">💡 Use top dropdowns to filter by State (FL, GA, SC, NC, TN, TX, LA, AL, CT, MS) or County.</p>
+      `
+    },
+    {
+      title: "Step 2: Appearance Bond Auto-Complete",
+      content: `
+        <p style="margin-bottom:8px">Click <strong>➕ Record Bond</strong> or click any lead row, then select your defendant:</p>
+        <ol style="padding-left:18px;margin-bottom:8px">
+          <li><strong>Auto-Fills Form</strong>: Defendant Name, Phone, Address, DOB, Booking #, County, Facility, Case #, Court Date/Time.</li>
+          <li><strong>Florida 10% Statutory Premium</strong>: Auto-calculates 10% of total bond with the <strong>$100 statutory minimum per charge</strong>.</li>
+          <li><strong>Per-Charge Table</strong>: Hydrates rows 1–4 (offenses, case numbers, POAs, amounts).</li>
+          <li><strong>Sequential POA Suggestion</strong>: Auto-queries inventory for next sequential power number for OSI or Palmetto.</li>
+        </ol>
+      `
+    },
+    {
+      title: "Step 3: DocuSeal Mobile E-Signature & Drive",
+      content: `
+        <p style="margin-bottom:8px">Send legal paperwork instantly to mobile devices:</p>
+        <ul style="padding-left:18px;margin-bottom:8px">
+          <li>📱 <strong>Mobile Signing Link</strong>: Sent via SMS, iMessage, or WhatsApp to indemnitor.</li>
+          <li>🪪 <strong>ID OCR & Verification</strong>: Indemnitor uploads Driver License → system OCR extracts DL# & address → signs on phone.</li>
+          <li>📁 <strong>Auto-Drive Filing</strong>: Upon completion, signed PDF is saved to Google Drive formatted as: <br/><code style="color:#34d399">&lt;LastName&gt;_&lt;MMDDYY&gt;_&lt;SURETY&gt;.pdf</code> (e.g. <code>Doe_080926_OSI.pdf</code>).</li>
+        </ul>
+      `
+    },
+    {
+      title: "Step 4: Active Bond Kanban & Forfeitures",
+      content: `
+        <p style="margin-bottom:8px">Manage active cases across the 7 lifecycle statuses:</p>
+        <ul style="padding-left:18px;margin-bottom:8px">
+          <li><strong>Active ➔ Monitoring ➔ Alert ➔ Exonerated / Forfeited / Surrendered ➔ Reinstated</strong></li>
+          <li>♻️ <strong>Auto-Release of POAs</strong>: Marking a bond <code>Exonerated</code> or <code>Surrendered</code> automatically releases power numbers back to available inventory.</li>
+          <li>📍 <strong>GPS & Check-Ins</strong>: Automated weekly SMS reminders for selfie + GPS check-ins via Traccar integration.</li>
+        </ul>
+      `
+    },
+    {
+      title: "Step 5: Multi-State Ops & System Health",
+      content: `
+        <p style="margin-bottom:8px">Operational dashboards for multi-state supervision:</p>
+        <ul style="padding-left:18px;margin-bottom:8px">
+          <li>📊 <strong>Multi-State Ops Tab</strong>: Live KPI gauges, scraper status, and run times across all 10 states.</li>
+          <li>🧹 <strong>Data Hygiene</strong>: One-click tools to purge test records and repair mismatches to protect MongoDB Atlas M0 512MB storage.</li>
+          <li>⚡ <strong>Automations Sweeper</strong>: Background watcher re-checking unset/$0 bonds every 30 minutes.</li>
+        </ul>
+      `
+    }
+  ];
 
   const POSTIZ_SLIDES = [
     {
-      title: "Step 1: Connect Your Social Accounts",
+      title: "Step 1: Connect Social Accounts",
       content: `
         <p style="margin-bottom:8px">Log into <strong style="color:#38bdf8">social.shamrockbailbonds.biz</strong> and click <strong>Integrations</strong> on the left menu.</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li>📘 <strong>Facebook</strong>: Connects official Facebook Page.</li>
+          <li>📘 <strong>Facebook</strong>: Official Shamrock Facebook Page.</li>
           <li>📸 <strong>Instagram</strong>: Connects <code>@shamrock_bail_bonds</code>.</li>
           <li>🪶 <strong>X / Twitter</strong>: Connects <code>@ShamrockBail_FL</code>.</li>
           <li>📺 <strong>YouTube</strong>: Connects <code>@shamrock_2245</code>.</li>
-          <li>📍 <strong>Google My Business</strong>: Connects office listing.</li>
+          <li>📍 <strong>Google My Business</strong>: Office listing.</li>
         </ul>
         <p style="font-size:11px;color:#94a3b8">A green checkmark ✅ appears when authorization completes.</p>
       `
@@ -93,35 +156,76 @@
     }
   };
 
+  function getActiveSlides() {
+    return activeGuide === 'crm' ? CRM_SLIDES : POSTIZ_SLIDES;
+  }
+
+  function getActiveSlideIndex() {
+    return activeGuide === 'crm' ? currentSlideCRM : currentSlideSocial;
+  }
+
+  function setActiveSlideIndex(idx) {
+    if (activeGuide === 'crm') currentSlideCRM = idx;
+    else currentSlideSocial = idx;
+  }
+
+  function setGuideMode(mode) {
+    activeGuide = mode;
+    const crmBtn = document.getElementById('slGuideTabCRM');
+    const socialBtn = document.getElementById('slGuideTabSocial');
+
+    if (crmBtn && socialBtn) {
+      if (mode === 'crm') {
+        crmBtn.style.background = '#059669';
+        crmBtn.style.color = '#fff';
+        socialBtn.style.background = '#1e293b';
+        socialBtn.style.color = '#94a3b8';
+      } else {
+        socialBtn.style.background = '#0284c7';
+        socialBtn.style.color = '#fff';
+        crmBtn.style.background = '#1e293b';
+        crmBtn.style.color = '#94a3b8';
+      }
+    }
+    updateSlideUI();
+  }
+
   function updateSlideUI() {
-    const slide = POSTIZ_SLIDES[currentSlide];
-    const contentEl = document.getElementById('postizSlideContent');
-    const indicatorEl = document.getElementById('postizStepIndicator');
-    const prevBtn = document.getElementById('postizPrevBtn');
-    const nextBtn = document.getElementById('postizNextBtn');
+    const slides = getActiveSlides();
+    const slideIdx = getActiveSlideIndex();
+    const slide = slides[slideIdx];
+
+    const titleEl = document.getElementById('wizardGuideTitle');
+    const contentEl = document.getElementById('wizardSlideContent');
+    const indicatorEl = document.getElementById('wizardStepIndicator');
+    const prevBtn = document.getElementById('wizardPrevBtn');
+    const nextBtn = document.getElementById('wizardNextBtn');
 
     if (!contentEl) return;
 
-    indicatorEl.textContent = `Step ${currentSlide + 1} of ${POSTIZ_SLIDES.length}`;
+    if (titleEl) {
+      titleEl.textContent = activeGuide === 'crm' ? 'ShamrockLeads Auto-CRM Guide' : 'Postiz Social Media Guide';
+    }
+
+    indicatorEl.textContent = `Step ${slideIdx + 1} of ${slides.length}`;
     contentEl.innerHTML = `
       <div style="font-weight:700;color:#f8fafc;margin-bottom:8px;font-size:14px">${slide.title}</div>
       ${slide.content}
     `;
 
-    prevBtn.style.opacity = currentSlide === 0 ? '0.5' : '1';
-    prevBtn.style.pointerEvents = currentSlide === 0 ? 'none' : 'auto';
+    prevBtn.style.opacity = slideIdx === 0 ? '0.5' : '1';
+    prevBtn.style.pointerEvents = slideIdx === 0 ? 'none' : 'auto';
 
-    if (currentSlide === POSTIZ_SLIDES.length - 1) {
+    if (slideIdx === slides.length - 1) {
       nextBtn.textContent = 'Restart Guide ↺';
       nextBtn.style.background = '#0284c7';
     } else {
       nextBtn.textContent = 'Next Step →';
-      nextBtn.style.background = '#059669';
+      nextBtn.style.background = activeGuide === 'crm' ? '#059669' : '#0284c7';
     }
   }
 
   function updateContextBanner() {
-    // Detect active tab from DOM
     let activeTabKey = 'leads';
     const activeTabEl = document.querySelector('.tab-btn.active, .nav-item.active, [data-tab].active');
     if (activeTabEl) {
@@ -140,6 +244,11 @@
 
     if (nameEl) nameEl.textContent = ctx.name;
     if (textEl) textEl.textContent = ctx.text;
+
+    // Auto-switch default guide tab if on social tab
+    if (activeTabKey === 'social' && activeGuide !== 'social') {
+      setGuideMode('social');
+    }
   }
 
   function open() {
@@ -170,13 +279,18 @@
   }
 
   function nextSlide() {
-    currentSlide = (currentSlide + 1) % POSTIZ_SLIDES.length;
+    const slides = getActiveSlides();
+    let idx = getActiveSlideIndex();
+    idx = (idx + 1) % slides.length;
+    setActiveSlideIndex(idx);
     updateSlideUI();
   }
 
   function prevSlide() {
-    if (currentSlide > 0) {
-      currentSlide--;
+    let idx = getActiveSlideIndex();
+    if (idx > 0) {
+      idx--;
+      setActiveSlideIndex(idx);
       updateSlideUI();
     }
   }
@@ -197,6 +311,7 @@
     close,
     toggle,
     nextSlide,
-    prevSlide
+    prevSlide,
+    setGuideMode
   };
 })();
