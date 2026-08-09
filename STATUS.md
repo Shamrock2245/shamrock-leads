@@ -1,13 +1,15 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-04  
+> **Last verified:** 2026-08-09  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
 > **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md`  
 > **Multi-state plan:** `docs/MULTI_STATE_SCRAPER_ROADMAP.md`  
 > **Proxy stack:** `docs/APE_INTEGRATION_GUIDE.md` · `docs/SELF_HOSTED_PROXY_ARCHITECTURE.md`  
-> **BlueBubbles versions:** `docs/BLUEBUBBLES_VERSIONING.md` (App v2 ≠ Server; Server latest = 1.9.9)
+> **BlueBubbles versions:** `docs/BLUEBUBBLES_VERSIONING.md` (App v2 ≠ Server; Server latest = 1.9.9)  
+> **DocuSeal Server:** `https://sign.shamrockbailbonds.biz` (Template ID 1 OSI · 16/16 tests passing)  
+> **Postiz Social & MCP:** `https://social.shamrockbailbonds.biz` (`/api/mcp` 200 OK SSE stream · 5 channels live)
 
 ---
 

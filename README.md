@@ -36,8 +36,8 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 10. **Manages** defendants (notes, contact logs, DNB/DNC flags, lifecycle tracking)
 11. **Matches** indemnitor intake to defendants via confidence-scored matching engine
 12. **Creates** bonded cases with surety selection (OSI / Palmetto) and POA assignment
-13. **Generates** surety-specific 14-document paperwork packets via SignNow
-14. **Orchestrates** e-signatures with webhook-driven completion tracking
+13. **Generates** surety-specific 14-document paperwork packets via DocuSeal (`https://sign.shamrockbailbonds.biz`)
+14. **Orchestrates** e-signatures with webhook-driven completion tracking and automatic Google Drive archiving (`<LastName>_<MMDDYY>_<SURETY>.pdf`)
 15. **Collects** premium payments via SwipeSimple integration
 16. **Manages** the 7-status active bond lifecycle via drag-and-drop Kanban
 17. **Automates** iMessage outreach via BlueBubbles bridge to the office iMac

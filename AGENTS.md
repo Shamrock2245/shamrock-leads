@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-08-04  
+> **Last Updated:** 2026-08-09  
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
@@ -23,7 +23,7 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 9. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
 10. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 11. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
-12. **Orchestrates signatures** via SignNow `[IMPLEMENTED]`
+12. **Orchestrates signatures** via DocuSeal (`https://sign.shamrockbailbonds.biz`) `[IMPLEMENTED — primary open-source e-sign backbone]`
 13. **Collects payments** via SwipeSimple `[IMPLEMENTED]`
 14. **Manages** the 7-status bond lifecycle via drag-and-drop Kanban `[IMPLEMENTED]`
 15. **Automates** iMessage outreach via BlueBubbles `[CODE COMPLETE — office tunnel/reliability is ops]`
