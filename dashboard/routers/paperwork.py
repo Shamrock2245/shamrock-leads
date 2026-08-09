@@ -36,6 +36,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from pydantic import BaseModel
 from dashboard.extensions import get_collection
 from dashboard.services.bb_client import (
     get_bb_client,
@@ -2785,16 +2786,15 @@ async def docuseal_prefill_preview(request: Request):
         "can_send": bool(
             ready.get("configured")
             and template_id
-            and values.get("defendant_name")
-            and values.get("indemnitor_name")
+            and (values.get("indemnitor_name") or values.get("defendant_name"))
         ),
         "context_sources": ctx.get("sources") or [],
         "bond_amount": bond_data.get("bond_amount"),
         "premium_preview": values.get("numeric_premium_dollar") or values.get("premium_amount"),
         "charges_summary": values.get("charges_summary"),
         "hint": (
-            "Prefill looks good — use Flatten & Send with DocuSeal selected."
-            if (ready.get("configured") and template_id and values.get("defendant_name"))
+            "Prefill looks good — indemnitor can sign now (defendant can be matched later)."
+            if (ready.get("configured") and template_id and (values.get("indemnitor_name") or values.get("defendant_name")))
             else "; ".join(ready.get("hints") or ["Review missing fields / env"])
         ),
         "small_bond_max": SMALL_BOND_MAX,
@@ -2948,6 +2948,72 @@ async def paperwork_docuseal_status(packet_id: str):
     except Exception as exc:
         logger.exception("docuseal status failed packet=%s", packet_id)
         return JSONResponse({"success": False, "error": str(exc)[:400]}, status_code=502)
+
+
+class BindDefendantRequest(BaseModel):
+    defendant_name: str
+    booking_number: Optional[str] = None
+    county: Optional[str] = None
+    case_number: Optional[str] = None
+    defendant_id: Optional[str] = None
+    charges: Optional[str] = None
+
+
+@paperwork_bp.post("/paperwork/packets/{packet_id}/bind-defendant")
+async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
+    """
+    Bind or match a defendant to an existing paperwork packet.
+    Allows indemnitors to sign paperwork first and attach the defendant later.
+    """
+    packet_col = get_collection("paperwork_packets")
+    packet = await packet_col.find_one({"$or": [{"packet_id": packet_id}, {"_id": packet_id}]})
+    if not packet:
+        return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
+
+    def_name = req.defendant_name.strip()
+    if not def_name:
+        return JSONResponse({"success": False, "error": "defendant_name_required"}, status_code=400)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update_fields = {
+        "defendant_name": def_name,
+        "unassigned_defendant": False,
+        "defendant_bound_at": now_iso,
+    }
+    if req.booking_number:
+        update_fields["booking_number"] = req.booking_number.strip()
+    if req.county:
+        update_fields["county"] = req.county.strip()
+    if req.case_number:
+        update_fields["case_number"] = req.case_number.strip()
+    if req.defendant_id:
+        update_fields["defendant_id"] = req.defendant_id.strip()
+    if req.charges:
+        update_fields["charges"] = req.charges.strip()
+
+    await packet_col.update_one(
+        {"$or": [{"packet_id": packet_id}, {"_id": packet_id}]},
+        {"$set": update_fields},
+    )
+
+    # Log immutable audit event
+    events = get_collection("audit_events")
+    await events.insert_one({
+        "event_id": f"evt_bind_def_{uuid.uuid4().hex[:8]}",
+        "event_type": "packet_defendant_matched",
+        "packet_id": packet_id,
+        "defendant_name": def_name,
+        "timestamp": now_iso,
+        "actor": "staff_or_matching_engine",
+    })
+
+    return {
+        "success": True,
+        "packet_id": packet_id,
+        "defendant_name": def_name,
+        "message": f"Successfully bound defendant '{def_name}' to packet {packet_id}.",
+    }
+
 
 
 @paperwork_bp.post("/paperwork/{packet_id}/docuseal/resend")

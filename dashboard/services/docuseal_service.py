@@ -599,7 +599,7 @@ class DocuSealService:
                     ],
                 )
             )
-            or ""
+            or "To Be Named"
         ).strip()
         indemnitor_name = (
             bond_data.get("indemnitor_name")
