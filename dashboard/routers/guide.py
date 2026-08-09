@@ -158,15 +158,17 @@ async def get_guide_html():
   <main>
     <sidebar>
       <h3>Table of Contents</h3>
-      <ul>
-        <li><a href="#overview">Executive Overview</a></li>
-        <li><a href="#chapter-1">1. ShamrockLeads CRM</a></li>
-        <li><a href="#chapter-2">2. Bond Creation & POAs</a></li>
-        <li><a href="#chapter-3">3. DocuSeal E-Signature</a></li>
-        <li><a href="#chapter-4">4. Postiz Social Guide</a></li>
-        <li><a href="#chapter-5">5. Active Bond Kanban</a></li>
-        <li><a href="#chapter-6">6. iMessage & Shannon AI</a></li>
-        <li><a href="#support">7. Emergency Support</a></li>
+      <ul id="tocList">
+        <li><a href="#quick-start-first-day-on-the-job">Quick start</a></li>
+        <li><a href="#chapter-1--leads-dashboard-shamrockleads">1. Leads dashboard</a></li>
+        <li><a href="#chapter-2--how-to-write-a-bond-step-by-step">2. How to write a bond</a></li>
+        <li><a href="#chapter-3--paperwork--docuseal-for-office-staff">3. Paperwork &amp; DocuSeal</a></li>
+        <li><a href="#chapter-4--active-bonds-kanban">4. Active bonds</a></li>
+        <li><a href="#chapter-5--bail-school-website-for-staff">5. Bail School</a></li>
+        <li><a href="#chapter-6--social-media-postiz">6. Social (Postiz)</a></li>
+        <li><a href="#chapter-7--imessage--shannon-ai-texting">7. iMessage &amp; Shannon</a></li>
+        <li><a href="#chapter-8--support--escalations">8. Support</a></li>
+        <li><a href="#appendix--one-page-write-bond-cheat-sheet">Write Bond cheat sheet</a></li>
       </ul>
     </sidebar>
 
@@ -177,7 +179,18 @@ async def get_guide_html():
 
   <script>
     const rawMd = `{md_escaped}`;
-    document.getElementById('mdRender').innerHTML = marked.parse(rawMd);
+    const root = document.getElementById('mdRender');
+    root.innerHTML = marked.parse(rawMd);
+    // Add IDs to headings so sidebar TOC works (any marked version)
+    const slugify = (t) => String(t || '')
+      .toLowerCase()
+      .replace(/<[^>]+>/g, '')
+      .replace(/[^\\w\\s-]/g, '')
+      .trim()
+      .replace(/\\s+/g, '-');
+    root.querySelectorAll('h1,h2,h3').forEach((el) => {{
+      if (!el.id) el.id = slugify(el.textContent);
+    }});
   </script>
 </body>
 </html>

@@ -2966,11 +2966,15 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
     Allows indemnitors to sign paperwork first and attach the defendant later.
     """
     packet_col = get_collection("paperwork_packets")
-    packet = await packet_col.find_one({"$or": [{"packet_id": packet_id}, {"_id": packet_id}]})
+    # Prefer packet_id string key (ObjectId string in _id is not valid BSON without cast)
+    packet = await packet_col.find_one({"packet_id": packet_id})
+    if not packet:
+        # Fallback via shared loader (handles ObjectId-shaped ids safely)
+        packet = await _load_packet(packet_id)
     if not packet:
         return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
 
-    def_name = req.defendant_name.strip()
+    def_name = (req.defendant_name or "").strip()
     if not def_name:
         return JSONResponse({"success": False, "error": "defendant_name_required"}, status_code=400)
 
@@ -2979,6 +2983,7 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
         "defendant_name": def_name,
         "unassigned_defendant": False,
         "defendant_bound_at": now_iso,
+        "updated_at": now_iso,
     }
     if req.booking_number:
         update_fields["booking_number"] = req.booking_number.strip()
@@ -2991,27 +2996,30 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
     if req.charges:
         update_fields["charges"] = req.charges.strip()
 
-    await packet_col.update_one(
-        {"$or": [{"packet_id": packet_id}, {"_id": packet_id}]},
-        {"$set": update_fields},
-    )
+    filt = {"packet_id": packet.get("packet_id") or packet_id}
+    await packet_col.update_one(filt, {"$set": update_fields})
 
-    # Log immutable audit event
-    events = get_collection("audit_events")
-    await events.insert_one({
-        "event_id": f"evt_bind_def_{uuid.uuid4().hex[:8]}",
-        "event_type": "packet_defendant_matched",
-        "packet_id": packet_id,
-        "defendant_name": def_name,
-        "timestamp": now_iso,
-        "actor": "staff_or_matching_engine",
-    })
+    # Log immutable audit event (never raise if audit write fails)
+    try:
+        events = get_collection("audit_events")
+        await events.insert_one({
+            "event_id": f"evt_bind_def_{uuid.uuid4().hex[:8]}",
+            "event_type": "packet_defendant_matched",
+            "packet_id": packet.get("packet_id") or packet_id,
+            "defendant_name": def_name,
+            "booking_number": update_fields.get("booking_number"),
+            "county": update_fields.get("county"),
+            "timestamp": now_iso,
+            "actor": "staff_or_matching_engine",
+        })
+    except Exception as audit_exc:
+        logger.warning("bind-defendant audit write failed: %s", audit_exc)
 
     return {
         "success": True,
-        "packet_id": packet_id,
+        "packet_id": packet.get("packet_id") or packet_id,
         "defendant_name": def_name,
-        "message": f"Successfully bound defendant '{def_name}' to packet {packet_id}.",
+        "message": f"Successfully bound defendant '{def_name}' to packet {packet.get('packet_id') or packet_id}.",
     }
 
 

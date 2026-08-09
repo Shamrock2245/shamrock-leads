@@ -336,25 +336,54 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
     ]
 
     try:
-        sub = await svc.create_submission(template_id=template_id, submitters=submitters)
-        sub_id = str(sub.get("id") or "")
-        raw_subs = sub.get("submitters") or []
-        first_sub = raw_subs[0] if raw_subs and isinstance(raw_subs[0], dict) else {}
-        norm_sub = svc.normalize_submitter_record(first_sub)
-        sign_url = norm_sub.get("sign_url") or ""
+        # DocuSeal often returns a bare list of submitters (not a {id, submitters} dict).
+        # Always normalize so list responses never throw AttributeError.
+        raw = await svc.create_submission(
+            template_id=template_id,
+            submitters=submitters,
+            send_email=False,
+        )
+        norm = svc.normalize_create_response(raw)
+        sub_id = norm.get("submission_id")
+        party_submitters = norm.get("submitters") or []
+        if not sub_id and party_submitters:
+            sub_id = party_submitters[0].get("submission_id")
+        first = party_submitters[0] if party_submitters else {}
+        sign_url = (first.get("sign_url") or "").strip()
+        if not sign_url and isinstance(first, dict):
+            # Fall back if normalize missed embed_src
+            slug = (first.get("slug") or "").strip()
+            if slug:
+                sign_url = svc.sign_url_for_slug(slug)
+
+        if not sign_url:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "no_sign_url",
+                    "hint": "DocuSeal created a submission but returned no sign link",
+                    "submission_id": sub_id,
+                },
+                status_code=502,
+            )
 
         packet_id = f"pkt_inst_{uuid.uuid4().hex[:12]}"
         now_iso = datetime.now(timezone.utc).isoformat()
         packet_doc = {
             "packet_id": packet_id,
             "intake_id": f"int_inst_{uuid.uuid4().hex[:8]}",
+            "esign_provider": "docuseal",
             "surety_id": surety_id,
             "indemnitor_name": ind_name,
             "indemnitor_phone": clean_phone,
+            "indemnitor_email": ind_email,
             "defendant_name": "To Be Named",
             "unassigned_defendant": True,
             "docuseal_template_id": template_id,
             "docuseal_submission_id": sub_id,
+            "docuseal_submitters": party_submitters,
+            "docuseal_status": "sent",
+            "docuseal_sent_at": now_iso,
             "signing_link": sign_url,
             "sign_url": sign_url,
             "status": "pending_indemnitor_signature",
@@ -368,14 +397,16 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
         return {
             "success": True,
             "packet_id": packet_id,
+            "submission_id": sub_id,
             "sign_url": sign_url,
             "signing_link": sign_url,
+            "submitters": party_submitters,
             "unassigned_defendant": True,
             "message": "Instant indemnitor packet ready — proceed to e-sign.",
         }
     except Exception as exc:
         logger.exception("create_instant_indemnitor_packet failed")
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"success": False, "error": str(exc)[:400]}, status_code=502)
 
 
 @pin_portal_router.post("/verify-pin")
@@ -993,20 +1024,38 @@ async def get_portal_ui(request: Request):
                         ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB:</span><span>${ext.dob}</span></div>` : ''}
                         ${ext.address ? `<div class="id-extracted-row"><span class="id-extracted-label">Address:</span><span>${ext.address}, ${ext.city || ''} ${ext.state || ''} ${ext.zip || ''}</span></div>` : ''}
                         <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-                            <button type="button" class="btn-primary" style="min-height:40px;font-size:13px;padding:8px 14px;background:#059669;border-color:#059669;color:#fff" onclick="startInstantIndemnitorEsign('${ext.full_name || ''}', '${ext.address || ''}', '${ext.dl_number || ''}')">✍️ Sign Paperwork Now (Defendant Matched Later)</button>
+                            <button type="button" id="btnInstantEsign" class="btn-primary" style="min-height:40px;font-size:13px;padding:8px 14px;background:#059669;border-color:#059669;color:#fff">✍️ Sign Paperwork Now (Defendant Matched Later)</button>
                             <button type="button" class="btn-primary" style="min-height:40px;font-size:13px;padding:8px 14px" onclick="showAuthTab('pin')">Proceed to PIN →</button>
                         </div>
                     </div>
                 `;
+                // Safe attach (never inject unescaped names into onclick= strings)
+                const btnInst = document.getElementById('btnInstantEsign');
+                if (btnInst) {
+                    btnInst.addEventListener('click', () => startInstantIndemnitorEsign({
+                        name: ext.full_name || '',
+                        address: [ext.address, ext.city, ext.state, ext.zip].filter(Boolean).join(', '),
+                        dl: ext.dl_number || '',
+                    }));
+                }
             } catch (err) {
                 resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${err.message}</div>`;
             }
         }
 
-        async function startInstantIndemnitorEsign(name, address, dl) {
+        async function startInstantIndemnitorEsign(opts) {
+            const name = (opts && opts.name) || 'Indemnitor';
+            const address = (opts && opts.address) || '';
+            const dl = (opts && opts.dl) || '';
             const resEl = document.getElementById('portalIdResult');
-            if (resEl) resEl.innerHTML += '<div class="status" style="display:block;margin-top:8px">⚡ Initializing instant indemnitor e-sign packet...</div>';
-            const phone = prompt('Enter your 10-digit mobile phone number for instant signing link:');
+            if (resEl) {
+                const status = document.createElement('div');
+                status.className = 'status';
+                status.style.cssText = 'display:block;margin-top:8px';
+                status.textContent = '⚡ Starting instant paperwork packet…';
+                resEl.appendChild(status);
+            }
+            const phone = prompt('Enter your 10-digit mobile phone number for the signing session:');
             if (!phone) return;
             try {
                 const r = await fetch('/api/portal/instant-indemnitor-packet', {

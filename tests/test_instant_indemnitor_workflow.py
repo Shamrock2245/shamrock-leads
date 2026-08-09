@@ -42,37 +42,41 @@ def test_instant_indemnitor_packet_and_bind_workflow(
 
     client = TestClient(test_app)
 
-    # Mock DocuSeal service to return clean submission URL
+    # Mock DocuSeal service — real API often returns a LIST of submitters
     mock_svc = mocker.patch("dashboard.services.docuseal_service.get_docuseal_service")
     mock_inst = mocker.MagicMock()
     mock_inst.is_configured = True
+    mock_inst.public_url = "https://sign.shamrockbailbonds.biz"
+    mock_inst.sign_url_for_slug = lambda slug: (
+        f"https://sign.shamrockbailbonds.biz/s/{slug}" if slug else ""
+    )
 
-    async def mock_create_sub(template_id, submitters):
-        return {
-            "id": 998811,
-            "submitters": [
-                {
-                    "id": 1234,
-                    "role": "indemnitor",
-                    "email": submitters[0]["email"],
-                    "slug": "test_slug_1234",
-                    "embed_src": "https://sign.shamrockbailbonds.biz/s/test_slug_1234",
-                }
-            ],
-        }
+    async def mock_create_sub(**kwargs):
+        # List shape (most common DocuSeal create-submission response)
+        return [
+            {
+                "id": 1234,
+                "submission_id": 998811,
+                "role": "indemnitor",
+                "email": (kwargs.get("submitters") or [{}])[0].get("email"),
+                "slug": "test_slug_1234",
+                "embed_src": "https://sign.shamrockbailbonds.biz/s/test_slug_1234",
+                "status": "sent",
+            }
+        ]
 
+    # Use real normalizers so list responses are covered
+    from dashboard.services.docuseal_service import DocuSealService
+
+    real = DocuSealService(base_url="https://sign.shamrockbailbonds.biz", api_key="test")
     mock_inst.create_submission = mock_create_sub
-    mock_inst.build_submitter.return_value = {
-        "role": "indemnitor",
-        "email": "test@shamrockbailbonds.biz",
-        "phone": "+12395550199",
-        "values": {"indemnitor_name": "Jane Doe", "defendant_name": "To Be Named"},
-    }
-    mock_inst.normalize_submitter_record.return_value = {
-        "role": "indemnitor",
-        "sign_url": "https://sign.shamrockbailbonds.biz/s/test_slug_1234",
-    }
-    mocker.patch("dashboard.services.docuseal_service.resolve_template_id_for_surety", return_value=1)
+    mock_inst.build_submitter = DocuSealService.build_submitter
+    mock_inst.normalize_create_response = real.normalize_create_response
+    mock_inst.normalize_submitter_record = real.normalize_submitter_record
+    mocker.patch(
+        "dashboard.services.docuseal_service.resolve_template_id_for_surety",
+        return_value=1,
+    )
     mock_svc.return_value = mock_inst
 
     # Step 1: Create instant indemnitor packet after ID scan (no defendant attached)
@@ -86,14 +90,24 @@ def test_instant_indemnitor_packet_and_bind_workflow(
             "surety_id": "osi",
         },
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["success"] is True
     assert data["unassigned_defendant"] is True
-    assert "sign_url" in data
+    assert data.get("sign_url")
+    assert "test_slug_1234" in data["sign_url"]
+    assert data.get("submission_id") in (998811, "998811")
     packet_id = data["packet_id"]
 
     # Step 2: Post-Sign Defendant Binding (Bind defendant to existing packet)
+    # find_one should return the instant packet for this packet_id
+    mock_packets.find_one = AsyncMock(
+        return_value={
+            "packet_id": packet_id,
+            "defendant_name": "To Be Named",
+            "unassigned_defendant": True,
+        }
+    )
     bind_resp = client.post(
         f"/api/paperwork/packets/{packet_id}/bind-defendant",
         json={
@@ -103,7 +117,7 @@ def test_instant_indemnitor_packet_and_bind_workflow(
             "case_number": "26-CF-009988",
         },
     )
-    assert bind_resp.status_code == 200
+    assert bind_resp.status_code == 200, bind_resp.text
     bind_data = bind_resp.json()
     assert bind_data["success"] is True
     assert bind_data["defendant_name"] == "John Doe"

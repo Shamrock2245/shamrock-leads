@@ -13,59 +13,73 @@
 
   const CRM_SLIDES = [
     {
-      title: "Step 1: Lead Explorer & Scoring Engine",
+      title: "Step 1: Lead Explorer (find the arrest)",
       content: `
-        <p style="margin-bottom:8px">Real-time arrest records from <strong>269 scrapers across 10 states</strong> populate here instantly.</p>
+        <p style="margin-bottom:8px">Arrests from <strong>10 states</strong> show up automatically with a score:</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li>🔥 <strong style="color:#ef4444">Hot Leads (80–100)</strong>: High bond, cash/surety, clear charges. Triggers Slack alert to <code>#leads</code> + iMessage queue.</li>
-          <li>🟡 <strong style="color:#f59e0b">Warm Leads (50–79)</strong>: Standard booking records logged for follow-up.</li>
-          <li>❄️ <strong style="color:#94a3b8">Disqualified (<50)</strong>: $0 bond, ROR, or capital/federal charges.</li>
+          <li>🔥 <strong style="color:#ef4444">Hot (80–100)</strong> — call/text first; Slack may alert <code>#leads</code>.</li>
+          <li>🟡 <strong style="color:#f59e0b">Warm (50–79)</strong> — good follow-ups when you have time.</li>
+          <li>❄️ <strong style="color:#94a3b8">Cold / DQ</strong> — often $0 bond, ROR, or no bond — skip unless a bondsman says otherwise.</li>
         </ul>
-        <p style="font-size:11px;color:#38bdf8">💡 Use top dropdowns to filter by State (FL, GA, SC, NC, TN, TX, LA, AL, CT, MS) or County.</p>
+        <p style="font-size:11px;color:#38bdf8">Filter by <strong>State</strong> then <strong>County</strong>. Lee FL is not Lee SC.</p>
       `
     },
     {
-      title: "Step 2: Appearance Bond Auto-Complete",
+      title: "Step 2: How to Write a Bond",
       content: `
-        <p style="margin-bottom:8px">Click <strong>➕ Record Bond</strong> or click any lead row, then select your defendant:</p>
+        <p style="margin-bottom:8px">Open <strong>➕ Record Bond / ✍️ Write Bond</strong> from a lead:</p>
         <ol style="padding-left:18px;margin-bottom:8px">
-          <li><strong>Auto-Fills Form</strong>: Defendant Name, Phone, Address, DOB, Booking #, County, Facility, Case #, Court Date/Time.</li>
-          <li><strong>Florida 10% Statutory Premium</strong>: Auto-calculates 10% of total bond with the <strong>$100 statutory minimum per charge</strong>.</li>
-          <li><strong>Per-Charge Table</strong>: Hydrates rows 1–4 (offenses, case numbers, POAs, amounts).</li>
-          <li><strong>Sequential POA Suggestion</strong>: Auto-queries inventory for next sequential power number for OSI or Palmetto.</li>
+          <li>Confirm defendant, charges, bond amounts.</li>
+          <li>Premium auto-calcs (~10%, <strong>$100 min per charge</strong> in FL style).</li>
+          <li>Pick surety <strong>OSI</strong> (preferred in FL) or <strong>Palmetto</strong>.</li>
+          <li>Accept the next <strong>POA</strong> from inventory — never invent power numbers.</li>
+          <li>Enter indemnitor (scan ID when possible).</li>
         </ol>
+        <p style="font-size:11px;color:#34d399">Full write-up: open <a href="/guide" target="_blank" style="color:#38bdf8">/guide</a> → Chapter 2.</p>
       `
     },
     {
-      title: "Step 3: DocuSeal Mobile E-Signature & Drive",
+      title: "Step 3: Paperwork (DocuSeal) & signing",
       content: `
-        <p style="margin-bottom:8px">Send legal paperwork instantly to mobile devices:</p>
+        <p style="margin-bottom:8px">After Write Bond fields look right:</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li>📱 <strong>Mobile Signing Link</strong>: Sent via SMS, iMessage, or WhatsApp to indemnitor.</li>
-          <li>🪪 <strong>ID OCR & Verification</strong>: Indemnitor uploads Driver License → system OCR extracts DL# & address → signs on phone.</li>
-          <li>📁 <strong>Auto-Drive Filing</strong>: Upon completion, signed PDF is saved to Google Drive formatted as: <br/><code style="color:#34d399">&lt;LastName&gt;_&lt;MMDDYY&gt;_&lt;SURETY&gt;.pdf</code> (e.g. <code>Doe_080926_OSI.pdf</code>).</li>
+          <li>Send packet with provider <strong>DocuSeal</strong> (not SignNow).</li>
+          <li>Client signs on phone via link, or on office iPad (portal).</li>
+          <li>Signed PDF auto-files to Drive: <code style="color:#34d399">LastName_MMDDYY_SURETY.pdf</code>.</li>
+          <li>Lost link? Use Paperwork tab → status / resend — don’t create a second packet.</li>
+        </ul>
+        <p style="font-size:11px;color:#94a3b8">Portal: paperwork.shamrockbailbonds.biz · Sign: sign.shamrockbailbonds.biz</p>
+      `
+    },
+    {
+      title: "Step 4: Active Bonds board",
+      content: `
+        <p style="margin-bottom:8px">After posting, manage the case on the Kanban:</p>
+        <ul style="padding-left:18px;margin-bottom:8px">
+          <li><strong>Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Reinstated</strong></li>
+          <li>Exonerated / Surrendered can <strong>auto-release POAs</strong> back to inventory.</li>
+          <li>Read confirm dialogs on forfeiture — those are serious.</li>
         </ul>
       `
     },
     {
-      title: "Step 4: Active Bond Kanban & Forfeitures",
+      title: "Step 5: Bail School website (staff)",
       content: `
-        <p style="margin-bottom:8px">Manage active cases across the 7 lifecycle statuses:</p>
+        <p style="margin-bottom:8px"><strong>school.shamrockbailbonds.biz</strong> is education — not Write Bond.</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li><strong>Active ➔ Monitoring ➔ Alert ➔ Exonerated / Forfeited / Surrendered ➔ Reinstated</strong></li>
-          <li>♻️ <strong>Auto-Release of POAs</strong>: Marking a bond <code>Exonerated</code> or <code>Surrendered</code> automatically releases power numbers back to available inventory.</li>
-          <li>📍 <strong>GPS & Check-Ins</strong>: Automated weekly SMS reminders for selfie + GPS check-ins via Traccar integration.</li>
+          <li>Point students to the school site to enroll (typical tracks: <strong>$199</strong> / <strong>$649</strong>).</li>
+          <li>Don’t mix student logins with bond packets.</li>
+          <li>If the site is down, note the time + error and escalate — don’t invent enrollment status.</li>
         </ul>
       `
     },
     {
-      title: "Step 5: Multi-State Ops & System Health",
+      title: "Step 6: Ops health (optional)",
       content: `
-        <p style="margin-bottom:8px">Operational dashboards for multi-state supervision:</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li>📊 <strong>Multi-State Ops Tab</strong>: Live KPI gauges, scraper status, and run times across all 10 states.</li>
-          <li>🧹 <strong>Data Hygiene</strong>: One-click tools to purge test records and repair mismatches to protect MongoDB Atlas M0 512MB storage.</li>
-          <li>⚡ <strong>Automations Sweeper</strong>: Background watcher re-checking unset/$0 bonds every 30 minutes.</li>
+          <li>📊 <strong>Multi-State Ops</strong> — scraper health across 10 states.</li>
+          <li>🧹 Data hygiene tools — managers only; protect database size.</li>
+          <li>Full employee manual: <a href="/guide" target="_blank" style="color:#38bdf8">leads…/guide</a> (also print-friendly).</li>
         </ul>
       `
     }
@@ -136,23 +150,27 @@
   const TAB_CONTEXTS = {
     'leads': {
       name: 'Lead Explorer',
-      text: 'Select an arrest lead to view 0–100 lead score breakdown, OSINT contacts, and start bond recording.'
+      text: 'Pick a hot/warm arrest → open Write Bond. Filter by state/county first so you never mix Lee FL with Lee SC.'
     },
     'active-bonds': {
       name: 'Active Bonds Kanban',
-      text: 'Drag & drop active cases across the 7 statuses. Exonerated & surrendered bonds auto-release POAs.'
+      text: 'Drag cases across statuses. Exonerated/surrendered can release POAs. Confirm before forfeiture.'
     },
     'paperwork': {
-      name: 'DocuSeal E-Sign',
-      text: 'Generate 14-doc OSI/Palmetto packets. Signed PDFs auto-save to Google Drive formatted as <LastName>_<MMDDYY>_<SURETY>.pdf.'
+      name: 'Paperwork / DocuSeal',
+      text: 'Send sign links, check status, resend. Signed files auto-file to Drive as LastName_MMDDYY_SURETY.pdf.'
     },
     'multi-state': {
       name: 'Multi-State Ops',
-      text: 'Monitor real-time scrapers across all 10 states (FL, GA, SC, NC, TN, TX, LA, AL, CT, MS).'
+      text: 'Scraper health and KPIs across FL, GA, SC, NC, TN, TX, LA, AL, CT, MS.'
     },
     'social': {
-      name: 'Postiz Social Engine',
-      text: 'Manage social media channels, create posts, schedule calendar items, and monitor AI agent posting.'
+      name: 'Social (Postiz)',
+      text: 'Create/schedule posts at social.shamrockbailbonds.biz. No private client arrest details in posts.'
+    },
+    'intake': {
+      name: 'Intake',
+      text: 'Match cosigners to defendants carefully. If two people could match, stop and escalate.'
     }
   };
 
