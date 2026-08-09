@@ -429,6 +429,10 @@ Dashboard (leads.…)  Write Bond / ✍️ Bond
 |--------|------|---------|
 | GET | `/api/paperwork/docuseal/health` | API key + reachability |
 | GET | `/api/paperwork/docuseal/templates` | List DocuSeal templates |
+| GET | `/api/paperwork/docuseal/templates/{id}` | Retrieve one template (fields/roles audit) |
+| GET | `/api/paperwork/docuseal/submissions` | List submissions (`?status=pending`) |
+| GET | `/api/paperwork/{packet_id}/docuseal/status` | Refresh status + sign links from DocuSeal |
+| POST | `/api/paperwork/{packet_id}/docuseal/resend` | Re-send to pending submitters (optional role/id/email) |
 | POST | `/api/paperwork/{packet_id}/docuseal` | Create multi-party submission (sign links, no forced email) |
 | POST | `/api/webhooks/docuseal` | form/submission complete → Mongo + Drive Completed Bonds |
 | POST | `/api/paperwork/docuseal/poll-swipesimple` | Manual Gmail SwipeSimple receipt poll |
@@ -448,6 +452,58 @@ docker exec shamrock-docuseal-postgres pg_dump -U docuseal docuseal | gzip > /op
 
 ---
 
+## 11b. DocuSeal CLI + agent skills
+
+**CLI upstream:** https://github.com/docusealco/docuseal-cli  
+**Agent skills upstream:** https://github.com/docusealco/docuseal-agent-skills  
+
+### Install (dev workstation)
+
+```bash
+# CLI (Node 18+)
+npm install -g docuseal
+
+# Official skills (prefer named skills, not --all — avoids 70+ agent vendor dirs)
+npx skills add docusealco/docuseal-agent-skills -y -s docuseal-cli -s docuseal-code
+
+# Point CLI at self-hosted Shamrock (not DocuSeal cloud)
+export DOCUSEAL_API_KEY="…"   # from DocuSeal admin after first login
+export DOCUSEAL_SERVER="https://sign.shamrockbailbonds.biz"
+docuseal configure --api-key "$DOCUSEAL_API_KEY" --server "$DOCUSEAL_SERVER"
+docuseal configure --list
+docuseal templates list -l 20
+```
+
+### Skills in this repo
+
+| Skill | Path | Use |
+|-------|------|-----|
+| `docuseal-cli` | `.agent/skills/docuseal-cli/` | Shell CLI: templates, submissions, submitters |
+| `docuseal-code` | `.agent/skills/docuseal-code/` | REST API, webhooks, embed/SDK reference |
+| `shamrock-docuseal` | `.agent/skills/shamrock-docuseal/` | Shamrock roles, env, CRM vs CLI playbooks |
+
+Also under `.agents/skills/` (agentskills.io layout). Global copies: `~/.grok/skills/`, `~/.claude/skills/`.
+
+### What agents should automate with CLI
+
+| Task | CLI |
+|------|-----|
+| Health / template inventory | `templates list`, `templates retrieve <id>` |
+| Clone / archive templates | `templates clone`, `templates archive` |
+| Pending signatures | `submissions list --status pending` |
+| Inspect one packet | `submissions retrieve <id>` |
+| Download signed docs (ops) | `submissions documents <id> --merge` |
+| Re-send / fix submitter | `submitters update <id> --send-email` |
+| Ad-hoc multi-party create | `submissions create --no-send-email -d 'submitters[…]'` |
+
+**Bond packets in production** still go through `docuseal_service` / `POST /api/paperwork/{id}/docuseal` so Mongo, audit events, and Drive Completed Bonds stay consistent. CLI is for ops and agent automation around that path—not a bypass of the match → bond case → packet chain.
+
+### Pro-marked CLI commands
+
+`templates create-pdf|create-docx|create-html`, merge, and some create-from-file submission paths are marked **(Pro)** on DocuSeal cloud. On self-hosted OSS, verify before depending on them; UI template upload remains a valid fallback.
+
+---
+
 ## 12. Related docs
 
 - Template inventory: `templates/README.md`  
@@ -457,9 +513,11 @@ docker exec shamrock-docuseal-postgres pg_dump -U docuseal docuseal | gzip > /op
 - Brand: `BRAND.md` + `docs/brand/shamrock_logo_transparent.png`  
 - Appearance bond code: `dashboard/bond_pdf_service.py`  
 - Packet manifest / hydration: `dashboard/services/signnow_packet_service.py` (migrate → DocuSeal service)  
+- CLI skill: `.agent/skills/docuseal-cli/SKILL.md`  
+- Shamrock bridge skill: `.agent/skills/shamrock-docuseal/SKILL.md`  
 
 ---
 
 **Owner:** Shamrock platform  
-**Last updated:** 2026-08-06  
+**Last updated:** 2026-08-09  
 **Sign-off:** Product decisions locked per Brendan greenlight + packet walkthrough (agnostic forms dual-initials, multi-indemnitor, appearance bond 10%/$100 + TBN, collateral OCR serials, kiosk, Drive Completed Bonds, Write Bond PIN handoff).

@@ -273,6 +273,28 @@ class DocuSealService:
     async def get_template(self, template_id: Union[int, str]) -> Dict[str, Any]:
         return await self._request("GET", f"/templates/{template_id}")
 
+    async def archive_template(self, template_id: Union[int, str]) -> Dict[str, Any]:
+        """Archive a template (soft-delete in DocuSeal)."""
+        return await self._request("DELETE", f"/templates/{template_id}")
+
+    async def clone_template(
+        self,
+        template_id: Union[int, str],
+        *,
+        name: Optional[str] = None,
+        folder_name: Optional[str] = None,
+        external_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Clone an existing template (ops / surety variants)."""
+        body: Dict[str, Any] = {}
+        if name:
+            body["name"] = name
+        if folder_name:
+            body["folder_name"] = folder_name
+        if external_id:
+            body["external_id"] = external_id
+        return await self._request("POST", f"/templates/{template_id}/clone", json=body or None)
+
     async def create_template_from_pdf(
         self,
         *,
@@ -296,6 +318,31 @@ class DocuSealService:
         return await self._request("POST", "/templates/pdf", json=body)
 
     # ── Submissions ─────────────────────────────────────────────────────────
+
+    async def list_submissions(
+        self,
+        *,
+        template_id: Optional[Union[int, str]] = None,
+        status: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 50,
+        after: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List submissions (CLI: `docuseal submissions list`)."""
+        params: Dict[str, Any] = {"limit": min(int(limit or 50), 100)}
+        if template_id is not None and str(template_id).strip() != "":
+            params["template_id"] = template_id
+        if status:
+            params["status"] = status
+        if q:
+            params["q"] = q
+        if after:
+            params["after"] = after
+        return await self._request("GET", "/submissions", params=params)
+
+    async def archive_submission(self, submission_id: Union[int, str]) -> Dict[str, Any]:
+        """Archive a submission (CLI: `docuseal submissions archive`)."""
+        return await self._request("DELETE", f"/submissions/{submission_id}")
 
     async def create_submission(
         self,
@@ -345,6 +392,103 @@ class DocuSealService:
             f"/submissions/{submission_id}/documents",
             params={"merge": str(merge).lower()},
         )
+
+    # ── Submitters (CLI parity for chase / resend / contact fix) ─────────────
+
+    async def list_submitters(
+        self,
+        *,
+        submission_id: Optional[Union[int, str]] = None,
+        q: Optional[str] = None,
+        slug: Optional[str] = None,
+        external_id: Optional[str] = None,
+        limit: int = 50,
+        after: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List submitters (CLI: `docuseal submitters list`)."""
+        params: Dict[str, Any] = {"limit": min(int(limit or 50), 100)}
+        if submission_id is not None and str(submission_id).strip() != "":
+            params["submission_id"] = submission_id
+        if q:
+            params["q"] = q
+        if slug:
+            params["slug"] = slug
+        if external_id:
+            params["external_id"] = external_id
+        if after:
+            params["after"] = after
+        return await self._request("GET", "/submitters", params=params)
+
+    async def get_submitter(self, submitter_id: Union[int, str]) -> Dict[str, Any]:
+        return await self._request("GET", f"/submitters/{submitter_id}")
+
+    async def update_submitter(
+        self,
+        submitter_id: Union[int, str],
+        *,
+        email: Optional[str] = None,
+        name: Optional[str] = None,
+        phone: Optional[str] = None,
+        send_email: Optional[bool] = None,
+        send_sms: Optional[bool] = None,
+        completed: Optional[bool] = None,
+        values: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        external_id: Optional[str] = None,
+        completed_redirect_url: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update a submitter — contact fix, re-send, prefill, or mark completed.
+
+        Mirrors CLI: `docuseal submitters update <id> --send-email …`
+        """
+        body: Dict[str, Any] = {}
+        if email is not None:
+            body["email"] = (email or "").strip()
+        if name is not None:
+            body["name"] = name
+        if phone is not None:
+            body["phone"] = phone
+        if send_email is not None:
+            body["send_email"] = bool(send_email)
+        if send_sms is not None:
+            body["send_sms"] = bool(send_sms)
+        if completed is not None:
+            body["completed"] = bool(completed)
+        if values is not None:
+            body["values"] = values
+        if metadata is not None:
+            body["metadata"] = metadata
+        if external_id is not None:
+            body["external_id"] = external_id
+        if completed_redirect_url is not None:
+            body["completed_redirect_url"] = completed_redirect_url
+        if extra:
+            body.update(extra)
+        return await self._request("PUT", f"/submitters/{submitter_id}", json=body)
+
+    def normalize_submitter_record(self, raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Normalize a submitter API object to Shamrock packet shape (sign links)."""
+        if not isinstance(raw, dict):
+            return {}
+        slug = (raw.get("slug") or "").strip()
+        sign_url = raw.get("embed_src") or (self.sign_url_for_slug(slug) if slug else "")
+        return {
+            "id": raw.get("id"),
+            "uuid": raw.get("uuid"),
+            "submission_id": raw.get("submission_id"),
+            "role": raw.get("role"),
+            "email": raw.get("email"),
+            "name": raw.get("name"),
+            "phone": raw.get("phone"),
+            "external_id": raw.get("external_id"),
+            "status": raw.get("status"),
+            "slug": slug,
+            "sign_url": sign_url,
+            "metadata": raw.get("metadata") or {},
+            "completed_at": raw.get("completed_at"),
+        }
 
     async def download_url_bytes(self, url: str) -> bytes:
         """Download a signed PDF from a DocuSeal file URL."""

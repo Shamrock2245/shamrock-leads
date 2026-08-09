@@ -90,3 +90,23 @@ postiz_config_ref.txt
 .deploy*
 .deploy_*.json
 .deploy.b64
+
+# Agent tooling skill copies (canonical skills live in .agent/skills/)
+# `npx skills add --all` can dump 70+ vendor dirs — never commit those.
+.claude/
+.grok/skills/
+.cursor/
+.codex/
+.windsurf/
+.continue/
+.aider*/
+.factory/
+.goose/
+.roo/
+.pi/
+.qwen/
+.kilocode/
+.junie/
+
+# agentskills.io install path (canonical skills: .agent/skills/)
+.agents/

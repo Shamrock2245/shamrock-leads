@@ -134,6 +134,11 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 | POST | `/api/paperwork/docuseal/prefill-preview` | Preview field hydration before send |
 | GET | `/api/paperwork/docuseal/health` | DocuSeal API connectivity |
 | GET | `/api/paperwork/docuseal/templates` | List templates |
+| GET | `/api/paperwork/docuseal/templates/{id}` | Retrieve template (fields/roles) |
+| GET | `/api/paperwork/docuseal/submissions` | List submissions (`?status=pending`) |
+| GET | `/api/paperwork/{id}/docuseal/status` | Refresh packet DocuSeal status + sign links |
+| POST | `/api/paperwork/{id}/docuseal/resend` | Re-send to pending submitters |
+| POST | `/api/paperwork/{id}/docuseal` | Push existing packet to DocuSeal |
 | POST | `/api/paperwork/docuseal/poll-swipesimple` | Manual SwipeSimple Gmail receipt poll |
 | POST | `/api/webhooks/docuseal` | DocuSeal completion webhook |
 | POST | `/api/paperwork/{id}/deliver` | Deliver signing link via BlueBubbles |

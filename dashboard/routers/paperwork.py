@@ -2665,8 +2665,8 @@ async def docuseal_health(surety_id: str = "osi"):
     result = await svc.health()
     ready = readiness_report(surety_id=(surety_id or "osi").lower())
     result["readiness"] = ready
-    result["ready_to_prefill"] = bool(ready.get("ready_to_send") is False and ready.get("configured") and ready.get("template_ready"))
-    # ready_to_send needs names; health without bond is "infra ready"
+    # Prefill preview only needs API key + template id (bond names checked at send)
+    result["ready_to_prefill"] = bool(ready.get("configured") and ready.get("template_ready"))
     result["infra_ready"] = bool(svc.is_configured and ready.get("template_ready"))
     code = 200 if result.get("ok") or not result.get("configured") else 502
     if not result.get("configured"):
@@ -2818,6 +2818,266 @@ async def docuseal_list_templates(q: str = "", limit: int = 50):
     except Exception as exc:
         logger.exception("docuseal templates list failed")
         return JSONResponse({"success": False, "error": str(exc)[:300]}, status_code=502)
+
+
+@paperwork_bp.get("/paperwork/docuseal/templates/{template_id}")
+async def docuseal_get_template(template_id: str):
+    """
+    Retrieve one template (fields/roles) for agent field-audit vs prefill keys.
+    CLI parity: `docuseal templates retrieve <id>`
+    """
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+    try:
+        data = await svc.get_template(template_id)
+        return {"success": True, "template": data}
+    except Exception as exc:
+        logger.exception("docuseal template retrieve failed id=%s", template_id)
+        return JSONResponse({"success": False, "error": str(exc)[:300]}, status_code=502)
+
+
+@paperwork_bp.get("/paperwork/docuseal/submissions")
+async def docuseal_list_submissions(
+    status: str = "",
+    template_id: str = "",
+    q: str = "",
+    limit: int = 50,
+):
+    """
+    List DocuSeal submissions (ops / agent chase).
+    CLI parity: `docuseal submissions list --status pending`
+    """
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+    try:
+        data = await svc.list_submissions(
+            status=status or None,
+            template_id=template_id or None,
+            q=q or None,
+            limit=limit,
+        )
+        return {"success": True, "submissions": data}
+    except Exception as exc:
+        logger.exception("docuseal submissions list failed")
+        return JSONResponse({"success": False, "error": str(exc)[:300]}, status_code=502)
+
+
+@paperwork_bp.get("/paperwork/{packet_id}/docuseal/status")
+async def paperwork_docuseal_status(packet_id: str):
+    """
+    Refresh packet signing status from DocuSeal and sync submitter sign links.
+    Does not mark completed (webhook/poller owns completion + Drive archive).
+    """
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    packet = await _load_packet(packet_id)
+    if not packet:
+        return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
+
+    sub_id = packet.get("docuseal_submission_id")
+    if not sub_id:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "no_docuseal_submission",
+                "hint": "Push packet first: POST /api/paperwork/{packet_id}/docuseal",
+            },
+            status_code=400,
+        )
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+
+    try:
+        sub = await svc.get_submission(sub_id)
+        status = (sub.get("status") or "").lower() if isinstance(sub, dict) else ""
+        raw_submitters = []
+        if isinstance(sub, dict):
+            raw_submitters = sub.get("submitters") or []
+        if not raw_submitters:
+            listed = await svc.list_submitters(submission_id=sub_id, limit=50)
+            items = listed.get("data") if isinstance(listed, dict) else listed
+            raw_submitters = items if isinstance(items, list) else []
+
+        submitters = [
+            svc.normalize_submitter_record(s) for s in raw_submitters if isinstance(s, dict)
+        ]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await get_collection("paperwork_packets").update_one(
+            {"packet_id": packet_id},
+            {
+                "$set": {
+                    "docuseal_status": status or packet.get("docuseal_status") or "pending",
+                    "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
+                    "docuseal_polled_at": now_iso,
+                }
+            },
+        )
+        return {
+            "success": True,
+            "packet_id": packet_id,
+            "submission_id": sub_id,
+            "docuseal_status": status,
+            "submitters": submitters,
+            "sign_links": [
+                {
+                    "role": s.get("role"),
+                    "email": s.get("email"),
+                    "status": s.get("status"),
+                    "sign_url": s.get("sign_url"),
+                }
+                for s in submitters
+            ],
+        }
+    except Exception as exc:
+        logger.exception("docuseal status failed packet=%s", packet_id)
+        return JSONResponse({"success": False, "error": str(exc)[:400]}, status_code=502)
+
+
+@paperwork_bp.post("/paperwork/{packet_id}/docuseal/resend")
+async def paperwork_docuseal_resend(packet_id: str, request: Request):
+    """
+    Re-send DocuSeal signature request(s) for a packet's submitters.
+
+    Body JSON (all optional):
+      submitter_id: int — only this party (else all incomplete)
+      role: str — filter by role name
+      email: str — update email before send (single target only)
+      send_email: bool (default true)
+      send_sms: bool (default false)
+    """
+    from dashboard.services.docuseal_service import get_docuseal_service
+
+    packet = await _load_packet(packet_id)
+    if not packet:
+        return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        body = {}
+
+    submitters = list(packet.get("docuseal_submitters") or [])
+    if not submitters and packet.get("docuseal_submission_id"):
+        svc_probe = get_docuseal_service()
+        if svc_probe.is_configured:
+            try:
+                listed = await svc_probe.list_submitters(
+                    submission_id=packet["docuseal_submission_id"], limit=50
+                )
+                items = listed.get("data") if isinstance(listed, dict) else listed
+                if isinstance(items, list):
+                    submitters = [
+                        svc_probe.normalize_submitter_record(s)
+                        for s in items
+                        if isinstance(s, dict)
+                    ]
+            except Exception:
+                pass
+
+    if not submitters:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "no_submitters",
+                "hint": "No docuseal_submitters on packet",
+            },
+            status_code=400,
+        )
+
+    only_id = body.get("submitter_id")
+    only_role = (body.get("role") or "").strip()
+    new_email = body.get("email")
+    send_email = bool(body.get("send_email", True))
+    send_sms = bool(body.get("send_sms", False))
+
+    targets = []
+    for s in submitters:
+        if not isinstance(s, dict) or not s.get("id"):
+            continue
+        st = (s.get("status") or "").lower()
+        if st in ("completed", "complete", "signed"):
+            continue
+        if only_id is not None and str(s.get("id")) != str(only_id):
+            continue
+        if only_role and (s.get("role") or "") != only_role:
+            continue
+        targets.append(s)
+
+    if not targets:
+        return JSONResponse(
+            {"success": False, "error": "no_pending_submitters"},
+            status_code=400,
+        )
+
+    svc = get_docuseal_service()
+    if not svc.is_configured:
+        return JSONResponse(
+            {"success": False, "error": "docuseal_not_configured"},
+            status_code=503,
+        )
+
+    updated = []
+    errors = []
+    for s in targets:
+        sid = s.get("id")
+        try:
+            kwargs: dict = {"send_email": send_email, "send_sms": send_sms}
+            if new_email and (only_id is not None or len(targets) == 1):
+                kwargs["email"] = str(new_email).strip()
+            raw = await svc.update_submitter(sid, **kwargs)
+            norm = svc.normalize_submitter_record(raw if isinstance(raw, dict) else s)
+            updated.append(norm)
+        except Exception as exc:
+            errors.append({"submitter_id": sid, "error": str(exc)[:200]})
+
+    if updated:
+        by_id = {str(u.get("id")): u for u in updated if u.get("id") is not None}
+        merged = []
+        for s in submitters:
+            if not isinstance(s, dict):
+                continue
+            key = str(s.get("id")) if s.get("id") is not None else ""
+            merged.append(by_id.get(key) or s)
+        seen = {
+            str(m.get("id")) for m in merged if isinstance(m, dict) and m.get("id") is not None
+        }
+        for u in updated:
+            if u.get("id") is not None and str(u.get("id")) not in seen:
+                merged.append(u)
+        await get_collection("paperwork_packets").update_one(
+            {"packet_id": packet_id},
+            {
+                "$set": {
+                    "docuseal_submitters": merged,
+                    "docuseal_resent_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+
+    return {
+        "success": len(errors) == 0,
+        "packet_id": packet_id,
+        "resent": len(updated),
+        "updated": updated,
+        "errors": errors,
+    }
 
 
 @paperwork_bp.post("/paperwork/{packet_id}/docuseal")

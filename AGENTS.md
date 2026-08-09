@@ -113,8 +113,8 @@ Move records safely through this lifecycle:
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
-| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ Live | `dashboard/api/paperwork.py`, `services/signnow_packet_service.py` |
-| **The Signature Agent** | Send and track SignNow packets | ✅ Live | `services/signnow_service.py`, `api/bond_lifecycle.py` |
+| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ Live | `dashboard/api/paperwork.py`, `services/signnow_packet_service.py`, **DocuSeal:** `dashboard/services/docuseal_service.py` (new packets) |
+| **The Signature Agent** | Send and track e-sign packets | ✅ Live | **DocuSeal (new):** `docuseal_service.py` + webhook `/api/webhooks/docuseal` · **SignNow (legacy):** `signnow_service.py` · **Agent skills:** `.agent/skills/shamrock-docuseal`, `docuseal-cli`, `docuseal-code` · CLI: `npm i -g docuseal` → `DOCUSEAL_SERVER=https://sign.shamrockbailbonds.biz` |
 | **The Payment Agent** | Log and track premium payments | ✅ Live | `dashboard/api/payments.py`, `api/payment_plans.py` |
 | **The Auditor** | Immutable event logging for all state changes | ✅ Live | `dashboard/api/events.py` |
 | **The Finder** | OSINT: family/friend contact discovery | ✅ Live | `services/contact_discovery.py`, `api/contacts.py` |

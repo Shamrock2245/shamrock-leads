@@ -75,6 +75,61 @@ def test_sign_url_for_slug_uses_public_url():
     assert svc.sign_url_for_slug("") == ""
 
 
+def test_normalize_submitter_record():
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    out = svc.normalize_submitter_record(
+        {
+            "id": 7,
+            "submission_id": 99,
+            "role": "indemnitor",
+            "email": "a@b.com",
+            "slug": "xyz",
+            "status": "sent",
+        }
+    )
+    assert out["id"] == 7
+    assert out["sign_url"] == "https://sign.example/s/xyz"
+    assert out["role"] == "indemnitor"
+    assert svc.normalize_submitter_record(None) == {}
+
+
+@pytest.mark.asyncio
+async def test_list_submissions_and_update_submitter_request_shapes():
+    """CLI parity helpers pass the right paths/params to DocuSeal REST."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    with patch.object(svc, "_request", new=AsyncMock(return_value={"data": []})) as m:
+        await svc.list_submissions(status="pending", template_id=1, limit=20)
+        m.assert_awaited()
+        args, kwargs = m.await_args
+        assert args[0] == "GET"
+        assert args[1] == "/submissions"
+        assert kwargs["params"]["status"] == "pending"
+        assert kwargs["params"]["template_id"] == 1
+
+        m.reset_mock()
+        m.return_value = {"id": 201, "slug": "s1", "status": "sent"}
+        await svc.update_submitter(201, email="new@x.com", send_email=True)
+        args, kwargs = m.await_args
+        assert args[0] == "PUT"
+        assert args[1] == "/submitters/201"
+        assert kwargs["json"]["email"] == "new@x.com"
+        assert kwargs["json"]["send_email"] is True
+
+        m.reset_mock()
+        await svc.list_submitters(submission_id=502, limit=10)
+        args, kwargs = m.await_args
+        assert args[0] == "GET"
+        assert args[1] == "/submitters"
+        assert kwargs["params"]["submission_id"] == 502
+
+        m.reset_mock()
+        await svc.clone_template(1, name="OSI copy")
+        args, kwargs = m.await_args
+        assert args[0] == "POST"
+        assert args[1] == "/templates/1/clone"
+        assert kwargs["json"]["name"] == "OSI copy"
+
+
 def test_normalize_create_response_list():
     svc = DocuSealService(base_url="https://sign.example", api_key="k")
     raw = [
