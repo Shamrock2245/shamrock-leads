@@ -165,6 +165,16 @@ class DocuSealService:
         self.base_url = (internal or raw).rstrip("/")
         self.api_key = (api_key if api_key is not None else os.getenv("DOCUSEAL_API_KEY", "")).strip()
         self.timeout = timeout
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout, follow_redirects=True)
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
     # ── Config ──────────────────────────────────────────────────────────────
 
@@ -206,28 +216,28 @@ class DocuSealService:
         if not p.startswith("/api/"):
             p = f"/api{p}"
         url = f"{self.base_url}{p}"
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.request(
+        client = await self._get_client()
+        resp = await client.request(
+            method,
+            url,
+            headers=self._headers(),
+            json=json,
+            params=params,
+        )
+        if resp.status_code >= 400:
+            body = (resp.text or "")[:500]
+            logger.error(
+                "[docuseal] %s %s → %s %s",
                 method,
-                url,
-                headers=self._headers(),
-                json=json,
-                params=params,
+                path,
+                resp.status_code,
+                body,
             )
-            if resp.status_code >= 400:
-                body = (resp.text or "")[:500]
-                logger.error(
-                    "[docuseal] %s %s → %s %s",
-                    method,
-                    path,
-                    resp.status_code,
-                    body,
-                )
-                raise httpx.HTTPStatusError(
-                    f"DocuSeal {method} {path} failed: {resp.status_code} {body}",
-                    request=resp.request,
-                    response=resp,
-                )
+            raise httpx.HTTPStatusError(
+                f"DocuSeal {method} {path} failed: {resp.status_code} {body}",
+                request=resp.request,
+                response=resp,
+            )
             if resp.status_code == 204 or not resp.content:
                 return None
             return resp.json()
@@ -497,10 +507,10 @@ class DocuSealService:
         headers = {}
         if self.api_key:
             headers["X-Auth-Token"] = self.api_key
-        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            return resp.content
+        client = await self._get_client()
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+        return resp.content
 
     async def download_combined_pdf(self, submission_id: Union[int, str]) -> bytes:
         """

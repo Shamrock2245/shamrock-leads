@@ -42,6 +42,41 @@ logger = logging.getLogger(__name__)
 DASHBOARD_DIR = os.path.dirname(__file__)
 
 
+async def _ensure_core_indexes_async():
+    """Ensure high-performance MongoDB indices on startup for M0 tier hygiene."""
+    try:
+        from dashboard.deps import get_collection
+        
+        # Paperwork Packets
+        packets = get_collection("paperwork_packets")
+        await packets.create_index("packet_id", sparse=True)
+        await packets.create_index("intake_id")
+        await packets.create_index("docuseal_submission_id", sparse=True)
+        await packets.create_index("indemnitor_phone")
+        await packets.create_index("unassigned_defendant")
+        await packets.create_index([("created_at", -1)])
+
+        # Portal PIN OTPs
+        pins = get_collection("portal_pins")
+        await pins.create_index("phone")
+        await pins.create_index([("created_at", -1)])
+
+        # Active Bonds
+        bonds = get_collection("active_bonds")
+        await bonds.create_index("bond_case_id", sparse=True)
+        await bonds.create_index("booking_number", sparse=True)
+        await bonds.create_index("defendant_name")
+
+        # Audit Events
+        events = get_collection("audit_events")
+        await events.create_index("event_id", sparse=True)
+        await events.create_index([("timestamp", -1)])
+        
+        logger.info("⚡ Core MongoDB indexes verified.")
+    except Exception as exc:
+        logger.warning("Core index creation warning: %s", exc)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Lifespan: startup / shutdown
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -54,9 +89,10 @@ async def lifespan(app: FastAPI):
     # ── Initialize singletons ──
     init_bluebubbles()
 
-    # ── Seed POA inventory (first boot only) ──
+    # ── Seed POA inventory & verify core MongoDB indexes ──
     from dashboard.extensions import _seed_poa_inventory_async
     await _seed_poa_inventory_async()
+    await _ensure_core_indexes_async()
 
     # ── Start background cron loops ──
     from dashboard.cron import start_all_crons
