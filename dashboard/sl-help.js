@@ -41,14 +41,14 @@
     {
       title: "Step 3: Paperwork (DocuSeal) & signing",
       content: `
-        <p style="margin-bottom:8px">After Write Bond fields look right:</p>
+        <p style="margin-bottom:8px">Send or create packet with provider <strong>DocuSeal</strong>:</p>
         <ul style="padding-left:18px;margin-bottom:8px">
-          <li>Send packet with provider <strong>DocuSeal</strong> (not SignNow).</li>
-          <li>Client signs on phone via link, or on office iPad (portal).</li>
+          <li><strong>Flexible Workflow</strong>: Indemnitor can scan ID &amp; sign <em>before</em> defendant details are in system. Click <code>bind-defendant</code> when arrest record arrives!</li>
+          <li>Client signs on phone via PIN link, or on office iPad (touch / Apple Pencil).</li>
           <li>Signed PDF auto-files to Drive: <code style="color:#34d399">LastName_MMDDYY_SURETY.pdf</code>.</li>
-          <li>Lost link? Use Paperwork tab → status / resend — don’t create a second packet.</li>
+          <li>Lost link? Use Paperwork tab → status / resend — don’t create a duplicate packet.</li>
         </ul>
-        <p style="font-size:11px;color:#94a3b8">Portal: paperwork.shamrockbailbonds.biz · Sign: sign.shamrockbailbonds.biz</p>
+        <p style="font-size:11px;color:#94a3b8">Portal: paperwork.shamrockbailbonds.biz · Sign Engine: sign.shamrockbailbonds.biz</p>
       `
     },
     {

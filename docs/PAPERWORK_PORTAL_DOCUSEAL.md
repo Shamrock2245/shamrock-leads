@@ -218,6 +218,28 @@ BondCase ready (match + surety + POA)
 
 Legacy SignNow code remains until M4 for historical packets; **new** work targets DocuSeal only.
 
+---
+
+## 5.6 DocuSeal REST API Reference & Multi-User Support Manual
+
+### 1. API Endpoints Overview (`https://sign.shamrockbailbonds.biz/api/v1`)
+- **Authorization**: Header `X-Auth-Token: <DOCUSEAL_API_KEY>` or `Authorization: Bearer <DOCUSEAL_API_KEY>`.
+- **`GET /api/v1/templates`**: List active templates. `DOCUSEAL_TEMPLATE_ID_OSI` (1) for OSI, `DOCUSEAL_TEMPLATE_ID_PALMETTO` for Palmetto.
+- **`POST /api/v1/submissions`**: Create signing submission with submitters list and prefill values.
+- **`PUT /api/v1/submitters/{id}`**: Update prefill field values (`values` / `fields`), change email/phone, or request email/SMS re-send.
+- **`POST /api/webhooks/docuseal`**: Receives `form.started`, `form.viewed`, and `form.completed`. Signed PDFs are auto-formatted as `<LastName>_<MMDDYY>_<SURETY>.pdf` and archived to Google Drive `Completed Bonds/{surety}/{date}/`.
+
+### 2. Employee Guidance (Bondsmen, Staff, God-Admin)
+- **Sign First, Bind Defendant Later**: If an indemnitor arrives before the defendant's booking record is indexed, create an unassigned packet (`defendant_name="To Be Named"`). The indemnitor can complete and sign their paperwork immediately. Staff can attach/bind defendant details later via `POST /api/paperwork/packets/{packet_id}/bind-defendant`.
+- **Resending Links**: In case of lost SMS or email, staff can click **Resend Link** in the dashboard (`POST /api/paperwork/{packet_id}/docuseal/resend`) or copy the direct `/s/{slug}` link.
+- **Template Audit**: Confirm template roles match `indemnitor`, `Coindemnitor`, `Defendant` before dispatching.
+
+### 3. Client Guidance (Defendants & Indemnitors)
+- **Mobile & Touch Signing (`https://paperwork.shamrockbailbonds.biz/`)**: Optimized for touchscreens, mobile Safari/Chrome, and Apple Pencil stylus input.
+- **ID Scan Auto-Fill**: Indemnitors scan their Driver's License/ID → PaddleOCR auto-populates name, address, DL#, and DOB.
+- **Instant Indemnitor Signing**: Indemnitors click **✍️ Sign Paperwork Now** to sign their documents instantly on phone/iPad without delay.
+
+
 ### 5.6 Branding DocuSeal
 
 - Company name: **Shamrock Bail Bonds**  

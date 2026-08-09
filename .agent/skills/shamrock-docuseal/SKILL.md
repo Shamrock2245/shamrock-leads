@@ -199,12 +199,58 @@ docuseal templates create-pdf \
 3. Run `tests/test_docuseal_service.py`.
 4. Do not remove SignNow paths until historical packets are retired (M4).
 
+## REST API & Webhook Core Reference
+
+DocuSeal REST API operates on `https://sign.shamrockbailbonds.biz/api/v1` (Bearer `X-Auth-Token` / `DOCUSEAL_API_KEY`).
+
+| Endpoint | Method | Purpose | Key Body / Query Params |
+|----------|--------|---------|-------------------------|
+| `/api/v1/templates` | `GET` | List available templates | `limit`, `q` |
+| `/api/v1/templates/{id}` | `GET` | Inspect template fields & roles | — |
+| `/api/v1/submissions` | `POST` | Create multi-party signing request | `template_id`, `submitters: [{role, email, name, phone, values: {...}, external_id}]` |
+| `/api/v1/submissions` | `GET` | List submissions (pending/completed) | `status`, `template_id`, `limit` |
+| `/api/v1/submissions/{id}` | `GET` | Retrieve submission status & links | Returns submitter status + `/s/{slug}` sign links |
+| `/api/v1/submitters/{id}` | `PUT` | Update submitter info or prefill values | `email`, `phone`, `send_email`, `values` / `fields` |
+| `/api/webhooks/docuseal` | `POST` | Live event receiver (webhook) | Events: `form.started`, `form.viewed`, `form.completed` |
+
+### Webhook payload handling (`form.completed`)
+When `form.completed` fires, the payload contains:
+```json
+{
+  "event": "form.completed",
+  "data": {
+    "id": 998811,
+    "status": "completed",
+    "external_id": "pkt_inst_123456",
+    "documents": [{"url": "https://sign.shamrockbailbonds.biz/documents/..."}]
+  }
+}
+```
+Our webhook handler (`POST /api/webhooks/docuseal`) verifies HMAC signature, downloads the merged PDF, formats it as `<LastName>_<MMDDYY>_<SURETY>.pdf`, uploads it to Google Drive `Completed Bonds/{surety}/{date}/`, updates MongoDB `paperwork_packets` to `status="completed"`, and alerts Slack.
+
+---
+
+## Agent Intuition & Support Matrix
+
+### 1. 🏢 For Employees (Bondsmen, Staff, Admins)
+- **Flexible Workflow (Sign First, Bind Later)**: If an indemnitor is ready before the defendant's jail roster details are in the system, staff can send an unassigned indemnitor packet (`defendant_name="To Be Named"`). When defendant details arrive, staff call `POST /api/paperwork/packets/{packet_id}/bind-defendant` to attach the defendant to the packet.
+- **Template Field Audit**: Run `docuseal templates retrieve 1` or `GET /api/paperwork/docuseal/health` to confirm prefill keys match template field names (`indemnitor_name`, `DefendantName`, `bond_amount`, `charges_summary`, `poa_number`).
+- **Resending Links**: Use `POST /api/paperwork/{packet_id}/docuseal/resend` with `{"role": "indemnitor", "send_email": true}` or send the direct `/s/{slug}` signing link via iMessage/SMS.
+
+### 2. 📱 For Clients (Defendants & Indemnitors)
+- **No Friction Mobile PWA**: Indemnitors open `https://paperwork.shamrockbailbonds.biz/` on their phone or iPad.
+- **ID Scan Auto-Fill**: Indemnitors scan their Driver's License/ID → PaddleOCR extracts name, address, DL#, and DOB → populates prefill fields automatically.
+- **Instant Signing**: Indemnitors click **✍️ Sign Paperwork Now** to sign instantly without waiting for defendant matching.
+- **Touch & Stylus Support**: Touch canvas accommodates Apple Pencil or finger signatures with pinch-zoom support for line review.
+
+---
+
 ## Common mistakes (Shamrock-specific)
 
 | Mistake | Fix |
 |---------|-----|
 | CLI pointed at `global` / `api.docuseal.com` | Set `DOCUSEAL_SERVER=https://sign.shamrockbailbonds.biz` |
-| Role `Indemnitor` vs `indemnitor` | Match live template strings exactly |
+| Role `Indemnitor` vs `indemnitor` | Match live template strings exactly (`indemnitor`, `Coindemnitor`, `Defendant`) |
 | Creating submission only in CLI for a real bond | Use paperwork API so packet + Mongo update |
 | Forcing email send for jail defendant | Use `--no-send-email` + portal/link handoff |
 | Palmetto using OSI template | Require `DOCUSEAL_TEMPLATE_ID_PALMETTO` |
@@ -218,3 +264,4 @@ docuseal templates create-pdf \
 - `gws-drive` — Completed Bonds Drive archive
 - `surety-compliance-auditor` — surety/POA compliance
 - `soc2-compliance-auditor` — audit / PII
+
