@@ -80,7 +80,7 @@
           <li>📘 <strong>Facebook</strong>: Official Shamrock Facebook Page.</li>
           <li>📸 <strong>Instagram</strong>: Connects <code>@shamrock_bail_bonds</code>.</li>
           <li>🪶 <strong>X / Twitter</strong>: Connects <code>@ShamrockBail_FL</code>.</li>
-          <li>📺 <strong>YouTube</strong>: Connects <code>@shamrock_2245</code>.</li>
+          <li>📺 <strong>YouTube</strong>: Connects <code>@Shamrock2245</code>.</li>
           <li>📍 <strong>Google My Business</strong>: Office listing.</li>
         </ul>
         <p style="font-size:11px;color:#94a3b8">A green checkmark ✅ appears when authorization completes.</p>

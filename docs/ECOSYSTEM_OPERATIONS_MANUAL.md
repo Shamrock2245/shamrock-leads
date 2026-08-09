@@ -101,7 +101,7 @@ Before posting, ensure your social media accounts are connected:
    * 📘 **Facebook**: Connects to the official Shamrock Bail Bonds Facebook Page.
    * 📸 **Instagram**: Connects to `@shamrock_bail_bonds`.
    * 🪶 **X / Twitter**: Connects to `@ShamrockBail_FL`.
-   * 📺 **YouTube**: Connects to `@shamrock_2245`.
+   * 📺 **YouTube**: Connects to `@Shamrock2245`.
    * 📍 **Google My Business**: Connects to Ft. Myers office listing.
 4. Follow the prompt to authorize Postiz. A green checkmark ✅ will appear when connected.
 
