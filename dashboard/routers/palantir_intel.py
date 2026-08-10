@@ -20,7 +20,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, HTTPException, Query
 
-from dashboard.extensions import get_collection
+from dashboard.deps import get_collection, get_db
 from dashboard.models.palantir import (
     BreachLookupItem,
     BreachLookupRequest,
@@ -658,7 +658,12 @@ async def breach_lookup(req: BreachLookupRequest):
             logger.warning("HIBP API query error for %s: %s", query, exc)
 
     # Check MongoDB stored OSINT scans for matching target
-    db = get_db()
+    db = None
+    try:
+        db = get_db()
+    except Exception:
+        db = None
+
     if db:
         try:
             osint_col = get_collection("osint_scans")
@@ -691,9 +696,9 @@ async def breach_lookup(req: BreachLookupRequest):
         found=False,
         total_breaches=0,
         breaches=[],
-        risk_impact="low",
-        data_mode="live",
-        message="No verified breach records found for this query." if api_key else "No breach hits found in database (set HIBP_API_KEY for live global breach search)."
+        risk_impact="low" if api_key else "unknown",
+        data_mode="live" if api_key else "unavailable",
+        message="No verified breach records found for this query." if api_key else "No breach-data provider configured (set HIBP_API_KEY or BREACH_API_KEY)."
     )
 
 
