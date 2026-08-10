@@ -191,18 +191,37 @@
   }
 
   // ── 2. OSIRIS Situation Room (3D Tactical Globe) ───────────────────
+  let _leafletMap = null;
+  let _mapMarkers = [];
+
   function _initOsirisMap() {
     const container = $('osirisMapContainer');
     if (!container || _mapInstance) return;
 
-    container.innerHTML = `
-      <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--palantir-muted)">
-        <div style="font-size:3rem;margin-bottom:10px">🌍</div>
-        <div style="font-size:0.9rem;font-weight:700;color:#ff9100">OSIRIS 3D Tactical Globe Surface Active</div>
-        <div style="font-size:0.75rem;margin-top:4px">SWFL Sector Grid (26.6406° N, 81.8723° W) · Live Flight &amp; Incident Overlays</div>
-      </div>
-    `;
-    _mapInstance = true;
+    if (typeof L !== 'undefined') {
+      container.innerHTML = '';
+      try {
+        _leafletMap = L.map('osirisMapContainer', { zoomControl: true }).setView([26.6406, -81.8723], 10);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+          maxZoom: 19,
+          subdomains: 'abcd',
+          attribution: '© OpenStreetMap © CARTO'
+        }).addTo(_leafletMap);
+        _mapInstance = true;
+        setTimeout(() => { if (_leafletMap) _leafletMap.invalidateSize(); }, 300);
+      } catch (e) {
+        console.warn('Leaflet map init warning:', e);
+      }
+    } else {
+      container.innerHTML = `
+        <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--palantir-muted)">
+          <div style="font-size:3rem;margin-bottom:10px">🌍</div>
+          <div style="font-size:0.9rem;font-weight:700;color:#ff9100">OSIRIS 3D Tactical Globe Surface Active</div>
+          <div style="font-size:0.75rem;margin-top:4px">SWFL Sector Grid (26.6406° N, 81.8723° W) · Live Flight &amp; Incident Overlays</div>
+        </div>
+      `;
+      _mapInstance = true;
+    }
   }
 
   async function _loadOsirisFeeds() {
@@ -223,18 +242,44 @@
         return;
       }
 
+      // Clear existing markers
+      if (_leafletMap && typeof L !== 'undefined') {
+        _mapMarkers.forEach(m => _leafletMap.removeLayer(m));
+        _mapMarkers = [];
+      }
+
       list.innerHTML = feeds.map(f => {
         const demoTag = f.demo ? ' · MAP REF ONLY' : ' · LIVE CRM';
         let badge = 'INFO';
         let cls = '';
-        if (f.severity === 'danger') { badge = 'HIGH SURGE'; cls = 'danger'; }
-        else if (f.severity === 'warning') { badge = 'ALERT'; cls = 'warning'; }
+        let color = '#38bdf8';
+        if (f.severity === 'danger') { badge = 'HIGH SURGE'; cls = 'danger'; color = '#f85149'; }
+        else if (f.severity === 'warning') { badge = 'ALERT'; cls = 'warning'; color = '#ff9100'; }
+
+        // Add Leaflet Marker
+        if (_leafletMap && typeof L !== 'undefined' && f.lat && f.lng) {
+          const marker = L.circleMarker([f.lat, f.lng], {
+            radius: 8,
+            fillColor: color,
+            color: '#fff',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.8
+          }).addTo(_leafletMap);
+
+          marker.bindPopup(`
+            <div style="font-size:0.78rem;font-weight:700;color:${color}">${_esc(f.title)}</div>
+            <div style="font-size:0.7rem;color:#333;margin-top:4px">${_esc(f.description)}</div>
+            <div style="font-size:0.62rem;color:#666;margin-top:4px">Source: ${_esc(f.source)}</div>
+          `);
+          _mapMarkers.push(marker);
+        }
 
         return `
           <div class="palantir-feed-card ${cls}">
             <div style="display:flex;justify-content:space-between;align-items:center">
               <span style="font-size:0.78rem;font-weight:700;color:#fff">${_esc(f.title)}</span>
-              <span style="font-size:0.6rem;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,0.06);color:${f.severity === 'danger' ? '#f85149' : '#ff9100'}">${badge}</span>
+              <span style="font-size:0.6rem;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,0.06);color:${color}">${badge}</span>
             </div>
             <div style="font-size:0.7rem;color:var(--palantir-muted);margin-top:4px">${_esc(f.description)}</div>
             <div style="font-size:0.62rem;color:var(--palantir-blue);margin-top:4px;font-family:monospace">Source: ${_esc(f.source)}${demoTag} · (${Number(f.lat).toFixed(4)}, ${Number(f.lng).toFixed(4)})</div>
