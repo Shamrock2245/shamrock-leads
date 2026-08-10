@@ -217,13 +217,18 @@ class DocuSealService:
             p = f"/api{p}"
         url = f"{self.base_url}{p}"
         client = await self._get_client()
-        resp = await client.request(
-            method,
-            url,
-            headers=self._headers(),
-            json=json,
-            params=params,
-        )
+        try:
+            resp = await client.request(
+                method,
+                url,
+                headers=self._headers(),
+                json=json,
+                params=params,
+            )
+        except httpx.RequestError as exc:
+            logger.error("[docuseal] %s %s network error: %s", method, path, exc)
+            raise RuntimeError(f"DocuSeal unreachable: {exc}") from exc
+
         if resp.status_code >= 400:
             body = (resp.text or "")[:500]
             logger.error(
@@ -238,9 +243,14 @@ class DocuSealService:
                 request=resp.request,
                 response=resp,
             )
-            if resp.status_code == 204 or not resp.content:
-                return None
+        # Success path (must not be nested under the error branch)
+        if resp.status_code == 204 or not resp.content:
+            return None
+        try:
             return resp.json()
+        except ValueError as exc:
+            logger.error("[docuseal] %s %s invalid JSON: %s", method, path, exc)
+            raise RuntimeError(f"DocuSeal returned non-JSON for {method} {path}") from exc
 
     async def health(self) -> Dict[str, Any]:
         """Best-effort connectivity check (templates list)."""
@@ -1421,6 +1431,26 @@ def readiness_report(bond_data: Optional[Dict[str, Any]] = None, surety_id: str 
     }
 
 
+_DOCUSEAL_SINGLETON: Optional[DocuSealService] = None
+
+
 def get_docuseal_service() -> DocuSealService:
-    """Factory for FastAPI routes."""
-    return DocuSealService()
+    """
+    Process-wide DocuSeal client so httpx connection pooling is shared.
+    Tests may construct DocuSealService(...) directly to avoid the singleton.
+    """
+    global _DOCUSEAL_SINGLETON
+    if _DOCUSEAL_SINGLETON is None:
+        _DOCUSEAL_SINGLETON = DocuSealService()
+    return _DOCUSEAL_SINGLETON
+
+
+async def close_docuseal_service() -> None:
+    """Release the shared AsyncClient (call on app shutdown)."""
+    global _DOCUSEAL_SINGLETON
+    if _DOCUSEAL_SINGLETON is not None:
+        try:
+            await _DOCUSEAL_SINGLETON.aclose()
+        except Exception:
+            pass
+        _DOCUSEAL_SINGLETON = None

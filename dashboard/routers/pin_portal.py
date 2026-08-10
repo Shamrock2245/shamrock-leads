@@ -285,6 +285,16 @@ class InstantIndemnitorPacketRequest(BaseModel):
     indemnitor_address: Optional[str] = None
     indemnitor_dl: Optional[str] = None
     surety_id: Optional[str] = "osi"
+    county: Optional[str] = None
+    state: Optional[str] = None
+
+
+def _valid_email(raw: str) -> bool:
+    s = (raw or "").strip()
+    if not s or "@" not in s or " " in s:
+        return False
+    local, _, domain = s.partition("@")
+    return bool(local) and "." in domain and len(s) < 200
 
 
 @pin_portal_router.post("/instant-indemnitor-packet")
@@ -294,24 +304,109 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
     allowing them to complete & sign paperwork without requiring a defendant to be pre-selected.
     Defendant can be matched/bound later.
     """
-    clean_phone = _digits_phone(req.indemnitor_phone)
-    if not clean_phone or len(clean_phone) < 10:
-        return JSONResponse({"success": False, "error": "Invalid 10-digit phone number"}, status_code=400)
-
     import uuid
-    from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety, ROLE_INDEMNITOR
+    from dashboard.services.docuseal_service import (
+        get_docuseal_service,
+        resolve_template_id_for_surety,
+        ROLE_INDEMNITOR,
+    )
+
+    clean_phone = _digits_phone(req.indemnitor_phone)
+    if not clean_phone or len(clean_phone) != 10:
+        return JSONResponse(
+            {"success": False, "error": "invalid_phone", "message": "Enter a valid 10-digit US mobile number."},
+            status_code=400,
+        )
+
+    ind_name = (req.indemnitor_name or "").strip()
+    if len(ind_name) < 2:
+        return JSONResponse(
+            {"success": False, "error": "invalid_name", "message": "Name is required before signing."},
+            status_code=400,
+        )
+    # Soft PII hygiene — cap free-text fields
+    ind_name = ind_name[:120]
+    ind_address = (req.indemnitor_address or "").strip()[:200]
+    ind_dl = (req.indemnitor_dl or "").strip()[:40]
+    county = (req.county or "Lee").strip()[:60] or "Lee"
+    state = (req.state or "FL").strip().upper()[:2] or "FL"
+
+    surety_id = (req.surety_id or "osi").lower().strip()
+    if surety_id not in ("osi", "palmetto"):
+        surety_id = "osi"
 
     svc = get_docuseal_service()
     if not svc.is_configured:
-        return JSONResponse({"success": False, "error": "docuseal_not_configured"}, status_code=503)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "docuseal_not_configured",
+                "message": "E-sign is temporarily unavailable. Please ask staff for a PIN link.",
+            },
+            status_code=503,
+        )
 
-    surety_id = (req.surety_id or "osi").lower()
     template_id = resolve_template_id_for_surety(surety_id)
     if not template_id:
-        return JSONResponse({"success": False, "error": "template_not_found"}, status_code=404)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "template_not_found",
+                "message": f"No DocuSeal template configured for surety {surety_id.upper()}.",
+            },
+            status_code=404,
+        )
 
-    ind_name = req.indemnitor_name.strip() or "Indemnitor"
-    ind_email = (req.indemnitor_email or "").strip() or f"indemnitor+{uuid.uuid4().hex[:8]}@shamrockbailbonds.biz"
+    raw_email = (req.indemnitor_email or "").strip()
+    if raw_email and not _valid_email(raw_email):
+        return JSONResponse(
+            {"success": False, "error": "invalid_email", "message": "Email looks invalid."},
+            status_code=400,
+        )
+    ind_email = raw_email if raw_email else f"indemnitor+{uuid.uuid4().hex[:8]}@shamrockbailbonds.biz"
+
+    # Idempotency: reuse a recent open instant packet for same phone (5 min window)
+    packets_col = get_collection("paperwork_packets")
+    try:
+        recent = await packets_col.find_one(
+            {
+                "indemnitor_phone": clean_phone,
+                "unassigned_defendant": True,
+                "esign_provider": "docuseal",
+                "status": {"$in": ["pending_indemnitor_signature", "sent", "pending_signature"]},
+                "sign_url": {"$exists": True, "$ne": ""},
+            },
+            sort=[("created_at", -1)],
+        )
+        if recent and recent.get("sign_url"):
+            created = recent.get("created_at") or ""
+            # Prefer reuse when packet is very fresh (ISO strings compare lexicographically)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if isinstance(created, str) and created[:16] >= now_iso[:16]:  # same minute-ish
+                pass  # fall through to create if clock weird
+            elif recent.get("sign_url"):
+                # Only reuse if created within last 10 minutes
+                try:
+                    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    if created_dt.tzinfo is None:
+                        created_dt = created_dt.replace(tzinfo=timezone.utc)
+                    age = datetime.now(timezone.utc) - created_dt
+                    if age <= timedelta(minutes=10):
+                        return {
+                            "success": True,
+                            "packet_id": recent.get("packet_id"),
+                            "submission_id": recent.get("docuseal_submission_id"),
+                            "sign_url": recent.get("sign_url"),
+                            "signing_link": recent.get("sign_url") or recent.get("signing_link"),
+                            "submitters": recent.get("docuseal_submitters") or [],
+                            "unassigned_defendant": True,
+                            "reused": True,
+                            "message": "Resuming your existing paperwork session.",
+                        }
+                except Exception:
+                    pass
+    except Exception as reuse_exc:
+        logger.debug("instant packet reuse check skipped: %s", reuse_exc)
 
     prefill = {
         "indemnitor_name": ind_name,
@@ -319,10 +414,12 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
         "defendant_name": "To Be Named",
         "DefendantName": "To Be Named",
         "indemnitor_phone": clean_phone,
-        "indemnitor_address": req.indemnitor_address or "",
-        "indemnitor_dl": req.indemnitor_dl or "",
-        "state": "FL",
-        "county": "Lee County",
+        "indemnitor_address": ind_address,
+        "indemnitor_dl": ind_dl,
+        "state": state,
+        "State": state,
+        "county": county,
+        "County": county,
     }
 
     submitters = [
@@ -332,12 +429,13 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
             name=ind_name,
             phone=clean_phone,
             values=prefill,
+            external_id=f"instant:{clean_phone}:{uuid.uuid4().hex[:6]}",
+            metadata={"source": "instant_indemnitor_portal", "unassigned_defendant": True},
         )
     ]
 
     try:
         # DocuSeal often returns a bare list of submitters (not a {id, submitters} dict).
-        # Always normalize so list responses never throw AttributeError.
         raw = await svc.create_submission(
             template_id=template_id,
             submitters=submitters,
@@ -351,7 +449,6 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
         first = party_submitters[0] if party_submitters else {}
         sign_url = (first.get("sign_url") or "").strip()
         if not sign_url and isinstance(first, dict):
-            # Fall back if normalize missed embed_src
             slug = (first.get("slug") or "").strip()
             if slug:
                 sign_url = svc.sign_url_for_slug(slug)
@@ -361,7 +458,7 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
                 {
                     "success": False,
                     "error": "no_sign_url",
-                    "hint": "DocuSeal created a submission but returned no sign link",
+                    "message": "Could not open a signing session. Please try again or use PIN login.",
                     "submission_id": sub_id,
                 },
                 status_code=502,
@@ -374,9 +471,13 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
             "intake_id": f"int_inst_{uuid.uuid4().hex[:8]}",
             "esign_provider": "docuseal",
             "surety_id": surety_id,
+            "county": county,
+            "state": state,
             "indemnitor_name": ind_name,
             "indemnitor_phone": clean_phone,
             "indemnitor_email": ind_email,
+            "indemnitor_address": ind_address,
+            "indemnitor_dl": ind_dl,
             "defendant_name": "To Be Named",
             "unassigned_defendant": True,
             "docuseal_template_id": template_id,
@@ -387,12 +488,25 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
             "signing_link": sign_url,
             "sign_url": sign_url,
             "status": "pending_indemnitor_signature",
+            "source": "instant_indemnitor_portal",
             "created_at": now_iso,
             "updated_at": now_iso,
         }
 
-        packets_col = get_collection("paperwork_packets")
         await packets_col.insert_one(packet_doc)
+
+        try:
+            await get_collection("audit_events").insert_one({
+                "event_id": f"evt_inst_pkt_{uuid.uuid4().hex[:10]}",
+                "event_type": "instant_indemnitor_packet_created",
+                "packet_id": packet_id,
+                "submission_id": sub_id,
+                "surety_id": surety_id,
+                "timestamp": now_iso,
+                "actor": "portal_client",
+            })
+        except Exception:
+            pass
 
         return {
             "success": True,
@@ -402,11 +516,20 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
             "signing_link": sign_url,
             "submitters": party_submitters,
             "unassigned_defendant": True,
-            "message": "Instant indemnitor packet ready — proceed to e-sign.",
+            "reused": False,
+            "message": "Your paperwork is ready — continue on the secure signing screen.",
         }
     except Exception as exc:
         logger.exception("create_instant_indemnitor_packet failed")
-        return JSONResponse({"success": False, "error": str(exc)[:400]}, status_code=502)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "create_failed",
+                "message": "We could not start e-sign right now. Please try PIN login or ask a staff member.",
+                "detail": str(exc)[:200],
+            },
+            status_code=502,
+        )
 
 
 @pin_portal_router.post("/verify-pin")
@@ -799,13 +922,39 @@ async def get_portal_ui(request: Request):
             background: rgba(59, 130, 246, 0.15);
         }
         .id-extracted-card {
-            background: rgba(16, 185, 129, 0.12);
-            border: 1px solid #10b981;
-            border-radius: 10px;
-            padding: 14px;
+            background: linear-gradient(145deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.6));
+            border: 1px solid rgba(16, 185, 129, 0.45);
+            border-radius: 14px;
+            padding: 16px;
             margin-top: 12px;
             text-align: left;
             font-size: 13px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+        }
+        .id-extracted-actions {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .btn-instant-esign {
+            background: linear-gradient(135deg, #059669, #10b981) !important;
+            color: #fff !important;
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.28);
+            letter-spacing: -0.01em;
+        }
+        .btn-secondary-ghost {
+            background: transparent !important;
+            color: #e2e8f0 !important;
+            border: 1px solid rgba(148, 163, 184, 0.28) !important;
+            font-weight: 600 !important;
+        }
+        .id-extracted-hint {
+            margin: 10px 0 0;
+            font-size: 11px;
+            color: #64748b;
+            line-height: 1.4;
+            text-align: center;
         }
         .id-extracted-title {
             color: #34d399;
@@ -997,10 +1146,122 @@ async def get_portal_ui(request: Request):
             if (input.files && input.files.length > 0) processPortalIdScan(input.files[0]);
         }
 
+        function escHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function ensurePhoneSheet() {
+            let sheet = document.getElementById('slPhoneSheet');
+            if (sheet) return sheet;
+            sheet = document.createElement('div');
+            sheet.id = 'slPhoneSheet';
+            sheet.setAttribute('role', 'dialog');
+            sheet.setAttribute('aria-modal', 'true');
+            sheet.setAttribute('aria-labelledby', 'slPhoneSheetTitle');
+            sheet.innerHTML = `
+              <div class="sl-phone-sheet-backdrop" data-close="1"></div>
+              <div class="sl-phone-sheet-card">
+                <div class="sl-phone-sheet-accent"></div>
+                <h3 id="slPhoneSheetTitle">Confirm mobile number</h3>
+                <p class="sl-phone-sheet-sub">We use this only to secure your signing session. 10-digit US number.</p>
+                <label class="sl-phone-label" for="slPhoneSheetInput">Mobile phone</label>
+                <input id="slPhoneSheetInput" type="tel" inputmode="numeric" autocomplete="tel"
+                       placeholder="(239) 555-0100" maxlength="16" />
+                <p id="slPhoneSheetErr" class="sl-phone-err" hidden></p>
+                <div class="sl-phone-sheet-actions">
+                  <button type="button" class="sl-phone-btn ghost" data-close="1">Cancel</button>
+                  <button type="button" class="sl-phone-btn primary" id="slPhoneSheetContinue">Continue to sign</button>
+                </div>
+              </div>`;
+            document.body.appendChild(sheet);
+            if (!document.getElementById('slPhoneSheetStyles')) {
+                const st = document.createElement('style');
+                st.id = 'slPhoneSheetStyles';
+                st.textContent = `
+                  #slPhoneSheet{display:none;position:fixed;inset:0;z-index:10050;align-items:flex-end;justify-content:center}
+                  #slPhoneSheet.open{display:flex}
+                  .sl-phone-sheet-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.72);backdrop-filter:blur(8px)}
+                  .sl-phone-sheet-card{position:relative;width:min(440px,100%);margin:0;background:linear-gradient(180deg,#1e293b 0%,#0f172a 100%);
+                    border:1px solid rgba(148,163,184,.18);border-radius:20px 20px 0 0;padding:24px 22px 28px;
+                    box-shadow:0 -24px 60px rgba(0,0,0,.45);animation:slSheetUp .28s cubic-bezier(.16,1,.3,1)}
+                  @media(min-width:640px){#slPhoneSheet{align-items:center}
+                    .sl-phone-sheet-card{border-radius:18px;margin:16px;animation:slSheetIn .28s cubic-bezier(.16,1,.3,1)}}
+                  @keyframes slSheetUp{from{transform:translateY(24px);opacity:0}to{transform:none;opacity:1}}
+                  @keyframes slSheetIn{from{transform:translateY(12px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+                  .sl-phone-sheet-accent{height:3px;width:48px;border-radius:999px;background:linear-gradient(90deg,#10b981,#34d399);
+                    margin:0 auto 16px}
+                  #slPhoneSheet h3{margin:0 0 6px;font-size:1.15rem;font-weight:700;color:#f8fafc;text-align:center;letter-spacing:-.02em}
+                  .sl-phone-sheet-sub{margin:0 0 18px;font-size:.85rem;color:#94a3b8;text-align:center;line-height:1.45}
+                  .sl-phone-label{display:block;font-size:.72rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px}
+                  #slPhoneSheetInput{width:100%;box-sizing:border-box;padding:14px 16px;border-radius:12px;border:1px solid rgba(148,163,184,.25);
+                    background:#0f172a;color:#f1f5f9;font-size:1.1rem;letter-spacing:.04em;outline:none;transition:border .15s,box-shadow .15s}
+                  #slPhoneSheetInput:focus{border-color:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.2)}
+                  .sl-phone-err{margin:8px 0 0;font-size:.8rem;color:#f87171}
+                  .sl-phone-sheet-actions{display:flex;gap:10px;margin-top:18px}
+                  .sl-phone-btn{flex:1;min-height:48px;border-radius:12px;font-weight:700;font-size:.92rem;cursor:pointer;border:none;transition:transform .12s,background .15s}
+                  .sl-phone-btn:active{transform:scale(.98)}
+                  .sl-phone-btn.ghost{background:transparent;border:1px solid rgba(148,163,184,.25);color:#e2e8f0}
+                  .sl-phone-btn.primary{background:linear-gradient(135deg,#059669,#10b981);color:#fff;box-shadow:0 8px 24px rgba(16,185,129,.28)}
+                  .sl-phone-btn.primary:disabled{opacity:.55;cursor:wait;box-shadow:none}
+                `;
+                document.head.appendChild(st);
+            }
+            sheet.addEventListener('click', (e) => {
+                if (e.target && e.target.getAttribute('data-close') === '1') closePhoneSheet(null);
+            });
+            return sheet;
+        }
+
+        function closePhoneSheet(value) {
+            const sheet = document.getElementById('slPhoneSheet');
+            if (sheet) sheet.classList.remove('open');
+            if (window._slPhoneResolve) {
+                const r = window._slPhoneResolve;
+                window._slPhoneResolve = null;
+                r(value);
+            }
+        }
+
+        function askPhoneNumber() {
+            return new Promise((resolve) => {
+                const sheet = ensurePhoneSheet();
+                window._slPhoneResolve = resolve;
+                const input = document.getElementById('slPhoneSheetInput');
+                const err = document.getElementById('slPhoneSheetErr');
+                const go = document.getElementById('slPhoneSheetContinue');
+                if (err) { err.hidden = true; err.textContent = ''; }
+                if (input) {
+                    try {
+                        const saved = localStorage.getItem('sl_portal_phone') || '';
+                        input.value = saved;
+                    } catch (e) { input.value = ''; }
+                }
+                const submit = () => {
+                    const digits = String(input.value || '').replace(/[^0-9]/g, '').slice(-10);
+                    if (digits.length !== 10) {
+                        if (err) { err.hidden = false; err.textContent = 'Enter a valid 10-digit mobile number.'; }
+                        input.focus();
+                        return;
+                    }
+                    try { localStorage.setItem('sl_portal_phone', digits); } catch (e) {}
+                    closePhoneSheet(digits);
+                };
+                go.onclick = submit;
+                input.onkeydown = (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submit(); } };
+                sheet.classList.add('open');
+                setTimeout(() => input && input.focus(), 50);
+            });
+        }
+
         async function processPortalIdScan(file) {
             const resEl = document.getElementById('portalIdResult');
             if (!resEl) return;
-            resEl.innerHTML = '<div class="status" style="display:block">📷 Scanning ID / Driver License / Passport with AI...</div>';
+            resEl.innerHTML = '<div class="status" style="display:block">📷 Scanning ID with secure OCR…</div>';
             try {
                 const formData = new FormData();
                 formData.append('file', file);
@@ -1009,37 +1270,41 @@ async def get_portal_ui(request: Request):
                 const d = await r.json();
 
                 if (!d.success || !d.extracted) {
-                    resEl.innerHTML = `<div class="status error" style="display:block">❌ ${d.error || 'Could not read ID photo. Try taking a clearer photo.'}</div>`;
+                    resEl.innerHTML = `<div class="status error" style="display:block">❌ ${escHtml(d.error || 'Could not read ID photo. Try a clearer photo.')}</div>`;
                     return;
                 }
 
                 const ext = d.extracted;
                 try { localStorage.setItem('sl_indemnitor_scanned_profile', JSON.stringify(ext)); } catch (e) {}
 
+                const addrLine = [ext.address, ext.city, ext.state, ext.zip].filter(Boolean).join(', ');
                 resEl.innerHTML = `
                     <div class="id-extracted-card">
-                        <div class="id-extracted-title">✅ ID Verified &amp; Info Extracted</div>
-                        ${ext.full_name ? `<div class="id-extracted-row"><span class="id-extracted-label">Name:</span><strong>${ext.full_name}</strong></div>` : ''}
-                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#:</span><span>${ext.dl_number} (${ext.dl_state || 'FL'})</span></div>` : ''}
-                        ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB:</span><span>${ext.dob}</span></div>` : ''}
-                        ${ext.address ? `<div class="id-extracted-row"><span class="id-extracted-label">Address:</span><span>${ext.address}, ${ext.city || ''} ${ext.state || ''} ${ext.zip || ''}</span></div>` : ''}
-                        <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
-                            <button type="button" id="btnInstantEsign" class="btn-primary" style="min-height:40px;font-size:13px;padding:8px 14px;background:#059669;border-color:#059669;color:#fff">✍️ Sign Paperwork Now (Defendant Matched Later)</button>
-                            <button type="button" class="btn-primary" style="min-height:40px;font-size:13px;padding:8px 14px" onclick="showAuthTab('pin')">Proceed to PIN →</button>
+                        <div class="id-extracted-title">ID verified</div>
+                        ${ext.full_name ? `<div class="id-extracted-row"><span class="id-extracted-label">Name</span><strong>${escHtml(ext.full_name)}</strong></div>` : ''}
+                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#</span><span>${escHtml(ext.dl_number)} (${escHtml(ext.dl_state || 'FL')})</span></div>` : ''}
+                        ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB</span><span>${escHtml(ext.dob)}</span></div>` : ''}
+                        ${addrLine ? `<div class="id-extracted-row"><span class="id-extracted-label">Address</span><span>${escHtml(addrLine)}</span></div>` : ''}
+                        <div class="id-extracted-actions">
+                            <button type="button" id="btnInstantEsign" class="btn-primary btn-instant-esign">Sign paperwork now</button>
+                            <button type="button" class="btn-primary btn-secondary-ghost" id="btnProceedPin">Use PIN instead →</button>
                         </div>
+                        <p class="id-extracted-hint">Defendant can be matched by staff after you sign.</p>
                     </div>
                 `;
-                // Safe attach (never inject unescaped names into onclick= strings)
                 const btnInst = document.getElementById('btnInstantEsign');
+                const btnPin = document.getElementById('btnProceedPin');
+                if (btnPin) btnPin.addEventListener('click', () => showAuthTab('pin'));
                 if (btnInst) {
                     btnInst.addEventListener('click', () => startInstantIndemnitorEsign({
                         name: ext.full_name || '',
-                        address: [ext.address, ext.city, ext.state, ext.zip].filter(Boolean).join(', '),
+                        address: addrLine,
                         dl: ext.dl_number || '',
+                        state: ext.state || 'FL',
                     }));
                 }
             } catch (err) {
-                resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${err.message}</div>`;
+                resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${escHtml(err.message)}</div>`;
             }
         }
 
@@ -1047,16 +1312,26 @@ async def get_portal_ui(request: Request):
             const name = (opts && opts.name) || 'Indemnitor';
             const address = (opts && opts.address) || '';
             const dl = (opts && opts.dl) || '';
+            const state = (opts && opts.state) || 'FL';
             const resEl = document.getElementById('portalIdResult');
-            if (resEl) {
-                const status = document.createElement('div');
-                status.className = 'status';
-                status.style.cssText = 'display:block;margin-top:8px';
-                status.textContent = '⚡ Starting instant paperwork packet…';
-                resEl.appendChild(status);
-            }
-            const phone = prompt('Enter your 10-digit mobile phone number for the signing session:');
+            const setStatus = (msg, isErr) => {
+                if (!resEl) return;
+                let el = document.getElementById('slInstantStatus');
+                if (!el) {
+                    el = document.createElement('div');
+                    el.id = 'slInstantStatus';
+                    el.className = 'status';
+                    el.style.cssText = 'display:block;margin-top:10px';
+                    resEl.appendChild(el);
+                }
+                el.className = 'status' + (isErr ? ' error' : '');
+                el.textContent = msg;
+            };
+            const phone = await askPhoneNumber();
             if (!phone) return;
+            const btn = document.getElementById('btnInstantEsign');
+            if (btn) { btn.disabled = true; btn.textContent = 'Preparing secure session…'; }
+            setStatus('Preparing your secure signing session…');
             try {
                 const r = await fetch('/api/portal/instant-indemnitor-packet', {
                     method: 'POST',
@@ -1065,17 +1340,22 @@ async def get_portal_ui(request: Request):
                         indemnitor_name: name || 'Indemnitor',
                         indemnitor_phone: phone,
                         indemnitor_address: address || '',
-                        indemnitor_dl: dl || ''
+                        indemnitor_dl: dl || '',
+                        state: state || 'FL',
                     })
                 });
-                const d = await r.json();
+                let d = {};
+                try { d = await r.json(); } catch (e) { d = {}; }
                 if (d.success && (d.sign_url || d.signing_link)) {
+                    setStatus(d.reused ? 'Resuming your session…' : 'Opening signing form…');
                     openDocuSealForm(d.sign_url || d.signing_link, { fullscreen: true });
                 } else {
-                    alert('Could not start instant packet: ' + (d.error || 'Server error'));
+                    setStatus(d.message || d.error || 'Could not start signing. Try PIN login.', true);
+                    if (btn) { btn.disabled = false; btn.textContent = 'Sign paperwork now'; }
                 }
             } catch (err) {
-                alert('Error starting instant packet: ' + err.message);
+                setStatus('Network error: ' + (err.message || 'try again'), true);
+                if (btn) { btn.disabled = false; btn.textContent = 'Sign paperwork now'; }
             }
         }
 

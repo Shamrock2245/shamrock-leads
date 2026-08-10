@@ -94,6 +94,28 @@ def test_normalize_submitter_record():
 
 
 @pytest.mark.asyncio
+async def test_request_success_returns_json():
+    """Regression: success path must not be nested under the error branch."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+
+    class _Resp:
+        status_code = 200
+        content = b'{"ok":true}'
+        text = '{"ok":true}'
+        request = MagicMock()
+
+        def json(self):
+            return {"ok": True}
+
+    client = MagicMock()
+    client.request = AsyncMock(return_value=_Resp())
+    client.is_closed = False
+    with patch.object(svc, "_get_client", new=AsyncMock(return_value=client)):
+        out = await svc._request("GET", "/templates")
+    assert out == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_list_submissions_and_update_submitter_request_shapes():
     """CLI parity helpers pass the right paths/params to DocuSeal REST."""
     svc = DocuSealService(base_url="https://sign.example", api_key="k")

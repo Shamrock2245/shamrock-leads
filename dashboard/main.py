@@ -106,9 +106,14 @@ async def lifespan(app: FastAPI):
 
     yield  # ── Application runs ──
 
-    # ── Shutdown: cancel all cron tasks ──
+    # ── Shutdown: cancel all cron tasks + close pooled HTTP clients ──
     for t in tasks:
         t.cancel()
+    try:
+        from dashboard.services.docuseal_service import close_docuseal_service
+        await close_docuseal_service()
+    except Exception as exc:
+        logger.debug("DocuSeal client close: %s", exc)
     logger.info("☘️  FastAPI lifespan: shutdown — %d cron tasks cancelled", len(tasks))
 
 

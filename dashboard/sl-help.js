@@ -1,177 +1,170 @@
 /**
- * ShamrockLeads — In-App Ecosystem Help Drawer & Dual Guide Wizard (SLHelp)
- * Controls F1 shortcut, drawer toggling, contextual tab detection, and interactive wizards
- * for both ShamrockLeads Auto-CRM (leads.shamrockbailbonds.biz) and Postiz Social Media (social.shamrockbailbonds.biz).
+ * ShamrockLeads — Operations Help Drawer (SLHelp)
+ * F1 contextual guide · dual CRM / Social modes · Fortune-50 interaction polish
  */
-(function() {
+(function () {
   'use strict';
 
-  let activeGuide = 'crm'; // 'crm' or 'social'
+  let activeGuide = 'crm';
   let currentSlideCRM = 0;
   let currentSlideSocial = 0;
   let isOpen = false;
+  let lastFocus = null;
 
   const CRM_SLIDES = [
     {
-      title: "Step 1: Lead Explorer (find the arrest)",
+      title: 'Step 1 · Lead Explorer',
       content: `
-        <p style="margin-bottom:8px">Arrests from <strong>10 states</strong> show up automatically with a score:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>🔥 <strong style="color:#ef4444">Hot (80–100)</strong> — call/text first; Slack may alert <code>#leads</code>.</li>
-          <li>🟡 <strong style="color:#f59e0b">Warm (50–79)</strong> — good follow-ups when you have time.</li>
-          <li>❄️ <strong style="color:#94a3b8">Cold / DQ</strong> — often $0 bond, ROR, or no bond — skip unless a bondsman says otherwise.</li>
+        <p>Arrests from <strong>10 states</strong> score automatically:</p>
+        <ul>
+          <li>🔥 <strong style="color:#f87171">Hot (80–100)</strong> — prioritize; Slack may alert <code>#leads</code>.</li>
+          <li>🟡 <strong style="color:#fbbf24">Warm (50–79)</strong> — follow up when capacity allows.</li>
+          <li>❄️ <strong style="color:#94a3b8">Cold / DQ</strong> — $0 bond, ROR, or no-bond — skip unless directed.</li>
         </ul>
-        <p style="font-size:11px;color:#38bdf8">Filter by <strong>State</strong> then <strong>County</strong>. Lee FL is not Lee SC.</p>
-      `
+        <p style="font-size:12px;color:#64748b">Always filter <strong>State</strong> then <strong>County</strong>. Lee FL ≠ Lee SC.</p>
+      `,
     },
     {
-      title: "Step 2: How to Write a Bond",
+      title: 'Step 2 · Write a Bond',
       content: `
-        <p style="margin-bottom:8px">Open <strong>➕ Record Bond / ✍️ Write Bond</strong> from a lead:</p>
-        <ol style="padding-left:18px;margin-bottom:8px">
-          <li>Confirm defendant, charges, bond amounts.</li>
-          <li>Premium auto-calcs (~10%, <strong>$100 min per charge</strong> in FL style).</li>
-          <li>Pick surety <strong>OSI</strong> (preferred in FL) or <strong>Palmetto</strong>.</li>
-          <li>Accept the next <strong>POA</strong> from inventory — never invent power numbers.</li>
+        <p>From a lead open <strong>Write Bond</strong>:</p>
+        <ol>
+          <li>Confirm defendant, charges, and amounts.</li>
+          <li>Premium auto-calcs (~10%, <strong>$100 min per charge</strong>).</li>
+          <li>Surety: <strong>OSI</strong> preferred in FL, else <strong>Palmetto</strong>.</li>
+          <li>Accept the next <strong>POA</strong> — never invent powers.</li>
           <li>Enter indemnitor (scan ID when possible).</li>
         </ol>
-        <p style="font-size:11px;color:#34d399">Full write-up: open <a href="/guide" target="_blank" style="color:#38bdf8">/guide</a> → Chapter 2.</p>
-      `
+        <p style="font-size:12px;color:#64748b">Full walkthrough: <a href="/guide" target="_blank" rel="noopener">/guide → Chapter 2</a></p>
+      `,
     },
     {
-      title: "Step 3: Paperwork (DocuSeal) & signing",
+      title: 'Step 3 · Paperwork & DocuSeal',
       content: `
-        <p style="margin-bottom:8px">Send or create packet with provider <strong>DocuSeal</strong>:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li><strong>Flexible Workflow</strong>: Indemnitor can scan ID &amp; sign <em>before</em> defendant details are in system. Click <code>bind-defendant</code> when arrest record arrives!</li>
-          <li>Client signs on phone via PIN link, or on office iPad (touch / Apple Pencil).</li>
-          <li>Signed PDF auto-files to Drive: <code style="color:#34d399">LastName_MMDDYY_SURETY.pdf</code>.</li>
-          <li>Lost link? Use Paperwork tab → status / resend — don’t create a duplicate packet.</li>
+        <ul>
+          <li>Send with <strong>DocuSeal</strong> (new packets — not SignNow).</li>
+          <li>Cosigner may sign <em>before</em> defendant is fully matched; staff binds later.</li>
+          <li>Signed PDF auto-files: <code>LastName_MMDDYY_SURETY.pdf</code>.</li>
+          <li>Lost link → resend from Paperwork. Don’t duplicate packets.</li>
         </ul>
-        <p style="font-size:11px;color:#94a3b8">Portal: paperwork.shamrockbailbonds.biz · Sign Engine: sign.shamrockbailbonds.biz</p>
-      `
+        <p style="font-size:12px;color:#64748b">Portal · paperwork.shamrockbailbonds.biz</p>
+      `,
     },
     {
-      title: "Step 4: Active Bonds board",
+      title: 'Step 4 · Active Bonds board',
       content: `
-        <p style="margin-bottom:8px">After posting, manage the case on the Kanban:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
+        <p>After posting, manage lifecycle on the Kanban:</p>
+        <ul>
           <li><strong>Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Reinstated</strong></li>
-          <li>Exonerated / Surrendered can <strong>auto-release POAs</strong> back to inventory.</li>
-          <li>Read confirm dialogs on forfeiture — those are serious.</li>
+          <li>Exonerated / Surrendered can <strong>auto-release POAs</strong>.</li>
+          <li>Read confirm dialogs on forfeiture — high stakes.</li>
         </ul>
-      `
+      `,
     },
     {
-      title: "Step 5: Bail School website (staff)",
+      title: 'Step 5 · Bail School',
       content: `
-        <p style="margin-bottom:8px"><strong>school.shamrockbailbonds.biz</strong> is education — not Write Bond.</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>Point students to the school site to enroll (typical tracks: <strong>$199</strong> / <strong>$649</strong>).</li>
-          <li>Don’t mix student logins with bond packets.</li>
-          <li>If the site is down, note the time + error and escalate — don’t invent enrollment status.</li>
+        <p><strong>school.shamrockbailbonds.biz</strong> is education — not Write Bond.</p>
+        <ul>
+          <li>Point students to enroll (typical tracks <strong>$199</strong> / <strong>$649</strong>).</li>
+          <li>Never mix student accounts with bond packets.</li>
+          <li>If down: note time + error, escalate — don’t invent enrollment status.</li>
         </ul>
-      `
+      `,
     },
     {
-      title: "Step 6: Ops health (optional)",
+      title: 'Step 6 · Ops health',
       content: `
-        <ul style="padding-left:18px;margin-bottom:8px">
+        <ul>
           <li>📊 <strong>Multi-State Ops</strong> — scraper health across 10 states.</li>
-          <li>🧹 Data hygiene tools — managers only; protect database size.</li>
-          <li>Full employee manual: <a href="/guide" target="_blank" style="color:#38bdf8">leads…/guide</a> (also print-friendly).</li>
+          <li>🧹 Data hygiene — managers only; protect Atlas storage.</li>
+          <li>Printable SOP: <a href="/guide" target="_blank" rel="noopener">leads…/guide</a></li>
         </ul>
-      `
-    }
+      `,
+    },
   ];
 
   const POSTIZ_SLIDES = [
     {
-      title: "Step 1: Connect Social Accounts",
+      title: 'Step 1 · Connect channels',
       content: `
-        <p style="margin-bottom:8px">Log into <strong style="color:#38bdf8">social.shamrockbailbonds.biz</strong> and click <strong>Integrations</strong> on the left menu.</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>📘 <strong>Facebook</strong>: Official Shamrock Facebook Page.</li>
-          <li>📸 <strong>Instagram</strong>: Connects <code>@shamrock_bail_bonds</code>.</li>
-          <li>🪶 <strong>X / Twitter</strong>: Connects <code>@ShamrockBail_FL</code>.</li>
-          <li>📺 <strong>YouTube</strong>: Connects <code>@Shamrock2245</code>.</li>
-          <li>📍 <strong>Google My Business</strong>: Office listing.</li>
+        <p>Open <strong style="color:#38bdf8">social.shamrockbailbonds.biz</strong> → <strong>Integrations</strong>:</p>
+        <ul>
+          <li>Facebook Page · Instagram <code>@shamrock_bail_bonds</code></li>
+          <li>X <code>@ShamrockBail_FL</code> · YouTube <code>@Shamrock2245</code></li>
+          <li>Google Business Profile</li>
         </ul>
-        <p style="font-size:11px;color:#94a3b8">A green checkmark ✅ appears when authorization completes.</p>
-      `
+        <p style="font-size:12px;color:#64748b">Green check = connected.</p>
+      `,
     },
     {
-      title: "Step 2: Create a New Post",
+      title: 'Step 2 · Create a post',
       content: `
-        <p style="margin-bottom:8px">Click the <strong>Create Post</strong> button (pencil icon) on the top left.</p>
-        <ol style="padding-left:18px;margin-bottom:8px">
-          <li>Select target social channels by clicking their icons.</li>
-          <li>Write your caption (e.g. <em>"Open 24/7 in Lee County! Call 239-334-2245"</em>).</li>
-          <li>Add 3–5 hashtags (e.g. <code>#BailBonds #LeeCounty #ShamrockBail</code>).</li>
+        <ol>
+          <li>Click <strong>Create Post</strong>.</li>
+          <li>Select channels.</li>
+          <li>Write a clear caption (include <strong>(239) 334-2245</strong> when relevant).</li>
+          <li>Add 3–5 local hashtags.</li>
         </ol>
-        <p style="font-size:11px;color:#34d399">💡 Tip: Use the mobile preview on the right to double-check text spacing!</p>
-      `
+        <p style="font-size:12px;color:#34d399">Use the mobile preview before publishing.</p>
+      `,
     },
     {
-      title: "Step 3: Media & Video Guidelines",
+      title: 'Step 3 · Media rules',
       content: `
-        <p style="margin-bottom:8px">Click <strong>Add Media</strong> to upload photos or videos:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>🖼 <strong>Images</strong>: PNG or JPG (1080x1080px square or 1080x1350px portrait).</li>
-          <li>🎥 <strong>Videos</strong>: MP4 under 100MB (keep under 60 seconds for Reels/Shorts).</li>
+        <ul>
+          <li>Images: PNG/JPG · 1080×1080 or 1080×1350</li>
+          <li>Video: MP4 under 100MB · prefer under 60s for Reels/Shorts</li>
         </ul>
-        <p style="font-size:11px;color:#94a3b8">Postiz automatically optimizes image resolutions for each network.</p>
-      `
+        <p style="font-size:12px;color:#64748b">No private arrest details or client mugshots without approval.</p>
+      `,
     },
     {
-      title: "Step 4: Schedule vs Publish Now",
+      title: 'Step 4 · Schedule vs now',
       content: `
-        <p style="margin-bottom:8px">Choose when your post goes live:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>🚀 <strong>Post Now</strong>: Sends message immediately across all channels.</li>
-          <li>📅 <strong>Schedule</strong>: Pick exact date and time (e.g. Tomorrow at 9:00 AM).</li>
+        <ul>
+          <li>🚀 <strong>Post Now</strong> — immediate publish</li>
+          <li>📅 <strong>Schedule</strong> — pick date/time</li>
         </ul>
-        <p style="font-size:11px;color:#e2e8f0">Click <strong>Calendar</strong> on the left menu anytime to view or edit upcoming scheduled posts.</p>
-      `
+        <p style="font-size:12px;color:#64748b">Review <strong>Calendar</strong> / <strong>Queue</strong> so two people don’t double-post.</p>
+      `,
     },
     {
-      title: "Step 5: Postiz MCP AI Automation",
+      title: 'Step 5 · AI queue',
       content: `
-        <p style="margin-bottom:8px">Our system includes automated <strong>Postiz MCP</strong> integration:</p>
-        <ul style="padding-left:18px;margin-bottom:8px">
-          <li>🤖 <strong>AI Arrest Highlights</strong>: Auto-generates non-PII county stats.</li>
-          <li>📢 <strong>Bail Education</strong>: Posts rights & legal FAQs automatically.</li>
+        <ul>
+          <li>Automated drafts may appear for education / non-PII stats.</li>
+          <li>Always review the <strong>Queue</strong> before anything sensitive goes live.</li>
         </ul>
-        <p style="font-size:11px;color:#38bdf8">Check the <strong>Queue</strong> tab to review AI drafts before they post!</p>
-      `
-    }
+      `,
+    },
   ];
 
   const TAB_CONTEXTS = {
-    'leads': {
+    leads: {
       name: 'Lead Explorer',
-      text: 'Pick a hot/warm arrest → open Write Bond. Filter by state/county first so you never mix Lee FL with Lee SC.'
+      text: 'Pick a hot/warm arrest → Write Bond. Filter by state/county so you never mix same-name counties.',
     },
     'active-bonds': {
-      name: 'Active Bonds Kanban',
-      text: 'Drag cases across statuses. Exonerated/surrendered can release POAs. Confirm before forfeiture.'
+      name: 'Active Bonds',
+      text: 'Drag cases across statuses. Exonerated/surrendered can release POAs. Confirm before forfeiture.',
     },
-    'paperwork': {
-      name: 'Paperwork / DocuSeal',
-      text: 'Send sign links, check status, resend. Signed files auto-file to Drive as LastName_MMDDYY_SURETY.pdf.'
+    paperwork: {
+      name: 'Paperwork',
+      text: 'Send DocuSeal links, check status, resend. Signed files auto-file to Drive as LastName_MMDDYY_SURETY.pdf.',
     },
     'multi-state': {
       name: 'Multi-State Ops',
-      text: 'Scraper health and KPIs across FL, GA, SC, NC, TN, TX, LA, AL, CT, MS.'
+      text: 'Scraper health and KPIs across FL, GA, SC, NC, TN, TX, LA, AL, CT, MS.',
     },
-    'social': {
-      name: 'Social (Postiz)',
-      text: 'Create/schedule posts at social.shamrockbailbonds.biz. No private client arrest details in posts.'
+    social: {
+      name: 'Social',
+      text: 'Create and schedule posts at social.shamrockbailbonds.biz. No private client details.',
     },
-    'intake': {
+    intake: {
       name: 'Intake',
-      text: 'Match cosigners to defendants carefully. If two people could match, stop and escalate.'
-    }
+      text: 'Match cosigners carefully. If two defendants could match, stop and escalate.',
+    },
   };
 
   function getActiveSlides() {
@@ -188,30 +181,42 @@
   }
 
   function setGuideMode(mode) {
-    activeGuide = mode;
+    activeGuide = mode === 'social' ? 'social' : 'crm';
     const crmBtn = document.getElementById('slGuideTabCRM');
     const socialBtn = document.getElementById('slGuideTabSocial');
+    const wizard = document.getElementById('slHelpWizard');
 
     if (crmBtn && socialBtn) {
-      if (mode === 'crm') {
-        crmBtn.style.background = '#059669';
-        crmBtn.style.color = '#fff';
-        socialBtn.style.background = '#1e293b';
-        socialBtn.style.color = '#94a3b8';
-      } else {
-        socialBtn.style.background = '#0284c7';
-        socialBtn.style.color = '#fff';
-        crmBtn.style.background = '#1e293b';
-        crmBtn.style.color = '#94a3b8';
-      }
+      const isCrm = activeGuide === 'crm';
+      crmBtn.classList.toggle('active-crm', isCrm);
+      socialBtn.classList.toggle('active-social', !isCrm);
+      crmBtn.classList.toggle('active-social', false);
+      socialBtn.classList.toggle('active-crm', false);
+      crmBtn.setAttribute('aria-selected', isCrm ? 'true' : 'false');
+      socialBtn.setAttribute('aria-selected', isCrm ? 'false' : 'true');
+    }
+    if (wizard) {
+      wizard.classList.toggle('mode-social', activeGuide === 'social');
     }
     updateSlideUI();
+  }
+
+  function renderProgress(slideIdx, total) {
+    const el = document.getElementById('wizardProgress');
+    if (!el) return;
+    let html = '';
+    for (let i = 0; i < total; i++) {
+      const cls = i < slideIdx ? 'done' : i === slideIdx ? 'active' : '';
+      html += `<span class="sl-help-progress-dot ${cls}"></span>`;
+    }
+    el.innerHTML = html;
   }
 
   function updateSlideUI() {
     const slides = getActiveSlides();
     const slideIdx = getActiveSlideIndex();
-    const slide = slides[slideIdx];
+    const slide = slides[slideIdx] || slides[0];
+    if (!slide) return;
 
     const titleEl = document.getElementById('wizardGuideTitle');
     const contentEl = document.getElementById('wizardSlideContent');
@@ -222,48 +227,59 @@
     if (!contentEl) return;
 
     if (titleEl) {
-      titleEl.textContent = activeGuide === 'crm' ? 'ShamrockLeads Auto-CRM Guide' : 'Postiz Social Media Guide';
+      titleEl.textContent =
+        activeGuide === 'crm' ? 'ShamrockLeads Auto-CRM' : 'Postiz Social Media';
+    }
+    if (indicatorEl) {
+      indicatorEl.textContent = `Step ${slideIdx + 1} of ${slides.length}`;
     }
 
-    indicatorEl.textContent = `Step ${slideIdx + 1} of ${slides.length}`;
     contentEl.innerHTML = `
-      <div style="font-weight:700;color:#f8fafc;margin-bottom:8px;font-size:14px">${slide.title}</div>
+      <div class="slide-title">${slide.title}</div>
       ${slide.content}
     `;
 
-    prevBtn.style.opacity = slideIdx === 0 ? '0.5' : '1';
-    prevBtn.style.pointerEvents = slideIdx === 0 ? 'none' : 'auto';
+    renderProgress(slideIdx, slides.length);
 
-    if (slideIdx === slides.length - 1) {
-      nextBtn.textContent = 'Restart Guide ↺';
-      nextBtn.style.background = '#0284c7';
-    } else {
-      nextBtn.textContent = 'Next Step →';
-      nextBtn.style.background = activeGuide === 'crm' ? '#059669' : '#0284c7';
+    if (prevBtn) {
+      const atStart = slideIdx === 0;
+      prevBtn.style.opacity = atStart ? '0.45' : '1';
+      prevBtn.style.pointerEvents = atStart ? 'none' : 'auto';
+      prevBtn.disabled = atStart;
+    }
+
+    if (nextBtn) {
+      const atEnd = slideIdx === slides.length - 1;
+      nextBtn.textContent = atEnd ? 'Restart ↺' : 'Next →';
     }
   }
 
   function updateContextBanner() {
     let activeTabKey = 'leads';
-    const activeTabEl = document.querySelector('.tab-btn.active, .nav-item.active, [data-tab].active');
+    const activeTabEl = document.querySelector(
+      '.tab-btn.active, .nav-item.active, [data-tab].active, .nav-tab.active'
+    );
     if (activeTabEl) {
-      const tabId = activeTabEl.getAttribute('data-tab') || activeTabEl.getAttribute('id') || '';
-      for (const k in TAB_CONTEXTS) {
-        if (tabId.includes(k)) {
+      const tabId =
+        activeTabEl.getAttribute('data-tab') ||
+        activeTabEl.getAttribute('id') ||
+        activeTabEl.textContent ||
+        '';
+      const lower = String(tabId).toLowerCase();
+      for (const k of Object.keys(TAB_CONTEXTS)) {
+        if (lower.includes(k)) {
           activeTabKey = k;
           break;
         }
       }
     }
 
-    const ctx = TAB_CONTEXTS[activeTabKey] || TAB_CONTEXTS['leads'];
+    const ctx = TAB_CONTEXTS[activeTabKey] || TAB_CONTEXTS.leads;
     const nameEl = document.getElementById('slHelpActiveTabName');
     const textEl = document.getElementById('slHelpContextText');
-
     if (nameEl) nameEl.textContent = ctx.name;
     if (textEl) textEl.textContent = ctx.text;
 
-    // Auto-switch default guide tab if on social tab
     if (activeTabKey === 'social' && activeGuide !== 'social') {
       setGuideMode('social');
     }
@@ -271,24 +287,41 @@
 
   function open() {
     const drawer = document.getElementById('slHelpDrawer');
+    const backdrop = document.getElementById('slHelpBackdrop');
     if (!drawer) return;
-    drawer.style.display = 'flex';
-    setTimeout(() => {
-      drawer.style.right = '0px';
-    }, 10);
+    lastFocus = document.activeElement;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+    if (backdrop) {
+      backdrop.classList.add('open');
+      backdrop.setAttribute('aria-hidden', 'false');
+    }
     isOpen = true;
     updateSlideUI();
     updateContextBanner();
+    // Focus first control for keyboard users
+    setTimeout(() => {
+      const closeBtn = drawer.querySelector('.sl-help-close');
+      if (closeBtn) closeBtn.focus();
+    }, 40);
   }
 
   function close() {
     const drawer = document.getElementById('slHelpDrawer');
+    const backdrop = document.getElementById('slHelpBackdrop');
     if (!drawer) return;
-    drawer.style.right = '-480px';
-    setTimeout(() => {
-      drawer.style.display = 'none';
-    }, 300);
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    if (backdrop) {
+      backdrop.classList.remove('open');
+      backdrop.setAttribute('aria-hidden', 'true');
+    }
     isOpen = false;
+    if (lastFocus && typeof lastFocus.focus === 'function') {
+      try {
+        lastFocus.focus();
+      } catch (e) {}
+    }
   }
 
   function toggle() {
@@ -307,29 +340,48 @@
   function prevSlide() {
     let idx = getActiveSlideIndex();
     if (idx > 0) {
-      idx--;
+      idx -= 1;
       setActiveSlideIndex(idx);
       updateSlideUI();
     }
   }
 
-  // Keyboard shortcut handler (F1)
-  document.addEventListener('keydown', function(e) {
+  document.addEventListener('keydown', function (e) {
     if (e.key === 'F1') {
       e.preventDefault();
       toggle();
-    } else if (e.key === 'Escape' && isOpen) {
+      return;
+    }
+    if (!isOpen) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
       close();
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      nextSlide();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      prevSlide();
     }
   });
 
-  // Export SLHelp global module
+  document.addEventListener('DOMContentLoaded', function () {
+    const backdrop = document.getElementById('slHelpBackdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', close);
+    }
+    // Initial progress render if drawer markup is present
+    updateSlideUI();
+  });
+
   window.SLHelp = {
     open,
     close,
     toggle,
     nextSlide,
     prevSlide,
-    setGuideMode
+    setGuideMode,
   };
 })();
