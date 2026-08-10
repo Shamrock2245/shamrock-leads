@@ -131,6 +131,7 @@ async function loadDefendants() {
 }
 
 // Inline fallback if defendants.js helpers are not on the page
+// Inline fallback if defendants.js helpers are not on the page
 async function _loadDefIdPhotosInline(bookingNumber) {
   const safe = String(bookingNumber || '').replace(/[^a-zA-Z0-9_-]/g, '_');
   const el = document.getElementById('defIdSlots_' + safe);
@@ -139,13 +140,15 @@ async function _loadDefIdPhotosInline(bookingNumber) {
     const r = await fetch((window.API || '') + '/api/defendants/by_booking/' + encodeURIComponent(bookingNumber) + '/uploads');
     const d = await r.json();
     const uploads = (r.ok && d.success !== false) ? (d.uploads || []) : [];
-    el.innerHTML = _renderDefIdSlotsInline(bookingNumber, uploads);
+    const lead = (window._leadMap || {})[bookingNumber] || {};
+    const mugshotUrl = d.mugshot_url || lead.Mugshot_URL || lead.mugshot_url || lead.photo_url || lead.image_url || lead.image || lead.mugshot || '';
+    el.innerHTML = _renderDefIdSlotsInline(bookingNumber, uploads, mugshotUrl);
   } catch (e) {
     el.innerHTML = '<div style="color:var(--muted);font-size:12px;grid-column:1/-1">Could not load ID photos</div>';
   }
 }
 
-function _renderDefIdSlotsInline(bookingNumber, uploads) {
+function _renderDefIdSlotsInline(bookingNumber, uploads, mugshotUrl = '') {
   const slots = [
     { key: 'govt_id_front', label: 'ID / DL Front', icon: '🪪' },
     { key: 'govt_id_back', label: 'ID / DL Back', icon: '🔄' },
@@ -160,19 +163,25 @@ function _renderDefIdSlotsInline(bookingNumber, uploads) {
     const src = u ? (u.url || ('/uploads/' + encodeURIComponent(u.entity_key || ('def-' + bookingNumber)) + '/' + encodeURIComponent(u.saved_as || ''))) : '';
     const isImg = u && imgExts.includes((u.extension || '').toLowerCase());
     const inputId = 'defSlot_' + s.key + '_' + String(bookingNumber || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-    return `<div class="id-photo-slot ${u ? 'has-file' : ''}" onclick="event.stopPropagation()">
+
+    // Auto-populate current mugshot in Selfie slot if defendant has not uploaded a custom selfie yet
+    const isMugshotFallback = (s.key === 'selfie') && !u && Boolean(mugshotUrl);
+    const displaySrc = u && isImg ? src : (isMugshotFallback ? mugshotUrl : '');
+
+    return `<div class="id-photo-slot ${u || isMugshotFallback ? 'has-file' : ''}" style="position:relative" onclick="event.stopPropagation()">
       <div class="id-photo-slot-label">${s.icon} ${s.label}</div>
-      <div class="id-photo-slot-preview">
-        ${u && isImg ? `<img src="${src}" alt="${s.label}" loading="lazy">`
+      <div class="id-photo-slot-preview" style="position:relative;overflow:hidden">
+        ${displaySrc ? `<img src="${displaySrc}" alt="${s.label}" loading="lazy" style="width:100%;height:100%;object-fit:cover;border-radius:4px">`
           : u ? `<div class="ind-upload-pdf-icon">📄</div>`
           : `<div class="id-photo-empty">Tap to upload</div>`}
+        ${isMugshotFallback ? `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(15,23,42,0.85);color:#38bdf8;font-size:9px;font-weight:700;padding:2px 4px;text-align:center;border-top:1px solid rgba(56,189,248,0.4)">📸 MUGSHOT (AUTO)</div>` : ''}
       </div>
       <div class="id-photo-slot-actions">
-        <label class="id-photo-upload-btn" for="${inputId}">${u ? 'Replace' : 'Upload'}</label>
+        <label class="id-photo-upload-btn" for="${inputId}">${u ? 'Replace' : (isMugshotFallback ? 'Upload Selfie' : 'Upload')}</label>
         <input id="${inputId}" type="file" accept="image/*,.pdf,.heic" hidden
           onchange="_uploadDefIdSlotInline('${bkSafe}','${s.key}', this.files && this.files[0])">
         ${u ? `<button type="button" class="id-photo-del-btn" onclick="event.stopPropagation();_deleteDefIdUploadInline('${bkSafe}','${u.file_id}')">Delete</button>` : ''}
-        ${u && isImg ? `<a href="${src}" target="_blank" class="id-photo-view-btn" onclick="event.stopPropagation()">View</a>` : ''}
+        ${displaySrc ? `<a href="${displaySrc}" target="_blank" class="id-photo-view-btn" onclick="event.stopPropagation()">View</a>` : ''}
       </div>
     </div>`;
   }).join('');

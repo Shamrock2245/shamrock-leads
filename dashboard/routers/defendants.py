@@ -435,6 +435,15 @@ async def api_defendant_uploads_list(booking_number: str):
 
         uploads = doc.get("kyc_uploads") or doc.get("id_uploads") or []
         id_photos = doc.get("id_photos") or slot_map_from_uploads(uploads)
+        mugshot_url = str(
+            doc.get("Mugshot_URL")
+            or doc.get("mugshot_url")
+            or doc.get("photo_url")
+            or doc.get("image_url")
+            or doc.get("image")
+            or doc.get("mugshot")
+            or ""
+        )
         return {
             "success": True,
             "booking_number": booking_number,
@@ -443,6 +452,7 @@ async def api_defendant_uploads_list(booking_number: str):
             "slots": ID_PHOTO_SLOTS,
             "total": len(uploads),
             "doc_types": ALL_DOC_TYPES,
+            "mugshot_url": mugshot_url,
         }
     except Exception as exc:
         logger.exception("api_defendant_uploads_list error")
