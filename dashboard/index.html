@@ -29,6 +29,7 @@
   <link rel="stylesheet" href="/sl-premium.css?v=1">
   <link rel="stylesheet" href="/sl-enrichment.css?v=1">
   <link rel="stylesheet" href="/sl-osint.css?v=3">
+  <link rel="stylesheet" href="/sl-palantir.css?v=1">
   <link rel="stylesheet" href="/sl-alpr.css?v=2">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
@@ -148,6 +149,7 @@
         <button class="sidebar-btn" data-tab="tabAdminHygiene" onclick="SL.switchTab(this);SLAdminHygiene&&SLAdminHygiene.init()" title="Superadmin: delete test data, fix mismatches"><span class="sidebar-btn-icon">🛡️</span> Data Hygiene</button>
         <button class="sidebar-btn" data-tab="tabIntelligence" onclick="SL.switchTab(this);SLIntelligence.load()"><span class="sidebar-btn-icon">🧠</span> Intelligence</button>
         <button class="sidebar-btn" data-tab="tabOSINT" onclick="SL.switchTab(this);SLOSINT.init()"><span class="sidebar-btn-icon">🕵️</span> OSINT Intel <span class="badge" id="osintBadge" style="background:#ef4444;display:none"></span></button>
+        <button class="sidebar-btn" data-tab="tabPalantir" onclick="SL.switchTab(this);SLPalantir.init()"><span class="sidebar-btn-icon">🌐</span> Palantir Intel <span class="badge" style="background:linear-gradient(135deg,#ff6d00,#00c853);color:#000;font-size:9px">PRO</span></button>
         <button class="sidebar-btn" data-tab="tabALPR" onclick="SL.switchTab(this);SLALPR&&SLALPR.init()" title="FL511 plate watch · watchlist · image scan"><span class="sidebar-btn-icon">🚘</span> ALPR Watch <span class="badge" id="alprBadge" style="background:#0ea5e9;display:none"></span></button>
         <button class="sidebar-btn" data-tab="tabFamilyTree" onclick="SL.switchTab(this);SLFamilyTree.init()"><span class="sidebar-btn-icon">👪</span> Family Tree</button>
         <button class="sidebar-btn" data-tab="tabEnrichment" onclick="SL.switchTab(this);SLEnrichment.init()"><span class="sidebar-btn-icon">✨</span> Enrichment <span class="badge" id="enrichBadge" style="background:#10b981"></span></button>
@@ -5731,6 +5733,127 @@
 </div><!-- end tabOSINT -->
 
 <!-- ═══════════════════════════════════════════════════════
+     PALANTIR INTELLIGENCE HUB — OpenPlanter + OSIRIS + SPECTRA
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabPalantir">
+  <div class="palantir-workstation">
+    <!-- Header -->
+    <div class="palantir-header">
+      <div class="palantir-header-left">
+        <h2>🌐 Palantir Intelligence Hub</h2>
+        <p>OpenPlanter Knowledge Graph · OSIRIS 3D Tactical Situation Room · SPECTRA Breach Matrix · Executive Dossiers</p>
+      </div>
+      <div class="palantir-header-right">
+        <span class="palantir-badge">⚡ Palantir Engine v4.2</span>
+        <button class="palantir-btn-primary" onclick="SLPalantir.generateDossierPrompt()">⚡ Generate Executive Dossier</button>
+      </div>
+    </div>
+
+    <!-- Sub-Tabs Navigation Bar -->
+    <div class="palantir-subtabs-bar">
+      <button class="palantir-subtab-btn active" data-subtab="graph" onclick="SLPalantir.switchSubtab('graph')">🕸️ OpenPlanter Knowledge Graph</button>
+      <button class="palantir-subtab-btn" data-subtab="osiris" onclick="SLPalantir.switchSubtab('osiris')">🌍 OSIRIS Situation Room (3D)</button>
+      <button class="palantir-subtab-btn" data-subtab="spectra" onclick="SLPalantir.switchSubtab('spectra')">🕵️ SPECTRA Social &amp; Breach Matrix</button>
+      <button class="palantir-subtab-btn" data-subtab="dossier" onclick="SLPalantir.switchSubtab('dossier')">⚡ Palantir Executive Dossier</button>
+    </div>
+
+    <!-- Subtab 1: OpenPlanter Knowledge Graph -->
+    <div class="palantir-subtab-view active" id="palantirViewGraph">
+      <div class="palantir-main-grid" style="grid-template-columns: 340px 1fr">
+        <!-- Controls & Entity Resolver -->
+        <div class="palantir-card">
+          <div class="palantir-card-title">🕸️ Entity Resolution &amp; Ingestion</div>
+          <p style="font-size:0.72rem;color:var(--palantir-muted);margin:0 0 12px">Ingest Sunbiz LLCs, property deeds, court cases, and indemnitors to auto-resolve relationship graphs.</p>
+          <div class="palantir-field" style="margin-bottom:10px">
+            <label>Target Subject ID / Name</label>
+            <input type="text" id="palantirSubjectInput" placeholder="e.g. John Smith or def_10492" value="John Michael Smith" />
+          </div>
+          <div class="palantir-field" style="margin-bottom:12px">
+            <label>Subject Type</label>
+            <select id="palantirSubjectType">
+              <option value="defendant">Defendant</option>
+              <option value="indemnitor">Indemnitor</option>
+            </select>
+          </div>
+          <button class="palantir-action-btn" onclick="SLPalantir.resolveGraph()">⚡ Resolve Knowledge Graph</button>
+          
+          <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
+            <div style="font-size:0.75rem;font-weight:700;color:#fff;margin-bottom:8px">Graph Filters &amp; Layers</div>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerLLC" checked onchange="SLPalantir.toggleLayer('llc')" /> Ingest FL LLC Filings (Sunbiz)</label>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerProperty" checked onchange="SLPalantir.toggleLayer('property')" /> Ingest Property Deeds &amp; Collateral</label>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerRelatives" checked onchange="SLPalantir.toggleLayer('relatives')" /> 1st/2nd Degree Relatives</label>
+          </div>
+        </div>
+
+        <!-- Graph Explorer Area -->
+        <div class="palantir-card" style="display:flex;flex-direction:column">
+          <div class="palantir-card-title" style="display:flex;justify-content:space-between;align-items:center">
+            <span>🕸️ OpenPlanter Entity Relationship Canvas</span>
+            <span style="font-size:0.68rem;color:#00e676;font-family:monospace" id="palantirGraphStats">5 Nodes · 5 Edges Resolved</span>
+          </div>
+          <div id="palantirGraphCanvas" class="palantir-graph-canvas"></div>
+        </div>
+      </div>
+    </div><!-- end palantirViewGraph -->
+
+    <!-- Subtab 2: OSIRIS Situation Room -->
+    <div class="palantir-subtab-view" id="palantirViewOsiris" style="display:none">
+      <div class="palantir-main-grid" style="grid-template-columns: 1fr 340px">
+        <!-- 3D Tactical Map Canvas -->
+        <div class="palantir-card" style="padding:0;overflow:hidden;position:relative;min-height:540px">
+          <div class="palantir-map-overlay-title">🌍 OSIRIS 3D Tactical Threat Globe · SWFL / FL Sector</div>
+          <div id="osirisMapContainer" style="width:100%;height:100%;min-height:540px;background:#090d16"></div>
+        </div>
+
+        <!-- Live Feeds Panel -->
+        <div class="palantir-card">
+          <div class="palantir-card-title">📡 Live Incident &amp; Threat Streams</div>
+          <div id="osirisFeedList" class="palantir-feed-list">
+            <div class="palantir-empty"><div class="empty-icon">📡</div><div class="empty-text">Loading live OSIRIS threat streams...</div></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- end palantirViewOsiris -->
+
+    <!-- Subtab 3: SPECTRA Social & Breach Matrix -->
+    <div class="palantir-subtab-view" id="palantirViewSpectra" style="display:none">
+      <div class="palantir-main-grid" style="grid-template-columns: 360px 1fr">
+        <!-- Breach Query Tool -->
+        <div class="palantir-card">
+          <div class="palantir-card-title">🕵️ SPECTRA PII &amp; Data Breach Search</div>
+          <div class="palantir-field" style="margin-bottom:12px">
+            <label>Query Target (Email / Phone / Username)</label>
+            <input type="text" id="spectraQueryInput" placeholder="subject@email.com or jsmith239" />
+          </div>
+          <button class="palantir-action-btn" onclick="SLPalantir.runBreachLookup()">🔍 Run SPECTRA Breach Scan</button>
+          <div id="spectraBreachResult" style="margin-top:14px;display:none"></div>
+        </div>
+
+        <!-- Social Geotag & Location Clustering -->
+        <div class="palantir-card">
+          <div class="palantir-card-title">📍 Social Geotags &amp; Posting Frequency Clusters</div>
+          <p style="font-size:0.72rem;color:var(--palantir-muted);margin:0 0 12px">Analyzes Instagram, Facebook, and X geotags to map subject travel patterns and high-frequency hubs.</p>
+          <div id="spectraGeotagCluster">
+            <div class="palantir-empty"><div class="empty-icon">📍</div><div class="empty-text">Run a SPECTRA lookup or select a subject to plot geotags.</div></div>
+          </div>
+        </div>
+      </div>
+    </div><!-- end palantirViewSpectra -->
+
+    <!-- Subtab 4: Palantir AI Dossier Generator -->
+    <div class="palantir-subtab-view" id="palantirViewDossier" style="display:none">
+      <div class="palantir-card">
+        <div class="palantir-card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>⚡ Palantir AI Executive Dossier</span>
+          <button class="palantir-action-btn" onclick="window.print()" style="width:auto;padding:4px 12px;font-size:0.7rem">🖨️ Print / Export PDF</button>
+        </div>
+        <div id="palantirDossierContent" style="margin-top:16px"></div>
+      </div>
+    </div><!-- end palantirViewDossier -->
+  </div>
+</div><!-- end tabPalantir -->
+
+<!-- ═══════════════════════════════════════════════════════
      FAMILY / RELATIONSHIP NETWORK
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabFamilyTree">
@@ -5949,6 +6072,7 @@
 <script defer src="/sl-enrichment.js?v=1"></script>
 <script defer src="/sl-tasks.js?v=1"></script>
 <script defer src="/sl-osint.js?v=3"></script>
+<script defer src="/sl-palantir.js?v=1"></script>
 <script defer src="/sl-alpr.js?v=2"></script>
 <script defer src="/sl-paperwork.js?v=2"></script>
 <script defer src="/sl-automations.js?v=2"></script>

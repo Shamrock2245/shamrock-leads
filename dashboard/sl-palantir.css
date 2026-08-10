@@ -1,0 +1,315 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Palantir Intelligence Hub Styles — OpenPlanter + OSIRIS + SPECTRA
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --palantir-bg: #090d16;
+  --palantir-card: #111723;
+  --palantir-border: rgba(255, 255, 255, 0.08);
+  --palantir-accent: #ff6d00;
+  --palantir-accent-glow: rgba(255, 109, 0, 0.25);
+  --palantir-green: #00c853;
+  --palantir-green-glow: rgba(0, 200, 83, 0.25);
+  --palantir-blue: #0284c7;
+  --palantir-muted: #94a3b8;
+  --palantir-text: #f8fafc;
+}
+
+.palantir-workstation {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 4px;
+}
+
+.palantir-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--palantir-card);
+  border: 1px solid var(--palantir-border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.palantir-header-left h2 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.3px;
+}
+
+.palantir-header-left p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--palantir-muted);
+}
+
+.palantir-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.palantir-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(255, 109, 0, 0.15);
+  border: 1px solid var(--palantir-accent);
+  color: #ff9100;
+  text-transform: uppercase;
+}
+
+.palantir-btn-primary {
+  background: linear-gradient(135deg, #ff6d00, #d50000) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 8px !important;
+  padding: 8px 16px !important;
+  font-size: 0.8rem !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  box-shadow: 0 0 14px rgba(255, 109, 0, 0.3);
+}
+
+.palantir-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgba(255, 109, 0, 0.5);
+}
+
+/* ── Workstation Subtabs Navigation Bar ────────────────────────────── */
+.palantir-subtabs-bar {
+  display: flex;
+  gap: 10px;
+  background: #111722 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+  padding: 8px 12px !important;
+  overflow-x: auto;
+  align-items: center;
+}
+
+.palantir-subtab-btn {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: #182232 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 8px !important;
+  color: #94a3b8 !important;
+  font-size: 0.78rem !important;
+  font-weight: 600 !important;
+  padding: 8px 16px !important;
+  min-height: 36px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.palantir-subtab-btn:hover {
+  background: #202d42 !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  color: #f1f5f9 !important;
+  transform: translateY(-1px);
+}
+
+.palantir-subtab-btn.active {
+  background: rgba(255, 109, 0, 0.15) !important;
+  border-color: #ff6d00 !important;
+  color: #ff9100 !important;
+  box-shadow: 0 0 12px rgba(255, 109, 0, 0.25) !important;
+}
+
+/* Subtab View Containers */
+.palantir-subtab-view {
+  display: none;
+}
+
+.palantir-subtab-view.active {
+  display: block;
+}
+
+.palantir-main-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.palantir-card {
+  background: var(--palantir-card);
+  border: 1px solid var(--palantir-border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+.palantir-card-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.palantir-field label {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--palantir-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.palantir-field input,
+.palantir-field select {
+  width: 100%;
+  background: #090d16;
+  border: 1px solid var(--palantir-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #fff;
+  font-size: 0.78rem;
+  box-sizing: border-box;
+}
+
+.palantir-action-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #0284c7, #2563eb) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 10px !important;
+  font-size: 0.78rem !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.palantir-action-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.palantir-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: var(--palantir-muted);
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+/* ── OpenPlanter Canvas ─────────────────────────────────────────────── */
+.palantir-graph-canvas {
+  width: 100%;
+  height: 480px;
+  background: #090d16;
+  border: 1px solid var(--palantir-border);
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── OSIRIS 3D Map Overlay ──────────────────────────────────────────── */
+.palantir-map-overlay-title {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  background: rgba(9, 13, 22, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--palantir-border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #ff9100;
+}
+
+.palantir-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.palantir-feed-card {
+  background: #090d16;
+  border: 1px solid var(--palantir-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.palantir-feed-card.danger {
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.palantir-feed-card.warning {
+  border-color: rgba(255, 109, 0, 0.4);
+}
+
+/* ── SPECTRA Breach Cards ───────────────────────────────────────────── */
+.spectra-breach-card {
+  background: #090d16;
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.spectra-breach-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #f85149;
+  display: flex;
+  justify-content: space-between;
+}
+
+/* ── Palantir Executive Dossier ─────────────────────────────────────── */
+.palantir-dossier-paper {
+  background: #090d16;
+  border: 1px solid var(--palantir-border);
+  border-radius: 10px;
+  padding: 24px;
+  font-family: inherit;
+  color: #f8fafc;
+}
+
+.palantir-dossier-paper h3 {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #ff9100;
+  margin: 0 0 12px;
+  border-bottom: 1px solid rgba(255, 109, 0, 0.3);
+  padding-bottom: 8px;
+}
+
+.palantir-dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.palantir-dossier-box {
+  background: var(--palantir-card);
+  border: 1px solid var(--palantir-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
