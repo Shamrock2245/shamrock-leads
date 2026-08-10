@@ -16,8 +16,9 @@
   let _pollTimer = null;
   let _toolStatus = null;
   let _activeTab = 'summary';
+  let _activeSubtab = 'scan';
   let _accountFilter = { source: 'all', category: 'all' };
-  let _selectedEngines = new Set(['maigret', 'sherlock']);
+  let _selectedEngines = new Set(['maigret', 'tookie', 'sherlock']);
 
   // ── Public API ─────────────────────────────────────────────────────
   window.SLOSINT = {
@@ -28,6 +29,10 @@
     closeScan,
     toggleEngine,
     switchTab,
+    switchSubtab,
+    runSingleEngineTest,
+    analyzeExifUrl,
+    createTrapeSession,
     exportJSON,
     exportCSV,
     exportPDF,
@@ -112,7 +117,7 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = info.available;
@@ -122,8 +127,9 @@
       const sess = eng === 'toutatis' && info.session_configured === false
         ? ' — needs INSTAGRAM_SESSION_ID'
         : '';
+      const label = eng === 'tookie' ? '🚀 Tookie-OSINT' : eng.charAt(0).toUpperCase() + eng.slice(1);
       return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}${sess}">
-        <span class="dot"></span>${eng.charAt(0).toUpperCase() + eng.slice(1)}${version}
+        <span class="dot"></span>${label}${version}
       </span>`;
     }).join('');
 
@@ -133,6 +139,43 @@
       const q = _toolStatus.queue;
       queueEl.textContent = `${q.running || 0} running · ${q.total_scans || 0} total`;
     }
+
+    _renderEngineMatrix();
+  }
+
+  function _renderEngineMatrix() {
+    const matrixEl = $('osintEngineMatrix');
+    if (!matrixEl || !_toolStatus) return;
+
+    const engineMeta = [
+      { id: 'tookie', name: '🚀 Tookie-OSINT V4', rank: '#1 Top Rank', desc: 'High-performance username discovery engine optimized for Python 3.12 (80%+ discovery rate across 300+ platforms)' },
+      { id: 'sherlock', name: '🔎 Sherlock', rank: '#2 Rank', desc: 'Cross-checks username availability & account registration across major social networks' },
+      { id: 'maigret', name: '🕵️ Maigret', rank: 'Core Engine', desc: 'Deep recursive search across 800+ sites with parsing & ID extraction' },
+      { id: 'blackbird', name: '🐦 Blackbird', rank: 'Email/User', desc: 'WhatsMyName data-based fast username & email footprinting engine' },
+      { id: 'spiderfoot', name: '🕷️ SpiderFoot', rank: 'OSINT Suite', desc: 'Multi-source entity correlation & OSINT footprinting' },
+      { id: 'ignorant', name: '📱 Ignorant', rank: 'Phone Check', desc: 'Passive phone registration checks on Instagram, Snapchat, Amazon (no target SMS)' },
+      { id: 'toutatis', name: '📸 Toutatis', rank: 'IG Enrichment', desc: 'Instagram handle → recovers public & obfuscated email, phone number & WhatsApp links' },
+      { id: 'instaloader', name: '🖼️ Instaloader', rank: 'IG Media', desc: 'Extracts Instagram bio text, HD avatars, external profile links & follower counts' },
+      { id: 'exiftool', name: '🔍 ExifTool', rank: 'EXIF / GPS', desc: 'Extracts camera fingerprints, timestamp, and GPS coordinates from evidence photos' },
+    ];
+
+    matrixEl.innerHTML = engineMeta.map(item => {
+      const info = _toolStatus[item.id] || {};
+      const avail = info.available === True || info.available === true;
+      const isTop = item.id === 'tookie';
+      const badgeCls = isTop ? 'top-rank' : (avail ? 'ready' : 'offline');
+      const badgeText = isTop ? '🚀 Rank #1 (Top)' : (avail ? 'ACTIVE' : 'UNAVAILABLE');
+      const pathText = info.path || 'Not installed';
+
+      return `<div class="osint-matrix-card ${isTop ? 'ranked-top' : ''}">
+        <div class="matrix-header">
+          <div class="matrix-title">${item.name}</div>
+          <span class="matrix-badge ${badgeCls}">${badgeText}</span>
+        </div>
+        <div class="matrix-desc">${item.desc}</div>
+        <div class="matrix-path">Path: ${_esc(pathText)} ${info.version ? '· ' + _esc(info.version) : ''}</div>
+      </div>`;
+    }).join('');
   }
 
   // ── Engine Toggle ──────────────────────────────────────────────────
@@ -783,5 +826,237 @@
     if (p.includes('medium') || p.includes('substacks') || p.includes('wordpress')) return '✍️';
     if (p.includes('keybase') || p.includes('signal')) return '🔑';
     return '🌐';
+  }
+
+  // ── Workstation Subtab Switcher ────────────────────────────────────
+  function switchSubtab(subtab) {
+    _activeSubtab = subtab;
+
+    // Toggle subtab buttons
+    document.querySelectorAll('.osint-subtab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.subtab === subtab);
+    });
+
+    // Toggle view elements
+    const subtabs = ['scan', 'engines', 'geo', 'trape'];
+    subtabs.forEach(st => {
+      const view = $('osintSubtabView' + st.charAt(0).toUpperCase() + st.slice(1));
+      if (view) {
+        view.classList.toggle('active', st === subtab);
+        view.style.display = st === subtab ? 'block' : 'none';
+      }
+    });
+
+    if (subtab === 'engines') {
+      _checkToolStatus();
+    } else if (subtab === 'trape') {
+      _loadTrapeSessions();
+    }
+  }
+
+  // ── Single-Engine Test Tool ────────────────────────────────────────
+  async function runSingleEngineTest() {
+    const engine = $('osintTestEngineSelect')?.value || 'tookie';
+    const target = ($('osintTestTargetInput')?.value || '').trim();
+    const box = $('osintTestResultBox');
+
+    if (!target) {
+      toast('Please enter a target username, phone number, or URL', 'error');
+      return;
+    }
+
+    if (box) {
+      box.style.display = 'block';
+      box.textContent = `⏳ Running single-engine test for engine=${engine} target=${target}...`;
+    }
+
+    try {
+      const isPhone = target.replace(/\D/g, '').length >= 10;
+      const isUrl = target.startsWith('http://') || target.startsWith('https://');
+
+      const payload = {
+        subject_type: 'defendant',
+        subject_id: 'test_' + Date.now(),
+        full_name: 'Test Subject',
+        usernames: (!isPhone && !isUrl) ? [target] : null,
+        phone: isPhone ? target : null,
+        email: isUrl ? target : null,
+        engines: [engine],
+        deep_scan: false,
+        notes: `Diagnostic test for ${engine}`,
+      };
+
+      const r = await fetch(`${API}/api/osint/scan`, {
+        method: 'POST',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        if (box) box.textContent = `❌ Error starting scan: ${err.detail || r.statusText}`;
+        return;
+      }
+
+      const data = await r.json();
+      const scanId = data.scan_id;
+
+      if (box) box.textContent = `⚡ Scan initiated (${scanId}). Polling worker for results...`;
+
+      // Poll until complete
+      let attempts = 0;
+      const pollTimer = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch(`${API}/api/osint/scan/${scanId}`, { headers: headers(), credentials: 'same-origin' });
+          if (!res.ok) return;
+          const scan = await res.json();
+          if (['completed', 'failed', 'partial'].includes(scan.status) || attempts > 20) {
+            clearInterval(pollTimer);
+            if (box) {
+              box.textContent = JSON.stringify(scan, null, 2);
+            }
+            toast(`Diagnostic test for ${engine} complete (${scan.total_accounts || 0} accounts found)`, 'success');
+          } else if (box) {
+            box.textContent = `⟳ Running ${engine} (${scan.status})... attempt ${attempts}/20`;
+          }
+        } catch (e) {
+          clearInterval(pollTimer);
+          if (box) box.textContent = `❌ Error polling diagnostic scan: ${e.message}`;
+        }
+      }, 2500);
+
+    } catch (e) {
+      if (box) box.textContent = `❌ Network error: ${e.message}`;
+    }
+  }
+
+  // ── Image EXIF Analyzer ────────────────────────────────────────────
+  async function analyzeExifUrl() {
+    const url = ($('osintExifUrlInput')?.value || '').trim();
+    const box = $('osintExifOutput');
+
+    if (!url || !url.startsWith('http')) {
+      toast('Please enter a valid image HTTP/HTTPS URL', 'error');
+      return;
+    }
+
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = `<div style="font-size:0.75rem;color:var(--osint-muted)">⏳ Analyzing EXIF metadata via ExifTool...</div>`;
+    }
+
+    try {
+      const payload = {
+        subject_type: 'defendant',
+        subject_id: 'exif_' + Date.now(),
+        email: url, // image URL passed in email context
+        engines: ['exiftool'],
+      };
+
+      const r = await fetch(`${API}/api/osint/scan`, {
+        method: 'POST',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+
+      if (!r.ok) {
+        if (box) box.innerHTML = `<div style="color:var(--osint-danger)">EXIF analysis request failed (${r.status})</div>`;
+        return;
+      }
+
+      const data = await r.json();
+      const scanId = data.scan_id;
+
+      let attempts = 0;
+      const pollTimer = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch(`${API}/api/osint/scan/${scanId}`, { headers: headers(), credentials: 'same-origin' });
+          if (!res.ok) return;
+          const scan = await res.json();
+          if (['completed', 'failed', 'partial'].includes(scan.status) || attempts > 15) {
+            clearInterval(pollTimer);
+            if (box) {
+              const entities = scan.entities || [];
+              if (entities.length) {
+                box.innerHTML = `<div style="font-size:0.75rem;font-weight:600;color:var(--osint-accent);margin-bottom:8px">EXIF Metadata Discovered:</div>` +
+                  entities.map(e => `<div style="font-size:0.68rem;padding:4px 0;border-bottom:1px solid var(--osint-border)"><strong>${_esc(e.type)}:</strong> ${_esc(e.value)}</div>`).join('');
+              } else {
+                box.innerHTML = `<div style="font-size:0.75rem;color:var(--osint-muted)">No EXIF metadata found in target image.</div>`;
+              }
+            }
+          }
+        } catch (e) {
+          clearInterval(pollTimer);
+        }
+      }, 2000);
+    } catch (e) {
+      if (box) box.innerHTML = `<div style="color:var(--osint-danger)">Network error: ${e.message}</div>`;
+    }
+  }
+
+  // ── Trape Session Helper ───────────────────────────────────────────
+  async function createTrapeSession() {
+    const subjectId = ($('trapeSubjectId')?.value || '').trim();
+    const subjectType = $('trapeSubjectType')?.value || 'defendant';
+    const lureUrl = ($('trapeLureUrl')?.value || '').trim();
+
+    if (!subjectId) {
+      toast('Subject ID required for Trape tracking session', 'error');
+      return;
+    }
+
+    try {
+      const r = await fetch(`${API}/api/osint/trape/session`, {
+        method: 'POST',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ subject_type: subjectType, subject_id: subjectId, lure_url: lureUrl }),
+      });
+
+      if (!r.ok) {
+        toast('Trape session creation failed', 'error');
+        return;
+      }
+
+      const session = await r.json();
+      toast(`✅ Trape lure link generated: ${session.tracking_url || session.session_id}`, 'success');
+      _loadTrapeSessions();
+    } catch (e) {
+      toast(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  async function _loadTrapeSessions() {
+    const listEl = $('trapeSessionList');
+    if (!listEl) return;
+
+    try {
+      const r = await fetch(`${API}/api/osint/trape/sessions`, { headers: headers(), credentials: 'same-origin' });
+      if (!r.ok) return;
+      const data = await r.json();
+      const sessions = data.sessions || [];
+
+      if (!sessions.length) {
+        listEl.innerHTML = `<div class="osint-empty"><div class="empty-icon">🎯</div><div class="empty-text">No active Trape tracking sessions. Create a new lure link above.</div></div>`;
+        return;
+      }
+
+      listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">` +
+        sessions.map(s => `<div style="background:var(--osint-bg);border:1px solid var(--osint-border);padding:10px;border-radius:6px">
+          <div style="font-size:0.75rem;font-weight:600;color:var(--osint-text);display:flex;justify-content:space-between">
+            <span>Session: ${s.session_id}</span>
+            <span style="color:var(--osint-accent);text-transform:uppercase">${s.status}</span>
+          </div>
+          <div style="font-size:0.68rem;color:var(--osint-muted);margin-top:4px">Lure URL: ${_esc(s.lure_url)}</div>
+          ${s.tracking_url ? `<div style="font-size:0.68rem;color:var(--osint-info);margin-top:2px">Tracking Link: ${_esc(s.tracking_url)}</div>` : ''}
+          ${s.ip_address ? `<div style="font-size:0.68rem;color:var(--osint-warning);margin-top:2px">Captured Target IP: ${s.ip_address}</div>` : ''}
+        </div>`).join('') + `</div>`;
+    } catch (e) {
+      console.warn('Failed to load Trape sessions:', e);
+    }
   }
 })();

@@ -22,12 +22,15 @@ class SubjectType(str, Enum):
 
 class EngineType(str, Enum):
     maigret = "maigret"
+    tookie = "tookie"
     sherlock = "sherlock"
     blackbird = "blackbird"
     spiderfoot = "spiderfoot"
     snoop = "snoop"
     ignorant = "ignorant"
     toutatis = "toutatis"
+    instaloader = "instaloader"
+    exiftool = "exiftool"
 
 
 class ScanStatus(str, Enum):
@@ -100,10 +103,10 @@ class OSINTScanRequest(BaseModel):
 
     # Engine selection — list of engines to run
     engines: List[EngineType] = Field(
-        default_factory=lambda: [EngineType.maigret, EngineType.sherlock],
+        default_factory=lambda: [EngineType.maigret, EngineType.tookie, EngineType.sherlock],
         description=(
-            "Engines to run. Default: [maigret, sherlock]. "
-            "Options: maigret, sherlock, blackbird, spiderfoot, ignorant, toutatis"
+            "Engines to run. Default: [maigret, tookie, sherlock]. "
+            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, toutatis, instaloader, exiftool"
         ),
     )
 

@@ -14,6 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/appuser \
     BLACKBIRD_DIR=/opt/blackbird \
     MAIGRET_PATH=/usr/local/bin/maigret \
+    TOOKIE_PATH=/opt/tookie-osint/brib.py \
     SHERLOCK_PATH=/usr/local/bin/sherlock
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +30,11 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 # ── Maigret ───────────────────────────────────────────────────────────
 RUN pip install --no-cache-dir maigret \
     || echo "WARNING: maigret install failed"
+
+# ── Tookie-OSINT ──────────────────────────────────────────────────────
+RUN git clone --depth 1 https://github.com/alfredredbird/tookie-osint /opt/tookie-osint \
+    && (pip install --no-cache-dir -r /opt/tookie-osint/requirements.txt || true) \
+    || echo "WARNING: tookie-osint install failed"
 
 # ── Sherlock ──────────────────────────────────────────────────────────
 RUN pip install --no-cache-dir sherlock-project \

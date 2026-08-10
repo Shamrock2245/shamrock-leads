@@ -56,9 +56,9 @@ class ScanRequestV2(BaseModel):
     phone: Optional[str] = None
     deep_scan: bool = False
     engines: List[str] = Field(
-        default_factory=lambda: ["maigret"],
+        default_factory=lambda: ["maigret", "tookie", "sherlock"],
         description=(
-            "Engines: maigret, sherlock, blackbird, spiderfoot, ignorant, toutatis"
+            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, toutatis, instaloader, exiftool"
         ),
     )
     second_opinion: bool = False
@@ -128,6 +128,7 @@ async def scan_v2(
 
     valid_engines = {
         "maigret",
+        "tookie",
         "sherlock",
         "blackbird",
         "spiderfoot",

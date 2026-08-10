@@ -644,3 +644,116 @@
   border-color: var(--osint-danger);
 }
 
+/* ── Workstation Subtabs Navigation Bar ────────────────────────────── */
+.osint-subtabs-bar {
+  display: flex;
+  gap: 8px;
+  background: var(--osint-card);
+  border: 1px solid var(--osint-border);
+  border-radius: var(--osint-radius);
+  padding: 6px 12px;
+  overflow-x: auto;
+  align-items: center;
+}
+.osint-subtab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--osint-radius-sm);
+  color: var(--osint-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: var(--osint-transition);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.osint-subtab-btn:hover {
+  color: var(--osint-text);
+  background: var(--osint-bg);
+}
+.osint-subtab-btn.active {
+  background: var(--osint-accent-dim);
+  border-color: rgba(0, 200, 83, 0.4);
+  color: var(--osint-accent);
+}
+
+/* Subtab View Container */
+.osint-subtab-view {
+  display: none;
+}
+.osint-subtab-view.active {
+  display: block;
+  animation: osint-fade-in 0.2s ease;
+}
+
+/* ── Tookie-OSINT Chip Special Styling ──────────────────────────────── */
+.osint-engine-chip[data-engine="tookie"].active {
+  background: rgba(255, 109, 0, 0.15);
+  border-color: #ff6d00;
+  color: #ff9100;
+}
+.osint-engine-chip[data-engine="tookie"].active .chip-dot {
+  background: #ff6d00;
+  box-shadow: 0 0 6px #ff6d00;
+}
+
+/* ── Engine Diagnostic Matrix ───────────────────────────────────────── */
+.osint-engine-matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.osint-matrix-card {
+  background: var(--osint-bg);
+  border: 1px solid var(--osint-border);
+  border-radius: var(--osint-radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.osint-matrix-card.ranked-top {
+  border-color: rgba(255, 109, 0, 0.4);
+  background: linear-gradient(135deg, rgba(255, 109, 0, 0.05), var(--osint-bg));
+}
+.osint-matrix-card .matrix-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.osint-matrix-card .matrix-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--osint-text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.osint-matrix-card .matrix-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+.matrix-badge.ready { background: rgba(0, 200, 83, 0.15); color: var(--osint-accent); }
+.matrix-badge.offline { background: rgba(248, 81, 73, 0.15); color: var(--osint-danger); }
+.matrix-badge.top-rank { background: rgba(255, 109, 0, 0.2); color: #ff9100; border: 1px solid rgba(255, 109, 0, 0.4); }
+.osint-matrix-card .matrix-desc {
+  font-size: 0.68rem;
+  color: var(--osint-muted);
+  line-height: 1.4;
+}
+.osint-matrix-card .matrix-path {
+  font-size: 0.6rem;
+  font-family: monospace;
+  color: var(--osint-info);
+  background: rgba(88, 166, 255, 0.08);
+  padding: 3px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+

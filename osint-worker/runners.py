@@ -26,6 +26,7 @@ from defaults import (
     MAX_TOUTATIS_USERNAMES,
     SHERLOCK_TIMEOUT,
     SPIDERFOOT_TIMEOUT,
+    TOOKIE_TIMEOUT,
     TOUTATIS_TIMEOUT,
     assess_maigret_quality,
     dedupe_accounts,
@@ -62,6 +63,31 @@ def resolve_maigret_cmd() -> Optional[str]:
         import importlib.util
         if importlib.util.find_spec("maigret") is not None:
             return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def resolve_tookie_cmd() -> Optional[str]:
+    """Resolve Tookie-OSINT CLI binary or python script entrypoint."""
+    candidates = [
+        os.getenv("TOOKIE_PATH", "").strip(),
+        "/opt/tookie-osint/brib.py",
+        "/opt/tookie-osint/tookie-osint.py",
+        shutil.which("tookie-osint") or "",
+        shutil.which("tookie") or "",
+        "/usr/local/bin/tookie-osint",
+        "/usr/bin/tookie-osint",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+        if importlib.util.find_spec("tookie") is not None:
+            return "python-module:tookie"
+        if importlib.util.find_spec("tookie_osint") is not None:
+            return "python-module:tookie_osint"
     except Exception:
         pass
     return None
@@ -274,8 +300,9 @@ def parse_phone_for_ignorant(phone: str) -> Optional[Tuple[str, str]]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def probe_tools() -> Dict[str, Any]:
-    """Probe all engines for availability (incl. Ignorant phone checks)."""
+    """Probe all engines for availability (incl. Tookie-OSINT + Ignorant phone checks)."""
     maigret_cmd = resolve_maigret_cmd()
+    tookie_cmd = resolve_tookie_cmd()
     sherlock_cmd = resolve_sherlock_cmd()
     spiderfoot_cmd = resolve_spiderfoot()
     bb_dir, bb_script = resolve_blackbird()
@@ -308,6 +335,24 @@ def probe_tools() -> Dict[str, Any]:
             maigret_version = f"unknown ({e})"
     else:
         maigret_error = "not found — install with: pip install maigret"
+
+    # Tookie-OSINT (v4)
+    tookie_ok = False
+    tookie_version = None
+    tookie_error = None
+    tookie_path = None
+
+    if tookie_cmd and (tookie_cmd.endswith(".py") or os.path.isfile(tookie_cmd)):
+        tookie_ok = True
+        tookie_path = tookie_cmd
+        tookie_version = "v4 (installed)"
+    elif tookie_cmd and tookie_cmd.startswith("python-module"):
+        tookie_ok = True
+        mod_name = tookie_cmd.split(":", 1)[1] if ":" in tookie_cmd else "tookie"
+        tookie_path = f"{PYTHON_CMD} -m {mod_name}"
+        tookie_version = f"installed (module: {mod_name})"
+    else:
+        tookie_error = "not found — clone tookie-osint to /opt/tookie-osint"
 
     # Sherlock
     sherlock_ok = False
@@ -472,6 +517,13 @@ def probe_tools() -> Dict[str, Any]:
             "version": maigret_version,
             "error": maigret_error,
         },
+        "tookie": {
+            "available": tookie_ok,
+            "path": tookie_path or "not found",
+            "version": tookie_version,
+            "error": tookie_error,
+            "note": "Tookie-OSINT V4 — High-performance username enumeration & webscraping",
+        },
         "sherlock": {
             "available": sherlock_ok,
             "path": sherlock_path or "not found",
@@ -531,6 +583,7 @@ def probe_tools() -> Dict[str, Any]:
         },
         "ready_for_scans": (
             maigret_ok
+            or tookie_ok
             or sherlock_ok
             or snoop_ok
             or blackbird_ok
@@ -541,9 +594,10 @@ def probe_tools() -> Dict[str, Any]:
             or exiftool_ok
         ),
         "worker": True,
-        "version": "2.3.0",
+        "version": "2.4.0",
         "defaults": {
             "maigret_default": True,
+            "tookie_default": True,
             "sherlock_default": True,
             "blackbird_default": False,
             "spiderfoot_default": False,
@@ -601,6 +655,69 @@ def parse_maigret_json(raw: Any) -> List[Dict]:
             "category": _categorize_platform(site_name),
             "relevance": "unreviewed",
         })
+    return accounts
+
+
+def parse_tookie_json(raw: Any) -> List[Dict]:
+    """
+    Parse Tookie-OSINT JSON output (dict or list of site findings).
+    Tookie-OSINT returns findings across social & web services.
+    """
+    accounts: List[Dict] = []
+    if not raw:
+        return accounts
+
+    VALID_STATUSES = {"claimed", "found", "taken", "active", "200", "ok", "exists", "true"}
+
+    def _is_found(val: Any) -> bool:
+        if not val:
+            return False
+        s = str(val).strip().lower()
+        return s in VALID_STATUSES or any(w in s for w in ("claimed", "found", "taken"))
+
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            st = item.get("status") or item.get("exists") or item.get("claim") or item.get("result")
+            if not _is_found(st):
+                continue
+            platform = str(item.get("site") or item.get("site_name") or item.get("platform") or item.get("name") or "Unknown")
+            url = item.get("url") or item.get("url_user") or item.get("link") or ""
+            username = item.get("username") or item.get("user") or ""
+            accounts.append({
+                "platform": platform,
+                "url": url,
+                "username": username,
+                "profile_data": item.get("data") or item.get("metadata") or {},
+                "source": "tookie",
+                "confidence": "found",
+                "category": _categorize_platform(platform),
+                "relevance": "unreviewed",
+            })
+        return accounts
+
+    if isinstance(raw, dict):
+        for site_name, site_data in raw.items():
+            if site_name in ("summary", "stats", "metadata", "target"):
+                continue
+            if not isinstance(site_data, dict):
+                continue
+            st = site_data.get("status") or site_data.get("exists") or site_data.get("claim") or site_data.get("result")
+            if not _is_found(st):
+                continue
+            url = site_data.get("url") or site_data.get("url_user") or site_data.get("link") or ""
+            username = site_data.get("username") or site_data.get("user") or ""
+            accounts.append({
+                "platform": str(site_name),
+                "url": url,
+                "username": username,
+                "profile_data": site_data,
+                "source": "tookie",
+                "confidence": "found",
+                "category": _categorize_platform(str(site_name)),
+                "relevance": "unreviewed",
+            })
     return accounts
 
 
@@ -1199,6 +1316,110 @@ async def run_maigret(
         result_meta["error"] = f"maigret executable not found ({maigret_cmd})"
     except Exception as exc:
         result_meta["error"] = f"maigret error: {exc}"
+    return result_meta
+
+
+async def run_tookie(
+    username: Union[str, List[str]],
+    deep: bool = False,
+    tmpdir: str = "",
+) -> Dict[str, Any]:
+    """Run Tookie-OSINT for username(s). Performs high-performance username enumeration."""
+    result_meta: Dict[str, Any] = {
+        "tool": "tookie", "ok": False, "error": None,
+        "warning": None, "raw": {}, "accounts": [],
+    }
+
+    if isinstance(username, str):
+        target_users = [username.strip()] if username.strip() else []
+    else:
+        target_users = [u.strip() for u in (username or []) if u and len(u.strip()) >= 2]
+
+    if not target_users:
+        result_meta["error"] = "no valid usernames provided for tookie"
+        return result_meta
+
+    tookie_cmd = resolve_tookie_cmd()
+    if not tookie_cmd:
+        result_meta["error"] = "tookie-osint not installed"
+        return result_meta
+
+    out_dir = tmpdir or tempfile.mkdtemp(prefix="tookie_")
+
+    if tookie_cmd.endswith(".py"):
+        cmd = [PYTHON_CMD, tookie_cmd]
+    elif tookie_cmd.startswith("python-module"):
+        mod_name = tookie_cmd.split(":", 1)[1] if ":" in tookie_cmd else "tookie"
+        cmd = [PYTHON_CMD, "-m", mod_name]
+    else:
+        cmd = [tookie_cmd]
+
+    threads = "15" if deep else "10"
+    u_arg = ",".join(target_users) if len(target_users) > 1 else target_users[0]
+
+    cmd += ["-u", u_arg, "-o", "json", "-t", threads]
+    if deep:
+        cmd += ["-W"]
+
+    log.info("Tookie-OSINT scan for %s deep=%s", [_redact(u) for u in target_users], deep)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=out_dir,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TOOKIE_TIMEOUT)
+        stderr_s = (stderr or b"").decode("utf-8", errors="replace")
+        stdout_s = (stdout or b"").decode("utf-8", errors="replace")
+
+        all_accounts: List[Dict[str, Any]] = []
+        raw_data: Dict[str, Any] = {}
+
+        json_files = []
+        if os.path.isdir(out_dir):
+            for fn in os.listdir(out_dir):
+                if fn.endswith(".json"):
+                    json_files.append(os.path.join(out_dir, fn))
+
+        if json_files:
+            for jp in json_files:
+                try:
+                    with open(jp, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    base_fn = os.path.basename(jp).removesuffix(".json")
+                    raw_data[base_fn] = data
+                    parsed = parse_tookie_json(data)
+                    for acct in parsed:
+                        if not acct.get("username") and len(target_users) == 1:
+                            acct["username"] = target_users[0]
+                    all_accounts.extend(parsed)
+                except Exception as exc:
+                    log.warning("Failed to parse Tookie JSON file %s: %s", jp, exc)
+
+        if not json_files and stdout_s.strip():
+            try:
+                if stdout_s.strip().startswith(("{", "[")):
+                    raw_obj = json.loads(stdout_s)
+                    raw_data["stdout"] = raw_obj
+                    parsed = parse_tookie_json(raw_obj)
+                    all_accounts.extend(parsed)
+            except Exception:
+                pass
+
+        accounts = dedupe_accounts(all_accounts)
+        result_meta.update({"ok": True, "raw": raw_data, "accounts": accounts})
+        if not accounts:
+            result_meta["warning"] = f"tookie scanned {len(target_users)} username(s) but found 0 accounts"
+        return result_meta
+
+    except asyncio.TimeoutError:
+        result_meta["error"] = f"tookie timed out after {TOOKIE_TIMEOUT}s"
+    except FileNotFoundError:
+        result_meta["error"] = f"tookie executable not found ({tookie_cmd})"
+    except Exception as exc:
+        result_meta["error"] = f"tookie error: {exc}"
     return result_meta
 
 
@@ -2150,6 +2371,9 @@ async def execute_scan_v2(
 
             if engine == "maigret" and mg_users:
                 tasks.append(run_maigret(mg_users[0], deep=deep_scan, tmpdir=tmpdir))
+                task_map.append(engine)
+            elif engine == "tookie" and mg_users:
+                tasks.append(run_tookie(mg_users, deep=deep_scan, tmpdir=tmpdir))
                 task_map.append(engine)
             elif engine == "sherlock" and mg_users:
                 tasks.append(run_sherlock(mg_users, deep=deep_scan, tmpdir=tmpdir))

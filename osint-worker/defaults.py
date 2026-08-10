@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # ── Timeouts ──────────────────────────────────────────────────────────────────
 MAIGRET_TIMEOUT = int(os.getenv("OSINT_MAIGRET_TIMEOUT", "180"))
+TOOKIE_TIMEOUT = int(os.getenv("OSINT_TOOKIE_TIMEOUT", "120"))
 SHERLOCK_TIMEOUT = int(os.getenv("OSINT_SHERLOCK_TIMEOUT", "120"))
 BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
 SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
