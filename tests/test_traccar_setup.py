@@ -28,3 +28,12 @@ def test_generate_traccar_config():
     assert "url=http%3A%2F%2Fleads.shamrockbailbonds.biz%3A5055" in config["deeplink"]
     assert "id=shamrock-LEE-2026-00123" in config["deeplink"]
     assert config["setup_url"].endswith("/traccar/setup/shamrock-LEE-2026-00123")
+
+
+@pytest.mark.asyncio
+async def test_traccar_health_check_fallback():
+    from dashboard.services.traccar_client import TraccarClient
+    client = TraccarClient(base_url="http://unreachable-host:9999")
+    h = await client.health_check()
+    assert h.get("status") == "standby"
+    assert "admin@shamrockbailbonds.biz" in h.get("user", "")

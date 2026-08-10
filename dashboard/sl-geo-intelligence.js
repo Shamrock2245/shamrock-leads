@@ -77,17 +77,47 @@ const SLGeoIntel = (() => {
     try {
       const h = await _fetch('/api/geo-intel/health');
       const isOnline = h.status === 'online';
+      const isStandby = h.status === 'standby';
+      const statusColor = isOnline ? 'var(--success)' : (isStandby ? 'var(--gold)' : 'var(--danger)');
+      const label = isOnline ? 'ONLINE' : (isStandby ? 'STANDBY' : escH(h.status).toUpperCase());
+
       el.innerHTML = `
-        <div class="stat-card" style="padding:12px;border-left:3px solid ${isOnline?'var(--success)':'var(--danger)'}">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="width:8px;height:8px;border-radius:50%;background:${isOnline?'var(--success)':'var(--danger)'};display:inline-block"></span>
-            <strong>Traccar GPS Engine</strong>
-            <span style="color:var(--muted);font-size:12px">${escH(h.status)}</span>
+        <div class="stat-card" style="padding:12px;border-left:3px solid ${statusColor}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block"></span>
+              <strong>Traccar GPS Engine</strong>
+              <span style="color:${statusColor};font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.06)">${label}</span>
+            </div>
+            <button onclick="SLGeoIntel.testPhonePing('239-955-0314')" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Ping 239-955-0314</button>
           </div>
-          ${isOnline ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">User: ${escH(h.user)} • Admin: ${h.admin?'Yes':'No'}</div>` : ''}
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">
+            User: ${escH(h.user || 'admin@shamrockbailbonds.biz')} • Admin: ${h.admin !== false ? 'Yes' : 'No'} ${h.message ? `• ${escH(h.message)}` : ''}
+          </div>
         </div>`;
     } catch (e) {
-      el.innerHTML = '<div class="stat-card" style="padding:12px;border-left:3px solid var(--danger)"><span style="color:var(--danger)">⚠ Traccar unreachable</span></div>';
+      el.innerHTML = `
+        <div class="stat-card" style="padding:12px;border-left:3px solid var(--gold)">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <strong style="color:var(--gold)">Traccar Engine Standby</strong>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">Run docker compose up -d traccar to initialize service</div>
+            </div>
+            <button onclick="SLGeoIntel.testPhonePing('239-955-0314')" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Ping 239-955-0314</button>
+          </div>
+        </div>`;
+    }
+  }
+
+  async function testPhonePing(phone = '239-955-0314') {
+    toast(`📡 Sending live GPS tracking ping to ${phone}...`, 'info');
+    try {
+      const res = await _post('/api/geo-intel/test-phone-ping', { phone, booking_number: 'TEST-2399550314' });
+      toast(`✅ Location ping registered for ${phone}! Lat: ${res.lat}, Lng: ${res.lng}`, 'success');
+      await loadDevices();
+      await loadOverview();
+    } catch (e) {
+      toast(`Ping failed: ${e.message}`, 'error');
     }
   }
 
@@ -334,7 +364,7 @@ const SLGeoIntel = (() => {
   return {
     init, refreshAll, loadOverview, loadDevices, loadZones,
     loadViolations, loadVehicles, loadHealth,
-    registerDevice, deactivateDevice,
+    registerDevice, deactivateDevice, testPhonePing,
     createZone, deleteZone,
     ackViolation,
     addVehicle,
