@@ -17,7 +17,7 @@
 | **Node-RED** | Hetzner VPS | `:1880` (profile: ops) | Operations dashboard |
 | **Nginx** | Hetzner VPS | `:443` → `:8088` | SSL reverse proxy |
 | **MongoDB** | Atlas Cloud | `shamrock.1mgkm.mongodb.net` | Primary database (M0 free tier) |
-| **iMessage** | Office iMac | ngrok → `:1234` | BlueBubbles bridge |
+| **iMessage** | Office iMac | Tailscale / Cloudflare / frp → `:1234` | BlueBubbles bridge |
 
 ---
 
@@ -243,8 +243,8 @@ curl -X POST http://178.156.179.237:8088/api/scraper/enable/lee
 # Check BlueBubbles health
 curl -s http://178.156.179.237:8088/api/bb/health | python -m json.tool
 
-# Verify ngrok tunnel is running on office iMac
-# Check BLUEBUBBLES_URL_0178 in .env matches current tunnel
+# Verify Tailscale / Cloudflare tunnel / frp is running on office iMac
+# Check BLUEBUBBLES_URL_0178 in .env (or Tailscale IP 100.102.10.86:1234)
 ```
 
 ### MongoDB M0 storage full (512MB)

@@ -341,7 +341,7 @@ window.SLiMessage = (() => {
         <span class="bb-reconnect-icon">🔗</span>
         <div>
           <div class="bb-reconnect-title">Update Tunnel URL</div>
-          <div class="bb-reconnect-subtitle">ngrok tunnel URLs may change on BlueBubbles restart. Paste the new URL here — no VPS rebuild needed.</div>        </div>
+          <div class="bb-reconnect-subtitle">Tailscale (http://100.102.10.86:1234), Cloudflare (https://bb.shamrockbailbonds.biz), or frp URLs can be updated here — no VPS rebuild needed.</div>        </div>
       </div>
       <div class="bb-reconnect-fields">
         <div class="bb-reconnect-field">
@@ -352,10 +352,10 @@ window.SLiMessage = (() => {
           </select>
         </div>
         <div class="bb-reconnect-field bb-reconnect-field--url">
-          <label class="bb-reconnect-label">New Tunnel URL <span style="color:var(--text-muted);font-weight:400">(from BlueBubbles → Settings → Connection)</span></label>
+          <label class="bb-reconnect-label">New Server / Tunnel URL <span style="color:var(--text-muted);font-weight:400">(Tailscale, Cloudflare, or frp endpoint)</span></label>
           <div class="bb-reconnect-url-row">
             <input id="bbReconnectUrl" class="sl-input sl-input-sm" type="url"
-              placeholder="https://something-new.ngrok-free.app"              onkeydown="if(event.key==='Enter')SLiMessage.updateTunnelUrl()"
+              placeholder="https://bb.shamrockbailbonds.biz or http://100.102.10.86:1234"              onkeydown="if(event.key==='Enter')SLiMessage.updateTunnelUrl()"
             />
             <button id="bbReconnectBtn" class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLiMessage.updateTunnelUrl()">
               🔌 Reconnect

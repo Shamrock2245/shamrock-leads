@@ -85,7 +85,7 @@ const SLFTA = (() => {
   async function sendGeoLink(bookingNumber, phone) {
     if (!phone) { _toast('No phone number on file', 'error'); return; }
     try {
-      const res = await fetch(`/tracking/${encodeURIComponent(bookingNumber)}/send-geo-link`, {
+      const res = await fetch(`/api/tracking/${encodeURIComponent(bookingNumber)}/send-geo-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone, recipient: 'defendant_fta' }),

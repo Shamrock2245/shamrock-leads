@@ -163,7 +163,7 @@ Move records safely through this lifecycle:
     ┌────┴────────┐          ┌────────┴────────┐
     │  MongoDB    │          │  BlueBubbles    │
     │  Atlas      │          │  iMessage Bridge│
-    │  (Central)  │          │  (ngrok Tunnel) │
+    │  (Central)  │          │  (Tailscale / frp) │
     └─────────────┘          └─────────────────┘
 ```
 
@@ -361,7 +361,7 @@ Escalate immediately if:
 | `SLACK_WEBHOOK_ARRESTS` | ✅ | #new-arrests channel |
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel |
-| `BLUEBUBBLES_URL_0178` | ✅ | ngrok permanent tunnel URL (office iMac) |
+| `BLUEBUBBLES_URL_0178` | ✅ | Tailscale direct (`http://100.102.10.86:1234`), Cloudflare tunnel (`https://bb.shamrockbailbonds.biz`), or frp (`http://178.156.179.237:12434`) |
 | `BLUEBUBBLES_PASSWORD_0178` | ✅ | BlueBubbles API password |
 | `SIGNNOW_API_TOKEN` | ✅ | SignNow bearer token |
 | `SIGNNOW_BASIC_AUTH` | ✅ | Base64 client_id:client_secret for ROPC flow |

@@ -180,8 +180,11 @@
         body: JSON.stringify({}),
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      toast(`Test alert sent to ${data.sent || 0}/${data.total_phones || 0} phones`, 'ok');
+      if (!r.ok || data.success === false) {
+        const errMsg = data.error || (data.errors && data.errors.length ? data.errors[0].error : null) || 'Test alert failed';
+        throw new Error(errMsg);
+      }
+      toast(`Test alert sent to ${data.sent}/${data.total_phones} phones`, 'ok');
     } catch (e) {
       toast(e.message || 'Test alert failed', 'error');
     }

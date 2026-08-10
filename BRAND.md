@@ -37,7 +37,7 @@ We write bonds under two surety companies. Every agent must know these cold.
 | **Production VPS** | `178.156.179.237` (Hetzner, root) |
 | **Dashboard URL** | `http://178.156.179.237:8088/` |
 | **Public Dashboard** | `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy) |
-| **iMessage Bridge** | ngrok permanent tunnel → office iMac BlueBubbles |
+| **iMessage Bridge** | Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles |
 | **Primary Repo** | `Shamrock2245/shamrock-leads` |
 | **Portal Repo** | `Shamrock2245/shamrock-bail-portal-site` |
 | **Ops Repo** | `Shamrock2245/shamrock-node-red` |

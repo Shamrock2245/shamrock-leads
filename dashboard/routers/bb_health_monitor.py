@@ -341,14 +341,13 @@ async def api_restart_messages(request: Request):
 async def api_update_bb_url(request: Request):
     """Hot-swap a BlueBubbles server URL at runtime — no container restart needed.
 
-    The permanent ngrok static domain (pseudospherical-etta-untactually.ngrok-free.dev)
-    should never change. This endpoint exists as a manual override if the ngrok
-    domain ever needs to be updated without a container rebuild.
+    Supports Tailscale direct (http://100.102.10.86:1234), Cloudflare Named Tunnel
+    (https://bb.shamrockbailbonds.biz), or frp (http://178.156.179.237:12434).
 
     Body:
         {
             "suffix": "0178",                                                    -- Which server (required)
-            "url": "https://pseudospherical-etta-untactually.ngrok-free.dev",   -- New tunnel URL (required)
+            "url": "https://bb.shamrockbailbonds.biz",                           -- New tunnel URL (required)
             "api_key": "shamrock-bb-sync-2245"                                  -- Auth key (required)
         }
     """
@@ -365,8 +364,8 @@ async def api_update_bb_url(request: Request):
         new_url = (data.get("url") or "").strip().rstrip("/")
         if not new_url:
             return JSONResponse({"success": False, "error": "url is required"}, status_code=400)
-        if not new_url.startswith("https://"):
-            return JSONResponse({"success": False, "error": "url must start with https://"}, status_code=400)
+        if not (new_url.startswith("http://") or new_url.startswith("https://")):
+            return JSONResponse({"success": False, "error": "url must start with http:// or https://"}, status_code=400)
 
         # Hot-swap the URL in memory
         updated_servers = update_bb_url(suffix, new_url)

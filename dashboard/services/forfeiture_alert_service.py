@@ -187,7 +187,8 @@ async def send_forfeiture_alerts(
                 sent += 1
                 logger.info("[forfeiture] ✅ Alert sent to ...%s", phone[-4:])
             else:
-                errors.append({"phone": phone[-4:], "error": result.get("error", "unknown")})
+                err_msg = result.get("error") or result.get("message") or "unknown"
+                errors.append({"phone": phone[-4:], "error": err_msg})
         except Exception as e:
             errors.append({"phone": phone[-4:], "error": str(e)})
             logger.error("[forfeiture] Failed to send to ...%s: %s", phone[-4:], e)
@@ -208,4 +209,14 @@ async def send_forfeiture_alerts(
     except Exception:
         pass
 
-    return {"success": sent > 0, "sent": sent, "total_phones": len(phones), "errors": errors}
+    success = sent > 0
+    res = {
+        "success": success,
+        "sent": sent,
+        "total_phones": len(phones),
+        "errors": errors,
+    }
+    if not success:
+        first_err = errors[0].get("error") if errors else "No phones configured"
+        res["error"] = f"Forfeiture alert could not be delivered (0/{len(phones)} sent). Cause: {first_err}"
+    return res

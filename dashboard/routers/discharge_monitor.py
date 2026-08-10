@@ -556,6 +556,8 @@ async def test_forfeiture_alert(request: Request):
             bond_amount=5000,
             subject="[TEST] Forfeiture alert system verification",
         )
+        if not result.get("success"):
+            return JSONResponse(result, status_code=502)
         return result
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

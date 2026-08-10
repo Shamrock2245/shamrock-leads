@@ -1004,19 +1004,12 @@ async def imessage_send(request: Request):
             })
 
     try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"{srv['url']}/api/v1/message/text",
-                params={"password": srv["password"]},
-                json={
-                    "chatGuid": chat_guid,
-                    "tempGuid": temp_guid,
-                    "message": message,
-                },
-                timeout=15,
-            )
-            bb_resp = r.json()
-            success = r.status_code in (200, 201)
+        from dashboard.routers.bb_private_api import BlueBubblesClient
+        client = BlueBubblesClient(srv["url"], srv["password"])
+        bb_resp = await client.send_text(chat_guid, message, temp_guid=temp_guid)
+        success = bb_resp.get("success", False)
+        status_code = bb_resp.get("status_code", 0)
+        error_msg = bb_resp.get("message") or bb_resp.get("error") or ""
 
         # Extract BB message GUID for unsend/edit capability
         bb_message_guid = ""
@@ -1039,8 +1032,8 @@ async def imessage_send(request: Request):
             "direction": "outbound",
             "sent_at": datetime.now(timezone.utc).isoformat(),
             "status": "sent" if success else "failed",
-            "bb_status_code": r.status_code,
-            "bb_error": bb_resp.get("message", "") if not success else "",
+            "bb_status_code": status_code,
+            "bb_error": error_msg if not success else "",
             "sent_by": "dashboard",
             "agent_name": agent_name,
             "from_number": from_number,
@@ -1052,7 +1045,20 @@ async def imessage_send(request: Request):
         if success:
             return {"success": True, "record": doc}
         else:
-            return JSONResponse({"success": False, "error": bb_resp.get("message", "BlueBubbles error"), "record": doc}, status_code=502)
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": error_msg or f"BlueBubbles server unreachable (status {status_code})",
+                    "record": doc,
+                },
+                status_code=502 if status_code in (0, 404, 502, 503) else 400,
+            )
+    except Exception as e:
+        logger.error("[imessage_send] Exception: %s", e)
+        return JSONResponse(
+            {"success": False, "error": f"Failed to send iMessage: {str(e)}"},
+            status_code=500,
+        )
 
     except httpx.ConnectError:
         return JSONResponse({"error": "Cannot reach BlueBubbles server. Is it running?"}, status_code=502)

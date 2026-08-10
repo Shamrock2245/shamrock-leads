@@ -97,7 +97,7 @@ launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
 ### Verify
 ```bash
 curl -s -H "ngrok-skip-browser-warning: true" \
-  'https://pseudospherical-etta-untactually.ngrok-free.dev/api/v1/server/info?password=2245Bail' \
+  'https://bb.shamrockbailbonds.biz/api/v1/server/info?password=2245Bail' \
   | python3 -m json.tool | grep -E 'private_api|helper_connected'
 ```
 Expected: `"private_api": true`, `"helper_connected": true`
@@ -107,8 +107,9 @@ Expected: `"private_api": true`, `"helper_connected": true`
 ## VPS `.env` Values
 
 ```env
-BLUEBUBBLES_URL_0178=https://pseudospherical-etta-untactually.ngrok-free.dev
-BLUEBUBBLES_URL=https://pseudospherical-etta-untactually.ngrok-free.dev
+# Primary methods: Tailscale direct, Cloudflare Named Tunnel, or frp
+BLUEBUBBLES_URL_0178=https://bb.shamrockbailbonds.biz
+BLUEBUBBLES_URL=https://bb.shamrockbailbonds.biz
 BLUEBUBBLES_PASSWORD_0178=2245Bail
 BLUEBUBBLES_PASSWORD=2245Bail
 BB_WEBHOOK_PUBLIC_URL=https://leads.shamrockbailbonds.biz
