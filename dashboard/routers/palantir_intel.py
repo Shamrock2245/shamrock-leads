@@ -664,7 +664,7 @@ async def breach_lookup(req: BreachLookupRequest):
     except Exception:
         db = None
 
-    if db:
+    if db is not None:
         try:
             osint_col = get_collection("osint_scans")
             if osint_col:
