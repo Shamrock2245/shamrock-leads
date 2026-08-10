@@ -33,7 +33,21 @@
 
   function init() {
     switchSubtab(_activeSubtab);
-    resolveGraph();
+    const input = ($('palantirSubjectInput')?.value || '').trim();
+    if (input) {
+      resolveGraph();
+    } else {
+      const canvas = $('palantirGraphCanvas');
+      if (canvas) {
+        canvas.innerHTML = `
+          <div style="padding:60px 20px;text-align:center;color:var(--palantir-muted);font-size:0.85rem">
+            <div style="font-size:2.5rem;margin-bottom:12px">🕸️</div>
+            <div style="font-weight:700;color:#fff;font-size:1rem;margin-bottom:6px">OpenPlanter Live Entity Resolution</div>
+            <div>Enter a defendant name, indemnitor name, or booking number above and click <strong>⚡ Resolve Knowledge Graph</strong> to view live relationship nodes.</div>
+          </div>
+        `;
+      }
+    }
   }
 
   // ── Subtab Switcher ────────────────────────────────────────────────
