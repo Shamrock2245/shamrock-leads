@@ -647,37 +647,56 @@
 /* ── Workstation Subtabs Navigation Bar ────────────────────────────── */
 .osint-subtabs-bar {
   display: flex;
-  gap: 8px;
-  background: var(--osint-card);
-  border: 1px solid var(--osint-border);
-  border-radius: var(--osint-radius);
-  padding: 6px 12px;
+  gap: 10px;
+  background: #111722 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+  padding: 8px 12px !important;
+  margin-bottom: 16px !important;
   overflow-x: auto;
   align-items: center;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
+
 .osint-subtab-btn {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--osint-radius-sm);
-  color: var(--osint-muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: var(--osint-transition);
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  background: #182232 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 8px !important;
+  color: #94a3b8 !important;
+  font-size: 0.78rem !important;
+  font-weight: 600 !important;
+  padding: 8px 16px !important;
+  min-height: 36px !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
   white-space: nowrap;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
+
 .osint-subtab-btn:hover {
-  color: var(--osint-text);
-  background: var(--osint-bg);
+  background: #202d42 !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  color: #f1f5f9 !important;
+  transform: translateY(-1px);
 }
+
 .osint-subtab-btn.active {
-  background: var(--osint-accent-dim);
-  border-color: rgba(0, 200, 83, 0.4);
-  color: var(--osint-accent);
+  background: rgba(0, 200, 83, 0.15) !important;
+  border-color: #00c853 !important;
+  color: #00e676 !important;
+  box-shadow: 0 0 12px rgba(0, 200, 83, 0.25) !important;
+}
+
+.osint-subtab-btn[data-subtab="trape"].active {
+  background: rgba(255, 109, 0, 0.15) !important;
+  border-color: #ff6d00 !important;
+  color: #ff9100 !important;
+  box-shadow: 0 0 12px rgba(255, 109, 0, 0.25) !important;
 }
 
 /* Subtab View Container */

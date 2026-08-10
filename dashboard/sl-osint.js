@@ -33,6 +33,8 @@
     runSingleEngineTest,
     analyzeExifUrl,
     createTrapeSession,
+    onTrapeLureTemplateChange,
+    sendTrapeViaIMessage,
     exportJSON,
     exportCSV,
     exportPDF,
@@ -998,14 +1000,34 @@
     }
   }
 
-  // ── Trape Session Helper ───────────────────────────────────────────
-  async function createTrapeSession() {
+  // ── Trape Session Helpers & 1-Click iMessage Dispatch ─────────────
+  function onTrapeLureTemplateChange() {
+    const sel = $('trapeLureTemplateSelect')?.value;
+    const customRow = $('trapeCustomUrlRow');
+    const urlInput = $('trapeLureUrl');
+
+    if (sel === 'custom') {
+      if (customRow) customRow.style.display = 'block';
+    } else {
+      if (customRow) customRow.style.display = 'none';
+      if (urlInput && sel) urlInput.value = sel;
+    }
+  }
+
+  async function createTrapeSession(sendIMessage = false) {
     const subjectId = ($('trapeSubjectId')?.value || '').trim();
     const subjectType = $('trapeSubjectType')?.value || 'defendant';
-    const lureUrl = ($('trapeLureUrl')?.value || '').trim();
+    const selTemplate = $('trapeLureTemplateSelect')?.value;
+    const lureUrl = (selTemplate === 'custom' ? $('trapeLureUrl')?.value : selTemplate) || 'https://shamrockbailbonds.biz/court-notice';
+    const phone = ($('trapeSubjectPhone')?.value || '').trim();
 
     if (!subjectId) {
-      toast('Subject ID required for Trape tracking session', 'error');
+      toast('Subject Name / ID required for Trape tracking session', 'error');
+      return;
+    }
+
+    if (sendIMessage && !phone) {
+      toast('Subject Phone Number required to dispatch via iMessage', 'error');
       return;
     }
 
@@ -1014,7 +1036,12 @@
         method: 'POST',
         headers: headers(),
         credentials: 'same-origin',
-        body: JSON.stringify({ subject_type: subjectType, subject_id: subjectId, lure_url: lureUrl }),
+        body: JSON.stringify({
+          subject_type: subjectType,
+          subject_id: subjectId,
+          lure_url: lureUrl,
+          notes: phone ? `Target Phone: ${phone}` : null,
+        }),
       });
 
       if (!r.ok) {
@@ -1023,10 +1050,55 @@
       }
 
       const session = await r.json();
-      toast(`✅ Trape lure link generated: ${session.tracking_url || session.session_id}`, 'success');
+      const trackUrl = session.tracking_url || `${window.location.origin}/track/${session.session_id}`;
+      toast(`✅ Trape lure link generated!`, 'success');
+
+      if (sendIMessage && phone) {
+        await sendTrapeViaIMessage(phone, trackUrl, lureUrl);
+      }
+
       _loadTrapeSessions();
     } catch (e) {
       toast(`Error: ${e.message}`, 'error');
+    }
+  }
+
+  async function sendTrapeViaIMessage(phone, trackingUrl, lureUrl = '') {
+    const cleanPhone = (phone || '').trim();
+    if (!cleanPhone) {
+      toast('Phone number required for iMessage dispatch', 'error');
+      return;
+    }
+
+    let defaultMsg = `Shamrock Bail Bonds Notice: Please verify your scheduled appearance status and case records at: ${trackingUrl}`;
+    if (lureUrl.includes('client-portal')) {
+      defaultMsg = `Shamrock Bail Bonds Portal: Please complete your required bond document sign-off here: ${trackingUrl}`;
+    } else if (lureUrl.includes('verify-checkin')) {
+      defaultMsg = `Shamrock Bail Bonds Alert: Complete your weekly GPS verification check-in here: ${trackingUrl}`;
+    }
+
+    const msg = prompt(`Confirm iMessage text to dispatch to ${cleanPhone}:`, defaultMsg);
+    if (!msg) return;
+
+    toast(`💬 Sending iMessage via BlueBubbles to ${cleanPhone}...`, 'info');
+
+    try {
+      const r = await fetch(`${API}/api/imessage/send`, {
+        method: 'POST',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ phone: cleanPhone, message: msg }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        toast(`❌ Failed to send iMessage: ${err.detail || r.statusText}`, 'error');
+        return;
+      }
+
+      toast(`✅ iMessage dispatched to ${cleanPhone} via BlueBubbles!`, 'success');
+    } catch (e) {
+      toast(`Network error sending iMessage: ${e.message}`, 'error');
     }
   }
 
@@ -1045,16 +1117,29 @@
         return;
       }
 
-      listEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">` +
-        sessions.map(s => `<div style="background:var(--osint-bg);border:1px solid var(--osint-border);padding:10px;border-radius:6px">
-          <div style="font-size:0.75rem;font-weight:600;color:var(--osint-text);display:flex;justify-content:space-between">
-            <span>Session: ${s.session_id}</span>
-            <span style="color:var(--osint-accent);text-transform:uppercase">${s.status}</span>
-          </div>
-          <div style="font-size:0.68rem;color:var(--osint-muted);margin-top:4px">Lure URL: ${_esc(s.lure_url)}</div>
-          ${s.tracking_url ? `<div style="font-size:0.68rem;color:var(--osint-info);margin-top:2px">Tracking Link: ${_esc(s.tracking_url)}</div>` : ''}
-          ${s.ip_address ? `<div style="font-size:0.68rem;color:var(--osint-warning);margin-top:2px">Captured Target IP: ${s.ip_address}</div>` : ''}
-        </div>`).join('') + `</div>`;
+      listEl.innerHTML = `<div style="font-size:0.78rem;font-weight:700;color:var(--osint-text);margin-bottom:10px">Active Skip-Trace Sessions (${sessions.length}):</div>` +
+        `<div style="display:flex;flex-direction:column;gap:10px">` +
+        sessions.map(s => {
+          const trackUrl = s.tracking_url || `${window.location.origin}/track/${s.session_id}`;
+          const isTriggered = s.status === 'triggered' || s.ip_address;
+          const statusCls = isTriggered ? 'color:var(--osint-accent)' : 'color:var(--osint-warning)';
+          const phoneMatch = (s.notes || '').match(/Target Phone:\s*(\+?[\d\s\-()]+)/i);
+          const phone = phoneMatch ? phoneMatch[1].trim() : '';
+
+          return `<div style="background:var(--osint-bg);border:1px solid ${isTriggered ? 'rgba(0,200,83,0.4)' : 'var(--osint-border)'};padding:12px 14px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.2)">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--osint-text);display:flex;justify-content:space-between;align-items:center">
+              <span>🎯 Subject: ${_esc(s.subject_id)} (${s.subject_type})</span>
+              <span style="${statusCls};font-size:0.68rem;text-transform:uppercase;font-weight:700;padding:2px 8px;background:rgba(255,255,255,0.05);border-radius:10px">● ${s.status}</span>
+            </div>
+            <div style="font-size:0.7rem;color:var(--osint-muted);margin-top:6px">Lure: <a href="${_esc(s.lure_url)}" target="_blank" style="color:var(--osint-info)">${_esc(s.lure_url)}</a></div>
+            <div style="font-size:0.72rem;font-family:monospace;color:var(--osint-accent);margin-top:4px;word-break:break-all">Tracking URL: ${_esc(trackUrl)}</div>
+            ${s.ip_address ? `<div style="font-size:0.72rem;font-weight:700;color:var(--osint-warning);margin-top:6px;padding:4px 8px;background:rgba(255,109,0,0.1);border:1px solid rgba(255,109,0,0.3);border-radius:4px">🎯 Target IP Captured: ${s.ip_address} ${s.geolocation ? '· Geo: ' + JSON.stringify(s.geolocation) : ''}</div>` : ''}
+            <div style="display:flex;gap:8px;margin-top:10px">
+              <button onclick="navigator.clipboard.writeText('${_esc(trackUrl)}');window.SL?.toast?.('Link copied to clipboard','success');" style="font-size:0.68rem;padding:4px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);color:#fff;border-radius:4px;cursor:pointer">📋 Copy Link</button>
+              <button onclick="SLOSINT.sendTrapeViaIMessage('${_esc(phone)}', '${_esc(trackUrl)}', '${_esc(s.lure_url)}')" style="font-size:0.68rem;padding:4px 10px;background:rgba(37,99,235,0.2);border:1px solid #3b82f6;color:#60a5fa;border-radius:4px;cursor:pointer;font-weight:600">📱 Dispatch via iMessage</button>
+            </div>
+          </div>`;
+        }).join('') + `</div>`;
     } catch (e) {
       console.warn('Failed to load Trape sessions:', e);
     }

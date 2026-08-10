@@ -5684,12 +5684,12 @@
     <!-- Subtab 4: Trape Skip-Trace View -->
     <div class="osint-subtab-view" id="osintSubtabViewTrape" style="display:none">
       <div class="osint-card">
-        <div class="osint-card-title">🎯 Trape Skip-Trace &amp; Location Lures</div>
-        <p style="font-size:0.73rem;color:var(--osint-muted);margin:0 0 16px">Generate targeted lure links to capture real-time IP, browser telemetry, and geolocation from elusive subjects.</p>
+        <div class="osint-card-title">🎯 Trape Skip-Trace &amp; iMessage Location Lures</div>
+        <p style="font-size:0.73rem;color:var(--osint-muted);margin:0 0 16px">Generate targeted lure links and dispatch them directly via BlueBubbles iMessage to capture real-time target IP, device telemetry, and geolocation.</p>
         <div class="osint-form-row">
           <div class="osint-field">
-            <label>Subject ID</label>
-            <input type="text" id="trapeSubjectId" placeholder="MongoDB ObjectId" />
+            <label>Subject ID / Name</label>
+            <input type="text" id="trapeSubjectId" placeholder="Defendant Name or MongoDB ObjectId" />
           </div>
           <div class="osint-field">
             <label>Subject Type</label>
@@ -5699,14 +5699,32 @@
             </select>
           </div>
         </div>
-        <div class="osint-form-row full">
+        <div class="osint-form-row">
           <div class="osint-field">
-            <label>Lure Page URL</label>
+            <label>Subject Phone Number (for iMessage dispatch)</label>
+            <input type="tel" id="trapeSubjectPhone" placeholder="+1 239-555-0100" />
+          </div>
+          <div class="osint-field">
+            <label>Lure Page Template</label>
+            <select id="trapeLureTemplateSelect" onchange="SLOSINT.onTrapeLureTemplateChange()">
+              <option value="https://shamrockbailbonds.biz/court-notice">⚖️ Court Date Appearance Confirmation</option>
+              <option value="https://shamrockbailbonds.biz/client-portal">🍀 Bail Bond Paperwork Sign-off Portal</option>
+              <option value="https://shamrockbailbonds.biz/verify-checkin">📍 Weekly GPS Verification Check-in</option>
+              <option value="custom">🔗 Custom URL...</option>
+            </select>
+          </div>
+        </div>
+        <div class="osint-form-row full" id="trapeCustomUrlRow" style="display:none">
+          <div class="osint-field">
+            <label>Custom Lure URL</label>
             <input type="text" id="trapeLureUrl" value="https://shamrockbailbonds.biz/court-notice" />
           </div>
         </div>
-        <button class="osint-scan-btn" onclick="SLOSINT.createTrapeSession()" style="margin-top:8px">🔗 Generate Trape Tracking Link</button>
-        <div id="trapeSessionList" style="margin-top:16px"></div>
+        <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <button class="osint-scan-btn" onclick="SLOSINT.createTrapeSession(false)" style="flex:1;min-width:200px">🔗 Generate Trape Lure Link</button>
+          <button class="osint-scan-btn" onclick="SLOSINT.createTrapeSession(true)" style="flex:1;min-width:200px;background:linear-gradient(135deg, #0284c7, #2563eb);border-color:#3b82f6">📱 Generate &amp; Send via iMessage</button>
+        </div>
+        <div id="trapeSessionList" style="margin-top:20px"></div>
       </div>
     </div><!-- end osintSubtabViewTrape -->
   </div>
