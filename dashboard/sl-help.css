@@ -124,7 +124,9 @@
   transition: background 0.15s, color 0.15s;
 }
 .sl-help-close:hover {
-  background: #1e293b;
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: #f1f5f9;
 }
 

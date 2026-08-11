@@ -37,9 +37,11 @@
   font-size: 0.7rem;
   color: var(--muted, #94a3b8);
   padding: 4px 10px;
-  background: var(--panel, #1e293b);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-radius: 6px;
-  border: 1px solid var(--border, #334155);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
 }
 .ai-recalc-btn {
   padding: 7px 16px;
@@ -78,8 +80,10 @@
   .ai-kpi-grid { grid-template-columns: repeat(2, 1fr); }
 }
 .ai-kpi-card {
-  background: var(--panel, #1e293b);
-  border: 1px solid var(--border, #334155);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 12px;
   padding: 16px 18px;
   position: relative;
@@ -132,8 +136,10 @@
   .ai-tier-grid { grid-template-columns: repeat(2, 1fr); }
 }
 .ai-tier-card {
-  background: var(--panel, #1e293b);
-  border: 1px solid var(--border, #334155);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 12px;
   padding: 16px;
   cursor: pointer;
@@ -189,8 +195,10 @@
 
 /* ── Leaderboard ────────────────────────────────────────────────── */
 .ai-lb-panel {
-  background: var(--panel, #1e293b);
-  border: 1px solid var(--border, #334155);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 20px;
@@ -310,8 +318,10 @@
 
 /* ── Deep Dive Panel ────────────────────────────────────────────── */
 .ai-dd-panel {
-  background: var(--panel, #1e293b);
-  border: 1px solid var(--border, #334155);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 20px;
@@ -335,7 +345,7 @@
 }
 .ai-dd-close {
   background: none;
-  border: 1px solid var(--border, #334155);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   color: var(--muted, #94a3b8);
   border-radius: 6px;
   padding: 4px 10px;
@@ -475,7 +485,7 @@
 }
 .ai-dd-metric {
   background: var(--bg-main, #0f172a);
-  border: 1px solid var(--border, #334155);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 8px;
   padding: 12px;
   text-align: center;
@@ -547,8 +557,10 @@
 
 /* ── Recommendations Panel ──────────────────────────────────────── */
 .ai-rec-panel {
-  background: var(--panel, #1e293b);
-  border: 1px solid var(--border, #334155);
+    background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-radius: 12px;
   overflow: hidden;
   margin-bottom: 20px;

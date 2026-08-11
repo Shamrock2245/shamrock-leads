@@ -20,46 +20,7 @@
 .ms-last-refresh { font-size: 11px; color: var(--text-muted, #64748b); }
 
 /* ── BUTTONS ─────────────────────────────────────────────────────────────── */
-.ms-btn {
-  appearance: none !important;
-  -webkit-appearance: none !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  padding: 8px 16px !important;
-  border-radius: 8px !important;
-  font-size: 13px !important;
-  font-weight: 700 !important;
-  cursor: pointer !important;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-  letter-spacing: 0.3px !important;
-  text-decoration: none !important;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4) !important;
-}
-.ms-btn-primary {
-  background: rgba(16, 185, 129, 0.15) !important;
-  color: #10b981 !important;
-  border: 1px solid rgba(16, 185, 129, 0.4) !important;
-}
-.ms-btn-primary:hover {
-  background: rgba(16, 185, 129, 0.3) !important;
-  border-color: #10b981 !important;
-  color: #34d399 !important;
-  transform: translateY(-1px) !important;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.35) !important;
-}
-.ms-btn-danger {
-  background: rgba(239, 68, 68, 0.15) !important;
-  color: #ef4444 !important;
-  border: 1px solid rgba(239, 68, 68, 0.4) !important;
-}
-.ms-btn-danger:hover {
-  background: rgba(239, 68, 68, 0.3) !important;
-  border-color: #ef4444 !important;
-  color: #f87171 !important;
-  transform: translateY(-1px) !important;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.35) !important;
-}
+/* Removed: Using .sl-btn global classes from sl-design-system.css */
 
 /* ── STATE CARDS ─────────────────────────────────────────────────────────── */
 .ms-state-cards {
@@ -73,16 +34,20 @@
 .ms-state-card { cursor: pointer; }
 
 .ms-state-card {
-  background: linear-gradient(135deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%);
-  border: 1px solid rgba(255,255,255,0.07);
+  background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
   border-top: 3px solid var(--state-color, #10b981);
-  border-radius: 14px;
+  border-radius: var(--r-lg, 14px);
   padding: 18px 20px;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all var(--t-normal, 0.2s ease);
 }
 .ms-state-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lift, 0 12px 40px rgba(0,0,0,0.6));
+  background: var(--card-hover, rgba(51, 65, 85, 0.8));
+  border-color: var(--border-hover, rgba(255,255,255,0.2));
 }
 .ms-state-card-header {
   display: flex;
@@ -139,10 +104,16 @@
 @media (max-width: 700px) { .ms-charts-row { grid-template-columns: 1fr; } }
 
 .ms-chart-card {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid var(--border, #1e293b);
-  border-radius: 12px;
+  background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: var(--r-md, 12px);
   padding: 16px;
+  transition: all var(--t-normal, 0.2s ease);
+}
+.ms-chart-card:hover {
+  border-color: var(--border-hover, rgba(255,255,255,0.2));
 }
 .ms-chart-card-wide { grid-column: span 1; }
 .ms-chart-title {
@@ -165,20 +136,26 @@
 
 /* ── PANEL SHARED ────────────────────────────────────────────────────────── */
 .ms-feed-panel, .ms-registry-panel {
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--border, #1e293b);
-  border-radius: 12px;
+  background: var(--bg-card, rgba(30, 41, 59, 0.7));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+  border-radius: var(--r-md, 12px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: all var(--t-normal, 0.2s ease);
+}
+.ms-feed-panel:hover, .ms-registry-panel:hover {
+  border-color: var(--border-hover, rgba(255,255,255,0.2));
 }
 .ms-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border, #1e293b);
-  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.1));
+  background: transparent;
 }
 .ms-panel-title { font-size: 13px; font-weight: 700; color: var(--text, #f1f5f9); }
 .ms-badge-count {

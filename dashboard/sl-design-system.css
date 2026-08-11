@@ -24,11 +24,11 @@
   /* Surface — vibrant Twenty CRM slate palette */
   --bg:           #0f172a;
   --bg-main:      #0f172a;
-  --bg-card:      #1e293b;
-  --bg-elevated:  #334155;
-  --surface:      #1e293b;
-  --card:         #1e293b;
-  --card-hover:   #334155;
+  --bg-card:      rgba(30, 41, 59, 0.7);
+  --bg-elevated:  rgba(51, 65, 85, 0.8);
+  --surface:      rgba(30, 41, 59, 0.7);
+  --card:         rgba(30, 41, 59, 0.7);
+  --card-hover:   rgba(51, 65, 85, 0.8);
   --border:       rgba(255,255,255,.1);
   --border-hover: rgba(255,255,255,.2);
 
@@ -232,14 +232,17 @@
 /* ── 6. Card System ─────────────────────────────────────────────────────── */
 .sl-card {
   background: var(--card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 16px;
   transition: all var(--t-normal);
 }
 .sl-card:hover {
+  transform: translateY(-2px);
   border-color: var(--border-hover);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lift);
 }
 .sl-card-header {
   display: flex;
@@ -899,4 +902,16 @@
 .bb-reconnect-status--ok   { background: rgba(16,185,129,.12); color: #10b981; border: 1px solid rgba(16,185,129,.25); }
 .bb-reconnect-status--warn { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.25); }
 .bb-reconnect-status--error { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.25); }
+
+
+/* Global Button Modernization */
+[class$="-btn"], [class*="-btn "], button:not(.sl-btn) {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+[class$="-btn"]:active, [class*="-btn "]:active, button:active {
+  transform: scale(0.96);
+}
+[class$="-btn"]:hover, [class*="-btn "]:hover, button:not(.sl-btn):not(.sidebar-btn):hover {
+  filter: brightness(1.15);
+}
 

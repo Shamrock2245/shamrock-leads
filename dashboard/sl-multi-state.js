@@ -138,8 +138,8 @@ const SLMultiState = (() => {
         </div>
         <div class="ms-header-actions">
           <span id="msLastRefresh" class="ms-last-refresh">—</span>
-          <button class="ms-btn ms-btn-primary" onclick="SLMultiState.refresh()">↻ Refresh</button>
-          <button class="ms-btn ms-btn-danger" onclick="SLMultiState.runAll()">▶ Run All</button>
+          <button class="sl-btn sl-btn-secondary" onclick="SLMultiState.refresh()">↻ Refresh</button>
+          <button class="sl-btn sl-btn-danger" onclick="SLMultiState.runAll()">▶ Run All</button>
         </div>
       </div>
 
