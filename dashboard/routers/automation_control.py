@@ -351,3 +351,45 @@ async def get_status():
     except Exception as exc:
         logger.error("[automation-api] get_status error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@automation_control_bp.post("/automation/parameters")
+async def update_parameters(request: Request):
+    """Tune parameters for a specific automation section (e.g. min_lead_score, intervals, mode)."""
+    try:
+        data = await request.json() or {}
+        key = data.get("key")
+        params = data.get("params") or {}
+        if not key or not isinstance(params, dict):
+            return JSONResponse({"success": False, "error": "key and params dict required"}, status_code=400)
+
+        db = get_db(request)
+        from dashboard.services.automation_config import update_automation_section_params
+        new_cfg = await update_automation_section_params(db, key, params, actor="dashboard_user")
+        return {"success": True, "key": key, "updated_params": params, "config": new_cfg}
+    except Exception as exc:
+        logger.error("[automation-api] update_parameters error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@automation_control_bp.post("/automation/trigger-all")
+async def trigger_all_automations(request: Request):
+    """Trigger one immediate execution cycle for ALL registered FastAPI background jobs."""
+    try:
+        triggered = []
+        for key, event in TRIGGER_EVENTS.items():
+            if not event.is_set():
+                event.set()
+                triggered.append(key)
+
+        logger.info("☘️  Master sweep triggered for %d background automations: %s", len(triggered), triggered)
+        return {
+            "success": True,
+            "triggered_count": len(triggered),
+            "triggered": triggered,
+            "message": f"Master sweep initiated for {len(triggered)} active automations."
+        }
+    except Exception as exc:
+        logger.error("[automation-api] trigger_all error: %s", exc)
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+

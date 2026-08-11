@@ -227,12 +227,18 @@ const SLAutomations = {
            <span class="slider"></span>
          </label>`;
 
-    // Run Now: disabled for NR-only; enabled for NR-orchestrated (they have a FastAPI trigger)
+    // Run Now & Tune Parameters buttons
     const canRun = hasTrigger && !isNrOnly;
     const runBtn = `<button class="btn btn-secondary auto-run-btn"
       onclick="SLAutomations.runNow('${auto.id}')"
       ${!canRun ? `disabled title="${isNrOnly ? 'Trigger from Node-RED editor' : 'No live trigger'}"` : ''}>
       ▶ Run Now
+    </button>`;
+
+    const tuneBtn = `<button class="btn btn-outline-secondary auto-tune-btn"
+      onclick="SLAutomations.tuneParams('${auto.id}')"
+      style="margin-left: 6px; font-size: 11px; padding: 4px 8px;">
+      ⚙️ Tune Params
     </button>`;
 
     return `
@@ -255,8 +261,66 @@ const SLAutomations = {
       ${historyHtml}
       <div class="auto-card-footer">
         ${runBtn}
+        ${tuneBtn}
       </div>
     </div>`;
+  },
+
+  // ── Master Sweep Trigger ──────────────────────────────────────────────────
+  async triggerAll() {
+    try {
+      if (window.SL && SL.notify) SL.notify('Initiating master sweep across all active automations…', 'info');
+      const res = await fetch('/api/automation/trigger-all', {
+        method: 'POST',
+        credentials: 'same-origin'
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (window.SL && SL.notify) SL.notify(data.message || `Triggered ${data.triggered_count} automations.`, 'success');
+        setTimeout(() => this.load(), 2000);
+      } else {
+        throw new Error(data.error || 'Master sweep failed');
+      }
+    } catch (e) {
+      console.error(e);
+      if (window.SL && SL.notify) SL.notify('Master sweep error: ' + e.message, 'error');
+    }
+  },
+
+  // ── Parameter Tuner Modal ──────────────────────────────────────────────────
+  async tuneParams(id) {
+    const auto = (this._last || []).find(a => a.id === id);
+    if (!auto) return;
+
+    const newInterval = prompt(`Tune execution interval for "${auto.name || id}" (in seconds):`, auto.interval_seconds || 3600);
+    if (newInterval === null) return;
+    const intervalSec = parseInt(newInterval, 10);
+    if (isNaN(intervalSec) || intervalSec < 10) {
+      alert('Please enter a valid interval in seconds (minimum 10s).');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/automation/parameters', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: id,
+          params: { interval_seconds: intervalSec }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        if (window.SL && SL.notify) SL.notify(`Updated parameters for ${auto.name || id}.`, 'success');
+        this.load();
+      } else {
+        throw new Error(data.error || 'Update failed');
+      }
+    } catch (e) {
+      console.error(e);
+      if (window.SL && SL.notify) SL.notify('Failed to update parameters: ' + e.message, 'error');
+    }
   },
 
   // ── Toggle ────────────────────────────────────────────────────────────────
