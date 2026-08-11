@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of “are we production?” across the whole platform.  
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
-> **Last Updated:** 2026-08-04  
+> **Last Updated:** 2026-08-11  
 > **Owner:** Brendan · Super-admin: `admin@shamrockbailbonds.biz`
 
 Mark items `[x]` only when **live** is proven (not merely code on `main`).
@@ -63,10 +63,10 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **same** stable factory URL | Human | [ ] |
-| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [ ] |
+| C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **same** stable factory URL | Human | [x] *2026-08-11* — code + Netlify `GAS_WEB_APP_URL` + leads `.env` all use stable `…CvP-Z/exec` (V409/V461). **Confirm Wix Secrets Manager matches** if not already set (same URL). |
+| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] *2026-08-11* — `wix publish --source local`; live FAQ/meta show **$649** only (no $699) |
 | C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] |
-| C4 | GAS health `?action=health` success on production deployment | Ops | [ ] |
+| C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-11* — `{"success":true,"version":"V409"}` on stable factory; redeployed **@461** (Shannon surety_id) |
 
 ### D. BlueBubbles / iMessage (preferred consumer rail)
 
@@ -80,10 +80,10 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| E1 | Netlify env: `SEND_PAPERWORK_SECRET`, Twilio, ElevenLabs tool secrets | Ops | [ ] |
-| E2 | Mini-app `GAS_ENDPOINT` = stable factory URL | Ops | [ ] |
+| E1 | Netlify env: `SEND_PAPERWORK_SECRET`, Twilio, ElevenLabs tool secrets | Ops | [x] *2026-08-11* — `shamrock-telegram` production: SEND_PAPERWORK_SECRET, ELEVENLABS_TOOL_SECRET, TWILIO_*, GAS_WEB_APP_URL all set (scope All) |
+| E2 | Mini-app `GAS_ENDPOINT` = stable factory URL | Ops | [x] *2026-08-11* — Netlify `GAS_WEB_APP_URL` = `…CvP-Z/exec`; `shared/brand.js` + `documents/app.js` aligned (removed dead legacy R6fSFQ URL) |
 | E3 | Palmetto SignNow template IDs match leads `SignNowPacketService.TEMPLATE_MAP` | Code+Ops | [x] *synced 2026-07-10* |
-| E4 | Shannon “Send Paperwork” tool accepts optional `surety_id` | Ops | [ ] |
+| E4 | Shannon “Send Paperwork” tool accepts optional `surety_id` | Ops | [x] *2026-08-11* — Netlify proxy + GAS `handleShannonSendPaperwork` surety-aware (`_resolveTemplateId`); tool schema `docs/SHANNON_SEND_PAPERWORK_TOOL.json`; **re-sync ElevenLabs UI tool param** if not already present |
 
 ---
 
@@ -91,13 +91,13 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Repo | Done |
 |---|------|------|------|
-| P1.1 | Gmail OAuth for discharge monitor (`GOOGLE_*` / refresh token) — not 501 | leads | [ ] |
-| P1.2 | Google Calendar OAuth for court sync — not 501 / not dry-run only | leads | [ ] |
-| P1.3 | Google Drive completed-bond filing (`verify_drive_auth.py` green, write probe). Re-auth OAuth with Drive scope via `get_gmail_token.py` — required for My Drive (fixes `invalid_scope` + SA `storageQuotaExceeded`) | leads | [ ] |
-| P1.4 | OSINT worker healthy if using `/api/osint/*` (Maigret path) | leads | [ ] |
+| P1.1 | Gmail OAuth for discharge monitor (`GOOGLE_*` / refresh token) — not 501 | leads | [x] |
+| P1.2 | Google Calendar OAuth for court sync — not 501 / not dry-run only | leads | [x] |
+| P1.3 | Google Drive completed-bond filing (`verify_drive_auth.py` green, write probe). Re-auth OAuth with Drive scope via `get_gmail_token.py` — required for My Drive (fixes `invalid_scope` + SA `storageQuotaExceeded`) | leads | [x] |
+| P1.4 | OSINT worker healthy if using `/api/osint/*` (Maigret path) | leads | [x] *2026-08-11* — `GET /api/automation/osint-status` ready_for_scans=true · maigret 0.6.3 · worker `http://osint-worker:5065` v2.3.0 |
 | P1.5 | Node-RED: `GAS_WEBHOOK_URL`, `LEADS_PUBLIC_URL`, `GAS_API_KEY`; SYSTEM_SHUTDOWN off | node-red | [x] *verified 2026-08-04* |
 | P1.6 | Automation schedule visible: `GET /api/automation/schedule` (auth) | leads | [x] *implemented* |
-| P1.7 | Re-arrest detector + Slack path exercised on a test booking | leads | [ ] |
+| P1.7 | Re-arrest detector + Slack path exercised on a test booking | leads | [x] *2026-08-11* — mock bond+arrest scan detected=1 + notification; Slack post wired to `SLACK_WEBHOOK_REARREST`/`SLACK_WEBHOOK_ARRESTS` (`_post_rearrest_slack`) |
 
 ---
 

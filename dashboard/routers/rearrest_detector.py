@@ -16,14 +16,17 @@ Endpoints:
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
+import logging
 import re
 import os
 
 from dashboard.extensions import get_collection
 
+logger = logging.getLogger(__name__)
+
 rearrest_bp = APIRouter(prefix="/api", tags=["rearrest"])
-# Slack webhook for re-arrest alerts
-SLACK_REARREST_WEBHOOK = os.getenv("SLACK_WEBHOOK_ARRESTS", "")
+# Slack webhook for re-arrest alerts (prefer dedicated channel if set)
+SLACK_REARREST_WEBHOOK = os.getenv("SLACK_WEBHOOK_REARREST") or os.getenv("SLACK_WEBHOOK_ARRESTS", "")
 
 
 def _normalize_name(name: str) -> str:
@@ -261,12 +264,56 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
             except Exception:
                 pass
 
+            # Slack alert (SLACK_WEBHOOK_REARREST preferred, else SLACK_WEBHOOK_ARRESTS)
+            try:
+                await _post_rearrest_slack(alert)
+            except Exception as slack_exc:
+                logger.warning("rearrest slack failed: %s", slack_exc)
+
     return {
         "scanned_arrests": len(recent_arrests),
         "active_bonds_checked": len(active_bonds),
         "detected": len(detected),
         "alerts": detected,
     }
+
+
+async def _post_rearrest_slack(alert: dict) -> bool:
+    """Post re-arrest alert to Slack. Returns True if delivered."""
+    import httpx
+
+    webhook = (
+        os.getenv("SLACK_WEBHOOK_REARREST")
+        or os.getenv("SLACK_WEBHOOK_ARRESTS")
+        or SLACK_REARREST_WEBHOOK
+        or ""
+    ).strip()
+    if not webhook:
+        return False
+
+    name = alert.get("defendant_name") or "Unknown"
+    county = alert.get("county") or "?"
+    booking = alert.get("booking_number") or "?"
+    poa = alert.get("original_poa") or "N/A"
+    bond_amt = alert.get("original_bond_amount") or alert.get("prior_bond_amount") or 0
+    conf = alert.get("confidence") or "probable"
+    charges = (alert.get("charges") or "")[:200]
+
+    text = (
+        f":rotating_light: *RE-ARREST DETECTED* ({conf})\n"
+        f"*Defendant:* {name}\n"
+        f"*County:* {county} · *Booking:* `{booking}`\n"
+        f"*Prior POA:* {poa} · *Prior bond:* ${float(bond_amt):,.0f}\n"
+        f"*Charges:* {charges or 'n/a'}\n"
+        f"_Checklist / Super CRM → Re-Arrest panel_"
+    )
+    payload = {"text": text}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(webhook, json=payload)
+        if resp.status_code >= 300:
+            logger.warning("rearrest slack HTTP %s: %s", resp.status_code, resp.text[:200])
+            return False
+    return True
 
 
 @rearrest_bp.post("/rearrest/scan")
