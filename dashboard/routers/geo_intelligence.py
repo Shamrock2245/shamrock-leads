@@ -127,34 +127,62 @@ async def register_device(request: Request):
 
 @geo_intel_bp.post("/test-phone-ping")
 async def test_phone_ping(request: Request):
-    """Instant GPS test ping for phone (239) 955-0314 or target device.
+    """Instant GPS test ping for a staff-specified device.
 
-    Body: { phone?, booking_number?, lat?, lng? }
-    Injects a live GPS fix into Traccar + MongoDB geo intelligence pipeline.
+    Body: { phone (required), booking_number?, lat?, lng? }
+    Injects a GPS fix tagged source=test_ping (excluded from forfeiture logic by convention).
+    God-admin / staff session only (middleware); no default personal phone.
     """
+    # Prefer god_admin when session available
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request, session_is_admin
+
+        sess = get_session_from_request(request)
+        if not sess:
+            return JSONResponse({"success": False, "error": "Authentication required"}, status_code=401)
+        if not session_is_admin(request) and sess.get("role") not in ("god_admin", "admin", "sub_agent"):
+            return JSONResponse({"success": False, "error": "Staff session required"}, status_code=403)
+    except Exception:
+        pass
+
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
 
-    raw_phone = body.get("phone", "239-955-0314").strip()
+    raw_phone = (body.get("phone") or "").strip()
+    if not raw_phone:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "phone_required",
+                "message": "Provide phone in the request body. No default test number is hardcoded.",
+            },
+            status_code=400,
+        )
     clean_digits = "".join(c for c in raw_phone if c.isdigit())
     if len(clean_digits) == 10:
         phone_e164 = f"+1{clean_digits}"
     elif len(clean_digits) == 11 and clean_digits.startswith("1"):
         phone_e164 = f"+{clean_digits}"
     else:
-        phone_e164 = f"+12399550314"
+        return JSONResponse(
+            {"success": False, "error": "invalid_phone", "message": "Use a 10-digit US phone number."},
+            status_code=400,
+        )
 
-    booking = body.get("booking_number", f"PING-{clean_digits or '2399550314'}")
-    lat = float(body.get("lat", 26.6406))
-    lng = float(body.get("lng", -81.8723))
+    booking = body.get("booking_number") or f"TEST-PING-{clean_digits}"
+    try:
+        lat = float(body.get("lat", 26.6406))
+        lng = float(body.get("lng", -81.8723))
+    except (TypeError, ValueError):
+        return JSONResponse({"success": False, "error": "invalid_coordinates"}, status_code=400)
 
     svc = _get_service()
-    # Register/update test device
-    uid = f"shamrock-{clean_digits or '2399550314'}"
-    traccar_id = int(clean_digits[-6:] if clean_digits else 955031)
+    # Register/update test device — prefix unique id so production bonds aren't polluted
+    uid = f"shamrock-test-{clean_digits}"
+    traccar_id = int(clean_digits[-6:]) if len(clean_digits) >= 6 else 0
 
     device = await svc.register_device(
         booking_number=booking,
@@ -162,7 +190,7 @@ async def test_phone_ping(request: Request):
         device_type="phone_app",
         traccar_device_id=traccar_id,
         unique_id=uid,
-        label=f"Phone Target ({raw_phone})",
+        label=f"TEST Ping ({phone_e164})",
         phone=phone_e164,
     )
 
@@ -186,8 +214,9 @@ async def test_phone_ping(request: Request):
         "lat": lat,
         "lng": lng,
         "position": pos,
+        "test": True,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "message": f"✅ Live GPS position ping registered for {phone_e164} in Ft. Myers, FL sector grid!",
+        "message": f"Test GPS position registered for {phone_e164} (source=test_ping).",
     }
 
 

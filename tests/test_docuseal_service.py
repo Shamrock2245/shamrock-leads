@@ -292,11 +292,25 @@ def test_verify_docuseal_signature():
 
     secret = "test-secret"
     body = b'{"event_type":"submission.completed"}'
-    with patch.dict(os.environ, {"DOCUSEAL_WEBHOOK_SECRET": secret, "DEBUG": "false"}):
+    with patch.dict(os.environ, {"DOCUSEAL_WEBHOOK_SECRET": secret, "DEBUG": "false", "ENV": "production"}):
         sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
         assert verify_docuseal_signature(body, sig) is True
         assert verify_docuseal_signature(body, "deadbeef") is False
         assert verify_docuseal_signature(body, f"sha256={sig}") is True
+
+
+def test_verify_docuseal_signature_fail_closed_without_secret():
+    from dashboard.routers.webhooks import verify_docuseal_signature
+
+    env = {
+        "DOCUSEAL_WEBHOOK_SECRET": "",
+        "DEBUG": "false",
+        "ENV": "production",
+    }
+    with patch.dict(os.environ, env, clear=False):
+        # Ensure empty secret even if host env has one
+        os.environ["DOCUSEAL_WEBHOOK_SECRET"] = ""
+        assert verify_docuseal_signature(b"{}", "abc") is False
 
 
 def test_resolve_template_id_for_surety():

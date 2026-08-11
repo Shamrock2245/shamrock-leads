@@ -33,8 +33,9 @@ def test_instant_indemnitor_packet_and_bind_workflow(
     mock_packets = AsyncMock()
     mock_packets.insert_one = AsyncMock(return_value=MagicMock(inserted_id="test_id"))
     mock_packets.find_one = AsyncMock(return_value={"packet_id": "pkt_inst_123456", "defendant_name": "To Be Named"})
-    mock_packets.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
-    
+    mock_packets.update_one = AsyncMock(return_value=MagicMock(matched_count=1, modified_count=1))
+    mock_packets.count_documents = AsyncMock(return_value=0)
+
     mock_pin_col.return_value = mock_packets
     mock_pw_col.return_value = mock_packets
     mock_ext_col.return_value = mock_packets

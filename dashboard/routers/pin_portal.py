@@ -27,7 +27,8 @@ portal_page_router = APIRouter(tags=["pin_portal_pages"])
 # pin -> {phone, intake_id, booking_number, expires_at}
 
 _TEST_PHONE = "2395550199"
-_MASTER_PIN = "224545"
+# Optional staff smoke bypass — env only (empty = disabled). Never hardcode in source.
+_MASTER_PIN = (os.getenv("PORTAL_STAFF_MASTER_PIN") or os.getenv("PAPERWORK_STAFF_EXCEPTION_PIN") or "").strip()
 
 
 class SendPinRequest(BaseModel):
@@ -298,11 +299,15 @@ def _valid_email(raw: str) -> bool:
 
 
 @pin_portal_router.post("/instant-indemnitor-packet")
-async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
+async def create_instant_indemnitor_packet(request: Request, req: InstantIndemnitorPacketRequest):
     """
     Create an instant DocuSeal paperwork packet for an indemnitor immediately after ID scan,
     allowing them to complete & sign paperwork without requiring a defendant to be pre-selected.
     Defendant can be matched/bound later.
+
+    Rate limits (anti-spam):
+      - max 3 open unassigned packets per phone / 24h
+      - max 8 creates per phone / 24h (including completed)
     """
     import uuid
     from dashboard.services.docuseal_service import (
@@ -367,6 +372,47 @@ async def create_instant_indemnitor_packet(req: InstantIndemnitorPacketRequest):
 
     # Idempotency: reuse a recent open instant packet for same phone (5 min window)
     packets_col = get_collection("paperwork_packets")
+
+    # Rate limit: prevent DocuSeal spam / legal junk from open portal
+    try:
+        day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        open_count = await packets_col.count_documents(
+            {
+                "indemnitor_phone": clean_phone,
+                "source": "instant_indemnitor_portal",
+                "unassigned_defendant": True,
+                "created_at": {"$gte": day_ago},
+                "status": {"$nin": ["cancelled", "void", "expired"]},
+            }
+        )
+        if open_count >= 3:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "rate_limited",
+                    "message": "Too many open paperwork sessions for this phone. Ask staff for a PIN link or wait and try again.",
+                },
+                status_code=429,
+            )
+        day_count = await packets_col.count_documents(
+            {
+                "indemnitor_phone": clean_phone,
+                "source": "instant_indemnitor_portal",
+                "created_at": {"$gte": day_ago},
+            }
+        )
+        if day_count >= 8:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "rate_limited",
+                    "message": "Daily paperwork limit reached for this phone. Please contact Shamrock staff.",
+                },
+                status_code=429,
+            )
+    except Exception as rl_exc:
+        logger.warning("instant packet rate-limit check skipped: %s", rl_exc)
+
     try:
         recent = await packets_col.find_one(
             {
@@ -540,14 +586,15 @@ async def verify_portal_pin(req: VerifyPinRequest):
     clean_phone = _digits_phone(req.phone)
     input_pin = (req.pin or "").strip()
 
-    # Master admin bypass (staff smoke)
-    if input_pin == _MASTER_PIN:
+    # Optional staff smoke bypass (env PORTAL_STAFF_MASTER_PIN only)
+    if _MASTER_PIN and input_pin == _MASTER_PIN:
+        import secrets as _secrets
         meta = await _resolve_packet_for_client(clean_phone)
         return {
             "success": True,
             "verified": True,
             "phone": clean_phone,
-            "session_token": f"PORTAL-ADMIN-{clean_phone}",
+            "session_token": f"PORTAL-ADMIN-{_secrets.token_urlsafe(24)}",
             "role": "indemnitor",
             "signing_link": meta.get("signing_link") or "",
             "has_packet": bool(meta.get("has_packet")),
@@ -580,7 +627,28 @@ async def verify_portal_pin(req: VerifyPinRequest):
         except ValueError:
             pass
 
-    await pins_col.update_one({"_id": pin_doc["_id"]}, {"$set": {"verified": True}})
+    import secrets as _secrets
+
+    session_token = f"PORTAL-{_secrets.token_urlsafe(24)}"
+    pin_id = pin_doc.get("_id")
+    if pin_id is not None:
+        await pins_col.update_one(
+            {"_id": pin_id},
+            {"$set": {
+                "verified": True,
+                "session_token": session_token,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    else:
+        await pins_col.update_one(
+            {"phone": clean_phone, "pin": input_pin},
+            {"$set": {
+                "verified": True,
+                "session_token": session_token,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
     meta = await _resolve_packet_for_client(
         clean_phone,
         booking=pin_doc.get("booking_number", "") or "",
@@ -593,7 +661,7 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "phone": clean_phone,
         "booking_number": pin_doc.get("booking_number"),
         "intake_id": pin_doc.get("intake_id"),
-        "session_token": f"PORTAL-{pin_doc['_id']}",
+        "session_token": session_token,
         "signing_link": meta.get("signing_link") or "",
         "has_packet": bool(meta.get("has_packet")),
         "packet_id": meta.get("packet_id") or "",

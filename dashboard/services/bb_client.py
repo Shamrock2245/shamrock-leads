@@ -122,7 +122,9 @@ async def _send_attachment_direct(phone: str, message: str, file_path: str) -> d
     bb = get_bb_client(phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
-    chat_guid = f"any;-;{phone}"
+    from dashboard.extensions import format_phone
+    e164 = format_phone(phone) or (f"+1{phone}" if len(str(phone).lstrip("+")) == 10 else phone)
+    chat_guid = f"any;-;{e164}"
     try:
         return await bb.send_attachment_url(chat_guid, file_path, message=message)
     except Exception as exc:

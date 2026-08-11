@@ -65,8 +65,15 @@ class ScanRequestV2(BaseModel):
 
 
 def _check_key(x_worker_key: Optional[str]) -> None:
+    """Fail closed: require OSINT_WORKER_KEY except explicit OSINT_ALLOW_INSECURE=true (dev only)."""
+    allow_insecure = os.getenv("OSINT_ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
     if not WORKER_KEY:
-        return
+        if allow_insecure:
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="OSINT_WORKER_KEY not configured — set key or OSINT_ALLOW_INSECURE=true for local dev only",
+        )
     if not x_worker_key or not secrets.compare_digest(x_worker_key, WORKER_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-Worker-Key")
 

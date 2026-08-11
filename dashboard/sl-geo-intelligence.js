@@ -89,7 +89,7 @@ const SLGeoIntel = (() => {
               <strong>Traccar GPS Engine</strong>
               <span style="color:${statusColor};font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;background:rgba(255,255,255,0.06)">${label}</span>
             </div>
-            <button onclick="SLGeoIntel.testPhonePing('239-955-0314')" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Ping 239-955-0314</button>
+            <button onclick="SLGeoIntel.testPhonePing()" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Test GPS Ping</button>
           </div>
           <div style="font-size:11px;color:var(--muted);margin-top:4px">
             User: ${escH(h.user || 'admin@shamrockbailbonds.biz')} • Admin: ${h.admin !== false ? 'Yes' : 'No'} ${h.message ? `• ${escH(h.message)}` : ''}
@@ -103,17 +103,22 @@ const SLGeoIntel = (() => {
               <strong style="color:var(--gold)">Traccar Engine Standby</strong>
               <div style="font-size:11px;color:var(--muted);margin-top:2px">Run docker compose up -d traccar to initialize service</div>
             </div>
-            <button onclick="SLGeoIntel.testPhonePing('239-955-0314')" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Ping 239-955-0314</button>
+            <button onclick="SLGeoIntel.testPhonePing()" class="btn-sm" style="font-size:11px;padding:4px 10px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;cursor:pointer">📡 Test GPS Ping</button>
           </div>
         </div>`;
     }
   }
 
-  async function testPhonePing(phone = '239-955-0314') {
-    toast(`📡 Sending live GPS tracking ping to ${phone}...`, 'info');
+  async function testPhonePing(phone) {
+    const target = (phone || window.prompt('Phone number for GPS test ping (10 digits):') || '').trim();
+    if (!target) {
+      toast('GPS test ping cancelled — phone required', 'info');
+      return;
+    }
+    toast(`📡 Sending test GPS ping for ${target}...`, 'info');
     try {
-      const res = await _post('/api/geo-intel/test-phone-ping', { phone, booking_number: 'TEST-2399550314' });
-      toast(`✅ Location ping registered for ${phone}! Lat: ${res.lat}, Lng: ${res.lng}`, 'success');
+      const res = await _post('/api/geo-intel/test-phone-ping', { phone: target, booking_number: 'TEST-PING' });
+      toast(`✅ Test location registered for ${target}! Lat: ${res.lat}, Lng: ${res.lng}`, 'success');
       await loadDevices();
       await loadOverview();
     } catch (e) {

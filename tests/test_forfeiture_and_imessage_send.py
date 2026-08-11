@@ -21,8 +21,14 @@ async def test_send_forfeiture_alerts_failure():
     """Verify send_forfeiture_alerts returns success=False and explicit error when BB fails."""
     from dashboard.services.forfeiture_alert_service import send_forfeiture_alerts
 
-    with patch("dashboard.services.forfeiture_alert_service.get_forfeiture_alert_phones", AsyncMock(return_value=["+12397849365"])):
-        with patch("dashboard.services.bb_client.send_imessage", AsyncMock(return_value={"success": False, "error": "BlueBubbles host unreachable (404)"})):
+    with patch(
+        "dashboard.services.forfeiture_alert_service.get_forfeiture_alert_phones",
+        AsyncMock(return_value=["+15551234567"]),
+    ):
+        with patch(
+            "dashboard.services.bb_client.send_imessage",
+            AsyncMock(return_value={"success": False, "error": "BlueBubbles host unreachable (404)"}),
+        ):
             res = await send_forfeiture_alerts(
                 defendant_name="TEST DEFENDANT",
                 county="Lee",

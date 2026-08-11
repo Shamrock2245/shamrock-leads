@@ -415,11 +415,37 @@ async def is_enabled(db, automation_key: str) -> bool:
     return section.get("enabled", False)
 
 
+# Client-facing / destructive jobs: fail CLOSED on config read errors
+_FAIL_CLOSED_KEYS = frozenset({
+    "speed_to_contact",
+    "paperwork_chase",
+    "intake_recovery",
+    "auto_reply",
+    "drip_scanner",
+    "data_retention",
+    "nr_payment_reminders",
+    "nr_whatsapp_campaigns",
+    "nr_the_closer",
+})
+
+# Health / delivery rails: fail OPEN so monitoring + PIN queue survive Mongo blips
+_FAIL_OPEN_KEYS = frozenset({
+    "watchdog",
+    "bb_health",
+    "nr_watchdog",
+    "scraper_health_webhook",
+    "outreach_queue",
+})
+
+
 async def should_run(db, key: str, default: bool = True) -> bool:
     """Check if a background service should run this cycle.
 
     Unlike is_enabled(), this defaults to True so system services
     keep running even if the config document doesn't exist yet.
+
+    Fail-closed on config errors for client-facing / destructive keys.
+    Fail-open for watchdog/health keys only.
 
     Args:
         db: Motor database instance
@@ -429,10 +455,17 @@ async def should_run(db, key: str, default: bool = True) -> bool:
     Returns:
         True if the service should execute, False to skip.
     """
+    fail_default = default
+    if key in _FAIL_CLOSED_KEYS:
+        fail_default = False
+    elif key in _FAIL_OPEN_KEYS:
+        fail_default = True
+
     try:
         cfg = await get_automation_config(db)
         section = cfg.get(key, {})
         return section.get("enabled", default)
-    except Exception:
-        return default
+    except Exception as exc:
+        logger.warning("[automation_config] should_run(%s) error → %s: %s", key, fail_default, exc)
+        return fail_default
 

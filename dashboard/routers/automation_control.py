@@ -11,11 +11,17 @@ POST /api/automation/toggle/<key>     → Quick enable/disable a specific servic
 POST /api/automation/trigger/<key>    → Manually trigger one immediate cycle
 GET  /api/automation/status           → Current runtime status of all services
 
-All endpoints require authentication (existing session-based auth).
+Auth (fail-closed):
+  - Config / toggle / parameters / status: staff session OR GAS_API_KEY
+  - Trigger / trigger-all: staff session OR GAS_API_KEY OR LEADS_INTERNAL_TOKEN
+    (Node-RED utilitarian flows send X-Internal-Token)
 """
 import asyncio
 import logging
+import os
+import secrets
 from datetime import datetime, timezone
+from typing import Optional, Tuple
 
 from dashboard.deps import get_db
 from dashboard.services.automation_config import (
@@ -33,6 +39,82 @@ automation_control_bp = APIRouter(prefix="/api", tags=["automation"])
 # its current sleep and run one cycle immediately.
 # Keys are populated lazily by the cron loops themselves at startup.
 TRIGGER_EVENTS: dict[str, asyncio.Event] = {}
+
+
+def _const_eq(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    try:
+        return secrets.compare_digest(a, b)
+    except Exception:
+        return a == b
+
+
+def _machine_key_ok(request: Request) -> bool:
+    """GAS_API_Key or LEADS_INTERNAL_TOKEN (Node-RED X-Internal-Token)."""
+    gas = (os.getenv("GAS_API_KEY") or "").strip()
+    internal = (
+        os.getenv("LEADS_INTERNAL_TOKEN")
+        or os.getenv("INTERNAL_API_TOKEN")
+        or ""
+    ).strip()
+    # Prefer GAS when internal is unset so existing Node-RED configs using only
+    # X-API-Key still work; also accept GAS as X-Internal-Token for convenience.
+    provided = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("X-Api-Key")
+        or request.headers.get("X-Internal-Token")
+        or request.query_params.get("api_key")
+        or ""
+    ).strip()
+    if gas and _const_eq(provided, gas):
+        return True
+    if internal and _const_eq(provided, internal):
+        return True
+    return False
+
+
+def _staff_session_ok(request: Request) -> bool:
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request
+
+        sess = get_session_from_request(request)
+        return bool(sess and sess.get("auth"))
+    except Exception:
+        return False
+
+
+def _require_control_auth(request: Request, *, allow_machine: bool = True) -> Optional[JSONResponse]:
+    """
+    Fail closed: staff cookie session, or machine key when allow_machine=True.
+    Returns JSONResponse on deny, None when authorized.
+    """
+    if _staff_session_ok(request):
+        return None
+    if allow_machine and _machine_key_ok(request):
+        return None
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "Authentication required",
+            "hint": "Staff session cookie, or X-API-Key / X-Internal-Token matching GAS_API_KEY / LEADS_INTERNAL_TOKEN",
+        },
+        status_code=401,
+    )
+
+
+def _actor_label(request: Request) -> str:
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request
+
+        sess = get_session_from_request(request)
+        if sess:
+            return sess.get("email") or sess.get("role") or "dashboard_user"
+    except Exception:
+        pass
+    if _machine_key_ok(request):
+        return "machine_key"
+    return "unknown"
 
 
 def register_trigger(key: str, event: asyncio.Event) -> None:
@@ -137,8 +219,11 @@ SERVICE_META = {
 
 # ── GET /api/automation/config — Read current config ───────────────────────
 @automation_control_bp.get("/automation/config")
-async def get_config():
+async def get_config(request: Request):
     """Return the full automation configuration."""
+    denied = _require_control_auth(request)
+    if denied:
+        return denied
     try:
         db = get_db()
         cfg = await get_automation_config(db)
@@ -160,12 +245,15 @@ async def set_config(request: Request):
         "paperwork_chase.nudge_1_hours": 3
     }
     """
+    denied = _require_control_auth(request, allow_machine=False)
+    if denied:
+        return denied
     try:
         body = await request.json()
         if not body:
             return JSONResponse({"success": False, "error": "Missing JSON body"}, status_code=400)
 
-        actor = body.pop("actor", "dashboard")
+        actor = body.pop("actor", None) or _actor_label(request)
         db = get_db()
         cfg = await update_automation_config(db, body, actor=actor)
         return {"success": True, "config": cfg}
@@ -186,6 +274,9 @@ async def toggle_automation(request: Request, key: str):
 
     If no body provided, toggles current state.
     """
+    denied = _require_control_auth(request, allow_machine=False)
+    if denied:
+        return denied
     if key not in ALL_SERVICE_KEYS:
         return JSONResponse(status_code=400, content={
             "success": False,
@@ -207,7 +298,7 @@ async def toggle_automation(request: Request, key: str):
         cfg = await update_automation_config(
             db,
             {f"{key}.enabled": new_state},
-            actor=body.get("actor", "dashboard"),
+            actor=body.get("actor") or _actor_label(request),
         )
 
         state_label = "🟢 ENABLED" if new_state else "🔴 DISABLED"
@@ -226,7 +317,7 @@ async def toggle_automation(request: Request, key: str):
 
 # ── POST /api/automation/trigger/<key> — Manual one-shot run ──────────────
 @automation_control_bp.post("/automation/trigger/{key}")
-async def trigger_automation(key: str):
+async def trigger_automation(request: Request, key: str):
     """Manually trigger one immediate cycle of a background service.
 
     This sets an asyncio.Event that the cron loop watches.  The loop will
@@ -238,7 +329,11 @@ async def trigger_automation(key: str):
     and logs a warning — the service will run on its next scheduled cycle.
 
     Valid keys: all entries in ALL_SERVICE_KEYS
+    Auth: staff session, GAS_API_KEY, or LEADS_INTERNAL_TOKEN (Node-RED).
     """
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
     if key not in ALL_SERVICE_KEYS:
         return JSONResponse(status_code=400, content={
             "success": False,
@@ -265,7 +360,7 @@ async def trigger_automation(key: str):
             "automation": key,
             "run_at": datetime.now(timezone.utc),
             "result": {"manual_trigger": True, "event_fired": triggered},
-            "triggered_by": "dashboard",
+            "triggered_by": _actor_label(request),
         })
     except Exception:
         pass  # Non-fatal — don't fail the response if logging fails
@@ -286,12 +381,15 @@ async def trigger_automation(key: str):
 
 # ── GET /api/automation/status — Full runtime status ─────────────────────
 @automation_control_bp.get("/automation/status")
-async def get_status():
+async def get_status(request: Request):
     """Return the current runtime status of ALL services.
 
     For each service: enabled state, interval, last run time, last result.
     Also includes service metadata (name, icon, category, description).
     """
+    denied = _require_control_auth(request)
+    if denied:
+        return denied
     try:
         db = get_db()
         cfg = await get_automation_config(db)
@@ -356,17 +454,54 @@ async def get_status():
 @automation_control_bp.post("/automation/parameters")
 async def update_parameters(request: Request):
     """Tune parameters for a specific automation section (e.g. min_lead_score, intervals, mode)."""
+    denied = _require_control_auth(request, allow_machine=False)
+    if denied:
+        return denied
     try:
         data = await request.json() or {}
         key = data.get("key")
         params = data.get("params") or {}
         if not key or not isinstance(params, dict):
             return JSONResponse({"success": False, "error": "key and params dict required"}, status_code=400)
+        if key not in ALL_SERVICE_KEYS and key not in (
+            "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
+            "outreach_queue", "docuseal_poller", "forfeiture_scan",
+        ):
+            return JSONResponse({"success": False, "error": f"unknown automation key: {key}"}, status_code=400)
+
+        # Cap dangerous free-form params
+        safe_params = dict(params)
+        if "mode" in safe_params:
+            mode = str(safe_params["mode"]).strip().lower()
+            if mode not in ("off", "review", "staff_only", "full_auto"):
+                return JSONResponse(
+                    {"success": False, "error": "mode must be off|review|staff_only|full_auto"},
+                    status_code=400,
+                )
+            safe_params["mode"] = mode
+        if "interval_seconds" in safe_params:
+            try:
+                iv = int(safe_params["interval_seconds"])
+                safe_params["interval_seconds"] = max(30, min(iv, 604800))
+            except (TypeError, ValueError):
+                return JSONResponse({"success": False, "error": "interval_seconds must be int"}, status_code=400)
+        if "min_lead_score" in safe_params:
+            try:
+                safe_params["min_lead_score"] = max(0, min(int(safe_params["min_lead_score"]), 100))
+            except (TypeError, ValueError):
+                return JSONResponse({"success": False, "error": "min_lead_score must be int 0-100"}, status_code=400)
+        if "max_per_cycle" in safe_params:
+            try:
+                safe_params["max_per_cycle"] = max(1, min(int(safe_params["max_per_cycle"]), 200))
+            except (TypeError, ValueError):
+                return JSONResponse({"success": False, "error": "max_per_cycle must be int 1-200"}, status_code=400)
 
         db = get_db(request)
         from dashboard.services.automation_config import update_automation_section_params
-        new_cfg = await update_automation_section_params(db, key, params, actor="dashboard_user")
-        return {"success": True, "key": key, "updated_params": params, "config": new_cfg}
+        new_cfg = await update_automation_section_params(
+            db, key, safe_params, actor=_actor_label(request)
+        )
+        return {"success": True, "key": key, "updated_params": safe_params, "config": new_cfg}
     except Exception as exc:
         logger.error("[automation-api] update_parameters error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
@@ -375,6 +510,9 @@ async def update_parameters(request: Request):
 @automation_control_bp.post("/automation/trigger-all")
 async def trigger_all_automations(request: Request):
     """Trigger one immediate execution cycle for ALL registered FastAPI background jobs."""
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
     try:
         triggered = []
         for key, event in TRIGGER_EVENTS.items():
@@ -382,7 +520,12 @@ async def trigger_all_automations(request: Request):
                 event.set()
                 triggered.append(key)
 
-        logger.info("☘️  Master sweep triggered for %d background automations: %s", len(triggered), triggered)
+        logger.info(
+            "☘️  Master sweep by %s for %d background automations: %s",
+            _actor_label(request),
+            len(triggered),
+            triggered,
+        )
         return {
             "success": True,
             "triggered_count": len(triggered),

@@ -960,22 +960,28 @@ async def adobe_pdf_services_webhook(request: Request):
 
 def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
     """
-    Verify DocuSeal webhook HMAC (when DOCUSEAL_WEBHOOK_SECRET is set).
+    Verify DocuSeal webhook HMAC.
 
-    Fail-closed in production if secret configured and signature missing/invalid.
-    If secret is empty: allow in DEBUG only (same pattern as SignNow).
+    Fail-closed unless DEBUG=true:
+      - missing DOCUSEAL_WEBHOOK_SECRET → reject (except DEBUG)
+      - missing/invalid signature → reject
     """
     secret = os.getenv("DOCUSEAL_WEBHOOK_SECRET", "").strip()
+    debug = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
+    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+    is_prod = env in ("production", "prod") or os.getenv("REQUIRE_DOCUSEAL_WEBHOOK_SECRET", "").lower() in (
+        "1", "true", "yes",
+    )
+
     if not secret:
-        if os.getenv("DEBUG", "false").lower() == "true":
-            logger.warning("[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET unset — allowing in DEBUG")
+        if debug and not is_prod:
+            logger.warning("[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET unset — allowing in DEBUG only")
             return True
-        # Allow first boot before secret is set, but log loudly
-        logger.warning(
-            "[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET not set — accepting "
-            "(set secret in DocuSeal admin + env for production)"
+        logger.error(
+            "[docuseal_webhook] DOCUSEAL_WEBHOOK_SECRET not set — rejecting "
+            "(set secret in DocuSeal admin + env)"
         )
-        return True
+        return False
 
     if not signature:
         logger.warning("[docuseal_webhook] missing signature header — rejecting")
@@ -986,7 +992,10 @@ def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
     sig = signature.strip().lower()
     if sig.startswith("sha256="):
         sig = sig[7:]
-    return hmac.compare_digest(expected, sig)
+    ok = hmac.compare_digest(expected, sig)
+    if not ok:
+        logger.warning("[docuseal_webhook] invalid signature — rejecting")
+    return ok
 
 
 @webhooks_bp.post("/webhooks/docuseal")

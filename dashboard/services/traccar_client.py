@@ -35,8 +35,11 @@ TRACCAR_PUBLIC_HOST = os.getenv(
 )
 TRACCAR_OSMAND_PUBLIC_PORT = os.getenv("TRACCAR_OSMAND_PUBLIC_PORT", "5055")
 TRACCAR_EMAIL = os.getenv("TRACCAR_EMAIL", "admin@shamrockbailbonds.biz")
-TRACCAR_PASSWORD = os.getenv("TRACCAR_PASSWORD", "Shamrock@Traccar2026!")
+# No default password in source — set TRACCAR_PASSWORD (or TRACCAR_TOKEN) in env
+TRACCAR_PASSWORD = os.getenv("TRACCAR_PASSWORD", "")
 TRACCAR_TOKEN = os.getenv("TRACCAR_TOKEN", "")  # Optional: use token auth instead
+# Optional fallback when docker DNS fails (empty = disabled)
+TRACCAR_FALLBACK_URL = os.getenv("TRACCAR_FALLBACK_URL", "").strip()
 
 _TIMEOUT = httpx.Timeout(15.0, connect=10.0)
 
@@ -84,16 +87,21 @@ class TraccarClient:
             )
             # If no token, authenticate via session
             if not self.token:
+                if not self.password:
+                    logger.error(
+                        "Traccar password/token not configured — set TRACCAR_PASSWORD or TRACCAR_TOKEN"
+                    )
+                    raise RuntimeError("traccar_not_configured")
                 try:
                     await self._create_session()
                 except Exception as exc:
-                    # Fall back to live Hetzner VPS Traccar endpoint if internal docker hostname fails
-                    if "traccar:8082" in self.base_url:
-                        fallback_url = "http://178.156.179.237:8082"
-                        logger.info("⚡ Attempting Traccar fallback to Hetzner VPS: %s", fallback_url)
+                    # Optional env-driven fallback (never hardcode public IPs)
+                    fallback_url = TRACCAR_FALLBACK_URL
+                    if fallback_url and fallback_url.rstrip("/") != self.base_url.rstrip("/"):
+                        logger.info("⚡ Attempting Traccar fallback URL: %s", fallback_url)
                         try:
                             await self._client.aclose()
-                            self.base_url = fallback_url
+                            self.base_url = fallback_url.rstrip("/")
                             self._client = httpx.AsyncClient(
                                 base_url=self.base_url,
                                 headers=headers,
@@ -102,34 +110,29 @@ class TraccarClient:
                             )
                             await self._create_session()
                         except Exception as fb_exc:
-                            logger.warning("Traccar VPS fallback error: %s", fb_exc)
+                            logger.warning("Traccar fallback error: %s", fb_exc)
+                            raise exc from fb_exc
+                    else:
+                        raise
         return self._client
 
     async def _create_session(self):
         """Authenticate with email/password to get a session cookie."""
+        if not self.password:
+            raise RuntimeError("traccar_password_missing")
         try:
             resp = await self._client.post(
                 "/api/session",
                 data={"email": self.email, "password": self.password},
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
+            # Fail closed — do not auto-login as admin/admin or rewrite credentials
             if resp.status_code == 401:
-                # Try default admin/admin login and update account
-                try:
-                    init_resp = await self._client.post(
-                        "/api/session",
-                        data={"email": "admin", "password": "admin"},
-                        headers={"Content-Type": "application/x-www-form-urlencoded"},
-                    )
-                    if init_resp.status_code == 200:
-                        user = init_resp.json()
-                        user["email"] = self.email
-                        user["password"] = self.password
-                        await self._client.put(f"/api/users/{user['id']}", json=user)
-                        logger.info("✅ Provisioned default Traccar admin to %s", self.email)
-                        resp = init_resp
-                except Exception as init_err:
-                    logger.warning("Traccar admin auto-provision attempt failed: %s", init_err)
+                logger.error(
+                    "Traccar auth rejected for %s — check TRACCAR_PASSWORD / TRACCAR_TOKEN",
+                    self.email,
+                )
+                resp.raise_for_status()
 
             resp.raise_for_status()
             self._session_cookie = resp.cookies.get("JSESSIONID")

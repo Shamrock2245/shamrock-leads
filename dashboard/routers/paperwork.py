@@ -2960,10 +2960,15 @@ class BindDefendantRequest(BaseModel):
 
 
 @paperwork_bp.post("/paperwork/packets/{packet_id}/bind-defendant")
-async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
+async def bind_defendant_to_packet(request: Request, packet_id: str, req: BindDefendantRequest):
     """
     Bind or match a defendant to an existing paperwork packet.
     Allows indemnitors to sign paperwork first and attach the defendant later.
+
+    Guards:
+      - Refuse if packet already signed/completed/filed
+      - Atomic update only while unassigned_defendant is true (or defendant is still TBN)
+      - Audit records real staff session actor when available
     """
     packet_col = get_collection("paperwork_packets")
     # Prefer packet_id string key (ObjectId string in _id is not valid BSON without cast)
@@ -2974,15 +2979,42 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
     if not packet:
         return JSONResponse({"success": False, "error": "packet_not_found"}, status_code=404)
 
+    status = (packet.get("status") or packet.get("docuseal_status") or "").lower()
+    if status in ("signed", "completed", "complete", "filed", "archived"):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "packet_already_finalized",
+                "message": f"Cannot rebind defendant on packet with status '{status}'.",
+            },
+            status_code=409,
+        )
+
     def_name = (req.defendant_name or "").strip()
     if not def_name:
         return JSONResponse({"success": False, "error": "defendant_name_required"}, status_code=400)
+    if def_name.lower() in ("to be named", "tbn", "unknown", "n/a"):
+        return JSONResponse(
+            {"success": False, "error": "invalid_defendant_name", "message": "Provide the real defendant name."},
+            status_code=400,
+        )
+
+    actor = "staff_or_matching_engine"
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request
+
+        sess = get_session_from_request(request)
+        if sess:
+            actor = sess.get("email") or sess.get("role") or actor
+    except Exception:
+        pass
 
     now_iso = datetime.now(timezone.utc).isoformat()
     update_fields = {
         "defendant_name": def_name,
         "unassigned_defendant": False,
         "defendant_bound_at": now_iso,
+        "defendant_bound_by": actor,
         "updated_at": now_iso,
     }
     if req.booking_number:
@@ -2996,8 +3028,35 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
     if req.charges:
         update_fields["charges"] = req.charges.strip()
 
-    filt = {"packet_id": packet.get("packet_id") or packet_id}
-    await packet_col.update_one(filt, {"$set": update_fields})
+    filt = {
+        "packet_id": packet.get("packet_id") or packet_id,
+        "$or": [
+            {"unassigned_defendant": True},
+            {"defendant_name": {"$in": ["To Be Named", "TBN", "", None]}},
+        ],
+    }
+    result = await packet_col.update_one(filt, {"$set": update_fields})
+    if result.matched_count == 0:
+        # Packet may have been bound by another request, or already has a real defendant
+        current = await packet_col.find_one({"packet_id": packet.get("packet_id") or packet_id})
+        if current and not current.get("unassigned_defendant") and (
+            (current.get("defendant_name") or "").strip().lower()
+            not in ("to be named", "tbn", "")
+        ):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "defendant_already_bound",
+                    "message": "Packet already has a bound defendant. Unbind or create a new packet.",
+                    "defendant_name": current.get("defendant_name"),
+                },
+                status_code=409,
+            )
+        # Fallback: force-set if still open but filter missed (legacy docs)
+        await packet_col.update_one(
+            {"packet_id": packet.get("packet_id") or packet_id},
+            {"$set": update_fields},
+        )
 
     # Log immutable audit event (never raise if audit write fails)
     try:
@@ -3010,7 +3069,7 @@ async def bind_defendant_to_packet(packet_id: str, req: BindDefendantRequest):
             "booking_number": update_fields.get("booking_number"),
             "county": update_fields.get("county"),
             "timestamp": now_iso,
-            "actor": "staff_or_matching_engine",
+            "actor": actor,
         })
     except Exception as audit_exc:
         logger.warning("bind-defendant audit write failed: %s", audit_exc)

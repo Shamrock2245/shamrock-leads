@@ -7,13 +7,13 @@ iMessage/SMS alerts to configured phone numbers.
 Alert recipients are stored in MongoDB `system_config` collection
 (key: "forfeiture_alert_phones") so God-Admin can add/remove via dashboard.
 
-Default phones (hardcoded as bootstrap):
-  - 239-784-9365 (Brendan)
-  - 239-955-0178 (Office)
-  - 239-955-0314 (Additional)
+Recipients from MongoDB system_config (forfeiture_alert_phones) or env
+FORFEITURE_ALERT_PHONES (comma-separated E.164). Empty defaults — never
+hardcode personal staff numbers in source.
 """
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 
@@ -21,12 +21,20 @@ from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
 
-# ── Default forfeiture alert recipients (bootstrap) ─────────────────────────
-DEFAULT_FORFEITURE_PHONES = [
-    "+12397849365",
-    "+12399550178",
-    "+12399550314",
-]
+# ── Bootstrap from env only (comma-separated). Prefer Mongo system_config. ──
+def _env_forfeiture_phones() -> list:
+    raw = (os.getenv("FORFEITURE_ALERT_PHONES") or "").strip()
+    if not raw:
+        return []
+    out = []
+    for part in raw.split(","):
+        p = part.strip()
+        if p:
+            out.append(p)
+    return out
+
+
+DEFAULT_FORFEITURE_PHONES = _env_forfeiture_phones()
 
 # ── Forfeiture-specific keywords (separate from discharge keywords) ─────────
 FORFEITURE_KEYWORDS = [

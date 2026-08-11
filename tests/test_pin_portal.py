@@ -26,13 +26,15 @@ def test_done_landing_page():
 
 
 def test_verify_admin_pin_bypass():
+    """Staff smoke bypass only when PORTAL_STAFF_MASTER_PIN env is set."""
     mock_packets = MagicMock()
     mock_packets.find_one = AsyncMock(return_value={
         "signing_link": "https://sign.shamrockbailbonds.biz/s/abc123",
         "created_at": "2026-08-07",
     })
-    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets):
-        payload = {"phone": "2395550199", "pin": "224545"}
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets), \
+         patch("dashboard.routers.pin_portal._MASTER_PIN", "999888"):
+        payload = {"phone": "2395550199", "pin": "999888"}
         response = client.post("/api/portal/verify-pin", json=payload, follow_redirects=True)
     assert response.status_code == 200
     data = response.json()
@@ -40,6 +42,20 @@ def test_verify_admin_pin_bypass():
     assert data["verified"] is True
     assert "PORTAL-ADMIN" in data["session_token"]
     assert data["signing_link"] == "https://sign.shamrockbailbonds.biz/s/abc123"
+
+
+def test_hardcoded_master_pin_disabled():
+    """Legacy hardcoded 224545 must not bypass portal auth when env pin unset."""
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value=None)
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins), \
+         patch("dashboard.routers.pin_portal._MASTER_PIN", ""):
+        response = client.post(
+            "/api/portal/verify-pin",
+            json={"phone": "2395550199", "pin": "224545"},
+            follow_redirects=True,
+        )
+    assert response.status_code == 401
 
 
 def test_send_pin_via_bluebubbles_mock():

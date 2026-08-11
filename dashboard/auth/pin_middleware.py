@@ -35,7 +35,8 @@ from dashboard.auth.super_admin import (
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "224545")
+# Env-only PIN — no hardcoded fallback (legacy dual-PIN removed for fail-closed auth)
+DASHBOARD_PIN = (os.getenv("DASHBOARD_PIN") or "").strip()
 COOKIE_NAME = "sl_session"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
@@ -82,8 +83,8 @@ OAUTH_PREFIXES = (
     "/api/social/oauth/meta/",
 )
 
-# Valid master PINs
-VALID_PINS = frozenset({DASHBOARD_PIN, "224545"})
+# Valid master PINs (env only — never ship a second hardcoded master)
+VALID_PINS = frozenset(p for p in (DASHBOARD_PIN,) if p)
 
 
 def _get_serializer() -> URLSafeTimedSerializer:
