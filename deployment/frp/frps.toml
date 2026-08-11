@@ -19,13 +19,13 @@ proxyBindAddr = "0.0.0.0"
 
 # Auth — MUST match frpc on the iMac. Rotate if ever leaked.
 auth.method = "token"
-auth.token = "CHANGE_ME_SET_FRP_TOKEN_IN_ENV"
+auth.token = "shamrock-bb-2245-frp"
 
 # Dashboard (optional ops UI)
 webServer.addr = "0.0.0.0"
 webServer.port = 7500
 webServer.user = "shamrock"
-webServer.password = "CHANGE_ME_FRP_DASHBOARD_PASSWORD"
+webServer.password = "2245Bail"
 
 # Allow only the ports we explicitly map in frpc
 allowPorts = [

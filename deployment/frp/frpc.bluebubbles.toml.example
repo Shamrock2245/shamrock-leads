@@ -8,7 +8,7 @@ serverAddr = "178.156.179.237"
 serverPort = 7001
 
 auth.method = "token"
-auth.token = "CHANGE_ME_SET_FRP_TOKEN_IN_ENV"
+auth.token = "shamrock-bb-2245-frp"
 
 loginFailExit = false
 
