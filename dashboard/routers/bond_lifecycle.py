@@ -433,20 +433,36 @@ async def file_to_drive(request: Request, identifier: str):
         
         drive_service = GoogleDriveService()
         if not drive_service.is_configured:
-            return JSONResponse({'error': 'Google Drive OAuth is not configured'}, status_code=500)
+            return JSONResponse({
+                'error': 'Google Drive is not configured',
+                'hint': (
+                    'Set GOOGLE_APPLICATION_CREDENTIALS (service account) or '
+                    'OAuth refresh token with Drive scope. '
+                    'Run: python scripts/verify_drive_auth.py'
+                ),
+            }, status_code=500)
 
         # ── Drive Folder Hierarchy ──
         # Root (Completed Bonds)
         #   └─ OSI /  Palmetto          ← surety subfolder (GAP-G fix)
         #       └─ DefendantLastName, FirstInitial_YYYYMMDD
         #           └─ PDF file
-        root_folder_id = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
+        root_folder_id = (
+            os.getenv("COMPLETED_BONDS_FOLDER_ID")
+            or os.getenv("GOOGLE_DRIVE_OUTPUT_FOLDER_ID")
+            or "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
+        )
 
         # Surety subfolder (OSI or Palmetto)
         surety_label = surety_id.upper()  # 'OSI' or 'PALMETTO'
         surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
         if not surety_folder_id:
-            return JSONResponse({'error': f'Failed to get/create surety folder ({surety_label})'}, status_code=500)
+            err = drive_service.error_payload()
+            return JSONResponse({
+                'error': f'Failed to get/create surety folder ({surety_label})',
+                'drive_error': err.get('error'),
+                'error_code': err.get('error_code'),
+            }, status_code=500)
 
         # Defendant subfolder — naming convention: LastName, FirstInitial_YYYYMMDD
         date_str = datetime.datetime.now().strftime("%Y%m%d")
@@ -465,6 +481,15 @@ async def file_to_drive(request: Request, identifier: str):
         filename = f"{folder_name}_Completed_Bond.pdf"
         link = drive_service.upload_pdf(pdf_bytes, filename, def_folder_id)
         
+        if not link:
+            err = drive_service.error_payload()
+            return JSONResponse({
+                'error': 'Drive upload failed',
+                'drive_error': err.get('error'),
+                'error_code': err.get('error_code'),
+                'auth_mode': err.get('auth_mode'),
+            }, status_code=500)
+
         if link:
             # Update DB with drive link, surety, and filed status
             await db.paperwork_packets.update_one(

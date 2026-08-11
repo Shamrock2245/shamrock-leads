@@ -445,6 +445,18 @@ class LifecycleAutomations:
                             if filed.get("ok"):
                                 drive_url = filed.get("drive_url")
                                 results["filed_drive"] += 1
+                            else:
+                                logger.warning(
+                                    "[docuseal-poll] drive archive failed packet=%s code=%s err=%s",
+                                    packet_id,
+                                    filed.get("error_code"),
+                                    (filed.get("error") or "")[:200],
+                                )
+                                results.setdefault("drive_errors", []).append({
+                                    "packet_id": packet_id,
+                                    "error_code": filed.get("error_code"),
+                                    "error": (filed.get("error") or "")[:200],
+                                })
                         except Exception as de:
                             logger.warning("[docuseal-poll] drive %s: %s", packet_id, de)
 

@@ -93,7 +93,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|------|------|
 | P1.1 | Gmail OAuth for discharge monitor (`GOOGLE_*` / refresh token) — not 501 | leads | [ ] |
 | P1.2 | Google Calendar OAuth for court sync — not 501 / not dry-run only | leads | [ ] |
-| P1.3 | Google Drive OAuth for completed-bond filing | leads | [ ] |
+| P1.3 | Google Drive completed-bond filing (`verify_drive_auth.py` green, write probe). Re-auth OAuth with Drive scope via `get_gmail_token.py` — required for My Drive (fixes `invalid_scope` + SA `storageQuotaExceeded`) | leads | [ ] |
 | P1.4 | OSINT worker healthy if using `/api/osint/*` (Maigret path) | leads | [ ] |
 | P1.5 | Node-RED: `GAS_WEBHOOK_URL`, `LEADS_PUBLIC_URL`, `GAS_API_KEY`; SYSTEM_SHUTDOWN off | node-red | [x] *verified 2026-08-04* |
 | P1.6 | Automation schedule visible: `GET /api/automation/schedule` (auth) | leads | [x] *implemented* |

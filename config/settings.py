@@ -88,7 +88,13 @@ class Settings:
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_GMAIL_REFRESH_TOKEN: str = os.getenv("GOOGLE_GMAIL_REFRESH_TOKEN", "")
+    # Optional dedicated Drive token; falls back to GOOGLE_GMAIL_REFRESH_TOKEN
+    GOOGLE_DRIVE_REFRESH_TOKEN: str = os.getenv("GOOGLE_DRIVE_REFRESH_TOKEN", "")
     GOOGLE_CALENDAR_ID: str = os.getenv("GOOGLE_CALENDAR_ID", "admin@shamrockbailbonds.biz")
+    COMPLETED_BONDS_FOLDER_ID: str = os.getenv(
+        "COMPLETED_BONDS_FOLDER_ID",
+        os.getenv("GOOGLE_DRIVE_OUTPUT_FOLDER_ID", ""),
+    )
 
     # --- BlueBubbles ---
     BLUEBUBBLES_URL_0178: str = os.getenv("BLUEBUBBLES_URL_0178", "")
@@ -114,6 +120,21 @@ class Settings:
     @classmethod
     def gmail_configured(cls) -> bool:
         return bool(cls.GOOGLE_CLIENT_ID and cls.GOOGLE_CLIENT_SECRET and cls.GOOGLE_GMAIL_REFRESH_TOKEN)
+
+    @classmethod
+    def drive_configured(cls) -> bool:
+        """True if service-account path or OAuth token present (scope not validated)."""
+        sa = bool(
+            cls.GOOGLE_APPLICATION_CREDENTIALS
+            or os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+            or os.getenv("GOOGLE_SA_KEY_JSON")
+        )
+        oauth = bool(
+            cls.GOOGLE_CLIENT_ID
+            and cls.GOOGLE_CLIENT_SECRET
+            and (cls.GOOGLE_DRIVE_REFRESH_TOKEN or cls.GOOGLE_GMAIL_REFRESH_TOKEN)
+        )
+        return sa or oauth
 
     @classmethod
     def bluebubbles_configured(cls) -> bool:

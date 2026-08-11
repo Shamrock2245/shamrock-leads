@@ -106,6 +106,9 @@ LEADS_RECOMMENDED = [
     "OPENAI_API_KEY",
     "MEMO_API_KEY",  # Mem0 / Shannon long-term memory (GAS name; alias MEM0_API_KEY)
     "GOOGLE_GMAIL_REFRESH_TOKEN",
+    # Drive archive: SA path preferred; OAuth token must include Drive scope
+    "GOOGLE_APPLICATION_CREDENTIALS",  # or GOOGLE_SERVICE_ACCOUNT_JSON
+    "COMPLETED_BONDS_FOLDER_ID",
     "SWIPESIMPLE_PAYMENT_LINK",
 ]
 

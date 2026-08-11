@@ -391,6 +391,26 @@ When **all required parties** have signed (DocuSeal webhooks complete):
    `Completed Bonds / {Surety label} / {Defendant folder} / signed packet`  
 4. Env: `COMPLETED_BONDS_FOLDER_ID` / `GOOGLE_DRIVE_OUTPUT_FOLDER_ID` = that folder ID  
 
+**Auth (required for production archive):**
+
+| Priority | Method | Setup |
+| -------- | ------ | ----- |
+| 1 (required for My Drive) | User OAuth | `python scripts/get_gmail_token.py` grants Gmail + Calendar + **Drive**; set `GOOGLE_GMAIL_REFRESH_TOKEN` (optional alias `GOOGLE_DRIVE_REFRESH_TOKEN`) |
+| 2 (Shared Drives only) | Service account | `GOOGLE_APPLICATION_CREDENTIALS` → SA JSON; folder must be a **Shared Drive** with SA as Content Manager |
+
+**Known failure modes:**
+
+| Error | Cause | Fix |
+| ----- | ----- | --- |
+| `invalid_scope` | OAuth token minted with Gmail/Calendar only | Re-run `get_gmail_token.py` (now includes Drive) and update `.env` |
+| `storageQuotaExceeded` | SA writing into personal My Drive | Use OAuth (above). SA has zero My Drive quota |
+
+```bash
+python scripts/verify_drive_auth.py          # preflight (write probe)
+python scripts/e2e_test_paperwork.py         # full DocuSeal + Drive
+python scripts/e2e_test_paperwork.py --drive-only
+```
+
 Legacy SignNow completion path already uploads here — DocuSeal webhook must call the same Drive helper.
 
 ### 7.8 Write Bond → portal PIN handoff

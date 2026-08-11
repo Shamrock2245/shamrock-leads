@@ -1226,12 +1226,18 @@ async def docuseal_webhook(request: Request):
     drive_url = None
     drive_folder_id = None
     pdf_bytes = None
+    packet_drive_error = None
     ds = DocuSealService()
     if submission_id and ds.is_configured:
         try:
             pdf_bytes = await ds.download_combined_pdf(submission_id)
         except Exception as exc:
             logger.error("[docuseal_webhook] PDF download failed: %s", exc)
+            packet_drive_error = {
+                "error_code": "pdf_download_failed",
+                "error": str(exc)[:300],
+                "at": now_iso,
+            }
 
     if pdf_bytes:
         try:
@@ -1245,10 +1251,26 @@ async def docuseal_webhook(request: Request):
             if filed.get("ok"):
                 drive_url = filed.get("drive_url")
                 drive_folder_id = filed.get("drive_folder_id")
+                packet_drive_error = None
             else:
-                logger.warning("[docuseal_webhook] Drive file failed: %s", filed.get("error"))
+                logger.warning(
+                    "[docuseal_webhook] Drive file failed code=%s err=%s",
+                    filed.get("error_code"),
+                    filed.get("error"),
+                )
+                packet_drive_error = {
+                    "error_code": filed.get("error_code"),
+                    "error": (filed.get("error") or "")[:300],
+                    "auth_mode": filed.get("auth_mode"),
+                    "at": now_iso,
+                }
         except Exception as exc:
             logger.error("[docuseal_webhook] Drive upload error: %s", exc)
+            packet_drive_error = {
+                "error_code": "upload_exception",
+                "error": str(exc)[:300],
+                "at": now_iso,
+            }
 
     packet_update = {
         "status": "signed",
@@ -1263,9 +1285,12 @@ async def docuseal_webhook(request: Request):
     if drive_url:
         packet_update["signed_pdf_drive_url"] = drive_url
         packet_update["drive_link"] = drive_url
+        packet_update["drive_archive_error"] = None
     if drive_folder_id:
         packet_update["drive_folder_id"] = drive_folder_id
         packet_update["signed_pdf_drive_id"] = drive_folder_id
+    if packet_drive_error and not drive_url:
+        packet_update["drive_archive_error"] = packet_drive_error
 
     await packets_col.update_one({"packet_id": packet_id}, {"$set": packet_update})
 

@@ -21,6 +21,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
@@ -1163,8 +1164,16 @@ class DocuSealService:
 
         drive = GoogleDriveService()
         if not drive.is_configured:
-            logger.warning("[docuseal] Google Drive OAuth not configured — skip archive")
-            return {"ok": False, "error": "google_drive_not_configured"}
+            logger.warning("[docuseal] Google Drive not configured — skip archive")
+            return {
+                "ok": False,
+                "error": "google_drive_not_configured",
+                "error_code": "not_configured",
+                "hint": (
+                    "Set GOOGLE_APPLICATION_CREDENTIALS (preferred) or OAuth "
+                    "refresh token with Drive scope. See scripts/verify_drive_auth.py"
+                ),
+            }
 
         root = (
             os.getenv("COMPLETED_BONDS_FOLDER_ID")
@@ -1200,30 +1209,59 @@ class DocuSealService:
                 upload_folder = drive.get_or_create_folder(folder_name, surety_folder) or surety_folder
             else:
                 logger.warning(
-                    "[docuseal] surety folder failed — uploading under Completed Bonds root"
+                    "[docuseal] surety folder failed — uploading under Completed Bonds root "
+                    "(drive_error=%s)",
+                    drive.last_error,
                 )
+                # If auth itself failed, do not pretend root upload will work
+                if drive.last_error_code in (
+                    "invalid_scope",
+                    "invalid_grant",
+                    "access_denied",
+                    "not_configured",
+                    "auth_failed",
+                ):
+                    payload = drive.error_payload()
+                    return {
+                        "ok": False,
+                        "error": payload.get("error") or "drive_auth_failed",
+                        "error_code": payload.get("error_code"),
+                        "auth_mode": payload.get("auth_mode"),
+                    }
                 upload_folder = root
         except Exception as exc:
             logger.warning("[docuseal] Drive folder create error: %s — using root", exc)
             upload_folder = root
 
         if not upload_folder:
-            return {"ok": False, "error": "no_upload_folder"}
+            payload = drive.error_payload()
+            return {
+                "ok": False,
+                "error": payload.get("error") or "no_upload_folder",
+                "error_code": payload.get("error_code") or "no_upload_folder",
+            }
 
         try:
             link = drive.upload_pdf(pdf_bytes, filename, upload_folder)
         except Exception as exc:
             logger.error("[docuseal] Drive upload exception: %s", exc)
-            return {"ok": False, "error": f"upload_exception:{exc}"[:200]}
+            return {"ok": False, "error": f"upload_exception:{exc}"[:200], "error_code": "upload_exception"}
 
         if not link:
-            return {"ok": False, "error": "upload_failed"}
+            payload = drive.error_payload()
+            return {
+                "ok": False,
+                "error": payload.get("error") or "upload_failed",
+                "error_code": payload.get("error_code") or "upload_failed",
+                "auth_mode": payload.get("auth_mode"),
+            }
         return {
             "ok": True,
             "drive_url": link,
             "drive_folder_id": upload_folder,
             "filename": filename,
             "surety": surety_label,
+            "auth_mode": drive.auth_mode,
         }
 
 
