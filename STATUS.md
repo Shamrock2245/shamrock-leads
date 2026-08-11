@@ -28,21 +28,21 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 ---
 
-## Scale (authoritative — 2026-08-04)
+## Scale (authoritative — 2026-08-11)
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
-| **GA** | **74** | `scrapers/counties_ga/` | + EAS batch runner for rural cluster |
+| **GA** | **85** | `scrapers/counties_ga/` | + Gordon, Walker, Whitfield, Tift, Ware, Coffee, Appling, Bleckley, Crisp, Laurens, Effingham + EAS batch runner |
 | **FL** | **67** | `scrapers/counties/` | **All 67 FL counties** on registry + scheduler; legacy `scraper_<county>` IDs |
+| **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
-| **NC** | **47** | `scrapers/counties_nc/` | Waves 4–7: DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF |
-| **TX** | **15** | `scrapers/counties_tx/` | + Gulf Coast (Cameron, Brazoria, Galveston) |
-| **TN** | **9** | `scrapers/counties_tn/` | + Williamson, Montgomery, Sumner |
-| **LA** | **4** | `scrapers/counties_la/` | Orleans, Lafayette, Jefferson, East Baton Rouge |
-| **AL** | **3** | `scrapers/counties_al/` | Jefferson, Madison, Mobile |
-| **CT** | **2** | `scrapers/counties_ct/` | Statewide dockets (~1.6k/run) · CT DOC A–Z (~14k) — hardened 2026-08-04 |
-| **MS** | **2** | `scrapers/counties_ms/` | Hinds, Jackson |
-| **Total** | **269** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **TX** | **33** | `scrapers/counties_tx/` | + Ellis, Johnson, Ector, Midland, Potter, Bastrop, Guadalupe, Comal, Victoria, Walker + Bell, Lubbock, Webb, Jefferson, McLennan, Nueces, Brazos, Hays |
+| **TN** | **21** | `scrapers/counties_tn/` | + Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, Giles + Wilson, Bradley, Blount, Sevier, Washington |
+| **AL** | **13** | `scrapers/counties_al/` | + Houston, Morgan, Etowah, Cullman, DeKalb, Jackson + Baldwin, Tuscaloosa, Shelby, Montgomery |
+| **LA** | **10** | `scrapers/counties_la/` | + Ascension, Livingston + Caddo, Calcasieu, Ouachita, St. Tammany |
+| **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
+| **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
+| **Total** | **350** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
@@ -54,7 +54,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **269** registered scrapers (10 states), scoring, Slack, Mongo | ✅ 2026-08-04 |
+| **350** registered scrapers (10 states), scoring, Slack, Mongo | ✅ 2026-08-11 |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |

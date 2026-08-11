@@ -188,6 +188,12 @@ from scrapers.counties_ga.troup import TroupScraper as GA_TroupScraper
 from scrapers.counties_ga.twiggs import TwiggsScraper as GA_TwiggsScraper
 from scrapers.counties_ga.upson import UpsonScraper as GA_UpsonScraper
 from scrapers.counties_ga.walton import WaltonScraper as GA_WaltonScraper
+from scrapers.counties_ga.gordon import GordonScraper as GA_GordonScraper
+from scrapers.counties_ga.walker import WalkerScraper as GA_WalkerScraper
+from scrapers.counties_ga.whitfield import WhitfieldScraper as GA_WhitfieldScraper
+from scrapers.counties_ga.tift import TiftScraper as GA_TiftScraper
+from scrapers.counties_ga.ware import WareScraper as GA_WareScraper
+from scrapers.counties_ga.coffee import CoffeeScraper as GA_CoffeeScraper
 
 # ── South Carolina Scrapers ────────────────────────────────────────────────
 from scrapers.counties_sc.abbeville import AbbevilleScraper as SC_AbbevilleScraper
@@ -288,6 +294,19 @@ from scrapers.counties_nc.caldwell import CaldwellScraper as NC_CaldwellScraper
 from scrapers.counties_nc.chatham import ChathamScraper as NC_ChathamScraper
 from scrapers.counties_nc.stanly import StanlyScraper as NC_StanlyScraper
 from scrapers.counties_nc.orange import OrangeScraper as NC_OrangeScraper
+from scrapers.counties_nc.rowan import RowanScraper as NC_RowanScraper
+from scrapers.counties_nc.robeson import RobesonScraper as NC_RobesonScraper
+from scrapers.counties_nc.wayne import WayneScraper as NC_WayneScraper
+from scrapers.counties_nc.wilkes import WilkesScraper as NC_WilkesScraper
+from scrapers.counties_nc.nash import NashScraper as NC_NashScraper
+from scrapers.counties_nc.vance import VanceScraper as NC_VanceScraper
+from scrapers.counties_nc.rockingham import RockinghamScraper as NC_RockinghamScraper
+from scrapers.counties_nc.granville import GranvilleScraper as NC_GranvilleScraper
+from scrapers.counties_nc.person import PersonScraper as NC_PersonScraper
+from scrapers.counties_nc.warren import WarrenScraper as NC_WarrenScraper
+from scrapers.counties_nc.caswell import CaswellScraper as NC_CaswellScraper
+from scrapers.counties_nc.chowan import ChowanScraper as NC_ChowanScraper
+from scrapers.counties_nc.perquimans import PerquimansScraper as NC_PerquimansScraper
 
 # ── Tennessee Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_tn.davidson import DavidsonScraper as TN_DavidsonScraper
@@ -299,6 +318,18 @@ from scrapers.counties_tn.rutherford import RutherfordScraper as TN_RutherfordSc
 from scrapers.counties_tn.williamson import WilliamsonScraper as TN_WilliamsonScraper
 from scrapers.counties_tn.montgomery import MontgomeryScraper as TN_MontgomeryScraper
 from scrapers.counties_tn.sumner import SumnerScraper as TN_SumnerScraper
+from scrapers.counties_tn.wilson import WilsonScraper as TN_WilsonScraper
+from scrapers.counties_tn.bradley import BradleyScraper as TN_BradleyScraper
+from scrapers.counties_tn.blount import BlountScraper as TN_BlountScraper
+from scrapers.counties_tn.sevier import SevierScraper as TN_SevierScraper
+from scrapers.counties_tn.washington import WashingtonScraper as TN_WashingtonScraper
+from scrapers.counties_tn.maury import MauryScraper as TN_MauryScraper
+from scrapers.counties_tn.robertson import RobertsonScraper as TN_RobertsonScraper
+from scrapers.counties_tn.hamblen import HamblenScraper as TN_HamblenScraper
+from scrapers.counties_tn.bedford import BedfordScraper as TN_BedfordScraper
+from scrapers.counties_tn.coffee import CoffeeTNScraper as TN_CoffeeScraper
+from scrapers.counties_tn.lincoln import LincolnTNScraper as TN_LincolnScraper
+from scrapers.counties_tn.giles import GilesScraper as TN_GilesScraper
 
 # ── Texas Scrapers ─────────────────────────────────────────────────────────
 from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
@@ -316,25 +347,70 @@ from scrapers.counties_tx.hidalgo import HidalgoScraper as TX_HidalgoScraper
 from scrapers.counties_tx.cameron import CameronScraper as TX_CameronScraper
 from scrapers.counties_tx.brazoria import BrazoriaScraper as TX_BrazoriaScraper
 from scrapers.counties_tx.galveston import GalvestonScraper as TX_GalvestonScraper
+from scrapers.counties_tx.bell import BellScraper as TX_BellScraper
+from scrapers.counties_tx.lubbock import LubbockScraper as TX_LubbockScraper
+from scrapers.counties_tx.webb import WebbScraper as TX_WebbScraper
+from scrapers.counties_tx.jefferson import JeffersonScraper as TX_JeffersonScraper
+from scrapers.counties_tx.mclennan import McLennanScraper as TX_McLennanScraper
+from scrapers.counties_tx.nueces import NuecesScraper as TX_NuecesScraper
+from scrapers.counties_tx.brazos import BrazosScraper as TX_BrazosScraper
+from scrapers.counties_tx.hays import HaysScraper as TX_HaysScraper
+from scrapers.counties_tx.ellis import EllisScraper as TX_EllisScraper
+from scrapers.counties_tx.johnson import JohnsonScraper as TX_JohnsonScraper
+from scrapers.counties_tx.ector import EctorScraper as TX_EctorScraper
+from scrapers.counties_tx.midland import MidlandScraper as TX_MidlandScraper
+from scrapers.counties_tx.potter import PotterScraper as TX_PotterScraper
+from scrapers.counties_tx.bastrop import BastropScraper as TX_BastropScraper
+from scrapers.counties_tx.guadalupe import GuadalupeScraper as TX_GuadalupeScraper
+from scrapers.counties_tx.comal import ComalScraper as TX_ComalScraper
+from scrapers.counties_tx.victoria import VictoriaScraper as TX_VictoriaScraper
+from scrapers.counties_tx.walker import WalkerTXScraper as TX_WalkerScraper
 
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
 from scrapers.counties_la.lafayette import LafayetteScraper as LA_LafayetteScraper
 from scrapers.counties_la.jefferson import JeffersonScraper as LA_JeffersonScraper
 from scrapers.counties_la.east_baton_rouge import EastBatonRougeScraper as LA_EastBatonRougeScraper
+from scrapers.counties_la.caddo import CaddoScraper as LA_CaddoScraper
+from scrapers.counties_la.calcasieu import CalcasieuScraper as LA_CalcasieuScraper
+from scrapers.counties_la.ouachita import OuachitaScraper as LA_OuachitaScraper
+from scrapers.counties_la.st_tammany import StTammanyScraper as LA_StTammanyScraper
+from scrapers.counties_la.ascension import AscensionScraper as LA_AscensionScraper
+from scrapers.counties_la.livingston import LivingstonScraper as LA_LivingstonScraper
 
 # ── Alabama Scrapers ───────────────────────────────────────────────────────
 from scrapers.counties_al.jefferson import JeffersonScraper as AL_JeffersonScraper
 from scrapers.counties_al.madison import MadisonScraper as AL_MadisonScraper
 from scrapers.counties_al.mobile import MobileScraper as AL_MobileScraper
+from scrapers.counties_al.baldwin import BaldwinScraper as AL_BaldwinScraper
+from scrapers.counties_al.tuscaloosa import TuscaloosaScraper as AL_TuscaloosaScraper
+from scrapers.counties_al.shelby import ShelbyScraper as AL_ShelbyScraper
+from scrapers.counties_al.montgomery import MontgomeryScraper as AL_MontgomeryScraper
+from scrapers.counties_al.houston import HoustonScraper as AL_HoustonScraper
+from scrapers.counties_al.morgan import MorganScraper as AL_MorganScraper
+from scrapers.counties_al.etowah import EtowahScraper as AL_EtowahScraper
+from scrapers.counties_al.cullman import CullmanScraper as AL_CullmanScraper
+from scrapers.counties_al.dekalb import DeKalbALScraper as AL_DeKalbScraper
+from scrapers.counties_al.jackson import JacksonALScraper as AL_JacksonScraper
 
 # ── Connecticut Scrapers ───────────────────────────────────────────────────
 from scrapers.counties_ct.statewide_docket import CTStatewideDockerScraper as CT_StatewideScraper
 from scrapers.counties_ct.ct_doc import CTDOCInmateScraper as CT_DOCScraper
+from scrapers.counties_ct.hartford import HartfordScraper as CT_HartfordScraper
+from scrapers.counties_ct.bridgeport import BridgeportScraper as CT_BridgeportScraper
+from scrapers.counties_ct.new_haven import NewHavenScraper as CT_NewHavenScraper
+from scrapers.counties_ct.stamford import StamfordScraper as CT_StamfordScraper
 
 # ── Mississippi Scrapers ───────────────────────────────────────────────────
 from scrapers.counties_ms.hinds import HindsScraper as MS_HindsScraper
 from scrapers.counties_ms.jackson import JacksonScraper as MS_JacksonScraper
+from scrapers.counties_ms.harrison import HarrisonScraper as MS_HarrisonScraper
+from scrapers.counties_ms.desoto import DeSotoScraper as MS_DeSotoScraper
+from scrapers.counties_ms.rankin import RankinScraper as MS_RankinScraper
+from scrapers.counties_ms.lauderdale import LauderdaleScraper as MS_LauderdaleScraper
+from scrapers.counties_ms.forrest import ForrestScraper as MS_ForrestScraper
+from scrapers.counties_ms.jones import JonesScraper as MS_JonesScraper
+from scrapers.counties_ms.madison import MadisonMSScraper as MS_MadisonScraper
 
 logging.basicConfig(
     level=logging.INFO,
@@ -534,6 +610,17 @@ def register_scrapers(sched):
     sched.register_scraper(GA_TwiggsScraper(), interval_minutes=120)
     sched.register_scraper(GA_UpsonScraper(), interval_minutes=120)
     sched.register_scraper(GA_WaltonScraper(), interval_minutes=30)
+    sched.register_scraper(GA_GordonScraper(), interval_minutes=90)
+    sched.register_scraper(GA_WalkerScraper(), interval_minutes=90)
+    sched.register_scraper(GA_WhitfieldScraper(), interval_minutes=90)
+    sched.register_scraper(GA_TiftScraper(), interval_minutes=90)
+    sched.register_scraper(GA_WareScraper(), interval_minutes=90)
+    sched.register_scraper(GA_CoffeeScraper(), interval_minutes=90)
+    sched.register_scraper(GA_ApplingScraper(), interval_minutes=120)
+    sched.register_scraper(GA_BleckleyScraper(), interval_minutes=120)
+    sched.register_scraper(GA_CrispScraper(), interval_minutes=120)
+    sched.register_scraper(GA_LaurensScraper(), interval_minutes=120)
+    sched.register_scraper(GA_EffinghamScraper(), interval_minutes=120)
 
     from apscheduler.triggers.interval import IntervalTrigger
     sched.scheduler.add_job(
@@ -642,12 +729,25 @@ def register_scrapers(sched):
     sched.register_scraper(NC_CatawbaScraper(), interval_minutes=60)
     sched.register_scraper(NC_CarteretScraper(), interval_minutes=90)
     sched.register_scraper(NC_CaldwellScraper(), interval_minutes=120)
-    # Wave-7 NC: Chatham/Stanly OCV JSON + Orange daily PDF
+    # Wave-7 NC: OCV + Orange daily PDF + Wave-8
     sched.register_scraper(NC_ChathamScraper(), interval_minutes=60)
     sched.register_scraper(NC_StanlyScraper(), interval_minutes=60)
     sched.register_scraper(NC_OrangeScraper(), interval_minutes=120)
+    sched.register_scraper(NC_RowanScraper(), interval_minutes=90)
+    sched.register_scraper(NC_RobesonScraper(), interval_minutes=90)
+    sched.register_scraper(NC_WayneScraper(), interval_minutes=90)
+    sched.register_scraper(NC_WilkesScraper(), interval_minutes=90)
+    sched.register_scraper(NC_NashScraper(), interval_minutes=90)
+    sched.register_scraper(NC_VanceScraper(), interval_minutes=90)
+    sched.register_scraper(NC_RockinghamScraper(), interval_minutes=90)
+    sched.register_scraper(NC_GranvilleScraper(), interval_minutes=120)
+    sched.register_scraper(NC_PersonScraper(), interval_minutes=120)
+    sched.register_scraper(NC_WarrenScraper(), interval_minutes=120)
+    sched.register_scraper(NC_CaswellScraper(), interval_minutes=120)
+    sched.register_scraper(NC_ChowanScraper(), interval_minutes=120)
+    sched.register_scraper(NC_PerquimansScraper(), interval_minutes=120)
 
-    # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3) ─────────────────────────────────
+    # ── Tennessee (wave-1 + TnCIS statewide + wave-2 + wave-3 + wave-4 + wave-5) ─────────────────────────────────
     sched.register_scraper(TN_DavidsonScraper(), interval_minutes=60)
     sched.register_scraper(TN_ShelbyScraper(), interval_minutes=90)
     sched.register_scraper(TN_KnoxScraper(), interval_minutes=90)
@@ -658,8 +758,20 @@ def register_scrapers(sched):
     sched.register_scraper(TN_WilliamsonScraper(), interval_minutes=90)
     sched.register_scraper(TN_MontgomeryScraper(), interval_minutes=60)
     sched.register_scraper(TN_SumnerScraper(), interval_minutes=90)
+    sched.register_scraper(TN_WilsonScraper(), interval_minutes=90)
+    sched.register_scraper(TN_BradleyScraper(), interval_minutes=90)
+    sched.register_scraper(TN_BlountScraper(), interval_minutes=90)
+    sched.register_scraper(TN_SevierScraper(), interval_minutes=90)
+    sched.register_scraper(TN_WashingtonScraper(), interval_minutes=90)
+    sched.register_scraper(TN_MauryScraper(), interval_minutes=90)
+    sched.register_scraper(TN_RobertsonScraper(), interval_minutes=90)
+    sched.register_scraper(TN_HamblenScraper(), interval_minutes=90)
+    sched.register_scraper(TN_BedfordScraper(), interval_minutes=120)
+    sched.register_scraper(TN_CoffeeScraper(), interval_minutes=120)
+    sched.register_scraper(TN_LincolnScraper(), interval_minutes=120)
+    sched.register_scraper(TN_GilesScraper(), interval_minutes=120)
 
-    # ── Texas (wave-1 + wave-2 + wave-3 + wave-4) ──────────────────────────────────────────
+    # ── Texas (wave-1 + wave-2 + wave-3 + wave-4 + wave-5 + wave-6) ──────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)
     sched.register_scraper(TX_DallasScraper(), interval_minutes=90)
     sched.register_scraper(TX_BexarScraper(), interval_minutes=60)
@@ -676,25 +788,70 @@ def register_scrapers(sched):
     sched.register_scraper(TX_CameronScraper(), interval_minutes=90)
     sched.register_scraper(TX_BrazoriaScraper(), interval_minutes=120)
     sched.register_scraper(TX_GalvestonScraper(), interval_minutes=90)
+    sched.register_scraper(TX_BellScraper(), interval_minutes=90)
+    sched.register_scraper(TX_LubbockScraper(), interval_minutes=90)
+    sched.register_scraper(TX_WebbScraper(), interval_minutes=90)
+    sched.register_scraper(TX_JeffersonScraper(), interval_minutes=90)
+    sched.register_scraper(TX_McLennanScraper(), interval_minutes=90)
+    sched.register_scraper(TX_NuecesScraper(), interval_minutes=90)
+    sched.register_scraper(TX_BrazosScraper(), interval_minutes=90)
+    sched.register_scraper(TX_HaysScraper(), interval_minutes=90)
+    sched.register_scraper(TX_EllisScraper(), interval_minutes=90)
+    sched.register_scraper(TX_JohnsonScraper(), interval_minutes=90)
+    sched.register_scraper(TX_EctorScraper(), interval_minutes=90)
+    sched.register_scraper(TX_MidlandScraper(), interval_minutes=90)
+    sched.register_scraper(TX_PotterScraper(), interval_minutes=90)
+    sched.register_scraper(TX_BastropScraper(), interval_minutes=120)
+    sched.register_scraper(TX_GuadalupeScraper(), interval_minutes=120)
+    sched.register_scraper(TX_ComalScraper(), interval_minutes=120)
+    sched.register_scraper(TX_VictoriaScraper(), interval_minutes=120)
+    sched.register_scraper(TX_WalkerScraper(), interval_minutes=120)
 
-    # ── Louisiana (wave-1) ───────────────────────────────────────────────────
+    # ── Louisiana (wave-1 + wave-2 + wave-3) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
     sched.register_scraper(LA_LafayetteScraper(), interval_minutes=90)
     sched.register_scraper(LA_JeffersonScraper(), interval_minutes=60)
     sched.register_scraper(LA_EastBatonRougeScraper(), interval_minutes=90)
+    sched.register_scraper(LA_CaddoScraper(), interval_minutes=90)
+    sched.register_scraper(LA_CalcasieuScraper(), interval_minutes=90)
+    sched.register_scraper(LA_OuachitaScraper(), interval_minutes=90)
+    sched.register_scraper(LA_StTammanyScraper(), interval_minutes=90)
+    sched.register_scraper(LA_AscensionScraper(), interval_minutes=120)
+    sched.register_scraper(LA_LivingstonScraper(), interval_minutes=120)
 
-    # ── Alabama (wave-1) ─────────────────────────────────────────────────────
+    # ── Alabama (wave-1 + wave-2 + wave-3) ─────────────────────────────────────────────────────
     sched.register_scraper(AL_JeffersonScraper(), interval_minutes=120)
     sched.register_scraper(AL_MadisonScraper(), interval_minutes=120)
     sched.register_scraper(AL_MobileScraper(), interval_minutes=120)
+    sched.register_scraper(AL_BaldwinScraper(), interval_minutes=120)
+    sched.register_scraper(AL_TuscaloosaScraper(), interval_minutes=120)
+    sched.register_scraper(AL_ShelbyScraper(), interval_minutes=120)
+    sched.register_scraper(AL_MontgomeryScraper(), interval_minutes=120)
+    sched.register_scraper(AL_HoustonScraper(), interval_minutes=120)
+    sched.register_scraper(AL_MorganScraper(), interval_minutes=120)
+    sched.register_scraper(AL_EtowahScraper(), interval_minutes=120)
+    sched.register_scraper(AL_CullmanScraper(), interval_minutes=120)
+    sched.register_scraper(AL_DeKalbScraper(), interval_minutes=120)
+    sched.register_scraper(AL_JacksonScraper(), interval_minutes=120)
 
-    # ── Connecticut (wave-1 + wave-2) ────────────────────────────────────────
+    # ── Connecticut (wave-1 + wave-2 + wave-3) ────────────────────────────────────────
     sched.register_scraper(CT_StatewideScraper(), interval_minutes=180)
     sched.register_scraper(CT_DOCScraper(), interval_minutes=120)
+    sched.register_scraper(CT_HartfordScraper(), interval_minutes=120)
+    sched.register_scraper(CT_BridgeportScraper(), interval_minutes=120)
+    sched.register_scraper(CT_NewHavenScraper(), interval_minutes=120)
+    sched.register_scraper(CT_StamfordScraper(), interval_minutes=120)
 
-    # ── Mississippi (wave-1) ─────────────────────────────────────────────────
+    # ── Mississippi (wave-1 + wave-2 + wave-3) ─────────────────────────────────────────────────
     sched.register_scraper(MS_HindsScraper(), interval_minutes=90)
     sched.register_scraper(MS_JacksonScraper(), interval_minutes=120)
+    sched.register_scraper(MS_HarrisonScraper(), interval_minutes=120)
+    sched.register_scraper(MS_DeSotoScraper(), interval_minutes=120)
+    sched.register_scraper(MS_RankinScraper(), interval_minutes=120)
+    sched.register_scraper(MS_LauderdaleScraper(), interval_minutes=120)
+    sched.register_scraper(MS_ForrestScraper(), interval_minutes=120)
+    sched.register_scraper(MS_JonesScraper(), interval_minutes=120)
+    sched.register_scraper(MS_MadisonScraper(), interval_minutes=120)
 
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")

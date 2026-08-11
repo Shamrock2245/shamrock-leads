@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-269-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-350-orange)](#county-coverage)
 [![States](https://img.shields.io/badge/States-10-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
@@ -24,7 +24,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **269 registered county scrapers** across 10 states (GA 74 · FL 67 · SC 46 · NC 47 · TX 15 · TN 9 · LA 4 · AL 3 · CT 2 · MS 2) on scheduled intervals
+1. **Scrapes** real-time booking data from **350 registered county scrapers** across 10 states (GA 85 · FL 67 · NC 60 · SC 46 · TX 33 · TN 21 · AL 13 · LA 10 · MS 9 · CT 6) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)

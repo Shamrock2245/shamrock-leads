@@ -2,20 +2,20 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
-> Last updated: 2026-08-04  
-> **Live registered (dashboard):** 67 FL · 74 GA · 46 SC · 47 NC · 15 TX · 9 TN · 4 LA · 3 AL · 2 CT · 2 MS = **269** — see root `STATUS.md`
+> Last updated: 2026-08-11  
+> **Live registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 21 TN · 13 AL · 10 LA · 9 MS · 6 CT = **350** — see root `STATUS.md`
 
 ## Why this order
 
 1. **FL** — OSI home market + densest scrapers already live ✅  
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
-3. **GA** — large existing Track A/B/C investment 🔄 (74/159)  
-4. **NC** — **47 registered** / 100 goal; deepen scrapes then expand 🔄  
-5. **TN** — **9 registered** (Davidson/Knox live) 🔄  
-6. **TX** — **15 registered** (Bexar/Dallas live); top-25 next 🔄  
-7. **LA → MS** — **4 LA** + **2 MS** registered; harden + expand 🔄  
-8. **CT** — **2 statewide sources** (dockets + DOC) hardened ✅  
-9. **AL** — **3** major metros registered 🔄  
+3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
+4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
+5. **TN** — **21 registered** (Davidson, Knox, Wilson, Bradley, Blount, Sevier, Washington, Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, Giles) 🔄  
+6. **TX** — **33 registered** (Bexar, Dallas, Bell, Lubbock, Webb, Jefferson, McLennan, Nueces, Brazos, Hays, Ellis, Johnson, Ector, Midland, Potter, Bastrop, Guadalupe, Comal, Victoria, Walker) 🔄  
+7. **LA → MS** — **10 LA** + **9 MS** registered; harden + expand 🔄  
+8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
+9. **AL** — **13 registered** (Jefferson, Madison, Mobile, Baldwin, Tuscaloosa, Shelby, Montgomery, Houston, Morgan, Etowah, Cullman, DeKalb, Jackson) 🔄  
 
 ## Shared platform bases (leverage first)
 
