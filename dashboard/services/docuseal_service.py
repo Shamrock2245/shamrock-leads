@@ -821,6 +821,16 @@ class DocuSealService:
             row_fields[f"bond_amount_{i}"] = c_amt_str
             row_fields[f"numeric_bond_amount_{i}"] = c_amt_str
 
+        # Determine collateral receipt number from first POA suffix
+        surety_id = str(bond_data.get("surety_id", "osi")).lower()
+        first_poa_digits = "".join(filter(str.isdigit, poa_list[0] if poa_list else poa))
+        collateral_receipt_number = ""
+        if first_poa_digits:
+            if surety_id == "palmetto":
+                collateral_receipt_number = first_poa_digits[-6:]
+            else:
+                collateral_receipt_number = first_poa_digits[-8:]
+
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
             **row_fields,
@@ -847,7 +857,7 @@ class DocuSealService:
             "poa_numbers": poa_all or poa,
             "bond_numbers": poa_all or poa,
             "BondNumbers": poa_all or poa,
-            "collateral_receipt_number": "".join(filter(str.isdigit, poa_list[0] if poa_list else poa)) if (poa_list or poa) else "",
+            "collateral_receipt_number": collateral_receipt_number,
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
