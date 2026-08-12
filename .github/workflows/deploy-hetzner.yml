@@ -24,7 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     # Core stack builds (~8–12m). osint-worker spiderfoot is NOT rebuilt on every
     # push — that step alone was blowing the 20m SSH command_timeout.
-    timeout-minutes: 35
+    # A cold core-image build used 27+ minutes on 2026-08-12; leave time for
+    # restart and the bounded health check instead of timing out mid-deploy.
+    timeout-minutes: 45
 
     steps:
       # Fail fast with a clear message if the VPS is unreachable (e.g. Tailscale
@@ -54,9 +56,9 @@ jobs:
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
           port: 22
-          # Long builds (pip + docker) need a live TCP channel; defaults can drop.
-          # 30m covers cold pip layers for shamrock-leads + dashboard only.
-          command_timeout: 30m
+          # Long builds (pip + docker) need a live TCP channel; the cold build
+          # observed on 2026-08-12 exceeded 30m before restart verification.
+          command_timeout: 40m
           timeout: 60s
           envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
           script: |

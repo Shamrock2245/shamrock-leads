@@ -15,6 +15,16 @@
 
 ---
 
+## Production audit update (2026-08-12)
+
+| Surface / gate | Verified state |
+|---|---|
+| Public hosts | Direct bounded probes returned `200` for leads `/health`, school `/`, DocuSeal `/`, paperwork `/`, Postiz `/auth`, and OpenCut `/`; the canonical portal GAS `?action=health` returned `success:true`, `V409`. |
+| Public Bail School pricing (C2) | **Verified**: current JSON-LD lists the 120-hour course at `$649`; the retired course title and `$699` were absent from the fetched page source. |
+| Deployment integrity | Latest `Deploy to Hetzner` run for `df24815` timed out at the 30-minute SSH command budget after the core image build. The workflow time budget is corrected in the pending commit; it is not yet a live deployment result. |
+| Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
+| Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
+
 ## What “Auto-CRM” means here
 
 After a **phone number** (and usually defendant/county) enters the system, the bond lifecycle should run with **minimal human intervention**, except risk/match gates:

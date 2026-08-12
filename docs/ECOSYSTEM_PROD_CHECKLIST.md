@@ -53,7 +53,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|-------|------|
 | B1 | VPS: `ENV=production`, strong `SECRET_KEY`, `DASHBOARD_PIN` set | Ops | [x] *2026-07-23* — `SECRET_KEY`+`ENV=production` on VPS; CRM health `secret_key:true` |
 | B2 | `MONGODB_URI` / `MONGODB_DB_NAME` healthy; dashboard loads | Ops | [x] *2026-07-23* — `/health` ok · ~128k arrests · CRM collections reachable |
-| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [x] *partial* — GAS `action=health` success V409; live write-bond smoke still staff-confirm |
+| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [ ] **Human-gated smoke pending** — GAS `action=health` returned V409 on 2026-08-12; one staff-confirmed write-bond → paperwork event is still required. |
 | B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [x] *config* — secret present + CRM `wix_webhook_auth:true`; live Wix post still staff-confirm |
 | B5 | SignNow token env (`SIGNNOW_*`) valid; Phase 1 packet can be sent on a test case | Ops | [x] *2026-07-24* — token valid, 19/19 templates accessible via validate-templates; send-packet needs intake doc (human gate) |
 | B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [x] *2026-08-04* — staff-confirmed live; SwipeSimple Retriever shows **Bail Bond Payment - Shamrock Bail Bonds** ACTIVE (74 sales) + school $199/$649 links; site popups surface correct pay links |
@@ -65,7 +65,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **same** stable factory URL | Human | [x] *2026-08-11* — code + Netlify `GAS_WEB_APP_URL` + leads `.env` all use stable `…CvP-Z/exec` (V409/V461). **Confirm Wix Secrets Manager matches** if not already set (same URL). |
-| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [ ] *regressed 2026-08-12* — page JS/catalog is $649; leftover Wix SEO JSON-LD still says “The Agent Path is $699”. **Republish Wix FAQ/SEO** (not in git). |
+| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] **verified live 2026-08-12** — public page source JSON-LD lists the 120-hour course at `$649`; no retired “The Agent Path” or `$699` string was found in the live page source. |
 | C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] |
 | C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-11* — `{"success":true,"version":"V409"}` on stable factory; redeployed **@461** (Shannon surety_id) |
 
@@ -74,7 +74,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | D1 | Office Mac BlueBubbles running; tunnel URL in `BLUEBUBBLES_URL_0178` | Ops | [x] *2026-07-23* — BB 1.9.9 on iMac; frp `:12434` + health check; also ngrok path when active |
-| D2 | Dashboard iMessage send succeeds to a test number | Ops | [x] *partial* — `/api/imessage/status` **connected** + private_api; outbound test SMS still staff-confirm once |
+| D2 | Dashboard iMessage send succeeds to a test number | Ops | [ ] **Human-gated smoke pending** — prior status showed BlueBubbles connected with `private_api`; one staff-approved outbound dashboard iMessage remains required. |
 | D3 | Revenue automations stay **`review`** until D1–D2 green for 7 days | Product | [x] *policy* — keep `review` until 7 clean days post-2026-07-23 |
 
 ### E. Telegram mini-apps

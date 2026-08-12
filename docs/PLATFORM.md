@@ -66,7 +66,7 @@ When someone in Florida (and later multi-state via Palmetto) asks “who runs ba
 | Stage | Meaning | Where we are |
 |-------|---------|----------------|
 | **1 · Built** | Code on `main` for core funnels | ✅ Bond chain Phases 1–17 · School LMS · Portal · NR · Telegram |
-| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Code + hosts ready** (2026-08-12). Remaining human: C2 leftover Wix FAQ “$699”, C3 historical secret rotation, staff-confirm write-bond / outbound iMessage once |
+| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Not yet earned** (audit 2026-08-12). C2 public pricing is now verified at $649; remaining gates are C3 historical secret rotation plus staff-confirmed write-bond → paperwork and outbound iMessage smokes. |
 | **3 · Authoritative FL brand** | Statewide coverage quality, education + ops reputation, SOC-minded | 🔲 After Stage 2 |
 | **4 · U.S. reference model** | Palmetto multi-state depth, playbooks others adopt | 🔲 After Stage 3 |
 

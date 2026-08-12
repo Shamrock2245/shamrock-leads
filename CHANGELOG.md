@@ -8,6 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-08-12 (production closeout)
 
 ### Fixed
+- **Deploy timeout budget** — increased the Hetzner job limit to 45 minutes and SSH command limit to 40 minutes after the verified 30-minute cutoff interrupted the `df24815` cold build before restart verification. This is a pending-code fix until its deployment run succeeds.
+- **Production checklist truth** — C2 is now live-verified at `$649` from public JSON-LD; B3 write-bond → paperwork and D2 outbound iMessage are explicitly open human-gated smokes rather than partial checkmarks.
 - **Postiz `/auth` 500** — Mastra `mastra_ai_spans` hit Postgres 1600-column limit after every deploy force-recreated `:latest` (postiz-app#1473). Dropped bloated telemetry tables; backend listening on `:3000` again (`/auth` 200, `/api/mcp` 401 without key).
 - Deploy no longer `pull` + `--force-recreate` Postiz on every CRM push. Recreate only when `docker-compose.yml` / `social/` change; otherwise repair if `:3000` is down (`scripts/repair_postiz_mastra.sh`).
 - Paperwork nginx in repo now matches live: dashboard `:8088` host-aware PIN portal (was a stale `:5310` origin that `setup_nginx_vhosts.sh` would have overwritten).
