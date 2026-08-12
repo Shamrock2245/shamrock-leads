@@ -775,6 +775,10 @@ const SLIndemnitor = (() => {
     const results = $('indSearchResults');
     if (results) results.innerHTML = '';
     _selectedPrior = null;
+    _scannedAddress = null;
+    _pendingSaveBody = null;
+    const scanInput = $('indAddIdScanner');
+    if (scanInput) scanInput.value = '';
   }
 
   function closeAddModal() {
@@ -925,8 +929,10 @@ const SLIndemnitor = (() => {
       if (!r.ok) { toast(`❌ ${d.error || 'Failed'}`, 'error'); return; }
       const verb = d.action === 'updated_existing' ? 'updated' : 'saved';
       const suffix = d.linked === false ? ' (unlinked — link to a bond later)' : '';
-      toast(`✅ Indemnitor ${verb}: ${body.first_name} ${body.last_name}${suffix}`, 'success');
+      const nm = `${body.firstName || ''} ${body.lastName || ''}`.trim() || 'record';
+      toast(`✅ Indemnitor ${verb}: ${nm}${suffix}`, 'success');
       closeAddModal();
+      _scannedAddress = null;
       load();  // Refresh list
     } catch(e) { toast('❌ Network error: ' + e.message, 'error'); }
   }
@@ -970,48 +976,122 @@ const SLIndemnitor = (() => {
   }
 
   function triggerScan() {
-    $('indAddIdScanner').click();
+    // Ensure we're on the form step (Scan ID lives in step 2)
+    const step2 = $('indAddStep2');
+    if (step2 && step2.style.display === 'none') {
+      showNewForm();
+    }
+    const input = $('indAddIdScanner');
+    if (!input) {
+      toast('❌ ID scanner control missing — refresh the page (hard reload).', 'error');
+      console.error('[SLIndemnitor] #indAddIdScanner not in DOM');
+      return;
+    }
+    // Programmatic click must stay in the same user-gesture stack
+    try {
+      input.click();
+    } catch (err) {
+      toast('❌ Could not open camera/file picker: ' + (err.message || err), 'error');
+    }
+  }
+
+  /**
+   * Normalize scan-id / scan-ocr API payloads into form-friendly fields.
+   * Backend returns { success, extracted: { first_name, last_name, ... } }.
+   */
+  function _normalizeScanPayload(data) {
+    if (!data || typeof data !== 'object') return {};
+    const ext = data.extracted && typeof data.extracted === 'object' ? data.extracted : data;
+    const full = (ext.full_name || ext.fullName || '').trim();
+    let first = ext.first_name || ext.firstName || '';
+    let last = ext.last_name || ext.lastName || '';
+    if ((!first || !last) && full) {
+      const parts = full.split(/\s+/);
+      if (!first && parts.length) first = parts[0];
+      if (!last && parts.length > 1) last = parts.slice(1).join(' ');
+    }
+    const line1 = ext.address || ext.street || ext.street_address || '';
+    const city = ext.city || '';
+    const st = ext.state || ext.dl_state || ext.dlState || '';
+    const zip = ext.zip || ext.postal || ext.zipcode || '';
+    let address = line1;
+    if (city || st || zip) {
+      const tail = [city, st].filter(Boolean).join(', ') + (zip ? ' ' + zip : '');
+      address = line1 ? `${line1}${tail ? ', ' + tail.trim() : ''}` : tail.trim();
+    }
+    return {
+      firstName: first,
+      lastName: last,
+      address: address,
+      dob: ext.dob || ext.date_of_birth || '',
+      dlNumber: ext.dl_number || ext.dlNumber || ext.license_number || '',
+      dlState: ext.dl_state || ext.dlState || ext.state || 'FL',
+    };
   }
 
   async function handleScanID(e) {
-    const file = e.target.files[0];
+    const file = e?.target?.files?.[0];
     if (!file) return;
 
-    toast('📸 Scanning ID via OCR...', 'info');
+    toast('📸 Scanning ID via OCR…', 'info');
     const formData = new FormData();
     formData.append('file', file);
-    
-    // Pass booking number so the backend can upload it to Google Drive
-    const bk = _pendingSaveBody?.booking_number || $('indFormBooking')?.value.trim() || _currentBk;
+
+    // Pass booking number so the backend can archive the image to Drive
+    const bk =
+      (_pendingSaveBody && _pendingSaveBody.booking_number) ||
+      ($('indFormBooking') && $('indFormBooking').value.trim()) ||
+      _currentBk ||
+      '';
     if (bk) formData.append('booking_number', bk);
 
     try {
       const r = await fetch(`${API}/api/indemnitors/scan-id`, {
         method: 'POST',
-        body: formData
+        body: formData,
+        credentials: 'same-origin',
       });
-      const data = await r.json();
-      if (!r.ok) {
-        toast(`❌ Scan failed: ${data.error || 'Unknown'}`, 'error');
+      let data = {};
+      try {
+        data = await r.json();
+      } catch (_) {
+        toast(`❌ Scan failed (HTTP ${r.status}) — invalid response`, 'error');
+        return;
+      }
+      if (!r.ok || data.success === false) {
+        toast(`❌ Scan failed: ${data.error || data.detail || 'Unknown'}`, 'error');
         return;
       }
 
-      toast('✅ ID Scanned successfully!', 'success');
-      
-      if (data.firstName) $('indFormFirst').value = data.firstName;
-      if (data.lastName) $('indFormLast').value = data.lastName;
-      if (data.address) {
-        $('indFormAddress').value = data.address;
-        _scannedAddress = data.address.trim();
+      const fields = _normalizeScanPayload(data);
+      if (fields.firstName && $('indFormFirst')) $('indFormFirst').value = fields.firstName;
+      if (fields.lastName && $('indFormLast')) $('indFormLast').value = fields.lastName;
+      if (fields.address && $('indFormAddress')) {
+        $('indFormAddress').value = fields.address;
+        _scannedAddress = fields.address.trim();
       }
-      if (data.dob) $('indFormDOB').value = data.dob;
-      if (data.dlNumber) $('indFormDL').value = data.dlNumber;
-      if (data.dlState) $('indFormDLState').value = data.dlState;
-      
+      if (fields.dob && $('indFormDOB')) {
+        // Accept YYYY-MM-DD or coerce common US formats into date input
+        let dob = fields.dob;
+        const m = String(dob).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (m) {
+          dob = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+        }
+        $('indFormDOB').value = dob;
+      }
+      if (fields.dlNumber && $('indFormDL')) $('indFormDL').value = fields.dlNumber;
+      if (fields.dlState && $('indFormDLState')) $('indFormDLState').value = fields.dlState;
+
+      const filled = [fields.firstName, fields.lastName, fields.dlNumber, fields.address].filter(Boolean).length;
+      if (filled === 0) {
+        toast('⚠️ ID scanned but no fields were read — try a clearer photo of the front of the ID.', 'error');
+      } else {
+        toast(`✅ ID scanned — filled ${filled} field(s). Review before saving.`, 'success');
+      }
     } catch (err) {
-      toast('❌ Scan error: ' + err.message, 'error');
+      toast('❌ Scan error: ' + (err.message || err), 'error');
     } finally {
-      e.target.value = ''; // Reset input
+      if (e && e.target) e.target.value = ''; // Reset so same file can be re-selected
     }
   }
 
@@ -1144,10 +1224,9 @@ const SLIndemnitor = (() => {
     switchSubTab, saveProfile, toggleDoc,
     generatePaymentLink, copyPaymentLink, sendPaymentLink,
     hydrateFrom,
-    // Add Indemnitor Modal
-    fetchSummaryHtml, renderIndemnitorView, toggleDocumentList,
+    // Add Indemnitor Modal (do NOT export undefined symbols — breaks entire module)
     openAddModal, closeAddModal, smartSearch, selectSearchResult,
-    showNewForm, backToSearch, submitAddForm, hydrateFrom,
+    showNewForm, backToSearch, submitAddForm,
     triggerScan, handleScanID, confirmAddressOverride,
     // KYC Uploads + ID slots
     handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,

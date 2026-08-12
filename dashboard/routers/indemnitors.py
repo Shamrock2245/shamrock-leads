@@ -161,7 +161,11 @@ async def api_scan_id_ocr(request: Request):
     if "multipart/form-data" in content_type:
         form = await request.form()
         file_obj = form.get("file") or form.get("image") or form.get("id_photo")
-        booking_number = form.get("booking_number", "").strip()
+        raw_bk = form.get("booking_number") or ""
+        if hasattr(raw_bk, "strip"):
+            booking_number = raw_bk.strip()
+        else:
+            booking_number = str(raw_bk or "").strip()
         if file_obj and hasattr(file_obj, "read"):
             filename = getattr(file_obj, "filename", "") or "id_photo"
             image_bytes = await file_obj.read()
