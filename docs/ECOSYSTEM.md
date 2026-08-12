@@ -119,6 +119,7 @@ Leads machine API (auth: `GAS_API_KEY`):
 | Public brand / indemnitor portal | `PORTAL_BASE_URL` / `CLIENT_BRAND_URL` | `https://shamrockbailbonds.biz` |
 | Ops dashboard (staff only) | `DASHBOARD_PUBLIC_URL` | `https://leads.shamrockbailbonds.biz` |
 | Bail school | Netlify | `https://school.shamrockbailbonds.biz` |
+| DocuSeal / paperwork / Postiz / OpenCut | — | `sign.` · `paperwork.` · `social.` · `edit.shamrockbailbonds.biz` — see `docs/SUBDOMAINS.md` |
 
 Never put PII-bearing staff URLs in client-facing SMS; use brand domain + magic links.
 
@@ -162,6 +163,7 @@ Never prints secret values — only presence + fingerprints for shared-key align
 ## Docs index
 
 - **Platform north star:** `docs/PLATFORM.md`
+- **Public hostnames:** `docs/SUBDOMAINS.md` · `config/subdomains.py`
 - **Production checklist (all repos):** `docs/ECOSYSTEM_PROD_CHECKLIST.md`
 - **GAS URL stability (all repos):** `docs/policies/gas-url-policy.md`
 - Leads: `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, `docs/SUPER_CRM.md`, `SECURITY.md`

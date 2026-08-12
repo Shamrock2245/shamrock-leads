@@ -39,13 +39,12 @@ Tailscale provides a zero-config WireGuard mesh that replaces the previous patch
 │           ▼                              ▼                              │
 │  ┌──────────────────────┐                                              │
 │  │  LAPTOP              │                                              │
-│  │  shamrock-laptop     │                                              │
-│  │  100.x.x.x           │                                              │
+│  │  brendans-macbook-   │                                              │
+│  │  pro-4               │                                              │
+│  │  100.119.187.33      │                                              │
 │  │                      │                                              │
-│  │  Dev/Ops access to:  │                                              │
-│  │  • VPS Dashboard     │                                              │
-│  │  • iMac SSH          │                                              │
-│  │  • Node-RED Editor   │                                              │
+│  │  • OpenCut :3000     │  ← edit.shamrockbailbonds.biz origin         │
+│  │  • Dev/Ops SSH       │                                              │
 │  └──────────────────────┘                                              │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘

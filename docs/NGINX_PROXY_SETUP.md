@@ -1,4 +1,13 @@
-# Nginx Reverse Proxy — `leads.shamrockbailbonds.biz`
+# Nginx Reverse Proxy — Shamrock vhosts
+
+Canonical host list: [`SUBDOMAINS.md`](./SUBDOMAINS.md) · `config/subdomains.py`  
+Vhost source: `nginx/<host>.conf`  
+Install all VPS hosts: `bash scripts/setup_nginx_vhosts.sh`  
+New editor host: **`edit.shamrockbailbonds.biz`** (OpenCut → Tailscale laptop `:3000`)
+
+---
+
+# `leads.shamrockbailbonds.biz`
 
 ## Why This Exists
 
@@ -143,9 +152,17 @@ certbot renew --dry-run
 ## Nginx Config Location
 
 ```
-nginx/leads.shamrockbailbonds.biz.conf   ← source (tracked in git)
-/etc/nginx/sites-available/leads.shamrockbailbonds.biz.conf  ← installed
-/etc/nginx/sites-enabled/leads.shamrockbailbonds.biz.conf    ← symlink (enabled)
+nginx/*.shamrockbailbonds.biz.conf       ← source (tracked in git)
+/etc/nginx/sites-available/<host>.conf   ← installed
+/etc/nginx/sites-enabled/<host>.conf     ← symlink (enabled)
+```
+
+Install or refresh every VPS vhost (keeps existing TLS files unless `--force`):
+
+```bash
+bash /opt/shamrock-leads/scripts/setup_nginx_vhosts.sh
+bash /opt/shamrock-leads/scripts/setup_nginx_vhosts.sh --certbot edit
+python3 /opt/shamrock-leads/scripts/check_subdomains.py --live
 ```
 
 If you update the nginx config in the repo, re-run:

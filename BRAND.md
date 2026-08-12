@@ -37,7 +37,13 @@ We write bonds under two surety companies. Every agent must know these cold.
 | **Production VPS** | `178.156.179.237` (Hetzner, root) |
 | **Dashboard URL** | `http://178.156.179.237:8088/` |
 | **Public Dashboard** | `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy) |
+| **DocuSeal** | `https://sign.shamrockbailbonds.biz` |
+| **Paperwork portal** | `https://paperwork.shamrockbailbonds.biz` |
+| **Postiz (social)** | `https://social.shamrockbailbonds.biz` |
+| **OpenCut (edit)** | `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop `:3000`) |
+| **Bail School** | `https://school.shamrockbailbonds.biz` |
 | **iMessage Bridge** | Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles |
+| **Host inventory** | `docs/SUBDOMAINS.md` · `config/subdomains.py` |
 | **Primary Repo** | `Shamrock2245/shamrock-leads` |
 | **Portal Repo** | `Shamrock2245/shamrock-bail-portal-site` |
 | **Ops Repo** | `Shamrock2245/shamrock-node-red` |

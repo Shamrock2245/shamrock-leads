@@ -14,6 +14,7 @@ This guide explains, in plain English, how to run day-to-day work across:
 | **E-sign system (DocuSeal)** | https://sign.shamrockbailbonds.biz |
 | **Bail School website** | https://school.shamrockbailbonds.biz |
 | **Social media manager (Postiz)** | https://social.shamrockbailbonds.biz |
+| **Video editor (OpenCut)** | https://edit.shamrockbailbonds.biz |
 | **Public company site / intake** | https://www.shamrockbailbonds.biz |
 
 ---
@@ -274,3 +275,4 @@ Prices can change — if the website and a flyer disagree, **trust the live webs
 - Sign: sign.shamrockbailbonds.biz  
 - School: school.shamrockbailbonds.biz  
 - Social: social.shamrockbailbonds.biz  
+- Edit (OpenCut): edit.shamrockbailbonds.biz  

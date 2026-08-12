@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-12 (official host inventory + edit)
+
+### Added
+- Canonical hostname registry `config/subdomains.py` + `docs/SUBDOMAINS.md`
+- `nginx/edit.shamrockbailbonds.biz.conf` — OpenCut public edge (Tailscale laptop)
+- `nginx/` now holds every VPS vhost (`leads` `sign` `paperwork` `social` `edit` `trape` `bb`)
+- `scripts/check_subdomains.py` · `scripts/setup_nginx_vhosts.sh` · `tests/test_subdomains.py`
+
+---
+
 ## [2.19.1] — 2026-08-04 (Mem0 long-term memory for Shannon)
 
 ### Added

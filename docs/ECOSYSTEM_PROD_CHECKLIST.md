@@ -41,6 +41,7 @@ python scripts/check_ecosystem_secrets.py --strict
 **Smoke**
 
 ```bash
+python scripts/check_subdomains.py --live
 curl -sS -o /dev/null -w "%{http_code}\n" https://school.shamrockbailbonds.biz/
 curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 # expect {"success":true,...}

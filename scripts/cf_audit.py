@@ -170,8 +170,20 @@ else:
 # 6. DNS PROPAGATION TEST (local dig/nslookup)
 # ═══════════════════════════════════════════════════════════
 print(f"\n6️⃣  DNS Propagation Test (local resolution):")
-subdomains = ["bb.shamrockbailbonds.biz", "imac.shamrockbailbonds.biz", 
-              "leads.shamrockbailbonds.biz", "shamrockbailbonds.biz"]
+# Keep in sync with config.subdomains.SUBDOMAINS
+subdomains = [
+    "shamrockbailbonds.biz",
+    "www.shamrockbailbonds.biz",
+    "leads.shamrockbailbonds.biz",
+    "school.shamrockbailbonds.biz",
+    "sign.shamrockbailbonds.biz",
+    "paperwork.shamrockbailbonds.biz",
+    "social.shamrockbailbonds.biz",
+    "edit.shamrockbailbonds.biz",
+    "bb.shamrockbailbonds.biz",
+    "imac.shamrockbailbonds.biz",
+    "trape.shamrockbailbonds.biz",
+]
 for sub in subdomains:
     try:
         result = subprocess.run(["dig", "+short", sub], capture_output=True, text=True, timeout=5)

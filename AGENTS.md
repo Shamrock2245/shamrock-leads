@@ -4,7 +4,7 @@
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
-> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md` · Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · Multi-state: `docs/MULTI_STATE_SCRAPER_ROADMAP.md` · GAS URL: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
+> **Platform:** `docs/PLATFORM.md` · **Prod checklist:** `docs/ECOSYSTEM_PROD_CHECKLIST.md` · Super CRM: `docs/SUPER_CRM.md` · Ecosystem: `docs/ECOSYSTEM.md` · Multi-state: `docs/MULTI_STATE_SCRAPER_ROADMAP.md` · Hosts: `docs/SUBDOMAINS.md` · GAS URL: `docs/policies/gas-url-policy.md` · Secrets: `scripts/check_ecosystem_secrets.py`
 
 ---
 
@@ -30,9 +30,10 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 16. **Detects** re-arrests of defendants on active bonds `[IMPLEMENTED]`
 17. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
 18. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
-19. **Orchestrates** social media presence via Postiz `[IMPLEMENTED]`
-20. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
-21. **Multi-State Ops + Bond Intelligence** dashboard surfaces for all 10 states `[IMPLEMENTED · registry-first KPIs]`
+19. **Orchestrates** social media presence via Postiz (`https://social.shamrockbailbonds.biz`) `[IMPLEMENTED]`
+20. **OpenCut video editor** public edge `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop — not Postiz) `[CONFIGURED]`
+21. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
+22. **Multi-State Ops + Bond Intelligence** dashboard surfaces for all 10 states `[IMPLEMENTED · registry-first KPIs]`
 
 **Not this repo:** Bail School student LMS → `shamrock-bail-school`.
 
@@ -326,7 +327,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 4. `AGENTS.md` (this file) — Digital workforce, scoring, safety rules
 5. `DATA_MODEL.md` — Entity definitions, MongoDB collections
 6. `ROADMAP.md` / `STATUS.md` — What's implemented vs live
-7. `docs/ECOSYSTEM.md` + `docs/policies/gas-url-policy.md` — if touching GAS, Wix webhooks, school auth, or Node-RED → GAS
+7. `docs/ECOSYSTEM.md` + `docs/SUBDOMAINS.md` + `docs/policies/gas-url-policy.md` — hosts / GAS / Wix / Node-RED
 8. `docs/policies/surety-policy.md` — if doing bond-writing work
 9. `docs/policies/matching-policy.md` — if doing matching work
 10. `docs/policies/signature-policy.md` — if doing signing work
@@ -406,3 +407,4 @@ docker exec shamrock-leads python main.py lee
 - **iMessage integration**: See `.agent/skills/bluebubbles-integration/SKILL.md`
 - **Frontend UI work**: See `.agent/skills/frontend-design/SKILL.md`
 - **Docker ops**: See `.agent/skills/docker-ops/SKILL.md`
+- **Adding a public hostname**: `config/subdomains.py` + `nginx/<host>.conf` + `docs/SUBDOMAINS.md`

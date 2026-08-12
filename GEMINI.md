@@ -28,6 +28,8 @@ plus **Georgia** — **350 registered scrapers** across 10 states (see `STATUS.m
 - **iMessage Bridge:** Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles (port 1234)
 - **DocuSeal Portal:** `https://sign.shamrockbailbonds.biz` (Primary e-signature engine · Template 1 OSI)
 - **Postiz Social & MCP:** `https://social.shamrockbailbonds.biz` (`/api/mcp` SSE stream · 5 channels live)
+- **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop `:3000` — not Postiz)
+- **Host inventory:** `docs/SUBDOMAINS.md` · `config/subdomains.py`
 
 ---
 

@@ -115,6 +115,7 @@
         <ul>
           <li>Images: PNG/JPG · 1080×1080 or 1080×1350</li>
           <li>Video: MP4 under 100MB · prefer under 60s for Reels/Shorts</li>
+          <li>Cut clips at <strong>edit.shamrockbailbonds.biz</strong> (OpenCut) — not Postiz.</li>
         </ul>
         <p style="font-size:12px;color:#64748b">No private arrest details or client mugshots without approval.</p>
       `,
