@@ -847,6 +847,7 @@ class DocuSealService:
             "poa_numbers": poa_all or poa,
             "bond_numbers": poa_all or poa,
             "BondNumbers": poa_all or poa,
+            "collateral_receipt_number": "".join(filter(str.isdigit, poa_list[0] if poa_list else poa)) if (poa_list or poa) else "",
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
