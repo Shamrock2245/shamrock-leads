@@ -10,7 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - Canonical hostname registry `config/subdomains.py` + `docs/SUBDOMAINS.md`
 - OpenCut on the VPS: `opencut/Dockerfile` + compose profile `edit` (postgres / redis / web)
-- `nginx/edit.shamrockbailbonds.biz.conf` → `127.0.0.1:5320` (Docker, not laptop Tailscale)
+- `nginx/edit.shamrockbailbonds.biz.conf` → `127.0.0.1:5320` (full HTTPS, Docker, not laptop Tailscale)
+- `setup_nginx_vhosts.sh` now replaces TLS vhosts when the source already has cert paths (unblocks Tailscale → Docker origin cutover)
 - `nginx/` holds every VPS vhost (`leads` `sign` `paperwork` `social` `edit` `trape` `bb`)
 - `scripts/check_subdomains.py` · `scripts/setup_nginx_vhosts.sh` · `tests/test_subdomains.py`
 

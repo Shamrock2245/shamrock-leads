@@ -53,7 +53,11 @@ def test_edit_nginx_proxies_to_local_docker():
     text = (NGINX_DIR / "edit.shamrockbailbonds.biz.conf").read_text(encoding="utf-8")
     assert "127.0.0.1:5320" in text
     assert "100.119.187.33" not in text
+    assert "opencut_ts" not in text
     assert "server_name edit.shamrockbailbonds.biz" in text
+    assert "listen 443 ssl" in text
+    assert "ssl_certificate" in text
+    assert "return 301 https://$host$request_uri" in text
 
 
 def test_social_is_postiz_not_opencut():
@@ -74,6 +78,11 @@ def test_required_nginx_confs_exist_and_name_the_host():
         assert path.is_file(), f"missing {path}"
         text = path.read_text(encoding="utf-8")
         assert f"server_name {sub.host}" in text, f"{path.name} missing server_name {sub.host}"
+
+
+def test_edit_nginx_not_duplicated_at_repo_root():
+    leftover = Path(REPO_ROOT) / "edit.shamrockbailbonds.biz.conf"
+    assert not leftover.exists(), "edit vhost lives in nginx/, not the repo root"
 
 
 def test_opencut_compose_profile_exists():

@@ -59,9 +59,14 @@ for src in "${NGINX_SRC}"/*.conf; do
   dest="/etc/nginx/sites-available/${name}"
   if [[ -f "${dest}" && "${FORCE}" -eq 0 ]]; then
     if grep -q "letsencrypt/live" "${dest}"; then
-      echo "   ↷ keep existing ${name} (has TLS cert paths; pass --force to replace)"
-      ln -sf "${dest}" "/etc/nginx/sites-enabled/${name}"
-      continue
+      # HTTP-only sources must not wipe a live certbot vhost. Sources that
+      # already ship ssl_certificate paths (sign/social/edit) are safe to
+      # replace so origin/upstream updates (e.g. Tailscale → Docker) apply.
+      if ! grep -q "ssl_certificate" "${src}"; then
+        echo "   ↷ keep existing ${name} (has TLS cert paths; pass --force to replace)"
+        ln -sf "${dest}" "/etc/nginx/sites-enabled/${name}"
+        continue
+      fi
     fi
   fi
   cp "${src}" "${dest}"

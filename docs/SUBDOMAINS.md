@@ -29,13 +29,15 @@ OpenCut is **not** Postiz and **not** the laptop. `social.*` stays on Postiz `:5
 Internet → edit.shamrockbailbonds.biz → VPS nginx → 127.0.0.1:5320 → shamrock-opencut
 ```
 
+The public hostname is **`edit`** (singular), not `edits`.
+
 ```bash
 # VPS
 cd /opt/shamrock-leads
 git pull origin main
-# set OPENCUT_AUTH_SECRET in .env (long random)
+# set OPENCUT_AUTH_SECRET in .env (long random, 32+ chars)
 docker compose --profile edit up -d --build
-bash scripts/setup_nginx_vhosts.sh --certbot edit   # first time only
+bash scripts/setup_nginx_vhosts.sh   # source now ships TLS paths; updates origin
 python3 scripts/check_subdomains.py --live
 ```
 
