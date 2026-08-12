@@ -442,6 +442,7 @@ class CourtEmailScheduler:
         except Exception:
             return 0
 
+        sent = 0
         defendant = parsed.get("defendant_name") or "the defendant"
         case_number = parsed.get("case_number") or "N/A"
         datetime_val = parsed.get("datetime_info")

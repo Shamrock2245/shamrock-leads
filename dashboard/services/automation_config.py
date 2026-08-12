@@ -183,14 +183,6 @@ DEFAULT_CONFIG = {
         "target_counties": ["Lee", "Collier", "Charlotte", "Sarasota", "Manatee", "Hendry", "DeSoto"],
     },
 
-    # ── First Appearance Watcher ──
-    "first_appearance_watcher": {
-        "enabled": True,
-        "interval_seconds": 1800,       # 30 minutes
-        "slack_digest": True,
-        "target_counties": ["Lee", "Collier", "Charlotte", "Sarasota", "Manatee", "Hendry", "DeSoto"],
-    },
-
     # ── iMessage & Tunnel Health Watchdog ──
     "imessage_watchdog": {
         "enabled": True,

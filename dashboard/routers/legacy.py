@@ -1060,10 +1060,6 @@ async def imessage_send(request: Request):
             status_code=500,
         )
 
-    except httpx.ConnectError:
-        return JSONResponse({"error": "Cannot reach BlueBubbles server. Is it running?"}, status_code=502)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @legacy_bp.get("/imessage/history/{booking_number}")

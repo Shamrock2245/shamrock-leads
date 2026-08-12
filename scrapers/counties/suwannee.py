@@ -169,7 +169,6 @@ class SuwanneeCountyScraper(BaseScraper):
 
     def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
-        from datetime import datetime, timezone
         soup = BeautifulSoup(html, "html.parser")
         records = []
 

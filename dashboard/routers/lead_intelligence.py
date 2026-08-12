@@ -200,7 +200,6 @@ async def trend_stats():
     try:
         db = get_db()
         arrests_col = db["arrests"]
-        prospective_col = db["prospective_bonds"]
         active_bonds_col = db["active_bonds"]
         payments_col = db["payments"]
 

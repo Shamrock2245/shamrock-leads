@@ -48,7 +48,7 @@ class FTAAlertService:
         cursor = self.db["active_bonds"].find(
             {
                 "status": {"$in": ["active", "monitoring", "alert"]},
-                "court_date": {"$exists": True, "$ne": None, "$ne": ""},
+                "court_date": {"$exists": True, "$nin": [None, ""]},
             }
         )
 

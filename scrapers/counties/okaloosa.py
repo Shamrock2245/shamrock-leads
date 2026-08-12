@@ -114,7 +114,6 @@ class OkaloosaCountyScraper(BaseScraper):
         return self._parse_soup(soup)
 
     def _parse_soup(self, soup) -> List[ArrestRecord]:
-        import re
         records = []
         seen = set()
 

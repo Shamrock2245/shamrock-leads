@@ -22,12 +22,16 @@ TIERS = {
 }
 
 
-def determine_surety_from_prefix(prefix: str) -> str:
-    """Return 'osi' or 'palmetto' based on prefix string."""
-    clean = str(prefix or "").strip().lower()
-    if clean.startswith("osi") or "osi-p" in clean:
+def determine_surety_from_prefix(prefix: str, explicit_surety: str | None = None) -> str:
+    """Return 'osi' or 'palmetto' based on prefix string, with optional explicit fallback."""
+    clean = str(prefix or "").strip().upper()
+    if clean.startswith("PSC") or clean.startswith("PAL"):
+        return "palmetto"
+    if clean.startswith("OSI") or "OSI-P" in clean:
         return "osi"
-    return "palmetto"
+    if explicit_surety and explicit_surety.lower().strip() in ("osi", "palmetto"):
+        return explicit_surety.lower().strip()
+    return "osi"
 
 
 def parse_max_bond_from_prefix(prefix: str) -> float:

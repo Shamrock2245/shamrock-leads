@@ -60,7 +60,6 @@ async def revenue_metrics(days: int = Query(default=30)):
         payments_col = db["payments"]
         active_bonds_col = db["active_bonds"]
         arrests_col = db["arrests"]
-        prospective_col = db["prospective_bonds"]
 
         # All-time collected
         total_pipeline = await payments_col.aggregate([

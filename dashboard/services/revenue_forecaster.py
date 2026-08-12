@@ -307,7 +307,6 @@ async def get_daily_revenue_series(db, days: int = 90) -> List[Dict[str, Any]]:
     Returns list of {date: "YYYY-MM-DD", amount: float, count: int}
     with zero-fill for missing days.
     """
-    from datetime import timedelta
 
     payments_col = db["payments"]
     now = datetime.now(timezone.utc)

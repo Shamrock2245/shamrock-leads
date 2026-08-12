@@ -219,7 +219,6 @@ KEYWORD_MAP = {
     "flee": ("traffic", "felony_3", 12, False),
     "elude": ("traffic", "felony_3", 12, False),
     "disorderly": ("public_order", "misdemeanor_2", 2, False),
-    "trespass": ("public_order", "misdemeanor_1", 3, False),
 
     # Child / Elder offenses
     "child abuse": ("violent", "felony_3", 8, False),

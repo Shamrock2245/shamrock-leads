@@ -31,7 +31,7 @@ async def get_forfeiture_remittitur_clocks() -> List[Dict[str, Any]]:
         "$or": [
             {"status": "forfeited"},
             {"status": "alert"},
-            {"forfeiture_order_date": {"$exists": True, "$ne": None, "$ne": ""}}
+            {"forfeiture_order_date": {"$exists": True, "$nin": [None, ""]}}
         ]
     }).sort("created_at", -1)
 

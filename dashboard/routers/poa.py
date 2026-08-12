@@ -230,21 +230,6 @@ async def api_poa_list(
     return {"powers": powers, "total": total, "page": page, "pages": pages}
 
 
-def determine_surety_from_prefix(poa_prefix: str, explicit_surety: str | None = None) -> str:
-    """
-    Determine surety based on POA prefix rules:
-    - Prefix starting with OSI (e.g. OSI3, OSI6) -> osi
-    - Prefix starting with PSC or PAL (e.g. PSC2, PSC5) -> palmetto
-    - Falls back to explicit_surety or 'osi'
-    """
-    p_upper = (poa_prefix or "").strip().upper()
-    if p_upper.startswith("PSC") or p_upper.startswith("PAL"):
-        return "palmetto"
-    if p_upper.startswith("OSI"):
-        return "osi"
-    if explicit_surety and explicit_surety.lower().strip() in ("osi", "palmetto"):
-        return explicit_surety.lower().strip()
-    return "osi"
 
 
 @poa_bp.post("/poa/execute")

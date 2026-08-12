@@ -15,6 +15,8 @@ import shutil
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import httpx
+
 from defaults import (
     BLACKBIRD_TIMEOUT,
     IGNORANT_TIMEOUT,
