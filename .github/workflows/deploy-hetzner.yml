@@ -22,10 +22,8 @@ jobs:
   deploy:
     name: Deploy ShamrockLeads
     runs-on: ubuntu-latest
-    # Core stack builds (~8–12m). osint-worker spiderfoot is NOT rebuilt on every
-    # push — that step alone was blowing the 20m SSH command_timeout.
-    # A cold core-image build used 27+ minutes on 2026-08-12; leave time for
-    # restart and the bounded health check instead of timing out mid-deploy.
+    # Routine pushes retain recent Docker build cache so the core restart is bounded.
+    # The osint-worker SpiderFoot image is not rebuilt unless its context changes.
     timeout-minutes: 45
 
     steps:
@@ -115,12 +113,12 @@ jobs:
             docker container prune -f 2>/dev/null || true
             docker volume prune -f 2>/dev/null || true
 
-            # BuildKit / intermediate layers
-            docker builder prune -af 2>/dev/null || true
-            docker buildx prune -af 2>/dev/null || true
-
-            # ALL unused images
-            docker image prune -af 2>/dev/null || true
+            # Retain recent build cache and tagged images on routine deploys. Clearing
+            # all layers forced a cold 30+ minute core rebuild and exhausted the SSH
+            # budget; age out only stale cache and dangling images here.
+            docker builder prune -f --filter "until=168h" 2>/dev/null || true
+            docker buildx prune -f --filter "until=168h" 2>/dev/null || true
+            docker image prune -f 2>/dev/null || true
 
             # Host clutter
             apt-get clean 2>/dev/null || true
@@ -154,10 +152,14 @@ jobs:
               echo "   Disk free after emergency reclaim: $(df -h / | awk 'NR==2 {print $4}')"
             fi
 
-            # ── Ensure Obscura image is present (pulled, not built) ──
+            # ── Ensure Obscura image is present (pulled only when missing) ──
             echo ""
             echo "🦀 Ensuring Obscura image..."
-            docker pull h4ckf0r0day/obscura:latest || echo "   ⚠️ Obscura pull failed (will use cached)"
+            if docker image inspect h4ckf0r0day/obscura:latest >/dev/null 2>&1; then
+              echo "   ⏭️  Obscura image cached — leave in place"
+            else
+              docker pull h4ckf0r0day/obscura:latest || echo "   ⚠️ Obscura pull failed (will retry from cache)"
+            fi
 
             # ── Rebuild core Docker images (skip osint-worker / alpr on every push) ──
             # osint-worker installs spiderfoot from source and regularly exceeds the
