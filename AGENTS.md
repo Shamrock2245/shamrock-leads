@@ -31,7 +31,7 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 17. **Monitors** Gmail for court discharge/exoneration emails `[IMPLEMENTED]`
 18. **Syncs** court dates to Google Calendar `[IMPLEMENTED]`
 19. **Orchestrates** social media presence via Postiz (`https://social.shamrockbailbonds.biz`) `[IMPLEMENTED]`
-20. **OpenCut video editor** public edge `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop — not Postiz) `[CONFIGURED]`
+20. **OpenCut video editor** `https://edit.shamrockbailbonds.biz` (VPS Docker profile `edit` → `:5320` — not Postiz, not the laptop) `[CONFIGURED]`
 21. **Super CRM hub** `/api/crm/*` health, overview, pipeline, search `[IMPLEMENTED July 2026]`
 22. **Multi-State Ops + Bond Intelligence** dashboard surfaces for all 10 states `[IMPLEMENTED · registry-first KPIs]`
 

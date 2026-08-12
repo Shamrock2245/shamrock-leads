@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 NGINX_DIR = REPO_ROOT / "nginx"
 
 VPS_IP = "178.156.179.237"
-OPENCUT_TAILSCALE_ORIGIN = "100.119.187.33:3000"  # brendans-macbook-pro-4 ONLY
+OPENCUT_DOCKER_ORIGIN = "127.0.0.1:5320"  # docker compose --profile edit
 
 Origin = Literal["wix", "vps_nginx", "netlify", "cloudflare_tunnel"]
 
@@ -92,10 +92,10 @@ SUBDOMAINS: tuple[Subdomain, ...] = (
         role="OpenCut video editor",
         origin="vps_nginx",
         nginx_conf="edit.shamrockbailbonds.biz.conf",
-        upstream=OPENCUT_TAILSCALE_ORIGIN,
+        upstream=OPENCUT_DOCKER_ORIGIN,
         notes=(
-            "VPS nginx → Tailscale laptop brendans-macbook-pro-4:3000. "
-            "Never point at shamrocksimac / iMac. Wix DNS A edit → VPS."
+            "VPS nginx → Docker shamrock-opencut :5320 "
+            "(compose profile edit). Not Postiz, not the laptop."
         ),
     ),
     Subdomain(

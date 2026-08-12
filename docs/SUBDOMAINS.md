@@ -16,26 +16,30 @@ DNS for `shamrockbailbonds.biz` is **Wix**. Do not mint Cloudflare nameservers f
 | `sign.shamrockbailbonds.biz` | DocuSeal | VPS nginx | `:5300` | `nginx/sign…conf` |
 | `paperwork.shamrockbailbonds.biz` | Indemnitor portal | VPS nginx | `:5310` | `nginx/paperwork…conf` |
 | `social.shamrockbailbonds.biz` | Postiz + MCP | VPS nginx | `:5200` | `nginx/social…conf` |
-| `edit.shamrockbailbonds.biz` | **OpenCut** video editor | VPS nginx → Tailscale laptop | `100.119.187.33:3000` | `nginx/edit…conf` |
+| `edit.shamrockbailbonds.biz` | **OpenCut** video editor | VPS nginx → **Docker** | `:5320` | `nginx/edit…conf` |
 | `bb.shamrockbailbonds.biz` | BlueBubbles | Cloudflare tunnel | iMac `:1234` | optional `nginx/bb…conf` |
 | `imac.shamrockbailbonds.biz` | iMac SSH | Cloudflare tunnel | iMac `:22` | — |
 | `trape.shamrockbailbonds.biz` | Trape OSINT (on-demand) | VPS nginx | `:8099` | `nginx/trape…conf` |
 
-## New host: `edit`
+## `edit` — OpenCut on the VPS
 
-OpenCut is **not** Postiz. `social.*` stays on Postiz `:5200`. The editor is:
+OpenCut is **not** Postiz and **not** the laptop. `social.*` stays on Postiz `:5200`.
 
 ```
-Internet → edit.shamrockbailbonds.biz → VPS nginx → Tailscale 100.119.187.33:3000
-                                              (brendans-macbook-pro-4 ONLY)
+Internet → edit.shamrockbailbonds.biz → VPS nginx → 127.0.0.1:5320 → shamrock-opencut
 ```
 
-1. **Wix DNS:** `A` `edit` → `178.156.179.237` (TTL 300)  
-2. Laptop: PM2 `opencut-web` + `opencut-controller` (listen `0.0.0.0:3000`)  
-3. VPS: `bash scripts/setup_nginx_vhosts.sh --certbot edit`  
-4. Verify: `python scripts/check_subdomains.py --live`
+```bash
+# VPS
+cd /opt/shamrock-leads
+git pull origin main
+# set OPENCUT_AUTH_SECRET in .env (long random)
+docker compose --profile edit up -d --build
+bash scripts/setup_nginx_vhosts.sh --certbot edit   # first time only
+python3 scripts/check_subdomains.py --live
+```
 
-Never point `edit` at `shamrocksimac` / the office iMac.
+Wix DNS: `A` `edit` → `178.156.179.237`. Do not proxy this host over Tailscale.
 
 ## Adding a subdomain
 

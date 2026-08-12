@@ -28,7 +28,7 @@ plus **Georgia** — **350 registered scrapers** across 10 states (see `STATUS.m
 - **iMessage Bridge:** Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles (port 1234)
 - **DocuSeal Portal:** `https://sign.shamrockbailbonds.biz` (Primary e-signature engine · Template 1 OSI)
 - **Postiz Social & MCP:** `https://social.shamrockbailbonds.biz` (`/api/mcp` SSE stream · 5 channels live)
-- **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop `:3000` — not Postiz)
+- **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS Docker `shamrock-opencut` · nginx → `:5320` — not Postiz, not the laptop)
 - **Host inventory:** `docs/SUBDOMAINS.md` · `config/subdomains.py`
 
 ---
@@ -61,6 +61,7 @@ Postiz               → Social media scheduling & MCP server (social.shamrockba
 | `node-red` | `shamrock-node-red` | 1880 | 1880 | Ops dashboard + 39 cron jobs (profile: ops) |
 | `social` | `shamrock-social` | 5060 | 8089 | Social Engine API (profile: social) |
 | `postiz` | `shamrock-postiz` | 5000 | 5200 | Postiz Social UI/API (profile: social) |
+| `opencut` | `shamrock-opencut` | 3000 | 5320 | OpenCut editor (profile: `edit` → edit.shamrockbailbonds.biz) |
 
 ---
 

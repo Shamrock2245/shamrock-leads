@@ -16,6 +16,7 @@
 | **Traccar** | Hetzner VPS | `:8082` | GPS tracking server |
 | **Node-RED** | Hetzner VPS | `:1880` (profile: ops) | Operations dashboard |
 | **Nginx** | Hetzner VPS | `:443` → `:8088` | SSL reverse proxy |
+| **OpenCut** | Hetzner VPS | `edit.*` → `:5320` (profile `edit`) | Video editor |
 | **MongoDB** | Atlas Cloud | `shamrock.1mgkm.mongodb.net` | Primary database (M0 free tier) |
 | **iMessage** | Office iMac | Tailscale / Cloudflare / frp → `:1234` | BlueBubbles bridge |
 

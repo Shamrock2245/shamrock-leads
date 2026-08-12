@@ -224,6 +224,25 @@ jobs:
             echo "✍️  Ensuring DocuSeal (paperwork profile)..."
             docker compose --profile paperwork up -d docuseal-postgres docuseal 2>/dev/null || true
 
+            # OpenCut (edit profile) — VPS Docker, not laptop Tailscale
+            echo ""
+            echo "🎬 Ensuring OpenCut (edit profile)..."
+            REBUILD_OPENCUT=0
+            if ! docker image inspect shamrock-leads-opencut >/dev/null 2>&1 \
+              && ! docker image inspect shamrock-opencut >/dev/null 2>&1; then
+              REBUILD_OPENCUT=1
+              echo "   📦 no opencut image — will build"
+            elif git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(opencut/|docker-compose.yml)'; then
+              REBUILD_OPENCUT=1
+              echo "   📦 opencut context changed — will rebuild"
+            else
+              echo "   ⏭️  opencut unchanged — start existing image"
+            fi
+            if [ "$REBUILD_OPENCUT" = "1" ]; then
+              docker compose --profile edit build opencut || echo "   ⚠️ OpenCut build failed (non-fatal)"
+            fi
+            docker compose --profile edit up -d opencut-postgres opencut-redis opencut-redis-http opencut 2>/dev/null || true
+
             # ── Postiz healthcheck fix + optional social stack refresh ──
             if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then
               echo ""

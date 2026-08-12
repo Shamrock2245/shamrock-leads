@@ -1,8 +1,11 @@
 """Repo inventory: every official Shamrock host has a tracked nginx vhost."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from config.subdomains import (
     NGINX_DIR,
+    REPO_ROOT,
     SUBDOMAINS,
     all_hosts,
     by_host,
@@ -36,13 +39,21 @@ def test_hosts_are_unique():
     assert len(hosts) == len(set(hosts))
 
 
-def test_edit_is_opencut_on_vps_nginx():
+def test_edit_is_opencut_on_vps_docker():
     edit = by_host("edit.shamrockbailbonds.biz")
     assert edit is not None
     assert edit.origin == "vps_nginx"
     assert edit.nginx_conf == "edit.shamrockbailbonds.biz.conf"
-    assert edit.upstream and "100.119.187.33" in edit.upstream
+    assert edit.upstream == "127.0.0.1:5320"
     assert "social" not in edit.role.lower()
+    assert "100.119.187.33" not in (edit.notes or "")
+
+
+def test_edit_nginx_proxies_to_local_docker():
+    text = (NGINX_DIR / "edit.shamrockbailbonds.biz.conf").read_text(encoding="utf-8")
+    assert "127.0.0.1:5320" in text
+    assert "100.119.187.33" not in text
+    assert "server_name edit.shamrockbailbonds.biz" in text
 
 
 def test_social_is_postiz_not_opencut():
@@ -63,3 +74,12 @@ def test_required_nginx_confs_exist_and_name_the_host():
         assert path.is_file(), f"missing {path}"
         text = path.read_text(encoding="utf-8")
         assert f"server_name {sub.host}" in text, f"{path.name} missing server_name {sub.host}"
+
+
+def test_opencut_compose_profile_exists():
+    compose = (Path(REPO_ROOT) / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "container_name: shamrock-opencut" in compose
+    assert "5320:3000" in compose
+    dockerfile = Path(REPO_ROOT) / "opencut" / "Dockerfile"
+    assert dockerfile.is_file()
+    assert "opencut-classic" in dockerfile.read_text(encoding="utf-8")

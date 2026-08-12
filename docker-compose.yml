@@ -689,6 +689,137 @@ services:
         max-size: "5m"
         max-file: "2"
 
+  # ── OpenCut: video editor (edit.shamrockbailbonds.biz) ──
+  # Start: docker compose --profile edit up -d
+  # Public: nginx edit.* → host :5320 → container :3000
+  # Origin is THIS VPS. Do not proxy to the laptop / Tailscale.
+  opencut:
+    build:
+      context: ./opencut
+      dockerfile: Dockerfile
+      args:
+        OPENCUT_REF: "${OPENCUT_REF:-main}"
+        NEXT_PUBLIC_SITE_URL: "${EDIT_PUBLIC_URL:-https://edit.shamrockbailbonds.biz}"
+        FREESOUND_CLIENT_ID: "${FREESOUND_CLIENT_ID:-}"
+        FREESOUND_API_KEY: "${FREESOUND_API_KEY:-}"
+    container_name: shamrock-opencut
+    hostname: opencut
+    restart: unless-stopped
+    profiles:
+      - edit
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://opencut:${OPENCUT_DB_PASSWORD:-shamrock_opencut_2026}@opencut-postgres:5432/opencut"
+      BETTER_AUTH_SECRET: "${OPENCUT_AUTH_SECRET:-change-me-opencut-auth-secret}"
+      UPSTASH_REDIS_REST_URL: "http://opencut-redis-http:80"
+      UPSTASH_REDIS_REST_TOKEN: "${OPENCUT_REDIS_TOKEN:-opencut_srh_token}"
+      NEXT_PUBLIC_SITE_URL: "${EDIT_PUBLIC_URL:-https://edit.shamrockbailbonds.biz}"
+    ports:
+      - "5320:3000"
+    depends_on:
+      opencut-postgres:
+        condition: service_healthy
+      opencut-redis-http:
+        condition: service_healthy
+    networks:
+      - shamrock-net
+    mem_limit: 2g
+    cpus: 1.5
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  opencut-postgres:
+    image: postgres:17-alpine
+    container_name: shamrock-opencut-postgres
+    restart: unless-stopped
+    profiles:
+      - edit
+    environment:
+      POSTGRES_USER: opencut
+      POSTGRES_PASSWORD: "${OPENCUT_DB_PASSWORD:-shamrock_opencut_2026}"
+      POSTGRES_DB: opencut
+    volumes:
+      - opencut-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opencut -d opencut"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - shamrock-net
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  opencut-redis:
+    image: redis:7-alpine
+    container_name: shamrock-opencut-redis
+    restart: unless-stopped
+    profiles:
+      - edit
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - shamrock-net
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  opencut-redis-http:
+    image: hiett/serverless-redis-http:latest
+    container_name: shamrock-opencut-redis-http
+    restart: unless-stopped
+    profiles:
+      - edit
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: "${OPENCUT_REDIS_TOKEN:-opencut_srh_token}"
+      SRH_CONNECTION_STRING: "redis://opencut-redis:6379"
+    depends_on:
+      opencut-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:80 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - shamrock-net
+    mem_limit: 128m
+    cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 volumes:
   node-red-data:
     driver: local
@@ -713,4 +844,6 @@ volumes:
   docuseal-data:
     driver: local
   docuseal-postgres-data:
+    driver: local
+  opencut-postgres-data:
     driver: local

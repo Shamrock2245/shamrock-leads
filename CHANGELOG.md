@@ -5,12 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-08-12 (official host inventory + edit)
+## [Unreleased] — 2026-08-12 (official host inventory + edit on VPS)
 
 ### Added
 - Canonical hostname registry `config/subdomains.py` + `docs/SUBDOMAINS.md`
-- `nginx/edit.shamrockbailbonds.biz.conf` — OpenCut public edge (Tailscale laptop)
-- `nginx/` now holds every VPS vhost (`leads` `sign` `paperwork` `social` `edit` `trape` `bb`)
+- OpenCut on the VPS: `opencut/Dockerfile` + compose profile `edit` (postgres / redis / web)
+- `nginx/edit.shamrockbailbonds.biz.conf` → `127.0.0.1:5320` (Docker, not laptop Tailscale)
+- `nginx/` holds every VPS vhost (`leads` `sign` `paperwork` `social` `edit` `trape` `bb`)
 - `scripts/check_subdomains.py` · `scripts/setup_nginx_vhosts.sh` · `tests/test_subdomains.py`
 
 ---

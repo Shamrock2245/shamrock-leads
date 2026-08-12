@@ -40,7 +40,7 @@ We write bonds under two surety companies. Every agent must know these cold.
 | **DocuSeal** | `https://sign.shamrockbailbonds.biz` |
 | **Paperwork portal** | `https://paperwork.shamrockbailbonds.biz` |
 | **Postiz (social)** | `https://social.shamrockbailbonds.biz` |
-| **OpenCut (edit)** | `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale laptop `:3000`) |
+| **OpenCut (edit)** | `https://edit.shamrockbailbonds.biz` (VPS Docker · nginx → `:5320`) |
 | **Bail School** | `https://school.shamrockbailbonds.biz` |
 | **iMessage Bridge** | Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles |
 | **Host inventory** | `docs/SUBDOMAINS.md` · `config/subdomains.py` |

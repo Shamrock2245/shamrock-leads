@@ -10,7 +10,7 @@
 > **BlueBubbles versions:** `docs/BLUEBUBBLES_VERSIONING.md` (App v2 ≠ Server; Server latest = 1.9.9)  
 > **DocuSeal Server:** `https://sign.shamrockbailbonds.biz` (Template ID 1 OSI · 16/16 tests passing)  
 > **Postiz Social & MCP:** `https://social.shamrockbailbonds.biz` (`/api/mcp` 200 OK SSE stream · 5 channels live)  
-> **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS nginx → Tailscale `brendans-macbook-pro-4:3000`)  
+> **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS Docker `shamrock-opencut` · nginx → `:5320`)  
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
@@ -160,7 +160,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
 | Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · SignNow primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |
-| `edit.shamrockbailbonds.biz` (OpenCut) | ⏳ **Repo ready** (`nginx/edit…conf`) · **live DNS missing** — Wix `A edit → 178.156.179.237`, then `setup_nginx_vhosts.sh --certbot edit` + PM2 on laptop |
+| `edit.shamrockbailbonds.biz` (OpenCut) | ⏳ **Dockerized** (`compose --profile edit` → `:5320`) · deploy: `docker compose --profile edit up -d --build` + nginx vhost |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
 
 ### Session note (2026-08-04)

@@ -17,7 +17,7 @@ Shamrock is **not** a pile of disconnected tools. It is one **operating platform
 | **Bail School** | Pre-licensing education (20hr / 120hr) → cert path | `school.shamrockbailbonds.biz` | Next.js + portal GAS / Sheets |
 | **Brand / Clipboard** | Everywhere intake (web, Telegram, voice) | `shamrockbailbonds.biz` | Wix + GAS |
 | **Automation fabric** | Crons, Watchdog, cross-service glue | Node-RED `:1880` | `shamrock-node-red` |
-| **Video / social studio** | OpenCut editor + Postiz | `edit.` · `social.shamrockbailbonds.biz` | Laptop PM2 + Postiz Docker |
+| **Video / social studio** | OpenCut editor + Postiz | `edit.` · `social.shamrockbailbonds.biz` | VPS Docker profile `edit` + Postiz |
 
 Together these are **Shamrock’s Platform** — the digital workforce + human bondsman system that should make Shamrock the default expert brand for Florida bail.
 
