@@ -13,6 +13,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `nginx/edit.shamrockbailbonds.biz.conf` → `127.0.0.1:5320` (full HTTPS, Docker, not laptop Tailscale)
 - `setup_nginx_vhosts.sh` now replaces TLS vhosts when the source already has cert paths (unblocks Tailscale → Docker origin cutover)
 - OpenCut Docker build patches archived `opencut-classic` (`isShortcutKey` + TS ignore) so `next build` succeeds
+- OpenCut runtime now supplies Marble + Freesound env strings so `/editor/*` does not 500 on Zod validation
 - `nginx/` holds every VPS vhost (`leads` `sign` `paperwork` `social` `edit` `trape` `bb`)
 - `scripts/check_subdomains.py` · `scripts/setup_nginx_vhosts.sh` · `tests/test_subdomains.py`
 

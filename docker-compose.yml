@@ -715,6 +715,10 @@ services:
       UPSTASH_REDIS_REST_URL: "http://opencut-redis-http:80"
       UPSTASH_REDIS_REST_TOKEN: "${OPENCUT_REDIS_TOKEN:-opencut_srh_token}"
       NEXT_PUBLIC_SITE_URL: "${EDIT_PUBLIC_URL:-https://edit.shamrockbailbonds.biz}"
+      NEXT_PUBLIC_MARBLE_API_URL: "${NEXT_PUBLIC_MARBLE_API_URL:-https://api.marblecms.com}"
+      MARBLE_WORKSPACE_KEY: "${MARBLE_WORKSPACE_KEY:-placeholder}"
+      FREESOUND_CLIENT_ID: "${FREESOUND_CLIENT_ID:-unused}"
+      FREESOUND_API_KEY: "${FREESOUND_API_KEY:-unused}"
     ports:
       - "5320:3000"
     depends_on:
