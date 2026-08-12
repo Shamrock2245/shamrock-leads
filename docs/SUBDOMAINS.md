@@ -14,7 +14,7 @@ DNS for `shamrockbailbonds.biz` is **Wix**. Do not mint Cloudflare nameservers f
 | `leads.shamrockbailbonds.biz` | Bond Auto-CRM | VPS nginx | `:8088` | `nginx/leads…conf` |
 | `school.shamrockbailbonds.biz` | Bail School LMS | Netlify | `shamrock-bail-school` | — |
 | `sign.shamrockbailbonds.biz` | DocuSeal | VPS nginx | `:5300` | `nginx/sign…conf` |
-| `paperwork.shamrockbailbonds.biz` | Indemnitor portal | VPS nginx | `:5310` | `nginx/paperwork…conf` |
+| `paperwork.shamrockbailbonds.biz` | Indemnitor / defendant PIN portal | VPS nginx | dashboard `:8088` (`/api/portal/portal-ui`) | `nginx/paperwork…conf` |
 | `social.shamrockbailbonds.biz` | Postiz + MCP | VPS nginx | `:5200` | `nginx/social…conf` |
 | `edit.shamrockbailbonds.biz` | **OpenCut** video editor | VPS nginx → **Docker** | `:5320` | `nginx/edit…conf` |
 | `bb.shamrockbailbonds.biz` | BlueBubbles | Cloudflare tunnel | iMac `:1234` | optional `nginx/bb…conf` |

@@ -5,7 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased] — 2026-08-12 (official host inventory + edit on VPS)
+## [Unreleased] — 2026-08-12 (production closeout)
+
+### Fixed
+- **Postiz `/auth` 500** — Mastra `mastra_ai_spans` hit Postgres 1600-column limit after every deploy force-recreated `:latest` (postiz-app#1473). Dropped bloated telemetry tables; backend listening on `:3000` again (`/auth` 200, `/api/mcp` 401 without key).
+- Deploy no longer `pull` + `--force-recreate` Postiz on every CRM push. Recreate only when `docker-compose.yml` / `social/` change; otherwise repair if `:3000` is down (`scripts/repair_postiz_mastra.sh`).
+- Paperwork nginx in repo now matches live: dashboard `:8088` host-aware PIN portal (was a stale `:5310` origin that `setup_nginx_vhosts.sh` would have overwritten).
+- DocuSeal healthcheck uses Ruby TCP (image has no `bash`).
+- Paperwork portal routes accept HEAD so probes are not 404.
+- SwipeSimple link unit test no longer requires a live `MONGODB_URI`.
+
+## [2.20.0] — 2026-08-12 (official host inventory + edit on VPS)
 
 ### Added
 - Canonical hostname registry `config/subdomains.py` + `docs/SUBDOMAINS.md`

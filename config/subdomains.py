@@ -75,9 +75,9 @@ SUBDOMAINS: tuple[Subdomain, ...] = (
         role="Indemnitor / defendant signing portal",
         origin="vps_nginx",
         nginx_conf="paperwork.shamrockbailbonds.biz.conf",
-        upstream="127.0.0.1:5310",
+        upstream="127.0.0.1:8088",
         public_client=True,
-        notes="PIN portal. Host-aware auth in pin_middleware.",
+        notes="PIN portal via dashboard pin_portal (host-aware). Not a separate :5310 app.",
     ),
     Subdomain(
         host="social.shamrockbailbonds.biz",

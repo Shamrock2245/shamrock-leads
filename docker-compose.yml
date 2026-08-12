@@ -643,13 +643,15 @@ services:
       - shamrock-net
     mem_limit: 1g
     cpus: 1.0
-    # DocuSeal image has no curl. Probe TCP :3000 with pure bash /dev/tcp.
-    # App still serves signing even when Docker marks "unhealthy" from missing curl.
+    # DocuSeal image has Ruby, not bash/curl. Probe TCP :3000.
     healthcheck:
       test:
         [
-          "CMD-SHELL",
-          "timeout 3 bash -c 'echo >/dev/tcp/127.0.0.1/3000' || exit 1",
+          "CMD",
+          "ruby",
+          "-rsocket",
+          "-e",
+          "TCPSocket.new('127.0.0.1', 3000).close",
         ]
       interval: 30s
       timeout: 10s

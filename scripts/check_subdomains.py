@@ -71,14 +71,21 @@ def _dns_a(host: str) -> list[str]:
 
 def _http_status(host: str, timeout: float) -> str:
     url = f"https://{host}/"
-    req = urllib.request.Request(url, method="HEAD")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return str(resp.status)
-    except urllib.error.HTTPError as exc:
-        return str(exc.code)
-    except Exception as exc:  # noqa: BLE001 — ops probe, any failure is a status
-        return type(exc).__name__
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(url, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return str(resp.status)
+        except urllib.error.HTTPError as exc:
+            # FastAPI GET-only routes 404 on HEAD; retry GET.
+            if method == "HEAD" and exc.code in (404, 405):
+                continue
+            return str(exc.code)
+        except Exception as exc:  # noqa: BLE001 — ops probe, any failure is a status
+            if method == "HEAD":
+                continue
+            return type(exc).__name__
+    return "unreachable"
 
 
 def check_live(timeout: float) -> list[str]:
@@ -90,12 +97,18 @@ def check_live(timeout: float) -> list[str]:
         dns = ", ".join(ips) if ips else "(no A)"
         if not ips:
             https = "—"
-            if sub.origin != "cloudflare_tunnel" or sub.host.startswith("imac."):
+            # Cloudflare tunnels often have no A (proxied CNAME / off when Mac sleeps).
+            if sub.origin != "cloudflare_tunnel":
                 warnings.append(f"DNS missing: {sub.host}")
         elif sub.host.startswith("imac."):
             https = "n/a (ssh)"
+        elif sub.host.startswith("trape."):
+            https = _http_status(sub.host, timeout)
+            # On-demand skip-trace lure — down/cert-mismatch is expected.
         else:
             https = _http_status(sub.host, timeout)
+            if https not in {"200", "301", "302", "303", "307", "308", "401", "403"}:
+                warnings.append(f"{sub.host} HTTPS {https}")
         print(f"{sub.host:42} {dns:28} {https}")
     return warnings
 

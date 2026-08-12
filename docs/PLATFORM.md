@@ -1,7 +1,7 @@
 # Shamrock’s Platform
 
 > **North star:** Become the **authoritative bail brand expert** in Florida — and the model operators elsewhere in the U.S. copy.  
-> **Last Updated:** 2026-07-10  
+> **Last Updated:** 2026-08-12  
 > **Production cutover:** [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md)  
 > **Repo harmony:** [`ECOSYSTEM.md`](./ECOSYSTEM.md) · **Brand:** [`../BRAND.md`](../BRAND.md)
 
@@ -66,7 +66,7 @@ When someone in Florida (and later multi-state via Palmetto) asks “who runs ba
 | Stage | Meaning | Where we are |
 |-------|---------|----------------|
 | **1 · Built** | Code on `main` for core funnels | ✅ Bond chain Phases 1–17 · School LMS · Portal · NR · Telegram |
-| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 Checklist-driven (this week) |
+| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Code + hosts ready** (2026-08-12). Remaining human: C2 leftover Wix FAQ “$699”, C3 historical secret rotation, staff-confirm write-bond / outbound iMessage once |
 | **3 · Authoritative FL brand** | Statewide coverage quality, education + ops reputation, SOC-minded | 🔲 After Stage 2 |
 | **4 · U.S. reference model** | Palmetto multi-state depth, playbooks others adopt | 🔲 After Stage 3 |
 

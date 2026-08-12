@@ -129,7 +129,11 @@ def test_save_doc_rules_config_endpoint(mock_get_col, test_app):
     mock_rules_col.update_one.assert_called_once()
 
 
-def test_swipesimple_link_endpoint(test_app):
+@patch("dashboard.routers.paperwork.get_collection")
+def test_swipesimple_link_endpoint(mock_get_col, test_app):
+    mock_col = AsyncMock()
+    mock_col.find_one = AsyncMock(return_value=None)
+    mock_get_col.return_value = mock_col
     client = TestClient(test_app)
     payload = {"packet_id": "pkt_3003", "amount": 750.00, "phone": "239-555-0199", "deliver": False}
     response = client.post("/api/paperwork/payment/swipesimple-link", json=payload)

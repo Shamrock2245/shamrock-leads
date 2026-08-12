@@ -1,7 +1,7 @@
 # Shamrock’s Platform — Ecosystem Harmony
 
 > How **leads**, **portal**, **bail-school**, **node-red**, and **telegram** form **one platform**.  
-> **Last Updated:** 2026-07-10 · Per-repo truth: each repo’s `STATUS.md`  
+> **Last Updated:** 2026-08-12 · Per-repo truth: each repo’s `STATUS.md`  
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
 > **Production checklist:** [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md)  
 > **GAS URL policy:** [`docs/policies/gas-url-policy.md`](./policies/gas-url-policy.md)
@@ -127,12 +127,7 @@ Never put PII-bearing staff URLs in client-facing SMS; use brand domain + magic 
 
 ## Production readiness checklist (leads)
 
-- [ ] `DASHBOARD_PIN` and strong `SECRET_KEY` set on VPS (no empty PIN open access)
-- [ ] `GAS_API_KEY` and `WIX_WEBHOOK_SECRET` set (webhooks fail closed if missing)
-- [ ] MongoDB Atlas user password rotated if ever committed; network access restricted beyond `0.0.0.0/0` when possible
-- [ ] BlueBubbles passwords only in env / LaunchAgents — not in shell scripts
-- [ ] Deploy workflow secrets: `HETZNER_SSH_KEY`, Firebase base64 secrets
-- [ ] Nginx TLS for `leads.shamrockbailbonds.biz`
+Track live cutover in [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md). Local `--strict` secrets check is green (2026-08-12). Remaining human items: C2 leftover Wix FAQ `$699`, C3 historical key rotation.
 
 ---
 

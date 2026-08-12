@@ -65,7 +65,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **same** stable factory URL | Human | [x] *2026-08-11* — code + Netlify `GAS_WEB_APP_URL` + leads `.env` all use stable `…CvP-Z/exec` (V409/V461). **Confirm Wix Secrets Manager matches** if not already set (same URL). |
-| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] *2026-08-11* — `wix publish --source local`; live FAQ/meta show **$649** only (no $699) |
+| C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [ ] *regressed 2026-08-12* — page JS/catalog is $649; leftover Wix SEO JSON-LD still says “The Agent Path is $699”. **Republish Wix FAQ/SEO** (not in git). |
 | C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] |
 | C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-11* — `{"success":true,"version":"V409"}` on stable factory; redeployed **@461** (Shannon surety_id) |
 

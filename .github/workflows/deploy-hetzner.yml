@@ -243,12 +243,23 @@ jobs:
             fi
             docker compose --profile edit up -d opencut-postgres opencut-redis opencut-redis-http opencut 2>/dev/null || true
 
-            # ── Postiz healthcheck fix + optional social stack refresh ──
+            # Postiz: do NOT pull :latest or force-recreate on every CRM deploy.
+            # Each recreate runs `prisma db push` + Mastra ALTER TABLE and leaves
+            # dropped-column slots until mastra_ai_spans hits PG's 1600-col limit
+            # (gitroomhq/postiz-app#1473) and /auth 500s.
             if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then
               echo ""
-              echo "📱 Refreshing Postiz (social profile)..."
-              docker compose --profile social pull postiz 2>/dev/null || true
-              docker compose --profile social up -d --force-recreate --no-deps postiz 2>/dev/null || true
+              if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(docker-compose.yml|social/)'; then
+                echo "📱 Social/compose changed — start Postiz (no image pull)"
+                docker compose --profile social up -d --no-deps postiz 2>/dev/null || true
+                bash scripts/repair_postiz_mastra.sh || true
+              else
+                echo "⏭️  Postiz unchanged — leave running"
+                if ! docker exec shamrock-postiz sh -c "ss -lntp 2>/dev/null | grep -q ':3000'"; then
+                  echo "⚠️  Postiz backend down — repairing Mastra tables"
+                  bash scripts/repair_postiz_mastra.sh || true
+                fi
+              fi
             fi
 
             # ── frp server (BlueBubbles tunnel) ──

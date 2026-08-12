@@ -60,6 +60,16 @@ def test_edit_nginx_proxies_to_local_docker():
     assert "return 301 https://$host$request_uri" in text
 
 
+def test_paperwork_proxies_to_dashboard_not_orphan_5310():
+    paperwork = by_host("paperwork.shamrockbailbonds.biz")
+    assert paperwork is not None
+    assert paperwork.upstream == "127.0.0.1:8088"
+    text = (NGINX_DIR / "paperwork.shamrockbailbonds.biz.conf").read_text(encoding="utf-8")
+    assert "127.0.0.1:8088" in text
+    assert "127.0.0.1:5310" not in text
+    assert "proxy_pass         http://127.0.0.1:8088/api/portal/portal-ui" in text
+
+
 def test_social_is_postiz_not_opencut():
     social = by_host("social.shamrockbailbonds.biz")
     assert social is not None

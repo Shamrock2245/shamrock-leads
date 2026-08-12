@@ -680,11 +680,11 @@ def _is_paperwork_host(request: Request) -> bool:
     )
 
 
-@portal_page_router.get("/", response_class=HTMLResponse)
-@portal_page_router.get("/done", response_class=HTMLResponse)
-@portal_page_router.get("/paperwork", response_class=HTMLResponse)
-@pin_portal_router.get("/portal-ui", response_class=HTMLResponse)
-@pin_portal_router.get("/done", response_class=HTMLResponse)
+@portal_page_router.api_route("/", response_class=HTMLResponse, methods=["GET", "HEAD"])
+@portal_page_router.api_route("/done", response_class=HTMLResponse, methods=["GET", "HEAD"])
+@portal_page_router.api_route("/paperwork", response_class=HTMLResponse, methods=["GET", "HEAD"])
+@pin_portal_router.api_route("/portal-ui", response_class=HTMLResponse, methods=["GET", "HEAD"])
+@pin_portal_router.api_route("/done", response_class=HTMLResponse, methods=["GET", "HEAD"])
 async def get_portal_ui(request: Request):
     """
     Render lightweight mobile PWA UI for paperwork.shamrockbailbonds.biz
