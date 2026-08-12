@@ -160,7 +160,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
 | Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · SignNow primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |
-| `edit.shamrockbailbonds.biz` (OpenCut) | ⏳ **Dockerized** (`compose --profile edit` → `:5320`) · deploy: `docker compose --profile edit up -d --build` + nginx vhost |
+| `edit.shamrockbailbonds.biz` (OpenCut) | ✅ Live on VPS Docker (`shamrock-opencut` → `:5320`) · nginx no longer Tailscale |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
 
 ### Session note (2026-08-04)

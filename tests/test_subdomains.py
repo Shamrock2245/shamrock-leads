@@ -91,4 +91,6 @@ def test_opencut_compose_profile_exists():
     assert "5320:3000" in compose
     dockerfile = Path(REPO_ROOT) / "opencut" / "Dockerfile"
     assert dockerfile.is_file()
-    assert "opencut-classic" in dockerfile.read_text(encoding="utf-8")
+    text = dockerfile.read_text(encoding="utf-8")
+    assert "opencut-classic" in text
+    assert "isShortcutKey" in text
