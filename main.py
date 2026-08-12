@@ -194,6 +194,11 @@ from scrapers.counties_ga.whitfield import WhitfieldScraper as GA_WhitfieldScrap
 from scrapers.counties_ga.tift import TiftScraper as GA_TiftScraper
 from scrapers.counties_ga.ware import WareScraper as GA_WareScraper
 from scrapers.counties_ga.coffee import CoffeeScraper as GA_CoffeeScraper
+from scrapers.counties_ga.appling import ApplingScraper as GA_ApplingScraper
+from scrapers.counties_ga.bleckley import BleckleyScraper as GA_BleckleyScraper
+from scrapers.counties_ga.crisp import CrispScraper as GA_CrispScraper
+from scrapers.counties_ga.laurens import LaurensScraper as GA_LaurensScraper
+from scrapers.counties_ga.effingham import EffinghamScraper as GA_EffinghamScraper
 
 # ── South Carolina Scrapers ────────────────────────────────────────────────
 from scrapers.counties_sc.abbeville import AbbevilleScraper as SC_AbbevilleScraper
