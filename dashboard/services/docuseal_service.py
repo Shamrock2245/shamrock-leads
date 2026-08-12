@@ -39,10 +39,10 @@ DEFAULT_COMPLETED_BONDS_FOLDER = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
 # (live template 1 "shamrock-osi-paperwork-complete"):
 #   indemnitor | Defendant | Coindemnitor | Bondsman
 ROLE_INDEMNITOR = "indemnitor"
-ROLE_DEFENDANT = "Defendant"
-ROLE_CO_INDEMNITOR = "Coindemnitor"
-ROLE_BONDSMAN = "Bondsman"
-ROLE_INDEMNITOR_N = "Coindemnitor"  # template only has one co-role; reuse Coindemnitor
+ROLE_DEFENDANT = "defendant"
+ROLE_CO_INDEMNITOR = "coindemnitor"
+ROLE_BONDSMAN = "bondsman"
+ROLE_INDEMNITOR_N = "coindemnitor"  # template only has one co-role; reuse Coindemnitor
 
 
 def _safe_money(val: Any) -> float:
@@ -1041,6 +1041,33 @@ class DocuSealService:
                 inds = [primary]
 
         submitters: List[Dict[str, Any]] = []
+
+        # Optional Bondsman / agent role (template may require signature block)
+        include_bondsman = bool(
+            bond_data.get("include_bondsman")
+            or os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "false").lower() in ("1", "true", "yes")
+        )
+        if include_bondsman:
+            agent_name = bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
+            agent_email = (
+                bond_data.get("bondsman_email")
+                or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
+            )
+            agent_phone = bond_data.get("bondsman_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
+            submitters.append(
+                self.build_submitter(
+                    role=ROLE_BONDSMAN,
+                    email=agent_email,
+                    name=agent_name,
+                    phone=agent_phone,
+                    external_id=f"{packet_id}:bondsman",
+                    values=payload_values,
+                    metadata={"packet_id": packet_id, "party_role": "bondsman"},
+                    send_email=True,
+                    order=len(submitters) + 1,
+                )
+            )
+
         for idx, ind in enumerate(inds):
             # Template roles: Indemnitor, Co-Indemnitor, Indemnitor 3+
             role = _role_for_indemnitor_index(idx)
@@ -1110,32 +1137,6 @@ class DocuSealService:
                         "party_role": "defendant",
                     },
                     send_email=send_email,
-                    order=len(submitters) + 1,
-                )
-            )
-
-        # Optional Bondsman / agent role (template may require signature block)
-        include_bondsman = bool(
-            bond_data.get("include_bondsman")
-            or os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "false").lower() in ("1", "true", "yes")
-        )
-        if include_bondsman:
-            agent_name = bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
-            agent_email = (
-                bond_data.get("bondsman_email")
-                or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
-            )
-            agent_phone = bond_data.get("bondsman_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
-            submitters.append(
-                self.build_submitter(
-                    role=ROLE_BONDSMAN,
-                    email=agent_email,
-                    name=agent_name,
-                    phone=agent_phone,
-                    external_id=f"{packet_id}:bondsman",
-                    values=payload_values,
-                    metadata={"packet_id": packet_id, "party_role": "bondsman"},
-                    send_email=True,
                     order=len(submitters) + 1,
                 )
             )
