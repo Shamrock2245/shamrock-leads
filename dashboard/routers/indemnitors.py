@@ -89,6 +89,60 @@ from dashboard.services.id_scanner_service import IDScannerService
 ALLOWED_UPLOAD_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "gif", "webp", "heic"}
 
 
+@router.post("/indemnitors/authorize-override")
+async def api_authorize_override(request: Request):
+    """
+    Validates a staff PIN and logs an address override event to the audit trail.
+    """
+    from dashboard.extensions import get_collection
+    from dashboard.auth.pin_middleware import DASHBOARD_PIN
+    import datetime
+    import uuid
+
+    body = await request.json()
+    pin = body.get("pin", "").strip()
+    booking = body.get("booking_number", "Unknown")
+    scanned_address = body.get("scanned_address", "")
+    new_address = body.get("new_address", "")
+
+    if not pin:
+        return JSONResponse({"error": "PIN required"}, status_code=400)
+
+    # Validate PIN (Master PIN or Sub-Agent PIN)
+    is_valid = False
+    agent_name = "Master Admin"
+
+    if pin == DASHBOARD_PIN:
+        is_valid = True
+    else:
+        # Check sub_agents
+        sub_agents = get_collection("sub_agents")
+        agent = await sub_agents.find_one({"license_number": pin})
+        if agent:
+            is_valid = True
+            agent_name = agent.get("name", "Unknown Agent")
+
+    if not is_valid:
+        return JSONResponse({"error": "Invalid PIN"}, status_code=403)
+
+    # Log to audit_events
+    audit_col = get_collection("audit_events")
+    await audit_col.insert_one({
+        "event_id": str(uuid.uuid4()),
+        "event_type": "address_override",
+        "booking_number": booking,
+        "actor": agent_name,
+        "actor_pin": pin[-4:], # Store last 4 for reference
+        "details": {
+            "scanned_address": scanned_address,
+            "new_address": new_address,
+        },
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+    })
+
+    return JSONResponse({"success": True})
+
+
 @router.post("/id/scan-ocr")
 @router.post("/indemnitors/scan-id")
 async def api_scan_id_ocr(request: Request):

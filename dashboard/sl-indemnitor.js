@@ -12,6 +12,8 @@ const SLIndemnitor = (() => {
   let _currentBk = null;
   let _subTab = 'profile';
   let _searchTimer = null;
+  let _scannedAddress = null;
+  let _pendingSaveBody = null;
 
   const $ = id => document.getElementById(id);
   const money = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
@@ -901,6 +903,18 @@ const SLIndemnitor = (() => {
       body.prior_role = _selectedPrior.prior_role || '';
     }
 
+    if (_scannedAddress && body.address.trim() && body.address.trim().toLowerCase() !== _scannedAddress.toLowerCase()) {
+      // Address was manually changed from scanned ID
+      _pendingSaveBody = body;
+      $('addressOverridePin').value = '';
+      $('addressOverrideModal').style.display = 'flex';
+      return;
+    }
+
+    await _executeSaveIndemnitor(body);
+  }
+
+  async function _executeSaveIndemnitor(body) {
     try {
       const r = await fetch(`${API}/api/indemnitors/create`, {
         method: 'POST',
@@ -911,10 +925,90 @@ const SLIndemnitor = (() => {
       if (!r.ok) { toast(`❌ ${d.error || 'Failed'}`, 'error'); return; }
       const verb = d.action === 'updated_existing' ? 'updated' : 'saved';
       const suffix = d.linked === false ? ' (unlinked — link to a bond later)' : '';
-      toast(`✅ Indemnitor ${verb}: ${firstName} ${lastName}${suffix}`, 'success');
+      toast(`✅ Indemnitor ${verb}: ${body.first_name} ${body.last_name}${suffix}`, 'success');
       closeAddModal();
       load();  // Refresh list
     } catch(e) { toast('❌ Network error: ' + e.message, 'error'); }
+  }
+
+  async function confirmAddressOverride() {
+    const pin = $('addressOverridePin').value.trim();
+    if (!pin) {
+      toast('❌ PIN required.', 'error');
+      return;
+    }
+    if (!_pendingSaveBody) return;
+    
+    // Call backend to validate PIN and log audit event
+    toast('⏳ Validating authorization...', 'info');
+    try {
+      const authRes = await fetch(`${API}/api/indemnitors/authorize-override`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          pin: pin,
+          booking_number: _pendingSaveBody.booking_number || $('indFormBooking').value.trim() || 'New',
+          scanned_address: _scannedAddress,
+          new_address: _pendingSaveBody.address
+        })
+      });
+      
+      if (!authRes.ok) {
+        const err = await authRes.json();
+        toast(`❌ ${err.error || 'Authorization denied.'}`, 'error');
+        return;
+      }
+      
+      // Auth passed
+      $('addressOverrideModal').style.display = 'none';
+      toast('✅ Override authorized by staff.', 'success');
+      await _executeSaveIndemnitor(_pendingSaveBody);
+      _pendingSaveBody = null;
+    } catch (e) {
+      toast('❌ Network error validating PIN: ' + e.message, 'error');
+    }
+  }
+
+  function triggerScan() {
+    $('indAddIdScanner').click();
+  }
+
+  async function handleScanID(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    toast('📸 Scanning ID via OCR...', 'info');
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const r = await fetch(`${API}/api/indemnitors/scan-id`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        toast(`❌ Scan failed: ${data.error || 'Unknown'}`, 'error');
+        return;
+      }
+
+      toast('✅ ID Scanned successfully!', 'success');
+      
+      if (data.firstName) $('indFormFirst').value = data.firstName;
+      if (data.lastName) $('indFormLast').value = data.lastName;
+      if (data.address) {
+        $('indFormAddress').value = data.address;
+        _scannedAddress = data.address.trim();
+      }
+      if (data.dob) $('indFormDOB').value = data.dob;
+      if (data.dlNumber) $('indFormDL').value = data.dlNumber;
+      if (data.dlState) $('indFormDLState').value = data.dlState;
+      
+    } catch (err) {
+      toast('❌ Scan error: ' + err.message, 'error');
+    } finally {
+      e.target.value = ''; // Reset input
+    }
   }
 
   // ── KYC Upload Handlers ──
@@ -1047,8 +1141,10 @@ const SLIndemnitor = (() => {
     generatePaymentLink, copyPaymentLink, sendPaymentLink,
     hydrateFrom,
     // Add Indemnitor Modal
+    fetchSummaryHtml, renderIndemnitorView, toggleDocumentList,
     openAddModal, closeAddModal, smartSearch, selectSearchResult,
-    showNewForm, backToSearch, submitAddForm,
+    showNewForm, backToSearch, submitAddForm, hydrateFrom,
+    triggerScan, handleScanID, confirmAddressOverride,
     // KYC Uploads + ID slots
     handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,
     handleModalIdUpload, handleModalIdDrop,

@@ -82,7 +82,11 @@ class IDScannerService:
             "- Standardize dates to YYYY-MM-DD format.\n"
             "- Extract 2-letter state codes for dl_state and state.\n"
             "- If a field is not visible or unknown, set its value to null.\n"
-            "- id_type must be one of: 'driver_license', 'state_id', 'passport', 'other'."
+            "- id_type must be one of: 'driver_license', 'state_id', 'passport', 'other'.\n"
+            "- Carefully read all text blocks and use context to infer address, even if poorly lit, blurred, or upside-down.\n"
+            "- Distinguish between mailing address and physical address if both are present, preferring physical.\n"
+            "- Extract the full middle name if present, not just the initial.\n"
+            "- Handle vertical, sideways, or upside-down images gracefully."
         )
 
         payload = {
