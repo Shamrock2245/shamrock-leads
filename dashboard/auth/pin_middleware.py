@@ -106,10 +106,13 @@ def _sign_token(
     role: str | None = None,
     agent_name: str | None = None,
     license_number: str | None = None,
+    is_admin: bool = False,
 ) -> str:
     """Create a signed session token with identity claims."""
     s = _get_serializer()
     payload: dict[str, Any] = {"auth": True, "t": int(time.time())}
+    if is_admin:
+        payload["is_admin"] = True
     if email:
         payload["email"] = normalize_email(email)
         payload["role"] = role or resolve_role_for_email(email)
@@ -393,12 +396,14 @@ def mount_login_routes(app):
                 )
 
             role = "sub_agent"
+            is_admin = bool(agent_doc.get("is_admin", False))
             session_email = f"agent-{license_number.lower()}@shamrockbailbonds.biz"
             token = _sign_token(
                 email=session_email,
                 role=role,
                 agent_name=canonical_name,
                 license_number=license_number.upper(),
+                is_admin=is_admin,
             )
             response = JSONResponse({
                 "success": True,
@@ -406,14 +411,14 @@ def mount_login_routes(app):
                 "role": role,
                 "agent_name": canonical_name,
                 "license_number": license_number.upper(),
-                "is_admin": False,
+                "is_admin": is_admin,
             })
 
         # ── God-Admin login ───────────────────────────────────────────────
         else:
             role = "god_admin"
             session_email = email or PRIMARY_SUPER_ADMIN
-            token = _sign_token(email=session_email, role=role)
+            token = _sign_token(email=session_email, role=role, is_admin=True)
             response = JSONResponse({
                 "success": True,
                 "email": session_email,

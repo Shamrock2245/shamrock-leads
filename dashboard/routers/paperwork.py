@@ -1927,6 +1927,12 @@ async def packet_builder_finalize(request: Request):
             bond_case_id=body.get("bond_case_id"),
             packet_id=body.get("packet_id"),
         )
+        
+        user = getattr(request.state, "user", {})
+        if user.get("agent_name"):
+            ctx["agent_name"] = user.get("agent_name")
+        if user.get("license_number"):
+            ctx["license_number"] = user.get("license_number")
 
         if body.get("self_indemnitor"):
             pin = body.get("authorization_pin") or body.get("pin") or ""
@@ -3250,6 +3256,11 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
 
     # Hydration source: explicit bond_data > packet > intake
     bond_data = dict(body.get("bond_data") or {})
+    user = getattr(request.state, "user", {})
+    if user.get("agent_name"):
+        bond_data["agent_name"] = user.get("agent_name")
+    if user.get("license_number"):
+        bond_data["license_number"] = user.get("license_number")
     for k in (
         "defendant_name",
         "indemnitor_name",

@@ -560,7 +560,7 @@ class DocuSealService:
         name: str = "",
         phone: str = "",
         external_id: str = "",
-        values: Optional[Dict[str, Any]] = None,
+        values: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         send_email: bool = False,
         order: Optional[int] = None,
@@ -926,12 +926,12 @@ class DocuSealService:
             "indemnitor_employer_address": bond_data.get("indemnitor_employer_address") or ind.get("employer_address") or "",
             "AgencyName": "Shamrock Bail Bonds",
             "agency_name": "Shamrock Bail Bonds",
-            "AgentName": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "agent_name": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "AgentLicense": os.getenv("BOND_AGENT_LICENSE", "P139768"),
-            "agent_license": os.getenv("BOND_AGENT_LICENSE", "P139768"),
-            "bondsman_name": os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "bondsman_license": os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "AgentName": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
+            "agent_name": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
+            "AgentLicense": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "agent_license": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "bondsman_name": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
+            "bondsman_license": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
         }
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
         return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
@@ -1006,7 +1006,23 @@ class DocuSealService:
         defendant: optional override; falls back to bond_data defendant fields.
         """
         bond_data = dict(bond_data or {})
-        values = self.prefill_values_from_bond(bond_data)
+        raw_values = self.prefill_values_from_bond(bond_data)
+
+        in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
+        if in_person:
+            # When scanning ID in-person, make these fields read-only
+            readonly_keys = {
+                "indemnitor_name", "IndemnitorName", "IndName", "FullName",
+                "indemnitor_dob", "indemnitor_dl", "indemnitor_address",
+                "indemnitor_city", "indemnitor_state", "indemnitor_zip",
+                "indemnitor_city_state_zip"
+            }
+            payload_values: Union[Dict[str, Any], List[Dict[str, Any]]] = [
+                {"name": k, "value": v, "readonly": (k in readonly_keys)}
+                for k, v in raw_values.items()
+            ]
+        else:
+            payload_values = raw_values
 
         # Collect indemnitors (primary + co-indemnitors)
         inds: List[Dict[str, Any]] = []
@@ -1016,9 +1032,9 @@ class DocuSealService:
             inds = [i for i in bond_data["indemnitors"] if _nonempty_party(i)]
         if not inds:
             primary = {
-                "name": values.get("indemnitor_name") or bond_data.get("indemnitor_name"),
-                "email": values.get("indemnitor_email") or bond_data.get("indemnitor_email"),
-                "phone": values.get("indemnitor_phone") or bond_data.get("indemnitor_phone"),
+                "name": raw_values.get("indemnitor_name") or bond_data.get("indemnitor_name"),
+                "email": raw_values.get("indemnitor_email") or bond_data.get("indemnitor_email"),
+                "phone": raw_values.get("indemnitor_phone") or bond_data.get("indemnitor_phone"),
             }
             if _nonempty_party(primary):
                 inds = [primary]
@@ -1051,14 +1067,14 @@ class DocuSealService:
                     name=name,
                     phone=phone,
                     external_id=f"{packet_id}:indemnitor:{idx}",
-                    values=values,
+                    values=payload_values,
                     metadata={
                         "packet_id": packet_id,
                         "party_role": party_role,
                         "indemnitor_index": idx,
                     },
                     send_email=send_email,
-                    order=idx,
+                    order=len(submitters) + 1,
                 )
             )
 
@@ -1066,7 +1082,7 @@ class DocuSealService:
             def_info = defendant if isinstance(defendant, dict) else {}
             def_name = (
                 def_info.get("name")
-                or values.get("defendant_name")
+                or raw_values.get("defendant_name")
                 or bond_data.get("defendant_name")
                 or ""
             )
@@ -1087,13 +1103,13 @@ class DocuSealService:
                     name=def_name,
                     phone=def_phone,
                     external_id=f"{packet_id}:defendant",
-                    values=values,
+                    values=payload_values,
                     metadata={
                         "packet_id": packet_id,
                         "party_role": "defendant",
                     },
                     send_email=send_email,
-                    order=len(submitters),
+                    order=len(submitters) + 1,
                 )
             )
 
@@ -1103,22 +1119,23 @@ class DocuSealService:
             or os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "false").lower() in ("1", "true", "yes")
         )
         if include_bondsman:
-            agent_name = os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
+            agent_name = bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
             agent_email = (
                 bond_data.get("bondsman_email")
                 or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
             )
+            agent_phone = bond_data.get("bondsman_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
             submitters.append(
                 self.build_submitter(
                     role=ROLE_BONDSMAN,
                     email=agent_email,
                     name=agent_name,
-                    phone=os.getenv("BOND_AGENT_PHONE", "2393322245"),
+                    phone=agent_phone,
                     external_id=f"{packet_id}:bondsman",
-                    values=values,
+                    values=payload_values,
                     metadata={"packet_id": packet_id, "party_role": "bondsman"},
-                    send_email=False,
-                    order=len(submitters),
+                    send_email=True,
+                    order=len(submitters) + 1,
                 )
             )
 
@@ -1288,6 +1305,24 @@ def resolve_template_id_for_surety(surety_id: str = "osi") -> Optional[str]:
     return tid or None
 
 
+BOND_AGENTS = {
+    "P139768": {
+        "agent_name": "Brendan O'Neal",
+        "agent_email": "admin@shamrockbailbonds.biz",
+        "agent_phone": "2393322245",
+    },
+    "G356764": {
+        "agent_name": "Kayla Lukesic",
+        "agent_email": "kaylalynn123992@gmail.com",
+        "agent_phone": "2393322245",
+    },
+    "W214323": {
+        "agent_name": "Jason Taylor",
+        "agent_email": "crabman23999@me.com",
+        "agent_phone": "2393322245",
+    },
+}
+
 def build_bond_data_from_dashboard(
     *,
     ctx: Optional[Dict[str, Any]] = None,
@@ -1342,8 +1377,30 @@ def build_bond_data_from_dashboard(
     # Multi-POA list if provided
     poa_numbers = body.get("poa_numbers") or ctx.get("poa_numbers") or poa
 
+    agent_name_session = body.get("agent_name") or ctx.get("agent_name") or ""
+    agent_license_session = body.get("license_number") or body.get("agent_license") or ctx.get("license_number") or ctx.get("agent_license") or ""
+
+    agent_reg = {}
+    if agent_license_session:
+        agent_reg = BOND_AGENTS.get(agent_license_session.upper(), {})
+    elif agent_name_session:
+        for k, v in BOND_AGENTS.items():
+            if v["agent_name"].lower() == agent_name_session.lower():
+                agent_reg = v
+                agent_license_session = k
+                break
+
+    bondsman_name = agent_reg.get("agent_name") or agent_name_session or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
+    bondsman_license = agent_license_session or os.getenv("BOND_AGENT_LICENSE", "P139768")
+    bondsman_email = agent_reg.get("agent_email") or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
+    bondsman_phone = agent_reg.get("agent_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
+
     bond_data: Dict[str, Any] = {
         **intake_doc,
+        "bondsman_name": bondsman_name,
+        "bondsman_license": bondsman_license,
+        "bondsman_email": bondsman_email,
+        "bondsman_phone": bondsman_phone,
         "surety_id": (surety_id or ctx.get("surety_id") or "osi").lower(),
         "defendant": def_ or intake_doc.get("defendant") or {},
         "indemnitor": ind or intake_doc.get("indemnitor") or {},
