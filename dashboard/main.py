@@ -254,6 +254,51 @@ async def index(request: Request):
     return FileResponse(os.path.join(DASHBOARD_DIR, "index.html"))
 
 
+@app.get("/track/{session_id}", include_in_schema=False)
+async def trape_lure_redirect(request: Request, session_id: str):
+    """
+    Handle Trape tracking links natively.
+    Captures IP, User-Agent, and redirects to the lure_url.
+    Also updates the OSINT Trape session if it exists.
+    """
+    from dashboard.deps import get_collection
+    from dashboard.services.osint_service import get_osint_service
+    from fastapi.responses import RedirectResponse
+    
+    try:
+        svc = get_osint_service()
+        trape_col = get_collection("osint_trape_sessions")
+        session = await trape_col.find_one({"session_id": session_id})
+        
+        if not session:
+            # Fallback redirect if session missing
+            return RedirectResponse("https://shamrockbailbonds.biz")
+            
+        lure_url = session.get("lure_url") or "https://shamrockbailbonds.biz"
+        
+        # Capture basic IP and UA
+        ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else "")
+        if ip_address and "," in ip_address:
+            ip_address = ip_address.split(",")[0].strip()
+            
+        user_agent = request.headers.get("User-Agent", "")
+        
+        await svc.update_trape_session(
+            session_id=session_id,
+            data={
+                "ip_address": ip_address,
+                "device_info": user_agent,
+            },
+            actor="system"
+        )
+        
+        return RedirectResponse(lure_url)
+    except Exception as e:
+        logger.error("Error handling /track/%s: %s", session_id, e)
+        return RedirectResponse("https://shamrockbailbonds.biz")
+
+
+
 @app.get("/uploads/{entity_key}/{filename}", include_in_schema=False)
 async def serve_identity_upload(entity_key: str, filename: str):
     """Serve identity media (DL/ID/selfie) from dashboard/uploads/.
