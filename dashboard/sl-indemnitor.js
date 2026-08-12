@@ -980,6 +980,10 @@ const SLIndemnitor = (() => {
     toast('📸 Scanning ID via OCR...', 'info');
     const formData = new FormData();
     formData.append('file', file);
+    
+    // Pass booking number so the backend can upload it to Google Drive
+    const bk = _pendingSaveBody?.booking_number || $('indFormBooking')?.value.trim() || _currentBk;
+    if (bk) formData.append('booking_number', bk);
 
     try {
       const r = await fetch(`${API}/api/indemnitors/scan-id`, {

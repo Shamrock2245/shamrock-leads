@@ -156,10 +156,12 @@ async def api_scan_id_ocr(request: Request):
     content_type = request.headers.get("content-type", "")
     image_bytes = b""
     filename = ""
+    booking_number = ""
 
     if "multipart/form-data" in content_type:
         form = await request.form()
         file_obj = form.get("file") or form.get("image") or form.get("id_photo")
+        booking_number = form.get("booking_number", "").strip()
         if file_obj and hasattr(file_obj, "read"):
             filename = getattr(file_obj, "filename", "") or "id_photo"
             image_bytes = await file_obj.read()
@@ -179,6 +181,56 @@ async def api_scan_id_ocr(request: Request):
         return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
 
     result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
+    
+    if result.get("success") and booking_number:
+        try:
+            from dashboard.extensions import get_collection
+            from dashboard.services.google_drive_service import GoogleDriveService
+            import asyncio
+            
+            async def _upload_id_to_drive():
+                bonds_col = get_collection("active_bonds")
+                bond = await bonds_col.find_one({"booking_number": booking_number})
+                if not bond:
+                    return
+                
+                defendant_name = bond.get("defendant_name", "Unknown Defendant")
+                surety = bond.get("surety_id", "osi")
+                surety_label = "OSI Appearance Bonds" if surety.lower() == "osi" else "Palmetto Appearance Bonds"
+                
+                indemnitor_name = result.get("extracted", {}).get("full_name", "Indemnitor")
+                ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+                upload_filename = f"{indemnitor_name}_ID.{ext}"
+
+                drive_service = GoogleDriveService()
+                root_folder_id = drive_service.completed_bonds_folder_id()
+                if not root_folder_id:
+                    return
+
+                surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
+                if not surety_folder_id:
+                    return
+
+                def_folder_name = f"{defendant_name} - {booking_number}"
+                def_folder_id = drive_service.get_or_create_folder(def_folder_name, surety_folder_id)
+                if not def_folder_id:
+                    return
+
+                mime_type = f"image/{ext}" if ext in ["jpg", "jpeg", "png", "webp", "gif"] else "application/pdf"
+                
+                drive_service.upload_file(
+                    file_bytes=image_bytes,
+                    filename=upload_filename,
+                    folder_id=def_folder_id,
+                    mime_type=mime_type
+                )
+            
+            # Fire and forget
+            asyncio.create_task(_upload_id_to_drive())
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"[id_scanner] Failed to upload to Drive: {e}")
+
     return JSONResponse(result, status_code=200 if result.get("success") else 400)
 
 
