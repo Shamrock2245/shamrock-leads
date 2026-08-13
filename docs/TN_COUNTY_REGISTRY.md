@@ -32,13 +32,13 @@
 | Coffee | `coffee.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
 | Lincoln | `lincoln.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
 | Giles | `giles.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
-| Putnam | `putnam.py` | 120 min | Public ISOMS roster | **Local public-source smoke passed 2026-08-12**; no production write has been claimed |
+| Putnam | `putnam.py` | 120 min | Public ISOMS roster | **Deployed 2026-08-12 EDT**; public service health green and local source smoke passed; no per-scraper Mongo write or Slack delivery has been claimed |
 
 ## Putnam implementation notes
 
 The official public ISOMS roster is paginated under `https://isoms.putnamcountytnsheriff.gov:8001/Jail`. The source supplies identity, intake time, custody/release status, charges, and per-charge bond figures, but it does **not** expose a county-issued booking number in the roster view. `putnam.py` therefore uses a deterministic surrogate derived from the public full name and intake time solely for the immutable `County + Booking_Number` dedup key. The record explicitly labels that origin in internal metadata and never represents the surrogate as a county-issued booking number.
 
-The parser uses the public current-inmate view (`hours=0`), honours server pagination, pauses between page requests, and makes no attempt to bypass authentication, CAPTCHAs, rate limits, or other access controls. A local source smoke on 2026-08-12 parsed 482 records with non-empty dedup keys and valid Tennessee/county/status fields; this is source validation, **not** evidence of a deployed Mongo write or alert delivery.
+The parser uses the public current-inmate view (`hours=0`), honours server pagination, pauses between page requests, and makes no attempt to bypass authentication, CAPTCHAs, rate limits, or other access controls. A local source smoke on 2026-08-12 parsed 482 records with non-empty dedup keys and valid Tennessee/county/status fields. The committed implementation deployed successfully on 2026-08-12 EDT, after which the public CRM health endpoint and approved public hosts returned healthy responses. Neither result is evidence of a Putnam-specific Mongo write or alert delivery; those telemetry checks remain pending.
 
 ## Recon queue
 

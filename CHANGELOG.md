@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **Putnam County, TN public-roster scraper** — paginated ISOMS parser with source-faithful custody, release, charge, and per-charge bond mapping; uses a clearly labeled deterministic surrogate only where the public roster does not expose a booking number. Registered as `scraper_tn_putnam` every 120 minutes and added to `REGISTERED_COUNTIES`.
-- **Putnam parser regression tests** — verify public-field mapping, custody status, surrogate-key stability, and pagination. A local public-source smoke parsed 482 records on 2026-08-12; deployment, Mongo upsert, and alert delivery remain unclaimed until live-proven.
+- **Putnam parser regression tests** — verify public-field mapping, custody status, surrogate-key stability, and pagination. A local public-source smoke parsed 482 records on 2026-08-12. The committed rollout subsequently succeeded and public CRM/host health checks passed; Putnam-specific Mongo upsert and alert delivery remain unclaimed until their telemetry is observed.
 
 ### Fixed
 - **Deploy timeout budget** — increased the Hetzner job limit to 45 minutes and SSH command limit to 40 minutes after the verified 30-minute cutoff interrupted the `df24815` cold build before restart verification. This is a pending-code fix until its deployment run succeeds.
