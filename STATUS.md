@@ -49,12 +49,12 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **33** | `scrapers/counties_tx/` | + Ellis, Johnson, Ector, Midland, Potter, Bastrop, Guadalupe, Comal, Victoria, Walker + Bell, Lubbock, Webb, Jefferson, McLennan, Nueces, Brazos, Hays |
-| **TN** | **21** | `scrapers/counties_tn/` | + Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, Giles + Wilson, Bradley, Blount, Sevier, Washington |
+| **TN** | **22** | `scrapers/counties_tn/` | + Putnam (public ISOMS source locally validated 2026-08-12); prior TN waves retained |
 | **AL** | **13** | `scrapers/counties_al/` | + Houston, Morgan, Etowah, Cullman, DeKalb, Jackson + Baldwin, Tuscaloosa, Shelby, Montgomery |
 | **LA** | **10** | `scrapers/counties_la/` | + Ascension, Livingston + Caddo, Calcasieu, Ouachita, St. Tammany |
 | **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
 | **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
-| **Total** | **350** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **351** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
@@ -66,7 +66,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **350** registered scrapers (10 states), scoring, Slack, Mongo | ✅ 2026-08-11 |
+| **351** registered scrapers (10 states), scoring, Slack, Mongo | ✅ code (Putnam TN added 2026-08-12; production deployment not yet proven) |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
@@ -158,7 +158,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | NC **47 registered** / 100 goal — many still need first successful production scrape | ⏳ Multi-State Ops / scheduler; DCN list partial (≤100/page); WAF metros (Wake/Guilford/Forsyth); more OCV app_ids |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
 | GA remaining counties beyond registered set (74/159) | ⏳ Recon + wrappers |
-| TN (9 registered; Davidson/Knox live; Shelby TLS) | ⏳ Deepen + remaining metros |
+| TN (22 registered; Putnam public source locally validated; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain production telemetry per source; Sullivan remains recon-only |
 | TX (15 registered; Bexar/Dallas live; Harris browser) | ⏳ Expand top-25 |
 | LA (4 registered; Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + harden EBR/Jefferson |
 | CT dockets + DOC | ✅ Hardened 2026-08-04 — keep production scrapes scheduled |

@@ -2,8 +2,8 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
-> Last updated: 2026-08-11  
-> **Live registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 21 TN · 13 AL · 10 LA · 9 MS · 6 CT = **350** — see root `STATUS.md`
+> Last updated: 2026-08-12
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT = **351** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
 
 ## Why this order
 
@@ -11,7 +11,7 @@
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
-5. **TN** — **21 registered** (Davidson, Knox, Wilson, Bradley, Blount, Sevier, Washington, Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, Giles) 🔄  
+5. **TN** — **22 registered** (including Putnam; source-specific production telemetry still required) 🔄
 6. **TX** — **33 registered** (Bexar, Dallas, Bell, Lubbock, Webb, Jefferson, McLennan, Nueces, Brazos, Hays, Ellis, Johnson, Ector, Midland, Potter, Bastrop, Guadalupe, Comal, Victoria, Walker) 🔄  
 7. **LA → MS** — **10 LA** + **9 MS** registered; harden + expand 🔄  
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
@@ -59,11 +59,12 @@
 4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
 5. Next: DCN pagination beyond first 100 · more OCV app_ids · Rowan/Robeson · remaining rural  
 
-### TN (9 registered — deepen)
-1. **Davidson** ✅ DCSO Justice Integration (RecentBookings + detail bond)  
-2. **Knox** ✅ sheriff.knoxcountytn.gov letter index  
-3. **Shelby** ⏳ IML TLS — curl_cffi path  
-4. + Williamson, Montgomery, Sumner · registry `docs/TN_COUNTY_REGISTRY.md`
+### TN (22 registered — deepen and validate)
+1. **Putnam** — public ISOMS parser added and local source smoke passed on 2026-08-12; production write/alert evidence is still required.
+2. **Davidson** and **Knox** — historically successful custom paths; re-check current source telemetry before operational reliance.
+3. **Shelby** — IML TLS sensitivity; retain curl_cffi-first monitoring.
+4. **Sullivan** — recon-only. The public OCV page is observable, but direct public-feed retrieval was access-denied in the validation environment; do not circumvent controls.
+5. Full scheduler inventory and source posture: `docs/TN_COUNTY_REGISTRY.md`.
 
 ### TX (15 registered — expand top-25)
 1. **Bexar** ✅ Central Magistrate 24h HTML  

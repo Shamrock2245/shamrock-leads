@@ -12,7 +12,7 @@
 
 ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 350 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 21 TN · 13 AL · 10 LA · 9 MS · 6 CT]`
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 351 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`

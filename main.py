@@ -334,6 +334,7 @@ from scrapers.counties_tn.bedford import BedfordScraper as TN_BedfordScraper
 from scrapers.counties_tn.coffee import CoffeeTNScraper as TN_CoffeeScraper
 from scrapers.counties_tn.lincoln import LincolnTNScraper as TN_LincolnScraper
 from scrapers.counties_tn.giles import GilesScraper as TN_GilesScraper
+from scrapers.counties_tn.putnam import PutnamScraper as TN_PutnamScraper
 
 # ── Texas Scrapers ─────────────────────────────────────────────────────────
 from scrapers.counties_tx.harris import HarrisScraper as TX_HarrisScraper
@@ -764,6 +765,7 @@ def register_scrapers(sched):
     sched.register_scraper(TN_CoffeeScraper(), interval_minutes=120)
     sched.register_scraper(TN_LincolnScraper(), interval_minutes=120)
     sched.register_scraper(TN_GilesScraper(), interval_minutes=120)
+    sched.register_scraper(TN_PutnamScraper(), interval_minutes=120)
 
     # ── Texas (wave-1 + wave-2 + wave-3 + wave-4 + wave-5 + wave-6) ──────────────────────────────────────────
     sched.register_scraper(TX_HarrisScraper(), interval_minutes=90)

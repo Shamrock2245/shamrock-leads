@@ -474,6 +474,7 @@ REGISTERED_COUNTIES = sorted([
     "Coffee (TN)",
     "Lincoln (TN)",
     "Giles (TN)",
+    "Putnam (TN)",
     # ── Texas (wave-1 + wave-2 + wave-3 + wave-4 + wave-5) ──
     "Bell (TX)",
     "Bexar (TX)",

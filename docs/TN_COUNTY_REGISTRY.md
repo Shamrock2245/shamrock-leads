@@ -1,45 +1,56 @@
 # Tennessee County Scraper Registry
 
-> **Last Updated:** 2026-07-26  
-> **Registered (dashboard):** 9 scrapers (wave-1–3 + TnCIS)  
-> **Package:** `scrapers/counties_tn/`  
+> **Last Updated:** 2026-08-12
+> **Registered scheduler jobs:** 22
+> **Package:** `scrapers/counties_tn/`
 > **Job IDs:** `scraper_tn_<county>` · CLI: `python main.py tn_davidson`
 
-## Wave-1 (registered)
+`main.py` is the implementation source of truth for scheduler registration. A county listed below is **registered in code**; that designation does not, by itself, prove a successful production write or freshness of the source. The Scraper Health view and production telemetry remain the evidence for live operation.
 
-| County | Scraper | Portal | Status | Notes |
-|--------|---------|--------|--------|-------|
-| **Davidson** | `davidson.py` | https://dcso.nashville.gov | ✅ Live | RecentBookings + letter walk + detail bond/charges (~2.8k active) |
-| **Knox** | `knox.py` | https://sheriff.knoxcountytn.gov/inmate.php | ✅ Live | Letter index; may serve maintenance placeholder |
-| **Shelby** | `shelby.py` | https://imljail.shelbycountytn.gov/IML | ⏳ Hardened stub | TLS handshake issues from some stacks; curl_cffi preferred |
+## Registered Tennessee inventory
 
-## Wave-2 / Wave-3 (registered)
+| County / source label | Scraper module | Cadence | Source family | Verification posture |
+|---|---|---:|---|---|
+| Davidson | `davidson.py` | 60 min | Custom Justice Integration | Registered; inspect live telemetry before operational reliance |
+| Shelby | `shelby.py` | 90 min | Custom IML | Registered; prior TLS sensitivity remains a monitoring concern |
+| Knox | `knox.py` | 90 min | Custom sheriff roster | Registered; inspect live telemetry before operational reliance |
+| TnCIS | `tncis.py` | 180 min | Statewide TnCIS adapter | Registered; source-specific telemetry required |
+| Hamilton | `hamilton.py` | 60 min | Custom JSON API | Registered; inspect live telemetry before operational reliance |
+| Rutherford | `rutherford.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
+| Williamson | `williamson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
+| Montgomery | `montgomery.py` | 60 min | Embedded roster JSON | Registered; source-specific telemetry required |
+| Sumner | `sumner.py` | 90 min | Custom OCV/S3 handling | Registered; source-specific telemetry required |
+| Wilson | `wilson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
+| Bradley | `bradley.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Blount | `blount.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Sevier | `sevier.py` | 90 min | Zuercher | Registered; source-specific telemetry required |
+| Washington | `washington.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Maury | `maury.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Robertson | `robertson.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Hamblen | `hamblen.py` | 90 min | Zuercher | Registered; source-specific telemetry required |
+| Bedford | `bedford.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
+| Coffee | `coffee.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
+| Lincoln | `lincoln.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
+| Giles | `giles.py` | 120 min | Southern Software | Registered; source-specific telemetry required |
+| Putnam | `putnam.py` | 120 min | Public ISOMS roster | **Local public-source smoke passed 2026-08-12**; no production write has been claimed |
 
-| County | Scraper | Portal | Status | Notes |
-|--------|---------|--------|--------|-------|
-| **Hamilton** | `hamilton.py` | Chattanooga | ✅ Live | Wave-2 |
-| **Rutherford** | `rutherford.py` | Murfreesboro | ✅ Live | Wave-2 |
-| **TnCIS** | `tncis.py` | Statewide rural | ✅ Live | Shared LGC cluster |
-| **Montgomery** | `montgomery.py` | Clarksville MCSO JSON | ✅ Live | ~600 current inmates |
-| **Sumner** | `sumner.py` | MyOCV SumnerInmates.json | ✅ Live | ~702 · charges+bond from S3 |
-| **Williamson** | `williamson.py` | JailTracker | ⚠️ CAPTCHA | Browser/JT base on VPS |
+## Putnam implementation notes
 
-## Next targets
+The official public ISOMS roster is paginated under `https://isoms.putnamcountytnsheriff.gov:8001/Jail`. The source supplies identity, intake time, custody/release status, charges, and per-charge bond figures, but it does **not** expose a county-issued booking number in the roster view. `putnam.py` therefore uses a deterministic surrogate derived from the public full name and intake time solely for the immutable `County + Booking_Number` dedup key. The record explicitly labels that origin in internal metadata and never represents the surrogate as a county-issued booking number.
 
-| County | Population rank | Likely platform | Priority |
-|--------|----------------:|-----------------|----------|
-| TnCIS rural expand | 80+ | LGC Cloudflare | Medium |
+The parser uses the public current-inmate view (`hours=0`), honours server pagination, pauses between page requests, and makes no attempt to bypass authentication, CAPTCHAs, rate limits, or other access controls. A local source smoke on 2026-08-12 parsed 482 records with non-empty dedup keys and valid Tennessee/county/status fields; this is source validation, **not** evidence of a deployed Mongo write or alert delivery.
 
-## Identity
+## Recon queue
 
-- `ArrestRecord.State = "TN"`
-- `scraper_id = scraper_tn_<county>`
-- Never collapse with Davidson (NC) or Shelby (AL) same-name counties
+| County | Public surface observed | Current decision |
+|---|---|---|
+| Sullivan | OCV-hosted public inmate roster at `https://www.scsotn.com/inmateRoster` | Do not register yet. The public browser page renders roster data, but direct S3-feed retrieval returned access-denied in this environment. Complete source-contract reconnaissance through an approved public route before implementation; do not circumvent access controls. |
+| Remaining high-volume TN counties | To be reconned one official source at a time | Prioritize sources that expose a durable booking identifier, public custody status, charges, and bond data without elevated request volume. |
 
-## Smoke results (2026-07-15)
+## Identity and safety
 
-| County | Records (one-shot) |
-|--------|-------------------:|
-| Davidson | ~2822 |
-| Knox | ~46 |
-| Shelby | 0 (portal TLS) |
+- `ArrestRecord.State = "TN"`.
+- `scraper_id = scraper_tn_<county>`.
+- Never collapse same-name counties across states; state is part of the dashboard and scheduler identity.
+- A roster source is not a bond case. Scrapers must not create defendants, paperwork, POAs, payments, or outbound contact.
+- Keep sources rate-limited and fail closed when a required public identity field is unavailable.
