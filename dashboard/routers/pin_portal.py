@@ -285,292 +285,31 @@ class InstantIndemnitorPacketRequest(BaseModel):
     state: Optional[str] = None
 
 
-def _valid_email(raw: str) -> bool:
-    s = (raw or "").strip()
-    if not s or "@" not in s or " " in s:
-        return False
-    local, _, domain = s.partition("@")
-    return bool(local) and "." in domain and len(s) < 200
-
 
 @pin_portal_router.post("/instant-indemnitor-packet")
 async def create_instant_indemnitor_packet(request: Request, req: InstantIndemnitorPacketRequest):
     """
-    Create an instant DocuSeal paperwork packet for an indemnitor immediately after ID scan,
-    allowing them to complete & sign paperwork without requiring a defendant to be pre-selected.
-    Defendant can be matched/bound later.
+    Retired fail-closed endpoint retained for old portal clients.
 
-    Rate limits (anti-spam):
-      - max 3 open unassigned packets per phone / 24h
-      - max 8 creates per phone / 24h (including completed)
+    A legal packet cannot be created from an ID scan alone.  New paperwork must
+    originate from the staff Write Bond flow after the complete identity chain is
+    validated (match, BondCase, surety, case number, and POA).  Keeping a stable
+    409 response prevents cached clients from silently recreating the former
+    unassigned-defendant workflow.
     """
-    import uuid
-    from dashboard.services.docuseal_service import (
-        get_docuseal_service,
-        resolve_template_id_for_surety,
-        ROLE_INDEMNITOR,
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "validated_bond_case_required",
+            "message": (
+                "Paperwork is not ready yet. A Shamrock bondsman must validate "
+                "the match and bond case before creating your signing packet."
+            ),
+            "next_step": "request_pin_after_staff_creates_packet",
+        },
+        status_code=409,
     )
 
-    clean_phone = _digits_phone(req.indemnitor_phone)
-    if not clean_phone or len(clean_phone) != 10:
-        return JSONResponse(
-            {"success": False, "error": "invalid_phone", "message": "Enter a valid 10-digit US mobile number."},
-            status_code=400,
-        )
-
-    ind_name = (req.indemnitor_name or "").strip()
-    if len(ind_name) < 2:
-        return JSONResponse(
-            {"success": False, "error": "invalid_name", "message": "Name is required before signing."},
-            status_code=400,
-        )
-    # Soft PII hygiene — cap free-text fields
-    ind_name = ind_name[:120]
-    ind_address = (req.indemnitor_address or "").strip()[:200]
-    ind_dl = (req.indemnitor_dl or "").strip()[:40]
-    county = (req.county or "Lee").strip()[:60] or "Lee"
-    state = (req.state or "FL").strip().upper()[:2] or "FL"
-
-    surety_id = (req.surety_id or "osi").lower().strip()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"
-
-    svc = get_docuseal_service()
-    if not svc.is_configured:
-        return JSONResponse(
-            {
-                "success": False,
-                "error": "docuseal_not_configured",
-                "message": "E-sign is temporarily unavailable. Please ask staff for a PIN link.",
-            },
-            status_code=503,
-        )
-
-    template_id = resolve_template_id_for_surety(surety_id)
-    if not template_id:
-        return JSONResponse(
-            {
-                "success": False,
-                "error": "template_not_found",
-                "message": f"No DocuSeal template configured for surety {surety_id.upper()}.",
-            },
-            status_code=404,
-        )
-
-    raw_email = (req.indemnitor_email or "").strip()
-    if raw_email and not _valid_email(raw_email):
-        return JSONResponse(
-            {"success": False, "error": "invalid_email", "message": "Email looks invalid."},
-            status_code=400,
-        )
-    ind_email = raw_email if raw_email else f"indemnitor+{uuid.uuid4().hex[:8]}@shamrockbailbonds.biz"
-
-    # Idempotency: reuse a recent open instant packet for same phone (5 min window)
-    packets_col = get_collection("paperwork_packets")
-
-    # Rate limit: prevent DocuSeal spam / legal junk from open portal
-    try:
-        day_ago = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-        open_count = await packets_col.count_documents(
-            {
-                "indemnitor_phone": clean_phone,
-                "source": "instant_indemnitor_portal",
-                "unassigned_defendant": True,
-                "created_at": {"$gte": day_ago},
-                "status": {"$nin": ["cancelled", "void", "expired"]},
-            }
-        )
-        if open_count >= 3:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "rate_limited",
-                    "message": "Too many open paperwork sessions for this phone. Ask staff for a PIN link or wait and try again.",
-                },
-                status_code=429,
-            )
-        day_count = await packets_col.count_documents(
-            {
-                "indemnitor_phone": clean_phone,
-                "source": "instant_indemnitor_portal",
-                "created_at": {"$gte": day_ago},
-            }
-        )
-        if day_count >= 8:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "rate_limited",
-                    "message": "Daily paperwork limit reached for this phone. Please contact Shamrock staff.",
-                },
-                status_code=429,
-            )
-    except Exception as rl_exc:
-        logger.warning("instant packet rate-limit check skipped: %s", rl_exc)
-
-    try:
-        recent = await packets_col.find_one(
-            {
-                "indemnitor_phone": clean_phone,
-                "unassigned_defendant": True,
-                "esign_provider": "docuseal",
-                "status": {"$in": ["pending_indemnitor_signature", "sent", "pending_signature"]},
-                "sign_url": {"$exists": True, "$ne": ""},
-            },
-            sort=[("created_at", -1)],
-        )
-        if recent and recent.get("sign_url"):
-            created = recent.get("created_at") or ""
-            # Prefer reuse when packet is very fresh (ISO strings compare lexicographically)
-            now_iso = datetime.now(timezone.utc).isoformat()
-            if isinstance(created, str) and created[:16] >= now_iso[:16]:  # same minute-ish
-                pass  # fall through to create if clock weird
-            elif recent.get("sign_url"):
-                # Only reuse if created within last 10 minutes
-                try:
-                    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                    if created_dt.tzinfo is None:
-                        created_dt = created_dt.replace(tzinfo=timezone.utc)
-                    age = datetime.now(timezone.utc) - created_dt
-                    if age <= timedelta(minutes=10):
-                        return {
-                            "success": True,
-                            "packet_id": recent.get("packet_id"),
-                            "submission_id": recent.get("docuseal_submission_id"),
-                            "sign_url": recent.get("sign_url"),
-                            "signing_link": recent.get("sign_url") or recent.get("signing_link"),
-                            "submitters": recent.get("docuseal_submitters") or [],
-                            "unassigned_defendant": True,
-                            "reused": True,
-                            "message": "Resuming your existing paperwork session.",
-                        }
-                except Exception:
-                    pass
-    except Exception as reuse_exc:
-        logger.debug("instant packet reuse check skipped: %s", reuse_exc)
-
-    prefill = {
-        "indemnitor_name": ind_name,
-        "IndemnitorName": ind_name,
-        "defendant_name": "To Be Named",
-        "DefendantName": "To Be Named",
-        "indemnitor_phone": clean_phone,
-        "indemnitor_address": ind_address,
-        "indemnitor_dl": ind_dl,
-        "state": state,
-        "State": state,
-        "county": county,
-        "County": county,
-    }
-
-    submitters = [
-        svc.build_submitter(
-            role=ROLE_INDEMNITOR,
-            email=ind_email,
-            name=ind_name,
-            phone=clean_phone,
-            values=prefill,
-            external_id=f"instant:{clean_phone}:{uuid.uuid4().hex[:6]}",
-            metadata={"source": "instant_indemnitor_portal", "unassigned_defendant": True},
-        )
-    ]
-
-    try:
-        # DocuSeal often returns a bare list of submitters (not a {id, submitters} dict).
-        raw = await svc.create_submission(
-            template_id=template_id,
-            submitters=submitters,
-            send_email=False,
-        )
-        norm = svc.normalize_create_response(raw)
-        sub_id = norm.get("submission_id")
-        party_submitters = norm.get("submitters") or []
-        if not sub_id and party_submitters:
-            sub_id = party_submitters[0].get("submission_id")
-        first = party_submitters[0] if party_submitters else {}
-        sign_url = (first.get("sign_url") or "").strip()
-        if not sign_url and isinstance(first, dict):
-            slug = (first.get("slug") or "").strip()
-            if slug:
-                sign_url = svc.sign_url_for_slug(slug)
-
-        if not sign_url:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "no_sign_url",
-                    "message": "Could not open a signing session. Please try again or use PIN login.",
-                    "submission_id": sub_id,
-                },
-                status_code=502,
-            )
-
-        packet_id = f"pkt_inst_{uuid.uuid4().hex[:12]}"
-        now_iso = datetime.now(timezone.utc).isoformat()
-        packet_doc = {
-            "packet_id": packet_id,
-            "intake_id": f"int_inst_{uuid.uuid4().hex[:8]}",
-            "esign_provider": "docuseal",
-            "surety_id": surety_id,
-            "county": county,
-            "state": state,
-            "indemnitor_name": ind_name,
-            "indemnitor_phone": clean_phone,
-            "indemnitor_email": ind_email,
-            "indemnitor_address": ind_address,
-            "indemnitor_dl": ind_dl,
-            "defendant_name": "To Be Named",
-            "unassigned_defendant": True,
-            "docuseal_template_id": template_id,
-            "docuseal_submission_id": sub_id,
-            "docuseal_submitters": party_submitters,
-            "docuseal_status": "sent",
-            "docuseal_sent_at": now_iso,
-            "signing_link": sign_url,
-            "sign_url": sign_url,
-            "status": "pending_indemnitor_signature",
-            "source": "instant_indemnitor_portal",
-            "created_at": now_iso,
-            "updated_at": now_iso,
-        }
-
-        await packets_col.insert_one(packet_doc)
-
-        try:
-            await get_collection("audit_events").insert_one({
-                "event_id": f"evt_inst_pkt_{uuid.uuid4().hex[:10]}",
-                "event_type": "instant_indemnitor_packet_created",
-                "packet_id": packet_id,
-                "submission_id": sub_id,
-                "surety_id": surety_id,
-                "timestamp": now_iso,
-                "actor": "portal_client",
-            })
-        except Exception:
-            pass
-
-        return {
-            "success": True,
-            "packet_id": packet_id,
-            "submission_id": sub_id,
-            "sign_url": sign_url,
-            "signing_link": sign_url,
-            "submitters": party_submitters,
-            "unassigned_defendant": True,
-            "reused": False,
-            "message": "Your paperwork is ready — continue on the secure signing screen.",
-        }
-    except Exception as exc:
-        logger.exception("create_instant_indemnitor_packet failed")
-        return JSONResponse(
-            {
-                "success": False,
-                "error": "create_failed",
-                "message": "We could not start e-sign right now. Please try PIN login or ask a staff member.",
-                "detail": str(exc)[:200],
-            },
-            status_code=502,
-        )
 
 
 @pin_portal_router.post("/verify-pin")
@@ -1407,76 +1146,15 @@ async def get_portal_ui(request: Request):
                         ${ext.sex ? `<div class="id-extracted-row"><span class="id-extracted-label">Sex</span><span>${escHtml(ext.sex)}</span></div>` : ''}
                         ${ext.height ? `<div class="id-extracted-row"><span class="id-extracted-label">Height</span><span>${escHtml(ext.height)}</span></div>` : ''}
                         <div class="id-extracted-actions">
-                            <button type="button" id="btnInstantEsign" class="btn-primary btn-instant-esign">Sign paperwork now</button>
-                            <button type="button" class="btn-primary btn-secondary-ghost" id="btnProceedPin">Use PIN instead →</button>
+                            <button type="button" class="btn-primary" id="btnProceedPin">Continue with secure PIN →</button>
                         </div>
-                        <p class="id-extracted-hint">Defendant can be matched by staff after you sign.</p>
+                        <p class="id-extracted-hint">Your bondsman must validate the defendant and bond case before a signing packet is available.</p>
                     </div>
                 `;
-                const btnInst = document.getElementById('btnInstantEsign');
                 const btnPin = document.getElementById('btnProceedPin');
                 if (btnPin) btnPin.addEventListener('click', () => showAuthTab('pin'));
-                if (btnInst) {
-                    btnInst.addEventListener('click', () => startInstantIndemnitorEsign({
-                        name: ext.full_name || '',
-                        address: addrLine,
-                        dl: ext.dl_number || '',
-                        state: ext.state || 'FL',
-                    }));
-                }
             } catch (err) {
                 resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${escHtml(err.message)}</div>`;
-            }
-        }
-
-        async function startInstantIndemnitorEsign(opts) {
-            const name = (opts && opts.name) || 'Indemnitor';
-            const address = (opts && opts.address) || '';
-            const dl = (opts && opts.dl) || '';
-            const state = (opts && opts.state) || 'FL';
-            const resEl = document.getElementById('portalIdResult');
-            const setStatus = (msg, isErr) => {
-                if (!resEl) return;
-                let el = document.getElementById('slInstantStatus');
-                if (!el) {
-                    el = document.createElement('div');
-                    el.id = 'slInstantStatus';
-                    el.className = 'status';
-                    el.style.cssText = 'display:block;margin-top:10px';
-                    resEl.appendChild(el);
-                }
-                el.className = 'status' + (isErr ? ' error' : '');
-                el.textContent = msg;
-            };
-            const phone = await askPhoneNumber();
-            if (!phone) return;
-            const btn = document.getElementById('btnInstantEsign');
-            if (btn) { btn.disabled = true; btn.textContent = 'Preparing secure session…'; }
-            setStatus('Preparing your secure signing session…');
-            try {
-                const r = await fetch('/api/portal/instant-indemnitor-packet', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        indemnitor_name: name || 'Indemnitor',
-                        indemnitor_phone: phone,
-                        indemnitor_address: address || '',
-                        indemnitor_dl: dl || '',
-                        state: state || 'FL',
-                    })
-                });
-                let d = {};
-                try { d = await r.json(); } catch (e) { d = {}; }
-                if (d.success && (d.sign_url || d.signing_link)) {
-                    setStatus(d.reused ? 'Resuming your session…' : 'Opening signing form…');
-                    openDocuSealForm(d.sign_url || d.signing_link, { fullscreen: true });
-                } else {
-                    setStatus(d.message || d.error || 'Could not start signing. Try PIN login.', true);
-                    if (btn) { btn.disabled = false; btn.textContent = 'Sign paperwork now'; }
-                }
-            } catch (err) {
-                setStatus('Network error: ' + (err.message || 'try again'), true);
-                if (btn) { btn.disabled = false; btn.textContent = 'Sign paperwork now'; }
             }
         }
 

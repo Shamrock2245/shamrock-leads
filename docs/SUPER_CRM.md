@@ -28,14 +28,14 @@ Hot Leads → contact (iMessage / sequence) → Bond Desk (intake + match + pack
 |--------|---------|--------------|-------------------|
 | Today / Command | tabCommand | `/api/crm/overview`, stats | arrests, scraper_status |
 | Hot Leads | tabLeads | `/api/leads`, `/api/arrests` | arrests |
-| **Bond Desk** | **tabIntake** | `/api/intake/*`, match, SignNow | intake_queue, matches |
+| **Bond Desk** | **tabIntake** | `/api/intake/*`, match, DocuSeal | intake_queue, matches |
 | Active Bonds Kanban | tabActiveBonds | `/api/bonds/*`, bond lifecycle | active_bonds, poa_inventory |
 | Court Calendar | tabCalendar | court / calendar APIs | court_reminders |
 | Defendants | tabDefendants | `/api/defendants/*` | defendants, defendant_notes |
 | Indemnitors | tabIndemnitor | `/api/indemnitors/*` | indemnitors, matches |
 | Lead Pipeline (legacy) | tabProspective | `/api/prospective/*`, outreach | prospective_bonds |
 | Matching | (Bond Desk + match manager) | `/api/bonds/match`, `/api/match-manager/*` | matches, active_bonds |
-| Paperwork Config | tabPaperwork | SignNow services | paperwork_packets |
+| Paperwork Config | tabPaperwork | DocuSeal services | paperwork_packets |
 | Payments | Accounting / plans | `/api/payments/*` | payments, payment_plans |
 | Tasks | Today / tasks API | `/api/tasks/*` | tasks |
 | Tracking | tabTracking | Traccar webhooks | locations |
@@ -67,7 +67,7 @@ Scraper → `arrests` → LeadScorer → Slack `#leads` / `#new-arrests` → Hot
 iMessage / Shannon / portal magic link → Wix/Telegram webhook → `intake_queue` (Bond Desk)
 
 ### 3. Match → Paperwork → Active Bond
-Bond Desk: match (human-gated) → surety + POA → SignNow packet → payment → **promote to Active Bonds**
+Bond Desk: match (human-gated) → surety + POA → DocuSeal packet → payment → **promote to Active Bonds**
 
 ### 4. Active bond lifecycle
 Kanban: Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered  
@@ -77,7 +77,7 @@ GPS tracking, court reminders, FTA alerts, rearrest detector
 
 ## Paperwork autofill (Bond Desk)
 
-Hydration source: `dashboard/services/signnow_packet_service.py` (`_build_prefill_fields`).  
+Hydration source: `dashboard/services/docuseal_service.py` (`prefill_values_from_bond`).
 Local blanks (flatten / Adobe / offline):
 
 | Folder | Role |
@@ -87,7 +87,7 @@ Local blanks (flatten / Adobe / offline):
 | `templates/palmetto/` | Palmetto surety forms + appearance bond |
 
 **Packet rule:** OSI = agnostic + `osi/` · Palmetto = agnostic + `palmetto/`.  
-E-sign after flatten: **SignNow** (primary) or **Adobe Sign / Acrobat** (per-client provider).
+New e-sign packets use the self-hosted **DocuSeal** service. SignNow remains read-only legacy history; appearance bonds remain print/wet-ink.
 
 Must collect before send: defendant identity & descriptors, booking/charges/court, bond $, indemnitor PII (address, DL, SSN for SSA, refs, employment, vehicle), surety, POA (phase 2), agency constants.
 

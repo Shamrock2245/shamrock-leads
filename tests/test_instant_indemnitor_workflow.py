@@ -1,7 +1,4 @@
-"""
-Test suite verifying instant indemnitor paperwork signing & post-sign defendant binding workflow.
-Allows indemnitors to scan ID, complete paperwork first, and bind defendant later.
-"""
+"""Regression coverage for the retired unassigned-defendant packet route."""
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
@@ -23,13 +20,10 @@ def test_app():
 @patch("dashboard.extensions.get_collection")
 @patch("dashboard.routers.paperwork.get_collection")
 @patch("dashboard.routers.pin_portal.get_collection")
-def test_instant_indemnitor_packet_and_bind_workflow(
+def test_instant_indemnitor_packet_fails_closed_without_validated_case(
     mock_pin_col, mock_pw_col, mock_ext_col, mock_deps_col, mocker, test_app
 ):
-    """
-    Test end-to-end instant indemnitor packet creation without a defendant,
-    and subsequent binding of defendant details post-creation/sign.
-    """
+    """An ID scan alone must never create a legal e-sign packet."""
     mock_packets = AsyncMock()
     mock_packets.insert_one = AsyncMock(return_value=MagicMock(inserted_id="test_id"))
     mock_packets.find_one = AsyncMock(return_value={"packet_id": "pkt_inst_123456", "defendant_name": "To Be Named"})
@@ -91,34 +85,15 @@ def test_instant_indemnitor_packet_and_bind_workflow(
             "surety_id": "osi",
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 409, resp.text
     data = resp.json()
-    assert data["success"] is True
-    assert data["unassigned_defendant"] is True
-    assert data.get("sign_url")
-    assert "test_slug_1234" in data["sign_url"]
-    assert data.get("submission_id") in (998811, "998811")
-    packet_id = data["packet_id"]
-
-    # Step 2: Post-Sign Defendant Binding (Bind defendant to existing packet)
-    # find_one should return the instant packet for this packet_id
-    mock_packets.find_one = AsyncMock(
-        return_value={
-            "packet_id": packet_id,
-            "defendant_name": "To Be Named",
-            "unassigned_defendant": True,
-        }
-    )
-    bind_resp = client.post(
-        f"/api/paperwork/packets/{packet_id}/bind-defendant",
-        json={
-            "defendant_name": "John Doe",
-            "booking_number": "2026-998877",
-            "county": "Lee",
-            "case_number": "26-CF-009988",
-        },
-    )
-    assert bind_resp.status_code == 200, bind_resp.text
-    bind_data = bind_resp.json()
-    assert bind_data["success"] is True
-    assert bind_data["defendant_name"] == "John Doe"
+    assert data == {
+        "success": False,
+        "error": "validated_bond_case_required",
+        "message": (
+            "Paperwork is not ready yet. A Shamrock bondsman must validate "
+            "the match and bond case before creating your signing packet."
+        ),
+        "next_step": "request_pin_after_staff_creates_packet",
+    }
+    mock_packets.insert_one.assert_not_awaited()

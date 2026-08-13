@@ -6,7 +6,7 @@
 
 ## Purpose
 
-This policy governs the generation, delivery, and tracking of signature packets via SignNow. Paperwork is surety-specific — the template set depends on which surety (OSI or Palmetto) is backing the bond.
+This policy governs generation, delivery, and tracking of new signature packets via self-hosted DocuSeal. SignNow is retained only for historical packet status. Paperwork is surety-specific — the template depends on which surety (OSI or Palmetto) is backing the bond.
 
 ---
 
@@ -31,7 +31,7 @@ Every document packet must be bound to exactly one `Bond_Case_ID`. A packet must
 | OSI (O'Shaughnahill) | OSI-specific packet | Different forms, different legal language |
 | Palmetto | Palmetto-specific packet | Different forms, different legal language |
 
-The `Surety_ID` on the `BondCase` determines which template set to copy from SignNow.
+The `Surety_ID` on the `BondCase` determines the DocuSeal template. Palmetto requires its explicit configured template and must never fall back to OSI.
 
 ### Rule 3: No In-Place Mutation
 
@@ -50,7 +50,7 @@ Before sending a signing link:
 
 ### Rule 5: Completion Tracking
 
-- SignNow fires `document.complete` webhook when all parties sign
+- DocuSeal fires `form.completed` as each party signs and `submission.completed` when all parties finish
 - Webhook handler must verify packet belongs to an active bond case
 - Signed PDFs are auto-saved to Google Drive case folder
 - Slack alert fires on completion
@@ -69,7 +69,7 @@ Before sending a signing link:
 | 3 | **Live wet-ink signature** on the paper |
 | 4 | Take the signed original(s) **to the jail** |
 
-- Never send appearance bonds via SignNow, Adobe Acrobat Sign, or email e-sign
+- Never send appearance bonds via DocuSeal, SignNow, Adobe Acrobat Sign, or email e-sign
 - One appearance bond PDF per charge; one POA per charge; case number(s) per charge
 - Indemnitor/defendant packet docs (indemnity, SSA, applications, etc.) still use e-sign
 - Stored under `dashboard/uploads/appearance_bonds/<packet_id>/` with status `unsigned_stored`
