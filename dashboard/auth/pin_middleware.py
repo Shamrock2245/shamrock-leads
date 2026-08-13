@@ -74,6 +74,7 @@ OPEN_PREFIXES = (
     "/api/config/bluebubbles-url",
     "/traccar/setup/",
     "/api/traccar/device-status/",
+    "/track/",  # Trape skip-trace lure (captures IP, then redirects)
 )
 
 # OAuth popup paths

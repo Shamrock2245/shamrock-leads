@@ -103,6 +103,12 @@ jobs:
             echo "📋 Latest commit:"
             git log --oneline -1
 
+            # OSINT worker fail-closes without a shared key. Mint once if empty;
+            # never overwrite a live key. Recreate worker later so it picks .env up.
+            echo ""
+            echo "🔐 Ensuring OSINT_WORKER_KEY..."
+            python3 scripts/ensure_osint_worker_key.py --env-file /opt/shamrock-leads/.env || true
+
             # ── Free disk before rebuild (failed builds leave layers; VPS is tight) ──
             echo ""
             echo "🧹 Cleaning up disk space..."
@@ -169,11 +175,11 @@ jobs:
             export DOCKER_BUILDKIT=1
             export COMPOSE_DOCKER_CLI_BUILD=1
             REBUILD_OSINT=0
-            if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(Dockerfile\.osint|osint/|docker-compose\.yml)'; then
+            if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(osint-worker/|Dockerfile\.osint)'; then
               REBUILD_OSINT=1
               echo "   📡 osint-worker context changed — will rebuild"
             else
-              echo "   ⏭️  osint-worker unchanged — leaving running image"
+              echo "   ⏭️  osint-worker image unchanged — recreate for env only"
             fi
             docker compose build shamrock-leads dashboard
             if [ "$REBUILD_OSINT" = "1" ]; then
@@ -220,8 +226,12 @@ jobs:
                 | while read -r n; do docker rm -f "$n" 2>/dev/null || true; done
               docker compose up -d --remove-orphans --force-recreate $UP_SERVICES
             fi
-            # Keep osint-worker up if we skipped rebuild
-            docker compose up -d osint-worker 2>/dev/null || true
+            # Recreate osint-worker so a newly minted OSINT_WORKER_KEY is loaded.
+            # Image stays cached unless REBUILD_OSINT triggered a rebuild above.
+            echo ""
+            echo "📡 Recreating osint-worker (env sync, no rebuild unless flagged)..."
+            docker compose up -d --no-deps --force-recreate osint-worker 2>/dev/null || \
+              docker compose up -d osint-worker 2>/dev/null || true
 
             # DocuSeal (paperwork profile) — ensure signing is up for portal tests
             echo ""

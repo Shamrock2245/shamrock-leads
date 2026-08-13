@@ -38,6 +38,24 @@ log = logging.getLogger("shamrock.osint")
 OSINT_WORKER_URL = os.getenv("OSINT_WORKER_URL", "http://osint-worker:5065").rstrip("/")
 OSINT_WORKER_KEY = os.getenv("OSINT_WORKER_KEY", "").strip()
 OSINT_WORKER_TIMEOUT = float(os.getenv("OSINT_WORKER_TIMEOUT", "600"))
+_DEFAULT_TRAPE_SERVER = (
+    os.getenv("TRAPE_SERVER_URL", "").strip()
+    or os.getenv("DASHBOARD_PUBLIC_URL", "").strip()
+    or "https://leads.shamrockbailbonds.biz"
+).rstrip("/")
+
+_ENGINE_KEYS = (
+    "maigret",
+    "tookie",
+    "sherlock",
+    "snoop",
+    "blackbird",
+    "spiderfoot",
+    "ignorant",
+    "toutatis",
+    "instaloader",
+    "exiftool",
+)
 
 
 def _redact(value: Optional[str]) -> str:
@@ -76,60 +94,98 @@ class OSINTService:
     # ── Tool Probe ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def probe_tools() -> Dict[str, Any]:
-        """Synchronous tool availability probe via worker."""
+    def _trape_status() -> Dict[str, Any]:
+        """Native dashboard /track/{session} lure is the production Trape path."""
         trape_dir = os.getenv("TRAPE_DIR", "/opt/trape")
         trape_path = os.path.join(trape_dir, "trape.py")
-        trape_server = os.getenv("TRAPE_SERVER_URL", "")
-        trape = {
-            "available": os.path.isfile(trape_path),
-            "server_url": trape_server or "not configured",
+        server = (
+            os.getenv("TRAPE_SERVER_URL", "").strip()
+            or os.getenv("DASHBOARD_PUBLIC_URL", "").strip()
+            or _DEFAULT_TRAPE_SERVER
+        ).rstrip("/")
+        return {
+            "available": True,
+            "mode": "native_dashboard_lure",
+            "server_url": server,
+            "binary_installed": os.path.isfile(trape_path),
         }
 
+    @staticmethod
+    def _disconnected_probe(
+        *,
+        trape: Dict[str, Any],
+        error: str,
+        worker_reachable: bool,
+        worker_auth_ok: bool,
+        http_status: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        data: Dict[str, Any] = {k: {"available": False} for k in _ENGINE_KEYS}
+        data.update({
+            "trape": trape,
+            "ready_for_scans": False,
+            "worker_reachable": worker_reachable,
+            "worker_auth_ok": worker_auth_ok,
+            "worker_key_configured": bool(OSINT_WORKER_KEY),
+            "worker_url": OSINT_WORKER_URL,
+            "error": error,
+        })
+        if http_status is not None:
+            data["worker_http_status"] = http_status
+        return data
+
+    @staticmethod
+    def probe_tools() -> Dict[str, Any]:
+        """Synchronous tool availability probe via worker.
+
+        Distinguishes worker-down vs auth-fail vs engines-missing so the UI
+        never reports 'not installed' when the worker is merely unauthenticated.
+        """
+        trape = OSINTService._trape_status()
+        health_ok = False
         try:
             with httpx.Client(timeout=8.0) as client:
+                health = client.get(f"{OSINT_WORKER_URL}/health")
+                health_ok = health.status_code == 200
+                if not health_ok:
+                    return OSINTService._disconnected_probe(
+                        trape=trape,
+                        error=f"worker /health HTTP {health.status_code}",
+                        worker_reachable=False,
+                        worker_auth_ok=False,
+                        http_status=health.status_code,
+                    )
                 r = client.get(f"{OSINT_WORKER_URL}/status", headers=_worker_headers())
                 if r.status_code == 200:
                     data = r.json()
                     data["trape"] = trape
                     data["worker_url"] = OSINT_WORKER_URL
                     data["worker_reachable"] = True
+                    data["worker_auth_ok"] = True
+                    data["worker_key_configured"] = bool(OSINT_WORKER_KEY)
+                    data["worker_http_status"] = 200
                     data["ready_for_scans"] = bool(data.get("ready_for_scans"))
                     return data
-                return {
-                    "maigret": {"available": False},
-                    "tookie": {"available": False},
-                    "sherlock": {"available": False},
-                    "blackbird": {"available": False},
-                    "spiderfoot": {"available": False},
-                    "ignorant": {"available": False},
-                    "toutatis": {"available": False},
-                    "instaloader": {"available": False},
-                    "exiftool": {"available": False},
-                    "trape": trape,
-                    "ready_for_scans": False,
-                    "worker_reachable": False,
-                    "worker_url": OSINT_WORKER_URL,
-                    "error": f"worker HTTP {r.status_code}",
-                }
+                if r.status_code == 503:
+                    err = "OSINT_WORKER_KEY not configured on worker"
+                elif r.status_code == 401:
+                    err = "OSINT_WORKER_KEY mismatch (dashboard vs worker)"
+                else:
+                    err = f"worker /status HTTP {r.status_code}"
+                return OSINTService._disconnected_probe(
+                    trape=trape,
+                    error=err,
+                    worker_reachable=True,
+                    worker_auth_ok=False,
+                    http_status=r.status_code,
+                )
         except Exception as exc:
             log.warning("OSINT worker probe failed: %s", exc)
-            return {
-                "maigret": {"available": False},
-                "tookie": {"available": False},
-                "sherlock": {"available": False},
-                "blackbird": {"available": False},
-                "spiderfoot": {"available": False},
-                "ignorant": {"available": False},
-                "toutatis": {"available": False},
-                "instaloader": {"available": False},
-                "exiftool": {"available": False},
-                "trape": trape,
-                "ready_for_scans": False,
-                "worker_reachable": False,
-                "worker_url": OSINT_WORKER_URL,
-                "error": str(exc)[:300],
-            }
+            return OSINTService._disconnected_probe(
+                trape=trape,
+                error=str(exc)[:300],
+                worker_reachable=health_ok,
+                worker_auth_ok=False,
+            )
 
     async def get_queue_info(self) -> Dict[str, Any]:
         """Get current queue depth (running/queued scans)."""
@@ -808,8 +864,8 @@ class OSINTService:
     ) -> Dict:
         session_id = secrets.token_urlsafe(16)
         now = datetime.now(timezone.utc)
-        trape_server = os.getenv("TRAPE_SERVER_URL", "")
-        tracking_url = f"{trape_server}/track/{session_id}" if trape_server else None
+        trape_server = OSINTService._trape_status()["server_url"]
+        tracking_url = f"{trape_server}/track/{session_id}"
         doc = {
             "subject_type": subject_type,
             "subject_id": subject_id,

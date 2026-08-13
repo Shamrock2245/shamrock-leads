@@ -109,6 +109,8 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    env_file:
+      - .env
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
@@ -209,6 +211,7 @@ services:
       - OSINT_WORKER_URL=http://osint-worker:5065
       - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
       - OSINT_WORKER_TIMEOUT=${OSINT_WORKER_TIMEOUT:-300}
+      - TRAPE_SERVER_URL=${TRAPE_SERVER_URL:-https://leads.shamrockbailbonds.biz}
       # Traccar URLs (in-stack GPS). Credentials come from .env via env_file —
       # do NOT blank TRACCAR_PASSWORD here or the client defaults get wiped.
       - TRACCAR_URL=${TRACCAR_URL:-http://traccar:8082}

@@ -89,6 +89,32 @@
 .osint-engine-pill.available .dot { background: var(--osint-accent); box-shadow: 0 0 4px var(--osint-accent); }
 .osint-engine-pill.unavailable .dot { background: var(--osint-danger); }
 .osint-engine-pill.unknown .dot { background: var(--osint-muted); }
+.osint-engine-pill.needs-config .dot { background: var(--osint-warning); box-shadow: 0 0 4px var(--osint-warning); }
+.osint-connection-banner {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: var(--osint-radius-sm);
+  border: 1px solid var(--osint-border);
+  background: var(--osint-bg);
+  color: var(--osint-text);
+}
+.osint-connection-banner.ok {
+  border-color: rgba(0, 200, 83, 0.45);
+  background: var(--osint-accent-dim);
+  color: var(--osint-accent);
+}
+.osint-connection-banner.auth,
+.osint-connection-banner.warn {
+  border-color: rgba(210, 153, 34, 0.45);
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--osint-warning);
+}
+.osint-connection-banner.down {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--osint-danger);
+}
 .osint-queue-info {
   font-size: 0.63rem;
   color: var(--osint-muted);
@@ -759,6 +785,7 @@
 }
 .matrix-badge.ready { background: rgba(0, 200, 83, 0.15); color: var(--osint-accent); }
 .matrix-badge.offline { background: rgba(248, 81, 73, 0.15); color: var(--osint-danger); }
+.matrix-badge.needs-config { background: rgba(210, 153, 34, 0.15); color: var(--osint-warning); }
 .matrix-badge.top-rank { background: rgba(255, 109, 0, 0.2); color: #ff9100; border: 1px solid rgba(255, 109, 0, 0.4); }
 .osint-matrix-card .matrix-desc {
   font-size: 0.68rem;

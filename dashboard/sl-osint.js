@@ -107,28 +107,95 @@
   async function _checkToolStatus() {
     try {
       const r = await fetch(`${API}/api/osint/status`, { headers: headers(), credentials: 'same-origin' });
-      if (!r.ok) return;
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        _toolStatus = {
+          worker_reachable: false,
+          worker_auth_ok: false,
+          ready_for_scans: false,
+          error: err.detail || `status HTTP ${r.status}`,
+        };
+        _renderToolStatus();
+        return;
+      }
       _toolStatus = await r.json();
       _renderToolStatus();
     } catch (e) {
       console.warn('OSINT status check failed:', e);
+      _toolStatus = {
+        worker_reachable: false,
+        worker_auth_ok: false,
+        ready_for_scans: false,
+        error: e.message || 'network error',
+      };
+      _renderToolStatus();
+    }
+  }
+
+  function _engineAvailable(info) {
+    return !!(info && (info.available === true || info.available === 'true'));
+  }
+
+  function _renderConnectionBanner() {
+    const banner = $('osintConnectionBanner');
+    if (!banner || !_toolStatus) return;
+
+    const reachable = _toolStatus.worker_reachable === true;
+    const authOk = _toolStatus.worker_auth_ok === true;
+    const ready = _toolStatus.ready_for_scans === true;
+    const trape = _toolStatus.trape || {};
+    const engines = ['maigret', 'tookie', 'sherlock', 'snoop', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
+    const live = engines.filter(id => _engineAvailable(_toolStatus[id]));
+    const pending = [];
+    if ((_toolStatus.toutatis || {}).package_installed && !_engineAvailable(_toolStatus.toutatis)) {
+      pending.push('Toutatis needs INSTAGRAM_SESSION_ID');
+    }
+    if (!_engineAvailable(_toolStatus.snoop)) pending.push('Snoop not installed (optional)');
+
+    let cls = 'ok';
+    let text = `Worker connected · ${live.length} engines live`;
+    if (trape.available) text += ' · Trape lure on dashboard /track';
+    if (!reachable) {
+      cls = 'down';
+      text = `OSINT worker unreachable${_toolStatus.error ? ' — ' + _esc(_toolStatus.error) : ''}`;
+    } else if (!authOk) {
+      cls = 'auth';
+      text = `Worker is up but not authenticated (${_esc(_toolStatus.error || 'OSINT_WORKER_KEY missing or mismatch')})`;
+    } else if (!ready) {
+      cls = 'warn';
+      text = `Worker authenticated but no scan engines reported available`;
+    }
+    if (pending.length && cls === 'ok') {
+      text += ` · ${pending.join(' · ')}`;
+    }
+
+    banner.hidden = false;
+    banner.className = `osint-connection-banner ${cls}`;
+    banner.textContent = text;
+
+    const scanBtn = $('osintScanBtn');
+    if (scanBtn) {
+      const blocked = !ready;
+      scanBtn.disabled = blocked;
+      scanBtn.title = blocked ? text : 'Run OSINT Scan';
     }
   }
 
   function _renderToolStatus() {
+    _renderConnectionBanner();
+
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
     const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
-      const available = info.available;
-      const cls = available ? 'available' : 'unavailable';
+      const available = _engineAvailable(info);
+      const needsSession = eng === 'toutatis' && info.session_configured === false;
+      const cls = available ? 'available' : (needsSession ? 'needs-config' : 'unavailable');
       const version = info.version ? ` v${info.version}` : '';
       const note = info.note ? ` — ${info.note}` : '';
-      const sess = eng === 'toutatis' && info.session_configured === false
-        ? ' — needs INSTAGRAM_SESSION_ID'
-        : '';
+      const sess = needsSession ? ' — needs INSTAGRAM_SESSION_ID' : '';
       const label = eng === 'tookie' ? '🚀 Tookie-OSINT' : eng.charAt(0).toUpperCase() + eng.slice(1);
       return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}${sess}">
         <span class="dot"></span>${label}${version}
@@ -159,15 +226,20 @@
       { id: 'toutatis', name: '📸 Toutatis', rank: 'IG Enrichment', desc: 'Instagram handle → recovers public & obfuscated email, phone number & WhatsApp links' },
       { id: 'instaloader', name: '🖼️ Instaloader', rank: 'IG Media', desc: 'Extracts Instagram bio text, HD avatars, external profile links & follower counts' },
       { id: 'exiftool', name: '🔍 ExifTool', rank: 'EXIF / GPS', desc: 'Extracts camera fingerprints, timestamp, and GPS coordinates from evidence photos' },
+      { id: 'snoop', name: '🐕 Snoop', rank: 'Optional', desc: 'Username search (optional extra engine — not required for scans)' },
+      { id: 'trape', name: '🎯 Trape Lure', rank: 'Skip-Trace', desc: 'Native dashboard /track/{session} lure captures IP/UA then redirects to the court/portal page' },
     ];
 
     matrixEl.innerHTML = engineMeta.map(item => {
       const info = _toolStatus[item.id] || {};
-      const avail = info.available === True || info.available === true;
+      const avail = _engineAvailable(info);
+      const needsCfg = item.id === 'toutatis' && info.session_configured === false && info.package_installed;
       const isTop = item.id === 'tookie';
-      const badgeCls = isTop ? 'top-rank' : (avail ? 'ready' : 'offline');
-      const badgeText = isTop ? '🚀 Rank #1 (Top)' : (avail ? 'ACTIVE' : 'UNAVAILABLE');
-      const pathText = info.path || 'Not installed';
+      const badgeCls = isTop && avail ? 'top-rank' : (avail ? 'ready' : (needsCfg ? 'needs-config' : 'offline'));
+      const badgeText = isTop && avail ? '🚀 Rank #1 (Top)' : (avail ? 'ACTIVE' : (needsCfg ? 'NEEDS COOKIE' : (_toolStatus.worker_auth_ok === false ? 'NOT AUTHENTICATED' : 'UNAVAILABLE')));
+      const pathText = item.id === 'trape'
+        ? (info.server_url || 'https://leads.shamrockbailbonds.biz') + '/track/{session}'
+        : (info.path || (needsCfg ? 'Installed — set INSTAGRAM_SESSION_ID' : (_toolStatus.worker_auth_ok === false ? 'Worker not authenticated' : 'Not installed')));
 
       return `<div class="osint-matrix-card ${isTop ? 'ranked-top' : ''}">
         <div class="matrix-header">

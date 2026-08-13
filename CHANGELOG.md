@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Per-party paperwork links** — staff get Indemnitor + Defendant copy/send cards after finalize. Branded URLs `https://paperwork.shamrockbailbonds.biz/sign/{packet}/{role}` redirect to the live DocuSeal slug. Deliver uses the party’s stored phone, fail-closes on BlueBubbles failure, and refuses unknown numbers.
 
 ### Fixed
+- **OSINT Intel “not hooked up”** — `osint-worker` engines were installed (Maigret, Tookie, Sherlock, Blackbird, SpiderFoot, Ignorant, Instaloader, ExifTool) but `OSINT_WORKER_KEY` was empty, so `/status` 503’d and the UI painted every engine UNAVAILABLE. Shared key is now minted once (`scripts/ensure_osint_worker_key.py`), persisted on the VPS `.env`, and recreated into worker + dashboard. Status probe distinguishes worker-down vs auth-fail vs engine-missing. Trape lure uses dashboard `/track/{session}` (open prefix) with `TRAPE_SERVER_URL=https://leads.shamrockbailbonds.biz`. Toutatis stays gated until `INSTAGRAM_SESSION_ID` is set.
 - **Add Indemnitor ID scan 413** — live HTTPS nginx had no `client_max_body_size` (default 1MB), so phone DL photos never reached OCR. Limit raised to 50MB; the modal now EXIF-orients, compresses, and retries OCR at 0/90/180/270° before hydrating name, address, DOB, and DL #.
 
 ### Changed

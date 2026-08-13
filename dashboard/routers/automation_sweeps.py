@@ -1030,6 +1030,8 @@ async def osint_worker_status(request: Request, api_key: str = ""):
             "action": "osint_status",
             "ready_for_scans": bool(tools.get("ready_for_scans")),
             "worker_reachable": bool(tools.get("worker_reachable", True)),
+            "worker_auth_ok": bool(tools.get("worker_auth_ok")),
+            "worker_key_configured": bool(tools.get("worker_key_configured")),
             "worker_url": tools.get("worker_url"),
             "worker_version": tools.get("version"),
             "maigret": tools.get("maigret"),
