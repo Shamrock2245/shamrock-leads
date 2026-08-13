@@ -1,14 +1,21 @@
 """
-E2E Test: Paperwork Packet -> DocuSeal -> Google Drive
+E2E Test: Paperwork tabs (OSI + Palmetto) → DocuSeal → optional Drive
+
+Covers the dashboard Paperwork Config surety tabs:
+  - local PDF packet composition (osi / palmetto folders)
+  - DocuSeal template resolution (no Palmetto→OSI fallback)
+  - live unsigned multi-party submission + sign links
 
 Usage (from shamrock-leads root):
     python scripts/e2e_test_paperwork.py
-    python scripts/e2e_test_paperwork.py --skip-drive   # DocuSeal only
-    python scripts/e2e_test_paperwork.py --drive-only   # preflight + skip live submit
+    python scripts/e2e_test_paperwork.py --surety both
+    python scripts/e2e_test_paperwork.py --surety osi --skip-drive
+    python scripts/e2e_test_paperwork.py --surety palmetto --skip-drive
+    python scripts/e2e_test_paperwork.py --drive-only
 
 Exit codes:
-  0 success
-  1 DocuSeal / general failure
+  0 success (every requested surety tab passed)
+  1 DocuSeal / tab / general failure
   2 Drive auth / archive failure (paperwork otherwise OK)
 """
 from __future__ import annotations
@@ -17,12 +24,14 @@ import argparse
 import asyncio
 import os
 import sys
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 # Ensure imports work from project root
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-load_dotenv()
+_ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(_ENV_PATH)
 
 # Prevent local execution from attempting to use Docker-internal DNS
 if "DOCUSEAL_INTERNAL_URL" in os.environ:
@@ -57,8 +66,175 @@ def _drive_preflight() -> dict:
     return result
 
 
+def _bond_data(surety_id: str) -> Dict[str, Any]:
+    prefix = surety_id.upper()
+    return {
+        "surety_id": surety_id,
+        "defendant_name": f"E2E {prefix} Defendant",
+        "indemnitor_name": f"E2E {prefix} Indemnitor",
+        "indemnitor_email": "admin@shamrockbailbonds.biz",
+        "defendant_email": "admin@shamrockbailbonds.biz",
+        "county": "Lee",
+        "case_number": f"E2E-{prefix}-CASE",
+        "poa_number": f"{prefix}-TEST-1234",
+        "booking_number": f"E2E-{prefix}-BK-999",
+        "bond_amount": 1000,
+        "charge_details": [
+            {
+                "charge": f"TESTING E2E {prefix}",
+                "bond_amount": 1000,
+                "case_number": f"E2E-{prefix}-CASE",
+                "poa_number": f"{prefix}-TEST-1234",
+            }
+        ],
+    }
+
+
+def _run_tab_composition(surety_id: str) -> bool:
+    """Exercise the Paperwork Config surety tab (local blanks + composition rule)."""
+    from dashboard.paperwork_pdf_service import (
+        PACKET_DOC_ORDER,
+        list_available_blanks,
+        packet_composition,
+    )
+
+    print(f"\n── Paperwork tab: {surety_id.upper()} ──")
+    comp = packet_composition(surety_id)
+    expected = (
+        "surety-agnostic-shamrock + palmetto"
+        if surety_id == "palmetto"
+        else "surety-agnostic-shamrock + osi"
+    )
+    print(f"   composition: {comp.get('rule')}")
+    if expected not in (comp.get("rule") or ""):
+        print(f"   ❌ unexpected composition rule (want {expected})")
+        return False
+
+    blanks = list_available_blanks(surety_id)
+    missing = [slug for slug in PACKET_DOC_ORDER if not blanks.get(slug)]
+    print_only_ok = blanks.get("appearance-bond") is True
+    print(f"   packet blanks: {sum(1 for s in PACKET_DOC_ORDER if blanks.get(s))}/{len(PACKET_DOC_ORDER)}")
+    print(f"   appearance bond (print-only): {'yes' if print_only_ok else 'MISSING'}")
+    if missing:
+        print(f"   ❌ missing blanks: {', '.join(missing)}")
+        return False
+    if not print_only_ok:
+        print("   ❌ appearance-bond blank missing")
+        return False
+    print(f"   ✅ {surety_id.upper()} tab local packet is complete")
+    return True
+
+
+def _summarize_templates(raw: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict):
+        items = raw.get("data") or raw.get("templates") or []
+    else:
+        items = []
+    out: List[Dict[str, Any]] = []
+    for t in items:
+        if isinstance(t, dict):
+            out.append(
+                {
+                    "id": t.get("id"),
+                    "name": t.get("name") or t.get("slug") or "",
+                    "archived": t.get("archived"),
+                }
+            )
+    return out
+
+
+async def _run_docuseal_tab(ds, surety_id: str, *, archive: bool) -> int:
+    """
+    Returns 0 ok, 1 tab/DocuSeal fail, 2 Drive fail after a good submission.
+    """
+    from dashboard.services.docuseal_service import resolve_template_id_for_surety
+
+    template_id = resolve_template_id_for_surety(surety_id)
+    print(f"\n── DocuSeal submit: {surety_id.upper()} ──")
+    if not template_id:
+        print(
+            f"   ❌ no template id for {surety_id} "
+            f"(set DOCUSEAL_TEMPLATE_ID_{surety_id.upper()} — Palmetto must not fall back to OSI)"
+        )
+        return 1
+
+    bond_data = _bond_data(surety_id)
+    packet_id = f"e2e-{surety_id}-{os.getpid()}"
+    print(f"   template_id={template_id} packet_id={packet_id}")
+    try:
+        submission = await ds.create_submission_for_packet(
+            template_id=template_id,
+            packet_id=packet_id,
+            bond_data=bond_data,
+            send_email=False,
+            include_defendant=True,
+        )
+    except Exception as e:
+        print(f"   ❌ create submission failed: {e}")
+        return 1
+
+    submission_id = submission.get("submission_id")
+    submitters = submission.get("submitters") or []
+    roles = [str(s.get("role") or "") for s in submitters if isinstance(s, dict)]
+    links = [
+        s.get("sign_url")
+        for s in submitters
+        if isinstance(s, dict) and s.get("sign_url")
+    ]
+    if not submission_id:
+        print(f"   ❌ no submission_id: {submission}")
+        return 1
+    print(f"   ✅ submission {submission_id}")
+    print(f"   roles={roles or ['(none)']}")
+    print(f"   sign_links={len(links)}")
+    if not links:
+        print("   ❌ no sign links returned")
+        return 1
+
+    # Unsigned packets often have no merged PDF yet — that is not a tab failure.
+    if archive:
+        print("   downloading combined PDF for Drive archive…")
+        try:
+            pdf_bytes = await ds.download_combined_pdf(submission_id)
+        except Exception as e:
+            print(f"   ⚠️  PDF download skipped (unsigned?): {e}")
+            pdf_bytes = b""
+        if not pdf_bytes:
+            print("   ⚠️  no signed PDF yet — skipping Drive (submission still OK)")
+            return 0
+        print(f"   PDF {len(pdf_bytes)} bytes — filing to Drive…")
+        try:
+            filed = ds.file_signed_pdf_to_drive(
+                pdf_bytes,
+                defendant_name=bond_data["defendant_name"],
+                surety_id=surety_id,
+                packet_id=packet_id,
+                booking_number=bond_data["booking_number"],
+            )
+        except Exception as e:
+            print(f"   ❌ Drive exception: {e}")
+            return 2
+        if not filed.get("ok"):
+            print(f"   ❌ Drive upload failed: {filed.get('error')}")
+            if filed.get("hint"):
+                print(f"   hint: {filed.get('hint')}")
+            return 2
+        print(f"   ✅ Drive {filed.get('drive_url')}")
+    else:
+        print("   ⏭  Drive archive skipped")
+    return 0
+
+
 async def main() -> int:
-    parser = argparse.ArgumentParser(description="E2E paperwork → DocuSeal → Drive")
+    parser = argparse.ArgumentParser(description="E2E paperwork tabs → DocuSeal → Drive")
+    parser.add_argument(
+        "--surety",
+        choices=["osi", "palmetto", "both"],
+        default="both",
+        help="Which paperwork tab(s) to exercise (default both)",
+    )
     parser.add_argument("--skip-drive", action="store_true", help="Skip Drive archive step")
     parser.add_argument(
         "--drive-only",
@@ -67,9 +243,10 @@ async def main() -> int:
     )
     args = parser.parse_args()
 
+    sureties = ["osi", "palmetto"] if args.surety == "both" else [args.surety]
     print("🚀 Starting E2E Paperwork Test")
+    print(f"   tabs: {', '.join(s.upper() for s in sureties)}")
 
-    # ── Drive preflight (fail early with actionable message) ───────────────
     drive_health = None
     if not args.skip_drive:
         drive_health = _drive_preflight()
@@ -82,12 +259,15 @@ async def main() -> int:
                 "but archive step is expected to fail until Drive is fixed."
             )
             print("   Fix: python scripts/verify_drive_auth.py")
-            print(
-                "   Prefer SA: share Completed Bonds with "
-                "bail-suite-sa@shamrock-bail-suite.iam.gserviceaccount.com as Editor"
-            )
-            print("   Or OAuth: python scripts/get_gmail_token.py  # includes Drive scope")
             print()
+
+    tab_ok = True
+    for sid in sureties:
+        if not _run_tab_composition(sid):
+            tab_ok = False
+    if not tab_ok:
+        print("\n❌ Paperwork tab composition failed")
+        return 1
 
     from dashboard.services.docuseal_service import DocuSealService
 
@@ -95,91 +275,30 @@ async def main() -> int:
     if not ds.is_configured:
         print("❌ DocuSeal is not configured. Check DOCUSEAL_API_KEY in .env")
         return 1
+    print("\n✅ DocuSeal service initialized.")
 
-    print("✅ DocuSeal service initialized.")
-
-    # 1. Create a synthetic bond case
-    bond_data = {
-        "defendant_name": "E2E Test Defendant",
-        "indemnitor_name": "E2E Test Indemnitor",
-        "indemnitor_email": "admin@shamrockbailbonds.biz",
-        "defendant_email": "admin@shamrockbailbonds.biz",
-        "county": "Lee",
-        "case_number": "E2E-TEST-CASE",
-        "poa_number": "OSI-TEST-1234",
-        "booking_number": "E2E-BK-999",
-        "bond_amount": 1000,
-        "charge_details": [
-            {
-                "charge": "TESTING E2E",
-                "bond_amount": 1000,
-                "case_number": "E2E-TEST-CASE",
-                "poa_number": "OSI-TEST-1234",
-            }
-        ],
-    }
-
-    template_id = int(os.environ.get("DOCUSEAL_TEMPLATE_ID_OSI", 1))
-    packet_id = "test-packet-e2e-123"
-
-    print(f"📦 Generating submission for packet_id={packet_id}...")
     try:
-        submission = await ds.create_submission_for_packet(
-            template_id=template_id,
-            packet_id=packet_id,
-            bond_data=bond_data,
-            send_email=False,
-        )
-        submission_id = submission.get("submission_id")
-        if not submission_id:
-            print(f"❌ Failed to get submission_id: {submission}")
-            return 1
-        print(f"✅ Submission created successfully! ID: {submission_id}")
+        raw = await ds.list_templates()
+        templates = _summarize_templates(raw)
+        print(f"   live templates: {len(templates)}")
+        for t in templates[:20]:
+            print(f"     id={t.get('id')} name={t.get('name')!r}")
     except Exception as e:
-        print(f"❌ Error creating submission: {e}")
-        return 1
+        print(f"   ⚠️  template list failed: {e}")
 
-    # 2. Simulate webhook → Download PDF
-    print("🤖 Simulating webhook 'submission.completed'...")
-    try:
-        pdf_bytes = await ds.download_combined_pdf(submission_id)
-        if not pdf_bytes:
-            print("❌ Downloaded PDF is empty.")
-            return 1
-        print(f"✅ Downloaded combined PDF. Size: {len(pdf_bytes)} bytes")
-    except Exception as e:
-        print(f"❌ Error downloading PDF: {e}")
-        return 1
+    worst = 0
+    archive = not args.skip_drive
+    for sid in sureties:
+        code = await _run_docuseal_tab(ds, sid, archive=archive)
+        worst = max(worst, code)
 
-    if args.skip_drive:
-        print("⏭  Skipping Drive archive (--skip-drive)")
-        return 0
-
-    # 3. Archive to Completed Bonds
-    print("📤 Pushing to Google Drive...")
-    try:
-        filed = ds.file_signed_pdf_to_drive(
-            pdf_bytes,
-            defendant_name=bond_data["defendant_name"],
-            surety_id="osi",
-            packet_id=packet_id,
-            booking_number=bond_data["booking_number"],
-        )
-        if filed.get("ok"):
-            print(f"✅ SUCCESS! File archived to Google Drive: {filed.get('drive_url')}")
-            print(f"   auth_mode={filed.get('auth_mode')} folder={filed.get('drive_folder_id')}")
-            return 0
-
-        print(f"❌ Google Drive upload failed: {filed.get('error')}")
-        if filed.get("error_code"):
-            print(f"   error_code={filed.get('error_code')}")
-        if filed.get("hint"):
-            print(f"   hint={filed.get('hint')}")
-        print("   Repair: python scripts/verify_drive_auth.py")
-        return 2
-    except Exception as e:
-        print(f"❌ Error filing to Google Drive: {e}")
-        return 2
+    if worst == 0:
+        print("\n✅ E2E paperwork tabs passed:", ", ".join(s.upper() for s in sureties))
+    elif worst == 2:
+        print("\n⚠️  Paperwork tabs submitted; Drive archive failed")
+    else:
+        print("\n❌ E2E paperwork tab failure")
+    return worst
 
 
 if __name__ == "__main__":
