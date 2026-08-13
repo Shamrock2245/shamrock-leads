@@ -227,18 +227,20 @@ const SLAutomations = {
            <span class="slider"></span>
          </label>`;
 
-    // Run Now & Tune Parameters buttons
     const canRun = hasTrigger && !isNrOnly;
-    const runBtn = `<button class="btn btn-secondary auto-run-btn"
+    const runTitle = isNrOnly ? 'Trigger from the Node-RED editor' : (hasTrigger ? 'Run this automation now' : 'No live trigger on this job');
+    const runBtn = `<button type="button" class="sl-btn sl-btn-primary sl-btn-sm auto-run-btn"
       onclick="SLAutomations.runNow('${auto.id}')"
-      ${!canRun ? `disabled title="${isNrOnly ? 'Trigger from Node-RED editor' : 'No live trigger'}"` : ''}>
-      ▶ Run Now
+      ${!canRun ? `disabled` : ''} title="${runTitle}">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      Run
     </button>`;
 
-    const tuneBtn = `<button class="btn btn-outline-secondary auto-tune-btn"
+    const tuneBtn = `<button type="button" class="sl-btn sl-btn-secondary sl-btn-sm auto-tune-btn"
       onclick="SLAutomations.tuneParams('${auto.id}')"
-      style="margin-left: 6px; font-size: 11px; padding: 4px 8px;">
-      ⚙️ Tune Params
+      title="Adjust interval">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Tune
     </button>`;
 
     return `
@@ -253,9 +255,9 @@ const SLAutomations = {
         ${toggleHtml}
       </div>
       <div class="auto-card-meta">
-        <span><strong>Status:</strong> <span style="color:${statusColor}">${statusText}</span></span>
-        <span><strong>Interval:</strong> ${this._fmtInterval(auto.interval_seconds)}</span>
-        <span title="${lastRunFull}"><strong>Last run:</strong> ${this._esc(lastRunText)}</span>
+        <span class="auto-meta-chip"><em>Status</em> <strong style="color:${statusColor}">${statusText}</strong></span>
+        <span class="auto-meta-chip"><em>Every</em> <strong>${this._fmtInterval(auto.interval_seconds)}</strong></span>
+        <span class="auto-meta-chip" title="${lastRunFull}"><em>Last</em> <strong>${this._esc(lastRunText)}</strong></span>
       </div>
       ${errHtml}
       ${historyHtml}
@@ -287,19 +289,84 @@ const SLAutomations = {
     }
   },
 
-  // ── Parameter Tuner Modal ──────────────────────────────────────────────────
-  async tuneParams(id) {
+  _ensureTuneModal() {
+    if (document.getElementById('autoTuneModal')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'autoTuneModal';
+    wrap.className = 'modal-overlay auto-tune-overlay';
+    wrap.innerHTML = `
+      <div class="modal auto-tune-modal" role="dialog" aria-labelledby="autoTuneTitle">
+        <div class="modal-header">
+          <h2 id="autoTuneTitle">Tune interval</h2>
+          <button type="button" class="modal-close" onclick="SLAutomations.closeTune()" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="auto-tune-sub" id="autoTuneSub"></p>
+          <label class="auto-tune-label" for="autoTuneInterval">Run every (seconds)</label>
+          <input type="number" id="autoTuneInterval" class="sl-input" min="10" step="10" inputmode="numeric">
+          <div class="auto-tune-presets" id="autoTunePresets"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="sl-btn sl-btn-ghost" onclick="SLAutomations.closeTune()">Cancel</button>
+          <button type="button" class="sl-btn sl-btn-primary" onclick="SLAutomations.saveTune()">Save interval</button>
+        </div>
+      </div>`;
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) this.closeTune(); });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && wrap.classList.contains('show')) this.closeTune();
+    });
+    document.body.appendChild(wrap);
+  },
+
+  tuneParams(id) {
     const auto = (this._last || []).find(a => a.id === id);
     if (!auto) return;
+    this._tuneId = id;
+    this._ensureTuneModal();
+    const sec = parseInt(auto.interval_seconds, 10) || 3600;
+    const input = document.getElementById('autoTuneInterval');
+    const sub = document.getElementById('autoTuneSub');
+    const presets = document.getElementById('autoTunePresets');
+    if (input) input.value = String(sec);
+    if (sub) sub.textContent = auto.name || id;
+    if (presets) {
+      const opts = [
+        [900, '15m'], [1800, '30m'], [3600, '1h'],
+        [21600, '6h'], [86400, '1d'],
+      ];
+      presets.innerHTML = opts.map(([v, label]) =>
+        `<button type="button" class="sl-btn sl-btn-secondary sl-btn-sm${v === sec ? ' auto-preset-on' : ''}"
+          onclick="SLAutomations._setTunePreset(${v})">${label}</button>`
+      ).join('');
+    }
+    document.getElementById('autoTuneModal').classList.add('show');
+    setTimeout(() => input && input.focus(), 40);
+  },
 
-    const newInterval = prompt(`Tune execution interval for "${auto.name || id}" (in seconds):`, auto.interval_seconds || 3600);
-    if (newInterval === null) return;
-    const intervalSec = parseInt(newInterval, 10);
-    if (isNaN(intervalSec) || intervalSec < 10) {
-      alert('Please enter a valid interval in seconds (minimum 10s).');
+  _setTunePreset(sec) {
+    const input = document.getElementById('autoTuneInterval');
+    if (input) input.value = String(sec);
+    document.querySelectorAll('#autoTunePresets .sl-btn').forEach((b) => {
+      const v = parseInt(b.getAttribute('onclick') && b.getAttribute('onclick').replace(/\D/g, ''), 10);
+      b.classList.toggle('auto-preset-on', v === sec);
+    });
+  },
+
+  closeTune() {
+    const el = document.getElementById('autoTuneModal');
+    if (el) el.classList.remove('show');
+    this._tuneId = null;
+  },
+
+  async saveTune() {
+    const id = this._tuneId;
+    const auto = (this._last || []).find(a => a.id === id);
+    const input = document.getElementById('autoTuneInterval');
+    const intervalSec = parseInt(input && input.value, 10);
+    if (!id || isNaN(intervalSec) || intervalSec < 10) {
+      if (window.SL && SL.notify) SL.notify('Enter at least 10 seconds.', 'error');
       return;
     }
-
     try {
       const res = await fetch('/api/automation/parameters', {
         method: 'POST',
@@ -312,7 +379,8 @@ const SLAutomations = {
       });
       const data = await res.json();
       if (data.success) {
-        if (window.SL && SL.notify) SL.notify(`Updated parameters for ${auto.name || id}.`, 'success');
+        if (window.SL && SL.notify) SL.notify(`Updated interval for ${auto?.name || id}.`, 'success');
+        this.closeTune();
         this.load();
       } else {
         throw new Error(data.error || 'Update failed');
@@ -361,7 +429,11 @@ const SLAutomations = {
   // ── Run Now ───────────────────────────────────────────────────────────────
   async runNow(id) {
     const btn = document.querySelector(`#auto-card-${id} .auto-run-btn`);
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.label = btn.innerHTML;
+      btn.innerHTML = '<span class="auto-btn-spin"></span> Running';
+    }
     try {
       if (window.SL && SL.notify) SL.notify('Triggering automation…', 'info');
       const res = await fetch(`/api/automation/trigger/${id}`, {
@@ -381,7 +453,10 @@ const SLAutomations = {
     } catch (e) {
       console.error(e);
       if (window.SL && SL.notify) SL.notify('Failed to trigger: ' + e.message, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = '▶ Run Now'; }
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = btn.dataset.label || 'Run';
+      }
     }
   },
 };

@@ -191,12 +191,32 @@
         }
       }
 
-      // Style the "Run Report →" text with color
+      // Replace hover-only "Run Report →" with always-visible actions
       var runEl = card.querySelector('.rpt-card-run');
-      if (runEl) {
-        runEl.style.color = color;
-        runEl.style.fontWeight = '700';
-        runEl.style.fontSize = '12px';
+      if (runEl && !card.querySelector('.rpt-card-actions')) {
+        var actions = document.createElement('div');
+        actions.className = 'rpt-card-actions';
+        actions.innerHTML =
+          '<button type="button" class="sl-btn sl-btn-primary sl-btn-sm rpt-run-btn">Run</button>' +
+          '<button type="button" class="sl-btn sl-btn-secondary sl-btn-sm rpt-csv-btn">CSV</button>' +
+          '<button type="button" class="sl-btn sl-btn-secondary sl-btn-sm rpt-pdf-btn">PDF</button>';
+        runEl.replaceWith(actions);
+        actions.querySelector('.rpt-run-btn').addEventListener('click', function (e) {
+          e.stopPropagation();
+          SLReports.generate(reportType);
+        });
+        actions.querySelector('.rpt-csv-btn').addEventListener('click', function (e) {
+          e.stopPropagation();
+          Promise.resolve(SLReports.generate(reportType)).then(function () {
+            if (window.SLReports) SLReports.exportCSV();
+          });
+        });
+        actions.querySelector('.rpt-pdf-btn').addEventListener('click', function (e) {
+          e.stopPropagation();
+          Promise.resolve(SLReports.generate(reportType)).then(function () {
+            if (window.SLReports) SLReports.exportPDF();
+          });
+        });
       }
 
       // Add hover glow
@@ -328,6 +348,44 @@
       cardGrid.style.gap = '12px';
       cardGrid.style.marginBottom = '20px';
     }
+
+    wireUploadDropzone();
+  }
+
+  function wireUploadDropzone() {
+    var zone = $('rptDropzone');
+    var file = $('rptUploadFile');
+    var browse = $('rptBrowseBtn');
+    var nameEl = $('rptUploadFileName');
+    if (!zone || !file || zone.dataset.wired) return;
+    zone.dataset.wired = '1';
+
+    function showName() {
+      if (nameEl) nameEl.textContent = (file.files && file.files[0]) ? file.files[0].name : '';
+    }
+    function openPicker() { file.click(); }
+    zone.addEventListener('click', function (e) {
+      if (e.target.closest('.rpt-browse-btn') || e.target === file) return;
+      openPicker();
+    });
+    zone.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
+    });
+    if (browse) browse.addEventListener('click', function (e) { e.stopPropagation(); openPicker(); });
+    file.addEventListener('change', showName);
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('rpt-drop-hot'); });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      zone.addEventListener(ev, function () { zone.classList.remove('rpt-drop-hot'); });
+    });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        file.files = e.dataTransfer.files;
+        showName();
+      }
+    });
   }
 
   /* ── 7. Export functions ────────────────────────────────────────────────── */

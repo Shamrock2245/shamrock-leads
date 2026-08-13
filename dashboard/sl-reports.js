@@ -1266,6 +1266,8 @@ const SLReports = (() => {
       // Clear inputs
       fileInput.value = '';
       urlInput.value = '';
+      const nameEl = $('rptUploadFileName');
+      if (nameEl) nameEl.textContent = '';
 
       // Reload recent reports
       toast('Spreadsheet processed successfully!', 'success');

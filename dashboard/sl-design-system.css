@@ -140,9 +140,98 @@
 }
 
 .sl-btn-sm {
-  padding: 4px 10px;
-  font-size: 11px;
-  min-height: 28px;
+  padding: 6px 12px;
+  font-size: 12px;
+  min-height: 32px;
+  border-radius: var(--r-pill);
+}
+
+.sl-btn:disabled,
+.sl-btn[disabled] {
+  opacity: .42;
+  cursor: not-allowed;
+  transform: none !important;
+  filter: none !important;
+  pointer-events: none;
+}
+
+/* Native-looking leftovers (outline-secondary was unstyled → white OS button) */
+.btn-outline-secondary,
+button.btn-outline-secondary {
+  background: rgba(255,255,255,.06) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border-hover) !important;
+  border-radius: var(--r-pill) !important;
+  font-family: inherit;
+}
+
+/* Dark form controls — .sl-input was referenced but never defined */
+.sl-input,
+input.sl-input,
+select.sl-input,
+textarea.sl-input {
+  background: rgba(15, 23, 42, .85);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  min-height: 40px;
+  outline: none;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  color-scheme: dark;
+}
+.sl-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(16,185,129,.15);
+}
+.sl-input::placeholder { color: var(--text-muted); }
+
+/* iOS-style switch used by Automations (was an unstyled checkbox) */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-switch .slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: #1e293b;
+  border: 1px solid var(--border-hover);
+  border-radius: 999px;
+  transition: background .2s var(--ease-out-expo), border-color .2s;
+}
+.toggle-switch .slider::before {
+  content: "";
+  position: absolute;
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  top: 2px;
+  background: #e2e8f0;
+  border-radius: 50%;
+  transition: transform .2s var(--ease-out-expo);
+  box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+.toggle-switch input:checked + .slider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle-switch input:checked + .slider::before {
+  transform: translateX(18px);
+  background: #fff;
+}
+.toggle-switch input:focus-visible + .slider {
+  box-shadow: 0 0 0 3px rgba(16,185,129,.25);
 }
 
 /* ── 3. Badge / Chip System ─────────────────────────────────────────────── */

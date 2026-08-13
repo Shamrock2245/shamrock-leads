@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css">
   <!-- Vanilla Calendar Pro — court calendar -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vanilla-calendar-pro@2.9.10/build/vanilla-calendar.min.css">
-  <link rel="stylesheet" href="/sl-design-system.css?v=5">
+  <link rel="stylesheet" href="/sl-design-system.css?v=6">
   <link rel="stylesheet" href="/sl-twenty-ux.css?v=2">
   <link rel="stylesheet" href="/styles.css?v=8">
   <link rel="stylesheet" href="/responsive.css?v=7">
@@ -26,7 +26,7 @@
   <link rel="stylesheet" href="/sl-imessage.css?v=6">
   <link rel="stylesheet" href="/sl-intelligence.css?v=2">
   <link rel="stylesheet" href="/sl-alpha-intel.css?v=2">
-  <link rel="stylesheet" href="/sl-premium.css?v=1">
+  <link rel="stylesheet" href="/sl-premium.css?v=2">
   <link rel="stylesheet" href="/sl-enrichment.css?v=1">
   <link rel="stylesheet" href="/sl-osint.css?v=4">
   <link rel="stylesheet" href="/sl-palantir.css?v=3">
@@ -2383,14 +2383,14 @@
   <!-- ═══ REPORTS: Header ═══ -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
     <div>
-      <h2 style="margin:0;font-size:20px">📋 Agency Reports</h2>
-      <p style="margin:4px 0 0;color:var(--muted);font-size:13px">Financial compliance · Surety liability · Agent production · POA management</p>
+      <h2 style="margin:0;font-size:22px;letter-spacing:-.4px;font-weight:700">Agency Reports</h2>
+      <p style="margin:6px 0 0;color:var(--muted);font-size:13px">Financial compliance · Surety liability · Agent production · POA management</p>
     </div>
     <div class="rpt-header-actions">
-      <span style="font-size:11px;color:var(--muted);margin-right:6px" title="When a report is open">⌘S print · ⌘P sort+print</span>
-      <button class="btn-secondary" onclick="SLReports.scheduleReport()" title="Schedule automated report delivery">⏰ Schedule</button>
-      <button class="btn-secondary" onclick="SLReports.exportPDF()" id="rptPDFBtn" style="display:none">📄 Export PDF</button>
-      <button class="btn-primary" onclick="SLReports.runAll()" id="rptRunAllBtn">▶ Run All</button>
+      <span class="rpt-kbd-hint" title="When a report is open">⌘S print · ⌘P sort+print</span>
+      <button type="button" class="sl-btn sl-btn-secondary" onclick="SLReports.scheduleReport()" title="Schedule automated report delivery">Schedule</button>
+      <button type="button" class="sl-btn sl-btn-secondary" onclick="SLReports.exportPDF()" id="rptPDFBtn" style="display:none">Export PDF</button>
+      <button type="button" class="sl-btn sl-btn-primary" onclick="SLReports.runAll()" id="rptRunAllBtn">Run all</button>
     </div>
   </div>
 
@@ -2487,19 +2487,30 @@
   </div>
 
   <!-- ═══ REPORTS: Upload Spreadsheet ═══ -->
-  <div class="panel" style="padding:20px;margin-bottom:20px;">
-    <div class="panel-title" style="margin-bottom:14px">📁 Upload Spreadsheet</div>
-    <div style="display:flex;gap:12px;align-items:center;">
-      <input type="file" id="rptUploadFile" accept=".xlsx,.csv" class="sl-input" style="flex:1;">
-      <span style="color:var(--muted);font-size:12px;">OR</span>
-      <input type="text" id="rptUploadUrl" placeholder="Google Sheets URL" class="sl-input" style="flex:2;">
-      <select id="rptUploadSurety" class="sl-input" style="width:120px;">
-        <option value="OSI">OSI</option>
-        <option value="PALMETTO">Palmetto</option>
-      </select>
-      <button class="sl-btn sl-btn-primary" onclick="SLReports.uploadSpreadsheet()">Upload & Generate</button>
+  <div class="panel rpt-upload-panel">
+    <div class="panel-title">Upload spreadsheet</div>
+    <div class="rpt-upload-grid">
+      <div class="rpt-dropzone" id="rptDropzone" role="button" tabindex="0">
+        <input type="file" id="rptUploadFile" accept=".xlsx,.csv" hidden>
+        <div class="rpt-dropzone-icon" aria-hidden="true">⬆</div>
+        <div class="rpt-dropzone-title">Drop an .xlsx or .csv</div>
+        <div class="rpt-dropzone-sub">or <button type="button" class="rpt-browse-btn" id="rptBrowseBtn">browse files</button></div>
+        <div class="rpt-dropzone-file" id="rptUploadFileName"></div>
+      </div>
+      <div class="rpt-upload-or"><span>or</span></div>
+      <div class="rpt-upload-url">
+        <label class="rpt-filter-label" for="rptUploadUrl">Google Sheets URL</label>
+        <input type="url" id="rptUploadUrl" class="sl-input" placeholder="https://docs.google.com/spreadsheets/…">
+        <div class="rpt-upload-url-row">
+          <select id="rptUploadSurety" class="sl-input" aria-label="Surety">
+            <option value="OSI">OSI</option>
+            <option value="PALMETTO">Palmetto</option>
+          </select>
+          <button type="button" class="sl-btn sl-btn-primary" onclick="SLReports.uploadSpreadsheet()">Generate</button>
+        </div>
+      </div>
     </div>
-    <div id="rptUploadStatus" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
+    <div id="rptUploadStatus" class="rpt-upload-status"></div>
   </div>
 
   <!-- Recent official XLSX archive (SuiteCRM-style report history) -->
@@ -2691,12 +2702,12 @@
         </div>
       </div>
       <div class="rpt-results-actions">
-        <button class="btn-secondary rpt-action-btn" onclick="SLReports.copySummary()" id="rptCopySummaryBtn" style="display:none" title="Copy executive summary">📋 Copy</button>
-        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportCSV()" id="rptExportCSVBtn" style="display:none">⬇ CSV</button>
-        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportXLSX()" id="rptExportXLSXBtn" style="display:none" title="Official multi-sheet surety workbook">📗 XLSX</button>
-        <button class="btn-secondary rpt-action-btn" onclick="SLReports.exportPDF()" id="rptExportPDFBtn" style="display:none">📄 PDF</button>
-        <button class="btn-secondary rpt-action-btn" onclick="SLReports.printReport()">🖨 Print</button>
-        <button class="rpt-close-btn" onclick="SLReports.closeResults()">✕ Close</button>
+        <button type="button" class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLReports.copySummary()" id="rptCopySummaryBtn" style="display:none" title="Copy executive summary">Copy</button>
+        <button type="button" class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLReports.exportCSV()" id="rptExportCSVBtn" style="display:none">CSV</button>
+        <button type="button" class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLReports.exportXLSX()" id="rptExportXLSXBtn" style="display:none" title="Official multi-sheet surety workbook">XLSX</button>
+        <button type="button" class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLReports.exportPDF()" id="rptExportPDFBtn" style="display:none">PDF</button>
+        <button type="button" class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLReports.printReport()">Print</button>
+        <button type="button" class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SLReports.closeResults()">Close</button>
       </div>
     </div>
 
@@ -3701,12 +3712,12 @@
 <script defer src="/sl-calendar.js?v=4"></script>
 <script defer src="/sl-calendar-ext.js?v=4"></script>
 <script defer src="/sl-record-bond.js?v=4"></script>
-<script defer src="/sl-reports.js?v=9"></script>
+<script defer src="/sl-reports.js?v=10"></script>
 <script defer src="/sl-animations.js?v=4"></script>
 <script defer src="/sl-lifecycle.js?v=4"></script>
 <script defer src="/sl-refinements.js?v=4"></script>
 <script defer src="/sl-pipeline-ui.js?v=5"></script>
-<script defer src="/sl-reports-ui.js?v=4"></script>
+<script defer src="/sl-reports-ui.js?v=5"></script>
 <script defer src="/sl-compliance.js?v=1"></script>
 <script defer src="/sl-tab-polish.js?v=4"></script>
 <script defer src="/sl-overhaul.js?v=4"></script>
@@ -4755,8 +4766,8 @@
 <div class="tab-content" id="tabAutomations">
   <div class="header-banner">
     <div class="header-title">
-      <h1>🤖 Automations Engine</h1>
-      <div class="header-subtitle">41 automations — Python cron loops, Node-RED flows, and event triggers. All wired.</div>
+      <h1>Automations Engine</h1>
+      <div class="header-subtitle">Python cron loops, Node-RED flows, and event triggers — all wired.</div>
     </div>
     <div class="header-actions">
       <div id="nrStatusBar" class="nr-status-bar">
@@ -4765,7 +4776,12 @@
         <span class="nr-status-label">Connected</span>
         <span class="nr-status-count">22 flows</span>
       </div>
-      <button class="btn btn-primary" onclick="SLAutomations.load()">Refresh Status</button>
+      <button type="button" class="sl-btn sl-btn-secondary" onclick="SLAutomations.triggerAll()" title="Fire every enabled Python automation">
+        Sweep all
+      </button>
+      <button type="button" class="sl-btn sl-btn-primary" onclick="SLAutomations.load()">
+        Refresh
+      </button>
     </div>
   </div>
   <div class="content-wrapper" style="max-width: 1600px; margin: 0 auto; padding-top: 20px;">
@@ -6198,7 +6214,7 @@
 <script defer src="/sl-palantir.js?v=3"></script>
 <script defer src="/sl-alpr.js?v=2"></script>
 <script defer src="/sl-paperwork.js?v=3"></script>
-<script defer src="/sl-automations.js?v=2"></script>
+<script defer src="/sl-automations.js?v=3"></script>
 <script defer src="/sl-relationships.js?v=1"></script>
 <script defer src="/sl-family-tree.js?v=1"></script>
 <!-- ═══ IN-APP ECOSYSTEM HELP DRAWER (F1) ═══ -->
