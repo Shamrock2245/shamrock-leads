@@ -3,10 +3,15 @@
 # Paste this ENTIRE file into Codex → Environment → Setup script = Manual.
 # Do not use Automatic setup (it pip-installs the full scraper extra set).
 #
-# This script must always exit 0. Codex treats any non-zero as "environment
-# setup failed". No apt, no sudo, no pytest, no set -euo pipefail.
+# Always ends with exit 0. Codex treats any non-zero as environment setup failed.
+# No apt, no sudo, no pytest, no set -euo pipefail.
 
 echo "==> Shamrock Codex setup starting (shell=${SHELL:-unknown} bash=${BASH_VERSION:-no})"
+
+_q() {
+  # Single-quote so & ? + in Mongo URIs cannot break a later `. file`.
+  printf "'%s'" "$(printf '%s' "${1-}" | sed "s/'/'\\\\''/g")"
+}
 
 ROOT="${CODEX_WORKDIR:-$(pwd)}"
 if [ -d /workspace/shamrock-leads ]; then
@@ -14,87 +19,102 @@ if [ -d /workspace/shamrock-leads ]; then
 elif [ -d /workspace ] && [ -f /workspace/AGENTS.md ]; then
   ROOT=/workspace
 fi
-cd "$ROOT" || cd /workspace || true
+cd "$ROOT" 2>/dev/null || cd /workspace 2>/dev/null || true
 ROOT="$(pwd)"
 echo "==> ROOT=$ROOT"
 
-# Universal image already has Python. Never apt-get (tesseract is unused here
-# and is the usual 30s fail). Never write /opt (often not writable).
-VENV_DIR="${HOME}/shamrock-venv"
-if [ ! -x "${VENV_DIR}/bin/python" ]; then
-  python3 -m venv "$VENV_DIR" || python3 -m venv --without-pip "$VENV_DIR" || true
+# Universal image already has Python. Never apt-get. Never write /opt.
+VENV_DIR="${HOME:-/tmp}/shamrock-venv"
+PY="${VENV_DIR}/bin/python"
+if [ ! -x "$PY" ]; then
+  python3 -m venv "$VENV_DIR" || true
 fi
-if [ -f "${VENV_DIR}/bin/activate" ]; then
-  # shellcheck disable=SC1091
-  . "${VENV_DIR}/bin/activate"
+if [ ! -x "$PY" ]; then
+  PY="$(command -v python3 || command -v python || true)"
 fi
-python3 -m pip install --upgrade pip wheel setuptools || true
+echo "==> PY=$PY"
 
-# Lean stack only. motor is required because dashboard.extensions imports it.
-python3 -m pip install --no-cache-dir \
-  "fastapi>=0.115.0,<0.120.0" \
-  "starlette>=0.37.0,<0.41.0" \
-  "uvicorn[standard]>=0.30.0" \
-  "httpx>=0.27.0" \
-  "aiohttp>=3.9.0" \
-  "pytest>=8.0.0" \
-  "pytest-asyncio>=0.23.0" \
-  "python-multipart>=0.0.9" \
-  "itsdangerous>=2.1.2" \
-  "Pillow>=10.0.0" \
-  "pymongo>=4.6.0" \
-  "motor>=3.3.0" \
-  "python-dotenv>=1.0.0" \
-  "pydantic>=2.0.0" \
-  "beautifulsoup4>=4.12.0" \
-  "requests>=2.31.0" \
-  "PyYAML>=6.0" \
-  "python-dateutil>=2.8.0" || echo "==> pip install had errors (continuing)"
+if [ -n "$PY" ]; then
+  "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  "$PY" -m pip install --upgrade pip wheel setuptools || true
+  # motor is required: dashboard.extensions imports AsyncIOMotorClient at import time.
+  "$PY" -m pip install --no-cache-dir \
+    "fastapi>=0.115.0,<0.120.0" \
+    "starlette>=0.37.0,<0.41.0" \
+    "uvicorn[standard]>=0.30.0" \
+    "httpx>=0.27.0" \
+    "aiohttp>=3.9.0" \
+    "pytest>=8.0.0" \
+    "pytest-asyncio>=0.23.0" \
+    "python-multipart>=0.0.9" \
+    "itsdangerous>=2.1.2" \
+    "Pillow>=10.0.0" \
+    "pymongo>=4.6.0" \
+    "motor>=3.3.0" \
+    "python-dotenv>=1.0.0" \
+    "pydantic>=2.0.0" \
+    "beautifulsoup4>=4.12.0" \
+    "requests>=2.31.0" \
+    "PyYAML>=6.0" \
+    "python-dateutil>=2.8.0" || echo "==> pip install had errors (continuing)"
+fi
 
-# Persist for the agent bash session (export in this script does not stick).
+ENV_FILE="${ROOT}/.env"
+umask 077
+touch "$ENV_FILE"
+
+_upsert_env() {
+  key="$1"
+  raw="$2"
+  [ -n "$raw" ] || return 0
+  quoted="$(_q "$raw")"
+  tmp="${ENV_FILE}.tmp.$$"
+  grep -v "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$ENV_FILE"
+  echo "${key}=${quoted}" >> "$ENV_FILE"
+}
+
+_upsert_env MONGODB_DB_NAME "${MONGODB_DB_NAME:-ShamrockBailDB}"
+_upsert_env DASHBOARD_PUBLIC_URL "${DASHBOARD_PUBLIC_URL:-https://leads.shamrockbailbonds.biz}"
+_upsert_env DOCUSEAL_URL "${DOCUSEAL_URL:-https://sign.shamrockbailbonds.biz}"
+_upsert_env TRAPE_SERVER_URL "${TRAPE_SERVER_URL:-https://leads.shamrockbailbonds.biz}"
+_upsert_env OSINT_WORKER_URL "${OSINT_WORKER_URL:-http://osint-worker:5065}"
+_upsert_env OSINT_ALLOW_INSECURE "${OSINT_ALLOW_INSECURE:-true}"
+_upsert_env DASHBOARD_PIN "${DASHBOARD_PIN:-codex-dev-pin}"
+_upsert_env SECRET_KEY "${SECRET_KEY:-codex-dev-secret-not-for-prod}"
+_upsert_env MONGODB_URI "${MONGODB_URI:-}"
+_upsert_env OPENAI_API_KEY "${OPENAI_API_KEY:-}"
+_upsert_env DOCUSEAL_API_KEY "${DOCUSEAL_API_KEY:-}"
+_upsert_env HUNTER_API_KEY "${HUNTER_API_KEY:-}"
+_upsert_env OSINT_WORKER_KEY "${OSINT_WORKER_KEY:-}"
+_upsert_env GAS_API_KEY "${GAS_API_KEY:-}"
+echo "==> wrote/updated ${ENV_FILE}"
+
+# Codex strips secrets after setup. Agent shells source bashrc — load quoted .env.
+PROFILE_SNIPPET="${HOME:-/tmp}/.shamrock-codex.sh"
+ACTIVATE="${VENV_DIR}/bin/activate"
 {
-  echo ""
-  echo "# Shamrock Codex Cloud"
-  echo "[ -f \"${VENV_DIR}/bin/activate\" ] && . \"${VENV_DIR}/bin/activate\""
-  echo "export PYTHONPATH=\"${ROOT}:\${PYTHONPATH:-}\""
+  echo "# Generated by scripts/codex_cloud_setup.sh"
+  echo "[ -f $(_q "$ACTIVATE") ] && . $(_q "$ACTIVATE")"
+  echo "export PYTHONPATH=$(_q "$ROOT"):\${PYTHONPATH:-}"
   echo "export PYTHONDONTWRITEBYTECODE=1"
   echo "export PYTHONUNBUFFERED=1"
-  echo "export MONGODB_DB_NAME=\"\${MONGODB_DB_NAME:-ShamrockBailDB}\""
-  echo "export DASHBOARD_PUBLIC_URL=\"\${DASHBOARD_PUBLIC_URL:-https://leads.shamrockbailbonds.biz}\""
-  echo "export DOCUSEAL_URL=\"\${DOCUSEAL_URL:-https://sign.shamrockbailbonds.biz}\""
-  echo "export TRAPE_SERVER_URL=\"\${TRAPE_SERVER_URL:-https://leads.shamrockbailbonds.biz}\""
-  echo "export OSINT_WORKER_URL=\"\${OSINT_WORKER_URL:-http://osint-worker:5065}\""
-  echo "cd \"${ROOT}\" 2>/dev/null || true"
-} >> "${HOME}/.bashrc"
+  echo "if [ -f $(_q "$ENV_FILE") ]; then"
+  echo "  set -a"
+  echo "  . $(_q "$ENV_FILE")"
+  echo "  set +a"
+  echo "fi"
+  echo "cd $(_q "$ROOT") 2>/dev/null || true"
+} > "$PROFILE_SNIPPET"
 
-# Secrets exist only during setup — copy into gitignored .env for the agent.
-ENV_FILE="${ROOT}/.env"
-if [ ! -f "$ENV_FILE" ]; then
-  umask 077
-  : > "$ENV_FILE"
-  {
-    echo "# Generated by scripts/codex_cloud_setup.sh — do not commit"
-    echo "MONGODB_DB_NAME=${MONGODB_DB_NAME:-ShamrockBailDB}"
-    echo "DASHBOARD_PUBLIC_URL=${DASHBOARD_PUBLIC_URL:-https://leads.shamrockbailbonds.biz}"
-    echo "DOCUSEAL_URL=${DOCUSEAL_URL:-https://sign.shamrockbailbonds.biz}"
-    echo "TRAPE_SERVER_URL=${TRAPE_SERVER_URL:-https://leads.shamrockbailbonds.biz}"
-    echo "OSINT_WORKER_URL=${OSINT_WORKER_URL:-http://osint-worker:5065}"
-    echo "OSINT_ALLOW_INSECURE=${OSINT_ALLOW_INSECURE:-true}"
-    echo "DASHBOARD_PIN=${DASHBOARD_PIN:-codex-dev-pin}"
-    echo "SECRET_KEY=${SECRET_KEY:-codex-dev-secret-not-for-prod}"
-  } >> "$ENV_FILE"
-  [ -n "${MONGODB_URI:-}" ] && echo "MONGODB_URI=${MONGODB_URI}" >> "$ENV_FILE"
-  [ -n "${OPENAI_API_KEY:-}" ] && echo "OPENAI_API_KEY=${OPENAI_API_KEY}" >> "$ENV_FILE"
-  [ -n "${DOCUSEAL_API_KEY:-}" ] && echo "DOCUSEAL_API_KEY=${DOCUSEAL_API_KEY}" >> "$ENV_FILE"
-  [ -n "${HUNTER_API_KEY:-}" ] && echo "HUNTER_API_KEY=${HUNTER_API_KEY}" >> "$ENV_FILE"
-  [ -n "${OSINT_WORKER_KEY:-}" ] && echo "OSINT_WORKER_KEY=${OSINT_WORKER_KEY}" >> "$ENV_FILE"
-  [ -n "${GAS_API_KEY:-}" ] && echo "GAS_API_KEY=${GAS_API_KEY}" >> "$ENV_FILE"
-  echo "==> wrote ${ENV_FILE}"
-else
-  echo "==> ${ENV_FILE} already exists — leaving in place"
-fi
+for rc in "${HOME:-/tmp}/.bashrc" "${HOME:-/tmp}/.profile" "${HOME:-/tmp}/.bash_profile"; do
+  touch "$rc"
+  if ! grep -q 'shamrock-codex.sh' "$rc" 2>/dev/null; then
+    echo "[ -f $(_q "$PROFILE_SNIPPET") ] && . $(_q "$PROFILE_SNIPPET")" >> "$rc"
+  fi
+done
 
 export PYTHONPATH="${ROOT}:${PYTHONPATH:-}"
-echo "==> python=$(command -v python3) $(python3 -c 'import sys; print(sys.version.split()[0])' 2>/dev/null || true)"
+echo "==> python=$PY $($PY -c 'import sys; print(sys.version.split()[0])' 2>/dev/null || true)"
 echo "==> Codex setup OK"
 exit 0
