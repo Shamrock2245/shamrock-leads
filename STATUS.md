@@ -1,6 +1,7 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-12  
+> **Last verified:** 2026-08-13  
+> **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
 > **Role:** Bond **Auto-CRM** pillar of **Shamrock’s Platform** (not Bail School LMS)  
@@ -14,6 +15,10 @@
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
+
+## VPS resize (2026-08-13)
+
+Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings for the scraper, dashboard, Obscura, OSINT, Postiz, Traccar, and OpenCut were raised in-repo and applied live (`docs/runbooks/vps-ccx33-resize.md`). `SCRAPER_MAX_CONCURRENT` stays **8** until one full cycle is green. **Root disk is still ~38 GB** — grow it to 160–240 GB in the Cloud Console (CPU/RAM resize does not grow the volume). Chromium launchers now share lean flags (`scrapers/chromium_flags.py`). Paperwork MVP: staff copy/send **indemnitor + defendant** branded links (`/sign/{packet}/{role}`).
 
 ## Production audit update (2026-08-12)
 

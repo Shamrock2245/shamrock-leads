@@ -249,15 +249,11 @@ class PatchrightBrowserManager:
         
         pw = await async_playwright().__aenter__()
         
-        launch_args = {
-            "headless": True,
-            "args": [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-gpu",
-            ],
-        }
+        from scrapers.chromium_flags import playwright_launch_kwargs
+
+        launch_args = playwright_launch_kwargs(
+            extra_args=["--disable-blink-features=AutomationControlled"]
+        )
         
         if proxy:
             launch_args["proxy"] = {"server": proxy}
@@ -325,10 +321,10 @@ class UndetectedChromeManager:
         
         if headless:
             options.add_argument("--headless=new")
-        
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
+
+        from scrapers.chromium_flags import CHROMIUM_MEMORY_ARGS
+        for arg in CHROMIUM_MEMORY_ARGS:
+            options.add_argument(arg)
         options.add_argument("--disable-blink-features=AutomationControlled")
         
         if proxy:

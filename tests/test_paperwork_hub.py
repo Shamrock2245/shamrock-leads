@@ -181,3 +181,68 @@ def test_post_release_remedy_doc_endpoint(mock_get_col, test_app):
     assert data["doc_id"].startswith("REMEDY-")
     assert "Motion to Vacate" in data["message"]
     mock_remedy_col.insert_one.assert_called_once()
+
+
+_DELIVER_PACKET = {
+    "packet_id": "PKT-DELIVER",
+    "defendant_name": "John Doe",
+    "indemnitor_name": "Mary Doe",
+    "indemnitor_phone": "2395550100",
+    "defendant_phone": "2395550199",
+    "intake_id": "INT-1",
+    "docuseal_submitters": [
+        {"role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind", "phone": "2395550100"},
+        {"role": "Defendant", "sign_url": "https://sign.shamrockbailbonds.biz/s/def", "phone": "2395550199"},
+    ],
+}
+
+
+@patch("dashboard.routers.paperwork.get_bb_client")
+@patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
+def test_deliver_rejects_unknown_phone(mock_load, mock_bb, test_app):
+    mock_load.return_value = dict(_DELIVER_PACKET)
+    client = TestClient(test_app)
+    res = client.post(
+        "/api/paperwork/PKT-DELIVER/deliver",
+        json={"phone": "3055559999", "role": "indemnitor"},
+    )
+    assert res.status_code == 403
+    mock_bb.assert_not_called()
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+@patch("dashboard.routers.paperwork.get_bb_client")
+@patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
+def test_deliver_fails_closed_when_bb_fails(mock_load, mock_bb, mock_get_col, test_app):
+    mock_load.return_value = dict(_DELIVER_PACKET)
+    mock_bb.return_value.send_text = AsyncMock(return_value={"success": False, "error": "down"})
+    packets = AsyncMock()
+    mock_get_col.return_value = packets
+    client = TestClient(test_app)
+    res = client.post(
+        "/api/paperwork/PKT-DELIVER/deliver",
+        json={"role": "indemnitor"},
+    )
+    assert res.status_code == 502
+    packets.update_one.assert_not_called()
+
+
+@patch("dashboard.routers.paperwork.get_collection")
+@patch("dashboard.routers.paperwork.get_bb_client")
+@patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
+def test_deliver_defendant_uses_defendant_phone(mock_load, mock_bb, mock_get_col, test_app):
+    mock_load.return_value = dict(_DELIVER_PACKET)
+    mock_bb.return_value.send_text = AsyncMock(return_value={"success": True})
+    mock_get_col.return_value = AsyncMock()
+    client = TestClient(test_app)
+    res = client.post(
+        "/api/paperwork/PKT-DELIVER/deliver",
+        json={"role": "defendant"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["role"] == "defendant"
+    assert data["magic_link"].endswith("/sign/PKT-DELIVER/defendant")
+    sent_guid = mock_bb.return_value.send_text.call_args[0][0]
+    assert sent_guid.endswith("2395550199")

@@ -134,11 +134,12 @@ class BaseScraper(ABC):
         co.auto_port()
         co.headless(True)
         co.set_argument("--headless=new")
-        co.set_argument("--no-sandbox")
-        co.set_argument("--disable-dev-shm-usage")
-        co.set_argument("--disable-gpu")
         co.set_argument("--ignore-certificate-errors")
         co.set_argument("--ignore-ssl-errors")
+
+        # Lean Chromium (shared flags) — process-per-site off, low-end mode
+        from scrapers.chromium_flags import apply_drission_memory_flags
+        apply_drission_memory_flags(co)
 
         # ── Stealth: Anti-bot evasion ──
         # Disable automation detection flags
@@ -159,20 +160,8 @@ class BaseScraper(ABC):
             "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         )
 
-        # Chrome memory optimization and crash mitigation for Docker
-        co.set_argument("--disable-background-networking")
-        co.set_argument("--disable-background-timer-throttling")
-        co.set_argument("--disable-backgrounding-occluded-windows")
-        co.set_argument("--disable-breakpad")
-        co.set_argument("--disable-component-update")
-        co.set_argument("--disable-domain-reliability")
-        co.set_argument("--disable-hang-monitor")
-        co.set_argument("--disable-ipc-flooding-protection")
-        co.set_argument("--disable-renderer-backgrounding")
-        co.set_argument("--disable-sync")
         # Suppress "Chrome is being controlled by automated software" infobar
         co.set_argument("--disable-infobars")
-        co.set_argument("--disable-extensions")
 
         # Critical: set browser path for Docker where chromium lives at /usr/bin/chromium
         chrome_path = os.getenv("CHROME_PATH")

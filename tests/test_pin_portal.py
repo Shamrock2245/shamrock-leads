@@ -11,6 +11,35 @@ app.include_router(pin_portal_router)
 client = TestClient(app)
 
 
+def test_public_sign_redirect_prefers_role():
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-TEST1",
+        "voided": False,
+        "status": "pending_signature",
+        "docuseal_submitters": [
+            {"role": "indemnitor", "slug": "ind-aaa", "status": "pending"},
+            {"role": "Defendant", "slug": "def-bbb", "status": "pending"},
+        ],
+    })
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets):
+        response = client.get("/sign/PKT-TEST1/defendant", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("/s/def-bbb")
+
+
+def test_extract_signing_link_prefers_indemnitor():
+    from dashboard.routers.pin_portal import _extract_signing_link_from_packet
+    link = _extract_signing_link_from_packet({
+        "packet_id": "PKT-X",
+        "docuseal_submitters": [
+            {"role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind"},
+            {"role": "Defendant", "sign_url": "https://sign.shamrockbailbonds.biz/s/def"},
+        ],
+    })
+    assert link.endswith("/s/ind")
+
+
 def test_portal_ui_route():
     response = client.get("/api/portal/portal-ui", follow_redirects=True)
     assert response.status_code == 200

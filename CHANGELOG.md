@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-13 (CCX33)
+
+### Added
+- **Per-party paperwork links** — staff get Indemnitor + Defendant copy/send cards after finalize. Branded URLs `https://paperwork.shamrockbailbonds.biz/sign/{packet}/{role}` redirect to the live DocuSeal slug. Deliver uses the party’s stored phone, fail-closes on BlueBubbles failure, and refuses unknown numbers.
+
+### Changed
+- **Hetzner CCX33 resource ceilings** — `shamrock-leads` 4g/2cpu → 8g/4cpu, dashboard 2g/1.5 → 3g/2.0, Obscura 512m → 1g, OSINT 1g → 2g, Postiz 2g → 3g, Traccar 512m → 768m, OpenCut 2g → 1.5g. Runbook: `docs/runbooks/vps-ccx33-resize.md`. `SCRAPER_MAX_CONCURRENT` stays 8 until a full cycle is green.
+- Daily `maintenance/docker-prune.sh` now ages BuildKit cache at 24h and vacuums runner diag / journal / apt cache (root disk was not grown with the RAM resize).
+- **Chromium RAM** — shared `scrapers/chromium_flags.py` (low-end mode, renderer limit 2, site-isolation off) wired into DrissionPage, Playwright/Patchright, JailTracker, Seminole. Scraper image sets `MALLOC_ARENA_MAX=2`.
+- Deploy no longer recreates Postiz on a compose-wide mem_limit tweak (Mastra 1600-col crash). Recreate only when `social/` or the repair script changes.
+
 ## [Unreleased] — 2026-08-12 (production closeout)
 
 ### Added

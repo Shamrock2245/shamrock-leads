@@ -141,7 +141,7 @@ const SLPaperwork = {
             <button type="button" class="inv-btn" onclick="SLPaperwork.openSwipeSimpleModal('${this._esc(pid)}', ${amt}, '${this._esc(p.indemnitor_phone || p.phone || '')}', '${this._esc(p.indemnitor_email || p.email || '')}')" style="font-size:10px;padding:2px 6px;color:#38bdf8" title="SwipeSimple credit card link">💳 Card</button>
             <button type="button" class="inv-btn" onclick="SLPaperwork.openCashModal('${this._esc(pid)}', ${amt})" style="font-size:10px;padding:2px 6px;color:#4ade80" title="Log cash payment">💵 Cash</button>
             ${p.drive_url ? `<a href="${this._esc(p.drive_url)}" target="_blank" class="inv-btn" style="font-size:10px;padding:2px 6px;color:#c084fc" title="View signed PDF folder in Drive">☁️ Drive</a>` : ''}
-            ${status !== 'voided' ? `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px;color:#34d399" title="Deliver via BlueBubbles iMessage / SMS">📱 Deliver</button>` : ''}
+            ${this._partyActionButtons(p)}
           </div>
         </td>
       `;
@@ -551,17 +551,89 @@ const SLPaperwork = {
     if (modal) { modal.style.display = 'none'; modal.classList.remove('active'); }
   },
 
-  async deliverPacket(packetId) {
-    if (!confirm(`Deliver paperwork packet ${packetId} via BlueBubbles iMessage / SMS?`)) return;
+  _partyActionButtons(p) {
+    const pid = p.packet_id || '';
+    const parties = Array.isArray(p.parties) ? p.parties : [];
+    if (!parties.length) {
+      if ((p.status || '') === 'voided') return '';
+      return `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${this._esc(pid)}')" style="font-size:10px;padding:2px 6px;color:#34d399" title="Deliver via iMessage / SMS">📱 Send</button>`;
+    }
+    return parties.map(party => {
+      const role = party.role || 'indemnitor';
+      const label = role === 'defendant' ? 'Def' : (role === 'coindemnitor' ? 'Co' : 'Ind');
+      const short = this._esc(pid);
+      const r = this._esc(role);
+      return `<button type="button" class="inv-btn" onclick="SLPaperwork.copyPartyLink('${short}','${r}')" style="font-size:10px;padding:2px 6px;color:#93c5fd" title="Copy ${this._esc(party.label || role)} sign link">📋 ${label}</button>`
+        + `<button type="button" class="inv-btn" onclick="SLPaperwork.deliverPacket('${short}','${r}')" style="font-size:10px;padding:2px 6px;color:#34d399" title="iMessage ${this._esc(party.label || role)}">📱 ${label}</button>`;
+    }).join('');
+  },
+
+  _partyFromCache(packetId, role) {
+    const pkt = (this._allPackets || []).find(p => p.packet_id === packetId) || {};
+    const parties = pkt.parties || [];
+    return parties.find(p => (p.role || '') === role) || parties[0] || null;
+  },
+
+  async copyPartyLink(packetId, role) {
+    const party = this._partyFromCache(packetId, role);
+    const url = party?.share_url || party?.sign_url || '';
+    if (!url) {
+      alert('No sign link for that party yet — finalize the packet first.');
+      return;
+    }
     try {
-      const res = await fetch(`/api/paperwork/${packetId}/deliver`, { method: 'POST', credentials: 'same-origin' });
+      await navigator.clipboard.writeText(url);
+      this._setApStatus(`Copied ${party.label || role} link.`, 'success');
+    } catch (err) {
+      prompt('Copy this signing link:', url);
+    }
+  },
+
+  async deliverPacket(packetId, role) {
+    const party = this._partyFromCache(packetId, role);
+    const who = party?.label || role || 'client';
+    if (!confirm(`Send the ${who} signing link via iMessage / SMS?`)) return;
+    try {
+      const res = await fetch(`/api/paperwork/${packetId}/deliver`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: role || undefined, phone: party?.phone || '' }),
+      });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'Delivery failed');
-      alert(`📱 Paperwork delivered successfully to ${data.recipient || 'client'}`);
+      alert(`📱 ${who} link sent to ${data.recipient || party?.phone || 'client'}`);
       this.loadLivePackets();
     } catch (err) {
       alert(`❌ Delivery error: ${err.message}`);
     }
+  },
+
+  renderPartyCards(parties, packetId) {
+    const el = document.getElementById('pwApParties');
+    if (!el) return;
+    const rows = Array.isArray(parties) ? parties : [];
+    if (!rows.length) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = 'grid';
+    el.innerHTML = rows.map(p => {
+      const role = this._esc(p.role || '');
+      const pid = this._esc(packetId || '');
+      const url = this._esc(p.share_url || p.sign_url || '');
+      return `<div style="background:#0f172a;border:1px solid #334155;border-radius:10px;padding:12px">
+        <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em">${this._esc(p.label || p.role)}</div>
+        <div style="font-weight:700;margin:4px 0 8px">${this._esc(p.name || '—')}</div>
+        <div style="font-size:11px;color:#64748b;word-break:break-all;margin-bottom:8px">${url}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="inv-btn" onclick="SLPaperwork.copyPartyLink('${pid}','${role}')">📋 Copy link</button>
+          <button type="button" class="inv-btn" style="color:#34d399" onclick="SLPaperwork.deliverPacket('${pid}','${role}')">📱 Send iMessage</button>
+          <a class="inv-btn" href="${url}" target="_blank" rel="noopener">✍️ Open</a>
+        </div>
+      </div>`;
+    }).join('');
   },
 
   async loadConfig() {
@@ -1121,6 +1193,9 @@ const SLPaperwork = {
       })),
       field_overrides: this._collectFieldOverrides(),
       provider,
+      include_defendant: document.getElementById('pwApIncludeDefendant')
+        ? !!document.getElementById('pwApIncludeDefendant').checked
+        : true,
       signer_email: document.getElementById('pwApIndEmail')?.value || '',
       poa_number: document.getElementById('pwApPoa')?.value || '',
       routing_scenario: document.getElementById('pwApPoa')?.value ? 'all-in-one' : 'phase_1',
@@ -1136,20 +1211,22 @@ const SLPaperwork = {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
 
-      const link = data.signing_link ? `\nSigning link: ${data.signing_link}` : '';
       const ds = data.send_results?.docuseal;
       let providerMsg = '';
       if (ds) providerMsg += ds.success ? ' DocuSeal ✓' : ` DocuSeal ✗ (${ds.error || 'fail'})`;
-
+      const parties = data.parties || ds?.parties || [];
+      if (parties.length) {
+        const idx = (this._allPackets || []).findIndex(p => p.packet_id === data.packet_id);
+        const merged = { ...(idx >= 0 ? this._allPackets[idx] : {}), packet_id: data.packet_id, parties };
+        if (idx >= 0) this._allPackets[idx] = merged;
+        else this._allPackets.unshift(merged);
+      }
       this._setApStatus(
-        `Packet ${data.packet_id} finalized · hydration ${data.hydration?.hydration_score ?? '—'}% · flattened=${data.flattened}${providerMsg}`,
+        `Packet ${data.packet_id} ready · ${parties.length || 0} signer link(s) · hydration ${data.hydration?.hydration_score ?? '—'}%${providerMsg}`,
         'success'
       );
-      alert(`Packet ready: ${data.packet_id}\nStatus: ${data.status}${providerMsg}${link}`);
+      this.renderPartyCards(parties, data.packet_id);
       this.loadLivePackets();
-      if (data.signing_link) {
-        // keep modal open so staff can copy link
-      }
     } catch (err) {
       this._setApStatus(`Finalize failed: ${err.message}`, 'error');
     }

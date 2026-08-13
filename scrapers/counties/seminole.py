@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.chromium_flags import chromium_launch_args, playwright_launch_kwargs
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -123,10 +124,7 @@ class SeminoleCountyScraper(BaseScraper):
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-            )
+            browser = p.chromium.launch(**playwright_launch_kwargs())
             try:
                 page = browser.new_page()
                 page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=60000)
@@ -153,12 +151,7 @@ class SeminoleCountyScraper(BaseScraper):
             browser = await uc.start(
                 browser_executable_path="/usr/bin/chromium",
                 headless=True,
-                browser_args=[
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-extensions",
-                ],
+                browser_args=chromium_launch_args(),
             )
             page = await browser.get(PORTAL_URL)
             await asyncio.sleep(5)

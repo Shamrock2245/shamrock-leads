@@ -253,8 +253,11 @@ jobs:
             # (gitroomhq/postiz-app#1473) and /auth 500s.
             if docker ps -a --format '{{.Names}}' | grep -qx shamrock-postiz; then
               echo ""
-              if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(docker-compose.yml|social/)'; then
-                echo "📱 Social/compose changed — start Postiz (no image pull)"
+              # Recreate Postiz only when its own service/env or social/ app
+              # code changed. A compose-wide mem_limit tweak must NOT
+              # force-recreate Postiz (prisma/Mastra 1600-col crash).
+              if git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -qE '^(social/|scripts/repair_postiz_mastra\.sh)'; then
+                echo "📱 Social app changed — start Postiz (no image pull)"
                 docker compose --profile social up -d --no-deps postiz 2>/dev/null || true
                 bash scripts/repair_postiz_mastra.sh || true
               else

@@ -65,8 +65,10 @@ class JailTrackerBaseScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         from playwright.sync_api import sync_playwright
 
+        from scrapers.chromium_flags import playwright_launch_kwargs
+
         pw = sync_playwright().start()
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(**playwright_launch_kwargs())
 
         try:
             ctx = browser.new_context(

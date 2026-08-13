@@ -222,11 +222,11 @@ def launch_cf_browser(
     sync_playwright, engine = _launch_sync_playwright()
     pw = sync_playwright().start()
 
-    launch_args = [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-dev-shm-usage",
-        "--no-sandbox",
-    ]
+    from scrapers.chromium_flags import chromium_launch_args
+
+    launch_args = chromium_launch_args(
+        ["--disable-blink-features=AutomationControlled"]
+    )
 
     # Prefer system Chrome when available (better CF behavior than stock chromium)
     browser = None

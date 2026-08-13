@@ -46,10 +46,16 @@ def _digits_phone(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())[-10:]
 
 
-def _extract_signing_link_from_packet(doc: Optional[dict]) -> str:
+def _extract_signing_link_from_packet(doc: Optional[dict], role: Optional[str] = None) -> str:
     """Pull the best DocuSeal/sign URL from a paperwork_packets document."""
     if not doc or not isinstance(doc, dict):
         return ""
+    from dashboard.services.paperwork_signers import party_signers_from_packet, pick_party
+
+    parties = party_signers_from_packet(doc)
+    chosen = pick_party(parties, role=role)
+    if chosen and chosen.get("sign_url"):
+        return chosen["sign_url"]
     for key in ("signing_link", "magic_link", "sign_url", "embed_src"):
         val = doc.get(key)
         if isinstance(val, str) and val.startswith("http"):
@@ -59,25 +65,6 @@ def _extract_signing_link_from_packet(doc: Optional[dict]) -> str:
         for u in links:
             if isinstance(u, str) and u.startswith("http"):
                 return u
-    submitters = doc.get("docuseal_submitters") or doc.get("submitters") or []
-    if isinstance(submitters, list):
-        for s in submitters:
-            if not isinstance(s, dict):
-                continue
-            for k in ("sign_url", "embed_src", "slug"):
-                v = s.get(k)
-                if isinstance(v, str) and v.startswith("http"):
-                    return v
-            slug = s.get("slug")
-            if isinstance(slug, str) and slug and not slug.startswith("http"):
-                host = (
-                    os.getenv("DOCUSEAL_URL")
-                    or os.getenv("DOCUSEAL_HOST")
-                    or "https://sign.shamrockbailbonds.biz"
-                ).rstrip("/")
-                if not host.startswith("http"):
-                    host = f"https://{host}"
-                return f"{host}/s/{slug}"
     return ""
 
 
@@ -156,7 +143,11 @@ async def _resolve_packet_for_client(
             ),
         }
 
-    link = _extract_signing_link_from_packet(doc)
+    from dashboard.services.paperwork_signers import party_signers_from_packet, pick_party
+
+    parties = party_signers_from_packet(doc)
+    chosen = pick_party(parties, phone=phone)
+    link = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc)
     defendant = str(doc.get("defendant_name") or doc.get("Defendant_Name") or "")
     packet_id = str(doc.get("packet_id") or doc.get("_id") or "")
     status = str(doc.get("status") or "pending")
@@ -168,6 +159,8 @@ async def _resolve_packet_for_client(
             "packet_id": packet_id,
             "defendant_name": defendant,
             "status": status or "pending_signature",
+            "parties": parties,
+            "role": (chosen or {}).get("role") or "",
             "message": "Packet ready — open your e-sign documents.",
         }
 
@@ -177,6 +170,8 @@ async def _resolve_packet_for_client(
         "packet_id": packet_id,
         "defendant_name": defendant,
         "status": status,
+        "parties": parties,
+        "role": "",
         "message": (
             "We found your case file, but the e-sign link is not ready yet. "
             "Please call (239) 332-2245 and we will resend your signing link."
@@ -667,8 +662,62 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "packet_id": meta.get("packet_id") or "",
         "defendant_name": meta.get("defendant_name") or "",
         "packet_status": meta.get("status") or "",
+        "parties": meta.get("parties") or [],
+        "role": meta.get("role") or "",
         "message": meta.get("message") or "",
     }
+
+
+async def _redirect_to_party_sign(packet_id: str, role: Optional[str] = None):
+    """302 the client to the live DocuSeal slug for this packet + role."""
+    from fastapi.responses import RedirectResponse
+    from dashboard.services.paperwork_signers import (
+        party_signers_from_packet,
+        pick_party,
+    )
+
+    packets = get_collection("paperwork_packets")
+    doc = None
+    try:
+        doc = await packets.find_one(
+            {
+                "packet_id": packet_id,
+                "voided": {"$ne": True},
+                "status": {"$nin": ["voided", "cancelled", "canceled"]},
+            }
+        )
+    except Exception:
+        doc = None
+    if not doc:
+        try:
+            doc = await packets.find_one({"packet_id": packet_id})
+        except Exception:
+            doc = None
+    if not doc:
+        return HTMLResponse(
+            "<!DOCTYPE html><html><body style='font-family:sans-serif;background:#0b0f19;color:#f8fafc;"
+            "padding:32px;text-align:center'><h1>Link not found</h1>"
+            "<p>This signing link is expired or invalid. Call (239) 332-2245.</p></body></html>",
+            status_code=404,
+        )
+    parties = party_signers_from_packet(doc)
+    chosen = pick_party(parties, role=role)
+    url = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc, role=role)
+    if not url:
+        return HTMLResponse(
+            "<!DOCTYPE html><html><body style='font-family:sans-serif;background:#0b0f19;color:#f8fafc;"
+            "padding:32px;text-align:center'><h1>Signature not ready</h1>"
+            "<p>Ask your bond agent to resend the paperwork. (239) 332-2245.</p></body></html>",
+            status_code=404,
+        )
+    return RedirectResponse(url=url, status_code=302)
+
+
+@portal_page_router.get("/sign/{packet_id}")
+@portal_page_router.get("/sign/{packet_id}/{role}")
+async def public_sign_redirect(packet_id: str, role: Optional[str] = None):
+    """Branded client URL → DocuSeal submitter form. No staff PIN."""
+    return await _redirect_to_party_sign(packet_id, role)
 
 
 def _is_paperwork_host(request: Request) -> bool:

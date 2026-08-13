@@ -653,11 +653,14 @@ async def list_all_packets(
         packets = await cursor.to_list(length=limit)
 
         from datetime import date
+        from dashboard.services.paperwork_signers import party_signers_from_packet
+
         for p in packets:
             for field in ("created_at", "updated_at", "delivered_at", "signnow_sent_at", "signed_at"):
                 val = p.get(field)
                 if isinstance(val, (datetime, date)):
                     p[field] = val.isoformat()
+            p["parties"] = party_signers_from_packet(p)
 
         # Summary KPIs
         total = await packets_col.count_documents({})
@@ -768,6 +771,8 @@ async def get_packet(packet_id: str):
             if isinstance(val, (datetime, date)):
                 packet[field] = val.isoformat()
 
+        from dashboard.services.paperwork_signers import party_signers_from_packet
+        packet["parties"] = party_signers_from_packet(packet)
         return packet
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -784,55 +789,69 @@ async def deliver_packet(request: Request, packet_id: str):
     Includes a geolocator link as required by project standards.
     """
     try:
-        data = (await request.json()) or {}
-        phone = data.get("phone", "").strip()
+        try:
+            data = (await request.json()) or {}
+        except Exception:
+            data = {}
         custom_message = data.get("message", "")
         include_geo = data.get("include_geo", True)
-
-        if not phone:
-            return JSONResponse({"error": "phone is required"}, status_code=400)
+        role = (data.get("role") or "").strip().lower() or None
 
         packet = await _load_packet(packet_id)
         if not packet:
             return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
-        # Policy Rule 4: verify recipient phone matches stored indemnitor phone
-        stored_phone = packet.get("indemnitor_phone", "")
-        if stored_phone:
-            # Normalize both to digits only for comparison
-            def _digits(p: str) -> str:
-                return "".join(c for c in p if c.isdigit())
-            if _digits(stored_phone) and _digits(phone) and _digits(stored_phone) != _digits(phone):
-                logger.warning(
-                    "[paperwork] deliver_packet: phone mismatch for packet %s — "
-                    "stored=%s, provided=%s. Proceeding but logging for audit.",
-                    packet_id, stored_phone, phone,
-                )
-                audit_events = get_collection("audit_events")
-                await audit_events.insert_one({
-                    "source": "paperwork_deliver",
-                    "event_type": "phone_mismatch_warning",
-                    "packet_id": packet_id,
-                    "stored_phone": stored_phone,
-                    "provided_phone": phone,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+        from dashboard.services.paperwork_signers import (
+            party_signers_from_packet,
+            pick_party,
+            branded_sign_url,
+        )
+
+        parties = party_signers_from_packet(packet)
+        chosen = pick_party(parties, role=role, phone=data.get("phone"))
+        phone = (data.get("phone") or "").strip() or (chosen or {}).get("phone") or ""
+        if not phone:
+            phone = (packet.get("indemnitor_phone") or packet.get("defendant_phone") or "").strip()
+        phone = "".join(c for c in phone if c.isdigit())[-10:]
+        if not phone:
+            return JSONResponse(
+                {"error": "phone is required — add an indemnitor or defendant mobile first"},
+                status_code=400,
+            )
+
+        # Policy: recipient must match a known party on this packet (fail closed).
+        known_digits = {
+            "".join(c for c in str(p.get("phone") or "") if c.isdigit())[-10:]
+            for p in parties
+            if p.get("phone")
+        }
+        for key in ("indemnitor_phone", "defendant_phone"):
+            digits = "".join(c for c in str(packet.get(key) or "") if c.isdigit())[-10:]
+            if digits:
+                known_digits.add(digits)
+        if known_digits and phone not in known_digits:
+            logger.warning(
+                "[paperwork] deliver_packet: phone mismatch for packet %s role=%s — blocked",
+                packet_id,
+                (chosen or {}).get("role") or role or "",
+            )
+            return JSONResponse(
+                {"error": "Recipient phone does not match indemnitor or defendant on this packet"},
+                status_code=403,
+            )
 
         defendant_name = packet.get("defendant_name", "your defendant")
         intake_id = packet.get("intake_id", "")
-
-        # Build the signing magic link
-        _settings = get_settings()
-        portal_base = _settings.portal_base_url
-        dashboard_url = _settings.dashboard_public_url or portal_base
-        magic_link = f"{portal_base}/sign/{packet_id}"
+        party_role = (chosen or {}).get("role") or role or "indemnitor"
+        magic_link = (chosen or {}).get("share_url") or branded_sign_url(packet_id, party_role)
 
         # Build the message
         if custom_message:
             message = custom_message
         else:
+            who = "your" if party_role == "defendant" else f"{defendant_name}'s"
             message = (
-                f"Hi! Here is your Shamrock Bail Bonds paperwork for {defendant_name}.\n\n"
+                f"Hi! Here is the Shamrock Bail Bonds paperwork for {who} bond.\n\n"
                 f"Please review and sign here:\n{magic_link}\n\n"
                 f"Questions? Call us: 239-332-2245\n"
                 f"Shamrock Bail Bonds — Fort Myers, FL"
@@ -847,6 +866,17 @@ async def deliver_packet(request: Request, packet_id: str):
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
         chat_guid = f"iMessage;-;{phone}"
         result = await bb.send_text(chat_guid, message)
+        sent_ok = bool(result and result.get("success"))
+        if not sent_ok:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": (result or {}).get("error") or "BlueBubbles send failed",
+                    "packet_id": packet_id,
+                    "role": party_role,
+                },
+                status_code=502,
+            )
 
         now = datetime.now(timezone.utc)
         packets_col = get_collection("paperwork_packets")
@@ -872,9 +902,11 @@ async def deliver_packet(request: Request, packet_id: str):
         from dashboard.routers.helpers import mask_phone
         logger.info("[paperwork] Packet %s delivered to %s", packet_id, mask_phone(phone))
         return {
-            "success": result.get("success", False),
+            "success": True,
             "packet_id": packet_id,
-            "delivered_to": phone,
+            "delivered_to": mask_phone(phone),
+            "recipient": mask_phone(phone),
+            "role": party_role,
             "magic_link": magic_link,
             "bb_result": result,
         }
@@ -2099,13 +2131,23 @@ async def packet_builder_finalize(request: Request):
                         send_email=bool(body.get("send_email", False)),
                         include_defendant=bool(body.get("include_defendant", True)),
                     )
-                    links = [
-                        s.get("sign_url")
-                        for s in (docuseal_result.get("submitters") or [])
-                        if s.get("sign_url")
-                    ]
-                    # Prefer indemnitor link first for staff clipboard
-                    signing_link = links[0] if links else ""
+                    from dashboard.services.paperwork_signers import (
+                        party_signers_from_submitters,
+                        pick_party,
+                    )
+
+                    parties = party_signers_from_submitters(
+                        docuseal_result.get("submitters") or [],
+                        packet_id=packet_id,
+                        indemnitor_name=ind.get("name") or "",
+                        defendant_name=def_.get("name") or "",
+                        indemnitor_phone=ind.get("phone") or "",
+                        defendant_phone=def_.get("phone") or "",
+                    )
+                    links = [p.get("share_url") or p.get("sign_url") for p in parties if p.get("sign_url")]
+                    signing_link = (pick_party(parties, role="indemnitor") or {}).get("share_url") or (
+                        links[0] if links else ""
+                    )
                     status = "pending_signature"
                     send_results["docuseal"] = {
                         "success": True,
@@ -2114,6 +2156,7 @@ async def packet_builder_finalize(request: Request):
                         "submitters": docuseal_result.get("submitters"),
                         "signing_link": signing_link,
                         "sign_links": links,
+                        "parties": parties,
                     }
             except Exception as ds_exc:
                 logger.exception("DocuSeal finalize failed for packet %s", packet_id)
@@ -2278,6 +2321,8 @@ async def packet_builder_finalize(request: Request):
             "docuseal_submission_id": (docuseal_result or {}).get("submission_id"),
             "docuseal_template_id": (send_results.get("docuseal") or {}).get("template_id"),
             "docuseal_submitters": (docuseal_result or {}).get("submitters") or [],
+            "parties": (send_results.get("docuseal") or {}).get("parties") or [],
+            "defendant_phone": def_.get("phone") or "",
             "docuseal_status": "sent" if (docuseal_result or {}).get("submission_id") else None,
             "docuseal_sent_at": now.isoformat() if (docuseal_result or {}).get("submission_id") else None,
             "adobe_agreement_id": (adobe_result or {}).get("agreement_id"),
@@ -2322,6 +2367,7 @@ async def packet_builder_finalize(request: Request):
             "manifest": manifest,
             "self_indemnitor": bool(ctx.get("self_indemnitor")),
             "signing_link": signing_link,
+            "parties": (send_results.get("docuseal") or {}).get("parties") or [],
             "send_results": send_results,
             "flattened": bool(flat_bytes),
             "adobe_pdf_meta": adobe_pdf_meta,

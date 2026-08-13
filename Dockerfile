@@ -44,6 +44,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROMIUM_PATH=/usr/bin/chromium
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROME_PATH=/usr/bin/chromium
+# Cut glibc arena waste in long-lived scraper processes (8 concurrent Chromium)
+ENV MALLOC_ARENA_MAX=2 \
+    PYTHONMALLOC=malloc \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 # Working directory
 WORKDIR /app

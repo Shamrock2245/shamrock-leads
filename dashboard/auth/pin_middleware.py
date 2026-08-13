@@ -67,6 +67,7 @@ OPEN_PREFIXES = (
     "/api/automation/",
     "/g/",
     "/c/",
+    "/sign/",
     "/api/portal",
     "/done",
     "/paperwork",

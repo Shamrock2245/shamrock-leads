@@ -5164,6 +5164,9 @@
               <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
                 <input type="checkbox" id="pwApPaymentPlan" checked> Include payment-plan docs
               </label>
+              <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
+                <input type="checkbox" id="pwApIncludeDefendant" checked> Include defendant signature
+              </label>
               <label style="font-size:12px;color:#94a3b8" title="E-sign is DocuSeal only for new packets">E-sign provider</label>
               <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="DocuSeal only — SignNow retired for new work">
                 <option value="docuseal" selected>☘️ DocuSeal (self-hosted · only)</option>
@@ -5172,6 +5175,7 @@
               <span id="pwApAdobePdfBadge" style="font-size:11px;color:#64748b">PDF Services: —</span>
             </div>
             <div id="pwApStatus" style="display:none;font-size:12px;padding:10px 12px;border-radius:8px"></div>
+            <div id="pwApParties" style="display:none;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px"></div>
           </div>
           <div class="inv-modal-footer" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
             <button type="button" class="btn btn-secondary" onclick="SLPaperwork.closeAdaptivePacketModal()">Cancel</button>
@@ -6098,7 +6102,7 @@
 <script defer src="/sl-osint.js?v=3"></script>
 <script defer src="/sl-palantir.js?v=2"></script>
 <script defer src="/sl-alpr.js?v=2"></script>
-<script defer src="/sl-paperwork.js?v=2"></script>
+<script defer src="/sl-paperwork.js?v=3"></script>
 <script defer src="/sl-automations.js?v=2"></script>
 <script defer src="/sl-relationships.js?v=1"></script>
 <script defer src="/sl-family-tree.js?v=1"></script>
