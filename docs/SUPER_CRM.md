@@ -87,7 +87,7 @@ Local blanks (flatten / Adobe / offline):
 | `templates/palmetto/` | Palmetto surety forms + appearance bond |
 
 **Packet rule:** OSI = agnostic + `osi/` · Palmetto = agnostic + `palmetto/`.  
-New e-sign packets use the self-hosted **DocuSeal** service. SignNow remains read-only legacy history; appearance bonds remain print/wet-ink.
+E-sign packets use the self-hosted **DocuSeal** service only; appearance bonds remain print/wet-ink.
 
 Must collect before send: defendant identity & descriptors, booking/charges/court, bond $, indemnitor PII (address, DL, SSN for SSA, refs, employment, vehicle), surety, POA (phase 2), agency constants.
 
@@ -100,7 +100,7 @@ Full field contract: `docs/specs/crm-ops-ia-revamp.md` §6.
 ### Ops checklist
 
 1. `python scripts/check_ecosystem_secrets.py --strict`
-2. Set VPS `.env`: `SECRET_KEY`, `DASHBOARD_PIN`, `GAS_API_KEY`, `WIX_WEBHOOK_SECRET`, Mongo, SignNow, Twilio, Slack, BB
+2. Set VPS `.env`: `SECRET_KEY`, `DASHBOARD_PIN`, `GAS_API_KEY`, `WIX_WEBHOOK_SECRET`, Mongo, DocuSeal, Twilio, Slack, BB
 3. `ENV=production` (or `REQUIRE_DASHBOARD_PIN=true`) so empty PIN does not open the CRM
 4. `python scripts/mongo_indexes.py` after deploy
 5. `curl -s https://leads.shamrockbailbonds.biz/api/crm/health` (authenticated session or via SSH localhost)

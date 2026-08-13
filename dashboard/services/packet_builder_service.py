@@ -3,7 +3,7 @@ ShamrockLeads — Adaptive Packet Builder Service
 ================================================
 Resolves defendant + indemnitor from the matching system, builds a robust
 field-hydration map, assembles drag-and-drop packet manifests, flattens
-final PDFs, and routes to SignNow (primary) or Adobe Sign / Acrobat (optional).
+final PDFs, and routes new e-sign packets to DocuSeal only. Adobe PDF Services may still be used only for local PDF flattening/previews.
 
 Local blank PDFs (see dashboard/paperwork_pdf_service.py):
   OSI packet      = templates/surety-agnostic-shamrock/* + templates/osi/*
@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# Catalog key (UI drag-drop) → SignNow / blank-PDF template slug
+# Catalog key (UI drag-drop) → DocuSeal/blank-PDF template slug
 CATALOG_TO_TEMPLATE: Dict[str, str] = {
     "master_bail_application": "defendant-application",
     "indemnity_agreement": "indemnity-agreement",
@@ -66,7 +66,7 @@ CATALOG_TO_TEMPLATE: Dict[str, str] = {
 }
 
 # Appearance bonds: stored unsigned, printed, wet-ink signed, taken to jail.
-# Never included in SignNow or Adobe Sign invites.
+# Never included in DocuSeal e-sign invites; appearance bonds require wet ink.
 PRINT_ONLY_TEMPLATES = frozenset({"appearance-bond"})
 
 APPEARANCE_BOND_PROCEDURE = (
@@ -418,8 +418,7 @@ def apply_self_indemnitor(context: Dict[str, Any], pin: str) -> Dict[str, Any]:
 
 def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Adaptive multi-alias field map for SignNow / local PDF hydration.
-    Mirrors conventions used by SignNowPacketService.build_prefill_fields.
+    Adaptive multi-alias field map for DocuSeal template prefill and local PDF previews.
     """
     def_ = context.get("defendant") or {}
     ind = context.get("indemnitor") or {}
@@ -603,7 +602,7 @@ def assemble_manifest(
         if k and k not in ordered_keys:
             ordered_keys.append(k)
 
-    # Always ensure core SignNow phase docs when building e-sign packets
+    # Core packet docs used by DocuSeal template prefill/preview workflows
     core_defaults = [
         "paperwork-header", "faq-cosigners", "indemnity_agreement",
         "master_bail_application", "promissory_note", "disclosure_statement",
@@ -727,26 +726,20 @@ async def send_via_adobe(
     return result
 
 
-# Active workflow: DocuSeal only. Legacy providers accepted only if ALLOW_LEGACY_ESIGN=true.
-_ESIGN_ACTIVE = frozenset({"docuseal", "none"})
-_ESIGN_LEGACY = frozenset({"signnow", "adobe", "both"})
-_ESIGN_PROVIDERS = _ESIGN_ACTIVE | _ESIGN_LEGACY
-
-
-def _legacy_esign_allowed() -> bool:
-    return os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() in ("1", "true", "yes")
+# Active workflow: DocuSeal only. The only non-signing option is `none` for
+# dry-run/staff prep workflows; SignNow and Adobe Sign are retired for new packets.
+_ESIGN_PROVIDERS = frozenset({"docuseal", "none"})
 
 
 def _normalize_esign_provider(p: Optional[str]) -> str:
-    """Map any preferred/stored value to the active e-sign policy."""
+    """Map any preferred/stored value to the active DocuSeal-only e-sign policy."""
     p = (p or "").lower().strip()
     if p in ("", "default"):
         return "docuseal"
-    if p in _ESIGN_LEGACY and not _legacy_esign_allowed():
-        # Hard cutover: never send new packets to SignNow/Adobe unless explicitly allowed
-        return "docuseal"
     if p in _ESIGN_PROVIDERS:
         return p
+    # Hard cutover: retired providers and unknown values never send new packets
+    # anywhere except DocuSeal.
     return "docuseal"
 
 
@@ -758,10 +751,9 @@ async def resolve_client_esign_provider(
     bond_case_id: Optional[str] = None,
 ) -> str:
     """
-    E-sign provider for the packet. **DocuSeal is the only active provider**
-    unless ALLOW_LEGACY_ESIGN=true (emergency / historical).
+    E-sign provider for the packet. **DocuSeal is the only active e-sign provider**.
 
-    Values: docuseal | none  (+ signnow|adobe|both only with legacy flag)
+    Values: docuseal | none (dry-run/no-send only)
     """
     from dashboard.extensions import get_collection
 
@@ -802,7 +794,7 @@ async def save_client_esign_provider(
 
     provider = _normalize_esign_provider(provider)
     if provider not in _ESIGN_PROVIDERS:
-        raise ValueError("provider must be docuseal | none (or legacy with ALLOW_LEGACY_ESIGN)")
+        raise ValueError("provider must be docuseal | none")
 
     now = datetime.now(timezone.utc)
     updated = []

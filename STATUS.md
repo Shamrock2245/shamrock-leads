@@ -26,7 +26,7 @@
 | Party portal | PIN lookup, ID OCR, address review UI, and role-specific DocuSeal launch exist. The unsafe ID-scan → unassigned packet shortcut is now fail-closed; packets must originate from a validated BondCase. Selfie enforcement and the full staff exception ceremony remain unfinished. |
 | Completion truth | DocuSeal webhook and enabled 30-minute DocuSeal poller update packet state; completed PDF Drive archival exists but still requires production OAuth/folder verification. |
 | Chase | Review-mode queue and staff resend/status endpoints exist. Client nudges remain human-gated; `full_auto` was not enabled. |
-| Legacy providers | New packet resolution is DocuSeal-only by default and the new-packet SignNow endpoint is retired. Historical SignNow records/poller remain available and disabled by default. |
+| E-sign provider | DocuSeal-only for active paperwork. SignNow is retired from the workflow; historical fields remain read-only for old records only. |
 | Remaining locked-spec gaps | Multi-indemnitor production walkthrough, staff second-PIN exception modal/audit, office kiosk walkthrough, dual-role FAQ initials, and collateral receipt serial OCR. No serial is inferred or invented. |
 
 Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings for the scraper, dashboard, Obscura, OSINT, Postiz, Traccar, and OpenCut were raised in-repo and applied live (`docs/runbooks/vps-ccx33-resize.md`). `SCRAPER_MAX_CONCURRENT` stays **8** until one full cycle is green. **Root disk is still ~38 GB** — grow it to 160–240 GB in the Cloud Console (CPU/RAM resize does not grow the volume). Chromium launchers now share lean flags (`scrapers/chromium_flags.py`). Paperwork MVP: staff copy/send **indemnitor + defendant** branded links (`/sign/{packet}/{role}`). OSINT worker key is minted and live (worker `/status` 200); Toutatis has an Instagram session. SPECTRA uses Hudson Rock (free), not HIBP. Hunter.io is wired for attorney email finder.
@@ -123,7 +123,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | SmartCOP base: direct before proxy | ✅ |
 | Defendants `normalize/batch` (Lee/Collier + 300) | ✅ **0 → 594** defendants |
 | Gilchrist | ⏳ no public DNS/host found |
-| SignNow token | checked this session (see logs) |
+| DocuSeal API/templates | must verify `DOCUSEAL_API_KEY`, `DOCUSEAL_TEMPLATE_ID_OSI`, and `DOCUSEAL_TEMPLATE_ID_PALMETTO` in production |
 
 ### Session follow-up (2026-07-24 — Manus prod-hardening)
 
@@ -147,19 +147,19 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | Bay County UniGUI: IIS 401 on HandleEvent (POST blocked, anti-scraping) | 🔴 blocked — server rejects all AJAX event requests from non-browser clients |
 | Lake reCAPTCHA: `SOLVECAPTCHA_KEY` IS set (Hillsborough uses it), token solved but API rejects (server-side verify fails) | ⚠️ SolveCaptcha token rejected by LCSO API (domain/score mismatch) |
 | Marion: AWS WAF still blocking VPS IP (403) | ⚠️ needs residential proxy egress |
-| SignNow B5: `/api/paperwork/signnow/validate-templates` | ✅ **19 valid templates, 0 invalid** — token works |
+| DocuSeal B5: `/api/paperwork/docuseal/templates` | ⏳ verify the two live DocuSeal templates from the production account |
 | Defendants `normalize/batch` × 5 more runs | ✅ **3,211 → 4,580** defendants (108 repeat offenders) |
 
 | Check | Result |
 |-------|--------|
 | `GET /health` | ✅ ok · **130,489 arrests** |
 | `GET /api/crm/health` | ✅ **ok** |
-| Integrations (GAS, Wix, SignNow, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
+| Integrations (GAS, Wix, DocuSeal, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
 | GAS `?action=health` | ✅ `success` · version V409 |
 | BlueBubbles frp `:12434` + `/api/imessage/status` | ✅ connected · private_api · 1.9.9 |
 | Monroe one-shot scrape (post-deploy) | ✅ 80 records |
 | Hillsborough one-shot (post-deploy) | ✅ 7 records |
-| SignNow template validation | ✅ 19/19 accessible |
+| DocuSeal template validation | ⏳ confirm OSI + Palmetto templates in production |
 | Scraper fleet | ✅ **233 ok · 7 error** (FL: Bay, Gadsden, Gilchrist, Lake, Marion, Okeechobee, Suwannee) |
 | Defendants collection | ✅ **4,580** (was 3,211) · 3.7% coverage |
 
@@ -184,7 +184,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
 | FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service |
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
-| Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · SignNow primary |
+| Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · DocuSeal primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |
 | `edit.shamrockbailbonds.biz` (OpenCut) | ✅ Live on VPS Docker (`shamrock-opencut` → `:5320`) · nginx no longer Tailscale |
 | Hetzner deploy after each `main` push | GitHub Action `Deploy to Hetzner` |
@@ -239,6 +239,6 @@ Node-RED pack: `GET /api/automation/schedule` · docs `docs/automation/NODE_RED_
 | Cron | Interval | Behavior |
 |------|----------|----------|
 | `forfeiture_scan` | 4h | Score active bonds; tasks + Slack for high/critical |
-| `signnow_poller` | 30m | Poll SignNow open packets → signed/void |
+| `docuseal_poller` | 30m | Poll DocuSeal open submissions → signed/void |
 | `compliance_backfill` | 6h | Missing check-in/court tasks → `TaskEngine` |
 | `matching_backlog` | 1h | `MatchingEngine.batch_match`; Slack digest for human review |

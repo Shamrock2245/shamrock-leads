@@ -39,7 +39,7 @@ ShamrockLeads is a **statewide arrest intelligence and bond lifecycle platform**
               ┌────────────────┼──────────┼────────────────┐
               │                │          │                │
         ┌─────▼─────┐  ┌──────▼────┐  ┌──▼──────┐  ┌─────▼─────┐
-        │ MongoDB   │  │ Slack     │  │ Blue    │  │ SignNow   │
+        │ MongoDB   │  │ Slack     │  │ Blue    │  │ DocuSeal  │
         │ Atlas     │  │ Webhooks  │  │ Bubbles │  │ E-Sign    │
         │ (primary) │  │ (12 ch)   │  │ iMessage│  │ API       │
         └───────────┘  └───────────┘  └─────────┘  └───────────┘
@@ -101,8 +101,8 @@ ArrestLead (scraped)
         → Indemnitor Intake (Wix / Telegram / Walk-in / Phone)
             → Match (confidence-scored, human-gated)
                 → BondCase (Surety + POA + Case#)
-                    → DocumentPacket (SignNow templates, hydrated)
-                        → Signature (SignNow webhook confirms)
+                    → DocumentPacket (DocuSeal template, hydrated)
+                        → Signature (DocuSeal webhook confirms)
                             → Payment (SwipeSimple premium)
                                 → Active Bond (7-status Kanban lifecycle)
                                     → Court Reminders → Discharge → Exoneration
@@ -130,7 +130,7 @@ Active → Monitoring → Alert → Exonerated
 | **MongoDB Atlas** | Read/Write | `motor` (async) | All entities (16 collections) |
 | **Slack** | Write | Webhook POST | Arrest alerts, hot leads, errors, ops (12+ channels) |
 | **BlueBubbles** | Read/Write | REST API via ngrok tunnel | iMessage send/receive, contact sync, automation |
-| **SignNow** | Read/Write | REST API + webhooks | Packet creation, field hydration, signing status, `document.complete` |
+| **DocuSeal** | Read/Write | REST API + webhooks | Packet creation, field hydration, signing status, `submission.completed` |
 | **SwipeSimple** | Write | Payment links | Bond premium collection, payment plan tracking |
 | **Twilio** | Write | REST API | Court reminder SMS (7d, 3d, 1d), 10DLC compliant |
 | **Google Sheets** | Write | `gspread` | Legacy arrest data storage (optional) |
@@ -153,7 +153,7 @@ Active → Monitoring → Alert → Exonerated
 | `active_bonds` | Bonded cases with 7-status lifecycle | `Bond_Case_ID` (UUID) |
 | `prospective_bonds` | Pre-bond pipeline (leads being worked) | `_id` (ObjectId) |
 | `poa_inventory` | Power of Attorney inventory per surety | `poa_number` (unique) |
-| `paperwork_packets` | SignNow document packet metadata | `Packet_ID` (UUID) |
+| `paperwork_packets` | DocuSeal packet/submission metadata | `Packet_ID` (UUID) |
 | `payments` | Payment log (SwipeSimple) | `Payment_ID` (UUID) |
 | `payment_plans` | Scheduled payment plans | `_id` (ObjectId) |
 | `intake_queue` | Incoming intake submissions | `_id` (ObjectId) |

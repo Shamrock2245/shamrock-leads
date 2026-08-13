@@ -38,7 +38,7 @@
 | The Analyst | [analyst-agent.md](agents/analyst-agent.md) | Lead scoring (0–100), risk classification |
 | The Watchdog | [watchdog-agent.md](agents/watchdog-agent.md) | Scraper health monitoring, self-healing |
 | The Matcher | [matching-agent.md](agents/matching-agent.md) | Indemnitor ↔ defendant matching |
-| The Paperwork Agent | [paperwork-agent.md](agents/paperwork-agent.md) | SignNow packet generation |
+| The Paperwork Agent | [paperwork-agent.md](agents/paperwork-agent.md) | DocuSeal packet generation |
 | The Signature Agent | [signature-agent.md](agents/signature-agent.md) | E-signature orchestration |
 | The Payment Agent | [payment-agent.md](agents/payment-agent.md) | Premium payment tracking |
 | The Auditor | [audit-agent.md](agents/audit-agent.md) | Immutable audit event logging |
@@ -58,7 +58,7 @@
 |----------|-------------|
 | [surety-policy.md](policies/surety-policy.md) | Bond writing, POA assignment, surety selection |
 | [matching-policy.md](policies/matching-policy.md) | Indemnitor → defendant matching logic |
-| [signature-policy.md](policies/signature-policy.md) | SignNow packet binding, signing workflow |
+| [signature-policy.md](policies/signature-policy.md) | DocuSeal packet binding, signing workflow |
 
 ---
 

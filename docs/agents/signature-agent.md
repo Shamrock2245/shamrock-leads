@@ -1,13 +1,13 @@
 # Signature Agent
 
 > **Status:** `[COMPLETE — Phase 7]`
-> **Implementation:** `dashboard/services/signnow_packet_service.py`, `dashboard/services/signnow_service.py`, `dashboard/api/webhooks.py`
+> **Implementation:** `dashboard/services/docuseal_service.py`, `dashboard/routers/paperwork.py`, `dashboard/api/webhooks.py`
 
 ---
 
 ## Role
 
-Sends generated paperwork packets for e-signature via SignNow, tracks completion, and handles the `document.complete` webhook.
+Sends generated paperwork packets for e-signature via DocuSeal, tracks completion, and handles the DocuSeal completion webhook.
 
 ---
 
@@ -20,7 +20,7 @@ Sends generated paperwork packets for e-signature via SignNow, tracks completion
 1. Receive packet ID
 2. Verify packet is `generated` status and bound to active bond case
 3. Verify recipient matches validated indemnitor contact info
-4. Generate SignNow embedded invite link
+4. Generate DocuSeal submitter signing link
 5. Deliver link via SMS (primary), Telegram, WhatsApp, or email
 6. Update packet status to `sent`
 7. Handle `document.complete` webhook:

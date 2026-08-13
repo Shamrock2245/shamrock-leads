@@ -19,7 +19,7 @@
 | `active_bonds` | Bonded cases with 7-status lifecycle | `Bond_Case_ID` (UUID), natural: `poa_number` + `case_number` |
 | `prospective_bonds` | Pre-bond pipeline (leads being worked) | `_id` (ObjectId) |
 | `poa_inventory` | Power of Attorney inventory per surety | `poa_number` (unique) |
-| `paperwork_packets` | SignNow document packet metadata | `Packet_ID` (UUID) |
+| `paperwork_packets` | DocuSeal packet/submission metadata | `Packet_ID` (UUID) |
 | `payments` | Payment log (SwipeSimple) | `Payment_ID` (UUID) |
 | `payment_plans` | Scheduled payment plans | `_id` (ObjectId) |
 | `intake_queue` | Incoming intake submissions | `_id` (ObjectId) |
@@ -182,7 +182,7 @@ indemnitor_phone      : str
 # Paperwork
 packet_id             : str (ref)
 signing_status        : str              # "pending", "sent", "completed"
-signnow_document_id   : str
+docuseal_submission_id : str
 
 # Timestamps
 created_at            : str (ISO)
@@ -279,6 +279,6 @@ updated_at            : str (ISO)
 3. **Intake → `indemnitors`**: Validated intake creates indemnitor record.
 4. **`defendants` + `indemnitors` → `matches`**: Matching engine scores and links. Human gate for < 0.85 confidence.
 5. **Confirmed match → `active_bonds`**: Only after: defendant exists, indemnitor exists, match confirmed, surety selected, POA assigned.
-6. **`active_bonds` → `paperwork_packets`**: Packet generation hydrates SignNow templates with bond data.
+6. **`active_bonds` → `paperwork_packets`**: Packet generation hydrates the two DocuSeal templates with bond data.
 7. **Status changes**: Every transition writes to `status_history[]` AND `audit_events`.
 8. **POA lifecycle**: Available → Assigned (on bond creation) → Released (on exoneration/forfeit/surrender) → Available.

@@ -33,7 +33,7 @@ County jails ──scrape──► shamrock-leads (Mongo + Slack)
               │               │               │
               ▼               ▼               ▼
      shamrock-node-red   portal GAS      Slack / Twilio
-     (schedules,         (SignNow,       Telegram, etc.
+     (schedules,         (DocuSeal,      Telegram, etc.
       webhooks,           packets)
       Watchdog)
               │
@@ -85,7 +85,7 @@ Leads machine API (auth: `GAS_API_KEY`):
 | `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` | Forward bond/paperwork events to GAS | Deployed web app URL | Auth + progress + certs |
 | `WIX_WEBHOOK_SECRET` | `/api/webhooks/wix-intake` | Wix → leads intake | — |
 | `MONGODB_URI` | Primary DB | Optional MongoLogger / proxy | — |
-| SignNow / Twilio / Slack / ElevenLabs | Ops + packets | Same vendor accounts | School payments (SwipeSimple) |
+| DocuSeal / Twilio / Slack / ElevenLabs | Ops + packets | Same vendor accounts | School payments (SwipeSimple) |
 
 **Rule:** After any secret rotation, update **VPS `.env`**, **Wix Secrets**, **GAS Script Properties**, and **Netlify** in the same change window.
 
@@ -127,7 +127,7 @@ Never put PII-bearing staff URLs in client-facing SMS; use brand domain + magic 
 
 ## Production readiness checklist (leads)
 
-Track live cutover in [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md). Local `--strict` secrets check is green (2026-08-12). Remaining human items: C2 leftover Wix FAQ `$699`, C3 historical key rotation.
+Track live cutover in [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md). Local `--strict` secrets check is green (2026-08-12). Remaining human items: C3 historical key rotation plus staff-confirmed write-bond → DocuSeal paperwork and outbound iMessage smokes.
 
 ---
 

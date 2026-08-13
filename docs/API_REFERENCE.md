@@ -70,7 +70,7 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/bond-lifecycle/initiate-signing` | Start e-sign flow (prefer DocuSeal finalize) |
-| POST | `/api/bond-lifecycle/signnow-webhook` | Legacy SignNow complete webhook |
+| POST | `/api/bond-lifecycle/signnow-webhook` | Retired legacy endpoint; not used by active workflow |
 | POST | `/api/bond-lifecycle/process-court-email` | Process court discharge email |
 
 ### Automations (Service Control — `dashboard/routers/automation_control.py`)
@@ -159,10 +159,10 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 | POST | `/api/portal/send-pin` | 6-digit OTP via BlueBubbles only |
 | POST | `/api/portal/verify-pin` | Verify OTP → DocuSeal deep-link metadata |
 
-### Paperwork (legacy SignNow paths — keep for old packets only)
+### Paperwork retired paths
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/paperwork/generate` | Legacy SignNow generate (not for new work) |
+| POST | `/api/paperwork/{id}/signnow` | Returns `410 signnow_retired`; use DocuSeal |
 | POST | `/api/paperwork/deliver` | Deliver packet link |
 | GET | `/api/paperwork/packets/<bond_id>` | List packets for bond |
 | GET | `/api/paperwork/status/<packet_id>` | Check packet signing status |
@@ -298,7 +298,7 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 |--------|----------|-------------|
 | GET | `/health` | Service health check |
 | POST | `/api/webhooks/wix` | Wix intake webhook |
-| POST | `/api/webhooks/signnow` | SignNow document completion |
+| POST | `/api/webhooks/signnow` | Retired legacy webhook; active completion is DocuSeal |
 
 ---
 

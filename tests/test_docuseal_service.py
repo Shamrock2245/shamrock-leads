@@ -388,10 +388,10 @@ async def test_default_esign_provider_is_docuseal():
         assert p == "docuseal"
         p2 = await resolve_client_esign_provider(preferred="docuseal")
         assert p2 == "docuseal"
-        # SignNow preferred is forced to DocuSeal unless ALLOW_LEGACY_ESIGN
+        # Retired providers are always forced to DocuSeal.
         p3 = await resolve_client_esign_provider(preferred="signnow")
         assert p3 == "docuseal"
 
     with patch.dict(os.environ, {"ALLOW_LEGACY_ESIGN": "true"}, clear=False):
         p4 = await resolve_client_esign_provider(preferred="signnow")
-        assert p4 == "signnow"
+        assert p4 == "docuseal"

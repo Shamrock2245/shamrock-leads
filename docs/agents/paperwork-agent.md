@@ -1,13 +1,13 @@
 # Paperwork Agent
 
 > **Status:** `[IMPLEMENTED]`
-> **Implementation:** `dashboard/api/paperwork.py`, `dashboard/services/signnow_packet_service.py`, `dashboard/services/signnow_service.py`
+> **Implementation:** `dashboard/api/paperwork.py`, `dashboard/routers/paperwork.py`, `dashboard/services/docuseal_service.py`
 
 ---
 
 ## Role
 
-Generates surety-specific bond paperwork packets by selecting the correct SignNow template set based on the surety backing the bond case.
+Generates surety-specific bond paperwork packets by selecting the correct DocuSeal template based on the surety backing the bond case.
 
 ---
 
@@ -22,7 +22,7 @@ Generates surety-specific bond paperwork packets by selecting the correct SignNo
 3. Select template set by `Surety_ID`:
    - OSI (O'Shaughnahill) → OSI template set
    - Palmetto → Palmetto template set
-4. Copy template in SignNow
+4. Create DocuSeal submission from the surety template
 5. Hydrate fields from BondCase + Defendant + Indemnitor data
 6. Create DocumentPacket record with `Packet_Version = 1`
 7. Log generation as AuditEvent
