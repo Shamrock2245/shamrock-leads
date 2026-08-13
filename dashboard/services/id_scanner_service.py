@@ -33,18 +33,26 @@ class IDScannerService:
         if not image_bytes:
             return {"success": False, "error": "No image data provided"}
 
+        prepared, prep_note = cls._prepare_image_for_ocr(image_bytes, filename=filename)
+        work_bytes = prepared or image_bytes
+
         # Try OpenAI GPT-4o-mini Vision if key present
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         if api_key:
             try:
-                res = await cls._scan_with_openai_vision(image_bytes, api_key)
-                if res and res.get("success"):
+                res = await cls._scan_with_openai_vision(work_bytes, api_key)
+                if res and res.get("success") and cls._extracted_field_count(res.get("extracted") or {}) > 0:
+                    if prep_note:
+                        res["prep"] = prep_note
                     return res
             except Exception as exc:
                 logger.warning("[id_scanner] OpenAI Vision scan failed: %s", exc)
 
-        # Fallback to local regex/OCR parser
-        return cls._scan_with_local_ocr(image_bytes, filename=filename)
+        # Fallback to local regex/OCR parser (tries all 4 orientations)
+        local = cls._scan_with_local_ocr(work_bytes, filename=filename)
+        if prep_note:
+            local["prep"] = prep_note
+        return local
 
     @classmethod
     async def _scan_with_openai_vision(cls, image_bytes: bytes, api_key: str) -> dict[str, Any]:
@@ -86,7 +94,8 @@ class IDScannerService:
             "- Carefully read all text blocks and use context to infer address, even if poorly lit, blurred, or upside-down.\n"
             "- Distinguish between mailing address and physical address if both are present, preferring physical.\n"
             "- Extract the full middle name if present, not just the initial.\n"
-            "- Handle vertical, sideways, or upside-down images gracefully."
+            "- Handle vertical, sideways, or upside-down images gracefully.\n"
+            "- The image may have been taken in any orientation; read all text regardless of rotation."
         )
 
         payload = {
@@ -122,7 +131,7 @@ class IDScannerService:
                 "https://api.openai.com/v1/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
@@ -143,33 +152,147 @@ class IDScannerService:
                 }
 
     @classmethod
-    def _scan_with_local_ocr(cls, image_bytes: bytes, filename: str = "") -> dict[str, Any]:
-        """Local OCR & Regex extraction fallback."""
-        text = ""
+    def _prepare_image_for_ocr(cls, image_bytes: bytes, filename: str = "") -> tuple[Optional[bytes], str]:
+        """Apply EXIF orientation, convert to RGB JPEG, downscale huge phone photos.
+
+        Returns (jpeg_bytes_or_None, note). None means leave the original bytes.
+        """
+        if image_bytes[:4] == b"%PDF":
+            return None, "pdf"
         try:
             import io
-            from PIL import Image
+            from PIL import Image, ImageOps
 
             img = Image.open(io.BytesIO(image_bytes))
             try:
-                import pytesseract
-                text = pytesseract.image_to_string(img)
+                img = ImageOps.exif_transpose(img) or img
             except Exception:
-                try:
-                    import ddddocr
-                    ocr = ddddocr.DdddOcr(show_ad=False)
-                    text = ocr.classification(image_bytes)
-                except Exception:
-                    pass
+                pass
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            elif img.mode == "L":
+                img = img.convert("RGB")
+            max_edge = 2000
+            w, h = img.size
+            if max(w, h) > max_edge:
+                scale = max_edge / float(max(w, h))
+                resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+                img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), resample)
+            out = io.BytesIO()
+            img.save(out, format="JPEG", quality=85, optimize=True)
+            return out.getvalue(), f"oriented {img.size[0]}x{img.size[1]}"
         except Exception as exc:
-            logger.warning("[id_scanner] Local OCR image open error: %s", exc)
+            logger.warning("[id_scanner] image prep failed (%s): %s", filename, exc)
+            return None, ""
+
+    @staticmethod
+    def _extracted_field_count(extracted: dict[str, Any]) -> int:
+        keys = ("first_name", "last_name", "full_name", "dob", "dl_number", "address", "zip")
+        return sum(1 for k in keys if extracted.get(k))
+
+    @classmethod
+    def _ocr_text_all_orientations(cls, image_bytes: bytes) -> str:
+        """Run Tesseract at 0/90/180/270° and keep the richest ID text."""
+        try:
+            import io
+            from PIL import Image, ImageOps, ImageEnhance, ImageFilter
+            import pytesseract
+        except Exception:
+            return ""
+
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            try:
+                img = ImageOps.exif_transpose(img) or img
+            except Exception:
+                pass
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            # Contrast bump helps glossy laminate / phone glare
+            gray = ImageOps.grayscale(img)
+            gray = ImageEnhance.Contrast(gray).enhance(1.6)
+            gray = gray.filter(ImageFilter.SHARPEN)
+        except Exception as exc:
+            logger.warning("[id_scanner] local OCR open failed: %s", exc)
+            return ""
+
+        best_text = ""
+        best_score = -1
+        for angle in (0, 90, 180, 270):
+            frame = gray if angle == 0 else gray.rotate(angle, expand=True)
+            try:
+                text = pytesseract.image_to_string(frame) or ""
+            except Exception:
+                continue
+            score = cls._score_id_text(text)
+            if score > best_score:
+                best_score = score
+                best_text = text
+        return best_text
+
+    @staticmethod
+    def _score_id_text(text: str) -> int:
+        """Heuristic: more DL-like tokens = more likely the upright orientation."""
+        if not text:
+            return 0
+        score = 0
+        upper = text.upper()
+        for token in (
+            "DOB", "EXP", "SEX", "DL", "DRIVER", "LICENSE", "CLASS",
+            "FLORIDA", "ADDRESS", "LN", "FN", "USA", "END",
+        ):
+            if token in upper:
+                score += 2
+        if re.search(r"\b[A-Z]\d{3}[-\s]?\d{3}", upper):
+            score += 4
+        if re.search(r"\b\d{5}(?:-\d{4})?\b", text):
+            score += 2
+        if re.search(r"\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b", text):
+            score += 2
+        score += min(len(text) // 80, 5)
+        return score
+
+    @classmethod
+    def _scan_with_local_ocr(cls, image_bytes: bytes, filename: str = "") -> dict[str, Any]:
+        """Local OCR & Regex extraction fallback. Tries every orientation."""
+        text = cls._ocr_text_all_orientations(image_bytes)
+        if not text:
+            try:
+                import ddddocr
+                ocr = ddddocr.DdddOcr(show_ad=False)
+                text = ocr.classification(image_bytes) or ""
+            except Exception:
+                text = ""
 
         extracted = cls.parse_raw_text(text)
+        # Merge AAMVA / city-state-zip parser when Tesseract got a long dump
+        try:
+            from dashboard.services.id_ocr_service import IDOCRService
+            extra = IDOCRService.parse_dl_text(text) or {}
+            for key in ("first_name", "last_name", "full_name", "dob", "dl_number",
+                        "address", "city", "state", "zip", "expiration_date", "dl_state"):
+                if extra.get(key) and not extracted.get(key):
+                    val = extra[key]
+                    if key == "dob":
+                        val = cls._normalize_date(str(val))
+                    extracted[key] = val
+        except Exception:
+            pass
+
+        if extracted.get("address") and extracted.get("city") and extracted.get("city").upper() not in str(extracted["address"]).upper():
+            tail = " ".join(filter(None, [
+                extracted.get("city"),
+                extracted.get("state"),
+                extracted.get("zip"),
+            ]))
+            if tail:
+                extracted["address"] = f"{extracted['address']}, {tail}"
+
         return {
             "success": True,
             "engine": "local_ocr",
             "extracted": extracted,
-            "raw_text_preview": text[:300],
+            "raw_text_preview": (text or "")[:300],
         }
 
     @classmethod
@@ -232,16 +355,46 @@ class IDScannerService:
         if m_zip:
             res["zip"] = m_zip.group(1)
 
-        # Name heuristic from lines
-        for line in lines:
-            if re.search(r"^1\s+([A-Z\s]+)$", line):
+        # City ST ZIP (FORT MYERS FL 33901)
+        m_csz = re.search(
+            r"\b([A-Z]+(?:[ ]+[A-Z]+){0,4})\s+"
+            r"(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+"
+            r"(\d{5}(?:-\d{4})?)\b",
+            text,
+        )
+        if m_csz:
+            res["city"] = m_csz.group(1).strip()
+            res["state"] = m_csz.group(2)
+            res["dl_state"] = m_csz.group(2)
+            res["zip"] = m_csz.group(3)
+
+        # Name + street heuristics from numbered AAMVA-style front lines
+        for i, line in enumerate(lines):
+            if re.search(r"^1\s+([A-Z\s\-']+)$", line):
                 res["last_name"] = line.split(maxsplit=1)[1].strip()
-            elif re.search(r"^2\s+([A-Z\s]+)$", line):
+            elif re.search(r"^2\s+([A-Z\s\-']+)$", line):
                 parts = line.split(maxsplit=1)[1].strip().split()
                 if parts:
                     res["first_name"] = parts[0]
                     if len(parts) > 1:
                         res["middle_name"] = " ".join(parts[1:])
+            elif re.search(r"^8\s+", line):
+                res["address"] = re.sub(r"^8\s+", "", line).strip()
+            elif re.search(r"^(?:ADD|ADDR|ADDRESS)[:\s]+(.+)$", line, re.I):
+                res["address"] = re.sub(r"^(?:ADD|ADDR|ADDRESS)[:\s]+", "", line, flags=re.I).strip()
+
+        if not res["address"]:
+            # Street-looking line before CITY ST ZIP
+            for i, line in enumerate(lines):
+                if res["city"] and res["city"].upper() in line.upper() and res.get("state") and res["state"] in line:
+                    if i > 0 and re.search(r"\d", lines[i - 1]) and not res["address"]:
+                        res["address"] = lines[i - 1]
+                    break
+
+        if res["address"] and res.get("city"):
+            tail = " ".join(filter(None, [res.get("city"), res.get("state"), res.get("zip")]))
+            if tail and tail.upper() not in res["address"].upper():
+                res["address"] = f"{res['address']}, {tail}"
 
         if res["first_name"] or res["last_name"]:
             full = f"{res['first_name'] or ''} {res['middle_name'] or ''} {res['last_name'] or ''}".strip()

@@ -996,6 +996,70 @@ const SLIndemnitor = (() => {
   }
 
   /**
+   * Downscale + honor EXIF orientation in the browser so a 12MB sideways
+   * iPhone photo does not 413 nginx (1MB default) and OCR sees upright text.
+   */
+  async function _prepareIdImage(file) {
+    if (!file) return file;
+    const name = (file.name || 'id-scan').toLowerCase();
+    if (file.type === 'application/pdf' || name.endsWith('.pdf')) return file;
+    if (!window.createImageBitmap || !window.HTMLCanvasElement) return file;
+    try {
+      let bitmap;
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      } catch (_) {
+        bitmap = await createImageBitmap(file);
+      }
+      const maxEdge = 2000;
+      let w = bitmap.width;
+      let h = bitmap.height;
+      if (!w || !h) {
+        bitmap.close && bitmap.close();
+        return file;
+      }
+      if (Math.max(w, h) > maxEdge) {
+        const scale = maxEdge / Math.max(w, h);
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      bitmap.close && bitmap.close();
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.84));
+      if (!blob) return file;
+      return new File([blob], 'id-scan.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+    } catch (err) {
+      console.warn('[SLIndemnitor] image prep skipped:', err);
+      return file;
+    }
+  }
+
+  function _applyScanFields(fields) {
+    if (!fields) return 0;
+    if (fields.firstName && $('indFormFirst')) $('indFormFirst').value = fields.firstName;
+    if (fields.lastName && $('indFormLast')) $('indFormLast').value = fields.lastName;
+    if (fields.address && $('indFormAddress')) {
+      $('indFormAddress').value = fields.address;
+      _scannedAddress = fields.address.trim();
+    }
+    if (fields.dob && $('indFormDOB')) {
+      let dob = fields.dob;
+      const m = String(dob).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m) {
+        dob = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+      }
+      $('indFormDOB').value = dob;
+    }
+    if (fields.dlNumber && $('indFormDL')) $('indFormDL').value = fields.dlNumber;
+    if (fields.dlState && $('indFormDLState')) $('indFormDLState').value = String(fields.dlState).slice(0, 2).toUpperCase();
+    return [fields.firstName, fields.lastName, fields.dlNumber, fields.address, fields.dob].filter(Boolean).length;
+  }
+
+  /**
    * Normalize scan-id / scan-ocr API payloads into form-friendly fields.
    * Backend returns { success, extracted: { first_name, last_name, ... } }.
    */
@@ -1032,12 +1096,21 @@ const SLIndemnitor = (() => {
   async function handleScanID(e) {
     const file = e?.target?.files?.[0];
     if (!file) return;
+    try {
+      await processAddModalScan(file);
+    } finally {
+      if (e && e.target) e.target.value = ''; // Reset so same file can be re-selected
+    }
+  }
 
+  async function processAddModalScan(file) {
+    if (!file) return;
+    toast('📸 Preparing ID photo (any orientation)…', 'info');
+    const prepared = await _prepareIdImage(file);
     toast('📸 Scanning ID via OCR…', 'info');
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', prepared, prepared.name || 'id-scan.jpg');
 
-    // Pass booking number so the backend can archive the image to Drive
     const bk =
       (_pendingSaveBody && _pendingSaveBody.booking_number) ||
       ($('indFormBooking') && $('indFormBooking').value.trim()) ||
@@ -1055,7 +1128,11 @@ const SLIndemnitor = (() => {
       try {
         data = await r.json();
       } catch (_) {
-        toast(`❌ Scan failed (HTTP ${r.status}) — invalid response`, 'error');
+        if (r.status === 413) {
+          toast('❌ Photo still too large after compress — take a closer crop of the ID front.', 'error');
+        } else {
+          toast(`❌ Scan failed (HTTP ${r.status}) — invalid response`, 'error');
+        }
         return;
       }
       if (!r.ok || data.success === false) {
@@ -1064,25 +1141,7 @@ const SLIndemnitor = (() => {
       }
 
       const fields = _normalizeScanPayload(data);
-      if (fields.firstName && $('indFormFirst')) $('indFormFirst').value = fields.firstName;
-      if (fields.lastName && $('indFormLast')) $('indFormLast').value = fields.lastName;
-      if (fields.address && $('indFormAddress')) {
-        $('indFormAddress').value = fields.address;
-        _scannedAddress = fields.address.trim();
-      }
-      if (fields.dob && $('indFormDOB')) {
-        // Accept YYYY-MM-DD or coerce common US formats into date input
-        let dob = fields.dob;
-        const m = String(dob).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-        if (m) {
-          dob = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-        }
-        $('indFormDOB').value = dob;
-      }
-      if (fields.dlNumber && $('indFormDL')) $('indFormDL').value = fields.dlNumber;
-      if (fields.dlState && $('indFormDLState')) $('indFormDLState').value = fields.dlState;
-
-      const filled = [fields.firstName, fields.lastName, fields.dlNumber, fields.address].filter(Boolean).length;
+      const filled = _applyScanFields(fields);
       if (filled === 0) {
         toast('⚠️ ID scanned but no fields were read — try a clearer photo of the front of the ID.', 'error');
       } else {
@@ -1090,8 +1149,6 @@ const SLIndemnitor = (() => {
       }
     } catch (err) {
       toast('❌ Scan error: ' + (err.message || err), 'error');
-    } finally {
-      if (e && e.target) e.target.value = ''; // Reset so same file can be re-selected
     }
   }
 
@@ -1191,29 +1248,45 @@ const SLIndemnitor = (() => {
   }
 
   async function processModalIdScan(file) {
-    toast('📷 Scanning ID / Passport with AI…', 'info');
+    toast('📷 Preparing ID photo (any orientation)…', 'info');
     try {
+      const prepared = await _prepareIdImage(file);
+      toast('📷 Scanning ID / Passport with AI…', 'info');
       const formData = new FormData();
-      formData.append('file', file);
-      const r = await fetch(`${API}/api/id/scan-ocr`, { method: 'POST', body: formData });
-      const d = await r.json();
+      formData.append('file', prepared, prepared.name || 'id-scan.jpg');
+      const r = await fetch(`${API}/api/id/scan-ocr`, { method: 'POST', body: formData, credentials: 'same-origin' });
+      let d = {};
+      try {
+        d = await r.json();
+      } catch (_) {
+        toast(r.status === 413
+          ? '❌ Photo too large — crop closer to the ID and retry.'
+          : `❌ Scan failed (HTTP ${r.status})`, 'error');
+        return;
+      }
       if (!d.success || !d.extracted) {
         toast(`❌ ${d.error || 'Could not read ID photo'}`, 'error');
         return;
       }
       const ext = d.extracted;
+      const fields = _normalizeScanPayload(d);
+
+      // Add-indemnitor modal fields
+      _applyScanFields(fields);
 
       // Auto-fill fields in #recordBondModal
-      if ($('baIndemName') && ext.full_name) $('baIndemName').value = ext.full_name;
-      if ($('baIndemDL') && ext.dl_number) $('baIndemDL').value = ext.dl_number;
-      if ($('baIndemDLState') && ext.dl_state) $('baIndemDLState').value = ext.dl_state;
-      if ($('baIndemDOB') && ext.dob) $('baIndemDOB').value = ext.dob;
-      if ($('baIndemAddress') && ext.address) $('baIndemAddress').value = ext.address;
+      if ($('baIndemName') && (ext.full_name || fields.firstName)) {
+        $('baIndemName').value = ext.full_name || `${fields.firstName} ${fields.lastName}`.trim();
+      }
+      if ($('baIndemDL') && (ext.dl_number || fields.dlNumber)) $('baIndemDL').value = ext.dl_number || fields.dlNumber;
+      if ($('baIndemDLState') && (ext.dl_state || fields.dlState)) $('baIndemDLState').value = ext.dl_state || fields.dlState;
+      if ($('baIndemDOB') && (ext.dob || fields.dob)) $('baIndemDOB').value = ext.dob || fields.dob;
+      if ($('baIndemAddress') && (ext.address || fields.address)) $('baIndemAddress').value = ext.address || fields.address;
       if ($('baIndemCity') && ext.city) $('baIndemCity').value = ext.city;
       if ($('baIndemState') && ext.state) $('baIndemState').value = ext.state;
       if ($('baIndemZip') && ext.zip) $('baIndemZip').value = ext.zip;
 
-      toast(`✅ Auto-filled indemnitor info for ${ext.full_name || 'scanned ID'}!`, 'ok');
+      toast(`✅ Auto-filled indemnitor info for ${ext.full_name || fields.firstName || 'scanned ID'}!`, 'success');
     } catch (err) {
       toast(`❌ ID scan failed: ${err.message}`, 'error');
     }
@@ -1227,7 +1300,7 @@ const SLIndemnitor = (() => {
     // Add Indemnitor Modal (do NOT export undefined symbols — breaks entire module)
     openAddModal, closeAddModal, smartSearch, selectSearchResult,
     showNewForm, backToSearch, submitAddForm,
-    triggerScan, handleScanID, confirmAddressOverride,
+    triggerScan, handleScanID, processAddModalScan, confirmAddressOverride,
     // KYC Uploads + ID slots
     handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,
     handleModalIdUpload, handleModalIdDrop,

@@ -3428,7 +3428,7 @@
     </div>
 
     <!-- Step 2: Profile Form (shown after selecting or creating new) -->
-    <div id="indAddStep2" style="display:none">
+    <div id="indAddStep2" style="display:none" ondragover="event.preventDefault()" ondrop="event.preventDefault();var f=event.dataTransfer&&event.dataTransfer.files&&event.dataTransfer.files[0];if(f)SLIndemnitor.processAddModalScan(f)">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
         <button type="button" onclick="SLIndemnitor.backToSearch()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px">← Back to search</button>
         <span id="indFormTitle" style="font-weight:700;font-size:14px;color:var(--text-secondary)">New Indemnitor</span>
@@ -3436,7 +3436,7 @@
         <input type="file" id="indAddIdScanner" accept="image/*,application/pdf" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;z-index:-1" onchange="SLIndemnitor.handleScanID(event)">
         <label for="indAddIdScanner" class="btn-sm" role="button" tabindex="0" style="margin-left:auto;padding:10px 14px;min-height:44px;display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none">📸 Scan ID</label>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Scan a driver license / state ID / passport photo to auto-fill name, address, DOB, and DL #.</p>
+      <p style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Scan or drop a driver license / state ID / passport photo — any orientation. OCR fills name, address, DOB, and DL #.</p>
 
       <!-- Booking Number Selection -->
       <div style="margin-bottom:14px">
@@ -3598,7 +3598,7 @@
 <script defer src="/sl-admin-hygiene.js?v=1"></script>
 <script defer src="/sl-service-control.js?v=1"></script>
 <script defer src="/sl-defendant-lifecycle.js?v=4"></script>
-<script defer src="/sl-indemnitor.js?v=6"></script>
+<script defer src="/sl-indemnitor.js?v=7"></script>
 <script defer src="/sl-inventory.js?v=4"></script>
 <script defer src="/sl-analytics.js?v=4"></script>
 <script defer src="/sl-analytics-apex.js?v=4"></script>

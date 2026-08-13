@@ -46,6 +46,31 @@ def test_id_scanner_raw_text_parsing():
     assert res["sex"] == "M"
     assert res["zip"] == "33901"
     assert res["expiration_date"] == "2028-06-15"
+    assert res["address"]
+    assert "1234 MAIN ST" in res["address"]
+    assert res["city"] == "FORT MYERS"
+    assert res["state"] == "FL"
+
+
+def test_id_scanner_scores_upright_dl_higher_than_noise():
+    upright = "FLORIDA DRIVER LICENSE\nDOB 01/02/1990\nEXP 01/02/2028\nSEX M\nD123-456-78-901-0\nFORT MYERS FL 33901"
+    garbage = "asdf qwer zxcv 111 222"
+    assert IDScannerService._score_id_text(upright) > IDScannerService._score_id_text(garbage)
+    assert IDScannerService._extracted_field_count({"first_name": "A", "dl_number": "X", "dob": None}) == 2
+
+
+def test_id_scanner_prepare_applies_exif_and_downscales():
+    from io import BytesIO
+    from PIL import Image
+
+    img = Image.new("RGB", (4000, 1200), color=(30, 80, 40))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    out, note = IDScannerService._prepare_image_for_ocr(buf.getvalue(), filename="wide.jpg")
+    assert out
+    prepared = Image.open(BytesIO(out))
+    assert max(prepared.size) <= 2000
+    assert "oriented" in note
 
 
 def test_id_scanner_normalize_fields():
