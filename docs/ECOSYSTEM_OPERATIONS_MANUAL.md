@@ -89,7 +89,7 @@ The form should fill:
 
 ### Step 5 — Generate / send paperwork (DocuSeal)
 1. Click **Generate Paperwork** / **Flatten & Send** (wording may vary by tab).
-2. Provider should be **DocuSeal** (not SignNow — SignNow is legacy only).
+2. Provider must be **DocuSeal**. SignNow is retired from the workflow.
 3. The system creates a multi-party signing packet and **sign links**.
 4. Send the indemnitor their link by:
    - **iMessage / SMS** from the dashboard, or  

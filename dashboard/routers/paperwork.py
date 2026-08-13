@@ -18,13 +18,13 @@ Endpoints:
   POST /api/paperwork/generate/bond/<intake_id>     — Generate appearance bond PDFs only
   GET  /api/paperwork/<packet_id>                   — Get packet status + download links
   POST /api/paperwork/<packet_id>/deliver           — Deliver via BlueBubbles iMessage
-  POST /api/paperwork/<packet_id>/signnow           — Push to SignNow for e-signature
+  POST /api/paperwork/<packet_id>/docuseal          — Push existing packet to DocuSeal
   POST /api/paperwork/<packet_id>/void              — Void a packet (policy Rule 3)
   GET  /api/paperwork/list/<intake_id>              — List all packets for an intake
-  GET  /api/paperwork/signnow/validate-templates    — Validate all TEMPLATE_MAP entries
+  GET  /api/paperwork/docuseal/templates           — List the two DocuSeal templates
 
 Policy Compliance (docs/policies/signature-policy.md):
-  Rule 1: Packet must be bound to Bond_Case_ID before SignNow push.
+  Rule 1: Packet must be bound to Bond_Case_ID before DocuSeal submission.
   Rule 2: Surety-specific template set (OSI vs Palmetto).
   Rule 3: No in-place mutation after send/sign — void + new version.
   Rule 4: Recipient verification before sending signing link.
@@ -99,143 +99,42 @@ async def _load_packet(packet_id: str) -> Optional[dict]:
 
 @paperwork_bp.get("/paperwork/config")
 async def paperwork_config():
-    """Return TEMPLATE_MAP + DOC_RULES for the Paperwork Config dashboard tab.
-
-    Shapes data for the frontend:
-      template_map.osi / .palmetto  → { key: { label, template_id, rule } }
-      doc_rules                     → raw DOC_RULES dict
-    """
+    """Return DocuSeal template config + local PDF inventory for Paperwork UI."""
     try:
-        from dashboard.services.signnow_packet_service import SignNowPacketService
+        from dashboard.services.docuseal_service import resolve_template_id_for_surety
 
-        svc = SignNowPacketService
-        doc_rules = getattr(svc, "DOC_RULES", {}) or {}
-        tmpl = getattr(svc, "TEMPLATE_MAP", {}) or {}
-
-        osi: dict = {}
-        palmetto: dict = {}
-        for key, template_id in tmpl.items():
-            base_key = key.replace("-palmetto", "")
-            rule_meta = doc_rules.get(base_key, {}) or {}
-            entry = {
-                "label": rule_meta.get("label") or base_key.replace("-", " ").title(),
-                "template_id": template_id or "",
-                "rule": rule_meta.get("rule", "static"),
-                "configured": bool(template_id),
-            }
-            if key.endswith("-palmetto"):
-                palmetto[base_key] = entry
-            else:
-                osi[key] = entry
-                # Shared keys also appear under Palmetto unless overridden
-                if base_key not in palmetto:
-                    palmetto[base_key] = {
-                        **entry,
-                        "label": f"{entry['label']} (shared)",
-                    }
-
-        # Apply explicit Palmetto overrides from TEMPLATE_MAP
-        for key, template_id in tmpl.items():
-            if not key.endswith("-palmetto"):
-                continue
-            base_key = key.replace("-palmetto", "")
-            rule_meta = doc_rules.get(base_key, {}) or {}
-            palmetto[base_key] = {
-                "label": rule_meta.get("label") or base_key.replace("-", " ").title(),
-                "template_id": template_id or "(uses shared)",
-                "rule": rule_meta.get("rule", "static"),
-                "configured": bool(template_id),
-            }
-
-        # Local PDF folder inventory (agnostic + surety) for flatten / Adobe path
+        osi_template = resolve_template_id_for_surety("osi") or ""
+        palmetto_template = resolve_template_id_for_surety("palmetto") or ""
+        template_map = {
+            "osi": {"bond_packet": {"label": "OSI DocuSeal Bond Packet", "template_id": osi_template, "rule": "docuseal_template", "configured": bool(osi_template)}},
+            "palmetto": {"bond_packet": {"label": "Palmetto DocuSeal Bond Packet", "template_id": palmetto_template, "rule": "docuseal_template", "configured": bool(palmetto_template)}},
+        }
         local_pdf: dict = {}
         try:
             from dashboard.paperwork_pdf_service import list_template_inventory, packet_composition
-
             local_pdf = {
                 "inventory": list_template_inventory(),
-                "composition": {
-                    "osi": packet_composition("osi"),
-                    "palmetto": packet_composition("palmetto"),
-                },
-                "rule": (
-                    "OSI packet = surety-agnostic-shamrock + osi; "
-                    "Palmetto packet = surety-agnostic-shamrock + palmetto"
-                ),
+                "composition": {"osi": packet_composition("osi"), "palmetto": packet_composition("palmetto")},
+                "rule": "DocuSeal is the e-sign source of truth; local PDFs are preview/print aids. Appearance bonds remain wet-ink only.",
             }
         except Exception as inv_exc:
             logger.warning("paperwork/config local inventory: %s", inv_exc)
             local_pdf = {"error": str(inv_exc)}
-
         return {
             "success": True,
-            "template_map": {"osi": osi, "palmetto": palmetto},
-            "doc_rules": doc_rules,
-            "local_pdf": local_pdf,
+            "esign_provider": "docuseal",
             "esign_providers": ["docuseal", "none"],
-            "esign_default": "docuseal",
-            "esign_policy": "docuseal_only",
-            "legacy_esign_allowed": os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() in ("1", "true", "yes"),
-            "docuseal": {
-                "configured": bool(os.getenv("DOCUSEAL_API_KEY")),
-                "url": os.getenv("DOCUSEAL_URL", "https://sign.shamrockbailbonds.biz"),
-                "webhook": "/api/webhooks/docuseal",
-                "template_id_osi": os.getenv("DOCUSEAL_TEMPLATE_ID_OSI") or os.getenv("DOCUSEAL_TEMPLATE_ID") or "",
-            },
+            "template_map": template_map,
+            "docuseal_templates_required": ["DOCUSEAL_TEMPLATE_ID_OSI", "DOCUSEAL_TEMPLATE_ID_PALMETTO"],
+            "legacy_providers_retired": ["signnow", "adobe_sign"],
+            "docuseal": {"configured": bool(os.getenv("DOCUSEAL_API_KEY")), "url": os.getenv("DOCUSEAL_URL", "https://sign.shamrockbailbonds.biz"), "webhook": "/api/webhooks/docuseal", "template_id_osi": osi_template, "template_id_palmetto": palmetto_template},
             "flatten_engines": ["adobe_pdf_services", "local_pymupdf"],
-            "counts": {
-                "osi": len(osi),
-                "palmetto": len(palmetto),
-                "rules": len(doc_rules),
-                "configured_osi": sum(1 for v in osi.values() if v.get("configured")),
-                "configured_palmetto": sum(
-                    1 for v in palmetto.values() if v.get("configured") and v.get("template_id") not in ("", "(uses shared)")
-                ),
-            },
+            "local_pdf": local_pdf,
+            "counts": {"docuseal_templates": int(bool(osi_template)) + int(bool(palmetto_template)), "required_docuseal_templates": 2},
         }
     except Exception as exc:
-        logger.exception("paperwork/config error: %s", exc)
+        logger.exception("paperwork/config error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-# Standard default drag-and-drop document rules categories
-# universal ≈ templates/surety-agnostic-shamrock + shared legal
-# osi_surety / palmetto_surety ≈ templates/osi or templates/palmetto
-DEFAULT_DOC_RULES_CATEGORIES = {
-    "universal": [
-        "paperwork-header",
-        "faq-cosigners",
-        "faq-defendants",
-        "master_bail_application",
-        "indemnity_agreement",
-        "promissory_note",
-        "disclosure_statement",
-        "master-waiver",
-        "ssa-release",
-        "premium_receipt",
-    ],
-    "payment_plan": [
-        "payment_plan_agreement",
-        "credit_card_authorization",
-        "promissory_note_schedule",
-        "wage_assignment",
-    ],
-    "osi_surety": [
-        "osi_appearance_bond",
-        "osi_premium_receipt",
-        "surety-terms",
-    ],
-    "palmetto_surety": [
-        "palmetto_power_certificate",
-        "palmetto_appearance_bond",
-        "surety-terms",
-    ],
-    "conditional": [
-        "cosigner_addendum",
-        "out_of_state_waiver",
-        "gps_checkin_consent",
-    ],
-}
 
 
 @paperwork_bp.get("/paperwork/config/rules")
@@ -451,7 +350,7 @@ async def generate_packet(request: Request, intake_id: str):
 
         # ── Appearance bonds (one per charge) — UNSIGNED files for print ────
         # Procedure: store unsigned PDF → print → live wet-ink signature → jail.
-        # Never e-sign (SignNow / Adobe Sign). See bond_pdf_service.appearance_bond_procedure_meta.
+        # Never e-sign via any provider. See bond_pdf_service.appearance_bond_procedure_meta.
         if DOC_APPEARANCE_BOND in PACKET_TYPES.get(packet_type, [DOC_APPEARANCE_BOND]):
             try:
                 from dashboard.bond_pdf_service import (
@@ -553,7 +452,7 @@ async def generate_packet(request: Request, intake_id: str):
             "bond_case_id": bond_case_id,           # policy Rule 1
             "packet_type": packet_type,
             "template": template,
-            "surety_id": template,                  # alias for SignNow service
+            "surety_id": template,                  # surety/template routing
             "status": "generated",
             "documents": documents,
             "defendant_name": intake.get("defendant_name", ""),
@@ -918,177 +817,24 @@ async def deliver_packet(request: Request, packet_id: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/signnow
-# Push the packet to SignNow for e-signature.
+# Retired: SignNow is out of the active workflow.
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.post("/paperwork/{packet_id}/signnow")
 async def push_to_signnow(request: Request, packet_id: str):
-    """
-    LEGACY — SignNow push. Disabled for new work unless ALLOW_LEGACY_ESIGN=true.
-    Use POST /api/paperwork/{packet_id}/docuseal or packet/finalize with provider=docuseal.
-    """
-    if os.getenv("ALLOW_LEGACY_ESIGN", "false").lower() not in ("1", "true", "yes"):
-        return JSONResponse(
-            {
-                "success": False,
-                "error": "signnow_retired",
-                "message": (
-                    "SignNow is no longer used for new bond packets. "
-                    "Use DocuSeal: POST /api/paperwork/packet/finalize with provider=docuseal "
-                    "or POST /api/paperwork/{packet_id}/docuseal."
-                ),
-                "use": "docuseal",
-            },
-            status_code=410,
-        )
-    try:
-        data = (await request.json()) or {}
-
-        packet = await _load_packet(packet_id)
-        if not packet:
-            return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
-
-        # Policy Rule 3: reject if already signed
-        if packet.get("status") == "signed":
-            return JSONResponse(status_code=409, content={
-                "error": "Packet is already signed. Create a new packet version (Rule 3).",
-                "packet_id": packet_id,
-                "status": "signed",
-            })
-
-        # Policy Rule 3: reject if voided
-        if packet.get("voided"):
-            return JSONResponse(status_code=409, content={
-                "error": "Packet has been voided. Create a new packet.",
-                "packet_id": packet_id,
-            })
-
-        # Policy Rule 1: warn if bond_case_id not set
-        bond_case_id = packet.get("bond_case_id")
-        if not bond_case_id:
-            logger.warning(
-                "[paperwork] push_to_signnow: packet %s has no bond_case_id — "
-                "proceeding but this violates signature policy Rule 1.",
-                packet_id,
-            )
-
-        intake_id = packet.get("intake_id", "")
-        intake = await _load_intake(intake_id)
-        if not intake:
-            return JSONResponse({"error": f"Intake {intake_id} not found"}, status_code=404)
-
-        # Resolve parameters — body overrides packet defaults
-        phase = int(data.get("phase", 1))
-        surety_id = data.get("surety_id") or packet.get("surety_id") or packet.get("template", "osi")
-        poa_number = data.get("poa_number") or intake.get("poa_number", "")
-        signer_email = (
-            data.get("signer_email")
-            or packet.get("indemnitor_email")
-            or intake.get("indemnitor_email")
-            or intake.get("indemnitor", {}).get("email", "")
-        )
-        signer_name = (
-            packet.get("indemnitor_name")
-            or intake.get("indemnitor_name", "Indemnitor")
-        )
-        telegram_chat_id = data.get("telegram_chat_id") or intake.get("telegram_chat_id")
-        routing_scenario = data.get("routing_scenario", "phase_1")
-        custom_manifest = data.get("custom_manifest")
-
-        if (phase == 2 or routing_scenario == "all-in-one") and not poa_number:
-            return JSONResponse(status_code=400, content={
-                "error": f"Scenario {routing_scenario} requires a poa_number. "
-                         "Provide it in the request body or set it on the intake record.",
-            })
-
-        from dashboard.services.signnow_packet_service import SignNowPacketService
-        svc = SignNowPacketService()
-        try:
-            result = await svc.create_packet(
-                intake_doc=intake,
-                packet_id=packet_id,
-                phase=phase,
-                surety_id=surety_id,
-                signer_email=signer_email,
-                signer_name=signer_name,
-                poa_number=poa_number or None,
-                custom_manifest=custom_manifest,
-                routing_scenario=routing_scenario,
-            )
-        except ValueError as ve:
-            # Hydration fail-closed / missing POA etc. → client error, not 500
-            return JSONResponse(status_code=400, content={
-                "error": str(ve),
-                "packet_id": packet_id,
-            })
-
-        # Store the primary SignNow document ID for webhook correlation
-        # The first document_id is the primary signing document
-        primary_doc_id = (result.get("document_ids") or [""])[0]
-        signing_link = result.get("signing_link", "")
-
-        now = datetime.now(timezone.utc)
-        packets_col = get_collection("paperwork_packets")
-        await packets_col.update_one(
-            {"packet_id": packet_id},
-            {"$set": {
-                "signnow_invite_id": result.get("invite_id"),
-                "signnow_document_id": primary_doc_id,   # KEY: enables webhook lookup
-                "signnow_document_ids": result.get("document_ids", []),
-                "signnow_group_id": result.get("group_id", ""),
-                "signnow_status": "sent",
-                "signnow_sent_at": now,
-                "signnow_phase": phase,
-                "signnow_surety_id": surety_id,
-                "status": "pending_signature",
-                "updated_at": now,
-            }},
-        )
-
-        # Update intake
-        intake_col = get_collection("intake_queue")
-        await intake_col.update_one(
-            {"intake_id": intake_id},
-            {"$set": {"paperwork_status": "pending_signature", "updated_at": now}},
-        )
-
-        logger.info(
-            "[paperwork] Packet %s pushed to SignNow: invite=%s doc=%s phase=%d surety=%s",
-            packet_id, result.get("invite_id"), primary_doc_id, phase, surety_id,
-        )
-
-        # ── Telegram delivery (if indemnitor has a Telegram chat_id stored) ──
-        if signing_link and telegram_chat_id:
-            try:
-                from dashboard.services.telegram_service import get_telegram_service
-                tg = get_telegram_service()
-                await tg.send_signing_link(
-                    chat_id=telegram_chat_id,
-                    defendant_name=intake.get("defendant_name", ""),
-                    signing_link=signing_link,
-                    indemnitor_name=signer_name,
-                    phase=phase,
-                )
-                logger.info("[paperwork] Telegram signing link sent to chat_id=%s", telegram_chat_id)
-            except Exception as tg_exc:
-                logger.warning("[paperwork] Telegram delivery failed: %s", tg_exc)
-
-        return {
-            "success": True,
-            "packet_id": packet_id,
-            "bond_case_id": bond_case_id,
-            "phase": phase,
-            "surety_id": surety_id,
-            "signnow_invite_id": result.get("invite_id"),
-            "signnow_document_id": primary_doc_id,
-            "signnow_document_ids": result.get("document_ids", []),
-            "signnow_group_id": result.get("group_id", ""),
-            "signnow_signing_link": signing_link,
-            "manifest_size": result.get("manifest_size", 0),
-        }
-
-    except Exception as exc:
-        logger.exception("push_to_signnow error for %s", packet_id)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+    """Return 410 for retired SignNow pushes; use DocuSeal only."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "signnow_retired",
+            "message": (
+                "SignNow is no longer part of the Shamrock paperwork workflow. "
+                "Use DocuSeal via /api/paperwork/packet/finalize or "
+                "/api/paperwork/{packet_id}/docuseal."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1201,511 +947,21 @@ async def list_packets(intake_id: str):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/paperwork/signnow/validate-templates
-# Diagnostic: validate every TEMPLATE_MAP entry against production SignNow.
+# Retired: SignNow template validation is intentionally unavailable.
 # ─────────────────────────────────────────────────────────────────────────────
 @paperwork_bp.get("/paperwork/signnow/validate-templates")
 async def validate_signnow_templates():
-    """
-    Validate all SignNow TEMPLATE_MAP entries against the production account.
-    For each template:
-      - Calls GET /document/{id} to confirm it exists and is accessible
-      - Reports template name, field count, role list, and page count
-      - Flags any missing or inaccessible templates
-      - Lists all field names for field-mapping verification
-
-    Returns:
+    """Return 410 for retired SignNow diagnostics; use DocuSeal template endpoints."""
+    return JSONResponse(
         {
-            "success": true,
-            "templates": [...],
-            "valid_count": 12,
-            "invalid_count": 1,
-            "palmetto_todos": ["collateral-receipt-palmetto", ...]
-        }
-    """
-    import httpx
-    from dashboard.services.signnow_packet_service import SignNowPacketService
+            "success": False,
+            "error": "signnow_retired",
+            "message": "SignNow templates are not used. Verify DocuSeal via /api/paperwork/docuseal/templates.",
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
-    svc = SignNowPacketService()
-    if not svc.api_token:
-        try:
-            await svc._get_token()
-        except Exception as exc:
-            return JSONResponse(status_code=500, content={
-                "success": False,
-                "error": f"SignNow auth failed: {exc}",
-            })
-
-    results = []
-    valid = 0
-    invalid = 0
-    palmetto_todos = []
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        for slug, template_id in SignNowPacketService.TEMPLATE_MAP.items():
-            if not template_id or template_id.startswith("<"):
-                palmetto_todos.append(slug)
-                results.append({
-                    "slug": slug,
-                    "template_id": template_id,
-                    "status": "todo",
-                    "message": "Template ID not yet configured",
-                })
-                continue
-
-            try:
-                resp = await client.get(
-                    f"{svc.base_url}/document/{template_id}",
-                    headers=svc._headers,
-                )
-                if resp.status_code == 200:
-                    doc_data = resp.json()
-                    fields = doc_data.get("fields", [])
-                    field_names = [f.get("field_name", f.get("name", "")) for f in fields]
-                    roles = list({
-                        f.get("role", "")
-                        for f in fields
-                        if f.get("role")
-                    })
-                    results.append({
-                        "slug": slug,
-                        "template_id": template_id,
-                        "status": "valid",
-                        "document_name": doc_data.get("document_name", ""),
-                        "field_count": len(fields),
-                        "field_names": sorted(field_names),  # for field-mapping audit
-                        "roles": sorted(roles),
-                        "page_count": doc_data.get("page_count", 0),
-                    })
-                    valid += 1
-                elif resp.status_code == 404:
-                    results.append({
-                        "slug": slug,
-                        "template_id": template_id,
-                        "status": "not_found",
-                        "message": "Template does not exist in this SignNow account",
-                    })
-                    invalid += 1
-                else:
-                    results.append({
-                        "slug": slug,
-                        "template_id": template_id,
-                        "status": "error",
-                        "http_status": resp.status_code,
-                        "message": resp.text[:200],
-                    })
-                    invalid += 1
-            except Exception as exc:
-                results.append({
-                    "slug": slug,
-                    "template_id": template_id,
-                    "status": "error",
-                    "message": str(exc),
-                })
-                invalid += 1
-
-    return {
-        "success": True,
-        "valid_count": valid,
-        "invalid_count": invalid,
-        "todo_count": len(palmetto_todos),
-        "palmetto_todos": palmetto_todos,
-        "templates": results,
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SwipeSimple Link, Cash Payment & Post-Release Remedy Endpoints
-# ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/payment/swipesimple-link")
-async def generate_swipesimple_link(request: Request):
-    """
-    Generate SwipeSimple checkout URL and deliver via BlueBubbles (iMessage/SMS)
-    and/or Gmail email once the bond's premium amount has been confirmed.
-
-    Payload options:
-        packet_id: Optional paperwork packet ID
-        booking_number: Optional county booking/case number
-        amount: Confirmed premium amount (numeric)
-        phone: Recipient cell phone for iMessage/SMS
-        email: Recipient email address for payment request email
-        deliver: Bool (default True) — master toggle to dispatch link
-        deliver_text: Bool (default True) — send BlueBubbles text
-        deliver_email: Bool (default True) — send Gmail email
-        defendant_name: Optional defendant full name
-    """
-    try:
-        body = await request.json() if request else {}
-        packet_id = (body.get("packet_id") or "").strip()
-        booking_number = (body.get("booking_number") or "").strip()
-        phone = (body.get("phone") or "").strip()
-        email_addr = (body.get("email") or body.get("email_address") or "").strip()
-        amount_val = body.get("amount")
-        defendant_name = (body.get("defendant_name") or "").strip()
-
-        deliver_master = body.get("deliver", True)
-        deliver_text = body.get("deliver_text", deliver_master)
-        deliver_email = body.get("deliver_email", deliver_master)
-
-        # Context Fallback: Hydrate missing fields from MongoDB
-        packet_doc = None
-        if packet_id:
-            pkts = get_collection("paperwork_packets")
-            try:
-                packet_doc = await pkts.find_one(_packet_lookup_filter(packet_id))
-            except Exception as lookup_err:
-                logger.warning("SwipeSimple packet lookup failed: %s", lookup_err)
-                packet_doc = None
-
-        bonds_col = get_collection("active_bonds")
-        bond_doc = None
-        if booking_number:
-            bond_doc = await bonds_col.find_one({"booking_number": booking_number})
-        elif packet_doc and packet_doc.get("booking_number"):
-            booking_number = str(packet_doc.get("booking_number") or "").strip()
-            if booking_number:
-                bond_doc = await bonds_col.find_one({"booking_number": booking_number})
-
-        intake_doc = None
-        if packet_doc and packet_doc.get("intake_id"):
-            intake_col = get_collection("intake_queue")
-            intake_id = str(packet_doc.get("intake_id") or "").strip()
-            intake_clauses: list[dict] = [{"intake_id": intake_id}]
-            try:
-                from bson import ObjectId
-                if ObjectId.is_valid(intake_id):
-                    intake_clauses.append({"_id": ObjectId(intake_id)})
-            except Exception:
-                pass
-            try:
-                intake_doc = await intake_col.find_one(
-                    {"$or": intake_clauses} if len(intake_clauses) > 1 else intake_clauses[0]
-                )
-            except Exception:
-                intake_doc = None
-
-        # Resolve phone
-        if not phone:
-            phone = (
-                (packet_doc.get("indemnitor_phone") if packet_doc else "")
-                or (packet_doc.get("phone") if packet_doc else "")
-                or (intake_doc.get("indemnitor_phone") if intake_doc else "")
-                or (bond_doc.get("indemnitor_phone") if bond_doc else "")
-                or ((bond_doc.get("indemnitor") or {}).get("phone") if bond_doc else "")
-                or ""
-            )
-        phone = str(phone or "").strip()
-
-        # Resolve email
-        if not email_addr:
-            email_addr = (
-                (packet_doc.get("indemnitor_email") if packet_doc else "")
-                or (packet_doc.get("email") if packet_doc else "")
-                or (intake_doc.get("indemnitor_email") if intake_doc else "")
-                or (bond_doc.get("indemnitor_email") if bond_doc else "")
-                or ((bond_doc.get("indemnitor") or {}).get("email") if bond_doc else "")
-                or ""
-            )
-        email_addr = str(email_addr or "").strip()
-
-        # Resolve defendant name
-        if not defendant_name:
-            defendant_name = (
-                (packet_doc.get("defendant_name") if packet_doc else "")
-                or (bond_doc.get("defendant_name") if bond_doc else "")
-                or (intake_doc.get("defendant_name") if intake_doc else "")
-                or "Client"
-            )
-        defendant_name = str(defendant_name or "Client").strip() or "Client"
-
-        # Resolve amount
-        try:
-            amount = float(amount_val) if amount_val is not None else 0.0
-        except (TypeError, ValueError):
-            amount = 0.0
-
-        if amount <= 0.0:
-            try:
-                if packet_doc and (packet_doc.get("premium_amount") or packet_doc.get("numeric_premium_dollar")):
-                    amount = float(packet_doc.get("premium_amount") or packet_doc.get("numeric_premium_dollar") or 0.0)
-                elif bond_doc and (bond_doc.get("premium_amount") or bond_doc.get("total_premium")):
-                    amount = float(bond_doc.get("premium_amount") or bond_doc.get("total_premium") or 0.0)
-                elif intake_doc and intake_doc.get("premium_amount"):
-                    amount = float(intake_doc.get("premium_amount") or 0.0)
-            except (TypeError, ValueError):
-                amount = 0.0
-
-        swipesimple_url = (os.getenv("SWIPESIMPLE_PAYMENT_LINK") or "").strip()
-        if not swipesimple_url:
-            try:
-                swipesimple_url = (getattr(get_settings(), "SWIPESIMPLE_PAYMENT_LINK", None) or "").strip()
-            except Exception:
-                swipesimple_url = ""
-        if not swipesimple_url:
-            swipesimple_url = "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
-
-        text_delivered = False
-        text_queued = False
-        text_channel = None
-        email_delivered = False
-        text_error = None
-        email_error = None
-
-        # 1) Deliver text via BlueBubbles (queue + retry; never Twilio)
-        if deliver_text and phone:
-            clean_phone = "".join(ch for ch in phone if ch.isdigit())
-            if len(clean_phone) >= 10:
-                try:
-                    amount_str = f"${amount:,.2f}" if amount > 0 else "Confirmed Amount"
-                    msg = (
-                        f"💳 Shamrock Bail Bonds — Payment Request\n"
-                        f"Defendant: {defendant_name}\n"
-                        f"Case / Booking: {booking_number or 'N/A'}\n"
-                        f"Confirmed Premium Amount: {amount_str}\n\n"
-                        f"Pay Online via SwipeSimple:\n{swipesimple_url}\n\n"
-                        f"Questions? Call or text us 24/7 at (239) 224-5454."
-                    )
-                    raw = await send_message_universal(phone, msg)
-                    send_res = normalize_bb_send_result(raw)
-                    text_delivered = bb_send_accepted(send_res)
-                    text_queued = bool(send_res.get("queued"))
-                    text_channel = send_res.get("channel")
-                    if not text_delivered:
-                        text_error = send_res.get("error") or "bb_send_failed"
-                except Exception as bb_err:
-                    text_error = str(bb_err)[:200]
-                    logger.warning("SwipeSimple BlueBubbles delivery warning: %s", bb_err)
-            else:
-                text_error = "invalid_phone"
-
-        # 2) Deliver email via Gmail API
-        if deliver_email and email_addr and "@" in email_addr:
-            try:
-                from dashboard.services.gmail_reader import GmailReaderService
-                gmail_svc = GmailReaderService()
-                if gmail_svc.is_configured:
-                    amount_str = f"${amount:,.2f}" if amount > 0 else "Confirmed Amount"
-                    subject = f"Shamrock Bail Bonds — Payment Request ({amount_str})"
-                    body_text = (
-                        f"Shamrock Bail Bonds — Payment Request\n\n"
-                        f"Defendant Name: {defendant_name}\n"
-                        f"Case / Booking Number: {booking_number or 'N/A'}\n"
-                        f"Confirmed Premium Amount: {amount_str}\n\n"
-                        f"Please click the link below to securely pay your bond premium online via SwipeSimple:\n"
-                        f"{swipesimple_url}\n\n"
-                        f"Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901\n"
-                        f"24/7 Phone / Text: (239) 224-5454\n"
-                    )
-                    body_html = f"""
-                    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 20px; background-color: #0f172a; color: #f8fafc; border-radius: 12px; border: 1px solid #1e293b;">
-                      <div style="text-align: center; padding-bottom: 16px; border-bottom: 1px solid #334155;">
-                        <h2 style="color: #10b981; margin: 0; font-size: 22px; letter-spacing: 0.5px;">☘️ SHAMROCK BAIL BONDS</h2>
-                        <p style="color: #94a3b8; font-size: 13px; margin-top: 4px;">Fast. Frictionless. Everywhere.</p>
-                      </div>
-                      <div style="padding: 20px 0;">
-                        <h3 style="color: #ffffff; margin-top: 0;">Payment Request — Confirmed Bond Premium</h3>
-                        <p style="color: #cbd5e1; font-size: 14px; line-height: 1.5;">
-                          Your bond paperwork and premium amount have been verified. You can securely pay online using credit/debit card via SwipeSimple below:
-                        </p>
-                        <div style="background-color: #1e293b; border-radius: 8px; padding: 16px; margin: 16px 0; border: 1px solid #334155;">
-                          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                            <tr>
-                              <td style="color: #94a3b8; padding: 4px 0;">Defendant:</td>
-                              <td style="color: #ffffff; font-weight: 600; text-align: right;">{defendant_name}</td>
-                            </tr>
-                            <tr>
-                              <td style="color: #94a3b8; padding: 4px 0;">Booking / Case #:</td>
-                              <td style="color: #ffffff; font-weight: 600; text-align: right;">{booking_number or 'N/A'}</td>
-                            </tr>
-                            <tr style="border-top: 1px dashed #475569;">
-                              <td style="color: #10b981; font-weight: 700; padding: 8px 0 0 0; font-size: 15px;">Confirmed Premium:</td>
-                              <td style="color: #10b981; font-weight: 700; text-align: right; padding: 8px 0 0 0; font-size: 18px;">{amount_str}</td>
-                            </tr>
-                          </table>
-                        </div>
-                        <div style="text-align: center; margin: 24px 0;">
-                          <a href="{swipesimple_url}" target="_blank" style="background-color: #10b981; color: #ffffff; padding: 14px 28px; font-size: 15px; font-weight: 700; text-decoration: none; border-radius: 8px; display: inline-block; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">
-                            💳 Pay {amount_str} Online Now
-                          </a>
-                        </div>
-                        <p style="color: #64748b; font-size: 12px; text-align: center;">
-                          Direct Link: <a href="{swipesimple_url}" style="color: #38bdf8; word-break: break-all;">{swipesimple_url}</a>
-                        </p>
-                      </div>
-                      <div style="border-top: 1px solid #334155; padding-top: 14px; text-align: center; font-size: 12px; color: #64748b;">
-                        <p style="margin: 2px 0;">Shamrock Bail Bonds | 1528 Broadway, Ft. Myers, FL 33901</p>
-                        <p style="margin: 2px 0;">24/7 Support: (239) 224-5454 | admin@shamrockbailbonds.biz</p>
-                      </div>
-                    </div>
-                    """
-                    mail_res = gmail_svc.send_email(
-                        to=email_addr,
-                        subject=subject,
-                        body_text=body_text,
-                        body_html=body_html,
-                    )
-                    email_delivered = bool(mail_res and mail_res.get("success"))
-                    if not email_delivered:
-                        email_error = mail_res.get("error") if mail_res else "email_failed"
-                else:
-                    email_error = "gmail_not_configured"
-            except Exception as mail_err:
-                email_error = str(mail_err)[:200]
-                logger.warning("SwipeSimple Gmail delivery warning: %s", mail_err)
-
-        # Audit & Database Record Logging
-        now_iso = datetime.now(timezone.utc).isoformat()
-        if packet_id:
-            try:
-                pkts = get_collection("paperwork_packets")
-                await pkts.update_one(
-                    _packet_lookup_filter(packet_id),
-                    {
-                        "$set": {
-                            "last_payment_link_sent_at": now_iso,
-                            "last_payment_amount": amount,
-                            "payment_link_delivered_text": text_delivered,
-                            "payment_link_delivered_email": email_delivered,
-                            "payment_link_text_channel": text_channel,
-                            "payment_link_text_queued": text_queued,
-                        },
-                        "$inc": {"payment_link_sent_count": 1},
-                    },
-                )
-            except Exception as db_err:
-                logger.warning("Failed to update paperwork_packets record: %s", db_err)
-
-        try:
-            disp_col = get_collection("payment_dispatches")
-            await disp_col.insert_one({
-                "packet_id": packet_id,
-                "booking_number": booking_number,
-                "amount": amount,
-                "phone": phone,
-                "email": email_addr,
-                "swipesimple_url": swipesimple_url,
-                "text_delivered": text_delivered,
-                "text_queued": text_queued,
-                "text_channel": text_channel,
-                "text_error": text_error,
-                "email_delivered": email_delivered,
-                "email_error": email_error,
-                "created_at": now_iso,
-            })
-        except Exception as log_err:
-            logger.warning("Failed to log payment dispatch record: %s", log_err)
-
-        return {
-            "success": True,
-            "packet_id": packet_id,
-            "booking_number": booking_number,
-            "amount": amount,
-            "payment_link": swipesimple_url,
-            "delivered": (text_delivered or email_delivered),
-            "text_delivered": text_delivered,
-            "text_queued": text_queued,
-            "text_channel": text_channel,
-            "text_error": text_error,
-            "email_delivered": email_delivered,
-            "email_error": email_error,
-            "recipient_phone": phone,
-            "recipient_email": email_addr,
-            "defendant_name": defendant_name,
-        }
-    except Exception as exc:
-        logger.exception("swipesimple-link error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-@paperwork_bp.post("/paperwork/payment/cash-log")
-async def log_cash_payment(request: Request):
-    """Log official cash premium payment and generate receipt record."""
-    try:
-        body = await request.json()
-        packet_id = body.get("packet_id", "")
-        amount = float(body.get("amount", 0.0))
-        received_from = body.get("received_from", "Indemnitor")
-        notes = body.get("notes", "")
-
-        tx_col = get_collection("payments")
-        receipt_id = f"CASH-{uuid.uuid4().hex[:8].upper()}"
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        record = {
-            "receipt_id": receipt_id,
-            "packet_id": packet_id,
-            "amount": amount,
-            "payment_method": "cash",
-            "received_from": received_from,
-            "notes": notes,
-            "status": "completed",
-            "created_at": now_iso,
-        }
-        await tx_col.insert_one(record)
-
-        return {
-            "success": True,
-            "message": f"Cash payment of ${amount:,.2f} recorded successfully",
-            "receipt_id": receipt_id,
-            "record": {k: v for k, v in record.items() if k != "_id"},
-        }
-    except Exception as exc:
-        logger.exception("cash-log error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-
-@paperwork_bp.post("/paperwork/post-release/remedy-doc")
-async def generate_post_release_remedy_doc(request: Request):
-    """Generate post-release legal documents & forfeiture remedies."""
-    try:
-        body = await request.json()
-        doc_type = body.get("doc_type", "")
-        packet_id = body.get("packet_id", "")
-        case_number = body.get("case_number", "TBD")
-        defendant_name = body.get("defendant_name", "Unknown Defendant")
-        county = body.get("county", "Lee")
-        notes = body.get("notes", "")
-
-        remedy_col = get_collection("forfeiture_remedies")
-        doc_id = f"REMEDY-{uuid.uuid4().hex[:8].upper()}"
-        now_iso = datetime.now(timezone.utc).isoformat()
-
-        titles = {
-            "motion_vacate_forfeiture": "Motion to Vacate Forfeiture & Discharge Bond",
-            "affidavit_surrender": "Affidavit of Defendant Surrender & Notice of Custody",
-            "indemnitor_recovery_demand": "Formal Indemnitor Recovery Demand & Notice of Forfeiture",
-            "fugitive_recovery_warrant": "Fugitive Recovery Agent Warrant & Authorization",
-        }
-        title = titles.get(doc_type, "Post-Release Legal Pleading")
-
-        doc_record = {
-            "doc_id": doc_id,
-            "doc_type": doc_type,
-            "title": title,
-            "packet_id": packet_id,
-            "case_number": case_number,
-            "defendant_name": defendant_name,
-            "county": county,
-            "notes": notes,
-            "status": "draft_generated",
-            "created_at": now_iso,
-        }
-        await remedy_col.insert_one(doc_record)
-
-        return {
-            "success": True,
-            "message": f"Generated {title}",
-            "doc_id": doc_id,
-            "record": {k: v for k, v in doc_record.items() if k != "_id"},
-        }
-    except Exception as exc:
-        logger.exception("remedy-doc error: %s", exc)
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Adaptive Case Packet Builder
-# Resolves match → defendant/indemnitor, assembles drag-drop manifest,
-# flattens extras, sends via SignNow (primary) or Adobe Sign (optional).
-# ─────────────────────────────────────────────────────────────────────────────
 
 @paperwork_bp.post("/paperwork/packet/context")
 async def packet_builder_context(request: Request):
@@ -1780,11 +1036,7 @@ async def packet_builder_context(request: Request):
             "esign_provider": client_provider,
             "providers": {
                 "docuseal": bool(os.getenv("DOCUSEAL_API_KEY")),
-                "signnow": True,
                 "adobe_pdf_services": astat["pdf_services"]["configured"],
-                "adobe_sign": astat["acrobat_sign"]["configured"],
-                # legacy key for UI
-                "adobe": astat["acrobat_sign"]["configured"],
             },
             "adobe": astat,
         }
@@ -1801,8 +1053,8 @@ async def packet_builder_finalize(request: Request):
       - optional self-indemnitor (PIN 224545)
       - assemble docs from drag-drop rules + extra catalog keys
       - attach extra uploaded PDFs
-      - flatten into a single PDF when possible
-      - send to DocuSeal (default) and/or SignNow / Adobe for signature
+      - flatten into a single PDF only for previews/extra uploads when needed
+      - send new e-sign packets to DocuSeal only
     """
     try:
         body = (await request.json()) or {}
@@ -1937,7 +1189,7 @@ async def packet_builder_finalize(request: Request):
         packet_id = body.get("packet_id") or f"PKT-{uuid.uuid4().hex[:10].upper()}"
         surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower()
 
-        # Build synthetic intake for SignNow service
+        # Build normalized bond/intake data for DocuSeal template prefill
         def_ = ctx.get("defendant") or {}
         ind = ctx.get("indemnitor") or {}
         intake_doc = {
@@ -2003,13 +1255,13 @@ async def packet_builder_finalize(request: Request):
         }
 
         # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
-        # DocuSeal uses its own template set — skip heavy stitch/flatten unless staff
-        # forces it (force_flatten) or provider needs a merged PDF (signnow/adobe).
+        # DocuSeal uses its two live templates — skip heavy stitch/flatten unless staff
+        # forces it (force_flatten) or uploaded extras require a preview archive.
         flat_bytes = b""
         flat_b64 = ""
         adobe_pdf_meta: dict = {}
         need_flatten = (
-            provider in ("signnow", "adobe", "both", "none")
+            provider == "none"
             or bool(body.get("force_flatten") or body.get("flatten"))
             or bool(extras)
         )
@@ -2078,8 +1330,6 @@ async def packet_builder_finalize(request: Request):
             flat_b64 = _b64.b64encode(flat_bytes).decode("ascii")
 
         send_results: dict = {}
-        signnow_result: dict = {}
-        adobe_result: dict = {}
         docuseal_result: dict = {}
         status = "finalized"
         signing_link = ""
@@ -2093,11 +1343,7 @@ async def packet_builder_finalize(request: Request):
                 )
 
                 ds = get_docuseal_service()
-                template_id = (
-                    body.get("docuseal_template_id")
-                    or body.get("template_id")
-                    or resolve_template_id_for_surety(surety_id)
-                )
+                template_id = resolve_template_id_for_surety(surety_id)
                 if not ds.is_configured:
                     send_results["docuseal"] = {
                         "success": False,
@@ -2109,8 +1355,8 @@ async def packet_builder_finalize(request: Request):
                         "success": False,
                         "error": "template_id_required",
                         "hint": (
-                            "Set DOCUSEAL_TEMPLATE_ID_OSI / DOCUSEAL_TEMPLATE_ID_PALMETTO "
-                            "or pass template_id in the request"
+                            "Set DOCUSEAL_TEMPLATE_ID_OSI and DOCUSEAL_TEMPLATE_ID_PALMETTO "
+                            "for the two live DocuSeal templates"
                         ),
                     }
                 else:
@@ -2171,100 +1417,7 @@ async def packet_builder_finalize(request: Request):
                     status_code=502,
                 )
 
-        # ── SignNow (legacy) ──
-        if provider in ("signnow", "both"):
-            try:
-                from dashboard.services.signnow_packet_service import SignNowPacketService
-                svc = SignNowPacketService()
-                # custom manifest: map our assembled docs to SignNow template keys
-                custom_manifest = []
-                for d in manifest:
-                    slug = d.get("template_slug") or template_slug_for_catalog_key(d.get("catalog_key", ""))
-                    if d.get("print_only"):
-                        continue
-                    custom_manifest.append(slug)
-
-                routing = body.get("routing_scenario") or "all-in-one"
-                phase = int(body.get("phase") or (2 if routing == "all-in-one" else 1))
-                signer_email = (
-                    body.get("signer_email")
-                    or ind.get("email")
-                    or def_.get("email")
-                    or ""
-                )
-                signer_name = ind.get("name") or def_.get("name") or "Signer"
-                poa_number = ctx.get("poa_number") or body.get("poa_number") or ""
-
-                if phase == 2 and not poa_number and routing == "all-in-one":
-                    # Soft fallback to phase 1 if POA missing
-                    phase = 1
-                    routing = "phase_1"
-
-                signnow_result = await svc.create_packet(
-                    intake_doc=intake_doc,
-                    packet_id=packet_id,
-                    phase=phase,
-                    surety_id=surety_id,
-                    signer_email=signer_email,
-                    signer_name=signer_name,
-                    poa_number=poa_number or None,
-                    custom_manifest=custom_manifest or None,
-                    routing_scenario=routing,
-                )
-                signing_link = signnow_result.get("signing_link") or ""
-                status = "pending_signature"
-                send_results["signnow"] = {
-                    "success": True,
-                    "document_ids": signnow_result.get("document_ids"),
-                    "group_id": signnow_result.get("group_id"),
-                    "invite_id": signnow_result.get("invite_id"),
-                    "signing_link": signing_link,
-                }
-            except Exception as sn_exc:
-                logger.exception("SignNow finalize failed — initiating Adobe Sign fallback")
-                send_results["signnow"] = {"success": False, "error": str(sn_exc), "fallback_triggered": True}
-                if flat_bytes:
-                    try:
-                        adobe_fallback = await send_via_adobe(
-                            flattened_pdf=flat_bytes,
-                            filename=f"{packet_id}.pdf",
-                            signer_email=body.get("signer_email") or ind.get("email") or "",
-                            signer_name=ind.get("name") or def_.get("name") or "Signer",
-                            agreement_name=f"Shamrock Bond Packet — {def_.get('name') or packet_id}",
-                        )
-                        send_results["adobe"] = adobe_fallback
-                        send_results["adobe"]["is_fallback"] = True
-                        if adobe_fallback.get("success"):
-                            status = "pending_signature"
-                            signing_link = adobe_fallback.get("signing_link") or adobe_fallback.get("url") or ""
-                            logger.info("✅ Adobe Sign fallback succeeded for packet %s", packet_id)
-                    except Exception as ad_exc:
-                        logger.exception("Adobe Sign fallback also failed")
-                        send_results["adobe"] = {"success": False, "error": str(ad_exc)}
-                if provider == "signnow" and not (send_results.get("adobe", {}).get("success")):
-                    return JSONResponse(
-                        {"success": False, "error": f"SignNow failed ({sn_exc}) and Adobe Sign fallback failed.", "packet_id": packet_id, "send_results": send_results},
-                        status_code=502,
-                    )
-
-        # ── Adobe ──
-        if provider in ("adobe", "both"):
-            if not flat_bytes:
-                adobe_result = {
-                    "success": False,
-                    "error": "No flattened PDF available for Adobe (add blank templates or upload PDFs).",
-                }
-            else:
-                adobe_result = await send_via_adobe(
-                    flattened_pdf=flat_bytes,
-                    filename=f"{packet_id}.pdf",
-                    signer_email=body.get("signer_email") or ind.get("email") or "",
-                    signer_name=ind.get("name") or def_.get("name") or "Signer",
-                    agreement_name=f"Shamrock Bond Packet — {def_.get('name') or packet_id}",
-                )
-            send_results["adobe"] = adobe_result
-            if adobe_result.get("success"):
-                status = "pending_signature"
+        # SignNow and Adobe Sign are retired for new paperwork packets.
 
         # Persist packet
         packet_doc = {
@@ -2314,10 +1467,6 @@ async def packet_builder_finalize(request: Request):
             "field_map_keys": list(fields.keys())[:80],
             "send_results": send_results,
             "esign_provider": provider,
-            "signnow_document_ids": (signnow_result or {}).get("document_ids") or [],
-            "signnow_group_id": (signnow_result or {}).get("group_id") or "",
-            "signnow_invite_id": (signnow_result or {}).get("invite_id"),
-            "signnow_status": "sent" if (signnow_result or {}).get("document_ids") else None,
             "docuseal_submission_id": (docuseal_result or {}).get("submission_id"),
             "docuseal_template_id": (send_results.get("docuseal") or {}).get("template_id"),
             "docuseal_submitters": (docuseal_result or {}).get("submitters") or [],
@@ -2325,7 +1474,6 @@ async def packet_builder_finalize(request: Request):
             "defendant_phone": def_.get("phone") or "",
             "docuseal_status": "sent" if (docuseal_result or {}).get("submission_id") else None,
             "docuseal_sent_at": now.isoformat() if (docuseal_result or {}).get("submission_id") else None,
-            "adobe_agreement_id": (adobe_result or {}).get("agreement_id"),
             "signing_link": signing_link,
             "provider": provider,
             "created_at": now,
@@ -2413,7 +1561,7 @@ async def set_client_esign_provider(request: Request):
     """
     Set e-sign provider for a client (indemnitor / defendant / bond).
     Applies to the whole packet — not per PDF.
-    Body: { provider: signnow|adobe|both|none, indemnitor_id?, defendant_id?, bond_case_id? }
+    Body: { provider: docuseal|none, indemnitor_id?, defendant_id?, bond_case_id? }
     """
     try:
         body = (await request.json()) or {}
@@ -2679,11 +1827,7 @@ async def docuseal_prefill_preview(request: Request):
         surety_id=surety_id,
     )
     values = DocuSealService.prefill_values_from_bond(bond_data)
-    template_id = (
-        body.get("docuseal_template_id")
-        or body.get("template_id")
-        or resolve_template_id_for_surety(surety_id)
-    )
+    template_id = resolve_template_id_for_surety(surety_id)
 
     # Predicted submitter roles (must match live DocuSeal template names)
     inds = bond_data.get("indemnitors") or []
@@ -2804,7 +1948,7 @@ async def paperwork_docuseal_status(packet_id: str):
     Refresh packet signing status from DocuSeal and sync submitter sign links.
     Does not mark completed (webhook/poller owns completion + Drive archive).
     """
-    from dashboard.services.docuseal_service import get_docuseal_service
+    from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
 
     packet = await _load_packet(packet_id)
     if not packet:
@@ -3019,7 +2163,7 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
       send_email: bool (default true)
       send_sms: bool (default false)
     """
-    from dashboard.services.docuseal_service import get_docuseal_service
+    from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
 
     packet = await _load_packet(packet_id)
     if not packet:
@@ -3143,14 +2287,13 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     Create a DocuSeal submission for an existing paperwork packet.
 
     Body JSON:
-      template_id: int|str (required until packet stores default)
       send_email: bool (default false — portal/PIN owns delivery)
       include_defendant: bool (default true)
       indemnitors: optional [{name, email, phone}]
       defendant: optional {name, email, phone}
       bond_data: optional override fields for prefill
     """
-    from dashboard.services.docuseal_service import get_docuseal_service
+    from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
 
     packet = await _load_packet(packet_id)
     if not packet:
@@ -3161,13 +2304,14 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     except Exception:
         body = {}
 
-    template_id = body.get("template_id") or packet.get("docuseal_template_id")
+    surety_for_template = (packet.get("surety_id") or packet.get("template") or body.get("surety_id") or "osi").lower()
+    template_id = resolve_template_id_for_surety(surety_for_template)
     if not template_id:
         return JSONResponse(
             {
                 "success": False,
                 "error": "template_id_required",
-                "hint": "Upload templates in DocuSeal admin, then pass template_id",
+                "hint": "Set DOCUSEAL_TEMPLATE_ID_OSI and DOCUSEAL_TEMPLATE_ID_PALMETTO for the two live DocuSeal templates",
             },
             status_code=400,
         )

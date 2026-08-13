@@ -6,7 +6,7 @@
 
 ## Purpose
 
-This policy governs generation, delivery, and tracking of new signature packets via self-hosted DocuSeal. SignNow is retained only for historical packet status. Paperwork is surety-specific — the template depends on which surety (OSI or Palmetto) is backing the bond.
+This policy governs generation, delivery, and tracking of signature packets via self-hosted DocuSeal only. SignNow is retired from the workflow and may appear only on historical records. Paperwork is surety-specific — the template depends on which surety (OSI or Palmetto) is backing the bond.
 
 ---
 
@@ -69,7 +69,7 @@ Before sending a signing link:
 | 3 | **Live wet-ink signature** on the paper |
 | 4 | Take the signed original(s) **to the jail** |
 
-- Never send appearance bonds via DocuSeal, SignNow, Adobe Acrobat Sign, or email e-sign
+- Never send appearance bonds via DocuSeal or any other e-sign provider; appearance bonds require wet ink
 - One appearance bond PDF per charge; one POA per charge; case number(s) per charge
 - Indemnitor/defendant packet docs (indemnity, SSA, applications, etc.) still use e-sign
 - Stored under `dashboard/uploads/appearance_bonds/<packet_id>/` with status `unsigned_stored`

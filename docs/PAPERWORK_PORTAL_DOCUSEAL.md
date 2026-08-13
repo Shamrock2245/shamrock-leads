@@ -1,11 +1,11 @@
 # Shamrock Paperwork Portal + DocuSeal
 
-> **Status:** APPROVED architecture (2026-08-06)  
-> **Replaces:** SignNow as e-sign backbone  
-> **Host:** Hetzner VPS · Docker Compose profile `paperwork`  
-> **Public portals:** `https://paperwork.shamrockbailbonds.biz`  
-> **DocuSeal:** `https://sign.shamrockbailbonds.biz` (self-hosted open source)  
-> **Upstream:** https://github.com/docusealco/docuseal  
+> **Status:** APPROVED architecture (2026-08-06)
+> **E-sign backbone:** DocuSeal only
+> **Host:** Hetzner VPS · Docker Compose profile `paperwork`
+> **Public portals:** `https://paperwork.shamrockbailbonds.biz`
+> **DocuSeal:** `https://sign.shamrockbailbonds.biz` (self-hosted open source)
+> **Upstream:** https://github.com/docusealco/docuseal
 
 ---
 
@@ -16,13 +16,13 @@
 | Capability | Where it lives today |
 |------------|----------------------|
 | Bond case, surety, POA, match gate | Mongo + Bond Desk |
-| Packet field hydration (OSI / Palmetto) | `signnow_packet_service` → will target DocuSeal templates |
+| Packet field hydration (OSI / Palmetto) | `docuseal_service` → targets the two live DocuSeal templates |
 | Identity media (DL/selfie storage) | `identity_media_service` + `dashboard/uploads` |
 | Open-source OCR stack | `scrapers/captcha_ocr.py` + `requirements-ocr-extra.txt` (**PaddleOCR**, Tesseract, EasyOCR, ddddocr) |
 | VPS + Docker + Nginx TLS | Production Hetzner |
 | Brand assets (transparent logo) | `docs/brand/shamrock_logo_transparent.png` |
 
-We are **not** inventing a new CRM — we are adding a **role-scoped portal** and swapping e-sign from SignNow → **DocuSeal** (AGPL open source, Docker-first).
+We are **not** inventing a new CRM — we are adding a **role-scoped portal** and standardizing e-sign on **DocuSeal** (AGPL open source, Docker-first).
 
 ---
 
@@ -36,7 +36,7 @@ We are **not** inventing a new CRM — we are adding a **role-scoped portal** an
 | 4 | **Surety:** Staff chooses OSI or Palmetto on the bond case; portals only fill role fields. Same rules; template field maps differ slightly. |
 | 5 | **Post-transaction edits:** Only **POA / power number** may change after bond workflow starts (voids, human error). Everything else is versioned / audit, not free edit. |
 | 6 | **Bond without full payment/signatures:** Allowed only via **staff exception modal**: second staff PIN + written reason + policy acknowledgments (premium still due; full premium liability). |
-| 7 | **E-sign:** DocuSeal self-hosted — **no SignNow** for new packets. |
+| 7 | **E-sign:** DocuSeal self-hosted — **no SignNow** in the active workflow. |
 | 8 | **UX:** Dark mode toggle for portal users; Shamrock brand (green/dark, transparent logo). |
 | 9 | **SEO:** Portal routes `noindex` (same rule as school LMS). |
 
@@ -60,11 +60,11 @@ Order is fixed (no skip):
 
 Defendant is **not** a lighter path. Same gates:
 
-1. **6-digit PIN unlock**  
-2. **Selfie required**  
-3. **ID upload required**  
-4. **OCR pre-fill** + **address confirmation popup** (correct? if not, correct it)  
-5. **Remaining defendant fields** not filled by OCR  
+1. **6-digit PIN unlock**
+2. **Selfie required**
+3. **ID upload required**
+4. **OCR pre-fill** + **address confirmation popup** (correct? if not, correct it)
+5. **Remaining defendant fields** not filled by OCR
 6. **Initial + sign** (DocuSeal)
 
 **Packet hydration rule:** OCR identity for the party maps into **every template field** where that party’s name/address/DOB/DL appears across the **entire** OSI or Palmetto packet (not a single form page). Rules are the same for both sureties; field *keys* differ slightly per template set.
@@ -76,12 +76,12 @@ If a bond is posted **without** full payment and/or all signatures, it is **bloc
 1. Staff opens **exception modal** (`/staff/...` or Bond Desk deep-link).
 2. **Second PIN input** (6-digit `PAPERWORK_STAFF_EXCEPTION_PIN` — separate from party PINs and recommended separate from agency dashboard PIN).
 3. Required fields (cannot submit incomplete):
-   - **Reason** (enum + free text) — why posting early  
-   - **Expected paperwork completion** date/time (when docs *will* be finished)  
+   - **Reason** (enum + free text) — why posting early
+   - **Expected paperwork completion** date/time (when docs *will* be finished)
    - **Acknowledgments** (all required checkboxes):
-     - Premium is due **no matter the circumstance**  
-     - Party remains **liable for the full premium** if they choose to do the bond  
-     - Company policy accepted by staff on record  
+     - Premium is due **no matter the circumstance**
+     - Party remains **liable for the full premium** if they choose to do the bond
+     - Company policy accepted by staff on record
 4. Immutable `audit_events` row + bond status note; exception cannot be silent.
 5. Portal stays open for indemnitor/defendant to finish selfie / ID / remaining fields / sign.
 
@@ -125,23 +125,23 @@ ID image upload (portal, authenticated)
       (OSI vs Palmetto field key maps)
 ```
 
-Implementation module (planned): `services/id_ocr_service.py`  
+Implementation module (planned): `services/id_ocr_service.py`
 API (portal): `POST /api/paperwork/ocr/id` (session + role scoped).
 
 **PII:** ID images stored under identity media rules; never log raw DL numbers, full addresses, or SSNs to Slack/console.
 
 ---
 
-## 5. DocuSeal (replace SignNow)
+## 5. DocuSeal
 
 ### 5.1 What DocuSeal is
 
 Open-source document fill + e-sign ([docusealco/docuseal](https://github.com/docusealco/docuseal)):
 
-- PDF form builder, multi-submitter, API + webhooks  
-- Docker image: `docuseal/docuseal`  
-- Embedded signing (JS / React) for our portal  
-- Self-host on VPS with Postgres  
+- PDF form builder, multi-submitter, API + webhooks
+- Docker image: `docuseal/docuseal`
+- Embedded signing (JS / React) for our portal
+- Self-host on VPS with Postgres
 
 ### 5.2 Deploy topology
 
@@ -173,13 +173,13 @@ Services:
 
 Nginx:
 
-- `sign.shamrockbailbonds.biz` → `127.0.0.1:5300`  
-- `paperwork.shamrockbailbonds.biz` → `127.0.0.1:5310`  
+- `sign.shamrockbailbonds.biz` → `127.0.0.1:5300`
+- `paperwork.shamrockbailbonds.biz` → `127.0.0.1:5310`
 
 Volumes (named, backed up daily — **do not lose like Postiz**):
 
-- `docuseal-data`  
-- `docuseal-postgres-data`  
+- `docuseal-data`
+- `docuseal-postgres-data`
 
 ### 5.3 Env (VPS `.env`)
 
@@ -198,7 +198,7 @@ PAPERWORK_STAFF_EXCEPTION_PIN=  # 6-digit second pin for exception modal
 
 ```
 BondCase ready (match + surety + POA)
-  → build prefill map (existing SignNow hydrator logic, retargeted)
+  → build prefill map via `DocuSealService.prefill_values_from_bond`
   → DocuSeal API: create submission from surety template
   → assign submitters: indemnitor email, defendant email
   → store docuseal_submission_id on paperwork_packets
@@ -206,7 +206,7 @@ BondCase ready (match + surety + POA)
   → webhook form.completed → update packet status, audit, unlock payment / active bond
 ```
 
-### 5.5 Migration from SignNow
+### 5.5 Active DocuSeal-only workflow
 
 | Phase | Action |
 |-------|--------|
@@ -214,9 +214,9 @@ BondCase ready (match + surety + POA)
 | M1 | Upload OSI + Palmetto PDFs as DocuSeal templates; map fields |
 | M2 | Portal MVP: auth + ID OCR + embed sign |
 | M3 | Parallel run: new bonds → DocuSeal only |
-| M4 | Freeze SignNow for new packets; keep read-only archive of old packets |
+| M4 | Complete: SignNow is retired for active workflow; historical fields are read-only only |
 
-Legacy SignNow code remains until M4 for historical packets; **new** work targets DocuSeal only.
+Active work targets DocuSeal only using the OSI and Palmetto templates in the DocuSeal account.
 
 ---
 
@@ -242,10 +242,10 @@ Legacy SignNow code remains until M4 for historical packets; **new** work target
 
 ### 5.6 Branding DocuSeal
 
-- Company name: **Shamrock Bail Bonds**  
-- Logo: `docs/brand/shamrock_logo_transparent.png` (RGBA, bg removed)  
-- Colors: Shamrock green `#00d26a` / dark slate  
-- Prefer white-label options available on self-host / Pro if needed  
+- Company name: **Shamrock Bail Bonds**
+- Logo: `docs/brand/shamrock_logo_transparent.png` (RGBA, bg removed)
+- Colors: Shamrock green `#00d26a` / dark slate
+- Prefer white-label options available on self-host / Pro if needed
 
 ---
 
@@ -260,7 +260,7 @@ paperwork_access
   - status: pending|identity|form|signing|complete
 
 paperwork_packets  (extend)
-  - esign_provider: docuseal|signnow_legacy
+  - esign_provider: docuseal|none
   - docuseal_template_id, docuseal_submission_id
   - surety_id: osi|palmetto
 
@@ -296,7 +296,7 @@ templates/
 
 Hydration reuses the existing field maps in:
 
-- `dashboard/services/signnow_packet_service.py` (→ retarget to DocuSeal)
+- `dashboard/services/docuseal_service.py`
 - `dashboard/bond_pdf_service.py` (appearance bonds)
 - `dashboard/paperwork_pdf_service.py` (stitch / paths)
 - Dashboard Write Bond modal (`sl-features.js` → `POST /api/write-bond`)
@@ -341,12 +341,12 @@ Implemented today in `dashboard/bond_pdf_service.py` — keep identical under Do
 | **Court date unknown** | Put **`TBN`** (“To Be Notified”) in court date; **skip / leave blank court time** when date is TBN or out-of-county / not yet set |
 | **Readable fill** | Use auto-scaling fonts so long names/addresses still fit and remain legible after fill (`_set_widget_value_with_scaling`) |
 
-OSI key fields (actual PDF widgets):  
+OSI key fields (actual PDF widgets):
 `DefFirstName`, `DefLastName`, `DefAddress`, `DefCounty`, `DefCharge1`/`DefCharge1Line2`,
 `BondAmountCharge1`, `CaseNum`, `PowerNum`, `CourtDate`, `CourtTime`,
 `WrittenPremiumAmount`, `NumericPremiumAmount`, agent/agency fields, …
 
-Palmetto key fields:  
+Palmetto key fields:
 `defendantNameField`, `DefendantAddress`, `countyField`, `numericBondAmount`,
 `chargesField1`/`chargesField2`, `powerNumField`, `CourtDateAndTimeField`,
 `writtenPremiumAmount` / `writtenPremiumAmountField`, `calculatedPremiumField`, …
@@ -372,11 +372,11 @@ Dashboard already surfaces **Kiosk (iPad) / Side-by-Side In Person** intake chan
 
 Kiosk mode for paperwork must support:
 
-1. Staff selects surety (OSI / Palmetto)  
-2. Walk through packet checklist (agnostic + surety set)  
-3. Manual field override **or** full auto-hydrate from lead / match / charge_details  
-4. Issue PIN(s) + open portal (or hand tablet to party for selfie/ID/sign)  
-5. Exception path (second staff PIN) if posting without complete payment/signatures  
+1. Staff selects surety (OSI / Palmetto)
+2. Walk through packet checklist (agnostic + surety set)
+3. Manual field override **or** full auto-hydrate from lead / match / charge_details
+4. Issue PIN(s) + open portal (or hand tablet to party for selfie/ID/sign)
+5. Exception path (second staff PIN) if posting without complete payment/signatures
 
 Kiosk is not a separate product — same DocuSeal templates + same hydration, full-screen staff UX.
 
@@ -384,12 +384,12 @@ Kiosk is not a separate product — same DocuSeal templates + same hydration, fu
 
 When **all required parties** have signed (DocuSeal webhooks complete):
 
-1. Merge final PDFs  
-2. Upload under **Completed Bonds**:  
-   `https://drive.google.com/drive/folders/1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs`  
-3. Hierarchy (already partially implemented in `bond_lifecycle.py` / `bonds.py`):  
-   `Completed Bonds / {Surety label} / {Defendant folder} / signed packet`  
-4. Env: `COMPLETED_BONDS_FOLDER_ID` / `GOOGLE_DRIVE_OUTPUT_FOLDER_ID` = that folder ID  
+1. Merge final PDFs
+2. Upload under **Completed Bonds**:
+   `https://drive.google.com/drive/folders/1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs`
+3. Hierarchy (already partially implemented in `bond_lifecycle.py` / `bonds.py`):
+   `Completed Bonds / {Surety label} / {Defendant folder} / signed packet`
+4. Env: `COMPLETED_BONDS_FOLDER_ID` / `GOOGLE_DRIVE_OUTPUT_FOLDER_ID` = that folder ID
 
 **Auth (required for production archive):**
 
@@ -411,7 +411,7 @@ python scripts/e2e_test_paperwork.py         # full DocuSeal + Drive
 python scripts/e2e_test_paperwork.py --drive-only
 ```
 
-Legacy SignNow completion path already uploads here — DocuSeal webhook must call the same Drive helper.
+DocuSeal completion uploads signed PDFs through the Drive helper.
 
 ### 7.8 Write Bond → portal PIN handoff
 
@@ -441,13 +441,13 @@ Dashboard (leads.…)  Write Bond / ✍️ Bond
 
 ## 9. Security / compliance
 
-- Fail closed: no packet without validated match + bond case + surety  
-- Portal PINs ≠ agency dashboard PIN  
-- Staff exception requires second PIN + immutable audit  
-- Minimize PII in logs  
-- All portal routes `noindex` + robots disallow  
-- DocuSeal webhooks HMAC-verified  
-- Appearance bonds never leave the print/wet-ink path for jail filing  
+- Fail closed: no packet without validated match + bond case + surety
+- Portal PINs ≠ agency dashboard PIN
+- Staff exception requires second PIN + immutable audit
+- Minimize PII in logs
+- All portal routes `noindex` + robots disallow
+- DocuSeal webhooks HMAC-verified
+- Appearance bonds never leave the print/wet-ink path for jail filing
 
 ---
 
@@ -463,7 +463,7 @@ Dashboard (leads.…)  Write Bond / ✍️ Bond
 | **S4** | Indemnitor + defendant identity flow (selfie, ID, address confirm) |
 | **S5** | Multi-submitter polish + sign-link handoff from Write Bond + webhook → Drive Completed Bonds (Drive helper already wired) |
 | **S6** | Staff exception modal + POA-only post-edit + **kiosk mode** walkthrough |
-| **S7** | Dual-role FAQ initials fields + collateral serial OCR + deprecate SignNow for new bonds |
+| **S7** | Dual-role FAQ initials fields + collateral serial OCR + keep DocuSeal-only workflow enforced |
 
 ### S1 API surface (dashboard)
 
@@ -496,8 +496,8 @@ docker exec shamrock-docuseal-postgres pg_dump -U docuseal docuseal | gzip > /op
 
 ## 11b. DocuSeal CLI + agent skills
 
-**CLI upstream:** https://github.com/docusealco/docuseal-cli  
-**Agent skills upstream:** https://github.com/docusealco/docuseal-agent-skills  
+**CLI upstream:** https://github.com/docusealco/docuseal-cli
+**Agent skills upstream:** https://github.com/docusealco/docuseal-agent-skills
 
 ### Install (dev workstation)
 
@@ -548,18 +548,18 @@ Also under `.agents/skills/` (agentskills.io layout). Global copies: `~/.grok/sk
 
 ## 12. Related docs
 
-- Template inventory: `templates/README.md`  
-- Surety rules: `docs/policies/surety-policy.md`  
-- Matching: `docs/policies/matching-policy.md`  
-- Signature policy: update to DocuSeal in S5  
-- Brand: `BRAND.md` + `docs/brand/shamrock_logo_transparent.png`  
-- Appearance bond code: `dashboard/bond_pdf_service.py`  
-- Packet manifest / hydration: `dashboard/services/signnow_packet_service.py` (migrate → DocuSeal service)  
-- CLI skill: `.agent/skills/docuseal-cli/SKILL.md`  
-- Shamrock bridge skill: `.agent/skills/shamrock-docuseal/SKILL.md`  
+- Template inventory: `templates/README.md`
+- Surety rules: `docs/policies/surety-policy.md`
+- Matching: `docs/policies/matching-policy.md`
+- Signature policy: update to DocuSeal in S5
+- Brand: `BRAND.md` + `docs/brand/shamrock_logo_transparent.png`
+- Appearance bond code: `dashboard/bond_pdf_service.py`
+- Packet manifest / hydration: `dashboard/services/docuseal_service.py`
+- CLI skill: `.agent/skills/docuseal-cli/SKILL.md`
+- Shamrock bridge skill: `.agent/skills/shamrock-docuseal/SKILL.md`
 
 ---
 
-**Owner:** Shamrock platform  
-**Last updated:** 2026-08-09  
+**Owner:** Shamrock platform
+**Last updated:** 2026-08-09
 **Sign-off:** Product decisions locked per Brendan greenlight + packet walkthrough (agnostic forms dual-initials, multi-indemnitor, appearance bond 10%/$100 + TBN, collateral OCR serials, kiosk, Drive Completed Bonds, Write Bond PIN handoff).

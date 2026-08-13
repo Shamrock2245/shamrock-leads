@@ -49,7 +49,7 @@ Every active bond that requires check-ins must have monitoring conditions that t
 ### Rule 3: Human Gate on Client Contact
 
 - **No automated client outreach** for check-in enrollment without staff action (Prime Directive: human-in-the-loop).
-- On SignNow complete, the system **may**: enable `check_in_required` on the bond, create a staff CRM task, generate a defendant portal token, and notify staff (Slack / dashboard).
+- On DocuSeal complete, the system **may**: enable `check_in_required` on the bond, create a staff CRM task, generate a defendant portal token, and notify staff (Slack / dashboard).
 - The system **must not** auto-text or auto-iMessage the defendant a check-in link unless a human triggers **Send check-in link** (or equivalent staff action).
 
 ### Rule 4: Fail Closed
@@ -147,7 +147,7 @@ Stored in `bond_checkins` + optional `location_history` on the bond. Consent met
 | `POST /api/portal/{token}/checkin` | Public check-in API |
 | `POST /api/active-bonds/{booking}/enable-checkin` | Staff enable |
 | `POST /api/active-bonds/{booking}/send-checkin-link` | Staff-gated send |
-| SignNow webhook / lifecycle poller | Post-sign enrollment (staff task only) |
+| DocuSeal webhook / lifecycle poller | Post-sign enrollment (staff task only) |
 | `bond_checkins` / Tracking tab | Ops visibility |
 
 ---

@@ -105,7 +105,7 @@ agent_retains = premium - surety_owed - buf_owed
 ## Step 6: Generate Paperwork `[Phase 6]`
 
 **Process:**
-1. Select SignNow template set by `Surety_ID`
+1. Select DocuSeal template by `Surety_ID` (`DOCUSEAL_TEMPLATE_ID_OSI` or `DOCUSEAL_TEMPLATE_ID_PALMETTO`)
 2. Copy templates
 3. Hydrate fields from BondCase + Defendant + Indemnitor
 4. Create DocumentPacket record (`Packet_Version = 1`)
@@ -118,7 +118,7 @@ agent_retains = premium - surety_owed - buf_owed
 
 **Process:**
 1. Verify recipient = validated indemnitor
-2. Generate SignNow embedded invite link
+2. Generate DocuSeal submitter signing link
 3. Deliver via SMS (primary), Telegram, WhatsApp, or email
 4. Update: `packet_status = sent`, `signature_status = sent`
 
@@ -128,7 +128,7 @@ agent_retains = premium - surety_owed - buf_owed
 
 ## Step 8: Signature Completion `[Phase 7]`
 
-**Triggered by:** SignNow `document.complete` webhook.
+**Triggered by:** DocuSeal `submission.completed` / `form.completed` webhook.
 
 **Process:**
 1. Verify packet → bond case linkage

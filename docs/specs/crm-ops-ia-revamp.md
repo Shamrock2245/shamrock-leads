@@ -34,7 +34,7 @@ Mapped from [twentyhq/twenty](https://github.com/twentyhq/twenty) product patter
 | **Record page tabs/widgets** | One case surface: defendant · indemnitor · charges · money · packet · timeline |
 | **Command menu (⌘K)** | Existing Omnibar — keep as universal jump |
 | **Side panel peek** | Quick peek on row click (later phase) |
-| **Workflows on stage change** | Lifecycle automations: Slack, SignNow, court reminders, POA release |
+| **Workflows on stage change** | Lifecycle automations: Slack, DocuSeal, court reminders, POA release |
 | **Hide unused objects** | Collapse Intelligence / Integrations under “More” |
 | **Closed-won automation** | Paperwork complete + payment logged → **create Active Bond** |
 
@@ -54,7 +54,7 @@ Jail roster scrape
                 2. Match defendant (human gate if ambiguous)
                 3. Indemnitor verified (PII for packet)
                 4. Surety + POA assigned
-                5. Packet generated & SignNow sent
+                5. Packet generated & DocuSeal sent
                 6. Signatures + premium
                 7. PROMOTE → Active Bonds
                     → Kanban: active · monitoring · alert · exonerated / forfeited / surrendered
@@ -133,7 +133,7 @@ Replace vague pending/in_progress mental model with explicit bond-writing stages
 | `matching` | Finding defendant | Match validated |
 | `indemnitor` | Cosigner PII complete | Fields for packet green |
 | `underwriting` | Surety + premium + POA tier | POA reserved |
-| `paperwork` | SignNow packet out | All required docs signed |
+| `paperwork` | DocuSeal packet out | All required docs signed |
 | `payment` | Premium / plan | Payment logged or plan created |
 | `ready` | Ready to post | Agent confirms posted |
 | → **Active Bonds** | Posted | `active_bonds` record + audit |
@@ -144,9 +144,9 @@ Legacy statuses `pending` / `in_progress` / `promoted` map into these stages wit
 
 ## 6. Paperwork autofill contract (what Bond Desk must collect)
 
-Source of truth for hydration: `dashboard/services/signnow_packet_service.py` → `_build_prefill_fields`.
+Source of truth for hydration: `dashboard/services/docuseal_service.py` → `prefill_values_from_bond`.
 
-### Packet docs (`templates/surety-agnostic-shamrock/` + `osi/` + `palmetto/` + SignNow)
+### Packet docs (DocuSeal OSI + Palmetto templates; local PDFs for preview/print)
 
 | Phase | Documents |
 |-------|-----------|
@@ -237,7 +237,7 @@ Missing fields block send (fail closed); override requires note + audit.
 2. ✅ Packet readiness checklist from prefill field groups
 3. ✅ Promote gated on required readiness (override with confirm)
 4. ✅ Lead Pipeline banner: “not the bond desk”
-5. ⬜ Soft-require SignNow signed status before promote (ops preference)
+5. ⬜ Soft-require DocuSeal signed status before promote (ops preference)
 6. ⬜ Inline field edit without leaving modal
 
 ### Phase C — Absorb Outreach

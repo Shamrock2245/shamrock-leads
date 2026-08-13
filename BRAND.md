@@ -83,7 +83,7 @@ We will surpass **Captira** and **Bail Books** in both functionality and user ex
 | **Frontend** | Vanilla JS + CSS (~25,700 lines, 32 modules) | Premium dark-theme UI |
 | **iMessage** | BlueBubbles API (office iMac bridge) | Human-feel outreach automation |
 | **AI** | OpenAI GPT-4o | Auto-reply agent, lead enrichment |
-| **Signatures** | SignNow API | E-signature orchestration |
+| **Signatures** | DocuSeal self-hosted | E-signature orchestration using the two live DocuSeal templates |
 | **Payments** | SwipeSimple | Bond premium collection |
 | **Alerts** | Slack SDK (webhook blocks) | Real-time operational alerts |
 | **GAS** | Google Apps Script | Sheets integration, write-bond forwarding |
@@ -118,8 +118,8 @@ ArrestLead (scraped)
     → Indemnitor Intake (from Wix, GAS, Telegram, or voice)
       → Match (validated, confidence-scored)
         → BondCase (Surety + POA + Case Number)
-          → DocumentPacket (SignNow template, hydrated)
-            → Signature (SignNow webhook confirms)
+          → DocumentPacket (DocuSeal template, hydrated)
+            → Signature (DocuSeal webhook confirms)
               → Payment (SwipeSimple, premium collected)
                 → Posted Bond (court-ready)
 ```
@@ -153,7 +153,7 @@ We are building toward **SOC II Type II** compliance. All agents must build with
 | Health Monitor | "The Watchdog" | ✅ Live | `writers/slack_notifier.py` |
 | Intake Matcher | "The Matcher" | ✅ Live | `dashboard/api/matching.py` |
 | Paperwork Generator | "The Notary" | ✅ Live | `dashboard/api/paperwork.py` |
-| Signature Orchestrator | "The Closer" | ✅ Live | `dashboard/services/signnow_packet_service.py` |
+| Signature Orchestrator | "The Closer" | ✅ Live | `dashboard/services/docuseal_service.py` + `/api/webhooks/docuseal` |
 | iMessage Agent | "Shannon" | ✅ Live | `dashboard/api/agent_brain.py` |
 | Court Reminder | "The Court Clerk" | ✅ Live | `dashboard/services/court_reminder_service.py` |
 | Discharge Monitor | "The Discharge Monitor" | ✅ Live | `dashboard/api/discharge_monitor.py` |

@@ -13,7 +13,7 @@ Shamrock is **not** a pile of disconnected tools. It is one **operating platform
 
 | Pillar | Product | Public surface | Factory |
 |--------|---------|----------------|--------|
-| **Bond Auto-CRM** | Arrest → lead → intake → match → surety/POA → SignNow → pay → lifecycle | `leads.shamrockbailbonds.biz` | Mongo + portal GAS + Node-RED |
+| **Bond Auto-CRM** | Arrest → lead → intake → match → surety/POA → DocuSeal → pay → lifecycle | `leads.shamrockbailbonds.biz` | Mongo + portal GAS + Node-RED |
 | **Bail School** | Pre-licensing education (20hr / 120hr) → cert path | `school.shamrockbailbonds.biz` | Next.js + portal GAS / Sheets |
 | **Brand / Clipboard** | Everywhere intake (web, Telegram, voice) | `shamrockbailbonds.biz` | Wix + GAS |
 | **Automation fabric** | Crons, Watchdog, cross-service glue | Node-RED `:1880` | `shamrock-node-red` |
@@ -66,7 +66,7 @@ When someone in Florida (and later multi-state via Palmetto) asks “who runs ba
 | Stage | Meaning | Where we are |
 |-------|---------|----------------|
 | **1 · Built** | Code on `main` for core funnels | ✅ Bond chain Phases 1–17 · School LMS · Portal · NR · Telegram |
-| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Not yet earned** (audit 2026-08-12). C2 public pricing is now verified at $649; remaining gates are C3 historical secret rotation plus staff-confirmed write-bond → paperwork and outbound iMessage smokes. |
+| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Not yet earned** (audit 2026-08-12). C2 public pricing is now verified at $649; remaining gates are C3 historical secret rotation plus staff-confirmed write-bond → DocuSeal paperwork and outbound iMessage smokes. |
 | **3 · Authoritative FL brand** | Statewide coverage quality, education + ops reputation, SOC-minded | 🔲 After Stage 2 |
 | **4 · U.S. reference model** | Palmetto multi-state depth, playbooks others adopt | 🔲 After Stage 3 |
 

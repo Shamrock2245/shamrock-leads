@@ -1,8 +1,8 @@
  # Shamrock Platform — Ecosystem Production Checklist
 
-> **Purpose:** Single source of “are we production?” across the whole platform.  
-> **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)  
-> **Last Updated:** 2026-08-11  
+> **Purpose:** Single source of “are we production?” across the whole platform.
+> **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)
+> **Last Updated:** 2026-08-11
 > **Owner:** Brendan · Super-admin: `admin@shamrockbailbonds.biz`
 
 Mark items `[x]` only when **live** is proven (not merely code on `main`).
@@ -11,9 +11,9 @@ Mark items `[x]` only when **live** is proven (not merely code on `main`).
 
 ## How to use
 
-1. Work top → bottom by **P0** then **P1**.  
-2. Prefer **ops verification** over new features until P0 is green.  
-3. After any GAS change: re-deploy **existing** deployment ID only (`docs/policies/gas-url-policy.md`).  
+1. Work top → bottom by **P0** then **P1**.
+2. Prefer **ops verification** over new features until P0 is green.
+3. After any GAS change: re-deploy **existing** deployment ID only (`docs/policies/gas-url-policy.md`).
 4. Run secrets hygiene:
 
 ```bash
@@ -55,7 +55,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | B2 | `MONGODB_URI` / `MONGODB_DB_NAME` healthy; dashboard loads | Ops | [x] *2026-07-23* — `/health` ok · ~128k arrests · CRM collections reachable |
 | B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [ ] **Human-gated smoke pending** — GAS `action=health` returned V409 on 2026-08-12; one staff-confirmed write-bond → paperwork event is still required. |
 | B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [x] *config* — secret present + CRM `wix_webhook_auth:true`; live Wix post still staff-confirm |
-| B5 | SignNow token env (`SIGNNOW_*`) valid; Phase 1 packet can be sent on a test case | Ops | [x] *2026-07-24* — token valid, 19/19 templates accessible via validate-templates; send-packet needs intake doc (human gate) |
+| B5 | DocuSeal env (`DOCUSEAL_*`) valid; OSI and Palmetto templates resolve from the DocuSeal account | Ops | [ ] **Human-gated smoke pending** — confirm the two live templates (`DOCUSEAL_TEMPLATE_ID_OSI`, `DOCUSEAL_TEMPLATE_ID_PALMETTO`) and send one staff-approved packet. |
 | B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [x] *2026-08-04* — staff-confirmed live; SwipeSimple Retriever shows **Bail Bond Payment - Shamrock Bail Bonds** ACTIVE (74 sales) + school $199/$649 links; site popups surface correct pay links |
 | B7 | Hot lead Slack webhooks (`SLACK_WEBHOOK_*`) deliver | Ops | [x] *config* — webhooks set + CRM `slack:true`; delivery confirmed by ongoing scraper alerts path |
 | B8 | Core county scrapers healthy (no mass auto-disable) | Ops | [x] *2026-07-24* — 233 ok / 7 error; Monroe 80, Hillsborough 7 (not mass-disabled) |
@@ -83,7 +83,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|-------|------|
 | E1 | Netlify env: `SEND_PAPERWORK_SECRET`, Twilio, ElevenLabs tool secrets | Ops | [x] *2026-08-11* — `shamrock-telegram` production: SEND_PAPERWORK_SECRET, ELEVENLABS_TOOL_SECRET, TWILIO_*, GAS_WEB_APP_URL all set (scope All) |
 | E2 | Mini-app `GAS_ENDPOINT` = stable factory URL | Ops | [x] *2026-08-11* — Netlify `GAS_WEB_APP_URL` = `…CvP-Z/exec`; `shared/brand.js` + `documents/app.js` aligned (removed dead legacy R6fSFQ URL) |
-| E3 | Palmetto SignNow template IDs match leads `SignNowPacketService.TEMPLATE_MAP` | Code+Ops | [x] *synced 2026-07-10* |
+| E3 | Palmetto DocuSeal template ID matches `DOCUSEAL_TEMPLATE_ID_PALMETTO` | Code+Ops | [ ] Verify against the DocuSeal templates account. |
 | E4 | Shannon “Send Paperwork” tool accepts optional `surety_id` | Ops | [x] *2026-08-11* — Netlify proxy + GAS `handleShannonSendPaperwork` surety-aware (`_resolveTemplateId`); tool schema `docs/SHANNON_SEND_PAPERWORK_TOOL.json`; **re-sync ElevenLabs UI tool param** if not already present |
 
 ---
@@ -114,7 +114,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | P2.6 | Jackson / rural county recon | 🔲 Expansion (non-blocking for SWFL) |
 | P2.7 | CE catalog + in-person cohort tooling | 🔲 After school P0 |
 
-**Primary production paperwork path remains SignNow** (`signnow_packet_service` / GAS). Local PDF stitcher is secondary/offline assist.
+**Primary production paperwork path is DocuSeal only** (`docuseal_service` / `/api/paperwork/packet/finalize`). Local PDF stitcher is secondary/offline assist.
 
 ---
 
@@ -137,7 +137,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|----------------|
 | H1 | Scrape one core county | Mongo upsert + optional Slack if hot |
 | H2 | Portal/Wix test intake | Leads `intake_queue` row |
-| H3 | Write-bond / paperwork path | GAS receives payload; SignNow Phase 1 or dry-run logged |
+| H3 | Write-bond / paperwork path | GAS receives payload; DocuSeal submission or dry-run logged |
 | H4 | School magic link | Login cookie + enrollment API |
 | H5 | Node-RED health / Command Center | No SYSTEM_SHUTDOWN; leads URL OK |
 | H6 | Telegram intake (optional) | GAS IntakeQueue row + surety_id present |
@@ -146,11 +146,11 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 ## Explicitly not production blockers
 
-- Continuing education (CE) product line  
-- Full phone-only autopilot (Phase 18)  
-- Every FL rural county scraper  
-- Local PDF stitcher parity with SignNow field extraction  
-- Revenue automations in `full_auto` on day one  
+- Continuing education (CE) product line
+- Full phone-only autopilot (Phase 18)
+- Every FL rural county scraper
+- Local PDF stitcher parity with DocuSeal field extraction
+- Revenue automations in `full_auto` on day one
 
 ---
 
@@ -158,10 +158,10 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 **Minimum bar for public trust:**
 
-1. School pay → unlock → learn works for a real student.  
-2. Bond staff can run intake → match → SignNow → pay → active bond on Super CRM.  
-3. GAS URL is stable and known in **Wix Secrets**.  
-4. Secrets are not in git; checklist secrets script is clean.  
+1. School pay → unlock → learn works for a real student.
+2. Bond staff can run intake → match → DocuSeal → pay → active bond on Super CRM.
+3. GAS URL is stable and known in **Wix Secrets**.
+4. Secrets are not in git; checklist secrets script is clean.
 5. BB or Twilio can reach a client when staff approves outreach.
 
 When A1–A5, B1–B7, C1–C4, and D1–D2 are `[x]`, call Stage 2 **production-hardened** in [`PLATFORM.md`](./PLATFORM.md).

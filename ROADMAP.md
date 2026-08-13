@@ -20,7 +20,7 @@
 | 4 | Matching Engine | ✅ Complete |
 | 5 | Bond Case + Surety + POA | ✅ Complete |
 | 6 | Paperwork Generation | ✅ Complete |
-| 7 | Signature Orchestration (SignNow) | ✅ Complete |
+| 7 | Signature Orchestration (DocuSeal) | ✅ Complete |
 | 8 | Payment Collection (SwipeSimple) | ✅ Complete |
 | 9 | Contact Discovery (OSINT) | ✅ Complete |
 | 10 | Outreach Sequencing (iMessage / BlueBubbles) | ✅ Code · ⏳ BB office reliability ops |
@@ -154,23 +154,23 @@ All intake sources handled natively in the FastAPI dashboard.
 - `dashboard/api/bonds.py` — Write Bond, active bonds management, 7-status PATCH, status history
 - `dashboard/api/poa.py` — POA inventory, next available, assign, reassign
 - `dashboard/services/poa_service.py` — POA tier logic
-- `dashboard/api/bond_lifecycle.py` — Lifecycle hooks, SignNow webhook, court email processing
+- `dashboard/api/bond_lifecycle.py` — Lifecycle hooks, DocuSeal status handoff, court email processing
 
 ---
 
 ## Phase 6: Paperwork Generation ✅ COMPLETE
 
 - `dashboard/api/paperwork.py` — Generate, deliver, list packets
-- `dashboard/services/signnow_packet_service.py` — PDF field hydration + SignNow delivery
+- `dashboard/services/docuseal_service.py` — DocuSeal template prefill + submission delivery
 - BlueBubbles delivery — sends PDF link to indemnitor phone via iMessage
 
 ---
 
-## Phase 7: Signature Orchestration (SignNow) ✅ COMPLETE
+## Phase 7: Signature Orchestration (DocuSeal) ✅ COMPLETE
 
-- `dashboard/services/signnow_service.py` — SignNow API wrapper
-- `dashboard/services/signnow_packet_service.py` — Packet creation, status polling
-- `dashboard/api/bond_lifecycle.py` — `/api/bond-lifecycle/initiate-signing`, `/api/bond-lifecycle/signnow-webhook`
+- `dashboard/services/docuseal_service.py` — DocuSeal API wrapper, template resolution, status polling
+- `dashboard/routers/paperwork.py` — `/api/paperwork/packet/finalize`, `/api/paperwork/docuseal/*`
+- `dashboard/api/webhooks.py` — `/api/webhooks/docuseal`
 
 ---
 
@@ -291,7 +291,7 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 
 ## 🛡️ Compliance & Brand Standards
 
-- **SOC II Readiness**: All data flows (MongoDB, SignNow, Twilio) must meet SOC II standards.
+- **SOC II Readiness**: All data flows (MongoDB, DocuSeal, Twilio) must meet SOC II standards.
 - **Brand Exclusivity**: All work is exclusively `Shamrock2245`. Never reference WTF.
 - **Strategic Goal**: Scale from $3–5M/year (Lee County) to $50M+/year by dominating the Florida (67 counties) and Georgia (159 counties) markets.
 - **Competitor Benchmark**: Captira and Bail Books are the floor, not the ceiling.

@@ -69,9 +69,9 @@ Matching Engine (confidence-scored, human-gated)
   ↓
 BondCase (Surety + POA + Case#)
   ↓
-DocumentPacket (SignNow templates, hydrated)
+DocumentPacket (DocuSeal template, hydrated)
   ↓
-Signature (SignNow webhook confirms)
+Signature (DocuSeal webhook confirms)
   ↓
 Payment (SwipeSimple premium collection)
   ↓
@@ -114,8 +114,8 @@ Move records safely through this lifecycle:
 | **The Analyst** | Lead scoring (0–100), risk classification | ✅ Live | `scoring/lead_scorer.py` |
 | **The Watchdog** | Scraper health monitoring, failure alerts | ✅ Live | `writers/slack_notifier.py` |
 | **The Matcher** | Link indemnitor intake to correct defendant | ✅ Live | `dashboard/api/matching.py`, `services/matching_engine.py` |
-| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ Live | `dashboard/api/paperwork.py`, `services/signnow_packet_service.py`, **DocuSeal:** `dashboard/services/docuseal_service.py` (new packets) |
-| **The Signature Agent** | Send and track e-sign packets | ✅ Live | **DocuSeal (new):** `docuseal_service.py` + webhook `/api/webhooks/docuseal` · **SignNow (legacy):** `signnow_service.py` · **Agent skills:** `.agent/skills/shamrock-docuseal`, `docuseal-cli`, `docuseal-code` · CLI: `npm i -g docuseal` → `DOCUSEAL_SERVER=https://sign.shamrockbailbonds.biz` |
+| **The Paperwork Agent** | Generate surety-specific bond paperwork | ✅ Live | `dashboard/api/paperwork.py`, `dashboard/routers/paperwork.py`, `dashboard/services/docuseal_service.py` |
+| **The Signature Agent** | Send and track e-sign packets | ✅ Live | **DocuSeal only:** `docuseal_service.py` + webhook `/api/webhooks/docuseal` · **Agent skills:** `.agent/skills/shamrock-docuseal`, `docuseal-cli`, `docuseal-code` · CLI: `npm i -g docuseal` → `DOCUSEAL_SERVER=https://sign.shamrockbailbonds.biz` |
 | **The Payment Agent** | Log and track premium payments | ✅ Live | `dashboard/api/payments.py`, `api/payment_plans.py` |
 | **The Auditor** | Immutable event logging for all state changes | ✅ Live | `dashboard/api/events.py` |
 | **The Finder** | OSINT: family/friend contact discovery | ✅ Live | `services/contact_discovery.py`, `api/contacts.py` |
@@ -210,7 +210,7 @@ Shamrock represents **two** insurance/surety companies. Every bonded case must s
 | **O'Shaughnahill Surety & Insurance (OSI)** | `osi` | Primary Florida surety (West Palm Beach, FL) |
 | **Palmetto Surety Corporation** | `palmetto` | Multi-state: FL, SC, NC, TN, TX, CT, LA, MS |
 
-The surety determines: POA book assignment, SignNow template set, commission rate, build-up fund %, monthly reporting format, and compliance requirements.
+The surety determines: POA book assignment, DocuSeal template, commission rate, build-up fund %, monthly reporting format, and compliance requirements.
 
 **Rule:** OSI is always preferred. Use Palmetto when OSI inventory is depleted for the needed tier, or when the case is outside Florida.
 
@@ -295,7 +295,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 5. **No mutating signed records** — Create new version, audit the replacement.
 6. **Audit everything** — Every state change: timestamp, actor, agent name, record IDs, old→new state, confidence, reason.
 7. **Minimize PII** — Never log phone numbers, SSNs, addresses in Slack/console/debug output.
-8. **Source-of-truth hierarchy** — Arrest facts: county source → MongoDB. Case workflow: MongoDB. Signatures: SignNow. Payments: SwipeSimple. GAS/Sheets: downstream only.
+8. **Source-of-truth hierarchy** — Arrest facts: county source → MongoDB. Case workflow: MongoDB. Signatures: DocuSeal. Payments: SwipeSimple. GAS/Sheets: downstream only.
 9. **Surety-aware ops** — Every bond-writing action specifies the surety. Never assume OSI or Palmetto.
 10. **GAS URL stability** — Keep the Google Apps Script **Web App URL** unchanged. Update code and re-deploy the **existing** deployment only (`clasp deploy -i <EXISTING_ID>`). **Never** mint a new `/macros/s/…/exec` URL without explicit human approval. If the URL must change, **stop and notify the human** so they can update **Wix Secrets Manager** (and Netlify/VPS/Node-RED). Policy: `docs/policies/gas-url-policy.md`.
 
@@ -314,7 +314,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.
 10. **The Chain Is Law** — ArrestLead → Defendant → Indemnitor → Match → BondCase → Packet → Signature → Payment. No shortcuts.
 11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities.
-12. **End-to-End Integration** — All systems must integrate seamlessly across SignNow, Twilio, iMessage, and Google Drive.
+12. **End-to-End Integration** — All systems must integrate seamlessly across DocuSeal, Twilio, iMessage, and Google Drive.
 13. **Stable GAS endpoints** — Prefer same Web App URL forever; deploy versions onto it. URL changes are a human + Wix Secrets event (see rule 10 / `docs/policies/gas-url-policy.md`).
 
 ---
@@ -364,10 +364,10 @@ Escalate immediately if:
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel |
 | `BLUEBUBBLES_URL_0178` | ✅ | Tailscale direct (`http://100.102.10.86:1234`), Cloudflare tunnel (`https://bb.shamrockbailbonds.biz`), or frp (`http://178.156.179.237:12434`) |
 | `BLUEBUBBLES_PASSWORD_0178` | ✅ | BlueBubbles API password |
-| `SIGNNOW_API_TOKEN` | ✅ | SignNow bearer token |
-| `SIGNNOW_BASIC_AUTH` | ✅ | Base64 client_id:client_secret for ROPC flow |
-| `SIGNNOW_USERNAME` | ✅ | `admin@shamrockbailbonds.biz` |
-| `SIGNNOW_PASSWORD` | ✅ | SignNow account password |
+| `DOCUSEAL_URL` | ✅ | DocuSeal public URL (`https://sign.shamrockbailbonds.biz`) |
+| `DOCUSEAL_API_KEY` | ✅ | DocuSeal API key |
+| `DOCUSEAL_TEMPLATE_ID_OSI` | ✅ | OSI DocuSeal template ID |
+| `DOCUSEAL_TEMPLATE_ID_PALMETTO` | ✅ | Palmetto DocuSeal template ID |
 | `TWILIO_ACCOUNT_SID` | Optional | Twilio SID for SMS court reminders |
 | `TWILIO_AUTH_TOKEN` | Optional | Twilio auth token |
 | `TWILIO_FROM_NUMBER` | Optional | Twilio sender number |
