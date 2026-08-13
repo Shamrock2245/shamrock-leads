@@ -99,6 +99,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | P1.5 | Node-RED: `GAS_WEBHOOK_URL`, `LEADS_PUBLIC_URL`, `GAS_API_KEY`; SYSTEM_SHUTDOWN off | node-red | [x] *verified 2026-08-04* |
 | P1.6 | Automation schedule visible: `GET /api/automation/schedule` (auth) | leads | [x] *implemented* |
 | P1.7 | Re-arrest detector + Slack path exercised on a test booking | leads | [x] *2026-08-11* — mock bond+arrest scan detected=1 + notification; Slack post wired to `SLACK_WEBHOOK_REARREST`/`SLACK_WEBHOOK_ARRESTS` (`_post_rearrest_slack`) |
+| P1.8 | Gmail Pub/Sub authenticated push: dedicated service account and exact `GMAIL_PUBSUB_AUDIENCE`, `GMAIL_PUBSUB_SERVICE_ACCOUNT_EMAIL`, `GMAIL_PUBSUB_SUBSCRIPTION`, `GMAIL_MONITORED_MAILBOX` values set on VPS | leads | [ ] Verify authenticated test push returns 200 and unauthenticated push returns 401 without an audit write. |
 
 ---
 
