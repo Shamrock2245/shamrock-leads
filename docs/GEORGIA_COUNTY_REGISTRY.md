@@ -8,6 +8,7 @@
 | Status | Meaning |
 |--------|---------|
 | ✅ Active | Scraper built and validated |
+| ⏸ Revalidation | Historical source entry; unscheduled until the live endpoint and source booking identifier are revalidated |
 | 🔄 Building | Scraper file exists, not yet validated |
 | 🔵 Validated | URL confirmed, scraper not yet built |
 | ✅ Active | URL unconfirmed, needs manual investigation |
@@ -15,38 +16,42 @@
 
 ---
 
-## Tier 1 — EAS Batch Runner (27 Counties)
-*All these counties use offenderindex.com and are scraped simultaneously by `eas_batch_runner.py`.*
+## Tier 1 — EAS Revalidation Hold (30 historical candidate counties)
+
+> The historical EAS list is retained for source reconnaissance only. `eas_batch_runner.py` is **not scheduler-registered**: its endpoint and source-provided booking identifiers must be revalidated county by county before any production ingestion. See [`recon/GEORGIA_SOURCE_VALIDATION_2026-08-12.md`](./recon/GEORGIA_SOURCE_VALIDATION_2026-08-12.md).
 
 | County | EAS Slug | Status | Interval |
 |--------|----------|--------|----------|
-| **Atkinson** | `atkinsoncoga` | ✅ Active | 60 min |
-| **Ben Hill** | `benhillcoga` | ✅ Active | 60 min |
-| **Berrien** | `berriencoga` | ✅ Active | 60 min |
-| **Butts** | `buttscoga` | ✅ Active | 60 min |
-| **Chattooga** | `chattoogacoga` | ✅ Active | 60 min |
-| **Cook** | `cookcoga` | ✅ Active | 60 min |
-| **Decatur** | `decaturcoga` | ✅ Active | 60 min |
-| **Elbert** | `elbertcoga` | ✅ Active | 60 min |
-| **Fannin** | `fannincoga` | ✅ Active | 60 min |
-| **Gilmer** | `gilmercoga` | ✅ Active | 60 min |
-| **Gordon** | `gordoncoga` | ✅ Active | 60 min |
-| **Jackson** | `jacksoncoga` | ✅ Active | 60 min |
-| **Jeff Davis** | `jeffdaviscoga` | ✅ Active | 60 min |
-| **Jenkins** | `jenkinscoga` | ✅ Active | 60 min |
-| **Laurens** | `laurenscoga` | ✅ Active | 60 min |
-| **Lee** | `leecoga` | ✅ Active | 60 min |
-| **Lincoln** | `lincolncoga` | ✅ Active | 60 min |
-| **Madison** | `madisoncoga` | ✅ Active | 60 min |
-| **Newton** | `newtoncoga` | ✅ Active | 60 min |
-| **Pierce** | `piercecoga` | ✅ Active | 60 min |
-| **Tift** | `tiftcoga` | ✅ Active | 60 min |
-| **Towns** | `townscoga` | ✅ Active | 60 min |
-| **Ware** | `warecoga` | ✅ Active | 60 min |
-| **Wayne** | `waynecoga` | ✅ Active | 60 min |
-| **Webster** | `webstercoga` | ✅ Active | 60 min |
-| **Wheeler** | `wheelercoga` | ✅ Active | 60 min |
-| **Worth** | `worthcoga` | ✅ Active | 60 min |
+| **Atkinson** | `atkinsoncoga` | ⏸ Revalidation | — |
+| **Ben Hill** | `benhillcoga` | ⏸ Revalidation | — |
+| **Berrien** | `berriencoga` | ⏸ Revalidation | — |
+| **Butts** | `buttscoga` | ⏸ Revalidation | — |
+| **Chattooga** | `chattoogacoga` | ⏸ Revalidation | — |
+| **Cook** | `cookcoga` | ⏸ Revalidation | — |
+| **Decatur** | `decaturcoga` | ⏸ Revalidation | — |
+| **Elbert** | `elbertcoga` | ⏸ Revalidation | — |
+| **Fannin** | `fannincoga` | ⏸ Revalidation | — |
+| **Gilmer** | `gilmercoga` | ⏸ Revalidation | — |
+| **Gordon** | `gordoncoga` | ⏸ Revalidation | — |
+| **Jackson** | `jacksoncoga` | ⏸ Revalidation | — |
+| **Jeff Davis** | `jeffdaviscoga` | ⏸ Revalidation | — |
+| **Jenkins** | `jenkinscoga` | ⏸ Revalidation | — |
+| **Laurens** | `laurenscoga` | ⏸ Revalidation | — |
+| **Lee** | `leecoga` | ⏸ Revalidation | — |
+| **Lincoln** | `lincolncoga` | ⏸ Revalidation | — |
+| **Madison** | `madisoncoga` | ⏸ Revalidation | — |
+| **Newton** | `newtoncoga` | ⏸ Revalidation | — |
+| **Pierce** | `piercecoga` | ⏸ Revalidation | — |
+| **Tift** | `tiftcoga` | ⏸ Revalidation | — |
+| **Towns** | `townscoga` | ⏸ Revalidation | — |
+| **Ware** | `warecoga` | ⏸ Revalidation | — |
+| **Wayne** | `waynecoga` | ⏸ Revalidation | — |
+| **Webster** | `webstercoga` | ⏸ Revalidation | — |
+| **Wheeler** | `wheelercoga` | ⏸ Revalidation | — |
+| **McDuffie** | `mcduffiecoga` | ⏸ Revalidation | — |
+| **Meriwether** | `meriwethercoga` | ⏸ Revalidation | — |
+| **Warren** | `warrencoga` | ⏸ Revalidation | — |
+| **Worth** | `worthcoga` | ⏸ Revalidation | — |
 
 ---
 

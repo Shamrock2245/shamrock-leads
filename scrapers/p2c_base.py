@@ -79,8 +79,8 @@ class P2CBaseScraper(BaseScraper):
         return all_r
 
     def _parse(self, soup) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
         records = []
+        dropped_missing_booking = 0
         for table in soup.find_all("table"):
             for row in table.find_all("tr")[1:]:
                 cells = row.find_all("td")
@@ -97,7 +97,14 @@ class P2CBaseScraper(BaseScraper):
                 rt = row.get_text(" ", strip=True)
                 bm = re.search(r"\$([\d,]+\.?\d*)", rt)
                 if bm: rec_bond = bm.group(1).replace(",","")
-                if not rec_name and not rec_bk: continue
+                if not rec_name:
+                    continue
+                # County + source booking number is the immutable arrest key.
+                # Do not synthesize it from a name or date: that can merge distinct
+                # people or distinct arrests and must fail closed instead.
+                if not rec_bk:
+                    dropped_missing_booking += 1
+                    continue
                 f, m, l = self._pn(rec_name)
                 lnk = row.find("a", href=True)
                 detail = ""
@@ -108,12 +115,18 @@ class P2CBaseScraper(BaseScraper):
                 records.append(ArrestRecord(
                     County=self.county,
                     State=getattr(self, "state", None) or "FL",
-                    Booking_Number=rec_bk or f"P2C_{re.sub(r'[^A-Za-z0-9]', '', rec_name)[:16]}",
+                    Booking_Number=rec_bk,
                     Full_Name=rec_name, First_Name=f, Middle_Name=m, Last_Name=l,
                     Booking_Date=rec_date, Bond_Amount=rec_bond, Status="In Custody",
                     Facility=self.FACILITY_NAME, Detail_URL=detail or self.P2C_URL,
                     Charges="Unknown", LastCheckedMode="INITIAL",
                 ))
+        if dropped_missing_booking:
+            logger.warning(
+                "%s: dropped %d P2C rows without a source booking identifier",
+                self.county,
+                dropped_missing_booking,
+            )
         return records
 
     @staticmethod

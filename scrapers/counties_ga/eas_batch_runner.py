@@ -67,28 +67,34 @@ class DynamicEASScraper(EASBaseScraper):
         return self._slug
 
 def run_eas_batch() -> List[ArrestRecord]:
-    """Run all EAS scrapers sequentially with a polite delay."""
-    all_records = []
-    
-    logger.info(f"🚀 Starting EAS batch runner for {len(EAS_COUNTIES)} counties...")
+    """Fetch EAS roster pages sequentially for manual reconnaissance only.
+
+    This helper is intentionally not registered with the scheduler. EAS sources
+    must not be treated as production coverage until each live endpoint and its
+    stable booking identifier are revalidated.
+    """
+    all_records: List[ArrestRecord] = []
+    logger.info("Starting EAS reconnaissance batch for %d counties", len(EAS_COUNTIES))
     start_time = time.time()
-    
+
     for i, (county_name, slug) in enumerate(EAS_COUNTIES):
-        logger.info(f"[{i+1}/{len(EAS_COUNTIES)}] Scraping {county_name} ({slug})...")
-        
+        logger.info("[%d/%d] Fetching %s", i + 1, len(EAS_COUNTIES), county_name)
         scraper = DynamicEASScraper(county_name, slug)
         records = scraper.scrape()
-        
         if records:
             all_records.extend(records)
-            
-        # Polite delay between domains to avoid rate limits
+
+        # Respect the shared upstream with a deliberate delay between counties.
         if i < len(EAS_COUNTIES) - 1:
             time.sleep(2.0)
-            
+
     elapsed = time.time() - start_time
-    logger.info(f"🏁 EAS batch complete: {len(all_records)} total records across {len(EAS_COUNTIES)} counties in {elapsed:.1f}s")
-    
+    logger.info(
+        "EAS reconnaissance batch complete: %d records across %d counties in %.1fs",
+        len(all_records),
+        len(EAS_COUNTIES),
+        elapsed,
+    )
     return all_records
 
 if __name__ == "__main__":

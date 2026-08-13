@@ -113,7 +113,6 @@ from scrapers.counties.wakulla import WakullaCountyScraper
 from scrapers.counties.washington import WashingtonCountyScraper
 
 # ── Georgia Scrapers ───────────────────────────────────────────────────────
-from scrapers.counties_ga.eas_batch_runner import run_eas_batch
 from scrapers.counties_ga.bacon import BaconScraper as GA_BaconScraper
 from scrapers.counties_ga.baker import BakerScraper as GA_BakerScraper
 from scrapers.counties_ga.banks import BanksScraper as GA_BanksScraper
@@ -626,16 +625,6 @@ def register_scrapers(sched):
     sched.register_scraper(GA_CrispScraper(), interval_minutes=120)
     sched.register_scraper(GA_LaurensScraper(), interval_minutes=120)
     sched.register_scraper(GA_EffinghamScraper(), interval_minutes=120)
-
-    from apscheduler.triggers.interval import IntervalTrigger
-    sched.scheduler.add_job(
-        run_eas_batch,
-        trigger=IntervalTrigger(minutes=60),
-        id="eas_batch_georgia",
-        name="EAS Batch Runner (27 GA Counties)",
-        replace_existing=True,
-        misfire_grace_time=600,
-    )
 
     # ── South Carolina ───────────────────────────────────────────────────────
     sched.register_scraper(SC_AbbevilleScraper(), interval_minutes=120)
