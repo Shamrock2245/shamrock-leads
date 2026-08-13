@@ -113,16 +113,52 @@ def test_api_routes_load():
     assert r.status_code == 200
     assert r.json().get("ok") is True
 
-    # Breach lookup must not invent hits
-    r2 = client.post(
-        "/api/palantir/spectra/breach-lookup",
-        json={"email": "someone@example.com"},
-    )
+    # Breach lookup must not invent hits (Hudson Rock mocked empty)
+    with patch(
+        "dashboard.routers.palantir_intel._query_hudson_rock",
+        new=AsyncMock(return_value=([], None)),
+    ):
+        r2 = client.post(
+            "/api/palantir/spectra/breach-lookup",
+            json={"email": "someone@example.com"},
+        )
     assert r2.status_code == 200
     body = r2.json()
     assert body["found"] is False
     assert body["total_breaches"] == 0
-    assert body["data_mode"] == "unavailable"
+    assert body["data_mode"] == "live"
+    assert "Hudson Rock" in (body.get("message") or "")
+
+
+def test_spectra_maps_hudson_rock_stealers():
+    from dashboard.routers.palantir_intel import _hudson_rock_items
+
+    items = _hudson_rock_items({
+        "stealers": [{
+            "date_compromised": "2024-03-01T12:00:00Z",
+            "stealer_family": "RedLine",
+            "operating_system": "Windows 10",
+            "computer_name": "DESKTOP-X",
+            "top_passwords": ["should-never-surface"],
+        }]
+    })
+    assert len(items) == 1
+    assert items[0].demo is False
+    assert items[0].verified is True
+    assert "Hudson Rock" in items[0].breach_name
+    assert "should-never-surface" not in items[0].description
+    assert "infostealer_log" in items[0].compromised_data
+
+
+def test_spectra_phone_not_queried():
+    app = FastAPI()
+    app.include_router(palantir_router)
+    client = TestClient(app)
+    r = client.post("/api/palantir/spectra/breach-lookup", json={"phone": "2395550100"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["found"] is False
+    assert "not phone" in (body.get("message") or "").lower()
 
 
 async def _async_iter(items):

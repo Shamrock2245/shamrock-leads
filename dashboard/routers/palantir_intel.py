@@ -602,103 +602,147 @@ async def get_situation_room_feeds(county: Optional[str] = None):
 
 
 # ── 3. SPECTRA breach matrix ─────────────────────────────────────────────────
+# Free infostealer intel: Hudson Rock Cavalier public OSINT tools (no API key).
+# Paid HIBP / commercial dump APIs are intentionally not used.
+_HUDSON_ROCK_EMAIL = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-email"
+_HUDSON_ROCK_USERNAME = "https://cavalier.hudsonrock.com/api/json/v2/osint-tools/search-by-username"
+
+
+def _hudson_rock_items(payload: Any) -> List[BreachLookupItem]:
+    """Map Hudson Rock JSON to SPECTRA items. Never include passwords or cookies."""
+    if not isinstance(payload, dict):
+        return []
+    stealers = payload.get("stealers")
+    if stealers is None:
+        stealers = payload.get("data") or []
+    if isinstance(stealers, dict):
+        stealers = [stealers]
+    if not isinstance(stealers, list):
+        return []
+
+    items: List[BreachLookupItem] = []
+    for raw in stealers:
+        if not isinstance(raw, dict):
+            continue
+        date = raw.get("date_compromised") or raw.get("date") or "Unknown"
+        if isinstance(date, str) and "T" in date:
+            date = date.split("T", 1)[0]
+        family = (
+            raw.get("stealer_family")
+            or raw.get("malware")
+            or raw.get("stealer")
+            or "Infostealer"
+        )
+        os_name = _safe_str(raw.get("operating_system"), 60)
+        fields = ["infostealer_log"]
+        if os_name:
+            fields.append("device_fingerprint")
+        if raw.get("computer_name"):
+            fields.append("hostname")
+        desc_bits = [f"Hudson Rock infostealer hit ({_safe_str(family, 40)})"]
+        if os_name:
+            desc_bits.append(f"OS={os_name}")
+        items.append(
+            BreachLookupItem(
+                breach_name=f"Hudson Rock / {_safe_str(family, 40) or 'Infostealer'}",
+                domain="hudsonrock.com",
+                breach_date=_safe_str(date, 32) or "Unknown",
+                compromised_data=fields[:8],
+                description=". ".join(desc_bits)[:200],
+                verified=True,
+                demo=False,
+            )
+        )
+    return items
+
+
+async def _query_hudson_rock(query: str, *, is_email: bool) -> Tuple[List[BreachLookupItem], Optional[str]]:
+    """Return (items, error). error is set only on transport/provider failure."""
+    import httpx
+
+    url = _HUDSON_ROCK_EMAIL if is_email else _HUDSON_ROCK_USERNAME
+    param = "email" if is_email else "username"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url,
+                params={param: query},
+                headers={"User-Agent": "ShamrockLeads-SPECTRA/1.0", "Accept": "application/json"},
+            )
+        if resp.status_code in (404, 204):
+            return [], None
+        if resp.status_code != 200:
+            return [], f"Hudson Rock HTTP {resp.status_code}"
+        try:
+            payload = resp.json()
+        except Exception:
+            return [], "Hudson Rock returned non-JSON"
+        return _hudson_rock_items(payload), None
+    except Exception as exc:
+        logger.warning("Hudson Rock lookup failed: %s", type(exc).__name__)
+        return [], "Hudson Rock unreachable"
+
 
 @palantir_router.post("/spectra/breach-lookup", response_model=BreachLookupResponse)
 async def breach_lookup(req: BreachLookupRequest):
     """
-    Executes live SPECTRA breach lookup against HIBP / licensed breach provider if key is set,
-    or checks MongoDB Atlas stored OSINT scans and public OSINT registries.
-    Never invents synthetic or fake breach data.
+    SPECTRA lookup via Hudson Rock's free infostealer OSINT API (no paid HIBP).
+    Email or username only. Never invents synthetic breach data.
     """
-    import os
-    import httpx
-
-    query = (req.email or req.phone or req.username or "").strip()
+    query = (req.email or req.username or "").strip()
+    phone_only = bool((req.phone or "").strip()) and not query
+    if phone_only:
+        return BreachLookupResponse(
+            query=(req.phone or "").strip(),
+            found=False,
+            total_breaches=0,
+            breaches=[],
+            risk_impact="unknown",
+            data_mode="live",
+            message=(
+                "Hudson Rock (free SPECTRA source) looks up email or username, not phone. "
+                "Use OSINT Ignorant for phone registration checks."
+            ),
+        )
     if not query:
         raise HTTPException(
             status_code=422,
-            detail="Provide email, phone, or username",
+            detail="Provide email or username",
         )
 
-    hibp_key = (os.getenv("HIBP_API_KEY") or "").strip()
-    breach_key = (os.getenv("BREACH_API_KEY") or "").strip()
-    api_key = hibp_key or breach_key
+    is_email = "@" in query
+    breaches, provider_error = await _query_hudson_rock(query, is_email=is_email)
 
-    breaches: List[BreachLookupItem] = []
+    if breaches:
+        return BreachLookupResponse(
+            query=query,
+            found=True,
+            total_breaches=len(breaches),
+            breaches=breaches,
+            risk_impact="high" if len(breaches) > 2 else "medium",
+            data_mode="live",
+            message=f"Hudson Rock reported {len(breaches)} infostealer record(s).",
+        )
 
-    if api_key and "@" in query:
-        # Live HaveIBeenPwned API v3 query
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(
-                    f"https://haveibeenpwned.com/api/v3/breachedaccount/{query}?truncateResponse=false",
-                    headers={"hibp-api-key": api_key, "user-agent": "ShamrockOSINT/1.0"}
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for item in data:
-                        breaches.append(BreachLookupItem(
-                            breach_name=item.get("Name", "Unknown Breach"),
-                            domain=item.get("Domain", "unknown"),
-                            breach_date=item.get("BreachDate", "Unknown"),
-                            compromised_data=item.get("DataClasses", []),
-                            description=item.get("Description", "")[:200],
-                            verified=item.get("IsVerified", True)
-                        ))
-                    return BreachLookupResponse(
-                        query=query,
-                        found=len(breaches) > 0,
-                        total_breaches=len(breaches),
-                        breaches=breaches,
-                        risk_impact="high" if len(breaches) > 3 else ("medium" if breaches else "low"),
-                        data_mode="live",
-                        message=f"Discovered {len(breaches)} verified HIBP breach records for {query}."
-                    )
-        except Exception as exc:
-            logger.warning("HIBP API query error for %s: %s", query, exc)
-
-    # Check MongoDB stored OSINT scans for matching target
-    db = None
-    try:
-        db = get_db()
-    except Exception:
-        db = None
-
-    if db is not None:
-        try:
-            osint_col = get_collection("osint_scans")
-            if osint_col:
-                saved = await osint_col.find_one({"$or": [{"target": query}, {"email": query}, {"phone": query}]})
-                if saved and saved.get("breaches"):
-                    for b in saved["breaches"]:
-                        breaches.append(BreachLookupItem(
-                            breach_name=b.get("name", "OSINT Dump"),
-                            domain=b.get("domain", "osint"),
-                            breach_date=b.get("date", "Stored"),
-                            compromised_data=b.get("fields", ["account_data"]),
-                            description=b.get("notes", "OSINT scanner hit"),
-                            verified=True
-                        ))
-                    return BreachLookupResponse(
-                        query=query,
-                        found=True,
-                        total_breaches=len(breaches),
-                        breaches=breaches,
-                        risk_impact="medium",
-                        data_mode="live",
-                        message=f"Discovered {len(breaches)} verified stored OSINT breach records."
-                    )
-        except Exception as exc:
-            logger.warning("Mongo OSINT search exception: %s", exc)
+    if provider_error:
+        return BreachLookupResponse(
+            query=query,
+            found=False,
+            total_breaches=0,
+            breaches=[],
+            risk_impact="unknown",
+            data_mode="unavailable",
+            message=f"SPECTRA provider error: {provider_error}",
+        )
 
     return BreachLookupResponse(
         query=query,
         found=False,
         total_breaches=0,
         breaches=[],
-        risk_impact="low" if api_key else "unknown",
-        data_mode="live" if api_key else "unavailable",
-        message="No verified breach records found for this query." if api_key else "No breach-data provider configured (set HIBP_API_KEY or BREACH_API_KEY)."
+        risk_impact="low",
+        data_mode="live",
+        message="No Hudson Rock infostealer records for this query.",
     )
 
 

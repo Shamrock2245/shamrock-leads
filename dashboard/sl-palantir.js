@@ -330,7 +330,10 @@
 
       const res = await r.json();
       if (!res.found || !res.breaches.length) {
-        box.innerHTML = `<div style="font-size:0.75rem;color:#00e676">✅ No known data breach compromises found for ${_esc(q)}</div>`;
+        const msg = res.message || `No known infostealer records for ${q}`;
+        const color = res.data_mode === 'unavailable' ? '#ff9100' : '#00e676';
+        box.innerHTML = `<div style="font-size:0.75rem;color:${color}">${res.data_mode === 'unavailable' ? '⚠' : '✅'} ${_esc(msg)}</div>`;
+        _renderGeotags(q);
         return;
       }
 
@@ -356,20 +359,7 @@
   function _renderGeotags(query) {
     const cluster = $('spectraGeotagCluster');
     if (!cluster) return;
-
-    cluster.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <div style="font-size:0.75rem;font-weight:700;color:#fff">Geotag Locations for ${_esc(query)}:</div>
-        <div style="background:#090d16;border:1px solid var(--palantir-border);padding:10px;border-radius:6px">
-          <div style="font-size:0.72rem;font-weight:700;color:#00e676">📍 High Frequency Cluster #1: Ft. Myers / Broadway Corridor</div>
-          <div style="font-size:0.68rem;color:var(--palantir-muted);margin-top:2px">18 Instagram / Facebook Geotags · Avg Posting Time: 6:00 PM EST</div>
-        </div>
-        <div style="background:#090d16;border:1px solid var(--palantir-border);padding:10px;border-radius:6px">
-          <div style="font-size:0.72rem;font-weight:700;color:#ff9100">📍 Cluster #2: Naples / Golden Gate Sector</div>
-          <div style="font-size:0.68rem;color:var(--palantir-muted);margin-top:2px">5 Geotags · Weekend Activity</div>
-        </div>
-      </div>
-    `;
+    cluster.innerHTML = `<div class="palantir-empty"><div class="empty-icon">📍</div><div class="empty-text">No verified geotags for ${_esc(query)}. Run an OSINT Exif/Instaloader scan — SPECTRA will not invent locations.</div></div>`;
   }
 
   // ── 4. Palantir Executive AI Dossier Generator ─────────────────────
