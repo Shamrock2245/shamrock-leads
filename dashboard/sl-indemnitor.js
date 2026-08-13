@@ -858,11 +858,14 @@ const SLIndemnitor = (() => {
     // Clear form
     ['indFormFirst','indFormLast','indFormPhone','indFormEmail','indFormAddress',
      'indFormDOB','indFormRelationship','indFormEmployer','indFormDL','indFormDLState',
-     'indFormSSN4','indFormBooking',
+     'indFormSSN4','indFormBooking','indFormMiddle','indFormSuffix','indFormSex',
+     'indFormHeight','indFormEyes','indFormHair','indFormDonor','indFormExp',
+     'indFormIssued','indFormIdType','indFormPortraitB64','indFormIdScanJson',
      'indFormRef1Name','indFormRef1Phone','indFormRef1Rel',
      'indFormRef2Name','indFormRef2Phone','indFormRef2Rel',
      'indFormRef3Name','indFormRef3Phone','indFormRef3Rel',
     ].forEach(id => { const el = $(id); if (el) el.value = id === 'indFormDLState' ? 'FL' : ''; });
+    if ($('indScanPortraitWrap')) $('indScanPortraitWrap').style.display = 'none';
   }
 
   function backToSearch() {
@@ -889,7 +892,19 @@ const SLIndemnitor = (() => {
       relationship: $('indFormRelationship')?.value || '',
       employer: $('indFormEmployer')?.value || '',
       dl_number: $('indFormDL')?.value || '',
-      dl_state: $('indFormDLState')?.value || 'FL',
+      dl_state: $('indFormDLState')?.value || '',
+      middleName: $('indFormMiddle')?.value || '',
+      suffix: $('indFormSuffix')?.value || '',
+      sex: $('indFormSex')?.value || '',
+      height: $('indFormHeight')?.value || '',
+      eye_color: $('indFormEyes')?.value || '',
+      hair_color: $('indFormHair')?.value || '',
+      organ_donor: $('indFormDonor')?.value === '' ? null : $('indFormDonor')?.value === 'true',
+      expiration_date: $('indFormExp')?.value || '',
+      issue_date: $('indFormIssued')?.value || '',
+      id_type: $('indFormIdType')?.value || '',
+      portrait_jpeg_b64: $('indFormPortraitB64')?.value || '',
+      id_scan: (() => { try { return JSON.parse($('indFormIdScanJson')?.value || '{}'); } catch (_) { return {}; } })(),
       ssn_last4: $('indFormSSN4')?.value || '',
       reference1_name: $('indFormRef1Name')?.value || '',
       reference1_phone: $('indFormRef1Phone')?.value || '',
@@ -1038,25 +1053,55 @@ const SLIndemnitor = (() => {
     }
   }
 
-  function _applyScanFields(fields) {
+  function _toDateInput(raw) {
+    if (!raw) return '';
+    const s = String(raw).trim();
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+    const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    return '';
+  }
+
+  function _applyScanFields(fields, data) {
     if (!fields) return 0;
+    const ext = (data && data.extracted) || {};
     if (fields.firstName && $('indFormFirst')) $('indFormFirst').value = fields.firstName;
     if (fields.lastName && $('indFormLast')) $('indFormLast').value = fields.lastName;
+    if (fields.middleName && $('indFormMiddle')) $('indFormMiddle').value = fields.middleName;
+    if (fields.suffix && $('indFormSuffix')) $('indFormSuffix').value = fields.suffix;
     if (fields.address && $('indFormAddress')) {
       $('indFormAddress').value = fields.address;
       _scannedAddress = fields.address.trim();
     }
-    if (fields.dob && $('indFormDOB')) {
-      let dob = fields.dob;
-      const m = String(dob).match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-      if (m) {
-        dob = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-      }
-      $('indFormDOB').value = dob;
-    }
+    if (fields.dob && $('indFormDOB')) $('indFormDOB').value = _toDateInput(fields.dob) || fields.dob;
     if (fields.dlNumber && $('indFormDL')) $('indFormDL').value = fields.dlNumber;
-    if (fields.dlState && $('indFormDLState')) $('indFormDLState').value = String(fields.dlState).slice(0, 2).toUpperCase();
-    return [fields.firstName, fields.lastName, fields.dlNumber, fields.address, fields.dob].filter(Boolean).length;
+    if (fields.dlState && $('indFormDLState')) $('indFormDLState').value = String(fields.dlState).slice(0, 3).toUpperCase();
+    if (fields.sex && $('indFormSex')) $('indFormSex').value = fields.sex;
+    if (fields.height && $('indFormHeight')) $('indFormHeight').value = fields.height;
+    if (fields.eyeColor && $('indFormEyes')) $('indFormEyes').value = fields.eyeColor;
+    if (fields.hairColor && $('indFormHair')) $('indFormHair').value = fields.hairColor;
+    if (fields.organDonor != null && $('indFormDonor')) $('indFormDonor').value = String(fields.organDonor);
+    if (fields.expirationDate && $('indFormExp')) $('indFormExp').value = _toDateInput(fields.expirationDate);
+    if (fields.issueDate && $('indFormIssued')) $('indFormIssued').value = _toDateInput(fields.issueDate);
+    if (fields.idType && $('indFormIdType')) $('indFormIdType').value = fields.idType;
+    const portrait = data && data.portrait_jpeg_b64;
+    if (portrait && $('indScanPortrait')) {
+      $('indScanPortrait').src = 'data:image/jpeg;base64,' + portrait;
+      if ($('indScanPortraitWrap')) $('indScanPortraitWrap').style.display = 'flex';
+      if ($('indFormPortraitB64')) $('indFormPortraitB64').value = portrait;
+    }
+    if ($('indScanMeta')) {
+      const bits = [fields.fullName || `${fields.firstName || ''} ${fields.lastName || ''}`.trim(), fields.idType, fields.organDonor === true ? 'Organ donor' : ''].filter(Boolean);
+      $('indScanMeta').textContent = bits.join(' · ');
+    }
+    if ($('indFormIdScanJson')) {
+      try { $('indFormIdScanJson').value = JSON.stringify(ext); } catch (_) {}
+    }
+    return [
+      fields.firstName, fields.lastName, fields.dlNumber, fields.address, fields.dob,
+      fields.middleName, fields.sex, fields.organDonor === true ? 'donor' : '',
+    ].filter(Boolean).length;
   }
 
   /**
@@ -1086,10 +1131,24 @@ const SLIndemnitor = (() => {
     return {
       firstName: first,
       lastName: last,
+      middleName: ext.middle_name || ext.middleName || '',
+      suffix: ext.suffix || '',
+      fullName: full,
       address: address,
       dob: ext.dob || ext.date_of_birth || '',
-      dlNumber: ext.dl_number || ext.dlNumber || ext.license_number || '',
-      dlState: ext.dl_state || ext.dlState || ext.state || 'FL',
+      dlNumber: ext.dl_number || ext.dlNumber || ext.license_number || ext.document_number || '',
+      dlState: ext.dl_state || ext.dlState || ext.state || ext.issuing_country || '',
+      sex: ext.sex || '',
+      height: ext.height || '',
+      eyeColor: ext.eye_color || ext.eyeColor || '',
+      hairColor: ext.hair_color || ext.hairColor || '',
+      organDonor: ext.organ_donor,
+      veteran: ext.veteran,
+      realId: ext.real_id,
+      expirationDate: ext.expiration_date || '',
+      issueDate: ext.issue_date || '',
+      idType: ext.id_type || '',
+      issuingCountry: ext.issuing_country || '',
     };
   }
 
@@ -1141,7 +1200,7 @@ const SLIndemnitor = (() => {
       }
 
       const fields = _normalizeScanPayload(data);
-      const filled = _applyScanFields(fields);
+      const filled = _applyScanFields(fields, data);
       if (filled === 0) {
         toast('⚠️ ID scanned but no fields were read — try a clearer photo of the front of the ID.', 'error');
       } else {
@@ -1236,18 +1295,18 @@ const SLIndemnitor = (() => {
     }
   }
 
-  function handleModalIdDrop(e) {
+  function handleModalIdDrop(e, role) {
     e.preventDefault();
     e.stopPropagation();
     const files = e.dataTransfer?.files;
-    if (files && files.length > 0) processModalIdScan(files[0]);
+    if (files && files.length > 0) processModalIdScan(files[0], role || 'indemnitor');
   }
 
-  function handleModalIdUpload(input) {
-    if (input.files && input.files.length > 0) processModalIdScan(input.files[0]);
+  function handleModalIdUpload(input, role) {
+    if (input.files && input.files.length > 0) processModalIdScan(input.files[0], role || 'indemnitor');
   }
 
-  async function processModalIdScan(file) {
+  async function processModalIdScan(file, role) {
     toast('📷 Preparing ID photo (any orientation)…', 'info');
     try {
       const prepared = await _prepareIdImage(file);
@@ -1270,23 +1329,28 @@ const SLIndemnitor = (() => {
       }
       const ext = d.extracted;
       const fields = _normalizeScanPayload(d);
+      const legal = ext.full_name || `${fields.firstName || ''} ${fields.lastName || ''}`.trim();
+      const who = role === 'defendant' ? 'defendant' : 'indemnitor';
 
-      // Add-indemnitor modal fields
-      _applyScanFields(fields);
-
-      // Auto-fill fields in #recordBondModal
-      if ($('baIndemName') && (ext.full_name || fields.firstName)) {
-        $('baIndemName').value = ext.full_name || `${fields.firstName} ${fields.lastName}`.trim();
+      if (who === 'indemnitor') {
+        _applyScanFields(fields, d);
+        if ($('baIndemName') && legal) $('baIndemName').value = legal;
+        if ($('baIndemDL') && fields.dlNumber) $('baIndemDL').value = fields.dlNumber;
+        if ($('baIndemDLState') && fields.dlState) $('baIndemDLState').value = fields.dlState;
+        if ($('baIndemDOB') && fields.dob) $('baIndemDOB').value = _toDateInput(fields.dob) || fields.dob;
+        if ($('baIndemAddress') && fields.address) $('baIndemAddress').value = fields.address;
+        if ($('baIndemCity') && ext.city) $('baIndemCity').value = ext.city;
+        if ($('baIndemState') && ext.state) $('baIndemState').value = ext.state;
+        if ($('baIndemZip') && ext.zip) $('baIndemZip').value = ext.zip;
+      } else {
+        if ($('baDefendantName') && legal) $('baDefendantName').value = legal;
+        if ($('baDefDL') && fields.dlNumber) $('baDefDL').value = fields.dlNumber;
+        if ($('baDefDOB') && fields.dob) $('baDefDOB').value = _toDateInput(fields.dob) || fields.dob;
+        if ($('baDefAddress') && fields.address) $('baDefAddress').value = fields.address;
       }
-      if ($('baIndemDL') && (ext.dl_number || fields.dlNumber)) $('baIndemDL').value = ext.dl_number || fields.dlNumber;
-      if ($('baIndemDLState') && (ext.dl_state || fields.dlState)) $('baIndemDLState').value = ext.dl_state || fields.dlState;
-      if ($('baIndemDOB') && (ext.dob || fields.dob)) $('baIndemDOB').value = ext.dob || fields.dob;
-      if ($('baIndemAddress') && (ext.address || fields.address)) $('baIndemAddress').value = ext.address || fields.address;
-      if ($('baIndemCity') && ext.city) $('baIndemCity').value = ext.city;
-      if ($('baIndemState') && ext.state) $('baIndemState').value = ext.state;
-      if ($('baIndemZip') && ext.zip) $('baIndemZip').value = ext.zip;
 
-      toast(`✅ Auto-filled indemnitor info for ${ext.full_name || fields.firstName || 'scanned ID'}!`, 'success');
+      const extra = [fields.organDonor === true ? 'organ donor' : '', fields.sex, fields.height].filter(Boolean).join(', ');
+      toast(`✅ ${who} ID: ${legal || 'scanned'}${extra ? ' · ' + extra : ''}`, 'success');
     } catch (err) {
       toast(`❌ ID scan failed: ${err.message}`, 'error');
     }

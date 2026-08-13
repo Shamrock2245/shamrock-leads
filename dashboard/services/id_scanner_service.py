@@ -67,35 +67,59 @@ class IDScannerService:
             mime_type = "image/webp"
 
         system_prompt = (
-            "You are an expert OCR parser for Driver's Licenses, State IDs, and Passports. "
-            "Extract the personal identification details from the provided image. "
-            "Return strictly valid JSON with no markdown formatting, using this exact schema:\n"
+            "You are an expert identity-document OCR parser for ALL 50 US states + DC + territories, "
+            "US and foreign passports, national IDs, consular IDs, permanent-resident cards, and military IDs. "
+            "Read every visible line including AAMVA field codes, MRZ (TD1/TD2/TD3), and small print. "
+            "Never invent values. If a field is not visible, use null.\n"
+            "Return strictly valid JSON (no markdown) with this schema:\n"
             "{\n"
             '  "first_name": "JOHN",\n'
             '  "middle_name": "ROBERT",\n'
             '  "last_name": "DOE",\n'
-            '  "full_name": "JOHN ROBERT DOE",\n'
+            '  "suffix": "JR",\n'
+            '  "full_name": "JOHN ROBERT DOE JR",\n'
             '  "dob": "1985-06-15",\n'
             '  "dl_number": "D123456789010",\n'
+            '  "document_number": null,\n'
             '  "dl_state": "FL",\n'
             '  "address": "1234 MAIN ST",\n'
             '  "city": "FORT MYERS",\n'
             '  "state": "FL",\n'
             '  "zip": "33901",\n'
+            '  "county": null,\n'
+            '  "country": "USA",\n'
             '  "sex": "M",\n'
+            '  "height": "6-01",\n'
+            '  "weight": "190",\n'
+            '  "eye_color": "BRO",\n'
+            '  "hair_color": "BLK",\n'
+            '  "organ_donor": true,\n'
+            '  "veteran": false,\n'
+            '  "real_id": true,\n'
+            '  "license_class": "E",\n'
+            '  "endorsements": null,\n'
+            '  "restrictions": null,\n'
+            '  "issue_date": "2020-06-15",\n'
             '  "expiration_date": "2028-06-15",\n'
-            '  "id_type": "driver_license"\n'
+            '  "place_of_birth": null,\n'
+            '  "nationality": "USA",\n'
+            '  "issuing_country": "USA",\n'
+            '  "issuing_authority": null,\n'
+            '  "mrz_line1": null,\n'
+            '  "mrz_line2": null,\n'
+            '  "id_type": "driver_license",\n'
+            '  "portrait_box": {"x": 0.03, "y": 0.20, "w": 0.30, "h": 0.55}\n'
             "}\n"
             "Rules:\n"
-            "- Standardize dates to YYYY-MM-DD format.\n"
-            "- Extract 2-letter state codes for dl_state and state.\n"
-            "- If a field is not visible or unknown, set its value to null.\n"
-            "- id_type must be one of: 'driver_license', 'state_id', 'passport', 'other'.\n"
-            "- Carefully read all text blocks and use context to infer address, even if poorly lit, blurred, or upside-down.\n"
-            "- Distinguish between mailing address and physical address if both are present, preferring physical.\n"
-            "- Extract the full middle name if present, not just the initial.\n"
-            "- Handle vertical, sideways, or upside-down images gracefully.\n"
-            "- The image may have been taken in any orientation; read all text regardless of rotation."
+            "- Dates YYYY-MM-DD. 2-letter region codes for US dl_state/state; ISO 3166-1 alpha-3 for issuing_country/nationality when not US.\n"
+            "- organ_donor: true if DONOR / ORGAN DONOR / heart icon / DDK=1; false if NOT A DONOR; else null.\n"
+            "- veteran / real_id: true only if the printed veteran flag or REAL ID star is visible.\n"
+            "- dl_number is the license/ID number; document_number is passport/inventory number if different.\n"
+            "- full_name is the legal name as printed (LN, FN, MN, suffix).\n"
+            "- Prefer physical address over mailing.\n"
+            "- portrait_box is the face photo as fractions of image width/height (0-1). Estimate if needed.\n"
+            "- id_type: driver_license | state_id | passport | resident_card | military_id | consular_id | other.\n"
+            "- Handle any rotation, glare, or crop. Read MRZ if present (P<USA..., I<..., etc.)."
         )
 
         payload = {
@@ -117,7 +141,7 @@ class IDScannerService:
                     ],
                 },
             ],
-            "max_tokens": 500,
+            "max_tokens": 1600,
             "temperature": 0.1,
         }
 
@@ -142,14 +166,18 @@ class IDScannerService:
                 content = data["choices"][0]["message"]["content"]
                 parsed = json.loads(content)
 
-                # Normalize keys for indemnitor intake
                 extracted = cls._normalize_extracted_fields(parsed)
-                return {
+                portrait = cls._crop_portrait(image_bytes, parsed.get("portrait_box"))
+                out = {
                     "success": True,
                     "engine": "openai_vision",
                     "extracted": extracted,
                     "raw": parsed,
                 }
+                if portrait:
+                    out["portrait_jpeg_b64"] = portrait
+                    extracted["has_portrait"] = True
+                return out
 
     @classmethod
     def _prepare_image_for_ocr(cls, image_bytes: bytes, filename: str = "") -> tuple[Optional[bytes], str]:
@@ -185,10 +213,66 @@ class IDScannerService:
             logger.warning("[id_scanner] image prep failed (%s): %s", filename, exc)
             return None, ""
 
+    @classmethod
+    def _crop_portrait(cls, image_bytes: bytes, box: Any = None) -> Optional[str]:
+        """Crop the ID portrait and return a JPEG base64 (no data: prefix)."""
+        if image_bytes[:4] == b"%PDF":
+            return None
+        try:
+            import io
+            from PIL import Image, ImageOps
+
+            img = Image.open(io.BytesIO(image_bytes))
+            try:
+                img = ImageOps.exif_transpose(img) or img
+            except Exception:
+                pass
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            w, h = img.size
+            if w < 40 or h < 40:
+                return None
+
+            region = None
+            if isinstance(box, dict):
+                try:
+                    x = float(box.get("x", 0))
+                    y = float(box.get("y", 0))
+                    bw = float(box.get("w") or box.get("width") or 0)
+                    bh = float(box.get("h") or box.get("height") or 0)
+                    if 0 <= x < 1 and 0 <= y < 1 and bw > 0.08 and bh > 0.12:
+                        region = (
+                            int(max(0, x) * w),
+                            int(max(0, y) * h),
+                            int(min(1, x + bw) * w),
+                            int(min(1, y + bh) * h),
+                        )
+                except (TypeError, ValueError):
+                    region = None
+            if region is None:
+                # Typical US DL / ID: face is the left ~32% of a landscape card
+                if w >= h:
+                    region = (int(w * 0.02), int(h * 0.16), int(w * 0.36), int(h * 0.88))
+                else:
+                    region = (int(w * 0.08), int(h * 0.08), int(w * 0.92), int(h * 0.48))
+
+            crop = img.crop(region)
+            if min(crop.size) < 24:
+                return None
+            out = io.BytesIO()
+            crop.save(out, format="JPEG", quality=82, optimize=True)
+            return base64.b64encode(out.getvalue()).decode("ascii")
+        except Exception as exc:
+            logger.warning("[id_scanner] portrait crop failed: %s", exc)
+            return None
+
     @staticmethod
     def _extracted_field_count(extracted: dict[str, Any]) -> int:
-        keys = ("first_name", "last_name", "full_name", "dob", "dl_number", "address", "zip")
-        return sum(1 for k in keys if extracted.get(k))
+        keys = (
+            "first_name", "last_name", "full_name", "dob", "dl_number",
+            "document_number", "address", "zip", "organ_donor",
+        )
+        return sum(1 for k in keys if extracted.get(k) not in (None, "", False))
 
     @classmethod
     def _ocr_text_all_orientations(cls, image_bytes: bytes) -> str:
@@ -239,7 +323,8 @@ class IDScannerService:
         upper = text.upper()
         for token in (
             "DOB", "EXP", "SEX", "DL", "DRIVER", "LICENSE", "CLASS",
-            "FLORIDA", "ADDRESS", "LN", "FN", "USA", "END",
+            "FLORIDA", "ADDRESS", "LN", "FN", "USA", "END", "PASSPORT",
+            "DONOR", "HEIGHT", "EYES", "HAIR", "REAL ID",
         ):
             if token in upper:
                 score += 2
@@ -269,11 +354,17 @@ class IDScannerService:
         try:
             from dashboard.services.id_ocr_service import IDOCRService
             extra = IDOCRService.parse_dl_text(text) or {}
-            for key in ("first_name", "last_name", "full_name", "dob", "dl_number",
-                        "address", "city", "state", "zip", "expiration_date", "dl_state"):
-                if extra.get(key) and not extracted.get(key):
+            extra_keys = (
+                "first_name", "middle_name", "last_name", "suffix", "full_name",
+                "dob", "dl_number", "address", "city", "state", "zip",
+                "expiration_date", "issue_date", "dl_state", "sex", "height",
+                "eye_color", "hair_color", "organ_donor", "veteran",
+                "license_class", "issuing_country",
+            )
+            for key in extra_keys:
+                if extra.get(key) not in (None, "") and extracted.get(key) in (None, ""):
                     val = extra[key]
-                    if key == "dob":
+                    if key in ("dob", "expiration_date", "issue_date") and isinstance(val, str) and "/" in val:
                         val = cls._normalize_date(str(val))
                     extracted[key] = val
         except Exception:
@@ -288,12 +379,18 @@ class IDScannerService:
             if tail:
                 extracted["address"] = f"{extracted['address']}, {tail}"
 
-        return {
+        portrait = cls._crop_portrait(image_bytes)
+        if portrait:
+            extracted["has_portrait"] = True
+        out = {
             "success": True,
             "engine": "local_ocr",
             "extracted": extracted,
-            "raw_text_preview": (text or "")[:300],
+            "raw_text_preview": (text or "")[:400],
         }
+        if portrait:
+            out["portrait_jpeg_b64"] = portrait
+        return out
 
     @classmethod
     def parse_raw_text(cls, text: str) -> dict[str, Any]:
@@ -305,13 +402,28 @@ class IDScannerService:
             "full_name": None,
             "dob": None,
             "dl_number": None,
-            "dl_state": "FL",
+            "dl_state": None,
             "address": None,
             "city": None,
-            "state": "FL",
+            "state": None,
             "zip": None,
             "sex": None,
+            "height": None,
+            "weight": None,
+            "eye_color": None,
+            "hair_color": None,
+            "organ_donor": None,
+            "veteran": None,
+            "real_id": None,
+            "license_class": None,
+            "endorsements": None,
+            "restrictions": None,
+            "issue_date": None,
             "expiration_date": None,
+            "suffix": None,
+            "document_number": None,
+            "issuing_country": None,
+            "nationality": None,
             "id_type": "driver_license",
         }
 
@@ -325,15 +437,38 @@ class IDScannerService:
         if m_dl:
             res["dl_number"] = m_dl.group(1).replace("-", "").replace(" ", "")
 
-        # Passport MRZ pattern (P<USA...)
-        m_pass = re.search(r"P<USA([A-Z<]+)", text)
+        # Passport MRZ (TD3): P<USAERIKSSON<<ANNA<MARIA or any ICAO issuer
+        m_pass = re.search(r"P<([A-Z]{3})([A-Z<]+)", text)
         if m_pass:
             res["id_type"] = "passport"
-            parts = [p for p in m_pass.group(1).split("<") if p]
+            res["issuing_country"] = m_pass.group(1)
+            res["nationality"] = m_pass.group(1)
+            parts = [p for p in m_pass.group(2).split("<") if p]
             if len(parts) >= 2:
                 res["last_name"] = parts[0]
                 res["first_name"] = parts[1]
-                res["full_name"] = f"{parts[1]} {parts[0]}"
+                if len(parts) > 2:
+                    res["middle_name"] = " ".join(parts[2:])
+                res["full_name"] = " ".join(filter(None, [res["first_name"], res.get("middle_name"), res["last_name"]]))
+
+        if re.search(r"\bORGAN\s*DONOR\b|\bDONOR\b", text, re.I) and not re.search(r"\bNOT\s+A\s+DONOR\b", text, re.I):
+            res["organ_donor"] = True
+        if re.search(r"\bVETERAN\b", text, re.I):
+            res["veteran"] = True
+        if re.search(r"\bREAL\s*ID\b|\b★\b|\bGOLD\s*STAR\b", text, re.I):
+            res["real_id"] = True
+        m_ht = re.search(r"(?:HGT|HEIGHT|HGT/WGT)[:\s]*(\d['’\- ]\d{1,2}|\d-\d{2}|\d{3}\s*(?:in|cm)?)", text, re.I)
+        if m_ht:
+            res["height"] = m_ht.group(1).strip()
+        m_eyes = re.search(r"(?:EYES?|EYE\s*COL)[:\s]*([A-Z]{3,})\b", text, re.I)
+        if m_eyes:
+            res["eye_color"] = m_eyes.group(1).upper()[:3]
+        m_hair = re.search(r"(?:HAIR)[:\s]*([A-Z]{3,})\b", text, re.I)
+        if m_hair:
+            res["hair_color"] = m_hair.group(1).upper()[:3]
+        m_class = re.search(r"(?:CLASS)[:\s]*([A-Z0-9]{1,3})\b", text, re.I)
+        if m_class:
+            res["license_class"] = m_class.group(1).upper()
 
         # Date of Birth (DOB 01/15/1990 or 4b 01/15/1990)
         m_dob = re.search(r"(?:DOB|4b|BIRTH|BORN)[:\s]*(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})", text, re.I)
@@ -417,24 +552,64 @@ class IDScannerService:
         if dl_no:
             dl_no = dl_no.replace("-", "").replace(" ", "").upper()
 
-        dl_st = str(parsed.get("dl_state") or parsed.get("state") or "FL").strip().upper()[:2]
-        st = str(parsed.get("state") or "FL").strip().upper()[:2]
+        dl_st = str(parsed.get("dl_state") or "").strip().upper()[:3] or None
+        if dl_st and len(dl_st) > 2 and parsed.get("id_type") != "passport":
+            dl_st = dl_st[:2]
+        st = str(parsed.get("state") or "").strip().upper()[:2] or None
+        if not dl_st and st:
+            dl_st = st
+
+        def _tri(val: Any) -> Optional[bool]:
+            if val is True or val is False:
+                return val
+            s = str(val or "").strip().lower()
+            if s in ("1", "y", "yes", "true", "donor"):
+                return True
+            if s in ("0", "n", "no", "false"):
+                return False
+            return None
+
+        suffix = str(parsed.get("suffix") or "").strip().upper() or None
+        if suffix and not full.endswith(suffix) and last:
+            full = f"{full} {suffix}".strip() if full else None
 
         return {
             "first_name": first or None,
             "middle_name": middle or None,
             "last_name": last or None,
+            "suffix": suffix,
             "full_name": full or None,
             "dob": parsed.get("dob"),
             "dl_number": dl_no or None,
-            "dl_state": dl_st or "FL",
-            "address": parsed.get("address"),
-            "city": parsed.get("city"),
-            "state": st or "FL",
-            "zip": parsed.get("zip"),
+            "document_number": str(parsed.get("document_number") or "").strip() or None,
+            "dl_state": dl_st,
+            "address": parsed.get("address") or None,
+            "city": parsed.get("city") or None,
+            "state": st,
+            "zip": parsed.get("zip") or None,
+            "county": parsed.get("county") or None,
+            "country": parsed.get("country") or parsed.get("issuing_country") or None,
             "sex": str(parsed.get("sex") or "").strip().upper()[:1] or None,
+            "height": str(parsed.get("height") or "").strip() or None,
+            "weight": str(parsed.get("weight") or "").strip() or None,
+            "eye_color": str(parsed.get("eye_color") or "").strip().upper() or None,
+            "hair_color": str(parsed.get("hair_color") or "").strip().upper() or None,
+            "organ_donor": _tri(parsed.get("organ_donor")),
+            "veteran": _tri(parsed.get("veteran")),
+            "real_id": _tri(parsed.get("real_id")),
+            "license_class": str(parsed.get("license_class") or "").strip().upper() or None,
+            "endorsements": parsed.get("endorsements") or None,
+            "restrictions": parsed.get("restrictions") or None,
+            "issue_date": parsed.get("issue_date"),
             "expiration_date": parsed.get("expiration_date"),
+            "place_of_birth": parsed.get("place_of_birth") or None,
+            "nationality": parsed.get("nationality") or None,
+            "issuing_country": parsed.get("issuing_country") or None,
+            "issuing_authority": parsed.get("issuing_authority") or None,
+            "mrz_line1": parsed.get("mrz_line1") or None,
+            "mrz_line2": parsed.get("mrz_line2") or None,
             "id_type": parsed.get("id_type") or "driver_license",
+            "has_portrait": bool(parsed.get("has_portrait")),
         }
 
     @staticmethod

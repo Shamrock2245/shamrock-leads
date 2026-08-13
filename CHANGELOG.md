@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Per-party paperwork links** — staff get Indemnitor + Defendant copy/send cards after finalize. Branded URLs `https://paperwork.shamrockbailbonds.biz/sign/{packet}/{role}` redirect to the live DocuSeal slug. Deliver uses the party’s stored phone, fail-closes on BlueBubbles failure, and refuses unknown numbers.
 
 ### Changed
+- **ID scan** now extracts 50-state DL/ID, US/foreign passports, organ donor, height/eyes/hair, dates, REAL ID/veteran flags, and a cropped portrait. Bondsman can scan defendant and indemnitor IDs separately; indemnitor + portal forms hydrate the extra fields.
 - **SPECTRA** uses Hudson Rock’s free infostealer OSINT API (email/username). Paid Have I Been Pwned is no longer a SPECTRA dependency. Fake Ft. Myers/Naples geotag clusters were removed.
 - **Hetzner CCX33 resource ceilings** — `shamrock-leads` 4g/2cpu → 8g/4cpu, dashboard 2g/1.5 → 3g/2.0, Obscura 512m → 1g, OSINT 1g → 2g, Postiz 2g → 3g, Traccar 512m → 768m, OpenCut 2g → 1.5g. Runbook: `docs/runbooks/vps-ccx33-resize.md`. `SCRAPER_MAX_CONCURRENT` stays 8 until a full cycle is green.
 - Daily `maintenance/docker-prune.sh` now ages BuildKit cache at 24h and vacuums runner diag / journal / apt cache (root disk was not grown with the RAM resize).

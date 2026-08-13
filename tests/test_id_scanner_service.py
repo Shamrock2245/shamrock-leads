@@ -93,6 +93,30 @@ def test_id_scanner_normalize_fields():
     assert extracted["dl_number"] == "S999888776660"
     assert extracted["dl_state"] == "FL"
     assert extracted["sex"] == "F"
+    assert extracted["organ_donor"] is None
+
+
+def test_id_scanner_does_not_default_state_to_fl():
+    extracted = IDScannerService._normalize_extracted_fields({"first_name": "Ana", "last_name": "Cruz"})
+    assert extracted["dl_state"] is None
+    assert extracted["state"] is None
+
+
+def test_id_scanner_foreign_passport_mrz():
+    raw = "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<\nL898902C36UTO7408122F1204159ZE184226B<<<<<10"
+    res = IDScannerService.parse_raw_text(raw)
+    assert res["id_type"] == "passport"
+    assert res["issuing_country"] == "UTO"
+    assert res["last_name"] == "ERIKSSON"
+    assert res["first_name"] == "ANNA"
+
+
+def test_id_scanner_organ_donor_and_physicals():
+    raw = "CALIFORNIA DRIVER LICENSE\nDONOR\nHGT 5-06 EYES BRO HAIR BLK\nCLASS C\nDOB 03/04/1991"
+    res = IDScannerService.parse_raw_text(raw)
+    assert res["organ_donor"] is True
+    assert res["eye_color"] == "BRO"
+    assert res["hair_color"] == "BLK"
 
 
 def test_api_scan_id_ocr_endpoint_multipart(client):

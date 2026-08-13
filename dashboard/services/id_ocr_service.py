@@ -60,12 +60,20 @@ class IDOCRService:
             # First Name (DAC or DCT) & Last Name (DCS or DAB)
             m_fn = re.search(r"(?:DAC|DCT)\s*([A-Za-z\-]+)", text)
             m_ln = re.search(r"(?:DCS|DAB)\s*([A-Za-z\-]+)", text)
+            m_mn = re.search(r"DAD\s*([A-Za-z\-]+)", text)
+            m_suf = re.search(r"DCU\s*([A-Za-z0-9\-]+)", text)
             if m_fn:
                 out["first_name"] = m_fn.group(1).title()
             if m_ln:
                 out["last_name"] = m_ln.group(1).title()
+            if m_mn:
+                out["middle_name"] = m_mn.group(1).title()
+            if m_suf:
+                out["suffix"] = m_suf.group(1).upper()
             if out["first_name"] and out["last_name"]:
-                out["full_name"] = f"{out['first_name']} {out['last_name']}"
+                mid = f" {out['middle_name']}" if out.get("middle_name") else ""
+                suf = f" {out['suffix']}" if out.get("suffix") else ""
+                out["full_name"] = f"{out['first_name']}{mid} {out['last_name']}{suf}".strip()
 
             # DL Number (DAQ)
             m_dl = re.search(r"DAQ\s*([A-Z0-9\-]+)", text)
@@ -81,8 +89,24 @@ class IDOCRService:
                 else:
                     out["dob"] = f"{raw_dob[0:2]}/{raw_dob[2:4]}/{raw_dob[4:8]}"
 
+            m_exp = re.search(r"DBA\s*(\d{8})", text)
+            if m_exp:
+                raw_exp = m_exp.group(1)
+                if raw_exp.startswith("19") or raw_exp.startswith("20"):
+                    out["expiration_date"] = f"{raw_exp[4:6]}/{raw_exp[6:8]}/{raw_exp[0:4]}"
+                else:
+                    out["expiration_date"] = f"{raw_exp[0:2]}/{raw_exp[2:4]}/{raw_exp[4:8]}"
+
+            m_iss = re.search(r"DBD\s*(\d{8})", text)
+            if m_iss:
+                raw_iss = m_iss.group(1)
+                if raw_iss.startswith("19") or raw_iss.startswith("20"):
+                    out["issue_date"] = f"{raw_iss[4:6]}/{raw_iss[6:8]}/{raw_iss[0:4]}"
+                else:
+                    out["issue_date"] = f"{raw_iss[0:2]}/{raw_iss[2:4]}/{raw_iss[4:8]}"
+
             # Address (DAG, DAI, DAJ, DAK)
-            m_street = re.search(r"DAG\s*([^\r\n\t]+?)(?=\s*(?:DAI|DAJ|DAK|DBC|DBD|DDB)|\r|\n|$)", text)
+            m_street = re.search(r"DAG\s*([^\r\n\t]+?)(?=\s*(?:DAI|DAJ|DAK|DBC|DBD|DDB|DAH)|\r|\n|$)", text)
             m_city = re.search(r"DAI\s*([^\r\n\t]+?)(?=\s*(?:DAJ|DAK|DBC|DBD|DDB)|\r|\n|$)", text)
             m_state = re.search(r"DAJ\s*([A-Z]{2})", text)
             m_zip = re.search(r"DAK\s*(\d{5})", text)
@@ -93,11 +117,37 @@ class IDOCRService:
                 out["city"] = m_city.group(1).strip().title()
             if m_state:
                 out["state"] = m_state.group(1).upper()
+                out["dl_state"] = m_state.group(1).upper()
             if m_zip:
                 out["zip"] = m_zip.group(1)
 
+            m_sex = re.search(r"DBC\s*([12MF])", text)
+            if m_sex:
+                out["sex"] = {"1": "M", "2": "F"}.get(m_sex.group(1), m_sex.group(1))
+            m_ht = re.search(r"DAU\s*([0-9]{3}(?:\s*(?:in|cm))?)", text, re.I)
+            if m_ht:
+                out["height"] = m_ht.group(1).strip()
+            m_eye = re.search(r"DAY\s*([A-Z]{3})", text)
+            if m_eye:
+                out["eye_color"] = m_eye.group(1).title()
+            m_hair = re.search(r"DAZ\s*([A-Z]{3})", text)
+            if m_hair:
+                out["hair_color"] = m_hair.group(1).title()
+            m_cls = re.search(r"DCA\s*([A-Z0-9]+)", text)
+            if m_cls:
+                out["license_class"] = m_cls.group(1)
+            m_donor = re.search(r"DDK\s*([01YN])", text, re.I)
+            if m_donor:
+                out["organ_donor"] = m_donor.group(1).upper() in ("1", "Y")
+            m_vet = re.search(r"DDL\s*([01YN])", text, re.I)
+            if m_vet:
+                out["veteran"] = m_vet.group(1).upper() in ("1", "Y")
+            m_cc = re.search(r"DCG\s*([A-Z]{3})", text)
+            if m_cc:
+                out["issuing_country"] = m_cc.group(1)
+
             if out["dl_number"] or out["full_name"]:
-                return {k: v for k, v in out.items() if v}
+                return {k: v for k, v in out.items() if v not in ("", None)}
 
         # ── Standard Front DL OCR Text Fallback ─────────────────────────────
         lines = [l.strip() for l in text.splitlines() if l.strip()]

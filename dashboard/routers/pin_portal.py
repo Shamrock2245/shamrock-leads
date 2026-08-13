@@ -1398,10 +1398,14 @@ async def get_portal_ui(request: Request):
                 resEl.innerHTML = `
                     <div class="id-extracted-card">
                         <div class="id-extracted-title">ID verified</div>
+                        ${d.portrait_jpeg_b64 ? `<img alt="ID portrait" src="data:image/jpeg;base64,${d.portrait_jpeg_b64}" style="width:72px;height:90px;object-fit:cover;border-radius:6px;margin-bottom:8px">` : ''}
                         ${ext.full_name ? `<div class="id-extracted-row"><span class="id-extracted-label">Name</span><strong>${escHtml(ext.full_name)}</strong></div>` : ''}
-                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#</span><span>${escHtml(ext.dl_number)} (${escHtml(ext.dl_state || 'FL')})</span></div>` : ''}
+                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#</span><span>${escHtml(ext.dl_number)} (${escHtml(ext.dl_state || ext.issuing_country || '')})</span></div>` : ''}
                         ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB</span><span>${escHtml(ext.dob)}</span></div>` : ''}
                         ${addrLine ? `<div class="id-extracted-row"><span class="id-extracted-label">Address</span><span>${escHtml(addrLine)}</span></div>` : ''}
+                        ${ext.organ_donor === true ? `<div class="id-extracted-row"><span class="id-extracted-label">Donor</span><span>Yes</span></div>` : ''}
+                        ${ext.sex ? `<div class="id-extracted-row"><span class="id-extracted-label">Sex</span><span>${escHtml(ext.sex)}</span></div>` : ''}
+                        ${ext.height ? `<div class="id-extracted-row"><span class="id-extracted-label">Height</span><span>${escHtml(ext.height)}</span></div>` : ''}
                         <div class="id-extracted-actions">
                             <button type="button" id="btnInstantEsign" class="btn-primary btn-instant-esign">Sign paperwork now</button>
                             <button type="button" class="btn-primary btn-secondary-ghost" id="btnProceedPin">Use PIN instead →</button>

@@ -27,6 +27,32 @@ def test_parse_dl_barcode():
     assert res.get("zip") == "33901"
 
 
+def test_parse_dl_barcode_donor_and_middle():
+    sample = """
+    ANSI 636000080002DL
+    DAQCA1234567
+    DCSGARCIA
+    DACMARIA
+    DADELENA
+    DBB19880312
+    DBA20300312
+    DAG100 MAIN ST
+    DAISAN DIEGO
+    DAJCA
+    DAK92101
+    DBC2
+    DAU064 in
+    DAYBRO
+    DDK1
+    """
+    res = IDOCRService.parse_dl_text(sample)
+    assert res.get("first_name") == "Maria"
+    assert res.get("middle_name") == "Elena"
+    assert res.get("state") == "CA"
+    assert res.get("organ_donor") is True
+    assert res.get("sex") == "F"
+
+
 def test_extract_indemnitor_data():
     front_text = "FLORIDA DRIVER LICENSE DOB: 05/15/1990 FORT MYERS FL 33901"
     back_text = "ANSI 636000080002DL00390237DLDAQD123456789012 DCSDOE DACJOHN DBB19900515 DAG1528 BROADWAY DAIFORT MYERS DAJFL DAK33901"

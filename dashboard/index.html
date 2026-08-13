@@ -3219,6 +3219,25 @@
           <input type="text" id="baDefendantName" class="ba-input" placeholder="e.g. John Smith">
         </div>
       </div>
+      <div style="margin:10px 0 4px;padding:10px 12px;border-radius:10px;background:rgba(16,185,129,0.08);border:1px dashed #34d399;text-align:center;cursor:pointer" onclick="document.getElementById('baDefIdScanFileInput').click()" ondragover="event.preventDefault()" ondrop="SLIndemnitor&&SLIndemnitor.handleModalIdDrop(event,'defendant')">
+        <strong style="color:#4ade80;font-size:12px">📸 Scan defendant ID</strong>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Any US state DL / ID, US or foreign passport — fills name + ID fields</div>
+        <input type="file" id="baDefIdScanFileInput" accept="image/*,application/pdf" style="display:none" onchange="SLIndemnitor&&SLIndemnitor.handleModalIdUpload(this,'defendant')">
+      </div>
+      <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px">
+        <div class="ba-field">
+          <label class="ba-label">Defendant DL / ID #</label>
+          <input type="text" id="baDefDL" class="ba-input" placeholder="License or passport #">
+        </div>
+        <div class="ba-field">
+          <label class="ba-label">Defendant DOB</label>
+          <input type="date" id="baDefDOB" class="ba-input">
+        </div>
+        <div class="ba-field">
+          <label class="ba-label">Defendant address</label>
+          <input type="text" id="baDefAddress" class="ba-input" placeholder="Street, city, ST ZIP">
+        </div>
+      </div>
 
       <!-- STEP 2: Charge Mapping (appears after defendant selection) -->
       <div id="baChargeMappingSection" style="display:none">
@@ -3245,10 +3264,10 @@
           </label>
 
           <!-- ID / Driver License AI Auto-Fill Dropzone -->
-          <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(59,130,246,0.08);border:1px dashed #3b82f6;text-align:center;cursor:pointer" onclick="document.getElementById('baIdScanFileInput').click()" ondragover="event.preventDefault()" ondrop="SLIndemnitor&&SLIndemnitor.handleModalIdDrop(event)">
-            <span style="font-size:18px">🪪</span> <strong style="color:#60a5fa;font-size:13px">Scan ID / Driver License / Passport to Auto-Fill</strong>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px">Tap to upload or snap photo — auto-fills Name, DL#, DOB, Address, City, State, Zip</div>
-            <input type="file" id="baIdScanFileInput" accept="image/*,application/pdf" style="display:none" onchange="SLIndemnitor&&SLIndemnitor.handleModalIdUpload(this)">
+          <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:rgba(59,130,246,0.08);border:1px dashed #3b82f6;text-align:center;cursor:pointer" onclick="document.getElementById('baIdScanFileInput').click()" ondragover="event.preventDefault()" ondrop="SLIndemnitor&&SLIndemnitor.handleModalIdDrop(event,'indemnitor')">
+            <span style="font-size:18px">🪪</span> <strong style="color:#60a5fa;font-size:13px">Scan indemnitor ID / DL / passport</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">50-state DL, passport, or foreign ID — name, DL#, DOB, address, donor, portrait</div>
+            <input type="file" id="baIdScanFileInput" accept="image/*,application/pdf" style="display:none" onchange="SLIndemnitor&&SLIndemnitor.handleModalIdUpload(this,'indemnitor')">
           </div>
 
           <div class="ba-manual-grid" style="grid-template-columns:1fr 1fr;gap:10px">
@@ -3272,6 +3291,22 @@
                 <option>Child</option><option>Friend</option><option>Employer</option>
                 <option>Attorney</option><option>Self</option><option>Other</option>
               </select>
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor DL / ID #</label>
+              <input type="text" id="baIndemDL" class="ba-input" placeholder="License or passport #">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor DOB</label>
+              <input type="date" id="baIndemDOB" class="ba-input">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">Indemnitor address</label>
+              <input type="text" id="baIndemAddress" class="ba-input" placeholder="Street, city, ST ZIP">
+            </div>
+            <div class="ba-field">
+              <label class="ba-label">DL state / country</label>
+              <input type="text" id="baIndemDLState" class="ba-input" maxlength="3" placeholder="FL">
             </div>
           </div>
 
@@ -3436,7 +3471,7 @@
         <input type="file" id="indAddIdScanner" accept="image/*,application/pdf" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;z-index:-1" onchange="SLIndemnitor.handleScanID(event)">
         <label for="indAddIdScanner" class="btn-sm" role="button" tabindex="0" style="margin-left:auto;padding:10px 14px;min-height:44px;display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none">📸 Scan ID</label>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Scan or drop a driver license / state ID / passport photo — any orientation. OCR fills name, address, DOB, and DL #.</p>
+      <p style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Scan or drop any US state DL/ID, passport, or foreign ID — any orientation. OCR fills legal name, address, DL/passport #, DOB, donor status, and portrait.</p>
 
       <!-- Booking Number Selection -->
       <div style="margin-bottom:14px">
@@ -3444,8 +3479,16 @@
         <input id="indFormBooking" type="text" placeholder="Enter booking number" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
       </div>
 
+      <div id="indScanPortraitWrap" style="display:none;align-items:center;gap:12px;margin-bottom:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel)">
+        <img id="indScanPortrait" alt="ID portrait" style="width:72px;height:90px;object-fit:cover;border-radius:6px;background:#111">
+        <div style="font-size:12px;color:var(--muted);line-height:1.4">
+          <div id="indScanMeta" style="font-weight:700;color:var(--text)"></div>
+          <div>Portrait + extra ID fields filled from the scan. Review before save.</div>
+        </div>
+      </div>
+
       <!-- Name Row -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 80px;gap:10px;margin-bottom:10px">
         <div>
           <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">First Name *</label>
           <input id="indFormFirst" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
@@ -3454,6 +3497,14 @@
           <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Last Name *</label>
           <input id="indFormLast" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
         </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Suffix</label>
+          <input id="indFormSuffix" type="text" placeholder="JR" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Middle / full legal name</label>
+        <input id="indFormMiddle" type="text" placeholder="Middle name" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
       </div>
 
       <!-- Contact Row -->
@@ -3504,20 +3555,62 @@
       </div>
 
       <!-- DL + SSN Last 4 -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">
         <div>
-          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL Number</label>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL / ID / Passport #</label>
           <input id="indFormDL" type="text" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
         </div>
         <div>
-          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL State</label>
-          <input id="indFormDLState" type="text" value="FL" maxlength="2" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;text-transform:uppercase">
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">DL / issuing state</label>
+          <input id="indFormDLState" type="text" value="FL" maxlength="3" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;text-transform:uppercase">
         </div>
         <div>
           <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">SSN Last 4</label>
           <input id="indFormSSN4" type="text" maxlength="4" placeholder="••••" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
         </div>
       </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Sex</label>
+          <input id="indFormSex" type="text" maxlength="1" placeholder="M/F" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Height</label>
+          <input id="indFormHeight" type="text" placeholder="5-10" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Eyes</label>
+          <input id="indFormEyes" type="text" placeholder="BRO" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Hair</label>
+          <input id="indFormHair" type="text" placeholder="BLK" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Organ donor</label>
+          <select id="indFormDonor" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+            <option value="">Unknown</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Expires</label>
+          <input id="indFormExp" type="date" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">Issued</label>
+          <input id="indFormIssued" type="date" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px;display:block">ID type</label>
+          <input id="indFormIdType" type="text" placeholder="DL / passport" style="width:100%;padding:8px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px">
+        </div>
+      </div>
+      <input type="hidden" id="indFormPortraitB64" value="">
+      <input type="hidden" id="indFormIdScanJson" value="">
 
       <!-- References Section -->
       <div style="border-top:1px solid var(--border);padding-top:12px;margin-bottom:14px">
@@ -3598,8 +3691,8 @@
 <script defer src="/sl-admin-hygiene.js?v=1"></script>
 <script defer src="/sl-service-control.js?v=1"></script>
 <script defer src="/sl-defendant-lifecycle.js?v=4"></script>
-<script defer src="/sl-indemnitor.js?v=7"></script>
-<script defer src="/sl-inventory.js?v=4"></script>
+<script defer src="/sl-indemnitor.js?v=8"></script>
+<script defer src="/sl-inventory.js?v=5"></script>
 <script defer src="/sl-analytics.js?v=4"></script>
 <script defer src="/sl-analytics-apex.js?v=4"></script>
 <script defer src="/sl-intelligence.js?v=1"></script>
