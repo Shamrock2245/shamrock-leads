@@ -15,7 +15,7 @@
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **12 LA** + **9 MS** registered; Tangipahoa is deployed and St. Mary is locally source-validated, but per-source production telemetry remains required 🔄
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
-9. **AL** — **16 registered** (Lee and Marshall deployed; St. Clair locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
+9. **AL** — **16 registered** (Lee, Marshall, and St. Clair deployed; Etowah locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
 
 ## Shared platform bases (leverage first)
 
@@ -87,7 +87,7 @@
 
 ### MS / AL
 1. **MS:** 9 jobs registered. `docs/MS_COUNTY_REGISTRY.md` records the current modules and recon-only blockers for Adams, Lafayette, Lowndes, Oktibbeha, and Warren.
-2. **AL:** 16 jobs registered. Lee and Marshall are deployed; St. Clair is locally source-validated and pending deployment. Validate existing source telemetry before adding overlapping coverage.
+2. **AL:** 16 jobs registered. Lee, Marshall, and St. Clair are deployed; Etowah is locally source-validated and pending deployment. Validate existing source telemetry before adding overlapping coverage.
 
 ## Directory layout
 
