@@ -1,12 +1,20 @@
-"""
-Tuscaloosa County (AL) Arrest Scraper — Tuscaloosa Sheriff Roster.
-URL: https://www.tcso.org/inmates
-"""
-import logging
-import time
-from typing import List
+"""Tuscaloosa County, Alabama source-safety guard.
 
-import requests
+The prior implementation pointed to ``tcso.org``, which is Tulsa County,
+Oklahoma, rather than Tuscaloosa County, Alabama. Tuscaloosa's official
+Sheriff site directs users to a human-verification-protected, person-search
+"Who's in Jail" surface. It does not presently provide a verified broad,
+booking-safe contract through normal automated access.
+
+The registered job remains visible for operational monitoring but intentionally
+emits no records until the Sheriff publishes a normal-access public roster that
+includes complete identity, a source-issued booking identifier, and booking
+date/time.
+"""
+from __future__ import annotations
+
+import logging
+from typing import List
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
@@ -15,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 
 class TuscaloosaScraper(BaseScraper):
+    """Fail closed until a Tuscaloosa official public roster is validated."""
+
+    OFFICIAL_SOURCE_URL = "https://www.tcsoal.org/inmates"
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Official Tuscaloosa Sheriff's 'Who's in Jail' surface requires human "
+        "verification and no broad booking-safe public roster contract is "
+        "verified through normal access."
+    )
+
     @property
     def county(self) -> str:
         return "Tuscaloosa"
@@ -24,32 +42,10 @@ class TuscaloosaScraper(BaseScraper):
         return "AL"
 
     def scrape(self) -> List[ArrestRecord]:
-        records: List[ArrestRecord] = []
-        url = "https://www.tcso.org/api/inmates/roster"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        }
-        try:
-            resp = requests.get(url, headers=headers, timeout=25)
-            if resp.status_code == 200:
-                for item in resp.json().get("inmates", []):
-                    b_num = str(item.get("booking_number") or item.get("id") or "")
-                    name = str(item.get("full_name") or f"{item.get('last_name')}, {item.get('first_name')}").strip()
-                    if not b_num or not name:
-                        continue
-                    records.append(
-                        ArrestRecord(
-                            booking_number=b_num,
-                            county="Tuscaloosa",
-                            state="AL",
-                            full_name=name,
-                            charges=item.get("charges") or [],
-                            total_bond_amount=float(item.get("bond_amount") or 0.0),
-                            facility="Tuscaloosa County Metro Jail",
-                            scraped_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        )
-                    )
-        except Exception as e:
-            logger.info(f"Tuscaloosa AL scrape info: {e}")
-        return records
+        logger.warning(
+            "%s %s fails closed: %s",
+            self.county,
+            self.state,
+            self.SOURCE_CONTRACT_REASON,
+        )
+        return []
