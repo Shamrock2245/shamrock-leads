@@ -68,7 +68,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
 | **AL** | **15** | `scrapers/counties_al/` | + Marshall (deployed 2026-08-14; official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
 | **LA** | **11** | `scrapers/counties_la/` | + Tangipahoa (deployed 2026-08-14; official public roster locally validated; Mongo/alert evidence pending) |
-| **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
+| **MS** | **9** | `scrapers/counties_ms/` | Registry reconciled 2026-08-14; 9 jobs registered. Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only pending safe public booking boundaries. |
 | **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
 | **Total** | **355** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
@@ -178,6 +178,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | TX (34 registered; Randall deployed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
 | AL (15 registered; Lee and Marshall deployed with public host checks green) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
 | LA (11 registered; Tangipahoa deployed with public host checks green; Lafayette remains CAPTCHA-sensitive) | ⏳ Obtain Tangipahoa Mongo/Slack telemetry and validate existing parish source health |
+| MS (9 registered; registry reconciled; five assessed counties remain recon-only) | ⏳ Validate existing source telemetry and wait for a supported public roster/export before adding uncovered counties |
 | CT dockets + DOC | ✅ Hardened 2026-08-04 — keep production scrapes scheduled |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |

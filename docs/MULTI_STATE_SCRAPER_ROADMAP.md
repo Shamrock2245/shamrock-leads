@@ -52,8 +52,9 @@
 3. **Greenville** — Incapsula; residential SOCKS when available  
 4. Proxy path for 403 jailroster.org family; scaffold quiet no-portal counties  
 
-### NC (47 registered — deepen + expand to 100)
-1. **NC recon ✅** + **47 scrapers registered** (waves 1–7) — `docs/NC_COUNTY_REGISTRY.md`  
+### NC (60 registered — deepen + expand to 100)
+1. **NC recon ✅** + **60 scrapers registered** — `docs/NC_COUNTY_REGISTRY.md`
+
 2. Platforms: Southern SW + Zuercher + classic P2C + DCN DevExpress + OCV inmates.json + custody PDFs + custom HTML  
 3. Dashboard Multi-State Ops filters NC; run-now uses `nc_*` keys  
 4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
@@ -73,33 +74,34 @@
 4. **Collin** remains WAF-sensitive; do not bypass access controls.
 5. Full scheduler inventory, source posture, and recon queue: `docs/TX_COUNTY_REGISTRY.md`.
 
-### LA (4 registered — harden)
-1. **Orleans** ⏳ OPSO partial · **Lafayette** ⏳ 365Labs captcha  
-2. Jefferson + East Baton Rouge registered · registry `docs/LA_COUNTY_REGISTRY.md`  
+### LA (11 registered — harden)
+1. **Tangipahoa** deployed after a bounded public-source smoke; parish-specific Mongo/alert evidence remains required.
+2. **Lafayette** remains CAPTCHA-sensitive; validate all existing parish sources before adding coverage.
+3. Registry `docs/LA_COUNTY_REGISTRY.md`.
 
-### CT (2 statewide — hardened)
-1. **Statewide dockets** ✅ ~1.6k rows / 12 courts (`curl_cffi`)  
-2. **CT DOC** ✅ A–Z list-first (~14k) · detail sample cap  
-3. Registry `docs/CT_COUNTY_REGISTRY.md`  
+### CT (6 registered — validate source access)
+1. **Statewide dockets** and **CT DOC** are registered; city modules cover Hartford, Bridgeport, New Haven, and Stamford.
+2. Registry reconciliation and access-method validation remain required; do not automate rejected or name-known-only sources.
+3. Registry `docs/CT_COUNTY_REGISTRY.md`.
 
 ### MS / AL
-1. MS: Hinds, Jackson registered  
-2. AL: Jefferson, Madison, Mobile registered  
+1. **MS:** 9 jobs registered. `docs/MS_COUNTY_REGISTRY.md` records the current modules and recon-only blockers for Adams, Lafayette, Lowndes, Oktibbeha, and Warren.
+2. **AL:** 15 jobs registered. Lee and Marshall are deployed; validate existing source telemetry before adding a county that overlaps the registration.
 
 ## Directory layout
 
 ```
 scrapers/
   counties/          # FL (67)
-  counties_ga/       # GA (74)
+  counties_ga/       # GA (85)
   counties_sc/       # SC (46)
-  counties_nc/       # NC (47)
-  counties_tn/       # TN (9)
-  counties_tx/       # TX (15)
-  counties_ct/       # CT (2 statewide)
-  counties_la/       # LA (4)
-  counties_ms/       # MS (2)
-  counties_al/       # AL (3)
+  counties_nc/       # NC (60)
+  counties_tn/       # TN (22)
+  counties_tx/       # TX (34)
+  counties_ct/       # CT (6)
+  counties_la/       # LA (11)
+  counties_ms/       # MS (9)
+  counties_al/       # AL (15)
   dcn_base.py        # NC DevExpress
   ocv_inmates_base.py
   *_base.py          # shared platforms
