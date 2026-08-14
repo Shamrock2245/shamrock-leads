@@ -66,7 +66,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
-| **AL** | **14** | `scrapers/counties_al/` | + Lee (official public roster locally validated; state-scoped separately from Lee in GA/NC/SC) |
+| **AL** | **14** | `scrapers/counties_al/` | + Lee (deployed 2026-08-14; official public roster locally validated; state-scoped separately from Lee in GA/NC/SC; Mongo/alert evidence pending) |
 | **LA** | **10** | `scrapers/counties_la/` | + Ascension, Livingston + Caddo, Calcasieu, Ouachita, St. Tammany |
 | **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
 | **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
@@ -82,7 +82,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **353** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee AL and Randall TX code + two-page local source smokes passed; per-scraper Mongo/Slack evidence remains pending |
+| **353** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee AL deployment and public host checks passed; Randall TX deployed; per-scraper Mongo/Slack evidence remains pending |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
@@ -175,7 +175,8 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
 | GA remaining counties beyond registered set (74/159) | ⏳ Recon + wrappers |
 | TN (22 registered; Putnam deployed with public health green; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain per-source Mongo/Slack telemetry; Sullivan remains recon-only |
-| TX (34 registered; Randall local source smoke passed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
+| TX (34 registered; Randall deployed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
+| AL (14 registered; Lee deployed with public host checks green) | ⏳ Obtain Lee-specific Mongo/Slack telemetry and validate source health for existing Alabama jobs |
 | LA (4 registered; Orleans partial; Lafayette captcha) | ⏳ 365Labs captcha + harden EBR/Jefferson |
 | CT dockets + DOC | ✅ Hardened 2026-08-04 — keep production scrapes scheduled |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
