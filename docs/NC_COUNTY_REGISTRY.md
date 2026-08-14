@@ -26,12 +26,12 @@ python main.py nc_lee      # not FL Lee
 
 | Platform | Counties (recon) | Base class (existing) |
 |----------|------------------|------------------------|
-| P2C / CentralSquare | Alamance, Alexander, Buncombe, Cabarrus, Cleveland, Forsyth, Guilford, Iredell, Lincoln, New Hanover, Robeson, Rowan, Union, Wake (+ Burke/Morganton PD?) | `P2CBaseScraper` |
+| P2C / CentralSquare | Alamance, Alexander, Buncombe, Cabarrus, Cleveland, Forsyth, Guilford, Iredell, New Hanover, Robeson, Rowan, Union, Wake (+ Burke/Morganton PD?) | `P2CBaseScraper` |
 | Southern Software | Anson, Duplin, Edgecombe, Harnett, Henderson, Polk, Sampson, Scotland, Stokes, Surry, Transylvania | `SouthernSWBaseScraper` |
 | Zuercher | Brunswick, Davie, Hoke, Pender, Rutherford | `ZuercherBaseScraper` |
 | New World | Gaston | `NewWorldBaseScraper` |
 | DCN family | Halifax, Lee, Moore, Richmond, Sampson (legacy) | New thin base or per-file |
-| Custom / OCV / PDF | Mecklenburg, Durham, Davidson, Randolph, Craven, Pitt, Carteret, Orange, Johnston, Caldwell, Chatham, Stanly, Cumberland, Catawba | per-file |
+| Custom / OCV / PDF | Mecklenburg, Durham, Davidson, Randolph, Craven, Pitt, Carteret, Orange, Johnston, Caldwell, Chatham, Stanly, Cumberland, Catawba, Lincoln | per-file |
 | JailTracker / SmartCOP | — | none confirmed |
 
 ## County Status
@@ -106,7 +106,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Jones | ⬜ No portal | — | VINE / phone |
 | Lee | ✅ Live | DCN | `dcn.leecountync.gov/dcn/inmates` · `dcn_base` (CLI `nc_lee`) |
 | Lenoir | ⬜ No portal | — | VINE / phone |
-| Lincoln | 🔲 Planned | P2C classic | `p2c.lincolnsheriff.org` |
+| Lincoln | ✅ Source validated | Official OCV roster | `lincolnsheriff.org/inmateSearch` · official OCV app `a46428092`; local aggregate smoke parsed 175 records with complete source IDs and booked timestamps. Production persistence and alert telemetry remain unproven. |
 | Macon | ⬜ No portal | — | VINE / phone |
 | Madison | ⬜ No portal | — | VINE / phone |
 | Martin | ⬜ No portal | — | VINE / phone |
