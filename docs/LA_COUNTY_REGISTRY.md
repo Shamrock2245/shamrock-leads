@@ -19,7 +19,7 @@ Louisiana uses **parishes** rather than counties; the parish name is stored in t
 | Orleans | `orleans.py` | 90 min | Registered; source and production telemetry require validation. |
 | Ouachita | `ouachita.py` | 90 min | Registered; source and production telemetry require validation. |
 | St. Tammany | `st_tammany.py` | 90 min | Registered; source and production telemetry require validation. |
-| St. Mary | `st_mary.py` | 120 min | **Local two-page official-source smoke passed 2026-08-14**; Mongo upsert and alert delivery remain unproven. |
+| St. Mary | `st_mary.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Tangipahoa | `tangipahoa.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 
 ## Tangipahoa Parish implementation notes
@@ -32,7 +32,7 @@ The bounded local smoke over the first two official pages parsed 20 records with
 
 St. Mary Parish Sheriff's Office publishes a broad, paginated current roster at `https://www.stmaryso.com/inmate-roster/filters/current/booking_time=desc/1`. Each public card presents a complete name, source-issued `Booking #`, booking timestamp, charges, and bond amount. The scraper maps the booking number directly, reads only public listing cards, and stops on an empty or duplicate-only page rather than retrieving individual profiles.
 
-The bounded local smoke over the first two official pages parsed 40 records with St. Mary/Louisiana state invariants and source-issued booking numbers. This is local source validation only, not evidence of a production database write or notification.
+The bounded local smoke over the first two official pages parsed 40 records with St. Mary/Louisiana state invariants and source-issued booking numbers. The `4a6fe7f` rollout completed successfully on 2026-08-14, followed by public `leads`, `sign`, `school`, `paperwork`, and `social /auth` health checks. This is not evidence of a St. Mary-specific production database write or notification.
 
 ## Recon queue
 

@@ -18,7 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **St. Mary Parish, LA public-roster scraper** — parses the official sheriff-site current roster with source-issued booking numbers, booking timestamps, public-card charges and bond amounts, bounded pagination, and no profile-page collection or access-control workaround. Registered as `scraper_la_st_mary` every 120 minutes and added to `REGISTERED_COUNTIES`.
-- **St. Mary Parish parser regression tests** — verify public-card mapping, source-issued booking-key handling, fail-closed missing fields, and explicit pagination. A bounded local two-page official-source smoke parsed 40 records on 2026-08-14; production Mongo upsert and alert delivery remain unclaimed until telemetry is observed.
+- **St. Mary Parish parser regression tests** — verify public-card mapping, source-issued booking-key handling, fail-closed missing fields, and explicit pagination. A bounded local two-page official-source smoke parsed 40 records on 2026-08-14. The `4a6fe7f` rollout subsequently completed successfully and public host checks passed; St. Mary-specific Mongo upsert and alert delivery remain unclaimed until telemetry is observed.
 
 ### Changed
 - **Mississippi registry reconciliation** — added `docs/MS_COUNTY_REGISTRY.md` as the state source of truth for the nine registered jobs. Official-source validation of Adams, Lafayette, Lowndes, Oktibbeha, and Warren found no safe broad booking-identity contract; all five remain recon-only, with no scraper or scheduler registration added.
