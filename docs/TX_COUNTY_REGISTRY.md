@@ -31,7 +31,7 @@ The Texas fleet contains county-specific sources, browser-rendered public pages,
 | Bell | `bell.py` | 90 min | Official Tyler New World Inmate Inquiry | Fail-closed guard deployed 2026-08-14. Former P2C hostname is stale; the official portal exposes a search form only, so no records emit until a supported broad roster contract is verified without guessing criteria. Public production hosts are healthy; no Bell writes or alerts are expected from the safety guard. |
 | Lubbock | `lubbock.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Webb | `webb.py` | 90 min | County-specific public source | Registered; production telemetry required |
-| Jefferson | `jefferson.py` | 90 min | Official Sheriff Next.js inmate search | Former P2C hostname is stale. The current public page exposes opaque detail routes and PDF links, but no verified booking-safe broad roster contract; fail closed pending a durable source key and booking timestamp on a supported bulk route. |
+| Jefferson | `jefferson.py` | 90 min | Official Sheriff Next.js inmate search | Fail-closed guard deployed 2026-08-14. Former P2C hostname is stale; the current public page exposes opaque detail routes and PDF links but no verified booking-safe broad roster contract. Public production hosts are healthy; no Jefferson writes or alerts are expected from the safety guard. |
 | McLennan | `mclennan.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Nueces | `nueces.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Brazos | `brazos.py` | 90 min | County-specific public source | Registered; production telemetry required |
