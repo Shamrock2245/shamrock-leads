@@ -5,6 +5,9 @@ from scrapers.p2c_base import P2CBaseScraper
 
 
 class ClevelandScraper(P2CBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_SAFETY_REASON = 'official P2C roster lacks a source-issued booking or inmate ID'
+
     P2C_URL = "http://74.218.167.200/p2c/jailinmates.aspx"
     COUNTY_NAME = "Cleveland"
     FACILITY_NAME = "Cleveland County Detention"

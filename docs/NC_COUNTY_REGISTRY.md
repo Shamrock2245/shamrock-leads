@@ -34,6 +34,8 @@ python main.py nc_lee      # not FL Lee
 | Custom / OCV / PDF | Mecklenburg, Durham, Davidson, Randolph, Craven, Pitt, Carteret, Orange, Johnston, Caldwell, Chatham, Stanly, Cumberland, Catawba, Lincoln | per-file |
 | JailTracker / SmartCOP | — | none confirmed |
 
+> **Legacy P2C safety:** Alamance, Cabarrus, Cleveland, Forsyth, Iredell, New Hanover, and Union remain registered scheduler paths but now fail closed. Their current public sources are search-only, restricted, or lack a booking-safe bulk identity boundary. See [`LEGACY_P2C_SOURCE_SAFETY.md`](LEGACY_P2C_SOURCE_SAFETY.md); do not use proxies, blank searches, or access-control bypasses.
+
 ## County Status
 
 Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · ❌ Blocked
@@ -42,7 +44,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 
 | County | Status | Platform | Notes |
 |--------|--------|----------|-------|
-| Alamance | 🔲 Planned | P2C classic | `apps.alamance-nc.com/p2c/jailinmates.aspx` |
+| Alamance | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Alexander | 🔲 Planned | P2C classic | `p2c.alexandercountync.gov` — DNS flaky |
 | Alleghany | ⬜ No portal | — | VINE / phone |
 | Anson | 🔲 Planned | Southern SW | AgencyID=`AnsonCoNC` |
@@ -54,7 +56,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Brunswick | 🔲 Planned | Zuercher | Official link; DNS fail from some hosts |
 | Buncombe | ✅ Live | Police-to-Citizen SPA | `buncombecountyso.policetocitizen.com` · browser letter walk |
 | Burke | 🔲 Planned | P2C cloud (Morganton PD?) | **Validate agency scope** |
-| Cabarrus | 🔲 Planned | P2C classic | High conf 200 |
+| Cabarrus | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Caldwell | ✅ Live | Daily PDF | DocumentCenter in-custody PDF · ~150 |
 | Camden | ⬜ No portal | — | VINE / phone |
 | Carteret | ✅ Live | DCN | `inmateinfo.carteretcountync.gov/inmates` · `dcn_base` |
@@ -64,7 +66,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Cherokee | 🔲 Planned | DCN? | Port 8080 DCN URL historically; unreachable 2026-07-14 |
 | Chowan | ⬜ No portal | — | VINE / phone |
 | Clay | ⬜ No portal | — | VINE / phone |
-| Cleveland | 🔲 Planned | P2C classic | IP host `74.218.167.200` — fragile |
+| Cleveland | ⚠ Fail closed | P2C legacy | Broad roster lacks source-issued booking/inmate ID; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Columbus | ⬜ App-only | OCV app | No open web roster |
 | Craven | ✅ Live | ArcGIS MapServer | `BookingsPublic/MapServer/0` · ~336 inmates + bond/statutes |
 | Cumberland | 🔲 Planned | Custom | Active inmate page — host flaky |
@@ -80,7 +82,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Duplin | 🔲 Planned | Southern SW | AgencyID=`DuplinCoNC` |
 | Durham | ⏳ Fail closed — deployed 2026-08-14 | Custom legacy IPS | Prior `www2.dconc.gov` path was stale and unsafe (TLS disabled, broad A–Z submissions, no verified booking-date boundary). Existing scheduled path emits no records until a supported public bulk roster exposes complete identity plus source-issued booking fields. Public production hosts are healthy; no Durham writes or alerts are expected from the safety guard. |
 | Edgecombe | 🔲 Planned | Southern SW | AgencyID=`EdgecombeCoNC` |
-| Forsyth | 🔲 Planned | P2C cloud | WAF |
+| Forsyth | ⚠ Fail closed | P2C legacy | Official portal access-restricted; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Franklin | ⬜ No portal | — | VINE / phone |
 | Gaston | 🔲 Planned | New World | `tepsweb.cityofgastonia.com/NewWorld.InmateInquiry/GastonCounty` |
 | Gates | ⬜ No portal | — | VINE / phone |
@@ -100,7 +102,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 
 | County | Status | Platform | Notes |
 |--------|--------|----------|-------|
-| Iredell | 🔲 Planned | P2C classic | `p2c.iredellcountync.gov` |
+| Iredell | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Jackson | ⬜ App-only | OCV app | App-centric |
 | Johnston | ✅ Live | ColdFusion | `johnstonnc.com/sheriffs_office/b_jailsearch2s.cfm` · ~296 |
 | Jones | ⬜ No portal | — | VINE / phone |
@@ -116,7 +118,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Montgomery | ⬜ No portal | — | VINE / phone |
 | Moore | ✅ Live | DCN | `webapps.moorecountync.gov/dcn/inmates` · `dcn_base` |
 | Nash | ⬜ No portal | — | VINE / phone |
-| New Hanover | 🔲 Planned | P2C classic | `p2c.nhcgov.com/p2c/jailinmates.aspx` |
+| New Hanover | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Northampton | ⬜ No portal | — | VINE / phone |
 | Onslow | ⚠️ Degraded | P2C + FingerprintJS | `p2c.ocsheriff.com` often sinkhole/timeout; fail closed · app still primary for public |
 | Orange | ✅ Live | Daily PDF | Wix portal → newest ugd PDF · ~50 + bonds |
@@ -146,7 +148,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Swain | ⬜ No portal | — | VINE / phone |
 | Transylvania | 🔲 Planned | Southern SW | AgencyID=`TransylvaniaCoNC` |
 | Tyrrell | ⬜ No portal | — | VINE / phone |
-| Union | 🔲 Planned | P2C classic | High conf 200 |
+| Union | ⚠ Fail closed | P2C legacy | CAPTCHA-protected with unverified source-ID boundary; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Vance | ⬜ No portal | — | VINE / phone |
 | **Wake** | 🔲 Planned | P2C cloud | Top build; WAF |
 | Warren | ⬜ No portal | — | VINE / phone |
@@ -163,10 +165,11 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).  
 **As of 2026-08-14:** **60 registered** (waves 1–8 including Pitt, DCN cluster, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF, Rowan, Robeson, Wayne, Wilkes, Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, and Perquimans).
 
-1. Harden registered metros (Meck, Wake WAF, Guilford, Forsyth) — residential proxy  
+1. Revalidate registered metros (Mecklenburg, Wake, Guilford, Forsyth) only when each official source exposes a supported public bulk roster; otherwise retain fail-closed behavior.
+
 2. DCN pagination beyond first 100 (DevExpress AJAX unreliable from DC IPs)  
 3. More OCV `app_id` counties (Wilson, etc.) where S3 inmates.json is public  
-4. Rowan / Robeson cloud P2C (proxy)  
+4. Revalidate Rowan and Robeson cloud P2C only if their official public contracts become directly accessible with complete identity and source-issued booking fields.
 5. Alexander classic P2C (DNS flaky)  
 6. Remaining rural / no-portal counties (VINE-only — skip or low priority)
 

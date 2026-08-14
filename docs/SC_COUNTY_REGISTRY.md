@@ -29,7 +29,7 @@ python main.py sc_lee      # not FL Lee
 | Zuercher | Anderson, Cherokee, Colleton, Kershaw, Laurens, Oconee, Pickens, Union | `ZuercherBaseScraper` |
 | JailTracker | Chester, Greenwood | `JailTrackerBaseScraper` |
 | Southern Software | Chesterfield, Dorchester | `SouthernSWBaseScraper` |
-| P2C / CentralSquare | Lexington, Lee | `P2CBaseScraper` |
+| P2C / CentralSquare | Lexington, Lee | `P2CBaseScraper` — both fail closed pending a supported source-safe broad roster |
 | SmartCOP | Sumter | `SmartCOPBaseScraper` |
 | New World | Lancaster | `NewWorldBaseScraper` |
 | Custom / XML | Beaufort, Charleston, Florence, Horry, York, Jasper, Aiken… | per-file |
@@ -61,8 +61,8 @@ python main.py sc_lee      # not FL Lee
 | Kershaw | 🟡 Wrapper | Zuercher | |
 | Lancaster | 🟡 Wrapper | New World | |
 | Laurens | 🟡 Wrapper | Zuercher | |
-| Lee | 🟡 Wrapper | P2C | URL may be wrong agency — re-verify |
-| Lexington | 🟡 Wrapper | P2C | |
+| Lee | ⚠ Fail closed | P2C legacy | Sumter-Lee regional portal has no validated broad roster contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
+| Lexington | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Marion | 🟡 Stub | Custom | 403 |
 | Marlboro | 🟡 Scaffold | Custom | Cloudflare/403 |
 | Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; deployed 2026-08-14; per-scraper scheduler telemetry still pending |

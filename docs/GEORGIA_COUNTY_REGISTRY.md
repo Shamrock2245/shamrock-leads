@@ -55,6 +55,8 @@
 
 ---
 
+> **Legacy P2C safety:** Columbia, Coweta, Dougherty, Forsyth, Hall, and Spalding are registered scheduler paths but now fail closed. Their current official public sources are restricted or lack a booking-safe bulk identity boundary. See [`LEGACY_P2C_SOURCE_SAFETY.md`](LEGACY_P2C_SOURCE_SAFETY.md); do not re-enable broad searches or bypass access controls.
+
 ## Tier 2 — Metro Atlanta & Major Portals (11 Counties)
 
 | # | County | JMS / Method | Scraper File | Status | Interval |
@@ -62,8 +64,8 @@
 | 1 | **Fulton** | Socrata API | `fulton.py` | ✅ Active | Daily |
 | 2 | **Chatham** | Custom HTML | `chatham.py` | ✅ Active | 30 min |
 | 3 | **Walton** | XML Feed | `walton.py` | ✅ Active | 30 min |
-| 4 | **Forsyth** | P2C | `forsyth.py` | ✅ Active | 60 min |
-| 5 | **Hall** | P2C | `hall.py` | ✅ Active | 60 min |
+| 4 | **Forsyth** | P2C | `forsyth.py` | ⚠ Fail closed | 60 min |
+| 5 | **Hall** | P2C | `hall.py` | ⚠ Fail closed | 60 min |
 | 6 | **Douglas** | Zuercher | `douglas.py` | ✅ Active | 90 min |
 | 7 | **Houston** | Zuercher | `houston.py` | 🔄 Building | 90 min |
 | 8 | **Floyd** | Zuercher | `floyd.py` | 🔄 Building | 90 min |

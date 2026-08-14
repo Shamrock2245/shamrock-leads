@@ -23,6 +23,11 @@ class P2CBaseScraper(BaseScraper):
     P2C_URL: str = ""           # Override: full URL to jail inmates page
     COUNTY_NAME: str = ""       # Override
     FACILITY_NAME: str = ""     # Override
+    # A county may explicitly disable this legacy transport when its official
+    # public source lacks a verified broad roster with complete identity,
+    # source-issued booking or inmate ID, and a booking-time boundary.
+    SOURCE_CONTRACT_VALIDATED: bool = True
+    SOURCE_SAFETY_REASON: str = ""
     jms_vendor = "p2c"
 
     @property
@@ -30,6 +35,15 @@ class P2CBaseScraper(BaseScraper):
         return self.COUNTY_NAME
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            reason = self.SOURCE_SAFETY_REASON or "official source contract is unverified"
+            logger.warning(
+                "%s %s; no records emitted pending a supported source-safe roster",
+                self.county,
+                reason,
+            )
+            return []
+
         try:
             import requests
             from bs4 import BeautifulSoup

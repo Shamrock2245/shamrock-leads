@@ -9,6 +9,9 @@ from scrapers.p2c_base import P2CBaseScraper
 
 
 class ForsythScraper(P2CBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_SAFETY_REASON = 'official P2C roster is access-restricted'
+
     P2C_URL = "https://p2c.fcso.us/p2c/jailinmates.aspx"
     COUNTY_NAME = "Forsyth"
     FACILITY_NAME = "Forsyth County Detention Center"

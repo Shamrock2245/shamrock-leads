@@ -60,10 +60,10 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
-| **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards deployed 2026-08-14: Gwinnett bulk names are abbreviated and Fulton Socrata returns 403; remaining paths require source telemetry. |
+| **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards are deployed; six audited legacy P2C paths also fail closed because official sources are restricted or lack a booking-safe bulk identity boundary. See `docs/LEGACY_P2C_SOURCE_SAFETY.md`. |
 | **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair and Broward fail-closed guard deployed 2026-08-14; public hosts are healthy and per-source production telemetry remains pending. |
-| **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard and Lincoln’s official OCV repair deployed 2026-08-14 with public hosts healthy. North Carolina production persistence and alert telemetry remain pending. |
-| **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair deployed 2026-08-14 with public hosts healthy; per-county persistence and alert telemetry remain pending. |
+| **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard and Lincoln’s official OCV repair are deployed; seven audited legacy P2C paths also fail closed pending a source-safe broad roster. See `docs/LEGACY_P2C_SOURCE_SAFETY.md`. Production persistence and alert telemetry remain pending. |
+| **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair is deployed; Lee and Lexington legacy P2C paths fail closed pending a source-safe broad roster. See `docs/LEGACY_P2C_SOURCE_SAFETY.md`. Per-county persistence and alert telemetry remain pending. |
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
 | **AL** | **15** | `scrapers/counties_al/` | + Marshall (deployed 2026-08-14; official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
