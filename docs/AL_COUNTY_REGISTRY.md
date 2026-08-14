@@ -16,7 +16,7 @@
 | Jackson | `jackson.py` | 120 min | Registered; source and production telemetry require validation. |
 | Jefferson | `jefferson.py` | 120 min | Registered; source and production telemetry require validation. |
 | Lee | `lee.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
-| Madison | `madison.py` | 120 min | Registered; source and production telemetry require validation. |
+| Madison | `madison.py` | 120 min | Registered; legacy proxy discovery and synthetic booking IDs removed. The path is **fail closed** until the official inmate-information page exposes a supported booking-safe broad roster. |
 | Marshall | `marshall.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Mobile | `mobile.py` | 120 min | Registered; source and production telemetry require validation. |
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
