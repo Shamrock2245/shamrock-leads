@@ -10,7 +10,6 @@ Angular SPA shell; roster data requires client render. Strategy:
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import string
@@ -147,7 +146,7 @@ class BuncombeScraper(BaseScraper):
             if m:
                 booking = m.group(1)
             if not booking:
-                booking = hashlib.sha1(f"buncombe|{name}".encode()).hexdigest()[:12]
+                continue
             if booking in seen:
                 continue
             seen.add(booking)
@@ -189,7 +188,7 @@ class BuncombeScraper(BaseScraper):
                     continue
                 booking = next((c for c in cells if re.match(r"^\d{4,}$", c)), "")
                 if not booking:
-                    booking = hashlib.sha1(f"buncombe|{name}".encode()).hexdigest()[:12]
+                    continue
                 if booking in seen:
                     continue
                 seen.add(booking)

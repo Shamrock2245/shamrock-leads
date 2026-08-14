@@ -14,6 +14,7 @@ The scheduler calls run() which handles:
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -79,6 +80,17 @@ class BaseScraper(ABC):
     The run() method wraps scrape() with error handling, timing,
     lead scoring, writer integration, and Slack alerts.
     """
+
+    # Deterministic prefixes found in historical county wrappers when a source
+    # did not expose a true booking identifier. They are never acceptable as the
+    # immutable County + Booking_Number deduplication key.
+    _SYNTHETIC_BOOKING_RE = re.compile(
+        r"^(?:AIK|CHS|DAR|MAR|NEW|MECK|CAT|RAN|DUR)_[0-9a-f]{10,12}$"
+        r"|^SC_[0-9a-f]{10}$"
+        r"|^SC_[A-Za-z]{2,16}_[0-9]{1,6}$"
+        r"|^ONS_[A-Za-z0-9]{1,14}$",
+        re.IGNORECASE,
+    )
 
     # Disk thresholds (percentage used)
     DISK_WARN_THRESHOLD = 75
@@ -553,6 +565,26 @@ class BaseScraper(ABC):
         if self.ape and proxy:
             self.ape.record_failure(proxy)
     
+    @classmethod
+    def _has_source_booking_identifier(cls, value: object) -> bool:
+        """Return whether a booking key is present and not a known local fallback.
+
+        Scraper modules must pass through identifiers supplied by their public
+        source. A name-, date-, or hash-derived value is not a booking number and
+        can merge different arrests; those rows are rejected before scoring,
+        writing, notifications, or dashboard metrics.
+        """
+        booking = str(value or "").strip()
+        return bool(booking) and not bool(cls._SYNTHETIC_BOOKING_RE.fullmatch(booking))
+
+    @classmethod
+    def _filter_records_without_source_booking(cls, records: List[ArrestRecord]) -> List[ArrestRecord]:
+        """Fail closed on missing or known synthetic booking identifiers."""
+        return [
+            record for record in records
+            if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+        ]
+
     @property
     def state(self) -> str:
         """Two-letter state code. Override for non-FL scrapers (GA, SC, etc)."""
@@ -620,8 +652,17 @@ class BaseScraper(ABC):
             records = self.scrape()
             elapsed = (datetime.now(timezone.utc) - start).total_seconds()
 
+            raw_record_count = len(records)
+            records = self._filter_records_without_source_booking(records)
+            if len(records) < raw_record_count:
+                logger.warning(
+                    "%s: dropped %d rows without a source-provided booking identifier",
+                    self.county,
+                    raw_record_count - len(records),
+                )
+
             logger.info(
-                f"✅ {self.county}: scraped {len(records)} records in {elapsed:.1f}s"
+                f"✅ {self.county}: scraped {len(records)} verified-key records in {elapsed:.1f}s"
             )
 
             # ── Step 2: Score every record (rule-based) ──
@@ -694,15 +735,12 @@ class BaseScraper(ABC):
                 "writer_results": [],
             }
 
-            # Drop records that cannot form a Mongo natural key
+            # Keep the county half of the natural key mandatory through write.
             before_filter = len(records)
-            records = [
-                r for r in records
-                if (r.Booking_Number or "").strip() and (r.County or self.county or "").strip()
-            ]
+            records = [r for r in records if (r.County or self.county or "").strip()]
             if len(records) < before_filter:
                 logger.warning(
-                    "⚠️ %s: dropped %d records missing booking_number/county before write",
+                    "⚠️ %s: dropped %d records missing county before write",
                     self.county,
                     before_filter - len(records),
                 )

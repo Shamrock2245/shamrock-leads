@@ -9,7 +9,7 @@
 | Status | Count | Notes |
 |--------|------:|-------|
 | Registered in scheduler / dashboard | **46** (all SC counties) | `scraper_sc_*` job IDs · `County (SC)` labels |
-| Production HTML/XML verified | 5+ | Beaufort (XML), Jasper (WP cards), Charleston, York, Florence, Horry, Richland |
+| Production HTML/XML/PDF source verified | 6+ | Beaufort (XML), Jasper (WP cards), Charleston, York, Florence, Horry, Richland, Newberry (dynamic official PDF) |
 | Platform thin wrappers | 16+ | Zuercher, JailTracker, Southern SW, P2C, SmartCOP, New World |
 | Scaffold / blocked | rest | No public portal, CAPTCHA, Cloudflare, or bad recon URL |
 | Missing module entirely | **0** | All 46 files present under `scrapers/counties_sc/` |
@@ -65,7 +65,7 @@ python main.py sc_lee      # not FL Lee
 | Lexington | 🟡 Wrapper | P2C | |
 | Marion | 🟡 Stub | Custom | 403 |
 | Marlboro | 🟡 Scaffold | Custom | Cloudflare/403 |
-| Newberry | 🟡 Stub | Custom | |
+| Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; pending deployment verification |
 | Oconee | 🟡 Wrapper | Zuercher | |
 | Pickens | 🟡 Wrapper | Zuercher | |
 | Richland | ✅ Live | ASP.NET JMSOnline | Captcha = `hidStrRandom` token. Digraph last-name walk (A–Z + digraphs when paged). List view: name/age/ht/wt/booked (no charges on list). |

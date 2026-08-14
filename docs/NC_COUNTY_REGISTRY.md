@@ -1,6 +1,6 @@
 # North Carolina County Registry
 
-> Last updated: 2026-08-04  
+> Last updated: 2026-08-14  
 > Goal: all **100** NC counties (Palmetto multi-state footprint)  
 > Code: `scrapers/counties_nc/` · Recon: [`docs/NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md)
 
@@ -8,8 +8,8 @@
 
 | Status | Count | Notes |
 |--------|------:|-------|
-| ✅ Registered | **47** | Waves 1–7: + Chatham/Stanly OCV · Orange daily PDF |
-| Scheduler / dashboard | **47** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
+| ✅ Registered | **60** | Waves 1–8: shared platform wrappers, DCN, custom, OCV, PDF, and source-verified county modules |
+| Scheduler / dashboard | **60** | `scraper_nc_*` · `County (NC)` labels · Multi-State Ops filter |
 | 🔲 Planned (portal mapped, not built) | ~40 | URL + platform in recon |
 | ⬜ No public web roster / app / VINE | ~45 | Skip or VINE-only until portal appears |
 | First production scrapes | ⏳ | Run via dashboard Multi-State Ops or `python main.py nc_mecklenburg` |
@@ -161,7 +161,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 ## Next build priorities
 
 See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).  
-**As of 2026-08-04:** **47 registered** (waves 1–7 including Pitt, DCN cluster, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF).
+**As of 2026-08-14:** **60 registered** (waves 1–8 including Pitt, DCN cluster, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly OCV, Orange PDF, Rowan, Robeson, Wayne, Wilkes, Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, and Perquimans).
 
 1. Harden registered metros (Meck, Wake WAF, Guilford, Forsyth) — residential proxy  
 2. DCN pagination beyond first 100 (DevExpress AJAX unreliable from DC IPs)  
@@ -175,13 +175,13 @@ See **Top 10** and wave plan in [`NC_RECON_RESULTS.md`](./NC_RECON_RESULTS.md).
 | State | Goal | Registered | Code dir | Status |
 |-------|-----:|----------:|----------|--------|
 | FL | 67 | **67** | `scrapers/counties/` | Primary complete |
-| GA | 159 | **74** | `scrapers/counties_ga/` | Expanding |
+| GA | 159 | **85** | `scrapers/counties_ga/` | Expanding |
 | SC | 46 | **46** | `scrapers/counties_sc/` | Registered · depth ongoing |
-| **NC** | **100** | **47** | **`scrapers/counties_nc/`** | **Waves 1–7 · expand portals** |
-| TN | 95 | **9** | `scrapers/counties_tn/` | Expanding |
-| TX | 254 | **15** | `scrapers/counties_tx/` | Expanding |
-| CT | statewide | **2** | `scrapers/counties_ct/` | DOC + dockets hardened |
-| LA | 64 | **4** | `scrapers/counties_la/` | Expanding |
-| AL | — | **3** | `scrapers/counties_al/` | Major metros |
-| MS | — | **2** | `scrapers/counties_ms/` | Major metros |
-| **Total** | — | **269** | `REGISTERED_COUNTIES` | See `STATUS.md` |
+| **NC** | **100** | **60** | **`scrapers/counties_nc/`** | **Waves 1–8 · expand portals** |
+| TN | 95 | **22** | `scrapers/counties_tn/` | Expanding |
+| TX | 254 | **33** | `scrapers/counties_tx/` | Expanding |
+| CT | statewide | **6** | `scrapers/counties_ct/` | DOC + dockets hardened |
+| LA | 64 | **10** | `scrapers/counties_la/` | Expanding |
+| AL | — | **13** | `scrapers/counties_al/` | Major metros |
+| MS | — | **9** | `scrapers/counties_ms/` | Major metros |
+| **Total** | — | **351** | `REGISTERED_COUNTIES` | See `STATUS.md` |

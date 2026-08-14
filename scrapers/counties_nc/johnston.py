@@ -8,7 +8,6 @@ Full active roster HTML table (Name, Primary Charge, Arrest Date).
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import time
@@ -81,9 +80,9 @@ class JohnstonScraper(BaseScraper):
                     if m:
                         nameid = m.group(1)
 
-                booking = nameid or hashlib.sha1(
-                    f"johnston|{name}|{arrest_date}".encode()
-                ).hexdigest()[:12]
+                booking = nameid
+                if not booking:
+                    continue
                 if booking in seen:
                     continue
                 seen.add(booking)
