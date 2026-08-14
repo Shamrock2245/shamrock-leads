@@ -8,7 +8,7 @@ CT does **not** use a 8-county jail roster model like FL. Primary public sources
 | Scraper | Dashboard label | Portal | Status |
 |---------|-----------------|--------|--------|
 | `statewide_docket.py` | `Statewide (CT)` | [Criminal Dockets by Court](https://www.jud2.ct.gov/crdockets/SearchByCourt.aspx) | ✅ Live — ~1.6k docket rows / 12 courts per run |
-| `ct_doc.py` | `CT DOC (CT)` | [CT Inmate Info Search](https://www.ctinmateinfo.state.ct.us/) | ✅ Live — full A–Z list (~14k inmates) + detail sample |
+| `ct_doc.py` | `CT DOC (CT)` | [CT Inmate Info Search](https://www.ctinmateinfo.state.ct.us/) | ⏳ Fail closed — official search is access-rejected by BITS BOT; no records emit until a supported complete-identity, source-ID, and booking/admission-date bulk contract is verifiable |
 
 ## CLI
 
@@ -28,9 +28,9 @@ python main.py "ct doc"           # may need exact scheduler key — prefer dash
 - `MAX_ENTRIES_PER_COURT = 500`
 
 ### CT DOC
-- **List-first** A–Z last-name search (Number, Name, DOB, Facility) — primary coverage
-- Optional detail enrichment (bond + controlling offense) capped at 40/run (CC facilities preferred)
-- `County` field is **`CT DOC`** (must match `REGISTERED_COUNTIES`)
+- The legacy A–Z broad-search path was retired because it disabled TLS verification, retained DOB, and could emit records without a verified booking or admission date.
+- The official public search returned access rejection during validation. The registered path is therefore **fail closed** until a supported bulk contract exposes complete identity, a source-issued inmate or booking identifier, and a booking or admission date.
+- `County` field remains **`CT DOC`** so the existing scheduler and dashboard identity stay stable; no duplicate municipal or statewide job was added.
 
 ## Gaps / non-goals
 - No separate municipal jail scrapers for all 169 towns — DOC + court dockets cover statewide custody/hearings
