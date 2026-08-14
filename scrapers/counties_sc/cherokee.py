@@ -5,6 +5,9 @@ from scrapers.zuercher_base import ZuercherBaseScraper
 
 
 class CherokeeScraper(ZuercherBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_SAFETY_REASON = 'official Zuercher portal lacks a safely validated broad roster contract'
+
     @property
     def county(self) -> str:
         return "Cherokee"

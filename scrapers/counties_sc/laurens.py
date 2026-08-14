@@ -11,6 +11,9 @@ from scrapers.zuercher_base import ZuercherBaseScraper
 
 
 class LaurensScraper(ZuercherBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_SAFETY_REASON = 'official Zuercher portal is unavailable and has no validated broad roster contract'
+
     @property
     def county(self) -> str:
         return "Laurens"

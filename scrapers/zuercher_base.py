@@ -14,7 +14,6 @@ Charges + bond amounts are embedded in the free-text ``hold_reasons`` field:
     "Warrant Charge: <desc> warrant <num> issued by ...; Arrest Date MM/DD/YYYY; Bond - $1,000.00;"
 """
 
-import hashlib
 import logging
 import re
 import time
@@ -51,6 +50,10 @@ class ZuercherBaseScraper(BaseScraper):
     Subclasses only need to provide the county name and subdomain.
     """
 
+    # A county may disable this transport when its official public roster lacks
+    # complete identity, a source-issued booking or inmate ID, and a booking-time boundary.
+    SOURCE_CONTRACT_VALIDATED: bool = True
+    SOURCE_SAFETY_REASON: str = ""
     jms_vendor = "zuercher"
 
     @property
@@ -77,12 +80,6 @@ class ZuercherBaseScraper(BaseScraper):
         )
 
     # ── Internal helpers ────────────────────────────────────────────────────
-
-    def _stable_booking_number(self, name: str, arrest_date: str) -> str:
-        """Deterministic fallback key (idempotent across runs — never time-based)."""
-        st = getattr(self, "state", None) or "FL"
-        digest = hashlib.md5(f"{name}|{arrest_date}|{self.county}|{st}".encode()).hexdigest()[:10]
-        return f"ZP_{digest}"
 
     @staticmethod
     def _parse_hold_reasons(hold_reasons: str):
@@ -146,6 +143,15 @@ class ZuercherBaseScraper(BaseScraper):
         """
         Fetch from Zuercher portal via the JSON API (no headless browser).
         """
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            reason = self.SOURCE_SAFETY_REASON or "official source contract is unverified"
+            logger.warning(
+                "%s %s; no records emitted pending a supported source-safe roster",
+                self.county,
+                reason,
+            )
+            return []
+
         start_time = time.time()
         base_url = f"https://{self.zuercher_domain}"
 
@@ -240,8 +246,19 @@ class ZuercherBaseScraper(BaseScraper):
                     booking_num = str(
                         inmate.get("booking_number")
                         or inmate.get("BookingNumber")
+                        or inmate.get("inmate_id")
+                        or inmate.get("InmateID")
                         or ""
-                    ).strip() or self._stable_booking_number(raw_name, arrest_date)
+                    ).strip()
+                    booking_date = str(
+                        inmate.get("booking_date")
+                        or inmate.get("BookingDate")
+                        or inmate.get("booked_date")
+                        or inmate.get("BookedDate")
+                        or ""
+                    ).strip()
+                    if not booking_num or not booking_date or not first_name or not last_name:
+                        continue
 
                     record = ArrestRecord(
                         County=self.county,
@@ -251,10 +268,10 @@ class ZuercherBaseScraper(BaseScraper):
                         Last_Name=last_name,
                         Middle_Name=middle_name,
                         Booking_Number=booking_num,
-                        Booking_Date=arrest_date,
+                        Booking_Date=booking_date,
                         Charges=" | ".join(charges) if charges else "Unknown",
                         Bond_Amount=f"{bond_cents / 100:.2f}" if bond_cents > 0 else "0",
-                        Status="In Custody",
+                        Status=str(inmate.get("custody_status") or inmate.get("status") or "Unknown"),
                         Detail_URL=f"{base_url}/#/inmates",
                     )
                     records.append(record)

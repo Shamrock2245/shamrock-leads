@@ -26,7 +26,7 @@ python main.py sc_lee      # not FL Lee
 
 | Platform | Counties | Base class |
 |----------|----------|------------|
-| Zuercher | Anderson, Cherokee, Colleton, Kershaw, Laurens, Oconee, Pickens, Union | `ZuercherBaseScraper` |
+| Zuercher | Anderson, Cherokee, Colleton, Kershaw, Laurens, Oconee, Pickens, Union | `ZuercherBaseScraper` — audited Anderson, Cherokee, Colleton, Kershaw, and Laurens fail closed; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | JailTracker | Chester, Greenwood | `JailTrackerBaseScraper` |
 | Southern Software | Chesterfield, Dorchester | `SouthernSWBaseScraper` |
 | P2C / CentralSquare | Lexington, Lee | `P2CBaseScraper` — both fail closed pending a supported source-safe broad roster |
@@ -39,28 +39,28 @@ python main.py sc_lee      # not FL Lee
 | County | Status | Platform | Notes |
 |--------|--------|----------|-------|
 | Aiken | 🟡 Partial | Custom iframe | TLS fails from some hosts to lookups.aikencountysc.gov |
-| Anderson | 🟡 Wrapper | Zuercher | `anderson-so-sc.zuercherportal.com` |
+| Anderson | ⚠ Fail closed | Zuercher | Search-only contract; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Bamberg | 🟡 Stub | Custom | 403 from datacenter |
 | Beaufort | ✅ Live | XML feed | `mugshots.bcgov.net/jailrostera.xml` |
 | Berkeley | 🟡 Stub | Custom | Needs parser |
 | Calhoun | ❌ Blocked | — | Prior Kologik URL is **Calhoun FL** (FL0070000 / Blountstown) |
 | Charleston | ✅ Built | ASP.NET | 7-day booking search |
-| Cherokee | 🟡 Wrapper | Zuercher | |
+| Cherokee | ⚠ Fail closed | Zuercher | No validated broad roster contract; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Chester | 🟡 Wrapper | JailTracker | CAPTCHA path |
 | Chesterfield | 🟡 Wrapper | Southern SW | |
-| Colleton | 🟡 Wrapper | Zuercher | |
+| Colleton | ⚠ Fail closed | Zuercher | No source-issued booking/inmate ID or booking timestamp; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Darlington | 🟡 Stub | Custom | |
 | Dorchester | 🟡 Wrapper | Southern SW | |
 | Florence | ✅ Live | DevExpress ASP.NET | Letter walk on booking.fcso.org; name/age/race/sex/booked |
 | Georgetown | 🟡 Scaffold | — | No machine-readable roster |
-| Greenville | ❌ Blocked | Custom + Incapsula | Official `app.greenvillecounty.org/inmate_search.htm`. Datacenter 403; needs `GREENVILLE_SOCKS_PROXY` / residential. Scraper ready when proxy available. |
+| Greenville | ❌ Blocked | Custom + Incapsula | Official `app.greenvillecounty.org/inmate_search.htm` is access-restricted. Retain fail-closed behavior until a supported public bulk roster is available; do not bypass controls. |
 | Greenwood | 🟡 Wrapper | JailTracker | |
 | Hampton | 🟡 Stub | Custom | 403 |
 | Horry | ✅ Built | Custom / JSON | |
 | Jasper | ✅ Live | WP cards | Verified 42 inmates (2026-07-14) |
-| Kershaw | 🟡 Wrapper | Zuercher | |
+| Kershaw | ⚠ Fail closed | Zuercher | No source-issued booking/inmate ID or booking timestamp; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Lancaster | 🟡 Wrapper | New World | |
-| Laurens | 🟡 Wrapper | Zuercher | |
+| Laurens | ⚠ Fail closed | Zuercher | No validated broad roster contract; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Lee | ⚠ Fail closed | P2C legacy | Sumter-Lee regional portal has no validated broad roster contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Lexington | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Marion | 🟡 Stub | Custom | 403 |
@@ -80,11 +80,11 @@ Abbeville, Allendale, Barnwell, Clarendon, Dillon, Edgefield, Fairfield, McCormi
 
 ## Next build priorities
 
-1. **Greenville** — enable residential SOCKS (`GREENVILLE_SOCKS_PROXY`); scraper code ready
+1. **Greenville** — revalidate only if the official source provides a supported public bulk roster; do not use proxy or access-control workarounds.
 2. **Richland** — optional charge/bond detail enrichment (list view is live)
 3. **Zuercher API hardening** — confirm SC portals return JSON; add DrissionPage fallback
 4. **JailTracker SC** — Chester/Greenwood with existing CAPTCHA cascade
-5. **Bamberg/Hampton family** — shared jailroster theme sites via residential proxy
+5. **Bamberg/Hampton family** — revalidate only when a supported direct public roster contract is available.
 6. **NC wave 1** — Southern SW + Zuercher + classic P2C (`docs/NC_RECON_RESULTS.md`)
 
 ## Multi-state roadmap (Palmetto)

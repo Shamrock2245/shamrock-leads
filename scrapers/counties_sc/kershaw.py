@@ -5,6 +5,9 @@ from scrapers.zuercher_base import ZuercherBaseScraper
 
 
 class KershawScraper(ZuercherBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_SAFETY_REASON = 'official Zuercher roster lacks a source-issued booking or inmate ID and booking timestamp'
+
     @property
     def county(self) -> str:
         return "Kershaw"
