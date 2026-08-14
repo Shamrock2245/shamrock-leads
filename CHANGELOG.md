@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-14 (disk)
+
+### Changed
+- Dashboard image installs `requirements-dashboard.txt` (no Playwright/Selenium/Chromium stack). Daily `docker-prune.sh` now clears unused BuildKit cache (`-a`, older than 24h).
+
 ## [Unreleased] — 2026-08-13 (CCX33)
 
 ### Added

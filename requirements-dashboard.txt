@@ -1,0 +1,59 @@
+# ShamrockLeads — Dashboard image only
+# Used by dashboard/Dockerfile. Do NOT install scraper browsers here
+# (playwright / patchright / selenium / nodriver / DrissionPage).
+# Full stack lives in requirements.txt for the shamrock-leads scraper image.
+
+# Core
+requests>=2.31.0
+pymongo[srv]>=4.6.0
+python-dotenv>=1.0.0
+
+# Google APIs (Gmail / Calendar / Drive / optional Sheets)
+gspread>=6.0.0
+google-auth>=2.25.0
+google-auth-oauthlib>=0.8.0
+google-api-python-client>=2.100.0
+
+# AI (Shannon, ID scanner) — HTTP fallback exists; SDK used when present
+openai>=1.12.0
+
+# Reports / light numeric (ML train still lazy-imports sklearn)
+pandas>=2.2.0
+numpy>=1.26.0
+joblib>=1.3.0
+
+# HTTP / parsing
+beautifulsoup4>=4.12.0
+Pillow>=10.0.0
+ddddocr>=1.4.0
+pdfplumber>=0.10.0
+
+# FastAPI dashboard
+fastapi>=0.115.0,<0.120.0
+starlette>=0.37.0,<0.41.0
+uvicorn[standard]>=0.30.0
+sse-starlette>=2.1.0
+motor>=3.3.0
+httpx[socks]>=0.27.0
+cryptography>=43.0.0
+PyJWT>=2.8.0
+aiohttp>=3.9.0
+python-multipart>=0.0.9
+itsdangerous>=2.1.2
+PyYAML>=6.0
+
+# PDFs + XLSX
+reportlab>=4.0.0
+fpdf2>=2.7.0
+python-dateutil>=2.8.0
+PyMuPDF>=1.24.0
+openpyxl>=3.1.0
+
+# BlueBubbles URL sync
+firebase-admin>=6.4.0
+
+# Name matching
+jellyfish>=1.0.0
+
+# Adobe PDF Services (paperwork)
+pdfservices-sdk>=4.0.0

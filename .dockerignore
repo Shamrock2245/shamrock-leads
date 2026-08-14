@@ -53,7 +53,21 @@ Thumbs.db
 
 # Agent skills and CI (not needed at runtime)
 .agent/
+.agents/
+.claude/
+.grok/
 .github/
+.system_generated/
+
+# Local one-offs / leftover deploy payloads
+scratch/
+.deploy*
+.deploy.b64
+.deploy_batch.sh
+
+# Other image sources (built from their own Dockerfiles)
+opencut/
+alpr-worker/
 
 # Logs and data (mounted as volumes)
 logs/

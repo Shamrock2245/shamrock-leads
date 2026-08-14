@@ -30,8 +30,10 @@ IMAGES_REMOVED=$(docker image prune -f 2>&1)
 echo "${LOG_PREFIX} Images: ${IMAGES_REMOVED}"
 
 # ── 3. Remove unused build cache ─────────────────────────────────────────────
-# CCX33 RAM grew; root disk often did not. Age out 24h (was 48h).
-CACHE_REMOVED=$(docker builder prune -f --filter "until=24h" 2>&1)
+# Disk is 38 GB; unused BuildKit cache has sat at 8 GB+. `-a` is required —
+# without it this host's legacy builder reports 0B while `docker system df`
+# still shows gigabytes of unused cache. Keep last 24h for faster rebuilds.
+CACHE_REMOVED=$(docker builder prune -af --filter "until=24h" 2>&1)
 echo "${LOG_PREFIX} Build cache: ${CACHE_REMOVED}"
 
 # ── 4. Remove dangling volumes (NOT named ones like node-red-data) ───────────

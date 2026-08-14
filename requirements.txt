@@ -1,4 +1,5 @@
-# ShamrockLeads — Python Dependencies
+# ShamrockLeads — Scraper / full-stack dependencies
+# Dashboard image uses requirements-dashboard.txt (no browsers).
 # Core
 requests>=2.31.0
 pymongo[srv]>=4.6.0
