@@ -191,7 +191,7 @@ class SouthernSWBaseScraper(BaseScraper):
             m = re.search(pattern, text, re.I | re.M)
             return m.group(1).strip() if m else ""
 
-        booked = field(r"Booked:\s*([0-9/.\-]+)")
+        booked = field(r"Booked:[ \t]*([^\n]+)")
         arrest_dt = field(r"Arrest Date/Time:\s*([^\n]+)")
         agency = field(r"Arresting Agency:\s*([^\n]+)")
         bond_total = field(r"Bond Total:\s*\$?\s*([\d,]+\.?\d*)")
@@ -263,11 +263,12 @@ class SouthernSWBaseScraper(BaseScraper):
             else:
                 last = name
 
-        booking_num = (
-            f"SSW_{re.sub(r'[^A-Za-z0-9]', '', last)[:12]}_"
-            f"{re.sub(r'[^0-9]', '', booked)[:8]}_"
-            f"{age or '0'}"
-        )
+        booking_num = self._source_booking_number(card, text)
+        # Never synthesize an arrest identity from a person's name, age, or date.
+        # A Citizen Connect record is emitted only when the public card supplies
+        # complete identity, a source-issued booking/inmate identifier, and Booked date.
+        if not first or not last or not booking_num or not booked:
+            return None
         bond = re.sub(r"[^\d.]", "", bond_total) or "0"
         if bond == "0":
             # sum individual bond lines
@@ -289,17 +290,57 @@ class SouthernSWBaseScraper(BaseScraper):
             Middle_Name=middle,
             Last_Name=last,
             Booking_Number=booking_num,
-            Booking_Date=booked or (arrest_dt[:10] if arrest_dt else ""),
-            Arrest_Date=arrest_dt.split()[0] if arrest_dt else booked,
+            Booking_Date=booked,
+            Arrest_Date=arrest_dt.split()[0] if arrest_dt else "",
             Age_At_Arrest=age,
             Race=race,
             Sex=(sex or "")[:1].upper(),
             Agency=agency,
             Charges=" | ".join(charges) if charges else "Unknown",
             Bond_Amount=str(bond),
-            Status="In Custody",
+            Status="Unknown",
             Detail_URL=f"{CC_BASE}/index.php?AgencyID={self.agency_id}",
+            extra_data={"booking_key_origin": "source-issued Citizen Connect booking/inmate ID"},
         )
+
+
+    @staticmethod
+    def _source_booking_number(card, text: str) -> str:
+        """Return only a public source-issued booking/inmate identifier.
+
+        Citizen Connect deployments vary: some render a labelled identifier,
+        some place it in a detail-link query parameter, and some expose it as
+        a data attribute. Do not fall back to person-derived surrogate keys.
+        """
+        for pattern in (
+            r"(?:Booking|Inmate)\s*(?:#|Number|ID)\s*:\s*([A-Za-z0-9-]+)",
+            r"(?:Booking|Inmate)\s+Number\s*:\s*([A-Za-z0-9-]+)",
+        ):
+            match = re.search(pattern, text, flags=re.I)
+            if match:
+                return match.group(1).strip()
+
+        for node in card.find_all(True):
+            for attr_name, attr_value in node.attrs.items():
+                normalized = attr_name.lower().replace("_", "-")
+                if normalized in {
+                    "data-booking-id",
+                    "data-booking-number",
+                    "data-inmate-id",
+                    "data-inmate-number",
+                } and attr_value:
+                    return str(attr_value).strip()
+
+        for anchor in card.find_all("a", href=True):
+            href = anchor.get("href", "")
+            match = re.search(
+                r"[?&](?:bookingid|booking_id|bookingnumber|booking_number|inmateid|inmate_id)=([^&#]+)",
+                href,
+                flags=re.I,
+            )
+            if match:
+                return match.group(1).strip()
+        return ""
 
 
 # Alias used by some county modules

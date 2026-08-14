@@ -8,7 +8,7 @@
 
 | County | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
-| Baldwin | `baldwin.py` | 120 min | Registered; source and production telemetry require validation. |
+| Baldwin | `baldwin.py` | 120 min | Registered; shared Citizen Connect parser is **fail closed** for the current unsupported Baldwin route and cannot generate synthetic booking identities. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
 | Cullman | `cullman.py` | 120 min | Registered; source and production telemetry require validation. |
 | DeKalb | `dekalb.py` | 120 min | Registered; source and production telemetry require validation. |
 | Etowah | `etowah.py` | 120 min | Registered; source and production telemetry require validation. |

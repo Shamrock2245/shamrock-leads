@@ -84,7 +84,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 |------|--------|
 | **357** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee, Marshall, and St. Clair AL, Tangipahoa and St. Mary LA, and Miami-Dade FL deployments with public host checks passed; per-scraper Mongo/Slack evidence remains pending |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
-| Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
+| Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅; shared Southern Software source-issued identity safeguard is locally validated and pending deployment. |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
 | **Multi-State Ops** tab + `/api/ops/*` (registry-first KPIs, live feed, all 10 states) | ✅ · live registry |
 | **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
