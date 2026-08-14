@@ -16,6 +16,7 @@ the Docker network. No host ports are published.
 | **SpiderFoot** | email / phone / name | Correlation / entity harvest |
 | **Ignorant** | **phone** | Passive phone registration on IG / Snap / Amazon ([megadose/ignorant](https://github.com/megadose/ignorant)) |
 | **Holehe** | **email** | Passive email registration on 120+ sites incl. Instagram ([megadose/holehe](https://github.com/megadose/holehe)) |
+| **HIBF** | **plate** | Public Flock LE search audit logs ([haveibeenflocked.com](https://haveibeenflocked.com)) — not live camera hits |
 | **Toutatis** | **username** | Instagram enrichment: public/obfuscated email & phone ([megadose/toutatis](https://github.com/megadose/toutatis)) |
 
 ### Ignorant notes
@@ -54,6 +55,7 @@ Rotate the cookie if it leaks; do not log it.
 | SpiderFoot | **OFF** unless selected |
 | Ignorant | **OFF** unless selected; UI auto-selects when a 10+ digit phone is entered |
 | Holehe | **OFF** unless selected; UI auto-selects when an email is entered |
+| HIBF | **OFF** unless selected; UI auto-selects when a license plate is entered |
 | Toutatis | **OFF** unless selected; UI auto-selects when usernames present **and** session configured |
 | Recursion | **Disabled** (noise control) |
 | Risk score | **Advisory only** — not auto-applied to bond risk |

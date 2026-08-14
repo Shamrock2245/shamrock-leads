@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **Holehe** OSINT chip — email → registered accounts on 120+ sites (same pattern as Ignorant for phones). Auto-selects when an email is entered. Single-engine test accepts `user@domain`. Does not notify the target.
+- **HIBF** OSINT chip — license plate → public Flock LE *search audit* logs via Have I Been Flocked (`POST /api/search/text` with SHA-256 plate prefixes). Incomplete FOIA data, not a live camera hit. Does not log the raw plate.
 
 ### Changed
 - Removed unused **Snoop** from the OSINT matrix, worker probe, and valid-engine list (package was never installed). Not adding OpenOSINT / bbot / social-analyzer — they overlap Maigret/Sherlock or are too heavy for this VPS.

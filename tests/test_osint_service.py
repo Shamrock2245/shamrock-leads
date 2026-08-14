@@ -12,12 +12,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "osint-worker"))
 
 from runners import (  # noqa: E402
+    hibf_plate_hash,
+    hibf_plate_hashes,
+    normalize_plate,
     parse_blackbird_json,
+    parse_hibf_results,
     parse_holehe_results,
     parse_ignorant_results,
     parse_maigret_json,
     parse_phone_for_ignorant,
     parse_toutatis_user,
+    run_hibf,
     run_holehe,
 )
 from defaults import score_signals  # noqa: E402
@@ -183,7 +188,9 @@ def test_probe_tools_structure():
     assert "defaults" in probe
     assert probe["defaults"].get("ignorant_on_phone") is True
     assert probe["defaults"].get("holehe_on_email") is True
+    assert probe["defaults"].get("hibf_on_plate") is True
     assert probe["defaults"].get("toutatis_on_username") is True
+    assert probe["hibf"]["available"] is True
     # Without session cookie, package may install but not be runnable
     assert "session_configured" in probe["toutatis"]
 
@@ -218,6 +225,55 @@ async def test_run_holehe_invalid_email():
     result = await run_holehe("not-an-email")
     assert result["ok"] is False
     assert "email" in (result.get("error") or "").lower()
+
+
+def test_hibf_plate_hash_matches_site():
+    assert normalize_plate("abc 123") == "ABC123"
+    assert normalize_plate("!!") is None
+    digest = hibf_plate_hash("ZZ0ZZ0")
+    assert digest == "5199d240"
+    hashes = hibf_plate_hashes("ZZ0ZZ0")
+    assert digest in hashes
+    assert hibf_plate_hash("ZZOZZO") in hashes
+
+
+def test_parse_hibf_results():
+    raw = {
+        "results": [
+            {
+                "org_name": "Lee County FL SO",
+                "reason": "stolen vehicle",
+                "search_type": "Search Tool",
+                "search_time_utc": "2026-01-01T00:00:00Z",
+                "license_plate_hash": "5199d240",
+                "total_devices_searched": 12,
+            }
+        ],
+        "total": 1,
+    }
+    accounts, entities = parse_hibf_results(raw)
+    assert len(accounts) == 1
+    assert accounts[0]["source"] == "hibf"
+    assert accounts[0]["profile_data"]["le_searched"] is True
+    assert "ABC123" not in str(accounts)
+    assert entities and "Flock" in entities[0]["value"]
+
+
+def test_score_signals_hibf_plate():
+    accounts = [
+        {"platform": "Flock audit · Lee County FL SO", "source": "hibf", "profile_data": {"le_searched": True}},
+        {"platform": "Flock audit · Collier SO", "source": "hibf", "profile_data": {"le_searched": True}},
+    ]
+    score, signals = score_signals(accounts)
+    assert score >= 4
+    assert any(s["signal_type"] == "flock_le_search" for s in signals)
+
+
+@pytest.mark.asyncio
+async def test_run_hibf_invalid_plate():
+    result = await run_hibf("!")
+    assert result["ok"] is False
+    assert "plate" in (result.get("error") or "").lower()
 
 
 def test_instagram_session_id_url_decodes(monkeypatch):

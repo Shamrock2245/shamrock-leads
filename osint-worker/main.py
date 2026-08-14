@@ -54,11 +54,12 @@ class ScanRequestV2(BaseModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    license_plate: Optional[str] = None
     deep_scan: bool = False
     engines: List[str] = Field(
         default_factory=lambda: ["maigret", "tookie", "sherlock"],
         description=(
-            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, toutatis, instaloader, exiftool"
+            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool"
         ),
     )
     second_opinion: bool = False
@@ -130,7 +131,7 @@ async def scan_v2(
     """
     _check_key(x_worker_key)
 
-    if not any([body.full_name, body.usernames, body.email, body.phone]):
+    if not any([body.full_name, body.usernames, body.email, body.phone, body.license_plate]):
         raise HTTPException(status_code=422, detail="At least one identifier required")
 
     valid_engines = {
@@ -141,6 +142,7 @@ async def scan_v2(
         "spiderfoot",
         "ignorant",
         "holehe",
+        "hibf",
         "toutatis",
         "instaloader",
         "exiftool",
@@ -152,8 +154,9 @@ async def scan_v2(
     candidates = build_username_candidates(body.usernames, body.full_name)
 
     log.info(
-        "v2 scan start engines=%s deep=%s users=%d email=%s phone=%s",
+        "v2 scan start engines=%s deep=%s users=%d email=%s phone=%s plate=%s",
         engines, body.deep_scan, len(candidates), bool(body.email), bool(body.phone),
+        bool(body.license_plate),
     )
 
     result = await execute_scan_v2(
@@ -163,6 +166,7 @@ async def scan_v2(
         full_name=body.full_name,
         deep_scan=body.deep_scan,
         engines=engines,
+        license_plate=body.license_plate,
     )
     return result
 

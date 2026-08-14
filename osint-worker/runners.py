@@ -19,6 +19,8 @@ import httpx
 
 from defaults import (
     BLACKBIRD_TIMEOUT,
+    HIBF_BASE_URL,
+    HIBF_TIMEOUT,
     HOLEHE_TIMEOUT,
     IGNORANT_TIMEOUT,
     MAIGRET_NO_AUTOUPDATE,
@@ -571,6 +573,16 @@ def probe_tools() -> Dict[str, Any]:
             "error": holehe_error,
             "note": "Email → registered accounts on 120+ sites (incl. Instagram). Does not notify target.",
         },
+        "hibf": {
+            "available": True,
+            "path": f"{HIBF_BASE_URL}/api/search/text",
+            "version": "frontend-api",
+            "error": None,
+            "note": (
+                "License plate → public Flock LE search audit logs "
+                "(Have I Been Flocked FOIA data — not a live camera hit)."
+            ),
+        },
         "toutatis": {
             "available": toutatis_ok,
             "package_installed": toutatis_pkg,
@@ -626,6 +638,7 @@ def probe_tools() -> Dict[str, Any]:
             "toutatis_default": False,
             "blackbird_on_email": True,
             "holehe_on_email": True,
+            "hibf_on_plate": True,
             "spiderfoot_on_phone": True,
             "ignorant_on_phone": True,
             "toutatis_on_username": True,
@@ -2278,6 +2291,173 @@ async def run_holehe(email: str) -> Dict[str, Any]:
     return result_meta
 
 
+def normalize_plate(plate: str) -> Optional[str]:
+    raw = (plate or "").strip().upper().replace(" ", "")
+    if not raw or not re.fullmatch(r"[A-Z0-9-]{2,10}", raw):
+        return None
+    return raw
+
+
+def hibf_plate_hash(plate: str) -> str:
+    """SHA-256 prefix used by haveibeenflocked.com (lowercase trim, first 8 hex)."""
+    return hashlib.sha256(plate.lower().strip().encode("utf-8")).hexdigest()[:8]
+
+
+def hibf_plate_hashes(plate: str, *, max_variants: int = 10) -> List[str]:
+    """Exact plate hash plus O/0 and I/1 lookalikes (same as the HIBF site)."""
+    base = normalize_plate(plate)
+    if not base:
+        return []
+    variants = {base}
+    slots: List[Tuple[int, Tuple[str, ...]]] = []
+    for i, ch in enumerate(base):
+        if ch in ("O", "0"):
+            slots.append((i, ("O", "0")))
+        elif ch in ("I", "1"):
+            slots.append((i, ("I", "1")))
+
+    if slots:
+        chars = list(base)
+
+        def _walk(idx: int) -> None:
+            if len(variants) >= max_variants:
+                return
+            if idx == len(slots):
+                variants.add("".join(chars))
+                return
+            pos, opts = slots[idx]
+            for opt in opts:
+                chars[pos] = opt
+                _walk(idx + 1)
+
+        _walk(0)
+
+    hashes: List[str] = []
+    seen: set[str] = set()
+    for variant in list(variants)[:max_variants]:
+        digest = hibf_plate_hash(variant)
+        if digest not in seen:
+            seen.add(digest)
+            hashes.append(digest)
+    return hashes
+
+
+def parse_hibf_results(raw: Any) -> Tuple[List[Dict], List[Dict]]:
+    """Map HIBF /api/search/text JSON into (accounts, entities). Never stores the plate."""
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not isinstance(raw, dict):
+        return accounts, entities
+    rows = raw.get("results") or []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        reason = str(item.get("reason") or "").strip()
+        agency = str(item.get("org_name") or item.get("agency_name") or item.get("org_id") or "Flock agency")
+        search_type = str(item.get("search_type") or "")
+        when = str(item.get("search_time_utc") or item.get("start_timeframe_utc") or "")
+        pd = {
+            "le_searched": True,
+            "check": "hibf_flock_audit",
+            "reason": reason[:240] if reason and reason.upper() not in {"REDACTED", "***"} else None,
+            "search_type": search_type or None,
+            "search_time_utc": when or None,
+            "devices_searched": item.get("total_devices_searched"),
+            "networks_searched": item.get("total_networks_searched"),
+            "plate_hash": str(item.get("license_plate_hash") or "")[:8] or None,
+        }
+        pd = {k: v for k, v in pd.items() if v not in (None, "")}
+        accounts.append({
+            "platform": f"Flock audit · {agency}",
+            "url": f"{HIBF_BASE_URL}/",
+            "username": "",
+            "profile_data": pd,
+            "source": "hibf",
+            "confidence": "found",
+            "category": "other",
+            "relevance": "unreviewed",
+        })
+    if accounts:
+        entities.append({
+            "type": "other",
+            "value": f"{len(accounts)} Flock LE search record(s)",
+            "source": "hibf",
+            "module": "plate_audit",
+            "confidence": "medium",
+            "context": "Public FOIA audit logs — not a live camera sighting.",
+            "relevance": "unreviewed",
+        })
+    return accounts, entities
+
+
+async def run_hibf(license_plate: str) -> Dict[str, Any]:
+    """
+    Look up public Flock LE search audit logs via Have I Been Flocked.
+
+    Sends only the site's 8-char SHA-256 plate prefix — never the raw plate.
+    Data is incomplete FOIA/transparency-portal logs, not live ALPR hits.
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "hibf",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "accounts": [],
+        "entities": [],
+    }
+    plate = normalize_plate(license_plate)
+    if not plate:
+        result_meta["error"] = "invalid or empty license plate"
+        return result_meta
+
+    hashes = hibf_plate_hashes(plate)
+    log.info("HIBF plate check hashes=%d prefix=%s", len(hashes), hashes[0] if hashes else "none")
+
+    url = f"{HIBF_BASE_URL}/api/search/text"
+    try:
+        async with httpx.AsyncClient(timeout=float(HIBF_TIMEOUT), follow_redirects=True) as client:
+            r = await client.post(
+                url,
+                json={"plates": hashes, "cursor": None},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "ShamrockLeads-osint-worker/1.0",
+                    "Origin": HIBF_BASE_URL,
+                    "Referer": f"{HIBF_BASE_URL}/",
+                },
+            )
+        if r.status_code == 429:
+            result_meta["error"] = "hibf rate-limited — retry later"
+            return result_meta
+        if r.status_code >= 400:
+            result_meta["error"] = f"hibf HTTP {r.status_code}"
+            return result_meta
+        payload = r.json() if r.content else {}
+        accounts, entities = parse_hibf_results(payload)
+        result_meta.update({
+            "ok": True,
+            "raw": {
+                "count": payload.get("count") if isinstance(payload, dict) else 0,
+                "total": payload.get("total") if isinstance(payload, dict) else 0,
+                "hash_count": len(hashes),
+            },
+            "accounts": accounts,
+            "entities": entities,
+        })
+        if not accounts:
+            result_meta["warning"] = (
+                "No public Flock audit-log hits (dataset is incomplete FOIA data)."
+            )
+        return result_meta
+    except httpx.TimeoutException:
+        result_meta["error"] = f"hibf timed out after {HIBF_TIMEOUT}s"
+    except Exception as exc:
+        result_meta["error"] = f"hibf error: {exc}"
+    return result_meta
+
+
 async def run_blackbird(
     username: Optional[str] = None,
     email: Optional[str] = None,
@@ -2465,6 +2645,7 @@ async def execute_scan_v2(
     full_name: Optional[str],
     deep_scan: bool,
     engines: List[str],
+    license_plate: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     v2 multi-engine scan orchestrator.
@@ -2567,6 +2748,13 @@ async def execute_scan_v2(
                 else:
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No email for holehe"
+            elif engine == "hibf":
+                if license_plate and str(license_plate).strip():
+                    tasks.append(run_hibf(str(license_plate).strip()))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No license plate for hibf"
             elif engine == "toutatis":
                 if mg_users:
                     tasks.append(run_toutatis(mg_users))

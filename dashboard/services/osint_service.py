@@ -52,6 +52,7 @@ _ENGINE_KEYS = (
     "spiderfoot",
     "ignorant",
     "holehe",
+    "hibf",
     "toutatis",
     "instaloader",
     "exiftool",
@@ -219,6 +220,8 @@ class OSINTService:
                 engines_list.append("ignorant")
             if req.email and "@" in str(req.email) and "holehe" not in engines_list:
                 engines_list.append("holehe")
+            if req.license_plate and str(req.license_plate).strip() and "hibf" not in engines_list:
+                engines_list.append("hibf")
             if usernames and "toutatis" not in engines_list:
                 engines_list.append("toutatis")
 
@@ -230,6 +233,9 @@ class OSINTService:
         # Email present → Holehe (email analog of Ignorant)
         if req.email and "@" in str(req.email) and "holehe" not in engines_list:
             engines_list.append("holehe")
+
+        if req.license_plate and str(req.license_plate).strip() and "hibf" not in engines_list:
+            engines_list.append("hibf")
 
         # Build progress dict
         progress = {}
@@ -254,6 +260,7 @@ class OSINTService:
                 "usernames": usernames,
                 "email": req.email,
                 "phone": req.phone,
+                "license_plate": req.license_plate,
                 "full_name": req.full_name,
                 "deep_scan": req.deep_scan,
                 "second_opinion": req.second_opinion,
@@ -297,11 +304,11 @@ class OSINTService:
         )
 
         # Dispatch background execution
-        asyncio.create_task(self._execute_scan(scan_id, req, actor))
+        asyncio.create_task(self._execute_scan(scan_id, req, actor, engines_list))
         return scan_id
 
     async def _execute_scan(
-        self, scan_id: str, req: OSINTScanRequest, actor: str
+        self, scan_id: str, req: OSINTScanRequest, actor: str, engines_list: List[str]
     ) -> None:
         """Background task: call worker and update Mongo with results."""
         col = self._scans_col
@@ -320,8 +327,9 @@ class OSINTService:
                 "full_name": req.full_name,
                 "email": req.email,
                 "phone": req.phone,
+                "license_plate": req.license_plate,
                 "deep_scan": req.deep_scan,
-                "engines": [e.value for e in req.engines],
+                "engines": engines_list,
                 "second_opinion": req.second_opinion,
             }
             async with httpx.AsyncClient(timeout=OSINT_WORKER_TIMEOUT) as client:

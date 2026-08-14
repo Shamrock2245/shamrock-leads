@@ -29,6 +29,7 @@ class EngineType(str, Enum):
     snoop = "snoop"  # legacy enum only — never installed, not a runnable engine
     ignorant = "ignorant"
     holehe = "holehe"
+    hibf = "hibf"
     toutatis = "toutatis"
     instaloader = "instaloader"
     exiftool = "exiftool"
@@ -100,6 +101,10 @@ class OSINTScanRequest(BaseModel):
         None,
         description="Known phone number (for Ignorant phone registration + SpiderFoot)",
     )
+    license_plate: Optional[str] = Field(
+        None,
+        description="Vehicle plate for Have I Been Flocked (public Flock LE search audit logs)",
+    )
     dob: Optional[str] = Field(None, description="Date of birth (YYYY-MM-DD)")
 
     # Engine selection — list of engines to run
@@ -107,7 +112,7 @@ class OSINTScanRequest(BaseModel):
         default_factory=lambda: [EngineType.maigret, EngineType.tookie, EngineType.sherlock],
         description=(
             "Engines to run. Default: [maigret, tookie, sherlock]. "
-            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, toutatis, instaloader, exiftool"
+            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool"
         ),
     )
 

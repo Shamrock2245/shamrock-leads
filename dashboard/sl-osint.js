@@ -96,6 +96,11 @@
       emailInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
       emailInput.addEventListener('change', () => _updateAdaptiveFields());
     }
+    const plateInput = $('osintPlate');
+    if (plateInput) {
+      plateInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
+      plateInput.addEventListener('change', () => _updateAdaptiveFields());
+    }
     const userInput = $('osintUsernames');
     if (userInput) {
       userInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
@@ -149,7 +154,7 @@
     const authOk = _toolStatus.worker_auth_ok === true;
     const ready = _toolStatus.ready_for_scans === true;
     const trape = _toolStatus.trape || {};
-    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool'];
     const live = engines.filter(id => _engineAvailable(_toolStatus[id]));
     const pending = [];
     if ((_toolStatus.toutatis || {}).package_installed && !_engineAvailable(_toolStatus.toutatis)) {
@@ -194,7 +199,7 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = _engineAvailable(info);
@@ -231,6 +236,7 @@
       { id: 'spiderfoot', name: '🕷️ SpiderFoot', rank: 'OSINT Suite', desc: 'Multi-source entity correlation & OSINT footprinting' },
       { id: 'ignorant', name: '📱 Ignorant', rank: 'Phone Check', desc: 'Passive phone registration checks on Instagram, Snapchat, Amazon (no target SMS)' },
       { id: 'holehe', name: '✉️ Holehe', rank: 'Email Check', desc: 'Passive email registration across 120+ sites including Instagram (no target email)' },
+      { id: 'hibf', name: '🚘 HIBF', rank: 'Plate Audit', desc: 'Public Flock LE search audit logs via Have I Been Flocked (FOIA data — not a live camera hit)' },
       { id: 'toutatis', name: '📸 Toutatis', rank: 'IG Enrichment', desc: 'Instagram handle → recovers public & obfuscated email, phone number & WhatsApp links' },
       { id: 'instaloader', name: '🖼️ Instaloader', rank: 'IG Media', desc: 'Extracts Instagram bio text, HD avatars, external profile links & follower counts' },
       { id: 'exiftool', name: '🔍 ExifTool', rank: 'EXIF / GPS', desc: 'Extracts camera fingerprints, timestamp, and GPS coordinates from evidence photos' },
@@ -295,6 +301,12 @@
     const email = ($('osintEmail')?.value || '').trim();
     if (email && email.includes('@') && !_selectedEngines.has('holehe')) {
       _selectedEngines.add('holehe');
+      _updateEngineChips();
+    }
+
+    const plate = ($('osintPlate')?.value || '').trim();
+    if (/^[A-Za-z0-9-]{2,10}$/.test(plate) && !_selectedEngines.has('hibf')) {
+      _selectedEngines.add('hibf');
       _updateEngineChips();
     }
 
@@ -375,12 +387,13 @@
     const usernames = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
     const email = $('osintEmail')?.value?.trim() || null;
     const phone = $('osintPhone')?.value?.trim() || null;
+    const licensePlate = $('osintPlate')?.value?.trim() || null;
     const deepScan = $('osintDeepScan')?.checked || false;
     const secondOpinion = $('osintSecondOpinion')?.checked || false;
     const notes = $('osintNotes')?.value?.trim() || null;
 
-    if (!fullName && !usernames.length && !email && !phone) {
-      toast('At least one identifier required (name, username, email, or phone)', 'error');
+    if (!fullName && !usernames.length && !email && !phone && !licensePlate) {
+      toast('At least one identifier required (name, username, email, phone, or plate)', 'error');
       return;
     }
 
@@ -406,6 +419,7 @@
           usernames: usernames.length ? usernames : null,
           email,
           phone,
+          license_plate: licensePlate,
           engines,
           deep_scan: deepScan,
           second_opinion: secondOpinion,
@@ -961,14 +975,16 @@
       const isEmail = target.includes('@') && !target.startsWith('http');
       const isPhone = !isEmail && target.replace(/\D/g, '').length >= 10;
       const isUrl = target.startsWith('http://') || target.startsWith('https://');
+      const isPlate = engine === 'hibf' || (!isEmail && !isPhone && !isUrl && /^[A-Za-z0-9-]{2,8}$/.test(target) && /[0-9]/.test(target));
 
       const payload = {
         subject_type: 'defendant',
         subject_id: 'test_' + Date.now(),
         full_name: 'Test Subject',
-        usernames: (!isPhone && !isUrl && !isEmail) ? [target] : null,
+        usernames: (!isPhone && !isUrl && !isEmail && !isPlate) ? [target] : null,
         phone: (isPhone || engine === 'ignorant') ? target : null,
         email: (isEmail || isUrl || engine === 'holehe' || engine === 'exiftool') ? target : null,
+        license_plate: (isPlate || engine === 'hibf') ? target : null,
         engines: [engine],
         deep_scan: false,
         notes: `Diagnostic test for ${engine}`,

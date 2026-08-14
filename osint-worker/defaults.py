@@ -17,6 +17,8 @@ BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
 SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
 IGNORANT_TIMEOUT = int(os.getenv("OSINT_IGNORANT_TIMEOUT", "45"))
 HOLEHE_TIMEOUT = int(os.getenv("OSINT_HOLEHE_TIMEOUT", "90"))
+HIBF_TIMEOUT = int(os.getenv("OSINT_HIBF_TIMEOUT", "20"))
+HIBF_BASE_URL = os.getenv("OSINT_HIBF_BASE_URL", "https://haveibeenflocked.com").rstrip("/")
 TOUTATIS_TIMEOUT = int(os.getenv("OSINT_TOUTATIS_TIMEOUT", "60"))
 MAX_TOUTATIS_USERNAMES = int(os.getenv("OSINT_MAX_TOUTATIS_USERNAMES", "3"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
@@ -217,6 +219,25 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
                 "(Ignorant passive check — does not message the target.)"
             ),
             "source": "ignorant",
+        })
+
+    # Flock LE search audit (Have I Been Flocked): public FOIA logs, not camera hits
+    hibf_hits = [
+        a for a in accounts
+        if str(a.get("source") or "") == "hibf"
+        and (a.get("profile_data") or {}).get("le_searched")
+    ]
+    if hibf_hits:
+        score += min(12, 4 * len(hibf_hits))
+        signals.append({
+            "signal_type": "flock_le_search",
+            "severity": "medium" if len(hibf_hits) < 5 else "high",
+            "detail": (
+                f"Public Flock audit logs show {len(hibf_hits)} LE search record(s) "
+                f"for this plate (Have I Been Flocked — incomplete FOIA data, "
+                f"not a live camera hit)."
+            ),
+            "source": "hibf",
         })
 
     # Email-linked accounts (Holehe): which sites this address is registered on
