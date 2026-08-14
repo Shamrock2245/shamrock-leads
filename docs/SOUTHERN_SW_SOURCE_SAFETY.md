@@ -14,7 +14,7 @@ The shared `SouthernSWBaseScraper` serves **51 registered county wrappers** in A
 
 Baldwin’s existing `BaldwinCoAL` Citizen Connect wrapper was validated against the county-linked official portal. The current normal index route returns a public response, but the current-confinements request contains only an unsupported warning container and no parseable booking-card contract. A browser visit to the former agency route redirects to the general Citizen Connect directory rather than a Baldwin roster. The hardened scraper returned zero records in a non-writing aggregate smoke; it did not generate a synthetic booking identity.
 
-Baldwin therefore remains **registered but non-productive** until the county’s official public source exposes a directly accessible, supported broad roster with complete identity, a source-issued booking/inmate ID, and booking date/time. This decision does not prove or imply production persistence or alert delivery for any Southern Software-dependent county.
+Baldwin therefore remains **registered but non-productive** until the county’s official public source exposes a directly accessible, supported broad roster with complete identity, a source-issued booking/inmate ID, and booking date/time. The shared `4d58f29` safety rollout completed successfully on 2026-08-14 and the required public hosts returned 200. This decision does not prove or imply production persistence or alert delivery for Baldwin or any Southern Software-dependent county.
 
 ## Revalidation criteria
 
