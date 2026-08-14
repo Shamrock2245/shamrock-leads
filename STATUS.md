@@ -61,7 +61,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards deployed 2026-08-14: Gwinnett bulk names are abbreviated and Fulton Socrata returns 403; remaining paths require source telemetry. |
-| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair deployed 2026-08-14; Broward’s legacy sequential-probe path locally repaired to fail closed pending a supported BSO bulk source. Per-source production telemetry remains pending. |
+| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair and Broward fail-closed guard deployed 2026-08-14; public hosts are healthy and per-source production telemetry remains pending. |
 | **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard deployed 2026-08-14 after retiring unsafe legacy broad search; public hosts are healthy and remaining NC paths require source telemetry. |
 | **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair deployed 2026-08-14 with public hosts healthy; per-county persistence and alert telemetry remain pending. |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
