@@ -62,7 +62,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 |-------|--------------------:|-----------|-------|
 | **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards deployed 2026-08-14: Gwinnett bulk names are abbreviated and Fulton Socrata returns 403; remaining paths require source telemetry. |
 | **FL** | **67** | `scrapers/counties/` | All 67 FL counties on registry + scheduler; Miami-Dade ArcGIS repair deployed 2026-08-14 with public host checks green; per-source production telemetry remains pending |
-| **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
+| **NC** | **60** | `scrapers/counties_nc/` | Durham legacy broad-search path locally repaired to fail closed pending a safe source contract; remaining NC paths require source telemetry. |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
@@ -171,7 +171,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 
 | Item | Status |
 |------|--------|
-| NC **60 registered** / 100 goal — many still need first successful production scrape | ⏳ Multi-State Ops / scheduler; DCN list partial (≤100/page); WAF metros (Wake/Guilford/Forsyth); more OCV app_ids |
+| NC **60 registered** / 100 goal — many still need first successful production scrape | ⏳ Multi-State Ops / scheduler; Durham now fails closed pending a public identity-safe source contract; DCN list partial (≤100/page); WAF metros (Wake/Guilford/Forsyth); more OCV app_ids |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
 | GA remaining counties beyond registered set (85/159) | ⏳ Recon + wrappers. Gwinnett is intentionally fail closed pending a supported complete-identity bulk source. |
 | TN (22 registered; Putnam deployed with public health green; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain per-source Mongo/Slack telemetry; Sullivan remains recon-only |

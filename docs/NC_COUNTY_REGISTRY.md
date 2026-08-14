@@ -78,7 +78,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Davidson | 🔲 Planned | Custom HTML | `www2.co.davidson.nc.us/DCInmates/` |
 | Davie | 🔲 Planned | Zuercher | `davie-so-nc.zuercherportal.com` |
 | Duplin | 🔲 Planned | Southern SW | AgencyID=`DuplinCoNC` |
-| Durham | 🔲 Planned | Custom IPS | `www2.dconc.gov/sheriff/ips/default.aspx` |
+| Durham | ⏳ Fail closed — pending source contract | Custom legacy IPS | Prior `www2.dconc.gov` path was stale and unsafe (TLS disabled, broad A–Z submissions, no verified booking-date boundary). Existing scheduled path emits no records until a supported public bulk roster exposes complete identity plus source-issued booking fields. |
 | Edgecombe | 🔲 Planned | Southern SW | AgencyID=`EdgecombeCoNC` |
 | Forsyth | 🔲 Planned | P2C cloud | WAF |
 | Franklin | ⬜ No portal | — | VINE / phone |
