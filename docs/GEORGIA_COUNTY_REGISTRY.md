@@ -88,7 +88,7 @@
 | County | Portal URL | Status | Notes |
 |--------|------------|--------|-------|
 | **Cobb** | `cobbsheriff.org/inmates/adult-detention-center` | 🔵 Validated | High priority metro |
-| **Gwinnett** | `gwinnettcountysheriff.com/smartwebclient/` | ⏳ Fail closed | Public last-24-hours view has booking key/time but abbreviates given names; existing job emits no records until a supported complete-identity bulk contract is available. |
+| **Gwinnett** | `gwinnettcountysheriff.com/smartwebclient/` | ⏳ Fail closed — deployed 2026-08-14 | Public last-24-hours view has booking key/time but abbreviates given names; existing job emits no records until a supported complete-identity bulk contract is available. Public production hosts are healthy; no Gwinnett writes or alerts are expected from the safety guard. |
 | **Richmond** | `richmondcountysheriffsoffice.com/inmate-inquiry.cfm` | 🔵 Validated | Augusta area |
 | **Bartow** | `bartowcountyga.gov/sheriff/inmate-search` | 🔵 Validated | Clean HTML table |
 | **Glynn** | `glynncountysheriff.org/inmate-search` | 🔵 Validated | Coastal area |

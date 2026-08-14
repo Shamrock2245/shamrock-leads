@@ -60,7 +60,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
-| **GA** | **85** | `scrapers/counties_ga/` | + Gordon, Walker, Whitfield, Tift, Ware, Coffee, Appling, Bleckley, Crisp, Laurens, Effingham + EAS batch runner |
+| **GA** | **85** | `scrapers/counties_ga/` | Gwinnett fail-closed guard deployed 2026-08-14 because public bulk names are abbreviated; 84 productive/recon paths plus the safety guard require source telemetry. |
 | **FL** | **67** | `scrapers/counties/` | All 67 FL counties on registry + scheduler; Miami-Dade ArcGIS repair deployed 2026-08-14 with public host checks green; per-source production telemetry remains pending |
 | **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
@@ -173,7 +173,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 |------|--------|
 | NC **60 registered** / 100 goal — many still need first successful production scrape | ⏳ Multi-State Ops / scheduler; DCN list partial (≤100/page); WAF metros (Wake/Guilford/Forsyth); more OCV app_ids |
 | SC production depth (CAPTCHA/Cloudflare/proxy for Greenville family, etc.) | ⏳ Harden per `SC_COUNTY_REGISTRY` |
-| GA remaining counties beyond registered set (85/159) | ⏳ Recon + wrappers |
+| GA remaining counties beyond registered set (85/159) | ⏳ Recon + wrappers. Gwinnett is intentionally fail closed pending a supported complete-identity bulk source. |
 | TN (22 registered; Putnam deployed with public health green; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain per-source Mongo/Slack telemetry; Sullivan remains recon-only |
 | TX (34 registered; Randall deployed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
 | AL (15 registered; Lee and Marshall deployed with public host checks green) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
