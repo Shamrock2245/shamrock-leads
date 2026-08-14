@@ -1,12 +1,12 @@
 # ============================================
 # ShamrockLeads — OSINT Worker v2
-# Writable FS: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
+# Writable FS: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe · Toutatis
 # Internal network only (no published ports)
 # ============================================
 FROM python:3.12-slim
 
 LABEL maintainer="Shamrock Active Software"
-LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant + Toutatis)"
+LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant + Holehe + Toutatis)"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY osint-worker/requirements.txt /app/requirements.txt
-# requirements.txt includes ignorant + toutatis (+ httpx/trio/phonenumbers/…)
+# requirements.txt includes ignorant + holehe + toutatis (+ httpx/trio/phonenumbers/…)
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # ── Maigret ───────────────────────────────────────────────────────────
@@ -51,6 +51,11 @@ RUN git clone --depth 1 https://github.com/smicallef/spiderfoot /opt/spiderfoot 
 RUN pip install --no-cache-dir "ignorant>=1.2" \
     && python -c "import ignorant; from ignorant.core import import_submodules, get_functions, launch_module"
 
+# ── Holehe (email → 120+ site registrations, same family as Ignorant) ──
+# Does not alert the target address.
+RUN pip install --no-cache-dir "holehe>=1.61" \
+    && python -c "import holehe; from holehe.core import import_submodules, get_functions, launch_module"
+
 # ── Toutatis (IG username enrichment) — package required; runtime needs cookie ──
 # Set INSTAGRAM_SESSION_ID / TOUTATIS_SESSION_ID on the worker to enable scans.
 RUN pip install --no-cache-dir "toutatis>=1.31" phonenumbers pycountry \
@@ -74,13 +79,15 @@ COPY osint-worker/ /app/
 
 # Final import smoke (catches COPY overwriting nothing; packages must resolve)
 RUN python -c "\
-import ignorant, toutatis; \
-from runners import resolve_ignorant, resolve_toutatis, probe_tools; \
+import ignorant, toutatis, holehe; \
+from runners import resolve_ignorant, resolve_toutatis, resolve_holehe, probe_tools; \
 assert resolve_ignorant(), 'ignorant not resolvable'; \
 assert resolve_toutatis(), 'toutatis not resolvable'; \
+assert resolve_holehe(), 'holehe not resolvable'; \
 p = probe_tools(); \
 assert p['ignorant']['available'] is True, p['ignorant']; \
 assert p['toutatis']['package_installed'] is True, p['toutatis']; \
+assert p['holehe']['available'] is True, p['holehe']; \
 print('OSINT engines OK:', p['version'])"
 
 RUN groupadd -r appuser && \

@@ -1,5 +1,5 @@
 """
-CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant, Toutatis
+CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant, Holehe, Toutatis
 — osint-worker v2. Writable filesystem assumed (not read-only dashboard rootfs).
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ import httpx
 
 from defaults import (
     BLACKBIRD_TIMEOUT,
+    HOLEHE_TIMEOUT,
     IGNORANT_TIMEOUT,
     MAIGRET_NO_AUTOUPDATE,
     MAIGRET_NO_RECURSION,
@@ -120,28 +121,6 @@ def resolve_sherlock_cmd() -> Optional[str]:
 
 
 
-def resolve_snoop_cmd() -> Optional[str]:
-    """Resolve snoop CLI binary or python module."""
-    candidates = [
-        os.getenv("SNOOP_PATH", "").strip(),
-        shutil.which("snoop") or "",
-        "/usr/local/bin/snoop",
-        "/usr/bin/snoop",
-    ]
-    for c in candidates:
-        if c and os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-        if c and os.path.isfile(c):
-            return c
-    try:
-        import importlib.util
-        if importlib.util.find_spec("snoop") is not None:
-            return "python-module"
-    except Exception:
-        pass
-    return None
-
-
 def resolve_spiderfoot() -> Optional[str]:
     """Resolve SpiderFoot CLI (sf.py or sfcli.py)."""
     candidates = [
@@ -187,6 +166,26 @@ def resolve_ignorant() -> Optional[str]:
         import importlib.util
 
         if importlib.util.find_spec("ignorant") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def resolve_holehe() -> Optional[str]:
+    """Resolve holehe package / CLI for email registration checks."""
+    candidates = [
+        os.getenv("HOLEHE_PATH", "").strip(),
+        shutil.which("holehe") or "",
+        "/usr/local/bin/holehe",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+
+        if importlib.util.find_spec("holehe") is not None:
             return "python-module"
     except Exception:
         pass
@@ -249,15 +248,24 @@ def resolve_exiftool() -> Optional[str]:
 
 def get_instagram_session_id() -> str:
     """
-    Instagram sessionid cookie for Toutatis.
+    Instagram sessionid cookie for Toutatis / Instaloader.
 
     Prefer ``INSTAGRAM_SESSION_ID`` (clear ops name); accept ``TOUTATIS_SESSION_ID``
-    as alias. Never log the raw value.
+    as alias. Chrome DevTools often copies the value URL-encoded (``%3A``);
+    decode so Instagram APIs see real colons. Never log the raw value.
     """
-    return (
+    from urllib.parse import unquote
+
+    raw = (
         os.getenv("INSTAGRAM_SESSION_ID", "").strip()
         or os.getenv("TOUTATIS_SESSION_ID", "").strip()
     )
+    if not raw:
+        return ""
+    # Strip wrapping quotes from .env editors
+    if (raw[0], raw[-1]) in {('"', '"'), ("'", "'")}:
+        raw = raw[1:-1]
+    return unquote(raw).strip()
 
 
 def parse_phone_for_ignorant(phone: str) -> Optional[Tuple[str, str]]:
@@ -396,23 +404,6 @@ def probe_tools() -> Dict[str, Any]:
     else:
         spiderfoot_error = "not found — install with: pip install spiderfoot"
 
-    # Snoop
-    snoop_cmd = resolve_snoop_cmd()
-    snoop_ok = False
-    snoop_version = None
-    snoop_error = None
-    snoop_path = None
-    if snoop_cmd == "python-module":
-        snoop_ok = True
-        snoop_path = f"{PYTHON_CMD} -m snoop"
-        snoop_version = "installed (module)"
-    elif snoop_cmd:
-        snoop_ok = True
-        snoop_path = snoop_cmd
-        snoop_version = "installed"
-    else:
-        snoop_error = "not found — install with: pip install snoop-project"
-
     # Blackbird
     blackbird_ok = bool(bb_script and os.path.isfile(bb_script))
     blackbird_error = None
@@ -451,6 +442,28 @@ def probe_tools() -> Dict[str, Any]:
         ignorant_version = "cli"
     else:
         ignorant_error = "not found — install with: pip install ignorant"
+
+    # Holehe (email → 120+ site registration, same family as Ignorant)
+    holehe_cmd = resolve_holehe()
+    holehe_ok = False
+    holehe_version = None
+    holehe_error = None
+    holehe_path = None
+    if holehe_cmd == "python-module":
+        try:
+            import holehe as _hh  # noqa: F401
+
+            holehe_ok = True
+            holehe_version = getattr(_hh, "__version__", "installed")
+            holehe_path = f"{PYTHON_CMD} -m holehe"
+        except Exception as e:
+            holehe_error = str(e)[:200]
+    elif holehe_cmd:
+        holehe_ok = True
+        holehe_path = holehe_cmd
+        holehe_version = "cli"
+    else:
+        holehe_error = "not found — install with: pip install holehe"
 
     # Toutatis (Instagram username enrichment via session cookie)
     toutatis_pkg = False
@@ -532,12 +545,6 @@ def probe_tools() -> Dict[str, Any]:
             "version": sherlock_version,
             "error": sherlock_error,
         },
-        "snoop": {
-            "available": snoop_ok,
-            "path": snoop_path or "not found",
-            "version": snoop_version,
-            "error": snoop_error,
-        },
         "blackbird": {
             "available": blackbird_ok,
             "path": bb_script or "not found",
@@ -557,6 +564,13 @@ def probe_tools() -> Dict[str, Any]:
             "error": ignorant_error,
             "note": "Phone registration check (IG/Snap/Amazon). Does not message target.",
         },
+        "holehe": {
+            "available": holehe_ok,
+            "path": holehe_path or "not found",
+            "version": holehe_version,
+            "error": holehe_error,
+            "note": "Email → registered accounts on 120+ sites (incl. Instagram). Does not notify target.",
+        },
         "toutatis": {
             "available": toutatis_ok,
             "package_installed": toutatis_pkg,
@@ -571,10 +585,14 @@ def probe_tools() -> Dict[str, Any]:
         },
         "instaloader": {
             "available": instaloader_ok,
+            "session_configured": session_configured,
             "path": instaloader_path or "not found",
             "version": instaloader_version,
             "error": instaloader_error,
-            "note": "Instagram username → bio text, HD avatar, external links & metrics.",
+            "note": (
+                "Instagram username → bio, avatar, links. "
+                "Uses INSTAGRAM_SESSION_ID when set (anonymous lookups are blocked)."
+            ),
         },
         "exiftool": {
             "available": exiftool_ok,
@@ -587,16 +605,16 @@ def probe_tools() -> Dict[str, Any]:
             maigret_ok
             or tookie_ok
             or sherlock_ok
-            or snoop_ok
             or blackbird_ok
             or spiderfoot_ok
             or ignorant_ok
+            or holehe_ok
             or toutatis_ok
             or instaloader_ok
             or exiftool_ok
         ),
         "worker": True,
-        "version": "2.4.0",
+        "version": "2.5.0",
         "defaults": {
             "maigret_default": True,
             "tookie_default": True,
@@ -604,8 +622,10 @@ def probe_tools() -> Dict[str, Any]:
             "blackbird_default": False,
             "spiderfoot_default": False,
             "ignorant_default": False,
+            "holehe_default": False,
             "toutatis_default": False,
             "blackbird_on_email": True,
+            "holehe_on_email": True,
             "spiderfoot_on_phone": True,
             "ignorant_on_phone": True,
             "toutatis_on_username": True,
@@ -822,51 +842,6 @@ def parse_sherlock_csv(csv_path: str) -> List[Dict]:
 
 
 
-def parse_snoop_json(raw: Any) -> tuple[List[Dict], List[Dict]]:
-    """
-    Parse Snoop JSON output.
-    Returns (accounts, geo_points).
-    """
-    accounts: List[Dict] = []
-    geo_points: List[Dict] = []
-    if not raw:
-        return accounts, geo_points
-
-    if isinstance(raw, dict):
-        for site_name, data in raw.items():
-            if site_name in ("statistics", "meta", "summary"):
-                continue
-            if isinstance(data, dict):
-                url = data.get("url") or data.get("link") or data.get("url_user") or ""
-                st = str(data.get("status") or "").lower()
-                if url and (st in ("claimed", "found", "ok", "exists") or data.get("exists", True)):
-                    accounts.append({
-                        "platform": str(site_name),
-                        "url": url,
-                        "username": data.get("username", ""),
-                        "profile_data": data,
-                        "source": "snoop",
-                        "confidence": "found",
-                        "category": _categorize_platform(str(site_name)),
-                        "relevance": "unreviewed",
-                    })
-                # Geo-coordinate extraction (EXIF, bio coordinates, location tags)
-                lat = data.get("latitude") or data.get("lat")
-                lon = data.get("longitude") or data.get("lon") or data.get("lng")
-                if lat is not None and lon is not None:
-                    try:
-                        geo_points.append({
-                            "latitude": float(lat),
-                            "longitude": float(lon),
-                            "source": f"snoop_{site_name}",
-                            "label": str(data.get("location_name") or site_name),
-                            "context": str(data.get("bio") or data.get("context") or ""),
-                        })
-                    except (ValueError, TypeError):
-                        pass
-    return accounts, geo_points
-
-
 def parse_spiderfoot_json(raw: Any) -> tuple[List[Dict], List[Dict]]:
     """
     Parse SpiderFoot JSON output.
@@ -1043,6 +1018,77 @@ def parse_ignorant_results(
             "context": (
                 f"Checked {', '.join(checked) or 'modules'}"
                 + (f"; rate-limited: {', '.join(rate_limited)}" if rate_limited else "")
+            ),
+            "relevance": "unreviewed",
+        })
+    return accounts, entities
+
+
+def parse_holehe_results(raw: Any, *, email: str = "") -> Tuple[List[Dict], List[Dict]]:
+    """
+    Parse holehe module output into (accounts, entities).
+
+    Only sites with exists=True become accounts. Recovery hints stay on
+    profile_data for staff; callers must not log them.
+    """
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not raw:
+        return accounts, entities
+
+    results = raw if isinstance(raw, list) else raw.get("results") or []
+    rate_limited: List[str] = []
+    checked: List[str] = []
+
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "unknown")
+        domain = str(item.get("domain") or f"{name}.com")
+        checked.append(name)
+        if item.get("rateLimit"):
+            rate_limited.append(name)
+            continue
+        if not item.get("exists"):
+            continue
+        platform = name.capitalize() if name.islower() else name
+        pd: Dict[str, Any] = {
+            "email_registered": True,
+            "check": "holehe_email_registration",
+        }
+        rec = item.get("emailrecovery")
+        phone_hint = item.get("phoneNumber")
+        if rec:
+            pd["email_recovery_hint"] = str(rec)
+        if phone_hint:
+            pd["phone_hint"] = str(phone_hint)
+        others = item.get("others")
+        if others:
+            pd["others"] = others
+        accounts.append({
+            "platform": platform,
+            "url": f"https://{domain}",
+            "username": "",
+            "profile_data": pd,
+            "source": "holehe",
+            "confidence": "found",
+            "category": _categorize_platform(platform),
+            "relevance": "unreviewed",
+        })
+
+    if email and "@" in email:
+        local, _, domain = email.partition("@")
+        redacted = f"{local[:1]}***@{domain}" if local else "***"
+        entities.append({
+            "type": "email",
+            "value": redacted,
+            "source": "holehe",
+            "module": "email_check",
+            "confidence": "high" if accounts else "medium",
+            "context": (
+                f"Checked {len(checked)} sites"
+                + (f"; registered on {len(accounts)}" if accounts else "")
+                + (f"; rate-limited: {', '.join(rate_limited[:8])}" if rate_limited else "")
             ),
             "relevance": "unreviewed",
         })
@@ -1851,6 +1897,16 @@ async def run_instaloader(usernames: List[str]) -> Dict[str, Any]:
                 save_metadata=False,
                 quiet=True,
             )
+            sid = get_instagram_session_id()
+            if sid:
+                L.context._session.cookies.set(
+                    "sessionid", sid, domain=".instagram.com", path="/"
+                )
+                ds_user = sid.split(":", 1)[0]
+                if ds_user.isdigit():
+                    L.context._session.cookies.set(
+                        "ds_user_id", ds_user, domain=".instagram.com", path="/"
+                    )
             profile = instaloader.Profile.from_username(L.context, u)
             return {
                 "username": profile.username,
@@ -2113,6 +2169,112 @@ async def run_ignorant(phone: str) -> Dict[str, Any]:
         result_meta["error"] = f"ignorant timed out after {IGNORANT_TIMEOUT}s"
     except Exception as exc:
         result_meta["error"] = f"ignorant error: {exc}"
+    return result_meta
+
+
+def _valid_email(email: str) -> bool:
+    e = (email or "").strip()
+    if "@" not in e or " " in e:
+        return False
+    local, _, domain = e.partition("@")
+    return bool(local) and "." in domain and len(e) >= 6
+
+
+async def run_holehe(email: str) -> Dict[str, Any]:
+    """
+    Run Holehe email-registration checks (120+ sites including Instagram).
+
+    Does **not** send mail or otherwise notify the target address.
+    Same megadose module API as Ignorant (httpx + launch_module).
+    """
+    result_meta: Dict[str, Any] = {
+        "tool": "holehe",
+        "ok": False,
+        "error": None,
+        "warning": None,
+        "raw": {},
+        "accounts": [],
+        "entities": [],
+    }
+    addr = (email or "").strip()
+    if not _valid_email(addr):
+        result_meta["error"] = "invalid or empty email"
+        return result_meta
+    if not resolve_holehe():
+        result_meta["error"] = "holehe not installed"
+        return result_meta
+
+    local, _, domain = addr.partition("@")
+    log.info("Holehe email check local=%s domain=%s", _redact(local), domain)
+
+    try:
+        import httpx
+        from holehe.core import get_functions, import_submodules, launch_module
+    except ImportError as exc:
+        result_meta["error"] = f"holehe import failed: {exc}"
+        return result_meta
+
+    try:
+        modules = import_submodules("holehe.modules")
+        websites = get_functions(modules)
+        if not websites:
+            result_meta["error"] = "holehe: no modules discovered"
+            return result_meta
+
+        out: List[Dict[str, Any]] = []
+        timeout = httpx.Timeout(float(min(HOLEHE_TIMEOUT, 25)))
+
+        async def _run() -> None:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                await asyncio.gather(
+                    *[launch_module(mod, addr, client, out) for mod in websites]
+                )
+
+        await asyncio.wait_for(_run(), timeout=float(HOLEHE_TIMEOUT))
+
+        accounts, entities = parse_holehe_results(out, email=addr)
+        rate_limited = [
+            r for r in out
+            if isinstance(r, dict) and r.get("rateLimit")
+        ]
+        # Do not persist full email or recovery hints in raw
+        safe_hits = []
+        for r in out:
+            if not isinstance(r, dict):
+                continue
+            if not r.get("exists") and not r.get("rateLimit"):
+                continue
+            safe_hits.append({
+                "name": r.get("name"),
+                "exists": bool(r.get("exists")),
+                "rateLimit": bool(r.get("rateLimit")),
+                "has_emailrecovery": bool(r.get("emailrecovery")),
+                "has_phoneNumber": bool(r.get("phoneNumber")),
+            })
+        result_meta.update({
+            "ok": True,
+            "raw": {
+                "hits": safe_hits,
+                "checked": len(out),
+                "domain": domain,
+            },
+            "accounts": accounts,
+            "entities": entities,
+        })
+        if rate_limited and not accounts:
+            result_meta["warning"] = (
+                f"holehe rate-limited on: "
+                f"{', '.join(str(r.get('name')) for r in rate_limited[:10])}"
+            )
+        elif rate_limited:
+            result_meta["warning"] = (
+                f"partial rate-limit on {len(rate_limited)} sites"
+            )
+        return result_meta
+    except asyncio.TimeoutError:
+        result_meta["error"] = f"holehe timed out after {HOLEHE_TIMEOUT}s"
+    except Exception as exc:
+        result_meta["error"] = f"holehe error: {exc}"
     return result_meta
 
 
@@ -2398,6 +2560,13 @@ async def execute_scan_v2(
                 else:
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No phone number for ignorant"
+            elif engine == "holehe":
+                if email and str(email).strip():
+                    tasks.append(run_holehe(str(email).strip()))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No email for holehe"
             elif engine == "toutatis":
                 if mg_users:
                     tasks.append(run_toutatis(mg_users))

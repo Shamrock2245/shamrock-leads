@@ -2,7 +2,7 @@
 Pydantic Models — OSINT Intelligence Module v2
 Admin-only. All access is audited. PII must not appear in logs.
 
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe · Toutatis
 """
 from __future__ import annotations
 
@@ -26,8 +26,9 @@ class EngineType(str, Enum):
     sherlock = "sherlock"
     blackbird = "blackbird"
     spiderfoot = "spiderfoot"
-    snoop = "snoop"
+    snoop = "snoop"  # legacy enum only — never installed, not a runnable engine
     ignorant = "ignorant"
+    holehe = "holehe"
     toutatis = "toutatis"
     instaloader = "instaloader"
     exiftool = "exiftool"
@@ -93,7 +94,7 @@ class OSINTScanRequest(BaseModel):
         ),
     )
     email: Optional[str] = Field(
-        None, description="Known email address (for Blackbird, SpiderFoot)"
+        None, description="Known email address (for Holehe, Blackbird, SpiderFoot)"
     )
     phone: Optional[str] = Field(
         None,
@@ -106,7 +107,7 @@ class OSINTScanRequest(BaseModel):
         default_factory=lambda: [EngineType.maigret, EngineType.tookie, EngineType.sherlock],
         description=(
             "Engines to run. Default: [maigret, tookie, sherlock]. "
-            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, toutatis, instaloader, exiftool"
+            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, toutatis, instaloader, exiftool"
         ),
     )
 
@@ -163,11 +164,11 @@ class SocialAccount(BaseModel):
 
 
 class GeoPoint(BaseModel):
-    """A geo-coordinate or location finding (e.g. from Snoop geo plugins or bio parsing)."""
+    """A geo-coordinate or location finding (EXIF / bio / profile location)."""
 
     latitude: float
     longitude: float
-    source: str = Field("snoop", description="Source tool or site")
+    source: str = Field("osint", description="Source tool or site")
     label: Optional[str] = Field(None, description="Location name or site title")
     context: Optional[str] = Field(None, description="Context snippet (e.g. bio, post)")
 

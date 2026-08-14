@@ -48,10 +48,10 @@ _ENGINE_KEYS = (
     "maigret",
     "tookie",
     "sherlock",
-    "snoop",
     "blackbird",
     "spiderfoot",
     "ignorant",
+    "holehe",
     "toutatis",
     "instaloader",
     "exiftool",
@@ -217,6 +217,8 @@ class OSINTService:
                     engines_list.append(eng)
             if req.phone and str(req.phone).strip() and "ignorant" not in engines_list:
                 engines_list.append("ignorant")
+            if req.email and "@" in str(req.email) and "holehe" not in engines_list:
+                engines_list.append("holehe")
             if usernames and "toutatis" not in engines_list:
                 engines_list.append("toutatis")
 
@@ -224,6 +226,10 @@ class OSINTService:
         # cover API/automation callers that only pass engines=[maigret]).
         if req.phone and str(req.phone).strip() and "ignorant" not in engines_list:
             engines_list.append("ignorant")
+
+        # Email present → Holehe (email analog of Ignorant)
+        if req.email and "@" in str(req.email) and "holehe" not in engines_list:
+            engines_list.append("holehe")
 
         # Build progress dict
         progress = {}

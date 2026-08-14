@@ -6,6 +6,8 @@ maigret>=0.6.0
 sherlock-project>=0.15.0
 # Phone registration checks (Instagram / Snapchat / Amazon) — does not alert target
 ignorant>=1.2
+# Email registration checks (120+ sites incl. Instagram) — does not alert target
+holehe>=1.61
 trio>=0.22.0
 termcolor>=2.0.0
 beautifulsoup4>=4.12.0

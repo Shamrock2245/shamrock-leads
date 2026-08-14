@@ -58,7 +58,7 @@ class ScanRequestV2(BaseModel):
     engines: List[str] = Field(
         default_factory=lambda: ["maigret", "tookie", "sherlock"],
         description=(
-            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, toutatis, instaloader, exiftool"
+            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, toutatis, instaloader, exiftool"
         ),
     )
     second_opinion: bool = False
@@ -140,10 +140,10 @@ async def scan_v2(
         "blackbird",
         "spiderfoot",
         "ignorant",
+        "holehe",
         "toutatis",
         "instaloader",
         "exiftool",
-        "snoop",
     }
     engines = [e for e in body.engines if e in valid_engines]
     if not engines:

@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-14 (OSINT)
+
+### Added
+- **Holehe** OSINT chip — email → registered accounts on 120+ sites (same pattern as Ignorant for phones). Auto-selects when an email is entered. Single-engine test accepts `user@domain`. Does not notify the target.
+
+### Changed
+- Removed unused **Snoop** from the OSINT matrix, worker probe, and valid-engine list (package was never installed). Not adding OpenOSINT / bbot / social-analyzer — they overlap Maigret/Sherlock or are too heavy for this VPS.
+
 ## [Unreleased] — 2026-08-14 (disk)
 
 ### Changed

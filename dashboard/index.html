@@ -5680,7 +5680,7 @@
           <div class="osint-form-row">
             <div class="osint-field" id="osintEmailField">
               <label>Email Address</label>
-              <input type="email" id="osintEmail" placeholder="subject@email.com" />
+              <input type="email" id="osintEmail" placeholder="subject@email.com" title="Holehe auto-selects: checks which sites this email is registered on" />
             </div>
             <div class="osint-field" id="osintPhoneField">
               <label>Phone Number</label>
@@ -5698,7 +5698,8 @@
             <div class="osint-engine-chip active" data-engine="sherlock"><span class="chip-dot"></span>Sherlock</div>
             <div class="osint-engine-chip" data-engine="blackbird"><span class="chip-dot"></span>Blackbird</div>
             <div class="osint-engine-chip" data-engine="spiderfoot"><span class="chip-dot"></span>SpiderFoot</div>
-            <div class="osint-engine-chip" data-engine="ignorant" title="Phone → Instagram / Snapchat / Amazon (does not message target)"><span class="chip-dot"></span>Ignorant</div>
+            <div class="osint-engine-chip" data-engine="ignorant" title="Phone → Instagram / Snapchat / Amazon registration (does not message target)"><span class="chip-dot"></span>Ignorant</div>
+            <div class="osint-engine-chip" data-engine="holehe" title="Email → registered accounts on 120+ sites including Instagram (does not notify target)"><span class="chip-dot"></span>Holehe</div>
             <div class="osint-engine-chip" data-engine="toutatis" title="Instagram username → email/phone (requires INSTAGRAM_SESSION_ID)"><span class="chip-dot"></span>Toutatis</div>
             <div class="osint-engine-chip" data-engine="instaloader" title="Instagram username → bio text, HD avatar & metrics"><span class="chip-dot"></span>Instaloader</div>
             <div class="osint-engine-chip" data-engine="exiftool" title="Image URL → EXIF metadata, camera fingerprinting & GPS reverse geocoding"><span class="chip-dot"></span>ExifTool</div>
@@ -5780,6 +5781,7 @@
               <option value="blackbird">🐦 Blackbird</option>
               <option value="spiderfoot">🕷️ SpiderFoot</option>
               <option value="ignorant">📱 Ignorant (Phone Check)</option>
+              <option value="holehe">✉️ Holehe (Email Check)</option>
               <option value="toutatis">📸 Toutatis (IG PII)</option>
               <option value="instaloader">🖼️ Instaloader</option>
               <option value="exiftool">🔍 ExifTool</option>
@@ -6210,7 +6212,7 @@
 <script defer src="/sl-social.js?v=2"></script>
 <script defer src="/sl-enrichment.js?v=1"></script>
 <script defer src="/sl-tasks.js?v=1"></script>
-<script defer src="/sl-osint.js?v=4"></script>
+<script defer src="/sl-osint.js?v=6"></script>
 <script defer src="/sl-palantir.js?v=3"></script>
 <script defer src="/sl-alpr.js?v=2"></script>
 <script defer src="/sl-paperwork.js?v=3"></script>

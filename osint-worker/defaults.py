@@ -2,7 +2,7 @@
 OSINT scan policy defaults — ShamrockLeads osint-worker v2
 ===========================================================
 Noise control and underwriting-friendly defaults.
-Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant
+Engines: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ SHERLOCK_TIMEOUT = int(os.getenv("OSINT_SHERLOCK_TIMEOUT", "120"))
 BLACKBIRD_TIMEOUT = int(os.getenv("OSINT_BLACKBIRD_TIMEOUT", "150"))
 SPIDERFOOT_TIMEOUT = int(os.getenv("OSINT_SPIDERFOOT_TIMEOUT", "300"))
 IGNORANT_TIMEOUT = int(os.getenv("OSINT_IGNORANT_TIMEOUT", "45"))
+HOLEHE_TIMEOUT = int(os.getenv("OSINT_HOLEHE_TIMEOUT", "90"))
 TOUTATIS_TIMEOUT = int(os.getenv("OSINT_TOUTATIS_TIMEOUT", "60"))
 MAX_TOUTATIS_USERNAMES = int(os.getenv("OSINT_MAX_TOUTATIS_USERNAMES", "3"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
@@ -216,6 +217,26 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
                 "(Ignorant passive check — does not message the target.)"
             ),
             "source": "ignorant",
+        })
+
+    # Email-linked accounts (Holehe): which sites this address is registered on
+    holehe_hits = [
+        a for a in accounts
+        if str(a.get("source") or "") == "holehe"
+        and (a.get("profile_data") or {}).get("email_registered")
+    ]
+    if holehe_hits:
+        names = sorted({str(a.get("platform") or "") for a in holehe_hits if a.get("platform")})
+        score += min(14, 3 * len(holehe_hits))
+        signals.append({
+            "signal_type": "email_linked_accounts",
+            "severity": "medium" if len(holehe_hits) < 8 else "high",
+            "detail": (
+                f"Email appears registered on {len(holehe_hits)} site(s): "
+                f"{', '.join(names[:12])}{'…' if len(names) > 12 else ''}. "
+                "(Holehe passive check — does not notify the target.)"
+            ),
+            "source": "holehe",
         })
 
     # Instagram PII enrichment (Toutatis): public/obfuscated email or phone on profile

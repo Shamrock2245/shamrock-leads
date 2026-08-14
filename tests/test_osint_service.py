@@ -13,10 +13,12 @@ sys.path.insert(0, str(ROOT / "osint-worker"))
 
 from runners import (  # noqa: E402
     parse_blackbird_json,
+    parse_holehe_results,
     parse_ignorant_results,
     parse_maigret_json,
     parse_phone_for_ignorant,
     parse_toutatis_user,
+    run_holehe,
 )
 from defaults import score_signals  # noqa: E402
 
@@ -175,13 +177,65 @@ def test_probe_tools_structure():
     assert "maigret" in probe
     assert "blackbird" in probe
     assert "ignorant" in probe
+    assert "holehe" in probe
     assert "toutatis" in probe
     assert "ready_for_scans" in probe
     assert "defaults" in probe
     assert probe["defaults"].get("ignorant_on_phone") is True
+    assert probe["defaults"].get("holehe_on_email") is True
     assert probe["defaults"].get("toutatis_on_username") is True
     # Without session cookie, package may install but not be runnable
     assert "session_configured" in probe["toutatis"]
+
+
+def test_parse_holehe_results_only_exists():
+    raw = [
+        {"name": "instagram", "domain": "instagram.com", "exists": True, "rateLimit": False},
+        {"name": "twitter", "domain": "twitter.com", "exists": False, "rateLimit": False},
+        {"name": "snapchat", "domain": "snapchat.com", "exists": False, "rateLimit": True},
+    ]
+    accounts, entities = parse_holehe_results(raw, email="jdoe@example.com")
+    assert len(accounts) == 1
+    assert accounts[0]["platform"] == "Instagram"
+    assert accounts[0]["source"] == "holehe"
+    assert accounts[0]["profile_data"]["email_registered"] is True
+    assert entities and entities[0]["type"] == "email"
+    assert "jdoe@" not in (entities[0].get("value") or "")
+
+
+def test_score_signals_holehe_email():
+    accounts = [
+        {"platform": "Instagram", "source": "holehe", "profile_data": {"email_registered": True}},
+        {"platform": "Twitter", "source": "holehe", "profile_data": {"email_registered": True}},
+    ]
+    score, signals = score_signals(accounts)
+    assert score >= 3
+    assert any(s["signal_type"] == "email_linked_accounts" for s in signals)
+
+
+@pytest.mark.asyncio
+async def test_run_holehe_invalid_email():
+    result = await run_holehe("not-an-email")
+    assert result["ok"] is False
+    assert "email" in (result.get("error") or "").lower()
+
+
+def test_instagram_session_id_url_decodes(monkeypatch):
+    from runners import get_instagram_session_id
+
+    monkeypatch.setenv(
+        "INSTAGRAM_SESSION_ID",
+        "12345%3Aabc%3A9%3Axyz",
+    )
+    monkeypatch.delenv("TOUTATIS_SESSION_ID", raising=False)
+    assert get_instagram_session_id() == "12345:abc:9:xyz"
+
+
+def test_instagram_session_id_strips_quotes(monkeypatch):
+    from runners import get_instagram_session_id
+
+    monkeypatch.setenv("INSTAGRAM_SESSION_ID", "'12345:abc:9:xyz'")
+    assert get_instagram_session_id() == "12345:abc:9:xyz"
 
 
 @pytest.mark.asyncio

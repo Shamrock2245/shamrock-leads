@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
    ShamrockLeads — OSINT Intelligence Workstation v2
    Admin-Only · Multi-Engine Platform
-   Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Toutatis
+   Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe · Toutatis
    ═══════════════════════════════════════════════════════════════════ */
 /* global SL */
 (function () {
@@ -91,6 +91,11 @@
       phoneInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
       phoneInput.addEventListener('change', () => _updateAdaptiveFields());
     }
+    const emailInput = $('osintEmail');
+    if (emailInput) {
+      emailInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
+      emailInput.addEventListener('change', () => _updateAdaptiveFields());
+    }
     const userInput = $('osintUsernames');
     if (userInput) {
       userInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
@@ -144,13 +149,15 @@
     const authOk = _toolStatus.worker_auth_ok === true;
     const ready = _toolStatus.ready_for_scans === true;
     const trape = _toolStatus.trape || {};
-    const engines = ['maigret', 'tookie', 'sherlock', 'snoop', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'toutatis', 'instaloader', 'exiftool'];
     const live = engines.filter(id => _engineAvailable(_toolStatus[id]));
     const pending = [];
     if ((_toolStatus.toutatis || {}).package_installed && !_engineAvailable(_toolStatus.toutatis)) {
       pending.push('Toutatis needs INSTAGRAM_SESSION_ID');
     }
-    if (!_engineAvailable(_toolStatus.snoop)) pending.push('Snoop not installed (optional)');
+    if ((_toolStatus.holehe || {}).error && !_engineAvailable(_toolStatus.holehe)) {
+      pending.push('Holehe not installed');
+    }
 
     let cls = 'ok';
     let text = `Worker connected · ${live.length} engines live`;
@@ -187,7 +194,7 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'toutatis', 'instaloader', 'exiftool'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = _engineAvailable(info);
@@ -223,10 +230,10 @@
       { id: 'blackbird', name: '🐦 Blackbird', rank: 'Email/User', desc: 'WhatsMyName data-based fast username & email footprinting engine' },
       { id: 'spiderfoot', name: '🕷️ SpiderFoot', rank: 'OSINT Suite', desc: 'Multi-source entity correlation & OSINT footprinting' },
       { id: 'ignorant', name: '📱 Ignorant', rank: 'Phone Check', desc: 'Passive phone registration checks on Instagram, Snapchat, Amazon (no target SMS)' },
+      { id: 'holehe', name: '✉️ Holehe', rank: 'Email Check', desc: 'Passive email registration across 120+ sites including Instagram (no target email)' },
       { id: 'toutatis', name: '📸 Toutatis', rank: 'IG Enrichment', desc: 'Instagram handle → recovers public & obfuscated email, phone number & WhatsApp links' },
       { id: 'instaloader', name: '🖼️ Instaloader', rank: 'IG Media', desc: 'Extracts Instagram bio text, HD avatars, external profile links & follower counts' },
       { id: 'exiftool', name: '🔍 ExifTool', rank: 'EXIF / GPS', desc: 'Extracts camera fingerprints, timestamp, and GPS coordinates from evidence photos' },
-      { id: 'snoop', name: '🐕 Snoop', rank: 'Optional', desc: 'Username search (optional extra engine — not required for scans)' },
       { id: 'trape', name: '🎯 Trape Lure', rank: 'Skip-Trace', desc: 'Native dashboard /track/{session} lure captures IP/UA then redirects to the court/portal page' },
     ];
 
@@ -283,6 +290,12 @@
         _selectedEngines.add('ignorant');
         _updateEngineChips();
       }
+    }
+
+    const email = ($('osintEmail')?.value || '').trim();
+    if (email && email.includes('@') && !_selectedEngines.has('holehe')) {
+      _selectedEngines.add('holehe');
+      _updateEngineChips();
     }
 
     // Auto-suggest Toutatis when usernames look like handles and session is ready
@@ -945,16 +958,17 @@
     }
 
     try {
-      const isPhone = target.replace(/\D/g, '').length >= 10;
+      const isEmail = target.includes('@') && !target.startsWith('http');
+      const isPhone = !isEmail && target.replace(/\D/g, '').length >= 10;
       const isUrl = target.startsWith('http://') || target.startsWith('https://');
 
       const payload = {
         subject_type: 'defendant',
         subject_id: 'test_' + Date.now(),
         full_name: 'Test Subject',
-        usernames: (!isPhone && !isUrl) ? [target] : null,
-        phone: isPhone ? target : null,
-        email: isUrl ? target : null,
+        usernames: (!isPhone && !isUrl && !isEmail) ? [target] : null,
+        phone: (isPhone || engine === 'ignorant') ? target : null,
+        email: (isEmail || isUrl || engine === 'holehe' || engine === 'exiftool') ? target : null,
         engines: [engine],
         deep_scan: false,
         notes: `Diagnostic test for ${engine}`,
