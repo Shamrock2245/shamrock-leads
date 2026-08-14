@@ -535,6 +535,7 @@ REGISTERED_COUNTIES = sorted([
     "Cullman (AL)",
     "DeKalb (AL)",
     "Jackson (AL)",
+    "Lee (AL)",
     # ── Connecticut (wave-1 + wave-2 + wave-3) ──
     "Bridgeport (CT)",
     "CT DOC (CT)",

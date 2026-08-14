@@ -66,11 +66,11 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
-| **AL** | **13** | `scrapers/counties_al/` | + Houston, Morgan, Etowah, Cullman, DeKalb, Jackson + Baldwin, Tuscaloosa, Shelby, Montgomery |
+| **AL** | **14** | `scrapers/counties_al/` | + Lee (official public roster locally validated; state-scoped separately from Lee in GA/NC/SC) |
 | **LA** | **10** | `scrapers/counties_la/` | + Ascension, Livingston + Caddo, Calcasieu, Ouachita, St. Tammany |
 | **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
 | **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
-| **Total** | **352** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **353** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
@@ -82,7 +82,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **352** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Randall TX code + two-page local source smoke passed; Putnam TN remains deployed; per-scraper Mongo/Slack evidence still pending |
+| **353** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee AL and Randall TX code + two-page local source smokes passed; per-scraper Mongo/Slack evidence remains pending |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |

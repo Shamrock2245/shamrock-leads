@@ -3,7 +3,7 @@
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
 > Last updated: 2026-08-14
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT = **352** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 14 AL · 10 LA · 9 MS · 6 CT = **353** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
 
 ## Why this order
 
@@ -15,7 +15,7 @@
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **10 LA** + **9 MS** registered; harden + expand 🔄  
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
-9. **AL** — **13 registered** (Jefferson, Madison, Mobile, Baldwin, Tuscaloosa, Shelby, Montgomery, Houston, Morgan, Etowah, Cullman, DeKalb, Jackson) 🔄  
+9. **AL** — **14 registered** (including Lee’s validated official public roster; per-source production telemetry remains required) 🔄
 
 ## Shared platform bases (leverage first)
 

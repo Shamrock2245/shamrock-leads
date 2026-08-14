@@ -12,14 +12,14 @@
 
 ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 352 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT]`
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 353 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 14 AL · 10 LA · 9 MS · 6 CT]`
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
 6. **Automates First Appearance Bond Filling** 24/7 background worker (`FirstAppearanceWatcher`) re-checking unset/$0 bonds across target active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto) every 30 mins `[IMPLEMENTED]`
 7. **Supports Per-Charge Bond Breakdown** structured `charge_details` data model + UI modal editing + `POST /api/leads/update-charge-bonds` auto-rescoring `[IMPLEMENTED]`
-8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and **352** county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
+8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and **353** county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
 9. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
 10. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 11. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
