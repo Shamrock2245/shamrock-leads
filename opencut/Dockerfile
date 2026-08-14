@@ -21,6 +21,12 @@ ARG FREESOUND_API_KEY
 
 RUN git clone --depth 1 --branch "${OPENCUT_REF}" "${OPENCUT_REPO}" .
 
+# Shamrock overlay: bundled SFX, extra effects, catalog API.
+# Lives in shamrock-leads/opencut/overlay so a rebuild does not wipe custom work
+# when upstream classic is still the git source.
+COPY overlay/ /tmp/shamrock-overlay/
+RUN if [ -d /tmp/shamrock-overlay ]; then cp -a /tmp/shamrock-overlay/. /app/; fi
+
 # Archived opencut-classic main fails `next build` (missing isShortcutKey).
 # Patch the type guard and skip leftover TS errors so the standalone image builds.
 RUN python3 - <<'PY'
