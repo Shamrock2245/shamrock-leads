@@ -1,27 +1,28 @@
 /**
- * SLBondIntelligence — Multi-State Bond Analytics Module
- * Connects to: /api/bond-intelligence, /api/arrests/recent, /api/arrests/stats/multi-state
- * Features: State KPI cards, bond distribution chart, top charges table,
- *           county leaderboard, daily trend chart, live recent arrests feed
+ * Bond Intelligence — desk: premium, writable custody, counties to call.
  */
 const SLBondIntel = (() => {
   let _charts = {};
   let _data = null;
   let _state = '';
+  let _county = '';
   let _days = 30;
   let _refreshTimer = null;
   let _initialized = false;
 
   const STATE_META = {
-    FL: { name: 'Florida',        flag: '🌴', color: '#f59e0b' },
-    GA: { name: 'Georgia',        flag: '🍑', color: '#10b981' },
-    SC: { name: 'South Carolina', flag: '🌙', color: '#3b82f6' },
-    NC: { name: 'North Carolina', flag: '🦅', color: '#8b5cf6' },
-    TN: { name: 'Tennessee',      flag: '🎸', color: '#ef4444' },
-    TX: { name: 'Texas',          flag: '⭐', color: '#eab308' },
-    LA: { name: 'Louisiana',      flag: '🎷', color: '#ec4899' },
+    FL: { name: 'Florida', color: '#f59e0b' },
+    GA: { name: 'Georgia', color: '#34d399' },
+    SC: { name: 'South Carolina', color: '#60a5fa' },
+    NC: { name: 'North Carolina', color: '#a78bfa' },
+    TN: { name: 'Tennessee', color: '#f87171' },
+    TX: { name: 'Texas', color: '#facc15' },
+    LA: { name: 'Louisiana', color: '#f472b6' },
+    AL: { name: 'Alabama', color: '#fb923c' },
+    MS: { name: 'Mississippi', color: '#2dd4bf' },
+    CT: { name: 'Connecticut', color: '#38bdf8' },
   };
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA'];
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'AL', 'MS', 'CT'];
 
   function _fmt$(n) {
     if (!n || n === 0) return '—';
@@ -31,154 +32,240 @@ const SLBondIntel = (() => {
   }
   function _fmtN(n) { return (n == null) ? '—' : Number(n).toLocaleString(); }
   function _pct(a, b) { return b ? Math.round((a / b) * 100) : 0; }
+  function _esc(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+  function _prem(bond) {
+    if (window.SLPremium && SLPremium.statutoryPremium) {
+      return SLPremium.statutoryPremium(bond, { chargeCount: 1 });
+    }
+    const b = parseFloat(bond) || 0;
+    return b > 0 ? Math.round(Math.max(100, b * 0.10)) : 0;
+  }
 
   async function load() {
     const container = document.getElementById('bondIntelContainer');
     if (!container) return;
-
     try {
+      const q = new URLSearchParams({ days: String(_days) });
+      if (_state) q.set('state', _state);
+      if (_county) q.set('county', _county);
       const [intelRes, multiRes] = await Promise.all([
-        fetch(`/api/bond-intelligence?days=${_days}${_state ? '&state=' + _state : ''}`, { credentials: 'same-origin' }),
+        fetch(`/api/bond-intelligence?${q}`, { credentials: 'same-origin' }),
         fetch('/api/arrests/stats/multi-state', { credentials: 'same-origin' }),
       ]);
       if (intelRes.status === 401 || multiRes.status === 401) {
-        // Global fetch wrapper redirects to /login; keep a clear in-tab message.
         throw new Error('session expired (401) — re-enter your dashboard PIN');
       }
       if (!intelRes.ok || !multiRes.ok) {
-        const errText = !intelRes.ok
-          ? `bond-intelligence: ${intelRes.status} ${intelRes.statusText}`
-          : `multi-state: ${multiRes.status} ${multiRes.statusText}`;
-        throw new Error(errText);
+        throw new Error(!intelRes.ok
+          ? `bond-intelligence: ${intelRes.status}`
+          : `multi-state: ${multiRes.status}`);
       }
       const intel = await intelRes.json();
       const multi = await multiRes.json();
-      if (intel.error || multi.error) {
-        throw new Error(intel.error || multi.error);
-      }
+      if (intel.error || multi.error) throw new Error(intel.error || multi.error);
       _data = { intel, multi };
       _render(intel, multi);
+      await _loadQueue();
       if (!_initialized) { _initialized = true; _startAutoRefresh(); }
     } catch (err) {
       console.error('[SLBondIntel] load error:', err);
-      if (container) container.innerHTML = `<div style="color:var(--danger);padding:24px;text-align:center">Failed to load bond intelligence: ${err.message}<br><a href="/login" style="color:var(--accent);margin-top:12px;display:inline-block">Sign in again →</a></div>`;
+      const cmd = document.getElementById('biCommand');
+      if (cmd) {
+        cmd.innerHTML = `<div class="bi-empty">Failed to load: ${_esc(err.message)}</div>`;
+      }
     }
   }
 
   function _render(intel, multi) {
-    _renderStateKPIs(multi);
-    _renderSummaryCards(intel.summary);
+    _renderCommand(intel.summary || {});
+    _renderStates(multi, intel.by_state || []);
+    _renderCounties(intel.by_county || []);
+    _renderCharges(intel.top_charges || []);
     _renderDistributionChart(intel.distribution);
     _renderTrendChart(intel.trend);
-    _renderCountyLeaderboard(intel.by_county);
-    _renderTopCharges(intel.top_charges);
-    _loadRecentFeed();
   }
 
-  function _renderStateKPIs(multi) {
-    const el = document.getElementById('bondStateKPIs');
+  function _renderCommand(s) {
+    const el = document.getElementById('biCommand');
+    if (!el) return;
+    const windowLabel = _days === 7 ? 'this week' : _days === 90 ? '90 days' : '30 days';
+    el.innerHTML = `
+      <article class="bi-stat accent">
+        <div class="lbl">Est. premium</div>
+        <div class="val">${_fmt$(s.est_premium)}</div>
+        <div class="hint">$100 min / 10% over $1k · ${windowLabel}</div>
+      </article>
+      <article class="bi-stat warn">
+        <div class="lbl">Writable now</div>
+        <div class="val">${_fmtN(s.writable)}</div>
+        <div class="hint">In custody with a bond set</div>
+      </article>
+      <article class="bi-stat">
+        <div class="lbl">Hot leads</div>
+        <div class="val">${_fmtN(s.hot_leads)}</div>
+        <div class="hint">Score 70+ in this window</div>
+      </article>
+      <article class="bi-stat">
+        <div class="lbl">Capture</div>
+        <div class="val">${s.bond_capture_rate || 0}%</div>
+        <div class="hint">${_fmtN(s.with_bond)} of ${_fmtN(s.total_arrests)} have a bond</div>
+      </article>`;
+  }
+
+  function _renderStates(multi, intelStates) {
+    const el = document.getElementById('biStateMap');
     if (!el) return;
     const byState = {};
     (multi.by_state || []).forEach(s => { byState[s.state] = s; });
-    const totals = multi.totals || {};
-
-    el.innerHTML = `
-      <!-- Grand Total Card -->
-      <div class="bond-kpi-card bond-kpi-grand">
-        <div class="bond-kpi-label">ALL STATES</div>
-        <div class="bond-kpi-value">${_fmtN(totals.all_time)}</div>
-        <div class="bond-kpi-sub">Total Arrests</div>
-        <div class="bond-kpi-meta">
-          <span>${_fmtN(totals.last_24h)} today</span>
-          <span style="color:var(--accent)">${_fmt$(totals.total_bond_value)} bond value</span>
-        </div>
-      </div>
-      ${STATE_ORDER.map(code => {
-        const m = STATE_META[code];
-        const d = byState[code] || {};
-        return `
-          <div class="bond-kpi-card" style="border-top:3px solid ${m.color};cursor:pointer" onclick="SLBondIntel.setState('${code}')" title="Filter to ${m.name}">
-            <div class="bond-kpi-label">${m.flag} ${m.name}</div>
-            <div class="bond-kpi-value" style="color:${m.color}">${_fmtN(d.total || 0)}</div>
-            <div class="bond-kpi-sub">Total Arrests</div>
-            <div class="bond-kpi-meta">
-              <span>${_fmtN(d.last_24h || 0)} today</span>
-              <span>${_fmt$(d.avg_bond || 0)} avg bond</span>
-            </div>
-            <div class="bond-kpi-meta" style="margin-top:4px">
-              <span style="color:#ef4444">🔥 ${_fmtN(d.hot_leads || 0)} hot</span>
-              <span style="color:${m.color}">${_fmt$(d.total_bond || 0)} total</span>
-            </div>
-          </div>`;
-      }).join('')}
-    `;
+    (intelStates || []).forEach(s => {
+      byState[s.state] = Object.assign({}, byState[s.state] || {}, s);
+    });
+    el.innerHTML = STATE_ORDER.map(code => {
+      const m = STATE_META[code];
+      const d = byState[code] || {};
+      const on = _state === code ? ' on' : '';
+      return `<button type="button" class="bi-state${on}" onclick="SLBondIntel.setState('${code}')">
+        <div class="nm">${m.name}</div>
+        <div class="bd">${_fmt$(d.est_premium || d.total_bond || 0)}</div>
+        <div class="sm">${_fmtN(d.last_24h || 0)} today · ${_fmtN(d.hot_leads || 0)} hot</div>
+      </button>`;
+    }).join('');
   }
 
-  function _renderSummaryCards(s) {
-    const el = document.getElementById('bondSummaryCards');
-    if (!el || !s) return;
-    const cards = [
-      { label: 'Total Bond Value', value: _fmt$(s.total_bond_value), icon: '💰', color: '#10b981' },
-      { label: 'Average Bond', value: _fmt$(s.avg_bond), icon: '📊', color: '#3b82f6' },
-      { label: 'Highest Bond', value: _fmt$(s.max_bond), icon: '🚨', color: '#ef4444' },
-      { label: 'In Custody', value: _fmtN(s.in_custody), icon: '🔒', color: '#f59e0b' },
-      { label: 'With Bond Set', value: _fmtN(s.with_bond), icon: '⚖️', color: '#8b5cf6' },
-      { label: 'Bond Capture Rate', value: `${s.bond_capture_rate}%`, icon: '🎯', color: '#06b6d4' },
-    ];
-    el.innerHTML = cards.map(c => `
-      <div class="bond-summary-card">
-        <div class="bond-summary-icon" style="color:${c.color}">${c.icon}</div>
-        <div class="bond-summary-value" style="color:${c.color}">${c.value}</div>
-        <div class="bond-summary-label">${c.label}</div>
-      </div>
-    `).join('');
+  function _renderCounties(counties) {
+    const el = document.getElementById('biCounties');
+    if (!el) return;
+    if (!counties.length) {
+      el.innerHTML = '<div class="bi-empty">No county volume in this window</div>';
+      return;
+    }
+    el.innerHTML = counties.slice(0, 8).map((c, i) => `
+      <div class="bi-county" onclick="SLBondIntel.setCounty('${_esc(c.county)}','${_esc(c.state)}')">
+        <span class="rk">${String(i + 1).padStart(2, '0')}</span>
+        <span><span class="cn">${_esc(c.county)}</span><br><span class="cs">${_esc(c.state)} · ${_fmtN(c.writable || c.with_bond)} writable</span></span>
+        <span class="pr">${_fmt$(c.est_premium || c.total_bond)}</span>
+      </div>`).join('');
+  }
+
+  function _renderCharges(charges) {
+    const el = document.getElementById('biCharges');
+    if (!el) return;
+    if (!charges.length) {
+      el.innerHTML = '<div class="bi-empty">No charge mix yet</div>';
+      return;
+    }
+    const max = charges[0]?.total_bond || 1;
+    el.innerHTML = charges.slice(0, 8).map(c => `
+      <div class="bi-charge">
+        <span title="${_esc(c.charge)}">${_esc((c.charge || '').slice(0, 42))}</span>
+        <span>${_fmt$(c.total_bond)}</span>
+        <div class="bar"><i style="width:${_pct(c.total_bond, max)}%"></i></div>
+      </div>`).join('');
+  }
+
+  async function _loadQueue() {
+    const el = document.getElementById('biWorkQueue');
+    if (!el) return;
+    const hotOnly = document.getElementById('biHotOnly')?.checked;
+    const min1k = document.getElementById('biMinBond1k')?.checked;
+    const q = new URLSearchParams({
+      limit: '40',
+      hours: '48',
+      min_bond: min1k ? '1000' : '1',
+      in_custody: 'true',
+    });
+    if (hotOnly) q.set('min_score', '70');
+    if (_state) q.set('state', _state);
+    if (_county) q.set('county', _county);
+    try {
+      const res = await fetch(`/api/arrests/recent?${q}`, { credentials: 'same-origin' });
+      const data = await res.json();
+      let arrests = data.arrests || [];
+      arrests.sort((a, b) => {
+        const s = (b.lead_score || 0) - (a.lead_score || 0);
+        if (s) return s;
+        return (b.bond_amount || 0) - (a.bond_amount || 0);
+      });
+      arrests = arrests.slice(0, 18);
+      if (!arrests.length) {
+        el.innerHTML = '<div class="bi-empty">No in-custody bonded arrests in the last 48 hours for this filter.</div>';
+        return;
+      }
+      el.innerHTML = arrests.map(a => {
+        const bond = parseFloat(a.bond_amount) || 0;
+        const prem = _prem(bond);
+        const score = a.lead_score || 0;
+        const tier = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold';
+        const charges = Array.isArray(a.charges) ? a.charges.slice(0, 2).join(' · ') : (a.charges || '');
+        const bk = String(a.booking_number || '');
+        const name = a.full_name || 'Unknown';
+        const county = a.county || '';
+        const st = a.state || '';
+        return `<article class="bi-row" data-bk="${_esc(bk)}">
+          <div>
+            <div class="who">${_esc(name)} <span class="bi-chip ${tier}">${score}</span></div>
+            <div class="meta">${_esc(county)}${st ? ', ' + _esc(st) : ''} · ${_esc(charges).slice(0, 72)}</div>
+          </div>
+          <div class="money">
+            <div class="bond">${_fmt$(bond)}</div>
+            <div class="prem">${_fmt$(prem)} premium</div>
+          </div>
+          <div class="act">
+            <button type="button" class="bi-btn" data-write="1"
+              data-name="${_esc(name)}" data-bond="${bond}" data-county="${_esc(county)}" data-bk="${_esc(bk)}">Write</button>
+          </div>
+        </article>`;
+      }).join('');
+      el.querySelectorAll('.bi-row').forEach(row => {
+        row.addEventListener('click', () => openLead(row.dataset.bk));
+      });
+      el.querySelectorAll('[data-write]').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          writeBond(btn.dataset.name, btn.dataset.bond, btn.dataset.county, btn.dataset.bk);
+        });
+      });
+    } catch (err) {
+      el.innerHTML = `<div class="bi-empty">Queue failed: ${_esc(err.message)}</div>`;
+    }
   }
 
   function _renderDistributionChart(distribution) {
     const ctx = document.getElementById('bondDistChart');
-    if (!ctx || !distribution || !distribution.length) return;
-    if (_charts.dist) { _charts.dist.destroy(); }
-    const labels = distribution.map(d => d.range);
-    const counts = distribution.map(d => d.count);
-    const totals = distribution.map(d => d.total);
+    if (!ctx || typeof ApexCharts === 'undefined') return;
+    if (!distribution || !distribution.length) { ctx.innerHTML = ''; return; }
+    if (_charts.dist) _charts.dist.destroy();
     _charts.dist = new ApexCharts(ctx, {
-      chart: { type: 'bar', height: 260, background: 'transparent', toolbar: { show: false } },
-      series: [
-        { name: 'Arrests', data: counts },
-        { name: 'Bond Value ($)', data: totals.map(t => Math.round(t)) },
-      ],
-      xaxis: { categories: labels, labels: { style: { colors: '#9ca3af', fontSize: '11px' }, rotate: -30 } },
-      yaxis: [
-        { title: { text: 'Arrests', style: { color: '#9ca3af' } }, labels: { style: { colors: '#9ca3af' } } },
-        { opposite: true, title: { text: 'Bond Value', style: { color: '#9ca3af' } }, labels: { style: { colors: '#9ca3af' }, formatter: v => _fmt$(v) } },
-      ],
-      colors: ['#3b82f6', '#10b981'],
-      plotOptions: { bar: { borderRadius: 4, columnWidth: '60%' } },
+      chart: { type: 'bar', height: 220, background: 'transparent', toolbar: { show: false } },
+      series: [{ name: 'Arrests', data: distribution.map(d => d.count) }],
+      xaxis: { categories: distribution.map(d => d.range), labels: { style: { colors: '#94a3b8', fontSize: '10px' }, rotate: -28 } },
+      yaxis: { labels: { style: { colors: '#94a3b8' } } },
+      colors: ['#d4af37'],
+      plotOptions: { bar: { borderRadius: 3, columnWidth: '55%' } },
       dataLabels: { enabled: false },
       grid: { borderColor: '#1f2937' },
       theme: { mode: 'dark' },
-      tooltip: { theme: 'dark', y: [{ formatter: v => _fmtN(v) }, { formatter: v => _fmt$(v) }] },
+      tooltip: { theme: 'dark' },
     });
     _charts.dist.render();
   }
 
   function _renderTrendChart(trend) {
     const ctx = document.getElementById('bondTrendChart');
-    if (!ctx || !trend || !trend.length) return;
-    if (_charts.trend) { _charts.trend.destroy(); }
+    if (!ctx || typeof ApexCharts === 'undefined') return;
+    if (!trend || !trend.length) { ctx.innerHTML = ''; return; }
+    if (_charts.trend) _charts.trend.destroy();
     _charts.trend = new ApexCharts(ctx, {
-      chart: { type: 'area', height: 220, background: 'transparent', toolbar: { show: false }, sparkline: { enabled: false } },
-      series: [
-        { name: 'Arrests', data: trend.map(t => ({ x: t.date, y: t.arrests })) },
-        { name: 'Avg Bond', data: trend.map(t => ({ x: t.date, y: Math.round(t.avg_bond || 0) })) },
-      ],
-      xaxis: { type: 'datetime', labels: { style: { colors: '#9ca3af', fontSize: '11px' } } },
-      yaxis: [
-        { labels: { style: { colors: '#9ca3af' } } },
-        { opposite: true, labels: { style: { colors: '#9ca3af' }, formatter: v => _fmt$(v) } },
-      ],
-      colors: ['#3b82f6', '#f59e0b'],
-      fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05 } },
+      chart: { type: 'area', height: 220, background: 'transparent', toolbar: { show: false } },
+      series: [{ name: 'Arrests', data: trend.map(t => ({ x: t.date, y: t.arrests })) }],
+      xaxis: { type: 'datetime', labels: { style: { colors: '#94a3b8', fontSize: '10px' } } },
+      yaxis: { labels: { style: { colors: '#94a3b8' } } },
+      colors: ['#34d399'],
+      fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.35, opacityTo: 0.04 } },
       stroke: { width: 2, curve: 'smooth' },
       grid: { borderColor: '#1f2937' },
       theme: { mode: 'dark' },
@@ -187,111 +274,42 @@ const SLBondIntel = (() => {
     _charts.trend.render();
   }
 
-  function _renderCountyLeaderboard(counties) {
-    const el = document.getElementById('bondCountyLeaderboard');
-    if (!el || !counties) return;
-    el.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead>
-          <tr style="color:var(--text-muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em">
-            <th style="padding:6px 8px;text-align:left">#</th>
-            <th style="padding:6px 8px;text-align:left">County</th>
-            <th style="padding:6px 8px;text-align:left">State</th>
-            <th style="padding:6px 8px;text-align:right">Arrests</th>
-            <th style="padding:6px 8px;text-align:right">Total Bond</th>
-            <th style="padding:6px 8px;text-align:right">Avg Bond</th>
-            <th style="padding:6px 8px;text-align:right">Max Bond</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${counties.slice(0, 20).map((c, i) => {
-            const m = STATE_META[c.state] || { color: '#9ca3af', flag: '' };
-            return `
-              <tr style="border-top:1px solid var(--border);transition:background .15s" onmouseover="this.style.background='rgba(255,255,255,.03)'" onmouseout="this.style.background=''">
-                <td style="padding:8px;color:var(--text-muted)">${i + 1}</td>
-                <td style="padding:8px;font-weight:600">${c.county}</td>
-                <td style="padding:8px"><span style="color:${m.color}">${m.flag} ${c.state}</span></td>
-                <td style="padding:8px;text-align:right">${_fmtN(c.total_arrests)}</td>
-                <td style="padding:8px;text-align:right;color:#10b981;font-weight:600">${_fmt$(c.total_bond)}</td>
-                <td style="padding:8px;text-align:right;color:#3b82f6">${_fmt$(c.avg_bond)}</td>
-                <td style="padding:8px;text-align:right;color:#ef4444">${_fmt$(c.max_bond)}</td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    `;
-  }
-
-  function _renderTopCharges(charges) {
-    const el = document.getElementById('bondTopCharges');
-    if (!el || !charges) return;
-    const max = charges[0]?.total_bond || 1;
-    el.innerHTML = charges.slice(0, 15).map((c, i) => `
-      <div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:12px">
-          <span style="color:var(--text);font-weight:500;max-width:65%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.charge}</span>
-          <span style="color:#10b981;font-weight:600">${_fmt$(c.total_bond)}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
-            <div style="height:100%;width:${_pct(c.total_bond, max)}%;background:linear-gradient(90deg,#3b82f6,#10b981);border-radius:3px;transition:width .4s"></div>
-          </div>
-          <span style="font-size:11px;color:var(--text-muted);min-width:40px;text-align:right">${_fmtN(c.count)} arrests</span>
-        </div>
-      </div>
-    `).join('');
-  }
-
-  async function _loadRecentFeed() {
-    const el = document.getElementById('bondRecentFeed');
-    if (!el) return;
-    try {
-      const res = await fetch(`/api/arrests/recent?limit=30&hours=24${_state ? '&state=' + _state : ''}`);
-      const data = await res.json();
-      const arrests = data.arrests || [];
-      if (!arrests.length) {
-        el.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:24px">No arrests in the last 24 hours</div>';
-        return;
-      }
-      el.innerHTML = arrests.map(a => {
-        const bond = a.bond_amount > 0 ? `<span style="color:#10b981;font-weight:700">${_fmt$(a.bond_amount)}</span>` : '<span style="color:var(--text-muted)">No Bond</span>';
-        const score = a.lead_score >= 70 ? '🔥' : a.lead_score >= 40 ? '🟡' : '❄️';
-        const m = STATE_META[a.state] || { flag: '', color: '#9ca3af' };
-        const charges = Array.isArray(a.charges) ? a.charges.slice(0, 2).join(', ') : (a.charges || '');
-        return `
-          <div class="bond-feed-row" onclick="SL.openLeadDetail && SL.openLeadDetail('${a.booking_number || ''}')">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-              <div>
-                <span style="font-weight:700;color:var(--text)">${a.full_name || 'Unknown'}</span>
-                <span style="margin-left:8px;font-size:11px;color:${m.color}">${m.flag} ${a.county || ''}, ${a.state || ''}</span>
-              </div>
-              <div style="text-align:right">${bond}</div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:3px">
-              <span style="font-size:11px;color:var(--text-muted);max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${charges}</span>
-              <span style="font-size:11px;color:var(--text-muted)">${score} ${a.lead_score || 0}</span>
-            </div>
-          </div>`;
-      }).join('');
-    } catch (err) {
-      if (el) el.innerHTML = `<div style="color:var(--danger);padding:12px">Failed to load feed: ${err.message}</div>`;
-    }
-  }
-
   function setState(s) {
-    _state = s;
-    document.querySelectorAll('.bond-state-btn').forEach(b => {
-      b.classList.toggle('active', b.dataset.state === s);
-    });
+    _state = s || '';
+    _county = '';
+    const sel = document.getElementById('biStateSelect');
+    if (sel && sel.value !== _state) sel.value = _state;
+    load();
+  }
+
+  function setCounty(county, state) {
+    _county = county || '';
+    if (state) _state = state;
+    const sel = document.getElementById('biStateSelect');
+    if (sel && _state) sel.value = _state;
     load();
   }
 
   function setDays(d) {
     _days = d;
-    document.querySelectorAll('.bond-days-btn').forEach(b => {
-      b.classList.toggle('active', parseInt(b.dataset.days) === d);
+    document.querySelectorAll('#biWindowSeg button').forEach(b => {
+      b.classList.toggle('on', parseInt(b.dataset.days, 10) === d);
     });
     load();
+  }
+
+  function reloadQueue() { return _loadQueue(); }
+
+  function openLead(booking) {
+    if (window.SL && typeof SL.openLeadDetail === 'function' && booking) {
+      SL.openLeadDetail(booking);
+    }
+  }
+
+  function writeBond(name, bond, county, booking) {
+    if (typeof openBondModal === 'function') {
+      openBondModal(name, parseFloat(bond) || 0, county, booking);
+    }
   }
 
   function _startAutoRefresh() {
@@ -299,8 +317,8 @@ const SLBondIntel = (() => {
     _refreshTimer = setInterval(() => {
       const tab = document.getElementById('tabBondIntel');
       if (tab && tab.classList.contains('active')) load();
-    }, 120000); // 2-minute refresh
+    }, 120000);
   }
 
-  return { load, setState, setDays };
+  return { load, setState, setCounty, setDays, reloadQueue, openLead, writeBond };
 })();

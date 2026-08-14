@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-14 (Bond Intelligence)
+
+### Changed
+- **Bond Intelligence tab rebuilt** as a work desk: estimated statutory premium, in-custody writable count, hot leads, capture rate, a 48-hour write queue, state money map, and counties ranked by premium. Old stacked KPI dump and white filter pills are gone. Stylesheet is now actually linked.
+
 ## [Unreleased] — 2026-08-14 (Record Bond)
 
 ### Fixed

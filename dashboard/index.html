@@ -31,6 +31,7 @@
   <link rel="stylesheet" href="/sl-osint.css?v=4">
   <link rel="stylesheet" href="/sl-palantir.css?v=3">
   <link rel="stylesheet" href="/sl-alpr.css?v=2">
+  <link rel="stylesheet" href="/sl-bond-intelligence.css?v=4">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -915,67 +916,89 @@
      TAB: BOND INTELLIGENCE
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabBondIntel">
-  <div class="container">
-    <!-- Filter Bar -->
-    <div class="bond-filter-bar">
-      <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">State:</span>
-      <button class="bond-state-btn active" data-state="" onclick="SLBondIntel.setState('')">All States</button>
-      <button class="bond-state-btn" data-state="FL" onclick="SLBondIntel.setState('FL')">🌴 Florida</button>
-      <button class="bond-state-btn" data-state="GA" onclick="SLBondIntel.setState('GA')">🍑 Georgia</button>
-      <button class="bond-state-btn" data-state="SC" onclick="SLBondIntel.setState('SC')">🌙 South Carolina</button>
-      <button class="bond-state-btn" data-state="NC" onclick="SLBondIntel.setState('NC')">🦅 North Carolina</button>
-      <button class="bond-state-btn" data-state="TN" onclick="SLBondIntel.setState('TN')">🎸 Tennessee</button>
-      <button class="bond-state-btn" data-state="TX" onclick="SLBondIntel.setState('TX')">⭐ Texas</button>
-      <button class="bond-state-btn" data-state="LA" onclick="SLBondIntel.setState('LA')">🎷 Louisiana</button>
-      <button class="bond-state-btn" data-state="CT" onclick="SLBondIntel.setState('CT')">⚓ Connecticut</button>
-      <button class="bond-state-btn" data-state="AL" onclick="SLBondIntel.setState('AL')">🌻 Alabama</button>
-      <button class="bond-state-btn" data-state="MS" onclick="SLBondIntel.setState('MS')">🎶 Mississippi</button>
-      <span style="margin-left:12px;font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em">Window:</span>
-      <button class="bond-days-btn" data-days="7" onclick="SLBondIntel.setDays(7)">7d</button>
-      <button class="bond-days-btn active" data-days="30" onclick="SLBondIntel.setDays(30)">30d</button>
-      <button class="bond-days-btn" data-days="90" onclick="SLBondIntel.setDays(90)">90d</button>
-      <button class="bond-days-btn" data-days="365" onclick="SLBondIntel.setDays(365)">1yr</button>
-      <button class="btn" onclick="SLBondIntel.load()" style="margin-left:auto;background:var(--panel-bg);border:1px solid var(--border);padding:5px 14px;font-size:12px">&#x1F504; Refresh</button>
-    </div>
-    <!-- State KPI Cards -->
-    <div class="bond-kpi-row" id="bondStateKPIs">
-      <div style="text-align:center;color:var(--text-muted);padding:32px;grid-column:1/-1">Loading bond intelligence...</div>
-    </div>
-    <!-- Summary Metric Cards -->
-    <div class="bond-summary-grid" id="bondSummaryCards"></div>
-    <!-- Charts Row -->
-    <div class="bond-charts-row">
-      <div class="panel">
-        <div class="bond-panel-title">📊 Bond Distribution by Amount</div>
-        <div id="bondDistChart"></div>
+  <div class="bi-shell" id="bondIntelContainer">
+    <header class="bi-head">
+      <div class="bi-head-copy">
+        <p class="bi-kicker">Bond desk</p>
+        <h2>Where to write next</h2>
+        <p class="bi-sub">Premium on the table, people still in custody, counties worth calling.</p>
       </div>
-      <div class="panel">
-        <div class="bond-panel-title">📈 Daily Arrest &amp; Bond Trend</div>
-        <div id="bondTrendChart"></div>
-      </div>
-    </div>
-    <!-- Data Row: County Leaderboard + Top Charges -->
-    <div class="bond-data-row">
-      <div class="panel">
-        <div class="bond-panel-title">🏆 Top Counties by Bond Volume</div>
-        <div id="bondCountyLeaderboard"></div>
-      </div>
-      <div class="panel">
-        <div class="bond-panel-title">⚖️ Top Charges by Bond Value</div>
-        <div id="bondTopCharges"></div>
-      </div>
-    </div>
-    <!-- Live Recent Arrests Feed -->
-    <div class="panel">
-      <div class="bond-panel-title" style="justify-content:space-between">
-        <span>⚡ Live Arrest Feed — Last 24 Hours</span>
-        <button class="btn" onclick="SLBondIntel.load()" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 10px;font-size:11px">↻ Refresh</button>
-      </div>
-      <div id="bondIntelContainer">
-        <div class="bond-feed-container" id="bondRecentFeed">
-          <div style="text-align:center;color:var(--text-muted);padding:24px">Loading live feed...</div>
+      <div class="bi-controls">
+        <label class="bi-field">
+          <span>State</span>
+          <select id="biStateSelect" onchange="SLBondIntel.setState(this.value)">
+            <option value="">All 10 states</option>
+            <option value="FL">Florida</option>
+            <option value="GA">Georgia</option>
+            <option value="SC">South Carolina</option>
+            <option value="NC">North Carolina</option>
+            <option value="TN">Tennessee</option>
+            <option value="TX">Texas</option>
+            <option value="LA">Louisiana</option>
+            <option value="AL">Alabama</option>
+            <option value="MS">Mississippi</option>
+            <option value="CT">Connecticut</option>
+          </select>
+        </label>
+        <div class="bi-seg" id="biWindowSeg" role="group" aria-label="Lookback window">
+          <button type="button" data-days="7" onclick="SLBondIntel.setDays(7)">7d</button>
+          <button type="button" class="on" data-days="30" onclick="SLBondIntel.setDays(30)">30d</button>
+          <button type="button" data-days="90" onclick="SLBondIntel.setDays(90)">90d</button>
         </div>
+        <button type="button" class="bi-refresh" onclick="SLBondIntel.load()" title="Refresh">↻</button>
       </div>
+    </header>
+
+    <section class="bi-command" id="biCommand" aria-label="Command metrics"></section>
+
+    <div class="bi-grid">
+      <section class="bi-panel bi-queue">
+        <div class="bi-panel-head">
+          <div>
+            <h3>Work now</h3>
+            <p>In custody · bond set · last 48 hours. Sorted by score then premium.</p>
+          </div>
+          <div class="bi-queue-filters">
+            <label><input type="checkbox" id="biHotOnly" onchange="SLBondIntel.reloadQueue()"> Hot only</label>
+            <label><input type="checkbox" id="biMinBond1k" onchange="SLBondIntel.reloadQueue()"> $1k+</label>
+          </div>
+        </div>
+        <div class="bi-queue-list" id="biWorkQueue">
+          <div class="bi-empty">Loading writable arrests…</div>
+        </div>
+      </section>
+
+      <aside class="bi-side">
+        <section class="bi-panel">
+          <div class="bi-panel-head">
+            <h3>Money map</h3>
+            <p>Click a state to filter the desk.</p>
+          </div>
+          <div class="bi-states" id="biStateMap"></div>
+        </section>
+        <section class="bi-panel">
+          <div class="bi-panel-head">
+            <h3>Call these counties</h3>
+            <p>Ranked by estimated premium, not raw arrest count.</p>
+          </div>
+          <div class="bi-counties" id="biCounties"></div>
+        </section>
+      </aside>
+    </div>
+
+    <div class="bi-lower">
+      <section class="bi-panel">
+        <div class="bi-panel-head"><h3>Bond mix</h3></div>
+        <div id="bondDistChart"></div>
+      </section>
+      <section class="bi-panel">
+        <div class="bi-panel-head"><h3>Daily flow</h3></div>
+        <div id="bondTrendChart"></div>
+      </section>
+      <section class="bi-panel">
+        <div class="bi-panel-head"><h3>Charges that pay</h3></div>
+        <div id="biCharges"></div>
+      </section>
     </div>
   </div>
 </div>
@@ -6286,7 +6309,7 @@
 </aside>
 
 <script defer src="/sl-help.js?v=3"></script>
-<script defer src="/sl-bond-intelligence.js?v=3"></script>
+<script defer src="/sl-bond-intelligence.js?v=4"></script>
 <script defer src="/sl-multi-state.js?v=3"></script>
 </body>
 </html>
