@@ -26,6 +26,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-08-12 (production closeout)
 
 ### Added
+- **Randall County, TX public-roster scraper** — renders and parses the official public OCV/Next.js jail roster with bounded `?page=<n>` pagination. It deliberately does not use the direct OCV S3 feed after that feed returned HTTP 403. The source does not label a booking number, so the scraper emits a clearly labelled deterministic key only from its public Inmate ID plus booking timestamp and fails closed if either value is absent. Registered as `scraper_tx_randall` every 120 minutes and added to `REGISTERED_COUNTIES`.
+- **Randall parser regression tests** — verify official-card mapping, fail-closed identifier/date handling, source-key stability, and pagination. A bounded local two-page source smoke parsed 10 records on 2026-08-14; production Mongo upsert and alert delivery remain unclaimed until their telemetry is observed.
 - **Putnam County, TN public-roster scraper** — paginated ISOMS parser with source-faithful custody, release, charge, and per-charge bond mapping; uses a clearly labeled deterministic surrogate only where the public roster does not expose a booking number. Registered as `scraper_tn_putnam` every 120 minutes and added to `REGISTERED_COUNTIES`.
 - **Putnam parser regression tests** — verify public-field mapping, custody status, surrogate-key stability, and pagination. A local public-source smoke parsed 482 records on 2026-08-12. The committed rollout subsequently succeeded and public CRM/host health checks passed; Putnam-specific Mongo upsert and alert delivery remain unclaimed until their telemetry is observed.
 

@@ -509,6 +509,7 @@ REGISTERED_COUNTIES = sorted([
     "Comal (TX)",
     "Victoria (TX)",
     "Walker (TX)",
+    "Randall (TX)",
     # ── Louisiana (wave-1 + wave-2) ──
     "Caddo (LA)",
     "Calcasieu (LA)",

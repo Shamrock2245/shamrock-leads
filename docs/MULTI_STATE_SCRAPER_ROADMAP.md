@@ -2,8 +2,8 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
-> Last updated: 2026-08-12
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 33 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT = **351** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
+> Last updated: 2026-08-14
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 13 AL · 10 LA · 9 MS · 6 CT = **352** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
 
 ## Why this order
 
@@ -12,7 +12,7 @@
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
 5. **TN** — **22 registered** (including Putnam; source-specific production telemetry still required) 🔄
-6. **TX** — **33 registered** (Bexar, Dallas, Bell, Lubbock, Webb, Jefferson, McLennan, Nueces, Brazos, Hays, Ellis, Johnson, Ector, Midland, Potter, Bastrop, Guadalupe, Comal, Victoria, Walker) 🔄  
+6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **10 LA** + **9 MS** registered; harden + expand 🔄  
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
 9. **AL** — **13 registered** (Jefferson, Madison, Mobile, Baldwin, Tuscaloosa, Shelby, Montgomery, Houston, Morgan, Etowah, Cullman, DeKalb, Jackson) 🔄  
@@ -66,12 +66,12 @@
 4. **Sullivan** — recon-only. The public OCV page is observable, but direct public-feed retrieval was access-denied in the validation environment; do not circumvent controls.
 5. Full scheduler inventory and source posture: `docs/TN_COUNTY_REGISTRY.md`.
 
-### TX (15 registered — expand top-25)
-1. **Bexar** ✅ Central Magistrate 24h HTML  
-2. **Dallas** ✅ official jaillookup name grid  
-3. **Harris** ⏳ browser A–Z  
-4. + Gulf Coast (Cameron, Brazoria, Galveston) · registry `docs/TX_COUNTY_REGISTRY.md`  
-5. Expect heavy Odyssey/Tyler + custom municipal jails  
+### TX (34 registered — validate and harden)
+1. **Randall** — official public OCV/Next.js roster parser added; local two-page browser-rendered source smoke passed. Mongo upsert and alert evidence remain required.
+2. **Bexar**, **Dallas**, **Tarrant**, and **Travis** remain core high-yield paths; refresh source telemetry before operational reliance.
+3. **Bell**, **Ellis**, **Guadalupe**, and **Jefferson** legacy P2C hostnames failed DNS during 2026-08-14 reconnaissance; refresh their sources instead of relying on stale wrappers.
+4. **Collin** remains WAF-sensitive; do not bypass access controls.
+5. Full scheduler inventory, source posture, and recon queue: `docs/TX_COUNTY_REGISTRY.md`.
 
 ### LA (4 registered — harden)
 1. **Orleans** ⏳ OPSO partial · **Lafayette** ⏳ 365Labs captcha  

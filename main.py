@@ -370,6 +370,7 @@ from scrapers.counties_tx.guadalupe import GuadalupeScraper as TX_GuadalupeScrap
 from scrapers.counties_tx.comal import ComalScraper as TX_ComalScraper
 from scrapers.counties_tx.victoria import VictoriaScraper as TX_VictoriaScraper
 from scrapers.counties_tx.walker import WalkerTXScraper as TX_WalkerScraper
+from scrapers.counties_tx.randall import RandallScraper as TX_RandallScraper
 
 # ── Louisiana Scrapers ─────────────────────────────────────────────────────
 from scrapers.counties_la.orleans import OrleansScraper as LA_OrleansScraper
@@ -802,6 +803,7 @@ def register_scrapers(sched):
     sched.register_scraper(TX_ComalScraper(), interval_minutes=120)
     sched.register_scraper(TX_VictoriaScraper(), interval_minutes=120)
     sched.register_scraper(TX_WalkerScraper(), interval_minutes=120)
+    sched.register_scraper(TX_RandallScraper(), interval_minutes=120)
 
     # ── Louisiana (wave-1 + wave-2 + wave-3) ───────────────────────────────────────────────────
     sched.register_scraper(LA_OrleansScraper(), interval_minutes=90)
