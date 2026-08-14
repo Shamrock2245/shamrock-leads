@@ -19,13 +19,13 @@ Louisiana uses **parishes** rather than counties; the parish name is stored in t
 | Orleans | `orleans.py` | 90 min | Registered; source and production telemetry require validation. |
 | Ouachita | `ouachita.py` | 90 min | Registered; source and production telemetry require validation. |
 | St. Tammany | `st_tammany.py` | 90 min | Registered; source and production telemetry require validation. |
-| Tangipahoa | `tangipahoa.py` | 120 min | **Local two-page official-source smoke passed 2026-08-14**; production Mongo upsert and alert delivery remain unproven. |
+| Tangipahoa | `tangipahoa.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 
 ## Tangipahoa Parish implementation notes
 
 Tangipahoa Parish Sheriff's Office publicly links a broad, paginated current roster at `https://tbs-web.com/jail/TangipahoaJail/roster`. The listing displays ten records per page and a source-issued numeric roster identifier alongside a booking timestamp. Because the source does not label that identifier as a booking number, the scraper generates a clearly labelled deterministic per-booking key from **both** values and fails closed if either value is absent. It reads only the public roster rows and does not retrieve individual detail pages.
 
-The bounded local smoke over the first two official pages parsed 20 records with Tangipahoa/Louisiana state invariants, non-empty dedup keys, and source-key provenance. This is local source validation only, not evidence of a production database write or notification.
+The bounded local smoke over the first two official pages parsed 20 records with Tangipahoa/Louisiana state invariants, non-empty dedup keys, and source-key provenance. The `f456205` code rollout completed successfully on 2026-08-14, followed by public `leads`, `sign`, `school`, `paperwork`, and `social /auth` health checks. This is not evidence of a Tangipahoa-specific production database write or notification.
 
 ## Recon queue
 
