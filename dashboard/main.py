@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import os
 import logging
+import traceback
+import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -35,8 +37,10 @@ from starlette.responses import Response
 from dashboard.deps import get_db, get_collection, get_settings
 from dashboard.extensions import init_bluebubbles
 from dashboard.auth.pin_middleware import PinAuthMiddleware, mount_login_routes
+from dashboard.logging_redaction import SensitiveDataRedactionFilter
 
 logger = logging.getLogger(__name__)
+logger.addFilter(SensitiveDataRedactionFilter())
 
 # ── Dashboard directory — for serving static assets ──
 DASHBOARD_DIR = os.path.dirname(__file__)
@@ -157,13 +161,26 @@ mount_login_routes(app)
 # Starlette still routes HTTPException / RequestValidationError to their own handlers (MRO).
 @app.exception_handler(Exception)
 async def _unhandled_exception(request: Request, exc: Exception):
-    """Dashboard JS always does res.json() — plain-text 500 breaks Run / Health buttons."""
+    """Return a stable, non-sensitive JSON error with an operator lookup ID."""
     path = request.url.path or ""
-    logger.exception("Unhandled error on %s: %s", path, exc)
+    request_id = str(uuid.uuid4())
+    logger.error(
+        "Unhandled error route=%s correlation_id=%s",
+        path,
+        request_id,
+        extra={
+            "correlation_id": request_id,
+            "route_path": path,
+            "exception_type": type(exc).__name__,
+            "exception_details": str(exc),
+            "exception_traceback": "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            ),
+        },
+    )
     payload = {
-        "ok": False,
-        "error": f"Internal server error: {type(exc).__name__}: {exc}",
-        "path": path,
+        "error": "An unexpected error occurred.",
+        "request_id": request_id,
     }
     return JSONResponse(payload, status_code=500)
 
