@@ -521,6 +521,7 @@ REGISTERED_COUNTIES = sorted([
     "St. Tammany (LA)",
     "Ascension (LA)",
     "Livingston (LA)",
+    "Tangipahoa (LA)",
     # ── Alabama (wave-1 + wave-2) ──
     "Baldwin (AL)",
     "Jefferson (AL)",

@@ -1,38 +1,36 @@
 # Louisiana Parish Scraper Registry
 
-> **Last Updated:** 2026-07-15  
-> **Registered (dashboard):** 2 wave-1 scrapers  
-> **Package:** `scrapers/counties_la/`  
-> **Job IDs:** `scraper_la_<parish>` · CLI: `python main.py la_orleans`  
-> **Note:** LA uses *parish* not county — we store parish name in `County` field.
+> **Last updated:** 2026-08-14
+> **Registered scheduler jobs:** 11
+> **Package:** `scrapers/counties_la/`
+> **Job IDs:** `scraper_la_<parish>` · CLI example: `python main.py la_tangipahoa`
 
-## Wave-1 (registered)
+Louisiana uses **parishes** rather than counties; the parish name is stored in the canonical `County` field. `main.py` is the source of truth for registration. A registered job is not proof of a production database write, alert, payment, or bond action.
 
-| Parish | Scraper | Portal | Status | Notes |
-|--------|---------|--------|--------|-------|
-| **Orleans** | `orleans.py` | https://www.opso.gov | ⏳ Partial | Beacon/OPSO paths; browser fallback; low yield |
-| **Lafayette** | `lafayette.py` | 365Labs Community Portal | ⏳ Captcha | CAPTCHA gate on inmate list; API probe + browser |
+| Parish | Module | Cadence | Evidence boundary |
+|---|---|---:|---|
+| Ascension | `ascension.py` | 120 min | Registered; source and production telemetry require validation. |
+| Caddo | `caddo.py` | 90 min | Registered; source and production telemetry require validation. |
+| Calcasieu | `calcasieu.py` | 90 min | Registered; source and production telemetry require validation. |
+| East Baton Rouge | `east_baton_rouge.py` | 90 min | Registered; source and production telemetry require validation. |
+| Jefferson | `jefferson.py` | 90 min | Registered; source and production telemetry require validation. |
+| Lafayette | `lafayette.py` | 90 min | Registered; CAPTCHA-sensitive source; do not bypass controls. |
+| Livingston | `livingston.py` | 120 min | Registered; source and production telemetry require validation. |
+| Orleans | `orleans.py` | 90 min | Registered; source and production telemetry require validation. |
+| Ouachita | `ouachita.py` | 90 min | Registered; source and production telemetry require validation. |
+| St. Tammany | `st_tammany.py` | 90 min | Registered; source and production telemetry require validation. |
+| Tangipahoa | `tangipahoa.py` | 120 min | **Local two-page official-source smoke passed 2026-08-14**; production Mongo upsert and alert delivery remain unproven. |
 
-## Next targets
+## Tangipahoa Parish implementation notes
 
-| Parish | Platform | Priority |
-|--------|----------|----------|
-| East Baton Rouge | Custom / VINE | High |
-| Jefferson | Custom | High |
-| Caddo | TBD | Medium |
-| Calcasieu | TBD | Medium |
-| St. Tammany | TBD | Medium |
-| LAVINE statewide | Appriss VINE | Medium (strict bot detection) |
+Tangipahoa Parish Sheriff's Office publicly links a broad, paginated current roster at `https://tbs-web.com/jail/TangipahoaJail/roster`. The listing displays ten records per page and a source-issued numeric roster identifier alongside a booking timestamp. Because the source does not label that identifier as a booking number, the scraper generates a clearly labelled deterministic per-booking key from **both** values and fails closed if either value is absent. It reads only the public roster rows and does not retrieve individual detail pages.
 
-## Lafayette 365Labs
+The bounded local smoke over the first two official pages parsed 20 records with Tangipahoa/Louisiana state invariants, non-empty dedup keys, and source-key provenance. This is local source validation only, not evidence of a production database write or notification.
 
-- Agency UUID: `689d71d5-1d4e-4726-9cfb-a3c94dfb231e`
-- Paths: `/InmateList/GetCaptcha`, `/InmateList/VerifyCaptcha`
-- Production path likely needs audio captcha solver or residential session
+## Recon queue
 
-## Smoke results (2026-07-15)
-
-| Parish | Records (one-shot) |
-|--------|-------------------:|
-| Orleans | ~5 |
-| Lafayette | 0 (captcha) |
+| Parish | Official public surface | Current decision |
+|---|---|---|
+| Rapides | Sheriff-linked NewWorld Inmate Inquiry | Recon only: broad roster lacks a verified source-issued booking key and booking timestamp. |
+| St. Landry | State roster directory / legacy LA VINE | Recon only: current public rendering and safe identity fields need confirmation. |
+| Grant, Terrebonne, Union | LA VINE roster directory | Recon only: official directory marks these roster endpoints offline. |
