@@ -88,7 +88,7 @@
 | County | Portal URL | Status | Notes |
 |--------|------------|--------|-------|
 | **Cobb** | `cobbsheriff.org/inmates/adult-detention-center` | 🔵 Validated | High priority metro |
-| **Gwinnett** | `gwinnettcountysheriff.com/SmartWebClient/Jail.aspx` | 🔵 Validated | SmartWebClient |
+| **Gwinnett** | `gwinnettcountysheriff.com/smartwebclient/` | ⏳ Fail closed | Public last-24-hours view has booking key/time but abbreviates given names; existing job emits no records until a supported complete-identity bulk contract is available. |
 | **Richmond** | `richmondcountysheriffsoffice.com/inmate-inquiry.cfm` | 🔵 Validated | Augusta area |
 | **Bartow** | `bartowcountyga.gov/sheriff/inmate-search` | 🔵 Validated | Clean HTML table |
 | **Glynn** | `glynncountysheriff.org/inmate-search` | 🔵 Validated | Coastal area |
@@ -112,4 +112,4 @@ Because Georgia has strong centralized court systems (PeachCourt/eCourts), the `
 - **`Bond_Forfeiture_Flag`**: Critical for bondsmen to know when a client FTAs
 - **`FTA_Date`**: The exact date of failure to appear
 
-*Next Steps: Build the remaining custom HTML scrapers for Cobb, Gwinnett, and Richmond.*
+*Next Steps: Re-validate Cobb and Richmond public contracts before repair work. Gwinnett is explicitly fail-closed pending a supported bulk view with complete names plus source booking fields.*
