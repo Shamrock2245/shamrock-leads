@@ -9,7 +9,7 @@
 | County | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
 | Baldwin | `baldwin.py` | 120 min | Registered; shared Citizen Connect parser is **fail closed** for the current unsupported Baldwin route and cannot generate synthetic booking identities. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
-| Cullman | `cullman.py` | 120 min | Registered; source and production telemetry require validation. |
+| Cullman | `cullman.py` | 120 min | Registered; county-specific Citizen Connect route redirects to the general agency directory, so the shared parser is **fail closed** pending a supported booking-safe public roster. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
 | DeKalb | `dekalb.py` | 120 min | Registered; source and production telemetry require validation. |
 | Etowah | `etowah.py` | 120 min | Repaired to the official public current-roster page; bounded two-page local smoke parsed 20 unique records with source-issued booking numbers and booking dates. Deployed 2026-08-14 with public hosts healthy; county-specific persistence and alert telemetry remain unproven. |
 | Houston | `houston.py` | 120 min | Registered; source and production telemetry require validation. |

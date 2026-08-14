@@ -16,6 +16,10 @@ Baldwin’s existing `BaldwinCoAL` Citizen Connect wrapper was validated against
 
 Baldwin therefore remains **registered but non-productive** until the county’s official public source exposes a directly accessible, supported broad roster with complete identity, a source-issued booking/inmate ID, and booking date/time. The shared `4d58f29` safety rollout completed successfully on 2026-08-14 and the required public hosts returned 200. This decision does not prove or imply production persistence or alert delivery for Baldwin or any Southern Software-dependent county.
 
+## Cullman County, Alabama
+
+Cullman’s `CullmanCoAL` Citizen Connect route was validated in a normal browser. It redirects from the county-specific booking-search URL to the general Citizen Connect agency directory, without presenting a Cullman current-confinements roster or a booking-safe broad-list contract. Cullman therefore remains **registered but non-productive** under the shared fail-closed parser. No blank search, parameter guess, profile lookup, or access-control workaround was attempted.
+
 ## Revalidation criteria
 
 A dependent wrapper may produce records only after its own official public card contract is observed to contain all required source fields. A source change must be accompanied by deterministic parser tests, a bounded aggregate-only source smoke, normal deployment verification, and separately observed persistence and alert telemetry before the county is marked productive.
