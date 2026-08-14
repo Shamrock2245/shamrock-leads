@@ -58,7 +58,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
-| 23 | **Broward** | HTTP GET — sequential ID probe | `broward.py` | ✅ Active | 60 min | 2026-04-27 |
+| 23 | **Broward** | Official BSO arrest search | `broward.py` | ⏳ Fail closed — Turnstile-protected source; no verified booking-safe bulk contract | 60 min | 2026-08-14 local validation |
 | 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
 | 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
@@ -225,7 +225,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering
-- **Active Counties**: Orange, Seminole, Broward, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns
+- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns. Broward remains registered but is explicitly fail closed pending a supported BSO bulk source; sequential identifier probing is prohibited.
 
 ---
 
