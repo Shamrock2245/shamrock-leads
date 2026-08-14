@@ -126,7 +126,7 @@
 ### High Priority — Miami-Dade (Largest County in FL)
 | # | County | JMS / Method | Status | Notes |
 |---|--------|-------------|--------|-------|
-| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Repaired locally | Official anonymous FeatureServer query uses only minimum identity, booking-date, source-key, and charge fields; bounded local smoke passed 2026-08-14. Production Mongo/alert telemetry remains unproven. Portal search remains reCAPTCHA-blocked. |
+| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Deployed 2026-08-14 | Official anonymous FeatureServer query uses only minimum identity, booking-date, source-key, and charge fields; bounded local smoke and public host checks passed. Miami-Dade Mongo/alert telemetry remains unproven. Portal search remains reCAPTCHA-blocked. |
 
 ### Needs Recon (16 Counties)
 | # | County | Status | Notes |

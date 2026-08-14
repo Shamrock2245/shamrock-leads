@@ -61,7 +61,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **85** | `scrapers/counties_ga/` | + Gordon, Walker, Whitfield, Tift, Ware, Coffee, Appling, Bleckley, Crisp, Laurens, Effingham + EAS batch runner |
-| **FL** | **67** | `scrapers/counties/` | All 67 FL counties on registry + scheduler; Miami-Dade ArcGIS path locally repaired and smoke-validated; per-source production telemetry remains pending |
+| **FL** | **67** | `scrapers/counties/` | All 67 FL counties on registry + scheduler; Miami-Dade ArcGIS repair deployed 2026-08-14 with public host checks green; per-source production telemetry remains pending |
 | **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
@@ -82,7 +82,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **355** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee and Marshall AL plus Tangipahoa LA deployments with public host checks passed; Miami-Dade FL ArcGIS repair locally smoke-validated; per-scraper Mongo/Slack evidence remains pending |
+| **355** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee and Marshall AL, Tangipahoa LA, and Miami-Dade FL deployments with public host checks passed; per-scraper Mongo/Slack evidence remains pending |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
@@ -183,7 +183,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade ArcGIS path is locally repaired but awaits production telemetry. |
+| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade ArcGIS repair is deployed but awaits Miami-specific production telemetry. |
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
 | Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · DocuSeal primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |

@@ -17,7 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-08-14 (disk)
 
 ### Changed
-- **Miami-Dade, FL ArcGIS scraper repair** — replaced broad `outFields=*` retrieval with the minimum official public fields (`ObjectId`, `GlobalID`, `BookDate`, `Defendant`, `Charge1`, `Charge3`), removed address/ZIP/DOB collection, fails closed without complete identity, source key, or booking date, and records custody as unknown instead of assuming it. Deterministic parser tests passed and a bounded official-source smoke parsed 426 records on 2026-08-14; production Mongo upsert and alert delivery remain unclaimed until telemetry is observed.
+- **Miami-Dade, FL ArcGIS scraper repair** — replaced broad `outFields=*` retrieval with the minimum official public fields (`ObjectId`, `GlobalID`, `BookDate`, `Defendant`, `Charge1`, `Charge3`), removed address/ZIP/DOB collection, fails closed without complete identity, source key, or booking date, and records custody as unknown instead of assuming it. Deterministic parser tests passed and a bounded official-source smoke parsed 426 records on 2026-08-14. The `7b10bda` rollout subsequently completed successfully and public host checks passed; Miami-Dade-specific Mongo upsert and alert delivery remain unclaimed until telemetry is observed.
 - Dashboard image installs `requirements-dashboard.txt` (no Playwright/Selenium/Chromium stack). Daily `docker-prune.sh` now clears unused BuildKit cache (`-a`, older than 24h).
 
 ## [Unreleased] — 2026-08-13 (CCX33)
