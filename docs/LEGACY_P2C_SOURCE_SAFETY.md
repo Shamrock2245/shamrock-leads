@@ -1,6 +1,7 @@
 # Legacy P2C Source-Safety Registry
 
 **Last reconciled:** 2026-08-14 EDT  
+**Deployment evidence:** Shared guard commit `0de5f79` deployed successfully. The first Leads `/health` probe returned a transient 502, then recovered to 200; Sign, School, Paperwork, and Social `/auth` returned 200. Per-scraper Mongo persistence and alert delivery remain unproven.
 **Purpose:** This registry is the operational source of truth for legacy P2C / CentralSquare wrappers reviewed during the all-state scraper hardening program. A registered job is not automatically a productive source. When a public bulk roster does not safely establish complete identity, a source-issued booking or inmate identifier, and a booking-time boundary, the code must **fail closed** and emit no arrest records.
 
 The policy avoids access-control bypasses, unsupported blank or A–Z searches, synthetic booking identifiers, and inferred custody status. It also preserves the immutable state-and-county scope of every source identity.
@@ -27,7 +28,7 @@ The policy avoids access-control bypasses, unsupported blank or A–Z searches, 
 
 ## Guard behavior
 
-The shared `P2CBaseScraper` now has an explicit `SOURCE_CONTRACT_VALIDATED` switch. The fifteen wrappers marked **Fail closed** set it to `False`, include a non-PII source-safety reason, and return an empty record list **before any HTTP request or form submission**. Their scheduler registrations remain unchanged to keep dashboard and operations inventory truthful while preventing unsupported writes.
+The shared `P2CBaseScraper` now has an explicit `SOURCE_CONTRACT_VALIDATED` switch. The fifteen wrappers marked **Fail closed** set it to `False`, include a non-PII source-safety reason, and return an empty record list **before any HTTP request or form submission**. This shared guard was deployed in `0de5f79`. Their scheduler registrations remain unchanged to keep dashboard and operations inventory truthful while preventing unsupported writes.
 
 Lincoln is intentionally excluded from that guard set because its stale P2C transport was replaced by its verified official OCV feed. Johnson remains recon-only because its current search contract has not justified modifying the registered path.
 
