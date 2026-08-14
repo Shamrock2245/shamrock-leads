@@ -111,11 +111,7 @@ window.SLRecordBond = (() => {
     // Bond amount — handle various field names across counties
     const bondAmt = parseFloat(arrest.bond_amount || arrest.total_bond_amount || 0);
     $('rbBondAmount').value = bondAmt > 0 ? bondAmt : '';
-    const premiumEl = $('rbPremium');
-    if (premiumEl && bondAmt > 0) {
-      premiumEl.value = Math.round(bondAmt * 0.10);
-      delete premiumEl.dataset.manualEdit;
-    }
+    _setStatutoryPremium(bondAmt, arrest.charges, arrest.charge_amounts);
 
     // Court info if available
     if (arrest.court_date) $('rbCourtDate').value = arrest.court_date;
@@ -167,9 +163,7 @@ window.SLRecordBond = (() => {
     const bondAmt = parseFloat(data.bond_amount || data.total_bond_amount || 0);
     $('rbBondAmount').value = bondAmt > 0 ? bondAmt : '';
 
-    // Auto-calc premium (10%)
-    const premiumAmt = bondAmt > 0 ? Math.round(bondAmt * 0.10) : '';
-    $('rbPremium').value = premiumAmt;
+    _setStatutoryPremium(bondAmt, data.charges, data.charge_amounts);
 
     // Defaults
     $('rbSurety').value = (data.insurance_company || data.surety || 'osi').toLowerCase();
@@ -217,12 +211,40 @@ window.SLRecordBond = (() => {
     _suggestedPOA = null;
   }
 
+  function _setStatutoryPremium(bondAmt, chargesText, chargeAmounts) {
+    const premiumEl = $('rbPremium');
+    if (!premiumEl) return;
+    const n = (window.SLPremium && SLPremium.countCharges)
+      ? SLPremium.countCharges(chargesText || $('rbCharges')?.value || '')
+      : 1;
+    const prem = (window.SLPremium && SLPremium.statutoryPremium)
+      ? SLPremium.statutoryPremium(bondAmt, { chargeCount: n, chargeAmounts: chargeAmounts || [] })
+      : Math.max(100 * n, Math.round((parseFloat(bondAmt) || 0) * 0.10));
+    if ((parseFloat(bondAmt) || 0) > 0) {
+      premiumEl.value = prem;
+      delete premiumEl.dataset.manualEdit;
+    } else {
+      premiumEl.value = '';
+    }
+  }
+
+  function _formatDob(raw) {
+    const s = (raw || '').trim();
+    if (!s) return '';
+    const iso = s.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+      const [y, m, d] = iso.split('-');
+      return `${m}/${d}/${y}`;
+    }
+    return s;
+  }
+
   // ── Auto-calculate premium when bond amount changes ─────────────────────
   function calcPremium() {
     const bondAmt = parseFloat($('rbBondAmount')?.value || 0);
     const premiumEl = $('rbPremium');
     if (premiumEl && bondAmt > 0 && !premiumEl.dataset.manualEdit) {
-      premiumEl.value = Math.round(bondAmt * 0.10);
+      _setStatutoryPremium(bondAmt, $('rbCharges')?.value);
     }
   }
 
@@ -406,7 +428,10 @@ window.SLRecordBond = (() => {
         const data = d.data;
         // Auto-fill form fields from the ingested data
         if (data.full_name) $('rbDefendantName').value = data.full_name;
-        if (data.date_of_birth) $('rbDefendantDob').value = data.date_of_birth;
+        const dob = _formatDob(data.date_of_birth || data.dob || data.birthDate || '');
+        if (dob) $('rbDefendantDob').value = dob;
+        const addr = data.address || data.defendant_address || '';
+        if (addr) $('rbDefendantAddress').value = addr;
         if (data.source_url) $('rbBookingUrl').value = data.source_url;
         if (data.booking_number) $('rbBookingNumber').value = data.booking_number;
         if (data.county) $('rbCounty').value = data.county;
@@ -420,11 +445,7 @@ window.SLRecordBond = (() => {
         const bondAmt = parseFloat(data.bond_amount || 0);
         if (bondAmt > 0) {
           $('rbBondAmount').value = bondAmt;
-          const premiumEl = $('rbPremium');
-          if (premiumEl) {
-            premiumEl.value = Math.round(bondAmt * 0.10);
-            delete premiumEl.dataset.manualEdit;
-          }
+          _setStatutoryPremium(bondAmt, data.charges, data.charge_amounts);
         }
 
         // Auto-set today as bond date

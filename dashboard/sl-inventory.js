@@ -481,7 +481,13 @@ const SLInventory = (() => {
     // Auto-fill bond amount if available from arrest record
     if (bondAmount && parseFloat(bondAmount) > 0) {
       const baEl = document.getElementById('baBondAmount'); if (baEl) baEl.value = parseFloat(bondAmount);
-      const premEl = document.getElementById('baPremium'); if (premEl) premEl.value = Math.round(parseFloat(bondAmount) * 0.10);
+      const premEl = document.getElementById('baPremium');
+      if (premEl) {
+        const n = (window.SLPremium && SLPremium.countCharges) ? SLPremium.countCharges(chargesStr) : 1;
+        premEl.value = (window.SLPremium && SLPremium.statutoryPremium)
+          ? SLPremium.statutoryPremium(bondAmount, { chargeCount: n })
+          : Math.max(100 * n, Math.round(parseFloat(bondAmount) * 0.10));
+      }
     }
     // Store arrest data for bond recording
     _selectedArrestData = { booking_number: booking, defendant_name: name, charges: chargesStr || '', county: county || '', bond_amount: parseFloat(bondAmount || 0) };
@@ -555,7 +561,14 @@ const SLInventory = (() => {
     const premEl = document.getElementById('baPremium');
     if (amtEl && premEl) {
       const amt = parseFloat(amtEl.value || 0);
-      if (amt > 0) premEl.value = Math.round(amt * 0.10);
+      if (amt > 0) {
+        const charges = document.getElementById('baCharges')?.value
+          || (_defendantCharges || []).join(' | ');
+        const n = (window.SLPremium && SLPremium.countCharges) ? SLPremium.countCharges(charges) : 1;
+        premEl.value = (window.SLPremium && SLPremium.statutoryPremium)
+          ? SLPremium.statutoryPremium(amt, { chargeCount: n })
+          : Math.max(100 * n, Math.round(amt * 0.10));
+      }
     }
   }
 

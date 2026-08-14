@@ -360,7 +360,9 @@ const SLIndemnitor = (() => {
   async function renderPaymentTab() {
     const bond = _data.find(b => b.booking_number === _currentBk);
     const ba = bond?.bond_amount || 0;
-    const premium = Math.round(ba * 0.10);
+    const premium = (window.SLPremium && SLPremium.statutoryPremium)
+      ? SLPremium.statutoryPremium(ba, { chargeCount: SLPremium.countCharges(bond?.charges || '') })
+      : Math.max(100, Math.round(ba * 0.10));
     const ind = bond?.indemnitor || {};
     const name = ind.name || [ind.firstName,ind.lastName].filter(Boolean).join(' ') || 'Indemnitor';
 

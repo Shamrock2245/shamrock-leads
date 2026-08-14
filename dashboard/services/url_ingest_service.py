@@ -32,6 +32,65 @@ FL_COUNTIES_UPPER = {
 }
 
 
+def _first_str(*vals) -> str:
+    for v in vals:
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            inner = _first_str(
+                v.get("line1"), v.get("address"), v.get("street"),
+                v.get("full"), v.get("value"),
+            )
+            if inner:
+                return inner
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in ("none", "null", "n/a", "na"):
+            return s
+    return ""
+
+
+def _normalize_dob(raw: str) -> tuple[str, str]:
+    """Return (iso_yyyy_mm_dd, display_mm_dd_yyyy). Empty strings if unusable."""
+    s = (raw or "").strip()
+    if not s:
+        return "", ""
+    s = s.replace("Z", "")
+    if "T" in s:
+        s = s.split("T", 1)[0]
+    s = s[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        y, m, d = s.split("-")
+        return s, f"{m}/{d}/{y}"
+    if len(s) == 10 and s[2] == "/" and s[5] == "/":
+        m, d, y = s.split("/")
+        if len(y) == 4:
+            return f"{y}-{m}-{d}", s
+    return s, s
+
+
+def _compose_address(b_data: dict) -> str:
+    street = _first_str(
+        b_data.get("address"),
+        b_data.get("address1"),
+        b_data.get("street"),
+        b_data.get("streetAddress"),
+        b_data.get("inmateAddress"),
+        b_data.get("residence"),
+        b_data.get("homeAddress"),
+    )
+    city = _first_str(b_data.get("city"), b_data.get("addressCity"))
+    state = _first_str(b_data.get("state"), b_data.get("addressState"), "FL")
+    zip_code = _first_str(
+        b_data.get("zip"), b_data.get("zipcode"), b_data.get("postalCode"),
+        b_data.get("zipCode"), b_data.get("addressZip"),
+    )
+    city_state = ", ".join(p for p in [city, " ".join(p for p in [state, zip_code] if p)] if p)
+    if street and city_state:
+        return f"{street}, {city_state}"
+    return street or city_state
+
+
 def _title_case_name(name_str: str) -> str:
     """Title case a name string while properly preserving apostrophes (e.g. D'Angelo, O'Connor)."""
     if not name_str:
@@ -74,7 +133,15 @@ async def ingest_url(url: str) -> dict:
                         "parse_method": "lee_county_api"
                     }
             except Exception as e:
-                log.warning(f"Lee API ingest failed for {url}, falling back to generic: {e}")
+                log.warning(f"Lee API ingest failed for {url}, falling back: {e}")
+            mongo_data = await _ingest_lee_from_mongo(booking_id, url)
+            if mongo_data and mongo_data.get("full_name"):
+                return {
+                    "success": True,
+                    "data": mongo_data,
+                    "source_url": url,
+                    "parse_method": "lee_mongo_arrest",
+                }
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True,
@@ -262,6 +329,37 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
 
     status_str = "In Custody" if b_data.get("inCustody", True) else "Released"
 
+    dob_iso, dob_display = _normalize_dob(_first_str(
+        b_data.get("birthDate"),
+        b_data.get("dateOfBirth"),
+        b_data.get("birthdate"),
+        b_data.get("dob"),
+        b_data.get("date_of_birth"),
+    ))
+    address = _compose_address(b_data)
+    charge_amounts = []
+    charge_details = []
+    for c in c_data:
+        desc = str(c.get("offenseDescription") or "").strip()
+        amt = 0.0
+        ba = c.get("bondAmount")
+        if ba:
+            try:
+                amt = float(str(ba).replace(",", "").replace("$", ""))
+            except (ValueError, TypeError):
+                amt = 0.0
+        if amt > 0:
+            charge_amounts.append(amt)
+        if desc:
+            charge_details.append({
+                "charge": desc,
+                "bond_amount": amt,
+                "bond_type": str(c.get("bondTypeName") or "").strip(),
+                "case_number": str(c.get("caseNumber") or "").strip(),
+            })
+
+    from dashboard.services.premium import statutory_premium
+
     return {
         "booking_number": booking_id,
         "full_name": full_name,
@@ -277,12 +375,96 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
         "court_location": ", ".join(court_locations) if court_locations else "",
         "county": detected_county,
         "status": status_str,
-        "address": str(b_data.get("address") or "").strip(),
+        "address": address,
+        "defendant_address": address,
+        "city": _first_str(b_data.get("city"), b_data.get("addressCity")),
+        "state": _first_str(b_data.get("state"), b_data.get("addressState"), "FL"),
+        "zip": _first_str(b_data.get("zip"), b_data.get("zipcode"), b_data.get("postalCode")),
         "facility": str(b_data.get("housing") or "Lee County Jail").strip(),
-        "dob": str(b_data.get("birthDate") or b_data.get("dob") or "").strip()[:10],
+        "dob": dob_iso or dob_display,
+        "date_of_birth": dob_display or dob_iso,
+        "charge_details": charge_details,
+        "charge_amounts": charge_amounts,
+        "premium": statutory_premium(
+            total_bond,
+            charge_amounts=charge_amounts,
+            charge_count=len(charges_list) or 1,
+        ),
         "source_url": source_url,
         "ingestion_method": "lee_county_api"
     }
+
+
+async def _ingest_lee_from_mongo(booking_id: str, source_url: str) -> Optional[dict]:
+    """Use the last scraped Lee arrest when the public API is cooled down."""
+    try:
+        from dashboard.extensions import get_db
+        db = get_db()
+        if db is None:
+            return None
+        doc = await db["arrests"].find_one(
+            {"$or": [
+                {"booking_number": booking_id},
+                {"Booking_Number": booking_id},
+            ]},
+            sort=[("last_checked", -1), ("Last_Checked", -1)],
+        )
+        if not doc:
+            return None
+        dob_iso, dob_display = _normalize_dob(
+            _first_str(doc.get("dob"), doc.get("DOB"), doc.get("date_of_birth"))
+        )
+        street = _first_str(doc.get("address"), doc.get("Address"))
+        city = _first_str(doc.get("city"), doc.get("City"))
+        state = _first_str(doc.get("state"), doc.get("State"), "FL")
+        zip_code = _first_str(doc.get("zip"), doc.get("ZIP"), doc.get("Zip"))
+        address = _compose_address({
+            "address": street, "city": city, "state": state, "zip": zip_code,
+        })
+        extra = doc.get("extra_data") or doc.get("Extra_Data") or {}
+        details = extra.get("charge_details") or []
+        charge_amounts = []
+        for d in details:
+            try:
+                amt = float(str((d or {}).get("bond_amount") or 0).replace(",", "").replace("$", ""))
+            except (ValueError, TypeError):
+                amt = 0.0
+            if amt > 0:
+                charge_amounts.append(amt)
+        charges = _first_str(doc.get("charges"), doc.get("Charges"))
+        bond = doc.get("bond_amount") or doc.get("Bond_Amount") or 0
+        try:
+            bond_f = float(str(bond).replace(",", "").replace("$", ""))
+        except (ValueError, TypeError):
+            bond_f = 0.0
+        from dashboard.services.premium import statutory_premium
+        return {
+            "booking_number": booking_id,
+            "full_name": _first_str(doc.get("full_name"), doc.get("Full_Name")),
+            "charges": charges,
+            "bond_amount": str(bond_f) if bond_f else "0",
+            "case_number": _first_str(doc.get("case_number"), doc.get("Case_Number")),
+            "court_date": _first_str(doc.get("court_date"), doc.get("Court_Date")) or "TBN",
+            "court_location": _first_str(doc.get("court_location"), doc.get("Court_Location")),
+            "county": _first_str(doc.get("county"), doc.get("County"), "Lee"),
+            "facility": _first_str(doc.get("facility"), doc.get("Facility"), "Lee County Jail"),
+            "address": address,
+            "defendant_address": address,
+            "dob": dob_iso or dob_display,
+            "date_of_birth": dob_display or dob_iso,
+            "charge_details": details,
+            "charge_amounts": charge_amounts,
+            "premium": statutory_premium(
+                bond_f,
+                charge_amounts=charge_amounts,
+                charge_count=max(1, len(charges.split("|")) if charges else 1),
+            ),
+            "source_url": source_url,
+            "ingestion_method": "lee_mongo_arrest",
+        }
+    except Exception as e:
+        log.warning("Lee Mongo fallback failed: %s", e)
+        return None
 
 
 def _detect_county(url):

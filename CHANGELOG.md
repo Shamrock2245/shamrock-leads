@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-14 (Record Bond)
+
+### Fixed
+- **Record Bond premium** — $100 minimum per criminal charge; 10% of penal when a charge is above $1,000. A $500 single-charge bond is $100, not $50.
+- **Lee URL auto-fill** — DOB and defendant address now populate from the sheriff booking API (`dob` / composed street+city+state+zip). The modal was only reading `date_of_birth` and never set the address field.
+
 ## [Unreleased] — 2026-08-14 (OSINT)
 
 ### Added
