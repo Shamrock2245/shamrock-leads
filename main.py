@@ -400,6 +400,7 @@ from scrapers.counties_al.cullman import CullmanScraper as AL_CullmanScraper
 from scrapers.counties_al.dekalb import DeKalbALScraper as AL_DeKalbScraper
 from scrapers.counties_al.jackson import JacksonALScraper as AL_JacksonScraper
 from scrapers.counties_al.lee import LeeALScraper
+from scrapers.counties_al.marshall import MarshallALScraper
 
 # ── Connecticut Scrapers ───────────────────────────────────────────────────
 from scrapers.counties_ct.statewide_docket import CTStatewideDockerScraper as CT_StatewideScraper
@@ -835,6 +836,7 @@ def register_scrapers(sched):
     sched.register_scraper(AL_DeKalbScraper(), interval_minutes=120)
     sched.register_scraper(AL_JacksonScraper(), interval_minutes=120)
     sched.register_scraper(LeeALScraper(), interval_minutes=120)
+    sched.register_scraper(MarshallALScraper(), interval_minutes=120)
 
     # ── Connecticut (wave-1 + wave-2 + wave-3) ────────────────────────────────────────
     sched.register_scraper(CT_StatewideScraper(), interval_minutes=180)

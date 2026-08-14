@@ -1,7 +1,7 @@
 # Alabama County Scraper Registry
 
 > **Last updated:** 2026-08-14
-> **Registered scheduler jobs:** 14
+> **Registered scheduler jobs:** 15
 > **Package:** `scrapers/counties_al/`
 
 `main.py` is the source of truth for scheduler registration. A county listed below is registered in code; that status does **not** prove a successful production write, downstream alert, payment, or bond action. All state-scoped county labels are kept distinct, including `Lee (AL)` versus Lee jobs in Georgia, North Carolina, and South Carolina.
@@ -17,6 +17,7 @@
 | Jefferson | `jefferson.py` | 120 min | Registered; source and production telemetry require validation. |
 | Lee | `lee.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Madison | `madison.py` | 120 min | Registered; source and production telemetry require validation. |
+| Marshall | `marshall.py` | 120 min | **Local two-page official-source smoke passed 2026-08-14**; Mongo upsert and alert delivery remain unproven. |
 | Mobile | `mobile.py` | 120 min | Registered; source and production telemetry require validation. |
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
 | Morgan | `morgan.py` | 120 min | Registered; source and production telemetry require validation. |
@@ -28,6 +29,12 @@
 Lee County Sheriff's Office publishes a public current-roster page at `https://www.leecosheriffal.gov/inmateSearch`. Its official public page exposes numbered pagination, a `NameID`, and a booking timestamp, without a source field labelled as a booking number. The scraper therefore creates a clearly labelled deterministic per-booking key from **both** public values, and fails closed if either is missing. It parses the official sheriff-domain Next.js response payload directly because card details are server-provided there; it neither calls a denied generic OCV feed nor bypasses a login, CAPTCHA, WAF, or other control.
 
 The bounded local smoke over the first two official pages parsed 20 records with Alabama/Lee state invariants, non-empty dedup keys, and source-key provenance. The `6109410` code rollout completed successfully on 2026-08-14, followed by public `leads`, `sign`, `school`, `paperwork`, and `social /auth` health checks. This is not evidence of a Lee-specific production database write or notification.
+
+## Marshall County implementation notes
+
+Marshall County Sheriff's Office publishes a broad current-inmate roster at `https://www.marshallso.org/inmate-roster/filters/current/booking_time=desc/1`. The public roster provides a source-issued `Booking #` and a booking timestamp on each card, so the scraper maps that source identifier directly and does not retrieve individual profile pages. It uses explicit Next-page detection, a bounded page cap, and stops if it encounters an empty or duplicate-only page.
+
+The bounded local smoke over the first two official pages parsed 40 records with Alabama/Marshall state invariants and source-issued booking numbers. This is local source validation only, not evidence of a production database write or notification.
 
 ## Recon queue
 
