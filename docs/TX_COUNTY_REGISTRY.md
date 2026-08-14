@@ -42,7 +42,7 @@ The Texas fleet contains county-specific sources, browser-rendered public pages,
 | Midland | `midland.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Potter | `potter.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Bastrop | `bastrop.py` | 120 min | County-specific public source | Registered; production telemetry required |
-| Guadalupe | `guadalupe.py` | 120 min | Legacy P2C hostname | DNS failed during 2026-08-14 reconnaissance; source refresh required |
+| Guadalupe | `guadalupe.py` | 120 min | Official Tyler Public Access Jail Records | Former P2C hostname is stale. The public Jail Records route is human-verification protected before roster access; fail closed pending a supported source-safe bulk roster. |
 | Comal | `comal.py` | 120 min | County-specific public source | Registered; production telemetry required |
 | Victoria | `victoria.py` | 120 min | County-specific public source | Registered; production telemetry required |
 | Walker | `walker.py` | 120 min | County-specific public source | Registered; production telemetry required |

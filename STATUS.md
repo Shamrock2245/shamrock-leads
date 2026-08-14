@@ -64,7 +64,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair and Broward fail-closed guard deployed 2026-08-14; public hosts are healthy and per-source production telemetry remains pending. |
 | **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard deployed 2026-08-14 after retiring unsafe legacy broad search; public hosts are healthy and remaining NC paths require source telemetry. |
 | **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair deployed 2026-08-14 with public hosts healthy; per-county persistence and alert telemetry remain pending. |
-| **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell and Ellis fail-closed guards deployed 2026-08-14 with public hosts healthy. Guadalupe and Jefferson still require source refresh. |
+| **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell and Ellis fail-closed guards are deployed, while Guadalupe’s stale P2C wrapper is locally repaired to fail closed after its current official jail route required human verification. Jefferson still requires source refresh. |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
 | **AL** | **15** | `scrapers/counties_al/` | + Marshall (deployed 2026-08-14; official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
 | **LA** | **12** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green; per-parish Mongo/alert evidence pending |
