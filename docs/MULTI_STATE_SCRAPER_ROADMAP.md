@@ -3,7 +3,7 @@
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
 > Last updated: 2026-08-14
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 15 AL · 11 LA · 9 MS · 6 CT = **355** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 15 AL · 12 LA · 9 MS · 6 CT = **356** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
 
 ## Why this order
 
@@ -13,7 +13,7 @@
 4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
 5. **TN** — **22 registered** (including Putnam; source-specific production telemetry still required) 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
-7. **LA → MS** — **11 LA** + **9 MS** registered; Tangipahoa local source validation passed, but per-source production telemetry remains required 🔄
+7. **LA → MS** — **12 LA** + **9 MS** registered; Tangipahoa is deployed and St. Mary is locally source-validated, but per-source production telemetry remains required 🔄
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
 9. **AL** — **15 registered** (including Lee’s deployed roster and Marshall’s validated official public roster; per-source production telemetry remains required) 🔄
 
@@ -74,7 +74,7 @@
 4. **Collin** remains WAF-sensitive; do not bypass access controls.
 5. Full scheduler inventory, source posture, and recon queue: `docs/TX_COUNTY_REGISTRY.md`.
 
-### LA (11 registered — harden)
+### LA (12 registered — harden)
 1. **Tangipahoa** deployed after a bounded public-source smoke; parish-specific Mongo/alert evidence remains required.
 2. **Lafayette** remains CAPTCHA-sensitive; validate all existing parish sources before adding coverage.
 3. Registry `docs/LA_COUNTY_REGISTRY.md`.
@@ -99,7 +99,7 @@ scrapers/
   counties_tn/       # TN (22)
   counties_tx/       # TX (34)
   counties_ct/       # CT (6)
-  counties_la/       # LA (11)
+  counties_la/       # LA (12)
   counties_ms/       # MS (9)
   counties_al/       # AL (15)
   dcn_base.py        # NC DevExpress

@@ -519,6 +519,7 @@ REGISTERED_COUNTIES = sorted([
     "Orleans (LA)",
     "Ouachita (LA)",
     "St. Tammany (LA)",
+    "St. Mary (LA)",
     "Ascension (LA)",
     "Livingston (LA)",
     "Tangipahoa (LA)",

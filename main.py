@@ -381,6 +381,7 @@ from scrapers.counties_la.caddo import CaddoScraper as LA_CaddoScraper
 from scrapers.counties_la.calcasieu import CalcasieuScraper as LA_CalcasieuScraper
 from scrapers.counties_la.ouachita import OuachitaScraper as LA_OuachitaScraper
 from scrapers.counties_la.st_tammany import StTammanyScraper as LA_StTammanyScraper
+from scrapers.counties_la.st_mary import StMaryLARosterScraper
 from scrapers.counties_la.ascension import AscensionScraper as LA_AscensionScraper
 from scrapers.counties_la.livingston import LivingstonScraper as LA_LivingstonScraper
 from scrapers.counties_la.tangipahoa import TangipahoaScraper as LA_TangipahoaScraper
@@ -817,6 +818,7 @@ def register_scrapers(sched):
     sched.register_scraper(LA_CalcasieuScraper(), interval_minutes=90)
     sched.register_scraper(LA_OuachitaScraper(), interval_minutes=90)
     sched.register_scraper(LA_StTammanyScraper(), interval_minutes=90)
+    sched.register_scraper(StMaryLARosterScraper(), interval_minutes=120)
     sched.register_scraper(LA_AscensionScraper(), interval_minutes=120)
     sched.register_scraper(LA_LivingstonScraper(), interval_minutes=120)
     sched.register_scraper(LA_TangipahoaScraper(), interval_minutes=120)
