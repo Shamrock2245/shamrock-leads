@@ -22,7 +22,7 @@
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
 | 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Needs **US residential** exit (Warren APE sticky or office SOCKS) | 90 min | 2026-07-16 |
 | 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |
-| 5 | **Sarasota** | **mugshotssarasota.com WP API** (primary, ~189 records/7d, ~7s, no proxy needed); JT FL `POST /Offender` returns empty 400 after valid captcha — agency backend issue, not OCR (do not re-probe); Revize CF hard-blocked on residential+proxy | `sarasota.py` | ✅ Active (v5 mugshots — **smoke-tested 2026-07-17, 189 records**) | 90 min | 2026-07-17 |
+| 5 | **Sarasota** | Official Sarasota booking-safe broad roster not verified through normal public access. Third-party mirror, CAPTCHA/JailTracker, proxy, profile, and sensitive-field paths are retired. | `sarasota.py` | ⏳ Fail closed — local validation complete; deployment pending | 90 min | Deterministic no-network safety tests passed 2026-08-14; no write or alert claim |
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
