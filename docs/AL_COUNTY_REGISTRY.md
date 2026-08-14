@@ -21,7 +21,7 @@
 | Mobile | `mobile.py` | 120 min | Registered; legacy residential-proxy access, DOB retention, and synthetic booking IDs removed. The path is **fail closed** until the official current-inmates portal exposes a supported booking-safe broad roster. Deployed 2026-08-14 with public hosts healthy; no Mobile writes or alerts are expected from the guard. |
 | Montgomery | `montgomery.py` | 120 min | Registered; official public inmates API returned HTTP 403 through normal access. The path is **fail closed** pending a supported booking-safe broad roster. Deployed 2026-08-14 with public hosts healthy; no Montgomery writes or alerts are expected from the guard. |
 | Morgan | `morgan.py` | 120 min | Registered; county-specific Citizen Connect route redirects to the general agency directory, so the shared parser is **fail closed** pending a supported booking-safe public roster. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
-| Shelby | `shelby.py` | 120 min | Registered; source and production telemetry require validation. |
+| Shelby | `shelby.py` | 120 min | Registered; shared JailTracker CAPTCHA/OCR and unsourced-identity path removed. The scraper is **fail closed** pending a county-specific booking-safe public roster contract. See `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
 | St. Clair | `st_clair.py` | 120 min | **Deployed 2026-08-14** after a bounded local two-page official-roster smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Tuscaloosa | `tuscaloosa.py` | 120 min | Registered; source and production telemetry require validation. |
 
