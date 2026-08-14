@@ -41,6 +41,19 @@ from dashboard.extensions import get_collection
 webhooks_bp = APIRouter(prefix="/api", tags=["webhooks"])
 logger = logging.getLogger(__name__)
 
+GMAIL_PUBSUB_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+
+
+def verify_gmail_pubsub_token(token: str, audience: str) -> dict:
+    """Verify a Google-signed Pub/Sub push OIDC token."""
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from google.oauth2 import id_token
+
+    claims = id_token.verify_oauth2_token(token, GoogleAuthRequest(), audience=audience)
+    if claims.get("iss") not in GMAIL_PUBSUB_ISSUERS:
+        raise ValueError("Unexpected token issuer")
+    return claims
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Security helpers
@@ -775,10 +788,37 @@ async def gmail_pubsub_webhook(request: Request):
     """
     import base64
     import json
-    from dashboard.routers.events import publish_event
+
+    audience = os.getenv("GMAIL_PUBSUB_AUDIENCE", "").strip()
+    expected_service_account = os.getenv("GMAIL_PUBSUB_SERVICE_ACCOUNT_EMAIL", "").strip().lower()
+    expected_subscription = os.getenv("GMAIL_PUBSUB_SUBSCRIPTION", "").strip()
+    monitored_mailbox = os.getenv("GMAIL_MONITORED_MAILBOX", "").strip().lower()
+    if not all((audience, expected_service_account, expected_subscription, monitored_mailbox)):
+        logger.error("[gmail_webhook] Required Pub/Sub authentication configuration is missing")
+        return JSONResponse({"error": "Webhook authentication not configured"}, status_code=503)
+
+    authorization = request.headers.get("Authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        logger.warning("[gmail_webhook] Rejected push with missing bearer token")
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        claims = verify_gmail_pubsub_token(token.strip(), audience)
+    except Exception:
+        logger.warning("[gmail_webhook] Rejected push with invalid identity token")
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    token_email = str(claims.get("email", "")).strip().lower()
+    if token_email != expected_service_account or claims.get("email_verified") is not True:
+        logger.warning("[gmail_webhook] Rejected push from unexpected service account")
+        return JSONResponse({"error": "Forbidden"}, status_code=403)
 
     try:
         data = await request.json() or {}
+        if data.get("subscription") != expected_subscription:
+            logger.warning("[gmail_webhook] Rejected push for unexpected subscription")
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         pubsub_message = data.get("message", {})
         if not pubsub_message:
             return JSONResponse({"error": "Invalid Pub/Sub payload"}, status_code=400)
@@ -789,20 +829,19 @@ async def gmail_pubsub_webhook(request: Request):
         payload = json.loads(decoded_bytes.decode("utf-8"))
 
         email_address = payload.get("emailAddress")
+        if not isinstance(email_address, str) or email_address.strip().lower() != monitored_mailbox:
+            logger.warning("[gmail_webhook] Rejected push for unexpected monitored mailbox")
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
         history_id = payload.get("historyId")
         message_id = payload.get("messageId") or pubsub_message.get("messageId")
 
-        logger.info(
-            "[gmail_webhook] Inbound push notification for email=%s, history_id=%s, msg_id=%s",
-            email_address, history_id, message_id,
-        )
+        logger.info("[gmail_webhook] Accepted authenticated Pub/Sub notification")
 
         # Log event to audit_events
         audit_events = get_collection("audit_events")
         await audit_events.insert_one({
             "source": "gmail_pubsub_webhook",
             "event_type": "court_email_notification",
-            "email_address": email_address,
             "history_id": history_id,
             "message_id": message_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -819,8 +858,8 @@ async def gmail_pubsub_webhook(request: Request):
             res = scheduler.process_all()
 
         # Publish SSE event for live dashboard sessions
+        from dashboard.routers.events import publish_event
         await publish_event("court_email_processed", {
-            "email_address": email_address,
             "result": res,
         })
 
