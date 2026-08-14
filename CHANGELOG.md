@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-14 (OpenCut overlay)
+
+### Added
+- **OpenCut editor overlay** — transitions, stylize/glow effects, text presets, timeline drag types, and an Auto/AI assets tab. Copied onto `opencut-classic` at image build (`opencut/overlay/`).
+
 ## [Unreleased] — 2026-08-14 (Bond Intelligence)
 
 ### Changed

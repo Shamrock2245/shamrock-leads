@@ -3,6 +3,8 @@ import type { EffectDefinition } from "@/effects/types";
 export const colorGradeEffectDefinition: EffectDefinition = {
 	type: "color-grade",
 	name: "Color Grade",
+	category: "color",
+	kind: "filter",
 	keywords: ["color", "grade", "contrast", "saturation", "temperature", "look"],
 	params: [
 		{ key: "brightness", label: "Brightness", type: "number", default: 0, min: -0.5, max: 0.5, step: 0.01 },

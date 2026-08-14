@@ -84,6 +84,143 @@ void main() {
   float b = texture(u_texture, v_uv - off).b;
   outColor = vec4(r, g, b, texture(u_texture, v_uv).a);
 }`,
+	pixelate: `${FRAG_LIB}
+void main() {
+  float size = max(u_scalars.x, 1.0);
+  vec2 grid = u_resolution / size;
+  vec2 uv = (floor(v_uv * grid) + 0.5) / grid;
+  outColor = texture(u_texture, uv);
+}`,
+	invert: `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float amount = u_scalars.x;
+  outColor = vec4(mix(c.rgb, 1.0 - c.rgb, amount), c.a);
+}`,
+	posterize: `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float levels = max(u_scalars.x, 2.0);
+  outColor = vec4(floor(c.rgb * levels) / levels, c.a);
+}`,
+	mirror: `${FRAG_LIB}
+void main() {
+  float mode = u_scalars.x;
+  vec2 uv = v_uv;
+  if (mode < 0.5) uv.x = abs(uv.x * 2.0 - 1.0);
+  else if (mode < 1.5) uv.y = abs(uv.y * 2.0 - 1.0);
+  else uv = abs(uv * 2.0 - 1.0);
+  outColor = texture(u_texture, uv);
+}`,
+	sharpen: `${FRAG_LIB}
+void main() {
+  float amount = u_scalars.x;
+  vec2 px = 1.0 / u_resolution;
+  vec4 c = texture(u_texture, v_uv);
+  vec4 blur = (
+    texture(u_texture, v_uv + vec2(px.x, 0.0)) +
+    texture(u_texture, v_uv - vec2(px.x, 0.0)) +
+    texture(u_texture, v_uv + vec2(0.0, px.y)) +
+    texture(u_texture, v_uv - vec2(0.0, px.y))
+  ) * 0.25;
+  outColor = vec4(clamp(c.rgb + (c.rgb - blur.rgb) * amount * 2.0, 0.0, 1.0), c.a);
+}`,
+	glow: `${FRAG_LIB}
+void main() {
+  float amount = u_scalars.x;
+  vec2 px = 1.0 / u_resolution;
+  vec4 c = texture(u_texture, v_uv);
+  vec4 bloom = vec4(0.0);
+  for (int i = -3; i <= 3; i++) {
+    bloom += texture(u_texture, v_uv + vec2(px.x * float(i) * 2.0, 0.0));
+    bloom += texture(u_texture, v_uv + vec2(0.0, px.y * float(i) * 2.0));
+  }
+  bloom /= 14.0;
+  vec3 hi = max(bloom.rgb - 0.55, 0.0);
+  outColor = vec4(clamp(c.rgb + hi * amount * 2.4, 0.0, 1.0), c.a);
+}`,
+	shake: `${FRAG_LIB}
+void main() {
+  float amount = u_scalars.x;
+  float t = u_scalars.y;
+  vec2 off = vec2(
+    sin(t * 47.0) + sin(t * 19.0),
+    cos(t * 31.0) + sin(t * 13.0)
+  ) * amount;
+  outColor = texture(u_texture, v_uv + off);
+}`,
+	"fade-black": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  outColor = vec4(mix(c.rgb, vec3(0.0), p), c.a);
+}`,
+	"fade-white": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  outColor = vec4(mix(c.rgb, vec3(1.0), p), c.a);
+}`,
+	"wipe-right": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  float edge = smoothstep(p - 0.02, p + 0.02, v_uv.x);
+  outColor = vec4(c.rgb * edge, c.a);
+}`,
+	"wipe-left": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  float edge = smoothstep(p - 0.02, p + 0.02, 1.0 - v_uv.x);
+  outColor = vec4(c.rgb * edge, c.a);
+}`,
+	"wipe-up": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  float edge = smoothstep(p - 0.02, p + 0.02, 1.0 - v_uv.y);
+  outColor = vec4(c.rgb * edge, c.a);
+}`,
+	"wipe-down": `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  float edge = smoothstep(p - 0.02, p + 0.02, v_uv.y);
+  outColor = vec4(c.rgb * edge, c.a);
+}`,
+	iris: `${FRAG_LIB}
+void main() {
+  vec4 c = texture(u_texture, v_uv);
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  vec2 d = v_uv - 0.5;
+  d.x *= u_resolution.x / max(u_resolution.y, 1.0);
+  float r = length(d);
+  float open = mix(0.75, 0.0, p);
+  float mask = smoothstep(open, open + 0.08, r);
+  outColor = vec4(c.rgb * (1.0 - mask), c.a);
+}`,
+	"pixelize-out": `${FRAG_LIB}
+void main() {
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  float size = mix(1.0, 48.0, p);
+  vec2 grid = u_resolution / size;
+  vec2 uv = (floor(v_uv * grid) + 0.5) / grid;
+  vec4 c = texture(u_texture, uv);
+  outColor = vec4(mix(c.rgb, vec3(0.0), p * 0.35), c.a);
+}`,
+	"zoom-blur-out": `${FRAG_LIB}
+void main() {
+  float p = clamp(u_scalars.x, 0.0, 1.0);
+  vec2 dir = v_uv - 0.5;
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < 8; i++) {
+    float t = float(i) / 7.0;
+    acc += texture(u_texture, v_uv - dir * t * p * 0.35);
+  }
+  acc /= 8.0;
+  outColor = vec4(mix(acc.rgb, vec3(0.0), p * 0.4), acc.a);
+}`,
 };
 
 const WASM_ONLY = new Set(["gaussian-blur"]);
@@ -114,7 +251,28 @@ function scalarsFor(pass: EffectPass): [number, number, number, number] {
 			return [num(u.u_amount, 0.12), num(u.u_size, 1.5), 0, 0];
 		case "chromatic":
 		case "glitch-rgb":
+		case "shake":
 			return [num(u.u_amount, 0.006), num(u.u_time, 0), 0, 0];
+		case "pixelate":
+			return [num(u.u_size, 12), 0, 0, 0];
+		case "invert":
+		case "sharpen":
+		case "glow":
+			return [num(u.u_amount, 0.5), 0, 0, 0];
+		case "posterize":
+			return [num(u.u_levels, 5), 0, 0, 0];
+		case "mirror":
+			return [num(u.u_mode, 0), 0, 0, 0];
+		case "fade-black":
+		case "fade-white":
+		case "wipe-right":
+		case "wipe-left":
+		case "wipe-up":
+		case "wipe-down":
+		case "iris":
+		case "pixelize-out":
+		case "zoom-blur-out":
+			return [num(u.u_progress, 0), 0, 0, 0];
 		default:
 			return [0, 0, 0, 0];
 	}

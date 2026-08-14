@@ -80,6 +80,7 @@ function SoundEffectsView() {
 		setLoading,
 		setError,
 		setHasLoaded,
+		setSearchResults,
 		setCurrentPage,
 		setHasNextPage,
 		setTotalCount,

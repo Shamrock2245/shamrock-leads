@@ -3,6 +3,8 @@ import type { EffectDefinition } from "@/effects/types";
 export const filmGrainEffectDefinition: EffectDefinition = {
 	type: "film-grain",
 	name: "Film Grain",
+	category: "lens",
+	kind: "filter",
 	keywords: ["grain", "film", "noise", "texture"],
 	params: [
 		{ key: "amount", label: "Amount", type: "number", default: 0.12, min: 0, max: 0.5, step: 0.01 },

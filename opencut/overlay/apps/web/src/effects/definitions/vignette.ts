@@ -3,6 +3,8 @@ import type { EffectDefinition } from "@/effects/types";
 export const vignetteEffectDefinition: EffectDefinition = {
 	type: "vignette",
 	name: "Vignette",
+	category: "lens",
+	kind: "filter",
 	keywords: ["vignette", "dark", "edges", "lens"],
 	params: [
 		{ key: "intensity", label: "Intensity", type: "number", default: 0.75, min: 0, max: 1.5, step: 0.01 },

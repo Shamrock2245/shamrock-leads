@@ -5,6 +5,16 @@ import { vignetteEffectDefinition } from "./vignette";
 import { filmGrainEffectDefinition } from "./film-grain";
 import { chromaticEffectDefinition } from "./chromatic";
 import { glitchEffectDefinition } from "./glitch";
+import {
+	pixelateEffectDefinition,
+	invertEffectDefinition,
+	posterizeEffectDefinition,
+	mirrorEffectDefinition,
+	sharpenEffectDefinition,
+	glowEffectDefinition,
+	shakeEffectDefinition,
+} from "./stylize";
+import { TRANSITION_EFFECT_DEFINITIONS } from "./transitions";
 
 const defaultEffects = [
 	blurEffectDefinition,
@@ -12,7 +22,15 @@ const defaultEffects = [
 	vignetteEffectDefinition,
 	filmGrainEffectDefinition,
 	chromaticEffectDefinition,
+	sharpenEffectDefinition,
+	glowEffectDefinition,
+	pixelateEffectDefinition,
+	invertEffectDefinition,
+	posterizeEffectDefinition,
+	mirrorEffectDefinition,
 	glitchEffectDefinition,
+	shakeEffectDefinition,
+	...TRANSITION_EFFECT_DEFINITIONS,
 ];
 
 export function registerDefaultEffects(): void {
