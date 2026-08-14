@@ -17,7 +17,7 @@
 | Jefferson | `jefferson.py` | 120 min | Registered; source and production telemetry require validation. |
 | Lee | `lee.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Madison | `madison.py` | 120 min | Registered; source and production telemetry require validation. |
-| Marshall | `marshall.py` | 120 min | **Local two-page official-source smoke passed 2026-08-14**; Mongo upsert and alert delivery remain unproven. |
+| Marshall | `marshall.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Mobile | `mobile.py` | 120 min | Registered; source and production telemetry require validation. |
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
 | Morgan | `morgan.py` | 120 min | Registered; source and production telemetry require validation. |
@@ -34,7 +34,7 @@ The bounded local smoke over the first two official pages parsed 20 records with
 
 Marshall County Sheriff's Office publishes a broad current-inmate roster at `https://www.marshallso.org/inmate-roster/filters/current/booking_time=desc/1`. The public roster provides a source-issued `Booking #` and a booking timestamp on each card, so the scraper maps that source identifier directly and does not retrieve individual profile pages. It uses explicit Next-page detection, a bounded page cap, and stops if it encounters an empty or duplicate-only page.
 
-The bounded local smoke over the first two official pages parsed 40 records with Alabama/Marshall state invariants and source-issued booking numbers. This is local source validation only, not evidence of a production database write or notification.
+The bounded local smoke over the first two official pages parsed 40 records with Alabama/Marshall state invariants and source-issued booking numbers. The `9ed467e` code rollout completed successfully on 2026-08-14, followed by public `leads`, `sign`, `school`, `paperwork`, and `social /auth` health checks. This is not evidence of a Marshall-specific production database write or notification.
 
 ## Recon queue
 

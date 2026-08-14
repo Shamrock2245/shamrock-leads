@@ -66,7 +66,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
 | **TX** | **34** | `scrapers/counties_tx/` | + Randall (official public roster locally validated); legacy P2C refresh required for Bell, Ellis, Guadalupe, and Jefferson |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending) |
-| **AL** | **15** | `scrapers/counties_al/` | + Marshall (official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
+| **AL** | **15** | `scrapers/counties_al/` | + Marshall (deployed 2026-08-14; official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
 | **LA** | **11** | `scrapers/counties_la/` | + Tangipahoa (deployed 2026-08-14; official public roster locally validated; Mongo/alert evidence pending) |
 | **MS** | **9** | `scrapers/counties_ms/` | + Lauderdale, Forrest, Jones, Madison + Harrison, DeSoto, Rankin |
 | **CT** | **6** | `scrapers/counties_ct/` | Statewide dockets, DOC, Hartford, Bridgeport, New Haven, Stamford |
@@ -82,7 +82,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **355** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee AL and Tangipahoa LA deployments with public host checks passed; Marshall AL local source smoke passed; per-scraper Mongo/Slack evidence remains pending |
+| **355** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee and Marshall AL plus Tangipahoa LA deployments with public host checks passed; per-scraper Mongo/Slack evidence remains pending |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅ |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
@@ -176,7 +176,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | GA remaining counties beyond registered set (74/159) | ⏳ Recon + wrappers |
 | TN (22 registered; Putnam deployed with public health green; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain per-source Mongo/Slack telemetry; Sullivan remains recon-only |
 | TX (34 registered; Randall deployed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
-| AL (15 registered; Lee deployed; Marshall local source smoke passed) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
+| AL (15 registered; Lee and Marshall deployed with public host checks green) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
 | LA (11 registered; Tangipahoa deployed with public host checks green; Lafayette remains CAPTCHA-sensitive) | ⏳ Obtain Tangipahoa Mongo/Slack telemetry and validate existing parish source health |
 | CT dockets + DOC | ✅ Hardened 2026-08-04 — keep production scrapes scheduled |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
