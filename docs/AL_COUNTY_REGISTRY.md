@@ -20,7 +20,7 @@
 | Marshall | `marshall.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Mobile | `mobile.py` | 120 min | Registered; source and production telemetry require validation. |
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
-| Morgan | `morgan.py` | 120 min | Registered; source and production telemetry require validation. |
+| Morgan | `morgan.py` | 120 min | Registered; county-specific Citizen Connect route redirects to the general agency directory, so the shared parser is **fail closed** pending a supported booking-safe public roster. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
 | Shelby | `shelby.py` | 120 min | Registered; source and production telemetry require validation. |
 | St. Clair | `st_clair.py` | 120 min | **Deployed 2026-08-14** after a bounded local two-page official-roster smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Tuscaloosa | `tuscaloosa.py` | 120 min | Registered; source and production telemetry require validation. |
