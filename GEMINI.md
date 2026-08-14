@@ -13,7 +13,7 @@ ShamrockLeads is the core intelligence engine for **Shamrock Bail Bonds** — mu
 and bond Auto-CRM (scrape → score → outreach → intake → match → paperwork → pay → active bond lifecycle).
 
 **Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint**
-plus **Georgia** — **356 registered scrapers** across 10 states (see `STATUS.md`).
+plus **Georgia** — **357 registered scrapers** across 10 states (see `STATUS.md`).
 
 ---
 
@@ -93,7 +93,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 
 | Metric | Count |
 |--------|-------|
-| Registered scrapers | **356** (85 GA · **67 FL** · 60 NC · 46 SC · 34 TX · 22 TN · 15 AL · 12 LA · 9 MS · 6 CT) — see `STATUS.md` |
+| Registered scrapers | **357** (85 GA · **67 FL** · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 12 LA · 9 MS · 6 CT) — see `STATUS.md` |
 | Scraper paths | `counties/` (FL), `counties_ga/`, `counties_sc/`, `counties_nc/`, `counties_tx/`, `counties_tn/`, `counties_la/`, `counties_al/`, `counties_ct/`, `counties_ms/` |
 | Job ID form | FL: `scraper_<county>` · other: `scraper_<st>_<county>` |
 | API blueprint modules | 66+ (in `dashboard/routers/`) incl. `multi_state_ops.py` |

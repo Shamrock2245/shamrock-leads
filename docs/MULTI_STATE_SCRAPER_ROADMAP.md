@@ -3,7 +3,7 @@
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
 > Last updated: 2026-08-14
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 15 AL · 12 LA · 9 MS · 6 CT = **356** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 12 LA · 9 MS · 6 CT = **357** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
 
 ## Why this order
 
@@ -15,7 +15,7 @@
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **12 LA** + **9 MS** registered; Tangipahoa is deployed and St. Mary is locally source-validated, but per-source production telemetry remains required 🔄
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
-9. **AL** — **15 registered** (including Lee’s deployed roster and Marshall’s validated official public roster; per-source production telemetry remains required) 🔄
+9. **AL** — **16 registered** (Lee and Marshall deployed; St. Clair locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
 
 ## Shared platform bases (leverage first)
 
@@ -49,15 +49,16 @@
 ### SC (registered — harden production)
 1. **All 46 modules registered** — see `docs/SC_COUNTY_REGISTRY.md`  
 2. Live custom paths: Beaufort XML, Charleston, York, Florence, Horry, Richland, Jasper, …  
-3. **Greenville** — Incapsula; residential SOCKS when available  
-4. Proxy path for 403 jailroster.org family; scaffold quiet no-portal counties  
+3. **Greenville** — retain fail-closed behavior until a supported public bulk roster is available; do not use access-control workarounds.
+4. Revalidate 403 jailroster.org-family paths only when their official public source contracts are directly accessible; scaffold quiet no-portal counties.
 
 ### NC (60 registered — deepen + expand to 100)
 1. **NC recon ✅** + **60 scrapers registered** — `docs/NC_COUNTY_REGISTRY.md`
 
 2. Platforms: Southern SW + Zuercher + classic P2C + DCN DevExpress + OCV inmates.json + custody PDFs + custom HTML  
 3. Dashboard Multi-State Ops filters NC; run-now uses `nc_*` keys  
-4. Cloud P2C (Wake/Guilford/Forsyth) still needs residential WAF strategy  
+4. Cloud P2C (Wake/Guilford/Forsyth) remains fail closed until directly accessible through a supported public bulk-roster contract.
+
 5. Next: DCN pagination beyond first 100 · more OCV app_ids · Rowan/Robeson · remaining rural  
 
 ### TN (22 registered — deepen and validate)
@@ -70,7 +71,7 @@
 ### TX (34 registered — validate and harden)
 1. **Randall** — official public OCV/Next.js roster parser added; local two-page browser-rendered source smoke passed. Mongo upsert and alert evidence remain required.
 2. **Bexar**, **Dallas**, **Tarrant**, and **Travis** remain core high-yield paths; refresh source telemetry before operational reliance.
-3. **Bell**, **Ellis**, **Guadalupe**, and **Jefferson** legacy P2C hostnames failed DNS during 2026-08-14 reconnaissance; refresh their sources instead of relying on stale wrappers.
+3. **Bell**, **Ellis**, **Guadalupe**, and **Jefferson** stale P2C wrappers are deployed fail closed pending supported public bulk-roster contracts; do not rely on stale sources or bypass controls.
 4. **Collin** remains WAF-sensitive; do not bypass access controls.
 5. Full scheduler inventory, source posture, and recon queue: `docs/TX_COUNTY_REGISTRY.md`.
 
@@ -86,7 +87,7 @@
 
 ### MS / AL
 1. **MS:** 9 jobs registered. `docs/MS_COUNTY_REGISTRY.md` records the current modules and recon-only blockers for Adams, Lafayette, Lowndes, Oktibbeha, and Warren.
-2. **AL:** 15 jobs registered. Lee and Marshall are deployed; validate existing source telemetry before adding a county that overlaps the registration.
+2. **AL:** 16 jobs registered. Lee and Marshall are deployed; St. Clair is locally source-validated and pending deployment. Validate existing source telemetry before adding overlapping coverage.
 
 ## Directory layout
 
@@ -101,7 +102,7 @@ scrapers/
   counties_ct/       # CT (6)
   counties_la/       # LA (12)
   counties_ms/       # MS (9)
-  counties_al/       # AL (15)
+  counties_al/       # AL (16)
   dcn_base.py        # NC DevExpress
   ocv_inmates_base.py
   *_base.py          # shared platforms

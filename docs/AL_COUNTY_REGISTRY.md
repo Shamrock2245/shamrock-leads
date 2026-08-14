@@ -1,7 +1,7 @@
 # Alabama County Scraper Registry
 
 > **Last updated:** 2026-08-14
-> **Registered scheduler jobs:** 15
+> **Registered scheduler jobs:** 16
 > **Package:** `scrapers/counties_al/`
 
 `main.py` is the source of truth for scheduler registration. A county listed below is registered in code; that status does **not** prove a successful production write, downstream alert, payment, or bond action. All state-scoped county labels are kept distinct, including `Lee (AL)` versus Lee jobs in Georgia, North Carolina, and South Carolina.
@@ -22,6 +22,7 @@
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
 | Morgan | `morgan.py` | 120 min | Registered; source and production telemetry require validation. |
 | Shelby | `shelby.py` | 120 min | Registered; source and production telemetry require validation. |
+| St. Clair | `st_clair.py` | 120 min | Registered after a bounded local two-page official-roster smoke; public production persistence and alert telemetry remain unproven pending deployment. |
 | Tuscaloosa | `tuscaloosa.py` | 120 min | Registered; source and production telemetry require validation. |
 
 ## Lee County implementation notes
@@ -42,6 +43,5 @@ The bounded local smoke over the first two official pages parsed 40 records with
 |---|---|---|
 | Limestone | Public Zuercher roster | Recon only: public roster lacks a verified safe per-booking identity boundary. |
 | Calhoun | Public sheriff roster | Recon only: public table lacks a source-issued booking or inmate identifier. |
-| St. Clair | Public sheriff roster | Recon only: direct retrieval encountered a Cloudflare challenge; do not bypass controls. |
 | Autauga | Sheriff app announcement | Recon only: no accessible public web roster contract. |
 | Talladega | Southern Software Citizen Connect | Recon only: identifier and booking-time contract need validation before implementation. |
