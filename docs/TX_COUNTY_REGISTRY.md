@@ -36,7 +36,7 @@ The Texas fleet contains county-specific sources, browser-rendered public pages,
 | Nueces | `nueces.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Brazos | `brazos.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Hays | `hays.py` | 90 min | County-specific public source | Registered; production telemetry required |
-| Ellis | `ellis.py` | 90 min | County-linked LL Hosting inmate search | Former P2C hostname is stale. Public landing shell and client search actions did not establish a supported broad roster contract, and normal aggregate validation then received a 403 challenge; fail closed pending a stable source-safe roster. |
+| Ellis | `ellis.py` | 90 min | County-linked LL Hosting inmate search | Fail-closed guard deployed 2026-08-14. Former P2C hostname is stale; the public landing shell and client search actions did not establish a supported broad roster contract, and normal aggregate validation then received a 403 challenge. Public production hosts are healthy; no Ellis writes or alerts are expected from the safety guard. |
 | Johnson | `johnson.py` | 90 min | Legacy P2C hostname | TLS connection failed during 2026-08-14 reconnaissance; source refresh required |
 | Ector | `ector.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Midland | `midland.py` | 90 min | County-specific public source | Registered; production telemetry required |
