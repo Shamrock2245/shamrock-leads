@@ -22,7 +22,7 @@
 | Montgomery | `montgomery.py` | 120 min | Registered; source and production telemetry require validation. |
 | Morgan | `morgan.py` | 120 min | Registered; source and production telemetry require validation. |
 | Shelby | `shelby.py` | 120 min | Registered; source and production telemetry require validation. |
-| St. Clair | `st_clair.py` | 120 min | Registered after a bounded local two-page official-roster smoke; public production persistence and alert telemetry remain unproven pending deployment. |
+| St. Clair | `st_clair.py` | 120 min | **Deployed 2026-08-14** after a bounded local two-page official-roster smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Tuscaloosa | `tuscaloosa.py` | 120 min | Registered; source and production telemetry require validation. |
 
 ## Lee County implementation notes
