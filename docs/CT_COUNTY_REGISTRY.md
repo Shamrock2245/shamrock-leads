@@ -8,7 +8,7 @@ CT does **not** use a 8-county jail roster model like FL. Primary public sources
 | Scraper | Dashboard label | Portal | Status |
 |---------|-----------------|--------|--------|
 | `statewide_docket.py` | `Statewide (CT)` | [Criminal Dockets by Court](https://www.jud2.ct.gov/crdockets/SearchByCourt.aspx) | ✅ Live — ~1.6k docket rows / 12 courts per run |
-| `ct_doc.py` | `CT DOC (CT)` | [CT Inmate Info Search](https://www.ctinmateinfo.state.ct.us/) | ⏳ Fail closed — official search is access-rejected by BITS BOT; no records emit until a supported complete-identity, source-ID, and booking/admission-date bulk contract is verifiable |
+| `ct_doc.py` | `CT DOC (CT)` | [CT Inmate Info Search](https://www.ctinmateinfo.state.ct.us/) | ⏳ Fail closed — deployed 2026-08-14; official search is access-rejected by BITS BOT, so no records emit until a supported complete-identity, source-ID, and booking/admission-date bulk contract is verifiable. Public production hosts are healthy; no CT DOC writes or alerts are expected from the safety guard. |
 
 ## CLI
 

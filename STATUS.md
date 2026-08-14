@@ -69,7 +69,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **AL** | **15** | `scrapers/counties_al/` | + Marshall (deployed 2026-08-14; official public roster locally validated); Lee remains deployed; per-scraper Mongo/alert evidence pending |
 | **LA** | **12** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green; per-parish Mongo/alert evidence pending |
 | **MS** | **9** | `scrapers/counties_ms/` | Registry reconciled 2026-08-14; 9 jobs registered. Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only pending safe public booking boundaries. |
-| **CT** | **6** | `scrapers/counties_ct/` | CT DOC legacy broad search locally repaired to fail closed after official BITS BOT rejection; Statewide dockets plus Hartford, Bridgeport, New Haven, and Stamford remain registered. |
+| **CT** | **6** | `scrapers/counties_ct/` | CT DOC fail-closed guard deployed 2026-08-14 after official BITS BOT rejection; public hosts are healthy and Statewide dockets plus municipal paths remain registered. |
 | **Total** | **356** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
@@ -179,7 +179,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | AL (15 registered; Lee and Marshall deployed with public host checks green) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
 | LA (12 registered; Tangipahoa and St. Mary deployed with public host checks green; Lafayette remains CAPTCHA-sensitive) | ⏳ Obtain parish-specific Mongo/Slack telemetry and validate existing parish source health |
 | MS (9 registered; registry reconciled; five assessed counties remain recon-only) | ⏳ Validate existing source telemetry and wait for a supported public roster/export before adding uncovered counties |
-| CT dockets + DOC | ⏳ CT DOC locally repaired to fail closed pending a supported booking-safe public source; do not claim CT DOC production writes or alerts. |
+| CT dockets + DOC | ⏳ CT DOC fail-closed guard deployed pending a supported booking-safe public source; do not claim CT DOC production writes or alerts. |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
