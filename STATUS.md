@@ -60,7 +60,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
-| **GA** | **85** | `scrapers/counties_ga/` | Gwinnett fail-closed guard deployed 2026-08-14 because public bulk names are abbreviated; 84 productive/recon paths plus the safety guard require source telemetry. |
+| **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards deployed 2026-08-14: Gwinnett bulk names are abbreviated and Fulton Socrata returns 403; remaining paths require source telemetry. |
 | **FL** | **67** | `scrapers/counties/` | All 67 FL counties on registry + scheduler; Miami-Dade ArcGIS repair deployed 2026-08-14 with public host checks green; per-source production telemetry remains pending |
 | **NC** | **60** | `scrapers/counties_nc/` | + Nash, Vance, Rockingham, Granville, Person, Warren, Caswell, Chowan, Perquimans + DCN, Pitt, Craven, Randolph, Catawba, Carteret, Caldwell, Chatham/Stanly, Rowan, Robeson, Wayne, Wilkes |
 | **SC** | **46** | `scrapers/counties_sc/` | All 46 counties registered |
