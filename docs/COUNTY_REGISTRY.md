@@ -126,7 +126,7 @@
 ### High Priority — Miami-Dade (Largest County in FL)
 | # | County | JMS / Method | Status | Notes |
 |---|--------|-------------|--------|-------|
-| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Path exists | Prefer ArcGIS open data over reCAPTCHA portal. Validate prod scrape. Portal search still reCAPTCHA-blocked. |
+| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Repaired locally | Official anonymous FeatureServer query uses only minimum identity, booking-date, source-key, and charge fields; bounded local smoke passed 2026-08-14. Production Mongo/alert telemetry remains unproven. Portal search remains reCAPTCHA-blocked. |
 
 ### Needs Recon (16 Counties)
 | # | County | Status | Notes |
@@ -160,7 +160,7 @@ Dataset ID: c2275711ced240c6bc4e998ee1910e85
 Hub URL:    https://gis-mdc.opendata.arcgis.com/datasets/c2275711ced240c6bc4e998ee1910e85/about
 Note:       opendata.miamidade.gov now redirects to hub.arcgis.com (legacy Socrata gone)
 Update freq: Daily (not real-time)
-Approach:   Download GeoJSON/CSV snapshot, diff vs last snapshot, ingest new bookings
+Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,BookDate,Defendant,Charge1,Charge3`; exclude address, ZIP, and DOB fields. Fail closed without a complete name, source key, or booking date. The source is date-granular, so it must not fabricate a booking time or custody status.
 ```
 
 ---

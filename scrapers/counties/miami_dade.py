@@ -5,7 +5,8 @@ API: https://services.arcgis.com/8Pc9XBTAsYuxx9Ny/ArcGIS/rest/services/miamidade
 Features:
 - ArcGIS REST API pagination (resultOffset/resultRecordCount)
 - Date-based filtering to only fetch recent bookings
-- curl_cffi for TLS fingerprint spoofing
+- Data-minimized public-field retrieval (no address or ZIP fields)
+- Fail-closed identity and booking-date validation
 """
 
 import logging
@@ -31,6 +32,8 @@ QUERY_ENDPOINT = f"{ARCGIS_BASE_URL}/query"
 DAYS_BACK = 3  # Fetch bookings from the last 3 days
 PAGE_SIZE = 200
 MAX_PAGES = 10
+# Retrieve only source fields needed for identity, booking deduplication, and charges.
+OUT_FIELDS = "ObjectId,GlobalID,BookDate,Defendant,Charge1,Charge3"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -74,7 +77,7 @@ class MiamiDadeCountyScraper(BaseScraper):
         for page in range(MAX_PAGES):
             params = {
                 "where": where_clause,
-                "outFields": "*",
+                "outFields": OUT_FIELDS,
                 "orderByFields": "BookDate DESC, ObjectId DESC",
                 "resultOffset": offset,
                 "resultRecordCount": PAGE_SIZE,
@@ -131,18 +134,6 @@ class MiamiDadeCountyScraper(BaseScraper):
             full_name = attrs.get("Defendant", "").strip()
             first_name, middle_name, last_name = self._parse_name(full_name)
             
-            # DOB
-            dob_raw = attrs.get("DOB", "")
-            dob_str = ""
-            if dob_raw and len(dob_raw) >= 10:
-                dob_str = dob_raw[:10]  # Usually YYYY-MM-DD
-                
-            # Address
-            address = (attrs.get("Address") or "").strip()
-            city = (attrs.get("City") or "").strip()
-            state = (attrs.get("State") or "FL").strip()
-            zip_code = (attrs.get("Zip") or "").strip()
-            
             # Charges
             charges_list = []
             for i in range(1, 4):
@@ -152,28 +143,28 @@ class MiamiDadeCountyScraper(BaseScraper):
             
             charges_str = " | ".join(charges_list) if charges_list else "UNKNOWN CHARGE"
             
-            # Unique ID (ArcGIS GlobalID or ObjectId)
-            booking_number = attrs.get("GlobalID") or str(attrs.get("ObjectId", ""))
-            if not booking_number:
+            # GlobalID is preferred; ObjectId is a source-issued fallback. Both are
+            # stored only as the booking deduplication token for this county source.
+            booking_number = str(attrs.get("GlobalID") or attrs.get("ObjectId") or "").strip()
+            # The ArcGIS source is date-granular, so do not guess a booking time.
+            # Fail closed if the public record has no complete name, booking key, or date.
+            if not booking_number or not booking_date_str or not full_name or len(full_name.replace(',', ' ').split()) < 2:
                 return None
 
             return ArrestRecord(
                 County=self.county,
+                State="FL",
                 Booking_Number=booking_number,
                 Full_Name=full_name,
                 First_Name=first_name,
                 Middle_Name=middle_name,
                 Last_Name=last_name,
-                DOB=dob_str,
                 Booking_Date=booking_date_str,
-                Address=address,
-                City=city,
-                State=state,
-                ZIP=zip_code,
                 Charges=charges_str,
-                Status="In Custody",  # Default assumption for recent bookings
+                Status="Unknown",
                 Facility="Miami-Dade Corrections",
-                LastCheckedMode="INITIAL"
+                LastCheckedMode="INITIAL",
+                extra_data={"booking_key_origin": "official public ArcGIS GlobalID/ObjectId"},
             )
         except Exception as e:
             logger.warning(f"[{self.county}] Error parsing record {attrs.get('ObjectId')}: {e}")
