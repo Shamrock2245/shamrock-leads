@@ -65,7 +65,7 @@ python main.py sc_lee      # not FL Lee
 | Lexington | 🟡 Wrapper | P2C | |
 | Marion | 🟡 Stub | Custom | 403 |
 | Marlboro | 🟡 Scaffold | Custom | Cloudflare/403 |
-| Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; pending deployment verification |
+| Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; deployed 2026-08-14; per-scraper scheduler telemetry still pending |
 | Oconee | 🟡 Wrapper | Zuercher | |
 | Pickens | 🟡 Wrapper | Zuercher | |
 | Richland | ✅ Live | ASP.NET JMSOnline | Captcha = `hidStrRandom` token. Digraph last-name walk (A–Z + digraphs when paged). List view: name/age/ht/wt/booked (no charges on list). |
