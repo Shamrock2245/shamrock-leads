@@ -28,7 +28,7 @@ The Texas fleet contains county-specific sources, browser-rendered public pages,
 | Cameron | `cameron.py` | 90 min | Sheriff public roster | Registered; production telemetry required |
 | Brazoria | `brazoria.py` | 120 min | Tyler Odyssey JailAccess | Registered; production telemetry required |
 | Galveston | `galveston.py` | 90 min | P2C public grid | Registered; production telemetry required |
-| Bell | `bell.py` | 90 min | Legacy P2C hostname | DNS failed during 2026-08-14 reconnaissance; source refresh required |
+| Bell | `bell.py` | 90 min | Official Tyler New World Inmate Inquiry | Former P2C hostname is stale. Official portal is reachable but exposes a search form only; fail closed until a supported broad roster contract is verified without guessing criteria. |
 | Lubbock | `lubbock.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Webb | `webb.py` | 90 min | County-specific public source | Registered; production telemetry required |
 | Jefferson | `jefferson.py` | 90 min | Legacy P2C hostname / official current-inmates PDF observed | P2C DNS failed during 2026-08-14 reconnaissance; do not replace fail-closed keying until a durable source key is confirmed |
