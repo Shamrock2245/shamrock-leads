@@ -41,6 +41,12 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Calcasieu source-contract guard deployment (2026-08-15)
+
+Commit `7fb306e` deployed successfully through **Deploy to Hetzner** run `31901602875`. The previous Calcasieu `/api/inmates/roster` path returned public HTTP `404`; the registered job is now explicitly `fail_closed`, performs no source request, and emits no records until the current public roster API and booking-safe broad-listing fields are revalidated. Scraper Health and the 947-scope matrix now show this runtime source decision. Beauregard remains a non-registered candidate only: its ordinary TLS transport was not reproducibly available from this environment, so it was not scaffolded or promoted.
+
+The Calcasieu guard, source-contract inspector, and focused registry/evidence suite passed **26 tests**. Public post-deploy probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL was not present in this clean checkout, so GAS `?action=health` was not re-probed; the strict local secrets check likewise remains unavailable without production `.env` files and sibling repositories.
+
 ## Complete source-contract reconnaissance deployment (2026-08-15)
 
 Commit `2ebcc01` deployed successfully through **Deploy to Hetzner** run `31898840660`. It adds a versioned, non-PII source-contract matrix for **947 scopes**: all 942 Census county-equivalents in the ten-state repository footprint plus five registered non-county scopes. The matrix makes the distinction explicit: only 10 rows retain existing deployed `verified_public` state, 29 retain existing deployed `fail_closed` guards, 2 are candidate-public listings that still require county-specific implementation validation, and the remainder remain `recon_only` or `unverified`. No source state, scheduler registration, parser, writer, alert, payment, or bond action was promoted by this documentation deployment.
