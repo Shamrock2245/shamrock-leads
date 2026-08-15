@@ -134,6 +134,12 @@ def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():
         assert f"| SC | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
 
 
+def test_connecticut_court_docket_counties_are_reported_as_fail_closed():
+    matrix = MATRIX.read_text()
+    assert "| CT | 003 | Hartford County | Palmetto | registered | fail_closed |" in matrix
+    assert "| CT | 009 | New Haven County | Palmetto | registered | fail_closed |" in matrix
+
+
 def test_active_docs_match_the_canonical_358_scraper_registry():
     counts = _registered_counts()
     assert sum(counts.values()) == 358

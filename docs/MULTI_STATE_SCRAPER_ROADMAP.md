@@ -14,7 +14,7 @@
 5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope remains `unverified`. Source-specific production telemetry is still required. 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
-8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
+8. **CT** — **6 registered**. The five judicial-docket scopes (Statewide, Bridgeport, Hartford, New Haven, Stamford) are explicitly `fail_closed`: court docket numbers and hearing dates are not arrest booking identifiers or arrest times. CT DOC remains a separate source requiring its own source-contract proof and telemetry. 🔄
 9. **AL** — **16 registered** (Lee, Marshall, and St. Clair deployed; Etowah locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
 
 ## Shared platform bases (leverage first)

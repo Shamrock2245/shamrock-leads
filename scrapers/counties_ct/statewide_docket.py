@@ -98,10 +98,13 @@ MAX_RECORDS_PER_RUN = int(__import__("os").environ.get("CT_DOCKET_MAX_RECORDS", 
 
 
 class CTStatewideDockerScraper(BaseScraper):
-    """
-    Scrapes the CT Judicial Branch criminal docket by court location.
-    Returns defendants with pending hearings as ArrestRecord objects.
-    """
+    """Fail-closed Connecticut court-docket base pending an arrest-source contract."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The Connecticut judicial docket exposes court cases and hearing dates, not "
+        "a validated broad arrest listing with a source-issued booking identifier and arrest time."
+    )
 
     # When True, hit every court in ALL_COURTS (slower; good for one-shots).
     scrape_all_courts: bool = False

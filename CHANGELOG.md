@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Connecticut judicial-docket guard)
+
+### Changed
+- **Connecticut court dockets fail-closed** — the Statewide, Bridgeport, Hartford, New Haven, and Stamford judicial-docket jobs now stop before source access. A criminal docket number and hearing date are not a source-issued arrest booking identifier or arrest-time contract, so court cases cannot be emitted as arrest intelligence.
+
 ## [Unreleased] — 2026-08-15 (South Carolina source-contract guard batch)
 
 ### Changed

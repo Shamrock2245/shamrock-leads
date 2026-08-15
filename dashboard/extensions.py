@@ -582,6 +582,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Rankin (MS)": "verified_public",
     # Deployed guards: no source fetches and no record emission pending revalidation.
     "Calcasieu (LA)": "fail_closed",
+    "Statewide (CT)": "fail_closed",
+    "Bridgeport (CT)": "fail_closed",
+    "Hartford (CT)": "fail_closed",
+    "New Haven (CT)": "fail_closed",
+    "Stamford (CT)": "fail_closed",
     "Anderson (SC)": "fail_closed",
     "Bamberg (SC)": "fail_closed",
     "Beaufort (SC)": "fail_closed",

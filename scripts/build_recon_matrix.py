@@ -201,6 +201,7 @@ def main() -> int:
         "6. `docs/recon/TENNESSEE_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the nine Tennessee guarded rows.",
         "7. `docs/recon/NORTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the ten North Carolina guarded rows.",
         "8. `docs/recon/SOUTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the fourteen South Carolina guarded rows.",
+        "9. `docs/recon/CONNECTICUT_JUDICIAL_DOCKET_VALIDATION_2026-08-15.md` — court-docket versus arrest-source validation for the Connecticut docket fleet.",
         "",
     ])
     args.output.parent.mkdir(parents=True, exist_ok=True)
