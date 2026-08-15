@@ -8,7 +8,7 @@
 
 | County | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
-| Baldwin | `baldwin.py` | 120 min | Registered; shared Citizen Connect parser is **fail closed** for the current unsupported Baldwin route and cannot generate synthetic booking identities. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
+| Baldwin | `baldwin.py` | 120 min | **Locally validated fail-closed safeguard pending deployment.** Configured Citizen Connect agency `BaldwinCoAL` resolves to the generic agency directory rather than a Baldwin booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. |
 | Cullman | `cullman.py` | 120 min | Registered; county-specific Citizen Connect route redirects to the general agency directory, so the shared parser is **fail closed** pending a supported booking-safe public roster. See `docs/SOUTHERN_SW_SOURCE_SAFETY.md`. |
 | DeKalb | `dekalb.py` | 120 min | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `DeKalbCoAL` resolves to the generic agency directory rather than a DeKalb booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31857452207` completed successfully; DeKalb-specific persistence and alert telemetry remain unproven. |
 | Etowah | `etowah.py` | 120 min | Repaired to the official public current-roster page; bounded two-page local smoke parsed 20 unique records with source-issued booking numbers and booking dates. Deployed 2026-08-14 with public hosts healthy; county-specific persistence and alert telemetry remain unproven. |
