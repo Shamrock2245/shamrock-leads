@@ -1,7 +1,7 @@
 # Louisiana Parish Scraper Registry
 
 > **Last updated:** 2026-08-14
-> **Registered scheduler jobs:** 12
+> **Registered scheduler jobs:** 13
 > **Package:** `scrapers/counties_la/`
 > **Job IDs:** `scraper_la_<parish>` · CLI example: `python main.py la_tangipahoa`
 
@@ -10,6 +10,7 @@ Louisiana uses **parishes** rather than counties; the parish name is stored in t
 | Parish | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
 | Ascension | `ascension.py` | 120 min | Registered; source and production telemetry require validation. |
+| Bossier | `bossier.py` | 120 min | **Locally validated and registered; deployment pending.** Official paginated listing cards expose complete source names, source-issued Inmate IDs, and booked date/times. A bounded two-page aggregate-only smoke parsed 20 unique records with state, parish, source-key, booking date/time, deduplication, and listing-only invariants passing. No profile or image retrieval. |
 | Caddo | `caddo.py` | 90 min | Registered; source and production telemetry require validation. |
 | Calcasieu | `calcasieu.py` | 90 min | Registered; source and production telemetry require validation. |
 | East Baton Rouge | `east_baton_rouge.py` | 90 min | Registered; source and production telemetry require validation. |
@@ -38,7 +39,6 @@ The bounded local smoke over the first two official pages parsed 40 records with
 
 | Parish | Official public surface | Current decision |
 |---|---|---|
-| Bossier | Official OCV roster | Recon only: broad cards lack a booking timestamp and alternate P2C routes are WAF-rejected. |
 | Rapides | Sheriff-linked NewWorld Inmate Inquiry | Recon only: broad roster lacks a verified source-issued booking key and booking timestamp. |
 | St. Landry | Sheriff-branded LAVNS roster | Recon only: TLS instability and dynamic loading prevented verification of a safe public booking boundary. |
 | Terrebonne | CentralSquare public portal | Recon only: current portal did not expose a verifiable broad roster or booking fields. |

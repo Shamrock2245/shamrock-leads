@@ -67,10 +67,10 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
 | **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending). Five JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
 | **AL** | **16** | `scrapers/counties_al/` | Lee, Marshall, St. Clair, and Etowah are deployed after bounded official-roster smokes; Madison, Mobile, Montgomery, and Tuscaloosa safeguards are deployed fail closed. Shelby is deployed fail closed under `0a75169`. Tuscaloosa run `31851444734` succeeded after its wrong-jurisdiction path was removed; public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Per-scraper Mongo/alert evidence remains pending. |
-| **LA** | **12** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green; per-parish Mongo/alert evidence pending |
+| **LA** | **13** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green. Bossier’s official public-card parser is locally validated and registered after a bounded two-page aggregate smoke; deployment pending. Per-parish Mongo/alert evidence remains pending. |
 | **MS** | **9** | `scrapers/counties_ms/` | Registry reconciled 2026-08-14; 9 jobs registered. Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only; four JailTracker wrappers are deployed fail closed under `0a75169`. See `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
 | **CT** | **6** | `scrapers/counties_ct/` | CT DOC fail-closed guard deployed 2026-08-14 after official BITS BOT rejection; public hosts are healthy and Statewide dockets plus municipal paths remain registered. |
-| **Total** | **357** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **Total** | **358** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
