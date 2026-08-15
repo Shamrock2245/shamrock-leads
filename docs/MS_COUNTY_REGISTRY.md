@@ -11,7 +11,7 @@
 | County | Module | Interval | Evidence boundary |
 |---|---|---:|---|
 | DeSoto | `desoto.py` | 120 min | **Inherited JailTracker fail-closed safeguard deployed.** Revalidated 2026-08-15: official landing page requires image-character human verification. The shared guard makes no CAPTCHA attempt, proxy request, profile request, sensitive-field collection, or synthetic key; it emits no records until a separately verified listing-only contract exists. |
-| Forrest | `forrest.py` | 120 min | Registered; source and production telemetry require validation. |
+| Forrest | `forrest.py` | 120 min | **Locally validated fail-closed safeguard pending deployment.** The configured official API returned HTTP 404 and the prior parser used an unsafe `id` fallback without a verified booking timestamp. The registered guard emits no records until a source-issued booking-safe API contract is revalidated. |
 | Harrison | `harrison.py` | 120 min | Registered; source and production telemetry require validation. |
 | Hinds | `hinds.py` | 90 min | **Fail-closed safeguard deployed 2026-08-15.** The prior profile-enriching path collected DOB and address and relied on an unverified listing contract. Aggregate normal-access validation returned no current listing rows or source IDs; the registered guard now emits no records until a listing-only booking-safe contract is revalidated. Deployment run `31855121732` completed successfully; Hinds-specific persistence and alert telemetry remain unproven. |
 | Jackson | `jackson.py` | 120 min | Registered; source and production telemetry require validation. |
