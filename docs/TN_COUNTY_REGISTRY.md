@@ -22,7 +22,7 @@
 | Sumner | `sumner.py` | 90 min | Custom OCV/S3 handling | Registered; source-specific telemetry required |
 | Wilson | `wilson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
 | Bradley | `bradley.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `BradleyCoTN` resolves to the generic agency directory rather than a Bradley booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31860512979` completed successfully; Bradley-specific persistence and alert telemetry remain unproven. |
-| Blount | `blount.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
+| Blount | `blount.py` | 90 min | JailTracker | **Inherited JailTracker fail-closed safeguard deployed.** Revalidated 2026-08-15: official landing page requires image-character human verification. The shared guard makes no CAPTCHA attempt, proxy request, profile request, sensitive-field collection, or synthetic key; it emits no records until a separately verified listing-only contract exists. |
 | Sevier | `sevier.py` | 90 min | Zuercher | Registered; source-specific telemetry required |
 | Washington | `washington.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
 | Maury | `maury.py` | 90 min | Southern Software | Registered; source-specific telemetry required |
