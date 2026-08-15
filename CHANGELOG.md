@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Orleans and St. Tammany source-contract guards)
+
+### Changed
+- **Orleans Parish, LA fail-closed** — removed speculative endpoint probing, browser navigation, TLS-bypass behavior, and name-derived booking fallbacks after the reachable OPSO public origin did not establish a compliant broad booking roster through ordinary access.
+- **St. Tammany Parish, LA fail-closed** — retired the prior `/api/inmates/recent` path after it returned public HTTP `403`. The registered scraper now makes no source request and emits no records until a booking-safe broad roster contract is revalidated.
+
 ## [Unreleased] — 2026-08-15 (Calcasieu source-contract guard)
 
 ### Changed

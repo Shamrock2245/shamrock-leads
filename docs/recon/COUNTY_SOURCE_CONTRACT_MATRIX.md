@@ -21,14 +21,14 @@
 | CT | 12 | 6 | 0 | 0 | 8 | 4 | 0 |
 | FL | 67 | 67 | 0 | 0 | 66 | 0 | 1 |
 | GA | 159 | 85 | 0 | 0 | 159 | 0 | 0 |
-| LA | 64 | 13 | 3 | 1 | 6 | 53 | 1 |
+| LA | 64 | 13 | 3 | 1 | 4 | 53 | 3 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 0 | 0 | 10 | 90 | 0 |
 | SC | 46 | 46 | 0 | 0 | 14 | 32 | 0 |
 | TN | 96 | 22 | 1 | 0 | 83 | 1 | 11 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 350; unverified 556; fail closed 30.
+**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 348; unverified 556; fail closed 32.
 
 ## County matrix
 
@@ -374,7 +374,7 @@
 | LA | 065 | Madison Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 067 | Morehouse Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 069 | Natchitoches Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
-| LA | 071 | Orleans Parish | Palmetto | registered | recon_only | https://www.opso.gov/detainees | ordinary public landing page; search not submitted | Official OPSO detainees landing page verified; no search submitted and no record fields inferred. |
+| LA | 071 | Orleans Parish | Palmetto | registered | fail_closed | https://www.opso.gov/detainees | ordinary public landing page; search not submitted | Official OPSO detainees landing page verified; no search submitted and no record fields inferred. |
 | LA | 073 | Ouachita Parish | Palmetto | registered | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 075 | Plaquemines Parish | Palmetto | recon_required | recon_only | https://www.ppso.net/corrections | ordinary public informational page | Official corrections landing page verified, but a broad current roster was not established safely. |
 | LA | 077 | Pointe Coupee Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
@@ -390,7 +390,7 @@
 | LA | 097 | St. Landry Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 099 | St. Martin Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 101 | St. Mary Parish | Palmetto | registered | verified_public | https://www.stmaryso.com/inmate-roster/filters/current/booking_time=desc/1 | ordinary public HTML listing with pagination path | Official St. Mary roster landing/listing visibly presents current-roster pagination and booking-time ordering; no person-level data retained. |
-| LA | 103 | St. Tammany Parish | Palmetto | registered | recon_only | https://www.stpso.com/divisions/corrections.php | ordinary public informational page | Official corrections page verified, but broad current roster and listing fields were not established. |
+| LA | 103 | St. Tammany Parish | Palmetto | registered | fail_closed | https://www.stpso.com/divisions/corrections.php | ordinary public informational page | Official corrections page verified, but broad current roster and listing fields were not established. |
 | LA | 105 | Tangipahoa Parish | Palmetto | registered | verified_public | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 107 | Tensas Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 109 | Terrebonne Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |

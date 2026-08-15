@@ -70,11 +70,14 @@ def test_recon_matrix_has_one_county_row_per_inventory_record():
     assert actual == expected
 
 
-def test_calcasieu_retired_endpoint_is_reported_as_fail_closed():
-    assert (
-        "| LA | 019 | Calcasieu Parish | Palmetto | registered | fail_closed |"
-        in MATRIX.read_text()
-    )
+def test_retired_louisiana_endpoints_are_reported_as_fail_closed():
+    matrix = MATRIX.read_text()
+    for row in (
+        "| LA | 019 | Calcasieu Parish | Palmetto | registered | fail_closed |",
+        "| LA | 071 | Orleans Parish | Palmetto | registered | fail_closed |",
+        "| LA | 103 | St. Tammany Parish | Palmetto | registered | fail_closed |",
+    ):
+        assert row in matrix
 
 
 def test_active_docs_match_the_canonical_358_scraper_registry():

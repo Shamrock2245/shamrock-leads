@@ -1,12 +1,15 @@
-"""
-St. Tammany Parish (LA) Arrest Scraper — Covington / STPSO Roster.
-URL: https://www.stpso.com/inmate-search
-"""
-import logging
-import time
-from typing import List
+"""St. Tammany Parish (LA) source-contract guard.
 
-import requests
+The prior configured ``/api/inmates/recent`` endpoint returned HTTP 403 through
+ordinary public access. No public broad-listing contract with complete identity,
+a source-issued immutable booking identifier, booking time, and bounded
+pagination is currently verified. This registered path therefore emits no
+records and performs no proxy, CAPTCHA, profile, or synthetic-identifier work.
+"""
+from __future__ import annotations
+
+import logging
+from typing import List
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
@@ -15,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class StTammanyScraper(BaseScraper):
+    """Fail closed until St. Tammany's official roster contract is revalidated."""
+
+    OFFICIAL_SOURCE_URL = "https://www.stpso.com/inmate-search"
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The prior /api/inmates/recent endpoint returned HTTP 403 through normal "
+        "public access; no booking-safe broad roster contract is revalidated."
+    )
+
     @property
     def county(self) -> str:
         return "St. Tammany"
@@ -24,32 +36,10 @@ class StTammanyScraper(BaseScraper):
         return "LA"
 
     def scrape(self) -> List[ArrestRecord]:
-        records: List[ArrestRecord] = []
-        url = "https://www.stpso.com/api/inmates/recent"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        }
-        try:
-            resp = requests.get(url, headers=headers, timeout=25)
-            if resp.status_code == 200:
-                for item in resp.json():
-                    b_num = str(item.get("booking_number") or item.get("id") or "")
-                    name = str(item.get("name") or "").strip()
-                    if not b_num or not name:
-                        continue
-                    records.append(
-                        ArrestRecord(
-                            booking_number=b_num,
-                            county="St. Tammany",
-                            state="LA",
-                            full_name=name,
-                            charges=item.get("charges") or [],
-                            total_bond_amount=float(item.get("bond") or 0.0),
-                            facility="St. Tammany Parish Jail",
-                            scraped_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        )
-                    )
-        except Exception as e:
-            logger.info(f"St. Tammany LA scrape info: {e}")
-        return records
+        logger.warning(
+            "%s %s fail closed: %s",
+            self.county,
+            self.state,
+            self.SOURCE_CONTRACT_REASON,
+        )
+        return []
