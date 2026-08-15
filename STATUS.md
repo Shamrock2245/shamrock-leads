@@ -41,6 +41,14 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Complete source-contract reconnaissance deployment (2026-08-15)
+
+Commit `2ebcc01` deployed successfully through **Deploy to Hetzner** run `31898840660`. It adds a versioned, non-PII source-contract matrix for **947 scopes**: all 942 Census county-equivalents in the ten-state repository footprint plus five registered non-county scopes. The matrix makes the distinction explicit: only 10 rows retain existing deployed `verified_public` state, 29 retain existing deployed `fail_closed` guards, 2 are candidate-public listings that still require county-specific implementation validation, and the remainder remain `recon_only` or `unverified`. No source state, scheduler registration, parser, writer, alert, payment, or bond action was promoted by this documentation deployment.
+
+The repository now includes reproducible inventory, evidence, matrix-generation, and documentation-contract tests. The focused recon/registry/source-key suite passed **23 tests**. The broader suite collected after its missing declared sandbox dependencies were installed and reported **626 passing**, but retained **13 failures and 1 error** in unrelated Google Drive, paperwork-route, Sarasota helper, and instant-indemnitor paths; those were not changed by this scoped work and are not represented as green.
+
+Post-deploy public probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL remains intentionally unavailable in this clean checkout, so GAS `?action=health` was not re-probed. The strict secrets script remains unable to pass locally because production `.env` files and sibling repositories are absent; neither local limitation is evidence of a production secret or factory regression.
+
 ## Scraper registry integrity deployment (2026-08-15)
 
 Commit `99547b7` deployed successfully through **Deploy to Hetzner** run `31897337465`. The canonical registry remains **358 state-qualified labels**, and static contract coverage now verifies that every registered label has both a local scraper module and a `main.register_scrapers` entry. The guard is intentionally source- and network-free; it does not claim that every registered county is producing records.
