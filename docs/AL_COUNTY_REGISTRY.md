@@ -44,4 +44,4 @@ The bounded local smoke over the first two official pages parsed 40 records with
 | Limestone | Public Zuercher roster | Recon only: public roster lacks a verified safe per-booking identity boundary. |
 | Calhoun | Public sheriff roster | Recon only: public table lacks a source-issued booking or inmate identifier. |
 | Autauga | Sheriff app announcement | Recon only: no accessible public web roster contract. |
-| Talladega | Southern Software Citizen Connect | Recon only: identifier and booking-time contract need validation before implementation. |
+| Talladega | Sheriff-branded Southern Software Citizen Connect | **Recon only, revalidated 2026-08-15:** normal public Current Confinements listing exposes `Booked` and `Arrest Date` but no visible source-issued booking or inmate identifier. No profile route was opened; do not register until the broad listing supplies both identity and booking-time fields. |
