@@ -41,6 +41,12 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## South Carolina source-contract guard deployment (2026-08-15)
+
+Commit `d1578b8` deployed successfully through **Deploy to Hetzner** run `31903358690`. Anderson, Bamberg, Beaufort, Berkeley, Greenville, Horry, Jasper, Kershaw, Laurens, Lee, Marion, Saluda, Union, and York are explicitly `fail_closed`; each emits no records before source retrieval until its county-specific broad-listing contract is revalidated. Existing guard modules are now represented in Scraper Health; the remaining ten modules use the deployed shared pre-scrape contract gate.
+
+The South Carolina metadata-only validation documented that none of the fourteen county paths proved all required broad-listing facts through ordinary access: complete displayed name, source-issued immutable booking/inmate key, booking or arrest date/time, and bounded pagination. The focused source-contract, source-key, registry, evidence, and documentation suite passed **32 tests**. Public post-deploy probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL and production local environment files remain unavailable in this checkout, so the GAS health probe and strict local secrets check were not locally proven.
+
 ## North Carolina source-contract guard deployment (2026-08-15)
 
 Commit `9fa5e74` deployed successfully through **Deploy to Hetzner** run `31902868124`. Caldwell, Chatham, Cumberland, Davidson, Guilford, Halifax, Randolph, Scotland, Union, and Wake are now explicitly `fail_closed`; each returns no records before source retrieval until a county-specific broad-listing contract is revalidated. Union’s existing P2C guard is now explicitly represented in Scraper Health. The other nine county modules use the deployed shared pre-scrape contract gate.
