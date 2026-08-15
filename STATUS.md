@@ -41,6 +41,12 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Tennessee source-contract gate deployment (2026-08-15)
+
+Commit `65dcb37` deployed successfully through **Deploy to Hetzner** run `31902407069`. `BaseScraper.run()` now stops every explicitly unvalidated county before disk checks, source access, scoring, persistence, broadcasts, or alerts. Davidson, Hamilton, Knox, Montgomery, Rutherford, Shelby, Sumner, Williamson, and Wilson are now `fail_closed`; together with the prior Tennessee guards, **20 Tennessee county paths** are non-emitting pending county-specific public contract validation. Putnam remains `verified_public`; the non-county TnCIS scope remains `unverified`.
+
+The Tennessee metadata-only validation documented that none of the nine county paths proved the complete broad-listing contract: complete displayed name, source-issued immutable booking/inmate key, booking or arrest date/time, and bounded pagination through ordinary access. The focused source-contract, source-key, registry, evidence, and documentation suite passed **30 tests**. Public post-deploy probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL and production local environment files remain unavailable in this checkout, so the GAS health probe and strict local secrets check were not locally proven.
+
 ## Orleans and St. Tammany source-contract guard deployment (2026-08-15)
 
 Commit `7c0dd10` deployed successfully through **Deploy to Hetzner** run `31901849486`. Orleans now makes no speculative endpoint, browser, TLS-bypass, or name-derived booking request after the reachable OPSO origin did not establish a compliant booking-safe roster. St. Tammany now makes no source request after its previous `/api/inmates/recent` endpoint returned public HTTP `403`. Both registered jobs are explicitly `fail_closed`, emit no records, and appear as guarded in Scraper Health until their county-specific broad-listing contracts are revalidated.
