@@ -39,7 +39,7 @@ The bounded local smoke over the first two official pages parsed 40 records with
 
 | Parish | Official public surface | Current decision |
 |---|---|---|
-| Rapides | Sheriff-linked NewWorld Inmate Inquiry | Recon only: broad roster lacks a verified source-issued booking key and booking timestamp. |
+| Rapides | Sheriff-linked NewWorld Inmate Inquiry | **Revalidated 2026-08-15 — recon only; no registration.** Normal public broad results expose complete names, a Subject Number, custody status, and facility, but do not expose a source-issued booking key or booking date/time. The public form’s Booking Number and date fields are search controls, not broad-listing data. Do not retrieve profiles or infer identifiers; retain no scraper until the listing itself supplies the required booking-safe fields. |
 | St. Landry | Sheriff-branded LAVNS roster | Recon only: TLS instability and dynamic loading prevented verification of a safe public booking boundary. |
 | Terrebonne | CentralSquare public portal | Recon only: current portal did not expose a verifiable broad roster or booking fields. |
 | Grant, Union | LA VINE roster directory | Recon only: official directory marks these roster endpoints offline. |
