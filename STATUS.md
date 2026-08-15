@@ -41,6 +41,12 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Orleans and St. Tammany source-contract guard deployment (2026-08-15)
+
+Commit `7c0dd10` deployed successfully through **Deploy to Hetzner** run `31901849486`. Orleans now makes no speculative endpoint, browser, TLS-bypass, or name-derived booking request after the reachable OPSO origin did not establish a compliant booking-safe roster. St. Tammany now makes no source request after its previous `/api/inmates/recent` endpoint returned public HTTP `403`. Both registered jobs are explicitly `fail_closed`, emit no records, and appear as guarded in Scraper Health until their county-specific broad-listing contracts are revalidated.
+
+The focused Louisiana, source-key, registry, evidence, and documentation suite passed **28 tests**. Public post-deploy probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL and production local environment files remain unavailable in this clean checkout, so GAS `?action=health` and strict secrets verification were not locally proven; neither limitation changes the deployed source-guard result.
+
 ## Calcasieu source-contract guard deployment (2026-08-15)
 
 Commit `7fb306e` deployed successfully through **Deploy to Hetzner** run `31901602875`. The previous Calcasieu `/api/inmates/roster` path returned public HTTP `404`; the registered job is now explicitly `fail_closed`, performs no source request, and emits no records until the current public roster API and booking-safe broad-listing fields are revalidated. Scraper Health and the 947-scope matrix now show this runtime source decision. Beauregard remains a non-registered candidate only: its ordinary TLS transport was not reproducibly available from this environment, so it was not scaffolded or promoted.
