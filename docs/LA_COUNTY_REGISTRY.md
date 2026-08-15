@@ -10,7 +10,7 @@ Louisiana uses **parishes** rather than counties; the parish name is stored in t
 | Parish | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
 | Ascension | `ascension.py` | 120 min | Registered; source and production telemetry require validation. |
-| Bossier | `bossier.py` | 120 min | **Locally validated and registered; deployment pending.** Official paginated listing cards expose complete source names, source-issued Inmate IDs, and booked date/times. A bounded two-page aggregate-only smoke parsed 20 unique records with state, parish, source-key, booking date/time, deduplication, and listing-only invariants passing. No profile or image retrieval. |
+| Bossier | `bossier.py` | 120 min | **Deployed 2026-08-15.** Official paginated listing cards expose complete source names, source-issued Inmate IDs, and booked date/times. A bounded two-page aggregate-only smoke parsed 20 unique records with state, parish, source-key, booking date/time, deduplication, and listing-only invariants passing. Deployment run `31852987527` succeeded; public leads `/health`, sign, school, paperwork, and social `/auth` checks were healthy. No profile or image retrieval; parish-specific persistence and alert telemetry remain unproven. |
 | Caddo | `caddo.py` | 90 min | Registered; source and production telemetry require validation. |
 | Calcasieu | `calcasieu.py` | 90 min | Registered; source and production telemetry require validation. |
 | East Baton Rouge | `east_baton_rouge.py` | 90 min | Registered; source and production telemetry require validation. |
