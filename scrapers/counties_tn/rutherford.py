@@ -14,7 +14,13 @@ from scrapers.jailtracker_base import JailTrackerBaseScraper
 
 
 class RutherfordScraper(JailTrackerBaseScraper):
-    """Rutherford County (TN) — JailTracker Blazor WASM roster."""
+    """Rutherford County (TN) — fail closed pending source-contract validation."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "No configured public roster contract is documented for this inherited "
+        "JailTracker path; CAPTCHA and roster workflows are not permitted."
+    )
 
     county_jt_id = "Rutherford_County_TN"
     facility_name = "Rutherford County Adult Detention Center"

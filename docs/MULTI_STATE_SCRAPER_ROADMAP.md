@@ -11,7 +11,7 @@
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
-5. **TN** — **22 registered** (including Putnam; source-specific production telemetry still required) 🔄
+5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope remains `unverified`. Source-specific production telemetry is still required. 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  

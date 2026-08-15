@@ -92,6 +92,13 @@ class BaseScraper(ABC):
         re.IGNORECASE,
     )
 
+    # Source-contract state defaults to enabled. County modules set this to False
+    # only when public-source recon does not prove a compliant broad listing.
+    # ``run`` then returns before any network, score, writer, broadcast, or alert
+    # behavior can occur.
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = ""
+
     # Disk thresholds (percentage used)
     DISK_WARN_THRESHOLD = 75
     DISK_PRUNE_THRESHOLD = 80
@@ -627,6 +634,44 @@ class BaseScraper(ABC):
         logger.info(f"{'═' * 50}")
         logger.info(f"🚦 Starting {self.county} County scraper (run #{self.total_runs})")
         logger.info(f"{'═' * 50}")
+
+        # ── Preflight: source-contract guard ──
+        # A job that lacks a proven public broad-listing contract must never make
+        # a source request or reach the score/write/alert stages. This guard is
+        # intentionally before disk, scrape, and all downstream activity.
+        if not getattr(self, "SOURCE_CONTRACT_VALIDATED", True):
+            reason = getattr(self, "SOURCE_CONTRACT_REASON", "") or (
+                "No validated public source contract is available."
+            )
+            logger.warning(
+                "%s %s fail closed before source fetch: %s",
+                self.county,
+                self.state,
+                reason,
+            )
+            self.last_run = datetime.now(timezone.utc)
+            self.last_error = reason
+            if _dashboard_available:
+                try:
+                    update_scraper_status(
+                        county=self.county,
+                        records=0,
+                        hot=0,
+                        warm=0,
+                        cold=0,
+                        disqualified=0,
+                        duration=0,
+                        status="empty",
+                    )
+                except Exception:
+                    pass
+            return {
+                "county": self.county,
+                "records_scraped": 0,
+                "elapsed_seconds": 0,
+                "source_contract_state": "fail_closed",
+                "error": reason,
+            }
 
         # ── Step 0: Disk space guard ──
         disk = self._check_disk_space()

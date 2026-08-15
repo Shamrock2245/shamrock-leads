@@ -46,6 +46,12 @@ REQUEST_PAUSE = 0.15
 
 
 class DavidsonScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Davidson paths did not establish a booking-safe broad roster "
+        "through ordinary access; TLS-bypass and speculative search flows are not permitted."
+    )
+
     @property
     def county(self) -> str:
         return "Davidson"

@@ -6,6 +6,12 @@ from scrapers.jailtracker_base import JailTrackerBaseScraper
 
 
 class WilsonScraper(JailTrackerBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Wilson JailTracker portal timed out through ordinary access; "
+        "no booking-safe broad roster contract is revalidated."
+    )
+
     @property
     def county(self) -> str:
         return "Wilson"

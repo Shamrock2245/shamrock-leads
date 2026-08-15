@@ -41,6 +41,12 @@ HEADERS = {
 
 
 class ShelbyScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Shelby custody paths did not establish a complete booking-safe "
+        "broad listing through ordinary access."
+    )
+
     @property
     def county(self) -> str:
         return "Shelby"

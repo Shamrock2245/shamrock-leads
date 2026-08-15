@@ -38,6 +38,12 @@ HEADERS = {
 
 
 class KnoxScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Knox public pages did not establish a complete booking-safe "
+        "broad listing through ordinary access; TLS-bypass letter walking is not permitted."
+    )
+
     @property
     def county(self) -> str:
         return "Knox"

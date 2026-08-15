@@ -10,6 +10,12 @@ from scrapers.jailtracker_base import JailTrackerBaseScraper
 
 
 class WilliamsonScraper(JailTrackerBaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "No configured public roster contract is documented for this inherited "
+        "JailTracker path; source retrieval is not permitted."
+    )
+
     county_jt_id = "Williamson_County_TN"
     facility_name = "Williamson County Jail"
 

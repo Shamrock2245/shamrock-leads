@@ -197,7 +197,8 @@ def main() -> int:
         "2. `docs/policies/surety-policy.md` — active OSI and Palmetto licensed-writing scope.",
         "3. `docs/recon/county_source_contract_evidence.json` — versioned, non-PII passive evidence for all 942 Census county-equivalent rows.",
         "4. `dashboard/extensions.py` — canonical registered scraper labels; state registry documents remain the source of county-specific source decisions.",
-        "5. `docs/recon/LOUISIANA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded public-contract validation for the three Louisiana candidate productive rows.",
+        "5. `docs/recon/LOUISIANA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded public-contract validation for Louisiana candidate and guarded rows.",
+        "6. `docs/recon/TENNESSEE_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the nine Tennessee guarded rows.",
         "",
     ])
     args.output.parent.mkdir(parents=True, exist_ok=True)

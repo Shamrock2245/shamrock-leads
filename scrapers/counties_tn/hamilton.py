@@ -47,7 +47,13 @@ MAX_DETAIL_FETCHES = 200
 
 
 class HamiltonScraper(BaseScraper):
-    """Hamilton County (TN) — Chattanooga jail roster via JSON API."""
+    """Hamilton County (TN) — fail closed pending source-contract validation."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Hamilton public surfaces did not establish a complete "
+        "booking-safe broad listing through ordinary access."
+    )
 
     @property
     def county(self) -> str:

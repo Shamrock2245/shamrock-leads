@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Tennessee source-contract guard batch)
+
+### Changed
+- **Shared pre-scrape source-contract gate** — `BaseScraper.run()` now exits before any source fetch, scoring, persistence, broadcast, or alert when a county explicitly declares `SOURCE_CONTRACT_VALIDATED = False`.
+- **Nine Tennessee county paths fail-closed** — Davidson, Hamilton, Knox, Montgomery, Rutherford, Shelby, Sumner, Williamson, and Wilson now make no source request and emit no records while their complete public broad-listing contracts remain unproven. The decision is documented in the 947-scope matrix and Tennessee validation note.
+
 ## [Unreleased] — 2026-08-15 (Orleans and St. Tammany source-contract guards)
 
 ### Changed

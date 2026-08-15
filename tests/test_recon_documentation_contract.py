@@ -80,6 +80,22 @@ def test_retired_louisiana_endpoints_are_reported_as_fail_closed():
         assert row in matrix
 
 
+def test_unvalidated_tennessee_batch_is_reported_as_fail_closed():
+    matrix = MATRIX.read_text()
+    for fips, county in (
+        ("037", "Davidson"),
+        ("065", "Hamilton"),
+        ("093", "Knox"),
+        ("125", "Montgomery"),
+        ("149", "Rutherford"),
+        ("157", "Shelby"),
+        ("165", "Sumner"),
+        ("187", "Williamson"),
+        ("189", "Wilson"),
+    ):
+        assert f"| TN | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
+
+
 def test_active_docs_match_the_canonical_358_scraper_registry():
     counts = _registered_counts()
     assert sum(counts.values()) == 358
@@ -95,5 +111,8 @@ def test_active_docs_match_the_canonical_358_scraper_registry():
     assert "947-scope reconnaissance matrix" in readme
     assert "947 rows total" in AGENTS.read_text()
     assert "= **358**" in ROADMAP.read_text()
-    assert "947 rows total" in ROADMAP.read_text()
-    assert "13 LA" in ROADMAP.read_text()
+    roadmap = ROADMAP.read_text()
+    assert "947 rows total" in roadmap
+    assert "20 county paths are explicitly `fail_closed`" in roadmap
+    assert "TnCIS scope remains `unverified`" in roadmap
+    assert "13 LA" in roadmap
