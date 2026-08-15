@@ -41,7 +41,7 @@ The bounded local smoke over the first two official pages parsed 40 records with
 
 | County | Official public surface | Current decision |
 |---|---|---|
-| Limestone | Public Zuercher roster | Recon only: public roster lacks a verified safe per-booking identity boundary. |
+| Limestone | Sheriff-linked Zuercher public roster | **Recon only, revalidated 2026-08-15:** normal public roster exposes name, race, sex, DOB, arrest date, mugshot, charge/bond detail, and release-date fields but no visible source-issued booking or inmate identifier. Do not collect sensitive fields or register until a booking-safe listing contract exists. |
 | Calhoun | Public sheriff roster | Recon only: public table lacks a source-issued booking or inmate identifier. |
 | Autauga | Sheriff site and official app announcement | **Recon only, revalidated 2026-08-15:** the Sheriff confirms the current Jail Roster is available through the mobile app, but normal public web access exposes no broad listing with a source-issued booking/inmate identifier and booking time. Do not register a scraper or reverse-engineer the app. |
 | Talladega | Sheriff-branded Southern Software Citizen Connect | **Recon only, revalidated 2026-08-15:** normal public Current Confinements listing exposes `Booked` and `Arrest Date` but no visible source-issued booking or inmate identifier. No profile route was opened; do not register until the broad listing supplies both identity and booking-time fields. |
