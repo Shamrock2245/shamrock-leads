@@ -1,12 +1,16 @@
-"""
-Calcasieu Parish (LA) Arrest Scraper — Lake Charles / CPSO Roster.
-URL: https://www.cpso.com/inmates
-"""
-import logging
-import time
-from typing import List
+"""Calcasieu Parish (LA) source-contract guard.
 
-import requests
+The prior configured ``/api/inmates/roster`` endpoint now resolves to the public
+site's 404 surface. Although the current roster page is publicly reachable, its
+live API contract, complete listing-name field, source-issued inmate identifier,
+booking timestamp, and bounded pagination require fresh county-specific
+validation. This registered path therefore emits no records and performs no
+proxy, CAPTCHA, detail-page, or synthetic-identifier work.
+"""
+from __future__ import annotations
+
+import logging
+from typing import List
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
@@ -15,6 +19,16 @@ logger = logging.getLogger(__name__)
 
 
 class CalcasieuScraper(BaseScraper):
+    """Fail closed until Calcasieu's current public roster contract is revalidated."""
+
+    OFFICIAL_SOURCE_URL = "https://www.cpso.com/inmateRoster"
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The prior /api/inmates/roster endpoint returned HTTP 404 through normal "
+        "public access; the current roster API and booking-safe listing contract "
+        "are not yet revalidated."
+    )
+
     @property
     def county(self) -> str:
         return "Calcasieu"
@@ -24,32 +38,10 @@ class CalcasieuScraper(BaseScraper):
         return "LA"
 
     def scrape(self) -> List[ArrestRecord]:
-        records: List[ArrestRecord] = []
-        url = "https://www.cpso.com/api/inmates/roster"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        }
-        try:
-            resp = requests.get(url, headers=headers, timeout=25)
-            if resp.status_code == 200:
-                for item in resp.json():
-                    b_num = str(item.get("booking_number") or item.get("id") or "")
-                    name = str(item.get("name") or "").strip()
-                    if not b_num or not name:
-                        continue
-                    records.append(
-                        ArrestRecord(
-                            booking_number=b_num,
-                            county="Calcasieu",
-                            state="LA",
-                            full_name=name,
-                            charges=item.get("charges") or [],
-                            total_bond_amount=float(item.get("total_bond") or 0.0),
-                            facility="Calcasieu Parish Correctional Center",
-                            scraped_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        )
-                    )
-        except Exception as e:
-            logger.info(f"Calcasieu LA scrape info: {e}")
-        return records
+        logger.warning(
+            "%s %s fail closed: %s",
+            self.county,
+            self.state,
+            self.SOURCE_CONTRACT_REASON,
+        )
+        return []

@@ -581,6 +581,7 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "St. Clair (AL)": "verified_public",
     "Rankin (MS)": "verified_public",
     # Deployed guards: no source fetches and no record emission pending revalidation.
+    "Calcasieu (LA)": "fail_closed",
     "Blount (TN)": "fail_closed",
     "Bradley (TN)": "fail_closed",
     "Sevier (TN)": "fail_closed",

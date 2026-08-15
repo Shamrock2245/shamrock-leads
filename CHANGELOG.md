@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Calcasieu source-contract guard)
+
+### Changed
+- **Calcasieu Parish, LA fail-closed** — retired the prior `/api/inmates/roster` request path after it returned public HTTP `404`. The registered scraper now performs no source fetch and emits no records until the current public API, complete displayed name, source-issued identifier, booking time, and bounded pagination are revalidated. Scraper Health and the 947-scope matrix now state `fail_closed`.
+
 ## [Unreleased] — 2026-08-15 (complete source-contract reconnaissance)
 
 ### Added

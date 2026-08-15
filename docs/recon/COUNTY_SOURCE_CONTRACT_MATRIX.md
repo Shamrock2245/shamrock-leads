@@ -21,14 +21,14 @@
 | CT | 12 | 6 | 0 | 0 | 8 | 4 | 0 |
 | FL | 67 | 67 | 0 | 0 | 66 | 0 | 1 |
 | GA | 159 | 85 | 0 | 0 | 159 | 0 | 0 |
-| LA | 64 | 13 | 3 | 2 | 6 | 53 | 0 |
+| LA | 64 | 13 | 3 | 1 | 6 | 53 | 1 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 0 | 0 | 10 | 90 | 0 |
 | SC | 46 | 46 | 0 | 0 | 14 | 32 | 0 |
 | TN | 96 | 22 | 1 | 0 | 83 | 1 | 11 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 10; candidate productive 2; recon only 350; unverified 556; fail closed 29.
+**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 350; unverified 556; fail closed 30.
 
 ## County matrix
 
@@ -348,7 +348,7 @@
 | LA | 013 | Bienville Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 015 | Bossier Parish | Palmetto | registered | verified_public | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 017 | Caddo Parish | Palmetto | registered | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
-| LA | 019 | Calcasieu Parish | Palmetto | registered | candidate_productive | https://www.cpso.com/inmateRoster | ordinary public HTML listing | Official CPSO roster page visibly exposes roster rows and booking-date/time fields; no person-level data retained. |
+| LA | 019 | Calcasieu Parish | Palmetto | registered | fail_closed | https://www.cpso.com/inmateRoster | ordinary public HTML listing | Official CPSO roster page visibly exposes roster rows and booking-date/time fields; no person-level data retained. |
 | LA | 021 | Caldwell Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 023 | Cameron Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
 | LA | 025 | Catahoula Parish | Palmetto | recon_required | unverified | — | No official source safely verified in passive reconnaissance | No official county/parish-operated source was verified through ordinary public access in this pass; no inference from registry status or search snippets. |
