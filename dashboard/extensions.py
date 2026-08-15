@@ -561,6 +561,67 @@ REGISTERED_COUNTIES = sorted([
 ])
 
 
+# ── Source-contract state for dashboard truthfulness ─────────────────────────
+# This is intentionally separate from Mongo run health. A run may be fresh while
+# its source contract is unverified; conversely a fail-closed guard may be
+# healthy infrastructure but must never be represented as data-producing.
+# Any registered county omitted here remains ``unverified`` rather than being
+# inferred as active. Keep this registry scoped to source decisions that have
+# been locally validated and deployed; update it with the county registry docs.
+SCRAPER_SOURCE_STATES: dict[str, str] = {
+    # Listing-only parsers with verified public contracts and bounded source smoke.
+    "Putnam (TN)": "verified_public",
+    "Randall (TX)": "verified_public",
+    "Bossier (LA)": "verified_public",
+    "Tangipahoa (LA)": "verified_public",
+    "St. Mary (LA)": "verified_public",
+    "Lee (AL)": "verified_public",
+    "Marshall (AL)": "verified_public",
+    "Etowah (AL)": "verified_public",
+    "St. Clair (AL)": "verified_public",
+    "Rankin (MS)": "verified_public",
+    # Deployed guards: no source fetches and no record emission pending revalidation.
+    "Blount (TN)": "fail_closed",
+    "Bradley (TN)": "fail_closed",
+    "Sevier (TN)": "fail_closed",
+    "Washington (TN)": "fail_closed",
+    "Maury (TN)": "fail_closed",
+    "Robertson (TN)": "fail_closed",
+    "Hamblen (TN)": "fail_closed",
+    "Bedford (TN)": "fail_closed",
+    "Coffee (TN)": "fail_closed",
+    "Lincoln (TN)": "fail_closed",
+    "Giles (TN)": "fail_closed",
+    "Baldwin (AL)": "fail_closed",
+    "Cullman (AL)": "fail_closed",
+    "DeKalb (AL)": "fail_closed",
+    "Houston (AL)": "fail_closed",
+    "Jackson (AL)": "fail_closed",
+    "Jefferson (AL)": "fail_closed",
+    "Morgan (AL)": "fail_closed",
+    "Shelby (AL)": "fail_closed",
+    "Tuscaloosa (AL)": "fail_closed",
+    "DeSoto (MS)": "fail_closed",
+    "Forrest (MS)": "fail_closed",
+    "Harrison (MS)": "fail_closed",
+    "Hinds (MS)": "fail_closed",
+    "Jackson (MS)": "fail_closed",
+    "Jones (MS)": "fail_closed",
+    "Lauderdale (MS)": "fail_closed",
+    "Madison (MS)": "fail_closed",
+    "Sarasota (FL)": "fail_closed",
+}
+
+
+def scraper_source_state(label: str) -> str:
+    """Return the explicit source-contract state for a registered county label.
+
+    The default is deliberately ``unverified``; a successful run must never
+    upgrade a source contract without a documented validation decision.
+    """
+    return SCRAPER_SOURCE_STATES.get(label, "unverified")
+
+
 # States we actively scrape / surface in the dashboard
 ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "AL", "CT", "MS")
 

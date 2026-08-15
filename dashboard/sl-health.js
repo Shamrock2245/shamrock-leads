@@ -23,6 +23,15 @@ const SLHealth = (() => {
     disabled:  { label: '⏸ Disabled',  cls: 'status-never', order: 8 },
   };
 
+  // Contract provenance is deliberately independent from last-run health.
+  // A source guard can be operationally healthy while intentionally emitting no data.
+  const SOURCE_STATE_CONFIG = {
+    verified_public:     { label: '✓ Verified public', color: '#10b981', hint: 'Verified public listing parser; source-issued identity and time required.' },
+    fail_closed:         { label: '🛡 Fail closed', color: '#f59e0b', hint: 'Guarded: this job intentionally emits no records until its source contract is revalidated.' },
+    unverified:          { label: '◌ Unverified', color: '#94a3b8', hint: 'Registered coverage without a deployed source-contract classification.' },
+    unregistered_history:{ label: 'History only', color: '#64748b', hint: 'Historical records exist, but this county is not currently registered.' },
+  };
+
   /** Productive = last run succeeded with records (not soft-empty / stubs). */
   function _isProductive(r) {
     const st = (r.status || '').toLowerCase();
@@ -34,6 +43,7 @@ const SLHealth = (() => {
   }
 
   function _statusCfg(s) { return STATUS_CONFIG[s] || { label: s, cls: 'status-never', order: 9 }; }
+  function _sourceCfg(s) { return SOURCE_STATE_CONFIG[s] || SOURCE_STATE_CONFIG.unverified; }
   function _fmtDuration(secs) {
     if (!secs) return '—';
     if (secs < 60) return `${Math.round(secs)}s`;
@@ -115,6 +125,8 @@ const SLHealth = (() => {
         rows = rows.filter(r => ['stale','warning','offline'].includes(r.status));
       } else if (_filter === 'empty') {
         rows = rows.filter(r => r.status === 'empty');
+      } else if (_filter === 'fail_closed') {
+        rows = rows.filter(r => r.source_state === 'fail_closed');
       } else {
         rows = rows.filter(r => r.status === _filter);
       }
@@ -189,6 +201,7 @@ const SLHealth = (() => {
     const neverRun = _data.filter(r => r.status === 'never_run').length;
     const stale = _data.filter(r => ['stale','warning','offline'].includes(r.status)).length;
     const disabled = _data.filter(r => r.status === 'disabled' || r.enabled === false).length;
+    const guarded = _data.filter(r => r.source_state === 'fail_closed').length;
     const totalRecords = _data.reduce((s,r) => s + (r.total_records||0), 0);
     const totalHot = _data.reduce((s,r) => s + (r.hot_leads||0), 0);
     kpiEl.innerHTML = `
@@ -227,6 +240,11 @@ const SLHealth = (() => {
         <div class="stat-value" style="color:#9ca3af">${disabled}</div>
         <div class="stat-sub">paused scrapers</div>
       </div>` : ''}
+      <div class="stat-card" style="border-color:#f59e0b;cursor:pointer" onclick="SLHealth.setFilter('fail_closed',this)">
+        <div class="stat-label">🛡 Source Guards</div>
+        <div class="stat-value" style="color:#f59e0b">${guarded}</div>
+        <div class="stat-sub">intentionally zero-output</div>
+      </div>
       <div class="stat-card">
         <div class="stat-label">📊 Total Records</div>
         <div class="stat-value">${totalRecords.toLocaleString()}</div>
@@ -247,7 +265,7 @@ const SLHealth = (() => {
     const rows = _getFiltered();
     if (label) label.textContent = `${rows.length} of ${_data.length} counties`;
     if (rows.length === 0) {
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">No counties match the current filter.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:32px">No counties match the current filter.</td></tr>`;
       return;
     }
     const STATE_COLORS_H = {
@@ -257,6 +275,7 @@ const SLHealth = (() => {
     };
     body.innerHTML = rows.map(r => {
       const cfg = _statusCfg(r.status);
+      const source = _sourceCfg(r.source_state);
       const lastRun = _fmtRelative(r.last_run || r.latest_record);
       const hasError = r.status === 'error' && r.error;
       const isNeverRun = r.status === 'never_run';
@@ -274,6 +293,7 @@ const SLHealth = (() => {
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
             ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}
           </td>
+          <td><span title="${source.hint}" style="display:inline-block;padding:2px 6px;border-radius:5px;border:1px solid ${source.color}66;background:${source.color}18;color:${source.color};font-size:10px;font-weight:700;white-space:nowrap">${source.label}</span></td>
           <td title="In DB${lastNLabel}">${_fmtNum(r.total_records)}${lastN != null ? `<div style="font-size:10px;color:var(--text-muted)">last ${lastN}</div>` : ''}</td>
           <td style="color:var(--danger)">${_fmtNum(r.hot_leads)}</td>
           <td style="color:${isNeverRun ? 'var(--text-muted)' : 'inherit'}">${lastRun}</td>
@@ -281,7 +301,8 @@ const SLHealth = (() => {
           <td>${r.run_count || '—'}</td>
           <td>
             <div style="display:flex;gap:4px;flex-wrap:wrap">
-              ${!isDisabled ? `<button class="btn btn-xs" onclick="SLHealth.runNow(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
+              ${!isDisabled && r.source_state !== 'fail_closed' ? `<button class="btn btn-xs" onclick="SLHealth.runNow(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
+              ${r.source_state === 'fail_closed' ? `<span title="${source.hint}" style="font-size:10px;color:#fbbf24;padding:3px 4px">Guarded</span>` : ''}
               ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError(${JSON.stringify(r.county)})" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
               <button class="btn btn-xs" onclick="SLHealth.showDrill(${JSON.stringify(r.county)})" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
               <button class="btn btn-xs" onclick="SLHealth.healthCheck(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>
@@ -499,7 +520,9 @@ const SLHealth = (() => {
     try {
       const row = _data.find(r => r.county === county) || {};
       const cfg = _statusCfg(row.status || 'never_run');
+      const source = _sourceCfg(row.source_state);
       const isDisabled = row.enabled === false || row.status === 'disabled';
+      const isGuarded = row.source_state === 'fail_closed';
       const cJ = JSON.stringify(county);
       const sJ = JSON.stringify(row.state || 'FL');
       title.textContent = `📊 ${county} County — ${cfg.label}`;
@@ -516,7 +539,8 @@ const SLHealth = (() => {
           <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:11px">Avg Duration</div><div class="stat-value" style="font-size:22px">${_fmtDuration(row.duration_seconds)}</div></div>
         </div>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          ${!isDisabled ? `<button class="btn" onclick="SLHealth.runNow(${cJ},${sJ})" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px">⚡ Run Now</button>` : ''}
+          ${!isDisabled && !isGuarded ? `<button class="btn" onclick="SLHealth.runNow(${cJ},${sJ})" style="background:var(--accent);color:#000;font-weight:700;padding:6px 14px">⚡ Run Now</button>` : ''}
+          ${isGuarded ? `<span title="${source.hint}" style="font-size:12px;color:#fbbf24;padding:6px 0">🛡 Source guard active — no manual run</span>` : ''}
           <button class="btn" onclick="SLHealth.healthCheck(${cJ},${sJ})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:6px 14px">🩺 Health Check</button>
           <button class="btn" onclick="SLHealth.viewLogs(${cJ})" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">📋 View Logs</button>
           <button class="btn" onclick="SL && SL.switchTab && SL.switchTab(document.querySelector('[data-tab=tabLeads]'))" style="background:var(--panel-bg);border:1px solid var(--border);padding:6px 14px">🔍 View Leads</button>

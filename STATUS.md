@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-13  
+> **Last verified:** 2026-08-15
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -65,10 +65,10 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard and Lincoln’s official OCV repair are deployed; seven audited legacy P2C paths also fail closed under `0de5f79`. Production persistence and alert telemetry remain pending. |
 | **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair is deployed; Lee and Lexington legacy P2C paths fail closed under `0de5f79`. Anderson, Cherokee, Colleton, Kershaw, and Laurens Zuercher guards are deployed in `7718bf8`; Chester and Greenwood JailTracker wrappers are deployed fail closed under `0a75169`. See `docs/SC_ZUERCHER_SOURCE_SAFETY.md` and `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-county persistence and alert telemetry remain pending. |
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
-| **TN** | **22** | `scrapers/counties_tn/` | + Putnam (deployed 2026-08-12 EDT; public ISOMS source locally validated; Mongo upsert/alert telemetry still pending). Five JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
-| **AL** | **16** | `scrapers/counties_al/` | Lee, Marshall, St. Clair, and Etowah are deployed after bounded official-roster smokes; Madison, Mobile, Montgomery, and Tuscaloosa safeguards are deployed fail closed. Shelby is deployed fail closed under `0a75169`. Tuscaloosa run `31851444734` succeeded after its wrong-jurisdiction path was removed; public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Per-scraper Mongo/alert evidence remains pending. |
+| **TN** | **22** | `scrapers/counties_tn/` | Putnam remains source-validated. Blount, Bradley, Sevier, Washington, Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, and Giles are deployed fail-closed guards pending compliant source contracts; public service checks were healthy. Per-source Mongo upsert and alert telemetry remain pending. |
+| **AL** | **16** | `scrapers/counties_al/` | Lee, Marshall, St. Clair, and Etowah are deployed after bounded official-roster smokes. Baldwin, Cullman, DeKalb, Houston, Jackson, Jefferson, Morgan, Shelby, Tuscaloosa, Madison, Mobile, and Montgomery are deployed fail-closed guards where no compliant source contract exists; public service checks were healthy. Per-scraper Mongo/alert evidence remains pending. |
 | **LA** | **13** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green. Bossier’s official public-card parser deployed 2026-08-15 in run `31852987527`; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Per-parish Mongo/alert evidence remains pending. |
-| **MS** | **9** | `scrapers/counties_ms/` | Registry reconciled 2026-08-14; 9 jobs registered. Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only; four JailTracker wrappers are deployed fail closed under `0a75169`. See `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
+| **MS** | **9** | `scrapers/counties_ms/` | Rankin is source-validated and deployed. DeSoto, Forrest, Harrison, Hinds, Jackson, Jones, Lauderdale, and Madison are deployed fail-closed guards; Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only. Public service checks were healthy; per-county Mongo/alert evidence remains pending. |
 | **CT** | **6** | `scrapers/counties_ct/` | CT DOC fail-closed guard deployed 2026-08-14 after official BITS BOT rejection; public hosts are healthy and Statewide dockets plus municipal paths remain registered. |
 | **Total** | **358** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 

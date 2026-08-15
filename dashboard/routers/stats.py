@@ -17,6 +17,7 @@ from dashboard.extensions import (
     merge_county_list_for_ui,
     parse_registered_county,
     resolve_scraper_status,
+    scraper_source_state,
 )
 from dashboard.routers.helpers import serialize_doc, async_csv_streamer
 from dashboard.models.leads import LeadsQueryModel
@@ -883,6 +884,7 @@ async def api_scraper_health():
                 "county": bare,
                 "county_label": label,
                 "state": st,
+                "source_state": scraper_source_state(label),
                 "total_records": r.get("total_records", 0),
                 "last_run_records": last_run_records,
                 "in_custody": r.get("in_custody", 0),
@@ -934,6 +936,7 @@ async def api_scraper_health():
                 "county": bare,
                 "county_label": label,
                 "state": st,
+                "source_state": "unregistered_history",
                 "total_records": r.get("total_records", 0),
                 "in_custody": r.get("in_custody", 0),
                 "records_24h": counts_24h.get(label, 0),

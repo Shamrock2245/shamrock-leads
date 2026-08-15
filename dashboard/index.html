@@ -1056,6 +1056,7 @@
         <button class="health-filter-btn" data-filter="error" onclick="SLHealth.setFilter('error',this)">&#x274C; Errors</button>
         <button class="health-filter-btn" data-filter="never_run" onclick="SLHealth.setFilter('never_run',this)">&#x23F3; Never Run</button>
         <button class="health-filter-btn" data-filter="stale" onclick="SLHealth.setFilter('stale',this)">&#x26A0;&#xFE0F; Stale</button>
+        <button class="health-filter-btn" data-filter="fail_closed" onclick="SLHealth.setFilter('fail_closed',this)">&#x1F6E1; Source Guards</button>
         <span style="width:1px;height:20px;background:var(--border);margin:0 4px"></span>
         <span style="font-weight:600;color:var(--text-muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em">State:</span>
         <button class="health-filter-btn" data-filter="state:FL" onclick="SLHealth.setFilter('state:FL',this)" style="border-color:#00d4aa;color:#00d4aa">FL</button>
@@ -1088,7 +1089,8 @@
             <tr>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('county')">County &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('state')">State &#x21D5;</th>
-              <th style="cursor:pointer" onclick="SLHealth.sortBy('status')">Status &#x21D5;</th>
+              <th style="cursor:pointer" onclick="SLHealth.sortBy('status')">Run Health &#x21D5;</th>
+              <th title="Validated source-contract state; independent from last-run health">Source Contract</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('total_records')">Records &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('hot_leads')">Hot &#x21D5;</th>
               <th style="cursor:pointer" onclick="SLHealth.sortBy('last_run')">Last Run &#x21D5;</th>
