@@ -1,11 +1,20 @@
-"""
-Sevier County (TN) Arrest Scraper — Zuercher Portal JSON API.
-URL: https://seviersheriff.zuercherportal.com
-"""
+"""Sevier County, TN — fail closed pending a verified official roster contract."""
+from __future__ import annotations
+
+import logging
+from typing import List
+
+from core.models import ArrestRecord
 from scrapers.zuercher_base import ZuercherBaseScraper
+
+logger = logging.getLogger(__name__)
 
 
 class SevierScraper(ZuercherBaseScraper):
+    """Registered guard; stale portal and public fallback lack a booking-safe identity contract."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+
     @property
     def county(self) -> str:
         return "Sevier"
@@ -21,3 +30,10 @@ class SevierScraper(ZuercherBaseScraper):
     @property
     def default_facility(self) -> str:
         return "Sevier County Jail"
+
+    def scrape(self) -> List[ArrestRecord]:
+        logger.warning(
+            "Sevier TN: fail closed; configured Zuercher portal is stale and the public "
+            "ISOMS listing has no verified booking-safe identity contract"
+        )
+        return []
