@@ -13,7 +13,7 @@
 | DeSoto | `desoto.py` | 120 min | Registered; source and production telemetry require validation. |
 | Forrest | `forrest.py` | 120 min | Registered; source and production telemetry require validation. |
 | Harrison | `harrison.py` | 120 min | Registered; source and production telemetry require validation. |
-| Hinds | `hinds.py` | 90 min | **Locally validated fail-closed safeguard pending deployment.** The prior profile-enriching path collected DOB and address and relied on an unverified listing contract. Aggregate normal-access validation returned no current listing rows or source IDs; the registered guard now emits no records until a listing-only booking-safe contract is revalidated. |
+| Hinds | `hinds.py` | 90 min | **Fail-closed safeguard deployed 2026-08-15.** The prior profile-enriching path collected DOB and address and relied on an unverified listing contract. Aggregate normal-access validation returned no current listing rows or source IDs; the registered guard now emits no records until a listing-only booking-safe contract is revalidated. Deployment run `31855121732` completed successfully; Hinds-specific persistence and alert telemetry remain unproven. |
 | Jackson | `jackson.py` | 120 min | Registered; source and production telemetry require validation. |
 | Jones | `jones.py` | 120 min | Registered; source and production telemetry require validation. |
 | Lauderdale | `lauderdale.py` | 120 min | Registered; source and production telemetry require validation. |
