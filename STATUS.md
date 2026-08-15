@@ -91,6 +91,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | Lead Explorer **state** column + filter (all 10 states) | ✅ |
 | Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ |
 | Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ |
+| **Scraper Health source-contract state** (`Verified public` / `Fail closed` / `Unverified` / `History only`) | ✅ deployed 2026-08-15 · independent of run health; guarded sources show no manual-run action |
 | **Autonomous Proxy Engine (APE)** Warren + S5W2C + Stormsia | ✅ code · hub live |
 | Hub APIs: `/api/crm/health`, `/overview`, `/pipeline`, `/search` | ✅ |
 | Omnibar → CRM search | ✅ |
