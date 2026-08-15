@@ -41,6 +41,10 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Verified-public scraper health review (2026-08-15)
+
+All ten paths currently marked `verified_public` were checked in disposable aggregate-only subprocesses with no writer, scoring, alert, broadcast, persistence, or PII output. Bossier, Tangipahoa, St. Mary, Lee (AL), Marshall, Etowah, and Rankin emitted records with non-empty source booking keys. Putnam’s configured source returned ordinary HTTP `200`, but its scraper exceeded both bounded time budgets; Randall returned an empty result while its configured source returned HTTP `200`; St. Clair returned an empty result and its ordinary direct source request returned HTTP `403`. These three observations are **monitoring findings only**. No working scraper class, shared base, scheduler registration, source-state label, endpoint, timeout, or deployment configuration was modified.
+
 ## Connecticut judicial-docket guard deployment (2026-08-15)
 
 Commit `d8295ea` deployed successfully through **Deploy to Hetzner** run `31903650843`. The Statewide, Bridgeport, Hartford, New Haven, and Stamford Connecticut judicial-docket jobs now stop before any source request. The court workflow previously converted judicial docket numbers and hearing dates into arrest-record fields; those are not source-issued arrest booking identifiers or arrest-time fields. Scraper Health now reports the five court-docket scopes as `fail_closed`.

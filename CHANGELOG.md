@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Verified-public scraper health review)
+
+### Documented
+- **No working scraper implementation changed** — aggregate-only checks covered every `verified_public` path without writers, scoring, alerts, persistence, or PII output. Bossier, Tangipahoa, St. Mary, Lee (AL), Marshall, Etowah, and Rankin emitted records with source booking keys in the bounded checks. Putnam remained source-reachable but exceeded the bounded budget; Randall and St. Clair emitted zero records without exceptions, with St. Clair’s ordinary direct source check receiving HTTP `403`. These are observability findings only; no scraper was disabled, patched, or reclassified.
+
 ## [Unreleased] — 2026-08-15 (Connecticut judicial-docket guard)
 
 ### Changed
