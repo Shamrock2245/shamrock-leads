@@ -737,6 +737,50 @@ const SLPaperwork = {
   /* ─────────────────────────────────────────────────────────────────────────────
    * Adaptive Case Packet Builder (match → auto-fill → drag extras → flatten → send)
    * ───────────────────────────────────────────────────────────────────────────── */
+  _setAdaptiveField(id, value) {
+    if (value == null || value === '') return;
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  },
+
+  _applyBondSeed(seed = {}) {
+    this._setAdaptiveField('pwApBooking', seed.booking_number);
+    this._setAdaptiveField('pwApCounty', seed.county);
+    this._setAdaptiveField('pwApLookupId', seed.packet_id || seed.intake_id);
+    this._setAdaptiveField('pwApPoa', seed.poa_number);
+    this._setAdaptiveField('pwApCaseNumber', seed.case_number);
+    this._setAdaptiveField('pwApBondAmount', seed.bond_amount);
+    this._setAdaptiveField('pwApDefName', seed.defendant_name);
+    this._setAdaptiveField('pwApDefDob', seed.defendant_dob);
+    this._setAdaptiveField('pwApDefPhone', seed.defendant_phone);
+    this._setAdaptiveField('pwApDefAddress', seed.defendant_address);
+    this._setAdaptiveField('pwApIndName', seed.indemnitor_name);
+    this._setAdaptiveField('pwApIndPhone', seed.indemnitor_phone);
+    this._setAdaptiveField('pwApIndEmail', seed.indemnitor_email);
+    this._setAdaptiveField('pwApIndAddress', seed.indemnitor_address);
+    if (seed.surety_id) {
+      const sur = document.getElementById('pwApSurety');
+      if (sur) {
+        const raw = String(seed.surety_id).toLowerCase();
+        sur.value = (raw.includes('palm') || raw.includes('psc')) ? 'palmetto' : 'osi';
+      }
+    }
+  },
+
+  /**
+   * Open OSI/Palmetto DocuSeal packet builder from a recorded bond or new indemnitor.
+   * Switches to Paperwork so the modal is not trapped in a hidden tab.
+   */
+  startFromBond(seed = {}) {
+    if (window.SL && typeof SL.switchTab === 'function') {
+      SL.switchTab('tabPaperwork');
+    }
+    if (typeof this.loadLivePackets === 'function') {
+      this.loadLivePackets().catch(() => {});
+    }
+    this.openAdaptivePacketModal(seed);
+  },
+
   openAdaptivePacketModal(seed = {}) {
     const modal = document.getElementById('pwAdaptivePacketModal');
     if (!modal) return;
@@ -745,34 +789,27 @@ const SLPaperwork = {
     this._adaptiveContext = null;
     this._adaptiveFields = null;
     this._draggedDocKey = null;
+    this._pendingBondSeed = seed;
 
-    if (seed.packet_id) {
-      const el = document.getElementById('pwApLookupId');
-      if (el) el.value = seed.packet_id;
-    }
-    if (seed.booking_number) {
-      const el = document.getElementById('pwApBooking');
-      if (el) el.value = seed.booking_number;
-    }
-    if (seed.county) {
-      const el = document.getElementById('pwApCounty');
-      if (el) el.value = seed.county;
-    }
-    if (seed.intake_id) {
-      const el = document.getElementById('pwApLookupId');
-      if (el) el.value = seed.intake_id;
-    }
+    this._applyBondSeed(seed);
 
     this.renderAdaptivePalette();
     this.renderCasePacketDrop();
     this.renderExtraList();
-    this._setApStatus('', null);
+    this._setApStatus(
+      seed.booking_number
+        ? `Loading OSI packet for booking ${seed.booking_number}…`
+        : '',
+      seed.booking_number ? 'info' : null,
+    );
     modal.style.display = 'flex';
     modal.classList.add('active');
 
-    // Auto-resolve if we already have an id
     if (seed.packet_id || seed.intake_id || seed.booking_number || seed.match_id) {
-      this.loadAdaptiveContext(seed);
+      this.loadAdaptiveContext(seed).then(() => {
+        // Manual/re-added cases win over empty match context
+        this._applyBondSeed(this._pendingBondSeed || seed);
+      });
     }
   },
 

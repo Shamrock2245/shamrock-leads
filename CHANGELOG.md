@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (Paperwork from recorded bond)
+
+### Added
+- **Do Paperwork** on Edit Bond, Active Bonds rows/cards, and New Indemnitor (`Save & Do Paperwork`). Opens the OSI/Palmetto DocuSeal packet builder with booking, POA, case #, and names filled — for cases re-added after a scraper purge.
+
 ## [Unreleased] — 2026-08-14 (OpenCut overlay)
 
 ### Added

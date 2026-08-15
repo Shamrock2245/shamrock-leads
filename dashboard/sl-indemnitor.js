@@ -875,7 +875,8 @@ const SLIndemnitor = (() => {
     $('indAddStep2').style.display = 'none';
   }
 
-  async function submitAddForm() {
+  async function submitAddForm(opts) {
+    const thenPaperwork = !!(opts && opts.thenPaperwork);
     const booking = ($('indFormBooking')?.value || '').trim();
     const firstName = ($('indFormFirst')?.value || '').trim();
     const lastName = ($('indFormLast')?.value || '').trim();
@@ -884,6 +885,10 @@ const SLIndemnitor = (() => {
     // Minimal validation: only a name is required to save.
     // Everything else (booking#, phone, address, etc.) can be filled in later.
     if (!firstName && !lastName) { toast('⚠️ At least a first or last name is required', 'error'); return; }
+    if (thenPaperwork && !booking) {
+      toast('Enter a booking # to start OSI paperwork', 'error');
+      return;
+    }
 
     const body = {
       booking_number: booking,
@@ -926,16 +931,18 @@ const SLIndemnitor = (() => {
 
     if (_scannedAddress && body.address.trim() && body.address.trim().toLowerCase() !== _scannedAddress.toLowerCase()) {
       // Address was manually changed from scanned ID
+      body.thenPaperwork = thenPaperwork;
       _pendingSaveBody = body;
       $('addressOverridePin').value = '';
       $('addressOverrideModal').style.display = 'flex';
       return;
     }
 
-    await _executeSaveIndemnitor(body);
+    await _executeSaveIndemnitor(body, { thenPaperwork });
   }
 
-  async function _executeSaveIndemnitor(body) {
+  async function _executeSaveIndemnitor(body, opts) {
+    const thenPaperwork = !!(opts && opts.thenPaperwork);
     try {
       const r = await fetch(`${API}/api/indemnitors/create`, {
         method: 'POST',
@@ -948,9 +955,26 @@ const SLIndemnitor = (() => {
       const suffix = d.linked === false ? ' (unlinked — link to a bond later)' : '';
       const nm = `${body.firstName || ''} ${body.lastName || ''}`.trim() || 'record';
       toast(`✅ Indemnitor ${verb}: ${nm}${suffix}`, 'success');
+      const booking = (body.booking_number || $('indFormBooking')?.value || '').trim();
       closeAddModal();
       _scannedAddress = null;
       load();  // Refresh list
+      if (thenPaperwork) {
+        if (!booking) {
+          toast('Enter a booking # to start OSI paperwork', 'error');
+          return;
+        }
+        if (window.SLPaperwork && typeof SLPaperwork.startFromBond === 'function') {
+          SLPaperwork.startFromBond({
+            booking_number: booking,
+            indemnitor_name: nm,
+            indemnitor_phone: body.phone || '',
+            indemnitor_email: body.email || '',
+            indemnitor_address: body.address || '',
+            surety_id: 'osi',
+          });
+        }
+      }
     } catch(e) { toast('❌ Network error: ' + e.message, 'error'); }
   }
 
@@ -985,7 +1009,7 @@ const SLIndemnitor = (() => {
       // Auth passed
       $('addressOverrideModal').style.display = 'none';
       toast('✅ Override authorized by staff.', 'success');
-      await _executeSaveIndemnitor(_pendingSaveBody);
+      await _executeSaveIndemnitor(_pendingSaveBody, { thenPaperwork: !!_pendingSaveBody.thenPaperwork });
       _pendingSaveBody = null;
     } catch (e) {
       toast('❌ Network error validating PIN: ' + e.message, 'error');

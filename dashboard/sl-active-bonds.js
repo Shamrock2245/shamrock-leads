@@ -316,7 +316,8 @@ function renderActiveBondsTable() {
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="window.openEditDrawer('${bkSafe}')">✏️ Edit</button>
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Send SignNow packet (${ins.includes('PALM') || ins.includes('PSC') ? 'Palmetto' : 'OSI'} templates)">📝 Docs</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff;font-weight:600" onclick="window.startPaperworkFromBondObj(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="OSI / Palmetto DocuSeal packet">📄 Paperwork</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Appearance-bond print / wet-ink">🖨️ Print bonds</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>
@@ -521,7 +522,65 @@ window.saveEditDrawer = async function () {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '💾 Save Changes'; }
   }
+};
+
+function _bondSeedFromFields(get, booking) {
+  const ins = (typeof get === 'function' ? get('abEditInsurance') : '') || '';
+  return {
+    booking_number: booking || '',
+    county: get('abEditCounty'),
+    poa_number: get('abEditPOA'),
+    case_number: get('abEditCaseNum'),
+    bond_amount: get('abEditBondAmount'),
+    defendant_name: get('abEditDefName'),
+    defendant_phone: get('abEditDefPhone'),
+    defendant_dob: get('abEditDefDob'),
+    defendant_address: get('abEditDefAddress'),
+    indemnitor_name: get('abEditIndemName'),
+    indemnitor_phone: get('abEditIndemPhone'),
+    indemnitor_email: get('abEditIndemEmail'),
+    surety_id: ins,
+  };
 }
+
+window.startPaperworkFromEditBond = function () {
+  const get = (id) => document.getElementById(id)?.value || '';
+  const booking = window._abEditingBooking || window._abEditBookingNumber || '';
+  if (!booking) {
+    if (window.SL?.toast) SL.toast('Open a bond first', 'error');
+    return;
+  }
+  if (typeof window.closeEditDrawer === 'function') window.closeEditDrawer();
+  const seed = _bondSeedFromFields(get, booking);
+  if (window.SLPaperwork && typeof SLPaperwork.startFromBond === 'function') {
+    SLPaperwork.startFromBond(seed);
+  } else if (window.SL?.toast) {
+    SL.toast('Paperwork module not loaded', 'error');
+  }
+};
+
+window.startPaperworkFromBondObj = function (bond) {
+  if (!bond) return;
+  const seed = {
+    booking_number: bond.booking_number || '',
+    county: bond.county || '',
+    poa_number: bond.poa_number || '',
+    case_number: bond.case_number || '',
+    bond_amount: bond.bond_amount || '',
+    defendant_name: bond.defendant_name || '',
+    defendant_phone: bond.defendant_phone || '',
+    defendant_dob: bond.defendant_dob || '',
+    defendant_address: bond.defendant_address || '',
+    indemnitor_name: bond.indemnitor?.name || bond.indemnitor_name || '',
+    indemnitor_phone: bond.indemnitor?.phone || bond.indemnitor_phone || '',
+    indemnitor_email: bond.indemnitor?.email || bond.indemnitor_email || '',
+    indemnitor_address: bond.indemnitor?.address || bond.indemnitor_address || '',
+    surety_id: bond.insurance_company || bond.surety || 'osi',
+  };
+  if (window.SLPaperwork && typeof SLPaperwork.startFromBond === 'function') {
+    SLPaperwork.startFromBond(seed);
+  }
+};
 
 function _ef(id, type, label, ph) {
   return `<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)">${label}<input id="${id}" type="${type}" placeholder="${ph}" style="padding:8px;background:var(--input,var(--panel));border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px"></label>`;
@@ -620,6 +679,7 @@ window._buildEditDrawer = function () {
     </div>
     <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel)">
       <button onclick="window.closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
+      <button onclick="window.startPaperworkFromEditBond()" style="padding:8px 16px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">📄 Do Paperwork</button>
       <button onclick="openRenewBondModal(window._abEditBookingNumber||'','')" style="padding:8px 16px;background:#f59e0b;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">🔄 Renew Bond</button>
       <button id="abEditSaveBtn" onclick="window.saveEditDrawer()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">💾 Save Changes</button>
     </div>`;
@@ -1547,6 +1607,7 @@ window.sendBondImessage = function (bookingNumber, defendantName, phone) {
       </div>
       <div class="kb-card-actions">
         <button onclick="openEditDrawer('${escHtml(bond.booking_number)}')">Edit</button>
+        <button onclick="window.startPaperworkFromBondObj(${JSON.stringify(bond).replace(/"/g, '&quot;')})">Paperwork</button>
         <button onclick="openInTracking('${escHtml(bond.booking_number)}')">Track</button>
         <button onclick="sendBondImessage('${escHtml(bond.booking_number)}','${escHtml(bond.defendant_name)}','${escHtml(bond.indemnitor_phone || '')}')">💬</button>
         <button onclick="SLKanban.loadStatusHistory('${escHtml(bond.booking_number)}')">History</button>
