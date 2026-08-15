@@ -41,6 +41,14 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Scraper registry integrity deployment (2026-08-15)
+
+Commit `99547b7` deployed successfully through **Deploy to Hetzner** run `31897337465`. The canonical registry remains **358 state-qualified labels**, and static contract coverage now verifies that every registered label has both a local scraper module and a `main.register_scrapers` entry. The guard is intentionally source- and network-free; it does not claim that every registered county is producing records.
+
+Hendry now drops OCV rows without the source-issued `inmateID`. Monroe now drops rows without an MNI, official offense number, or official CAD number, rather than hashing a name or date into a booking key. This keeps source rows that lack a valid immutable identifier out of the `County + Booking_Number` write path.
+
+Post-deploy public probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL is intentionally redacted from this checkout and no local `GAS_WEB_APP_URL` was present, so GAS `?action=health` was **not** re-probed here. Likewise, `scripts/check_ecosystem_secrets.py --strict` cannot pass in this clean clone because production `.env` files and sibling repositories are absent; that local result is not evidence of a production secret regression.
+
 ## What “Auto-CRM” means here
 
 After a **phone number** (and usually defendant/county) enters the system, the bond lifecycle should run with **minimal human intervention**, except risk/match gates:
