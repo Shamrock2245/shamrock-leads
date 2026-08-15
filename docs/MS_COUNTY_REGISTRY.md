@@ -24,7 +24,7 @@
 
 | County | Official public surface | Decision | Reason |
 |---|---|---|---|
-| Adams | `https://adamscosheriff.net/portal/jail` | Recon only | Public ISOMS listing exposes names and intake timestamps, but lacks a verified bulk source-issued booking/inmate key and intermittently returns a Cloudflare challenge to unattended retrieval. |
+| Adams | `https://adamscosheriff.net/portal/jail` | **Revalidated 2026-08-15 — recon only; no registration.** | Normal public portal access continues to expose identity and intake timing but no verified broad source-issued booking/inmate identifier. An intake date cannot be used to manufacture an identity key; retain no scraper unless a bulk listing supplies the required booking-safe fields. |
 | Lafayette | `https://lafayettems.com/public-safety/sheriffs-department/` | Recon only | Official sheriff page does not publish a documented broad public roster or booking fields. |
 | Lowndes | `https://portalprod.lowndescounty.com/PublicAccess/JailingSearch.aspx?ID=400` | Recon only | Official Tyler portal is name-known-or-booking-number search oriented; no broad current roster or bulk booking-time contract is exposed. |
 | Oktibbeha | `https://www.sheriff.oktibbeha.ms.us/inmateRosterFeed` | Recon only | Broad roster is public and paginated, but its source identifier and booked timestamp are exposed only through individual detail records; no supported bulk contract is verified. |
