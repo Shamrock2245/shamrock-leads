@@ -41,6 +41,12 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
 
+## Connecticut judicial-docket guard deployment (2026-08-15)
+
+Commit `d8295ea` deployed successfully through **Deploy to Hetzner** run `31903650843`. The Statewide, Bridgeport, Hartford, New Haven, and Stamford Connecticut judicial-docket jobs now stop before any source request. The court workflow previously converted judicial docket numbers and hearing dates into arrest-record fields; those are not source-issued arrest booking identifiers or arrest-time fields. Scraper Health now reports the five court-docket scopes as `fail_closed`.
+
+The Connecticut validation retained no case or person data and confirmed that the ordinary metadata request terminated at TLS transport; more importantly, the source category itself is court-docket—not arrest-listing—data. The focused source-contract, source-key, registry, evidence, and documentation suite passed **33 tests**. Public post-deploy probes returned `200` for leads `/health`, DocuSeal, Bail School, Paperwork, and Postiz `/auth`. The stable factory URL and production local environment files remain unavailable in this checkout, so the GAS health probe and strict local secrets check were not locally proven.
+
 ## South Carolina source-contract guard deployment (2026-08-15)
 
 Commit `d1578b8` deployed successfully through **Deploy to Hetzner** run `31903358690`. Anderson, Bamberg, Beaufort, Berkeley, Greenville, Horry, Jasper, Kershaw, Laurens, Lee, Marion, Saluda, Union, and York are explicitly `fail_closed`; each emits no records before source retrieval until its county-specific broad-listing contract is revalidated. Existing guard modules are now represented in Scraper Health; the remaining ten modules use the deployed shared pre-scrape contract gate.
