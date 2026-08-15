@@ -28,6 +28,11 @@ PORTAL_URL = (
 
 
 class RandolphScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Randolph legacy roster was unavailable through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self) -> str:
         return "Randolph"

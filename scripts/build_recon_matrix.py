@@ -199,6 +199,7 @@ def main() -> int:
         "4. `dashboard/extensions.py` — canonical registered scraper labels; state registry documents remain the source of county-specific source decisions.",
         "5. `docs/recon/LOUISIANA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded public-contract validation for Louisiana candidate and guarded rows.",
         "6. `docs/recon/TENNESSEE_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the nine Tennessee guarded rows.",
+        "7. `docs/recon/NORTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the ten North Carolina guarded rows.",
         "",
     ])
     args.output.parent.mkdir(parents=True, exist_ok=True)

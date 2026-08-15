@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (North Carolina source-contract guard batch)
+
+### Changed
+- **Ten North Carolina county paths fail-closed** — Caldwell, Chatham, Cumberland, Davidson, Guilford, Halifax, Randolph, Scotland, Union, and Wake now make no source request and emit no records while their complete public broad-listing contracts remain unproven. Union’s existing P2C guard is now represented explicitly in the dashboard source-state registry; the other nine paths use the shared pre-scrape gate.
+
 ## [Unreleased] — 2026-08-15 (Tennessee source-contract guard batch)
 
 ### Changed

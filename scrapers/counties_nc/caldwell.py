@@ -40,6 +40,12 @@ _DOCKET = re.compile(r"(\d{2}[A-Z]{2}\d{4,}-\d{3})")
 
 
 class CaldwellScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Caldwell public paths did not establish a complete booking-safe "
+        "broad listing through ordinary access; TLS-bypass retrieval is not permitted."
+    )
+
     @property
     def county(self) -> str:
         return "Caldwell"

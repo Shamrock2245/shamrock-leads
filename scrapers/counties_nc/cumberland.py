@@ -37,6 +37,11 @@ HEADERS = {
 
 
 class CumberlandScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Cumberland public paths were unavailable through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     """Cumberland County (NC) — CCSO inmate search."""
 
     @property

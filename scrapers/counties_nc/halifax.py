@@ -6,6 +6,11 @@ from scrapers.dcn_base import DCNBaseScraper
 
 
 class HalifaxScraper(DCNBaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Halifax DCN path was unavailable through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self) -> str:
         return "Halifax"

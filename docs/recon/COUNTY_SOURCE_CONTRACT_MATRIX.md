@@ -23,12 +23,12 @@
 | GA | 159 | 85 | 0 | 0 | 159 | 0 | 0 |
 | LA | 64 | 13 | 3 | 1 | 4 | 53 | 3 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
-| NC | 100 | 60 | 0 | 0 | 10 | 90 | 0 |
+| NC | 100 | 60 | 0 | 0 | 0 | 90 | 10 |
 | SC | 46 | 46 | 0 | 0 | 14 | 32 | 0 |
 | TN | 96 | 22 | 1 | 0 | 74 | 1 | 20 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 339; unverified 556; fail closed 41.
+**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 329; unverified 556; fail closed 51.
 
 ## County matrix
 
@@ -498,22 +498,22 @@
 | NC | 021 | Buncombe County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 023 | Burke County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 025 | Cabarrus County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 027 | Caldwell County | Palmetto | registered | recon_only | — | public page; no PDF/records opened | Official county detention page identifies a current-inmates list; no list was downloaded or inspected. |
+| NC | 027 | Caldwell County | Palmetto | registered | fail_closed | — | public page; no PDF/records opened | Official county detention page identifies a current-inmates list; no list was downloaded or inspected. |
 | NC | 029 | Camden County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 031 | Carteret County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 033 | Caswell County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 035 | Catawba County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 037 | Chatham County | Palmetto | registered | recon_only | — | public page; no record queries | Official sheriff inmate-search landing page was located; listing-field contract was not tested. |
+| NC | 037 | Chatham County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff inmate-search landing page was located; listing-field contract was not tested. |
 | NC | 039 | Cherokee County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 041 | Chowan County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 043 | Clay County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 045 | Cleveland County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 047 | Columbus County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 049 | Craven County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 051 | Cumberland County | Palmetto | registered | recon_only | — | public page; no record queries | Official sheriff active-inmate page located; listing-field contract was not tested. |
+| NC | 051 | Cumberland County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff active-inmate page located; listing-field contract was not tested. |
 | NC | 053 | Currituck County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 055 | Dare County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 057 | Davidson County | Palmetto | registered | recon_only | — | public page; no list opened | Official sheriff detention page identifies an active inmate list; no list was opened. |
+| NC | 057 | Davidson County | Palmetto | registered | fail_closed | — | public page; no list opened | Official sheriff detention page identifies an active inmate list; no list was opened. |
 | NC | 059 | Davie County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 061 | Duplin County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 063 | Durham County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
@@ -525,8 +525,8 @@
 | NC | 075 | Graham County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 077 | Granville County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 079 | Greene County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 081 | Guilford County | Palmetto | registered | recon_only | — | public page; no record queries | Public sheriff-linked P2C catalog URL identified; no roster or person-level page was opened. |
-| NC | 083 | Halifax County | Palmetto | registered | recon_only | — | public page; no record queries | Official sheriff inmate-search page was located; listing-field contract was not tested. |
+| NC | 081 | Guilford County | Palmetto | registered | fail_closed | — | public page; no record queries | Public sheriff-linked P2C catalog URL identified; no roster or person-level page was opened. |
+| NC | 083 | Halifax County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff inmate-search page was located; listing-field contract was not tested. |
 | NC | 085 | Harnett County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 087 | Haywood County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 089 | Henderson County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
@@ -560,23 +560,23 @@
 | NC | 145 | Person County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 147 | Pitt County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 149 | Polk County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 151 | Randolph County | Palmetto | registered | recon_only | — | public page; no record queries | Official county confined-inmates page located; listing-field contract was not tested. |
+| NC | 151 | Randolph County | Palmetto | registered | fail_closed | — | public page; no record queries | Official county confined-inmates page located; listing-field contract was not tested. |
 | NC | 153 | Richmond County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 155 | Robeson County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 157 | Rockingham County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 159 | Rowan County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 161 | Rutherford County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 163 | Sampson County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 165 | Scotland County | Palmetto | registered | recon_only | — | public page; no record queries | Official sheriff inmate-search page located; listing-field contract was not tested. |
+| NC | 165 | Scotland County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff inmate-search page located; listing-field contract was not tested. |
 | NC | 167 | Stanly County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 169 | Stokes County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 171 | Surry County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 173 | Swain County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 175 | Transylvania County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 177 | Tyrrell County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 179 | Union County | Palmetto | registered | recon_only | — | public page; no record queries | Official sheriff detention inquiry page located; listing-field contract was not tested. |
+| NC | 179 | Union County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff detention inquiry page located; listing-field contract was not tested. |
 | NC | 181 | Vance County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 183 | Wake County | Palmetto | registered | recon_only | — | public page; no record queries | Public P2C inmate catalog URL identified by search; no roster or person-level page was opened. |
+| NC | 183 | Wake County | Palmetto | registered | fail_closed | — | public page; no record queries | Public P2C inmate catalog URL identified by search; no roster or person-level page was opened. |
 | NC | 185 | Warren County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 187 | Washington County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 189 | Watauga County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
@@ -994,3 +994,4 @@ A row may be promoted from `recon_only`, `unverified`, or `candidate_productive`
 4. `dashboard/extensions.py` — canonical registered scraper labels; state registry documents remain the source of county-specific source decisions.
 5. `docs/recon/LOUISIANA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded public-contract validation for Louisiana candidate and guarded rows.
 6. `docs/recon/TENNESSEE_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the nine Tennessee guarded rows.
+7. `docs/recon/NORTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the ten North Carolina guarded rows.

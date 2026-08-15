@@ -36,6 +36,11 @@ HEADERS = {
 
 
 class GuilfordScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Guilford inmate-lookup path returned HTTP 404; no booking-safe broad roster contract is revalidated."
+    )
     """Guilford County (NC) — GCSO inmate lookup."""
 
     @property

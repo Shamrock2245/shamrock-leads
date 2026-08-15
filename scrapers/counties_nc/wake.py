@@ -37,6 +37,11 @@ HEADERS = {
 
 
 class WakeScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Wake public paths were unavailable through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     """Wake County (NC) — Detention Center inmate roster."""
 
     @property
