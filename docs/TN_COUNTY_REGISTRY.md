@@ -44,7 +44,7 @@ The parser uses the public current-inmate view (`hours=0`), honours server pagin
 
 | County | Public surface observed | Current decision |
 |---|---|---|
-| Sullivan | OCV-hosted public inmate roster at `https://www.scsotn.com/inmateRoster` | Do not register yet. The public browser page renders roster data, but direct S3-feed retrieval returned access-denied in this environment. Complete source-contract reconnaissance through an approved public route before implementation; do not circumvent access controls. |
+| Sullivan | Sheriff-hosted OCV public inmate roster at `https://www.scsotn.com/inmateRoster` | **Recon only, revalidated 2026-08-15:** normal public broad cards expose custody/booked time but no visible source-issued booking or inmate identifier, while also exposing sensitive address, demographic/physical, image, and detail-link content. Do not use cards, profile links, app, or denied feed; register only if a booking-safe broad contract becomes available. |
 | Remaining high-volume TN counties | To be reconned one official source at a time | Prioritize sources that expose a durable booking identifier, public custody status, charges, and bond data without elevated request volume. |
 
 ## Identity and safety
