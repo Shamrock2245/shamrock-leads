@@ -12,6 +12,8 @@ config/google-services.json
 !package.json
 !package-lock.json
 !config/alpr_cameras.json
+!docs/recon/county_recon_inventory.json
+!docs/recon/county_source_contract_evidence.json
 
 
 # Python

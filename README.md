@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-350-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-358-orange)](#county-coverage)
 [![States](https://img.shields.io/badge/States-10-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
@@ -20,11 +20,11 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 **Product boundary:** Bail School education is **`shamrock-bail-school`** (separate funnel). This repo does not host the student LMS.
 
-**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto surety footprint** (FL, SC, NC, TN, TX, CT, LA, MS, AL) plus the **Georgia** market — with OSI primary in Florida.
+**Strategic goal:** Scale from $3–5M/year (Lee County) to $50M+/year across the **Palmetto licensed footprint** (FL, SC, NC, TN, TX, CT, LA, MS), with **OSI primary in Florida**. Georgia and Alabama remain adjacent repository coverage markets; their scraper presence does not assert an active surety-writing license.
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **350 registered county scrapers** across 10 states (GA 85 · FL 67 · NC 60 · SC 46 · TX 33 · TN 21 · AL 13 · LA 10 · MS 9 · CT 6) on scheduled intervals
+1. **Scrapes** real-time booking data from **358 registered county scrapers** across 10 states (GA 85 · FL 67 · NC 60 · SC 46 · TX 34 · TN 22 · AL 16 · LA 13 · MS 9 · CT 6) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
@@ -60,7 +60,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        SCRAPER ENGINE                                │
 │                                                                      │
-│  269 County Scrapers across 10 States (Python 3.12)                   │
+│  358 County Scrapers across 10 States (Python 3.12)                   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │DrissionPage│  │ curl_cffi  │  │ requests +   │  │ Patchright │  │
 │  │ (Chromium) │  │(TLS spoof) │  │BeautifulSoup │  │ (Stealth)  │  │
@@ -110,7 +110,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
     ┌──────────┼──────────────┐
     ▼          ▼              ▼
 ┌────────┐ ┌──────────┐ ┌──────────┐
-│Traccar │ │BlueBubbles│ │ SignNow  │
+│Traccar │ │BlueBubbles│ │ DocuSeal │
 │GPS     │ │ iMessage  │ │ E-Sign   │
 │Tracking│ │ Bridge    │ │ Packets  │
 └────────┘ └──────────┘ └──────────┘
@@ -161,7 +161,7 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 | ⚡ **Bond Intelligence** | `sl-bond-intelligence.js` | Multi-state bond portfolio analytics, risk tiering, regional performance |
 | 👤 **Defendants** | `defendants.js`, `sl-defendant-lifecycle.js` | Card grid with lifecycle notes, contact log, DNB/DNC, bond finalize |
 | 📱 **Outreach** | `sl-prospective.js` | Kanban pipeline (Contacted → Negotiating → Paperwork → Ready), iMessage bridge |
-| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 269 scrapers, error drill-down, manual triggers, auto-recovery |
+| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 358 registered scrapers, source-contract posture, error drill-down, manual triggers, auto-recovery |
 | 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated) |
 | 📍 **Tracking** | `sl-tracking.js`, `sl-geo-intelligence.js` | GPS/check-in tracking, geofencing, Traccar integration |
 | 📥 **Intake Queue** | `sl-intake.js` | Wix/Telegram intake processing, defendant matching |
@@ -184,21 +184,21 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 
 ## County Coverage
 
-**269 registered scrapers** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 states**, utilizing shared platform bases:
+**358 registered scrapers** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 states**, utilizing shared platform bases. Registry coverage is not proof that a county source is currently record-emitting; see [`docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`](./docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md) for the complete, evidence-bound 947-scope reconnaissance matrix (942 Census county-equivalents plus five registered non-county scopes):
 
 | State | Registered | Path | Job ID form | CLI command |
 |-------|----------:|------|-------------|-------------|
-| **Georgia** | 74 | `scrapers/counties_ga/` | `scraper_ga_<county>` | `python main.py ga_fulton` |
+| **Georgia** | 85 | `scrapers/counties_ga/` | `scraper_ga_<county>` | `python main.py ga_fulton` |
 | **Florida** | 67 | `scrapers/counties/` | `scraper_<county>` (legacy) | `python main.py lee` |
 | **South Carolina** | 46 | `scrapers/counties_sc/` | `scraper_sc_<county>` | `python main.py sc_charleston` |
-| **North Carolina** | 47 | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
-| **Texas** | 15 | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
-| **Tennessee** | 9 | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
-| **Louisiana** | 4 | `scrapers/counties_la/` | `scraper_la_<parish>` | `python main.py la_orleans` |
-| **Alabama** | 3 | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
-| **Connecticut** | 2 | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` |
-| **Mississippi** | 2 | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
-| **Total** | **269** | `dashboard/extensions.py` | Labels: `County (ST)` | |
+| **North Carolina** | 60 | `scrapers/counties_nc/` | `scraper_nc_<county>` | `python main.py nc_mecklenburg` |
+| **Texas** | 34 | `scrapers/counties_tx/` | `scraper_tx_<county>` | `python main.py tx_bexar` |
+| **Tennessee** | 22 | `scrapers/counties_tn/` | `scraper_tn_<county>` | `python main.py tn_davidson` |
+| **Louisiana** | 13 | `scrapers/counties_la/` | `scraper_la_<parish>` | `python main.py la_orleans` |
+| **Alabama** | 16 | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
+| **Connecticut** | 6 | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` |
+| **Mississippi** | 9 | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
+| **Total** | **358** | `dashboard/extensions.py` | Labels: `County (ST)` | |
 
 ### Shared Base Classes
 
@@ -256,16 +256,16 @@ shamrock-leads/
 │   ├── southern_sw_base.py    # Southern Software (Georgia/SC/NC)
 │   ├── socrata_base.py        # Socrata Open Data (Georgia)
 │   ├── generic_adaptive.py    # Auto-detect scraper for unknown JMS
-│   ├── counties/              # Florida county scrapers (67 active)
-│   ├── counties_ga/           # Georgia county scrapers (74 active)
-│   ├── counties_sc/           # South Carolina county scrapers (46 active)
-│   ├── counties_nc/           # North Carolina county scrapers (47 active)
-│   ├── counties_tx/           # Texas county scrapers (15 active)
-│   ├── counties_tn/           # Tennessee county scrapers (9 active)
-│   ├── counties_la/           # Louisiana parish scrapers (4 active)
-│   ├── counties_al/           # Alabama county scrapers (3 active)
-│   ├── counties_ct/           # Connecticut scrapers (2 active)
-│   └── counties_ms/           # Mississippi county scrapers (2 active)
+│   ├── counties/              # Florida county scrapers (67 registered)
+│   ├── counties_ga/           # Georgia county scrapers (85 registered)
+│   ├── counties_sc/           # South Carolina county scrapers (46 registered)
+│   ├── counties_nc/           # North Carolina county scrapers (60 registered)
+│   ├── counties_tx/           # Texas county scrapers (34 registered)
+│   ├── counties_tn/           # Tennessee county scrapers (22 registered)
+│   ├── counties_la/           # Louisiana parish scrapers (13 registered)
+│   ├── counties_al/           # Alabama county scrapers (16 registered)
+│   ├── counties_ct/           # Connecticut scrapers (6 registered)
+│   └── counties_ms/           # Mississippi county scrapers (9 registered)
 ├── scoring/
 │   └── lead_scorer.py         # Rule-based lead qualification (0–100)
 ├── writers/

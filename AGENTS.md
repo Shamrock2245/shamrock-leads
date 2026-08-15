@@ -12,7 +12,7 @@
 
 ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 357 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 12 LA · 9 MS · 6 CT]`
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 358 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT]`. The complete source-contract worklist is documented in `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: 942 Census county-equivalents plus five registered non-county scopes (947 rows total). Registration never proves that a source is record-emitting.
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
@@ -142,7 +142,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  357 County Scrapers  │  │  Super CRM + Multi-State  │ │
+│  │  358 County Scrapers  │  │  Super CRM + Multi-State  │ │
 │  │  (10 states)          │  │  Ops + Bond Intel         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │
@@ -310,7 +310,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 5. **Self-Heal First** — BaseScraper retries 3x, classifies errors, auto-disables. Fix root causes.
 6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval.
 7. **PII is Sacred** — Never log PII to Slack or console in production.
-8. **Document Everything** — Every fix updates COUNTY_REGISTRY.md. No silent fixes.
+8. **Document Everything** — Every fix updates the relevant state registry and `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`. No silent fixes.
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.
 10. **The Chain Is Law** — ArrestLead → Defendant → Indemnitor → Match → BondCase → Packet → Signature → Payment. No shortcuts.
 11. **Shamrock Exclusive** — Never reference or use any resources, emails, or repos related to 'WTF' or non-Shamrock entities.
@@ -401,7 +401,7 @@ docker exec shamrock-leads python main.py lee
 
 ### Development Patterns
 
-- **Adding a county scraper**: See `.agent/skills/scraper-builder/SKILL.md`
+- **Adding a county scraper**: First update the county row in `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` with a county-specific, public source-contract validation; then see `.agent/skills/scraper-builder/SKILL.md`.
 - **Debugging a broken scraper**: See `.agent/skills/scraper-debugger/SKILL.md`
 - **Tuning lead scores**: See `.agent/skills/lead-scoring-tuning/SKILL.md`
 - **iMessage integration**: See `.agent/skills/bluebubbles-integration/SKILL.md`

@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (complete source-contract reconnaissance)
+
+### Added
+- **Runtime-inclusive source-contract matrix** — added `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` covering **947 scopes**: all 942 Census county-equivalents across the ten repository states plus five registered non-county scopes. The matrix separates repository registration from source posture: `verified_public`, `candidate_productive`, `recon_only`, `unverified`, and deployed `fail_closed` guards.
+- **Versioned non-PII reconnaissance evidence** — added the Census-based inventory, 942-row evidence file, reproducible inventory/evidence/matrix scripts, and contract tests. Evidence contains source-contract posture and public source references only; it does not contain arrest records, images, profiles, or contact data.
+- **Louisiana bounded validation note** — recorded ordinary-public-listing contract findings for Beauregard, Calcasieu, and St. Mary. These findings do not create new runtime parsers or claim persistence, alert, payment, or bond telemetry.
+
+### Changed
+- **Active coverage documentation synchronized** — README, AGENTS, and the multi-state roadmap now reflect the canonical **358** registered labels and active surety policy: OSI in Florida; Palmetto in FL, SC, NC, TN, TX, CT, LA, and MS. Georgia and Alabama are correctly distinguished as adjacent repository coverage rather than Palmetto license assertions.
+
 ## [Unreleased] — 2026-08-15 (scraper registry integrity)
 
 ### Added

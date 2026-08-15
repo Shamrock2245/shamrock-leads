@@ -3,7 +3,7 @@
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
 > Last updated: 2026-08-14
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 12 LA · 9 MS · 6 CT = **357** — see root `STATUS.md`. Registration is not proof of a successful production scrape.
+> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT = **358** — see root `STATUS.md`. Registration is not proof of a successful production scrape. The complete source-contract inventory is `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total across all repository states).
 
 ## Why this order
 
@@ -13,7 +13,7 @@
 4. **NC** — **60 registered** / 100 goal; deepen scrapes then expand 🔄  
 5. **TN** — **22 registered** (including Putnam; source-specific production telemetry still required) 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
-7. **LA → MS** — **12 LA** + **9 MS** registered; Tangipahoa is deployed and St. Mary is locally source-validated, but per-source production telemetry remains required 🔄
+7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
 8. **CT** — **6 registered** (dockets + DOC + Hartford, Bridgeport, New Haven, Stamford) ✅  
 9. **AL** — **16 registered** (Lee, Marshall, and St. Clair deployed; Etowah locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
 
@@ -100,7 +100,7 @@ scrapers/
   counties_tn/       # TN (22)
   counties_tx/       # TX (34)
   counties_ct/       # CT (6)
-  counties_la/       # LA (12)
+  counties_la/       # LA (13)
   counties_ms/       # MS (9)
   counties_al/       # AL (16)
   dcn_base.py        # NC DevExpress
