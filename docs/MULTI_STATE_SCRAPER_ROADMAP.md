@@ -8,7 +8,7 @@
 ## Why this order
 
 1. **FL** — OSI home market + densest scrapers already live ✅  
-2. **SC** — Palmetto HQ-adjacent; **46/46 registered** (production depth ongoing) ✅ registry  
+2. **SC** — Palmetto HQ-adjacent; **46/46 registered**. Fourteen county paths are explicitly `fail_closed` pending compliant source contracts; production depth and telemetry remain ongoing. ✅ registry
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; ten county paths are explicitly `fail_closed` pending compliant source contracts, while production telemetry remains required for every enabled source. 🔄
 5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope remains `unverified`. Source-specific production telemetry is still required. 🔄

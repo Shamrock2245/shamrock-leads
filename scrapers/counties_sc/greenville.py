@@ -34,6 +34,11 @@ LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 class GreenvilleSCScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Greenville public paths returned HTTP 403 through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self) -> str:
         return "Greenville"

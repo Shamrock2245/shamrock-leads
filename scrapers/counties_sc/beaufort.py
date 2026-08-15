@@ -7,6 +7,11 @@ from core.models import ArrestRecord
 import logging
 
 class BeaufortSCScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Beaufort roster path was unavailable through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self): return "Beaufort"
     

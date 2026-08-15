@@ -24,6 +24,11 @@ PORTAL_URL = "https://jail.marionso.com/"
 
 
 class MarionScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Marion jail path returned HTTP 403 through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self) -> str:
         return "Marion"

@@ -24,6 +24,11 @@ PORTAL_URL = "https://sheriff.berkeleycountysc.gov/report/inmate-lookup/"
 
 
 class BerkeleyScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Configured Berkeley public paths did not establish a complete booking-safe broad listing through ordinary access."
+    )
     @property
     def county(self) -> str:
         return "Berkeley"

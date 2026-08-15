@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class SaludaScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "No configured public roster URL is documented for this source path; source retrieval is not permitted."
+    )
     @property
     def county(self) -> str:
         return "Saluda"

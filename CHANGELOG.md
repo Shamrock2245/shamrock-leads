@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (South Carolina source-contract guard batch)
+
+### Changed
+- **Fourteen South Carolina county paths fail-closed** — Anderson, Bamberg, Beaufort, Berkeley, Greenville, Horry, Jasper, Kershaw, Laurens, Lee, Marion, Saluda, Union, and York now make no source request and emit no records while their complete public broad-listing contracts remain unproven. Existing guards are reflected in the dashboard source-state registry; the remaining modules use the shared pre-scrape gate.
+
 ## [Unreleased] — 2026-08-15 (North Carolina source-contract guard batch)
 
 ### Changed

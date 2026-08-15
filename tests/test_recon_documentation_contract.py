@@ -113,6 +113,27 @@ def test_unvalidated_north_carolina_batch_is_reported_as_fail_closed():
         assert f"| NC | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
 
 
+def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():
+    matrix = MATRIX.read_text()
+    for fips, county in (
+        ("007", "Anderson"),
+        ("009", "Bamberg"),
+        ("013", "Beaufort"),
+        ("015", "Berkeley"),
+        ("045", "Greenville"),
+        ("051", "Horry"),
+        ("053", "Jasper"),
+        ("055", "Kershaw"),
+        ("059", "Laurens"),
+        ("061", "Lee"),
+        ("067", "Marion"),
+        ("081", "Saluda"),
+        ("087", "Union"),
+        ("091", "York"),
+    ):
+        assert f"| SC | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
+
+
 def test_active_docs_match_the_canonical_358_scraper_registry():
     counts = _registered_counts()
     assert sum(counts.values()) == 358

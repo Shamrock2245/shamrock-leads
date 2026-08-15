@@ -20,6 +20,11 @@ PORTAL_URL = "https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinj
 
 
 class YorkScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured York roster path timed out through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     """Parse source-faithful York County public booking cards."""
 
     @property

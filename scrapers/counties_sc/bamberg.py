@@ -24,6 +24,11 @@ PORTAL_URL = "https://bambergjailroster.org/inmate-search/"
 
 
 class BambergScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured Bamberg inmate path returned HTTP 403 through ordinary access; no booking-safe broad roster contract is revalidated."
+    )
     @property
     def county(self) -> str:
         return "Bamberg"
