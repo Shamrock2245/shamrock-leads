@@ -121,32 +121,20 @@
 
 ---
 
-## Priority Build — Not Yet Scraped (17 Counties)
+## Statewide Scaffold Coverage and Source Recon
 
-### High Priority — Miami-Dade (Largest County in FL)
-| # | County | JMS / Method | Status | Notes |
-|---|--------|-------------|--------|-------|
-| 51 | **Miami-Dade** | ArcGIS FeatureServer (code in `miami_dade.py`) | ✅ Deployed 2026-08-14 | Official anonymous FeatureServer query uses only minimum identity, booking-date, source-key, and charge fields; bounded local smoke and public host checks passed. Miami-Dade Mongo/alert telemetry remains unproven. Portal search remains reCAPTCHA-blocked. |
+**All 67 Florida counties now have a local module, a unique `County (FL)` dashboard label, and a runtime scheduler registration.** That operational scaffold is intentionally separate from source-contract validation: registration alone must never be represented as a successful county ingest, Mongo write, or alert.
 
-### Needs Recon (16 Counties)
-| # | County | Status | Notes |
-|---|--------|--------|-------|
-| 52 | Wakulla | 🟡 Needs Recon | Small rural, Tallahassee area |
-| 53 | Baker | 🟡 Needs Recon | Small rural, NE FL |
-| 54 | Bradford | 🟡 Needs Recon | Small rural, NE FL |
-| 55 | Levy | 🟡 Needs Recon | Nature Coast |
-| 56 | Hamilton | 🟡 Needs Recon | Rural North FL |
-| 57 | Lafayette | 🟡 Needs Recon | Rural North FL — very small |
-| 58 | Madison | 🟡 Needs Recon | Rural North FL |
-| 59 | Gilchrist | 🟡 Needs Recon | Rural North FL |
-| 60 | Union | 🟡 Needs Recon | Rural North FL |
-| 61 | Calhoun | 🟡 Needs Recon | Rural Panhandle |
-| 62 | Gulf | 🟡 Needs Recon | Rural Panhandle |
-| 63 | Holmes | 🟡 Needs Recon | Rural Panhandle |
-| 64 | Jefferson | 🟡 Needs Recon | Rural North FL |
-| 65 | Liberty | 🟡 Needs Recon | Rural Panhandle — smallest county |
-| 66 | Washington | 🟡 Needs Recon | Rural Panhandle |
-| 67 | Franklin | 🟡 Needs Recon | Rural Panhandle |
+### Miami-Dade
+| County | Module | Runtime state | Source posture |
+|---|---|---|---|
+| **Miami-Dade** | `miami_dade.py` | Registered | ArcGIS FeatureServer parser deployed 2026-08-14. It requires the official source identifier and booking date; county-specific Mongo and alert telemetry remain unproven. |
+
+### Rural source-recon queue — scaffolded and registered
+
+The following counties are **not missing implementations**. Their modules and scheduler entries are present, but public source contracts still require county-by-county confirmation before any record-emitting behavior can be relied on: **Wakulla, Baker, Bradford, Levy, Hamilton, Lafayette, Madison, Gilchrist, Union, Calhoun, Gulf, Holmes, Jefferson, Liberty, Washington, and Franklin**.
+
+> A scaffold must return no arrest records whenever a source row lacks a complete identity and a source-issued immutable booking identifier. Do not synthesize a key from a name, date, profile URL, or document ID. Record the final source decision in `SCRAPER_SOURCE_STATES` and this registry only after a bounded validation.
 
 ---
 

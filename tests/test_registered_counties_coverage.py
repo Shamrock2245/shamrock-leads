@@ -38,10 +38,10 @@ def test_wave2_fl_counties_are_registered():
     assert not missing, f"Wave-2 FL counties missing from REGISTERED_COUNTIES: {sorted(missing)}"
 
 
-def test_fl_is_full_67_and_total_350():
+def test_fl_is_full_67_and_total_358():
     fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)")]
     assert len(fl) == 67, f"Expected 67 FL counties, got {len(fl)}"
-    assert len(REGISTERED_COUNTIES) == 350, f"Expected 350 total, got {len(REGISTERED_COUNTIES)}"
+    assert len(REGISTERED_COUNTIES) == 358, f"Expected 358 total, got {len(REGISTERED_COUNTIES)}"
 
 
 # Wave-3 NC/TN/TX metros (2026-07-26)
@@ -70,7 +70,7 @@ EXPECTED_MULTI_STATE_WAVE4 = {
 }
 
 
-# Wave-5 Expansion (49 new scrapers bringing total to 350)
+# Wave-5 expansion coverage remains in the current 358-scraper registry.
 EXPECTED_MULTI_STATE_WAVE5 = {
     "Gordon (GA)", "Walker (GA)", "Whitfield (GA)", "Tift (GA)", "Ware (GA)", "Coffee (GA)", "Appling (GA)", "Bleckley (GA)", "Crisp (GA)", "Laurens (GA)", "Effingham (GA)",
     "Ellis (TX)", "Johnson (TX)", "Ector (TX)", "Midland (TX)", "Potter (TX)", "Bastrop (TX)", "Guadalupe (TX)", "Comal (TX)", "Victoria (TX)", "Walker (TX)",

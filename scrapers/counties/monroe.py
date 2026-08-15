@@ -14,13 +14,13 @@ HISTORY:
         No captcha, no proxy, no disclaimer. Returns ArrestLog1..8.json
         buckets, one per day, ~80 records/week.
 
-Natural key: the MNI id embedded in the mugshot filename
-(e.g. MCSO78MNI183475) + arrest date; falls back to name+date hash.
+Natural key: the source-issued MNI id embedded in the mugshot filename
+(e.g. MCSO78MNI183475), offense number, or CAD number. Rows without one of
+those source-issued identifiers are skipped.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -122,7 +122,10 @@ class MonroeCountyScraper(BaseScraper):
         arrest_date = str(item.get("ArrestDate") or "").strip()
         arrest_time = str(item.get("ArrestTime") or "").strip()
 
-        booking_num = self._natural_key(item, full_name, arrest_date)
+        booking_num = self._natural_key(item)
+        if not booking_num:
+            logger.warning("%s: skipping row without source-issued booking identifier", self.county)
+            return None
         first, middle, last = self._parse_name(full_name)
 
         charges = "; ".join(
@@ -173,8 +176,8 @@ class MonroeCountyScraper(BaseScraper):
         )
 
     @staticmethod
-    def _natural_key(item: Dict[str, Any], full_name: str, arrest_date: str) -> str:
-        """Stable id: MNI from mugshot filename, else offense/CAD no, else hash."""
+    def _natural_key(item: Dict[str, Any]) -> str:
+        """Use only a source-issued MNI, offense number, or CAD number."""
         for field in ("mugShot", "mugShotL"):
             m = _MNI_RE.search(str(item.get(field) or ""))
             if m:
@@ -183,8 +186,7 @@ class MonroeCountyScraper(BaseScraper):
             v = str(item.get(field) or "").strip()
             if v:
                 return f"MONROE-{v}"
-        digest = hashlib.sha1(f"{full_name}|{arrest_date}".encode()).hexdigest()[:12]
-        return f"MONROE-{digest.upper()}"
+        return ""
 
     @staticmethod
     def _parse_arraignment(raw: str) -> tuple:

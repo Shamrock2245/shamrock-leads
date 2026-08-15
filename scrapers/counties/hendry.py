@@ -98,9 +98,13 @@ class HendryCountyScraper(BaseScraper):
         if not full_name or full_name == ",":
             return None
 
-        booking_number = inmate_id or self._fallback_booking(full_name, item)
-        if not booking_number:
+        # The source-issued inmate identifier is the only admissible immutable
+        # key for this feed.  Never synthesize a booking key from names, dates,
+        # or document IDs: an incomplete source row must be skipped instead.
+        if not inmate_id:
+            logger.warning("%s: skipping row without source-issued inmate ID", self.county)
             return None
+        booking_number = inmate_id
 
         content = str(item.get("content") or "")
         demographics = self._parse_content_html(content)
@@ -252,13 +256,3 @@ class HendryCountyScraper(BaseScraper):
         if m:
             return f"{m.group(1)}{int(m.group(2)):02d}"
         return re.sub(r"[^\d]", "", raw)[:3]
-
-    def _fallback_booking(self, full_name: str, item: Dict[str, Any]) -> str:
-        oid = ""
-        _id = item.get("_id")
-        if isinstance(_id, dict):
-            oid = str(_id.get("$id") or "")
-        elif _id:
-            oid = str(_id)
-        base = oid or re.sub(r"[^A-Z0-9]", "", full_name.upper())[:16]
-        return f"HENDRY-{base}"

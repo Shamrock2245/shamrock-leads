@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-15 (scraper registry integrity)
+
+### Added
+- **Registered-county scaffold contract test** — statically validates all **358** canonical `County (ST)` labels (67 FL, 85 GA, 60 NC, 46 SC, 34 TX, 22 TN, 16 AL, 13 LA, 9 MS, and 6 CT) have a local scraper module and a corresponding `main.register_scrapers` entry. The test does not import modules or contact county sources.
+- **Hendry source-key regression tests** — verify that an OCV row without the source-issued inmate identifier is skipped and that a present source identifier is preserved as the immutable `County + Booking_Number` key.
+
+### Fixed
+- **Hendry and Monroe booking-key safety** — removed name, date, and document-derived booking fallbacks. Hendry now requires the official OCV `inmateID`; Monroe requires an MNI from the source mugshot filename, the official offense number, or the official CAD number. Rows that lack these identifiers fail closed before a record is returned.
+- **Florida coverage documentation and regression expectation** — corrected the stale “not yet scraped” wording to distinguish full 67-county scaffold/scheduler coverage from source-contract validation, and aligned the legacy total-fleet test with the current 358 registered labels.
+
 ## [Unreleased] — 2026-08-15 (Paperwork from recorded bond)
 
 ### Added

@@ -32,7 +32,8 @@ SAMPLE = [
                     ],
                 },
                 {
-                    # no mugshot → falls back to hash key; junk name filtered below
+                    # No mugshot, but the source supplies a CAD number.
+                    "CADno": "CAD-001",
                     "Name": "DOE, JANE",
                     "ArrestDate": "07/23/2026",
                     "Bond": "NO BOND",
@@ -80,7 +81,7 @@ class TestMonroeScraper(unittest.TestCase):
 
     def test_parses_and_dedupes(self):
         recs = self._scrape()
-        # 2 valid unique records (empty-name row skipped, dup MNI deduped)
+        # 2 valid unique records (empty-name row skipped, duplicate MNI deduped)
         self.assertEqual(len(recs), 2)
 
     def test_natural_key_from_mugshot(self):
@@ -103,7 +104,14 @@ class TestMonroeScraper(unittest.TestCase):
         recs = self._scrape()
         doe = next(r for r in recs if r.Last_Name == "DOE")
         self.assertEqual(float(doe.Bond_Amount), 0.0)
-        self.assertTrue(doe.Booking_Number.startswith("MONROE-"))
+        self.assertEqual(doe.Booking_Number, "MONROE-CAD-001")
+
+    def test_skips_row_without_source_issued_identifier(self):
+        record = MonroeCountyScraper._parse_arrest(
+            make_scraper(),
+            {"Name": "DOE, JANE", "ArrestDate": "07/23/2026"},
+        )
+        self.assertIsNone(record)
 
     def test_arraignment_parser(self):
         p = MonroeCountyScraper._parse_arraignment
