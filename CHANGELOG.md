@@ -666,3 +666,5 @@ Comprehensive audit and rewrite of all 7 coordination documents to reflect actua
 ## [1.x.x] — Prior Releases
 
 See git log for full history of Phase 1 (scraper), Phase 2 (lead scoring), Phase 3 (dashboard MVP), and Phase 4 (bonded case management).
+
+- **Hinds County, MS source-safety repair** — replaced the unverified profile-enriching parser with a registered fail-closed guard after aggregate normal-access validation returned no current listing rows or source IDs. The removed path collected DOB, address, and individual detail pages; the guard emits no records until a listing-only public contract provides complete identity, a source-issued booking/inmate key, and booking date/time. Deterministic no-network safety tests passed locally; deployment, persistence, and alert delivery remain unproven.
