@@ -1,4 +1,6 @@
 # Antigravity Handoff — ShamrockLeads Bond Lifecycle Migration
+> **Historical archive — not current operating guidance.** Any reference below to retired legacy e-signature routes, callbacks, templates, credentials, or packet delivery is superseded by [`../../policies/signature-policy.md`](../../policies/signature-policy.md). The active signature path is staff-approved DocuSeal only; retain this file solely as a historical record.
+
 **Repo:** `Shamrock2245/shamrock-leads` · **Branch:** `main` · **Latest commit:** `564214b`
 **Date:** 2026-04-27
 

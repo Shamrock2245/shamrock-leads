@@ -30,7 +30,7 @@ python scripts/check_ecosystem_secrets.py --strict
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | A1 | Netlify prod env: `GAS_WEBHOOK_URL`, `SESSION_SECRET`, `GAS_API_KEY` set | Ops | [x] *verified 2026-08-03* |
-| A2 | `GAS_WEBHOOK_URL` matches **stable** school factory `/exec` (Netlify uses deploy `…Qa_DMg`; leads `.env` uses `…CvP-Z` — **both redeployed @445/@446 on 2026-07-10**, same code; do not mint new IDs) | Ops | [x] *deployed* |
+| A2 | School Netlify uses its dedicated **stable school factory** `/exec` (`…Qa_DMg`). The central portal/CRM factory is separately stable at `…CvP-Z`; the two IDs are distinct approved deployments and must never be substituted for one another or replaced with a new ID. | Ops | [x] *deployed* |
 | A3 | SwipeSimple **20hr = $199.00**, **120hr = $649.00** in admin (matches `lib/courses.ts`) | Ops | [x] *verified 2026-08-03* |
 | A4 | Portal `setupSwipeSimpleTrigger()` / Gmail poller firing every ~5 min | Ops | [x] *verified 2026-08-03* |
 | A5 | E2E: real/test pay → `Student_Auth` Unlocked → magic-link email → dashboard modules | Ops | [x] *verified 2026-08-03* |
@@ -64,7 +64,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **same** stable factory URL | Human | [x] *2026-08-11* — code + Netlify `GAS_WEB_APP_URL` + leads `.env` all use stable `…CvP-Z/exec` (V409/V461). **Confirm Wix Secrets Manager matches** if not already set (same URL). |
+| C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **central portal/CRM stable factory** `…CvP-Z/exec` | Human | [x] *2026-08-11* — Wix portal, Telegram shared client, and central CRM paths use `…CvP-Z/exec`. Bail School is the approved exception and uses its dedicated stable school factory `…Qa_DMg`. Human confirmation of current Wix Secrets Manager values remains required if the dashboard has been changed manually. |
 | C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] **verified live 2026-08-12** — public page source JSON-LD lists the 120-hour course at `$649`; no retired “The Agent Path” or `$699` string was found in the live page source. |
 | C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] |
 | C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-11* — `{"success":true,"version":"V409"}` on stable factory; redeployed **@461** (Shannon surety_id) |
@@ -116,6 +116,8 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | P2.7 | CE catalog + in-person cohort tooling | 🔲 After school P0 |
 
 **Primary production paperwork path is DocuSeal only** (`docuseal_service` / `/api/paperwork/packet/finalize`). Local PDF stitcher is secondary/offline assist.
+
+> **Paperwork vocabulary:** An indemnitor/defendant `docuseal_packet` may be `pending`, `sent`, `signed`, or `voided` and follows the validated Match → BondCase → surety → POA chain. An `appearance_bond` is a separate `unsigned_stored` PDF requiring print and live wet ink; it is never an e-signature readiness gap and must never be sent to DocuSeal.
 
 ---
 

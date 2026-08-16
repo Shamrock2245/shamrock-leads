@@ -1,5 +1,7 @@
 # Manus Handoff — ShamrockLeads Production Hardening (continue Grok session)
 
+> **Historical archive — not current operating guidance.** Any reference below to retired legacy e-signature providers, credentials, templates, callbacks, or test packets is superseded by [`../../policies/signature-policy.md`](../../policies/signature-policy.md). The active signature path is staff-approved DocuSeal only; retain this file solely as a historical record.
+>
 > **Written:** 2026-07-24  
 > **Updated:** 2026-07-24 (post-Manus merge: stealth stack + multi-select defendants + import fixes)  
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  

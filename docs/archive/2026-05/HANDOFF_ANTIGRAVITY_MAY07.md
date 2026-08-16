@@ -1,5 +1,7 @@
 # Antigravity Handoff Prompt — May 07, 2026
 
+> **Historical archive — not current operating guidance.** Any reference below to the retired legacy e-sign provider, its templates, credentials, callbacks, or delivery flows is superseded by [`../../policies/signature-policy.md`](../../policies/signature-policy.md). The active signature path is staff-approved DocuSeal only; retain this file solely as a historical record.
+
 **Copy and paste the following prompt to Antigravity to continue the work:**
 
 ***
