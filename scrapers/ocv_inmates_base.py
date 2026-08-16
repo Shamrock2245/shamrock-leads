@@ -111,15 +111,17 @@ class OCVInmatesBaseScraper(BaseScraper):
             return None
 
         inmate_id = str(item.get("inmateID") or "").strip()
+        if not inmate_id:
+            return None
+
         oid = item.get("_id")
         if isinstance(oid, dict):
             oid = oid.get("$id") or ""
-        booking = inmate_id or str(oid or "")
-        if not booking:
-            return None
 
         demo = self._parse_content(item.get("content") or "")
         booked = demo.get("booked") or self._ts_to_date(item.get("date"))
+        if not booked:
+            return None
         custody = (item.get("custody_status_cd") or "").upper()
         status = "In Custody" if custody in ("IN", "I", "ACTIVE", "") else custody or "In Custody"
 
@@ -166,8 +168,8 @@ class OCVInmatesBaseScraper(BaseScraper):
             Full_Name=full if not full.isupper() else full.title(),
             First_Name=first.title() if first.isupper() else first,
             Last_Name=last.title() if last.isupper() else last,
-            Booking_Number=str(booking),
-            Person_ID=str(inmate_id or booking),
+            Booking_Number=str(inmate_id),
+            Person_ID=str(inmate_id),
             Booking_Date=booked,
             Sex=(demo.get("gender") or "")[:1].upper(),
             Race=demo.get("race") or "",

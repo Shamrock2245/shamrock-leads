@@ -679,6 +679,43 @@ async def api_indemnitor_search_existing(q: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_booking_number=""):
+    """Persist a standalone indemnitor. Never invents a prospective bond card."""
+    indemnitors_coll = get_collection("indemnitors")
+    profile["created_at"] = now.isoformat()
+    profile["linked_bonds"] = []
+    profile["status"] = "unlinked"
+    if pending_booking_number:
+        profile["pending_booking_number"] = pending_booking_number
+    if phone:
+        existing = await indemnitors_coll.find_one({"phone": phone, "status": "unlinked"})
+        if existing:
+            await indemnitors_coll.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {**profile, "updated_at": now.isoformat()}},
+            )
+            ind_id = str(existing.get("Indemnitor_ID") or existing["_id"])
+            return {
+                "success": True,
+                "action": "updated_existing",
+                "indemnitor_id": ind_id,
+                "booking_number": f"UNLINKED-{ind_id}",
+                "linked": False,
+                "message": message,
+            }
+    profile["Indemnitor_ID"] = str(uuid.uuid4())
+    await indemnitors_coll.insert_one(profile)
+    ind_id = profile["Indemnitor_ID"]
+    return {
+        "success": True,
+        "action": "created",
+        "indemnitor_id": ind_id,
+        "booking_number": f"UNLINKED-{ind_id}",
+        "linked": False,
+        "message": message,
+    }
+
+
 @router.post("/indemnitors/create")
 async def api_indemnitor_create(request: Request):
     """Create or update an indemnitor profile and link to a bond.
@@ -752,37 +789,12 @@ async def api_indemnitor_create(request: Request):
 
         # If no booking number, save as an unlinked indemnitor for later matching
         if not booking_number:
-            indemnitors_coll = get_collection("indemnitors")
-            profile["created_at"] = now.isoformat()
-            profile["linked_bonds"] = []
-            profile["status"] = "unlinked"
-            # Dedup by phone if available (same person re-entered)
-            if phone:
-                existing = await indemnitors_coll.find_one({"phone": phone, "status": "unlinked"})
-                if existing:
-                    await indemnitors_coll.update_one(
-                        {"_id": existing["_id"]},
-                        {"$set": {**profile, "updated_at": now.isoformat()}},
-                    )
-                    ind_id = str(existing.get("Indemnitor_ID") or existing["_id"])
-                    return {
-                        "success": True,
-                        "action": "updated_existing",
-                        "indemnitor_id": ind_id,
-                        "booking_number": f"UNLINKED-{ind_id}",
-                        "linked": False,
-                    }
-            profile["Indemnitor_ID"] = str(uuid.uuid4())
-            result = await indemnitors_coll.insert_one(profile)
-            ind_id = profile["Indemnitor_ID"]
-            return {
-                "success": True,
-                "action": "created",
-                "indemnitor_id": ind_id,
-                "booking_number": f"UNLINKED-{ind_id}",
-                "linked": False,
-                "message": "Indemnitor saved. Open the card and enter a Booking # to link.",
-            }
+            return await _save_unlinked_indemnitor(
+                profile,
+                phone=phone,
+                now=now,
+                message="Indemnitor saved. Open the card and enter a Booking # to link.",
+            )
 
         # Find the bond (prospective or active)
         doc = await prospective_bonds.find_one({"booking_number": booking_number})
@@ -794,9 +806,22 @@ async def api_indemnitor_create(request: Request):
             bond_type = "active"
 
         if not doc:
-            from dashboard.extensions import get_db
             db = get_db()
-            arrest = await db.arrests.find_one({"booking_number": booking_number})
+            arrests = await db.arrests.find(
+                {"booking_number": booking_number}
+            ).to_list(length=2)
+            if len(arrests) > 1:
+                return await _save_unlinked_indemnitor(
+                    profile,
+                    phone=phone,
+                    now=now,
+                    pending_booking_number=booking_number,
+                    message=(
+                        "Indemnitor saved unlinked. That booking # matches more "
+                        "than one arrest; pick the defendant card before linking."
+                    ),
+                )
+            arrest = arrests[0] if arrests else None
             if arrest:
                 # Create a new prospective bond from the arrest lead
                 # stage must be a VALID_STAGES value used by the In Progress pipeline
@@ -825,35 +850,16 @@ async def api_indemnitor_create(request: Request):
                 collection = prospective_bonds
                 bond_type = "prospective"
             else:
-                # No existing bond or arrest — create a stub prospective bond
-                # so the indemnitor can be linked now and matched to a defendant later.
-                doc = {
-                    "booking_number": booking_number,
-                    "county": "",
-                    "defendant_name": "",
-                    "bond_amount": 0,
-                    "charges": [],
-                    "status": "active",
-                    "stage": "contacted",
-                    "source": "dashboard_manual",
-                    "created_at": now.isoformat(),
-                    "updated_at": now.isoformat(),
-                    "timeline": [{
-                        "timestamp": now.isoformat(),
-                        "event": "bond_started",
-                        "detail": (
-                            f"Stub bond created via indemnitor intake — "
-                            f"booking #{booking_number} not yet in system"
-                        ),
-                        "agent": "System",
-                    }],
-                    "indemnitors": [],
-                    "documents": {},
-                    "kyc_uploads": [],
-                }
-                await prospective_bonds.insert_one(doc)
-                collection = prospective_bonds
-                bond_type = "prospective"
+                return await _save_unlinked_indemnitor(
+                    profile,
+                    phone=phone,
+                    now=now,
+                    pending_booking_number=booking_number,
+                    message=(
+                        "Indemnitor saved unlinked. That booking # is not "
+                        "in arrests or bonds; link after the defendant record exists."
+                    ),
+                )
 
         # Multi-cosigner: migrate from single indemnitor to indemnitors array
         existing_indemnitors = doc.get("indemnitors", [])
@@ -952,7 +958,7 @@ async def api_indemnitor_link(request: Request):
     """Link a previously unlinked standalone indemnitor to a booking/bond.
 
     Body: {indemnitor_id: str, booking_number: str}
-    Reuses the create path so stub-bond + multi-cosigner logic stays centralized.
+    Reuses the create path so unlinked-or-existing-bond attach stays centralized.
     """
     try:
         data = await request.json() or {}

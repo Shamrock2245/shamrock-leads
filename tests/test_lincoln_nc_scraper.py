@@ -44,6 +44,24 @@ class TestLincolnNCScraper(unittest.TestCase):
         }
         self.assertIsNone(self.scraper._item_to_record(item))
 
+    def test_mongo_object_id_is_not_a_booking_number(self):
+        item = {
+            "firstName": "JANE",
+            "lastName": "DOE",
+            "_id": {"$id": "64f0deadbeef"},
+            "content": "<div>Booked Date: 08/14/2026 12:34</div>",
+        }
+        self.assertIsNone(self.scraper._item_to_record(item))
+
+    def test_missing_booked_date_fails_closed(self):
+        item = {
+            "firstName": "JANE",
+            "lastName": "DOE",
+            "inmateID": "LC-1001",
+            "content": "<div>Inmate ID: LC-1001</div>",
+        }
+        self.assertIsNone(self.scraper._item_to_record(item))
+
 
 if __name__ == "__main__":
     unittest.main()

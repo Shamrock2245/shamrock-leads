@@ -1,8 +1,8 @@
 # DATA_MODEL.md — ShamrockLeads Entity & Schema Reference
 
-> **Last Updated:** 2026-08-04  
+> **Last Updated:** 2026-08-16  
 > **Database:** MongoDB Atlas — `ShamrockBailDB`  
-> **Dedup Key:** `county` + `booking_number` (for arrests; multi-state prefers `state` + `county` + `booking_number`)  
+> **Dedup Key:** `state` + `county` + `booking_number` (arrests; unique index `dedup_state_county_booking`)  
 > **Identity Rule:** ArrestLead ≠ Defendant ≠ Indemnitor ≠ Match ≠ BondCase. Never collapse.  
 > **Multi-state:** always set `state` (FL/GA/SC/NC…); never collapse same-name counties across states.
 
@@ -12,7 +12,7 @@
 
 | Collection | Purpose | Dedup Key |
 |------------|---------|-----------|
-| `arrests` | Raw scraped arrest records from **269 registered** scrapers across 10 states (39 fields + `state` + `charge_details`) | `county` + `booking_number` |
+| `arrests` | Raw scraped arrest records from **358 registered** scrapers across 10 states (39 fields + `state` + `charge_details`) | `state` + `county` + `booking_number` |
 | `defendants` | Normalized defendant profiles | `Defendant_ID` (UUID) |
 | `indemnitors` | Indemnitor intake records | `Indemnitor_ID` (UUID) |
 | `matches` | Validated defendant↔indemnitor links | `Match_ID` (UUID) |
@@ -120,6 +120,8 @@ email                 : str
 address               : str
 relationship          : str              # "Mother", "Spouse", "Friend", etc.
 source                : str              # "wix", "telegram", "walk-in", "phone"
+status                : str              # "unlinked" until attached to a real arrest/bond
+pending_booking_number: str              # optional typed booking that was not found
 created_at            : str (ISO)
 ```
 
@@ -251,7 +253,7 @@ updated_at            : str (ISO)
 
 | Collection | Index | Type | Purpose |
 |------------|-------|------|---------|
-| `arrests` | `{county: 1, booking_number: 1}` | Unique | Dedup key |
+| `arrests` | `{state: 1, county: 1, booking_number: 1}` | Unique (`dedup_state_county_booking`) | Multi-state dedup key. Legacy `{county, booking_number}` was dropped so Lee FL/GA/SC cannot collide. |
 | `arrests` | `{lead_status: 1, scraped_at: -1}` | Compound | Hot lead queries |
 | `arrests` | `{county: 1, scraped_at: -1}` | Compound | Per-county dashboard |
 | `active_bonds` | `{poa_number: 1}` | Unique (sparse) | POA lookup |
@@ -274,9 +276,9 @@ updated_at            : str (ISO)
 
 ## Data Flow Rules
 
-1. **Scraping → `arrests`**: Upsert by `county` + `booking_number`. Never overwrite with older data.
+1. **Scraping → `arrests`**: Upsert by `state` + `county` + `booking_number`. Never overwrite with older data.
 2. **`arrests` → `defendants`**: Normalization creates/updates defendant profiles. Many arrests → one defendant.
-3. **Intake → `indemnitors`**: Validated intake creates indemnitor record.
+3. **Intake → `indemnitors`**: Validated intake creates an indemnitor record. Dashboard walk-in save with no booking number writes `status: unlinked` on `indemnitors` only. A booking number that is not already on an arrest, prospective bond, or active bond must not invent a stub pipeline card.
 4. **`defendants` + `indemnitors` → `matches`**: Matching engine scores and links. Human gate for < 0.85 confidence.
 5. **Confirmed match → `active_bonds`**: Only after: defendant exists, indemnitor exists, match confirmed, surety selected, POA assigned.
 6. **`active_bonds` → `paperwork_packets`**: Packet generation hydrates the two DocuSeal templates with bond data.

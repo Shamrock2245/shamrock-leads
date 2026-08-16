@@ -72,7 +72,7 @@ python main.py sc_lee      # not FL Lee
 | Spartanburg | 🟡 Scaffold | — | Prior 72h URL 404 |
 | Sumter | 🟡 Wrapper | SmartCOP | |
 | Union | 🟡 Wrapper | Zuercher | |
-| York | ✅ Source-faithful repair — deployed 2026-08-14 | ASP.NET public roster | Official public cards expose complete names, source-issued booking numbers, and booking timestamps. Repaired parser now maps these directly, rejects missing fields, and never synthesizes booking keys. Local one-page smoke parsed 15 records; public production hosts are healthy, while York-specific persistence and alert telemetry remain unproven. |
+| York | ⚠ Fail closed | ASP.NET public roster | Parser maps official booking numbers and timestamps and refuses synthetic keys, but ordinary access to the configured roster timed out. `SOURCE_CONTRACT_VALIDATED = False`; Scraper Health reports `fail_closed`. Re-enable only after ordinary public access is revalidated. |
 
 ### Not yet scaffolded (typically no public portal)
 

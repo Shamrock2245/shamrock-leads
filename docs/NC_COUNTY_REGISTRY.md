@@ -108,7 +108,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Jones | ⬜ No portal | — | VINE / phone |
 | Lee | ✅ Live | DCN | `dcn.leecountync.gov/dcn/inmates` · `dcn_base` (CLI `nc_lee`) |
 | Lenoir | ⬜ No portal | — | VINE / phone |
-| Lincoln | ✅ Deployed | Official OCV roster | `lincolnsheriff.org/inmateSearch` · official OCV app `a46428092`; local aggregate smoke parsed 175 records with complete source IDs and booked timestamps. The `a7c3fd8` rollout and public host checks succeeded; Lincoln persistence and alert telemetry remain unproven. |
+| Lincoln | ✅ Deployed | Official OCV roster | `lincolnsheriff.org/inmateSearch` · official OCV app `a46428092`; local aggregate smoke parsed 175 records with complete source IDs and booked timestamps. Shared OCV parser now requires a source `inmateID` and booked date/time and will not treat a Mongo `_id` as a booking number. Persistence and alert telemetry remain unproven. |
 | Macon | ⬜ No portal | — | VINE / phone |
 | Madison | ⬜ No portal | — | VINE / phone |
 | Martin | ⬜ No portal | — | VINE / phone |

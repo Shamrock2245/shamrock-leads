@@ -960,8 +960,8 @@ const SLIndemnitor = (() => {
       _scannedAddress = null;
       load();  // Refresh list
       if (thenPaperwork) {
-        if (!booking) {
-          toast('Enter a booking # to start OSI paperwork', 'error');
+        if (!booking || d.linked === false) {
+          toast('Save the indemnitor unlinked, then start paperwork from a recorded arrest or bonded case', 'error');
           return;
         }
         if (window.SLPaperwork && typeof SLPaperwork.startFromBond === 'function') {

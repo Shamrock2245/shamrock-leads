@@ -1,12 +1,15 @@
-"""
-Ascension Parish (LA) Arrest Scraper — Donaldsonville / APSO Roster.
-URL: https://www.ascensionso.com/inmates
-"""
-import logging
-import time
-from typing import List
+"""Ascension Parish (LA) source-contract guard.
 
-import requests
+The registered path targeted a speculative ``/api/v1/inmates`` endpoint
+that was never county-validated. It accepted a generic ``id`` as a booking
+key, required no booking date/time, and used non-canonical ArrestRecord
+kwargs. This job emits no records until an official listing contract is
+validated.
+"""
+from __future__ import annotations
+
+import logging
+from typing import List
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
@@ -15,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 class AscensionScraper(BaseScraper):
+    """Fail closed until Ascension has a verified booking-safe roster."""
+
+    OFFICIAL_SOURCE_URL = "https://www.ascensionso.com/inmates"
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "The configured /api/v1/inmates path is an unverified speculative "
+        "endpoint; no booking-safe official listing contract is validated."
+    )
+
     @property
     def county(self) -> str:
         return "Ascension"
@@ -24,32 +36,10 @@ class AscensionScraper(BaseScraper):
         return "LA"
 
     def scrape(self) -> List[ArrestRecord]:
-        records: List[ArrestRecord] = []
-        url = "https://www.ascensionso.com/api/v1/inmates"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-        }
-        try:
-            resp = requests.get(url, headers=headers, timeout=25)
-            if resp.status_code == 200:
-                for item in resp.json().get("inmates", []):
-                    b_num = str(item.get("booking_number") or item.get("id") or "")
-                    name = str(item.get("name") or "").strip()
-                    if not b_num or not name:
-                        continue
-                    records.append(
-                        ArrestRecord(
-                            booking_number=b_num,
-                            county="Ascension",
-                            state="LA",
-                            full_name=name,
-                            charges=item.get("charges") or [],
-                            total_bond_amount=float(item.get("bond") or 0.0),
-                            facility="Ascension Parish Jail",
-                            scraped_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        )
-                    )
-        except Exception as e:
-            logger.info(f"Ascension LA scrape info: {e}")
-        return records
+        logger.warning(
+            "%s %s fail closed: %s",
+            self.county,
+            self.state,
+            self.SOURCE_CONTRACT_REASON,
+        )
+        return []

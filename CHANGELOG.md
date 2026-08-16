@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-16 (August wave leftover guards)
+
+### Changed
+- **East Baton Rouge and Jefferson Parish, LA fail-closed** — removed residential stealth, Cloudflare/disclaimer browser walks, TLS fingerprinting, and name-derived `EBR_` / `JEF_` booking fallbacks.
+- **Lafayette Parish, LA fail-closed** — captcha-gated 365Labs path no longer probes Azure with TLS off, opens a browser, or invents `LAF_` keys.
+- **Ascension, Caddo, Livingston, and Ouachita Parish fail-closed** — speculative `/api/...` inmate endpoints are no longer fetched.
+- **Dashboard source-state registry** — those Louisiana jobs plus already-gated Forsyth (NC), Madison (AL), and Mobile (AL) are explicit `fail_closed` labels.
+- **Indemnitor save** — an unknown or ambiguous booking number no longer inserts a stub `prospective_bonds` card. The indemnitor is saved `unlinked`. Save & Do Paperwork does not open DocuSeal from an unlinked save.
+- **OCV inmate parser** — Lincoln and other OCV counties now require a source `inmateID` and booked date/time. A Mongo `_id` is not accepted as a booking number.
+
 ## [Unreleased] — 2026-08-15 (Verified-public scraper health review)
 
 ### Documented

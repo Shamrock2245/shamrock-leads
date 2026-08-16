@@ -75,10 +75,10 @@
 4. **Collin** remains WAF-sensitive; do not bypass access controls.
 5. Full scheduler inventory, source posture, and recon queue: `docs/TX_COUNTY_REGISTRY.md`.
 
-### LA (12 registered — harden)
-1. **Tangipahoa** deployed after a bounded public-source smoke; parish-specific Mongo/alert evidence remains required.
-2. **Lafayette** remains CAPTCHA-sensitive; validate all existing parish sources before adding coverage.
-3. Registry `docs/LA_COUNTY_REGISTRY.md`.
+### LA (13 registered — harden)
+1. **Tangipahoa**, **St. Mary**, and **Bossier** are `verified_public` after bounded official-listing smokes; parish-specific Mongo/alert evidence remains required.
+2. **Calcasieu**, **Orleans**, **St. Tammany**, **East Baton Rouge**, **Jefferson**, **Ascension**, **Caddo**, **Lafayette**, **Livingston**, and **Ouachita** are `fail_closed`. Do not restore stealth, CAPTCHA, speculative APIs, or synthetic booking keys.
+4. Registry `docs/LA_COUNTY_REGISTRY.md`.
 
 ### CT (6 registered — validate source access)
 1. **Statewide dockets** and **CT DOC** are registered; city modules cover Hartford, Bridgeport, New Haven, and Stamford.

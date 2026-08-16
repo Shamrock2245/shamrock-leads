@@ -1,6 +1,6 @@
 # Louisiana Parish Scraper Registry
 
-> **Last updated:** 2026-08-14
+> **Last updated:** 2026-08-16
 > **Registered scheduler jobs:** 13
 > **Package:** `scrapers/counties_la/`
 > **Job IDs:** `scraper_la_<parish>` · CLI example: `python main.py la_tangipahoa`
@@ -9,17 +9,17 @@ Louisiana uses **parishes** rather than counties; the parish name is stored in t
 
 | Parish | Module | Cadence | Evidence boundary |
 |---|---|---:|---|
-| Ascension | `ascension.py` | 120 min | Registered; source and production telemetry require validation. |
+| Ascension | `ascension.py` | 120 min | **Fail-closed 2026-08-16.** Configured `/api/v1/inmates` is an unverified speculative endpoint. The job emits no records. |
 | Bossier | `bossier.py` | 120 min | **Deployed 2026-08-15.** Official paginated listing cards expose complete source names, source-issued Inmate IDs, and booked date/times. A bounded two-page aggregate-only smoke parsed 20 unique records with state, parish, source-key, booking date/time, deduplication, and listing-only invariants passing. Deployment run `31852987527` succeeded; public leads `/health`, sign, school, paperwork, and social `/auth` checks were healthy. No profile or image retrieval; parish-specific persistence and alert telemetry remain unproven. |
-| Caddo | `caddo.py` | 90 min | Registered; source and production telemetry require validation. |
-| Calcasieu | `calcasieu.py` | 90 min | Registered; source and production telemetry require validation. |
-| East Baton Rouge | `east_baton_rouge.py` | 90 min | Registered; source and production telemetry require validation. |
-| Jefferson | `jefferson.py` | 90 min | Registered; source and production telemetry require validation. |
-| Lafayette | `lafayette.py` | 90 min | Registered; CAPTCHA-sensitive source; do not bypass controls. |
-| Livingston | `livingston.py` | 120 min | Registered; source and production telemetry require validation. |
-| Orleans | `orleans.py` | 90 min | Registered; source and production telemetry require validation. |
-| Ouachita | `ouachita.py` | 90 min | Registered; source and production telemetry require validation. |
-| St. Tammany | `st_tammany.py` | 90 min | Registered; source and production telemetry require validation. |
+| Caddo | `caddo.py` | 90 min | **Fail-closed 2026-08-16.** Configured `/api/inmates/current` is an unverified speculative endpoint. The job emits no records. |
+| Calcasieu | `calcasieu.py` | 90 min | **Fail-closed 2026-08-15.** Prior `/api/inmates/roster` returned public HTTP 404. The job emits no records until the current public roster API and booking-safe listing fields are revalidated. |
+| East Baton Rouge | `east_baton_rouge.py` | 90 min | **Fail-closed 2026-08-16.** Prior path used residential stealth, a Cloudflare/disclaimer browser walk, and name-derived `EBR_` booking keys. No official EBRSO booking-safe broad roster has been verified through ordinary public access. The job emits no records. |
+| Jefferson | `jefferson.py` | 90 min | **Fail-closed 2026-08-16.** Prior path used stealth TLS fingerprinting, a browser fallback, and name-derived `JEF_` booking keys. No official JPSO booking-safe broad roster has been verified through ordinary public access. The job emits no records. |
+| Lafayette | `lafayette.py` | 90 min | **Fail-closed 2026-08-16.** 365Labs portal is captcha-gated. Prior TLS-disabled endpoint probes, browser fallback, and `LAF_` name-hash keys are removed. The job emits no records. |
+| Livingston | `livingston.py` | 120 min | **Fail-closed 2026-08-16.** Configured `/api/inmates/recent` is an unverified speculative endpoint. The job emits no records. |
+| Orleans | `orleans.py` | 90 min | **Fail-closed 2026-08-15.** Reachable OPSO origin did not establish a booking-safe broad roster; speculative endpoints, browser navigation, and synthetic booking fallbacks were removed. |
+| Ouachita | `ouachita.py` | 90 min | **Fail-closed 2026-08-16.** Configured `/api/v1/inmate-search` is an unverified speculative endpoint. The job emits no records. |
+| St. Tammany | `st_tammany.py` | 90 min | **Fail-closed 2026-08-15.** Prior `/api/inmates/recent` returned public HTTP 403. The job emits no records until a booking-safe broad roster is revalidated. |
 | St. Mary | `st_mary.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 | Tangipahoa | `tangipahoa.py` | 120 min | **Deployed 2026-08-14** after a local two-page official-source smoke; public production hosts are healthy. Mongo upsert and alert delivery remain unproven. |
 

@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-15
+> **Last verified:** 2026-08-16
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -40,6 +40,25 @@ Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings f
 | Deployment integrity | Latest `Deploy to Hetzner` run for `df24815` timed out at the 30-minute SSH command budget after the core image build. The workflow time budget is corrected in the pending commit; it is not yet a live deployment result. |
 | Human-gated bond / outreach evidence | **Still required**: one staff-confirmed write-bond → paperwork event (B3) and one staff-approved outbound dashboard iMessage (D2). No synthetic cases, paperwork, or client messages were created for this audit. |
 | Historical secret rotation (C3) | **Still required**: the portal rotation guide confirms prior credentials existed in git history. No vendor key was rotated without Brendan’s approval. |
+
+## August 14–16 source-safety wave review (2026-08-16)
+
+The 2026-08-14 through 2026-08-16 Shamrock2245 commit wave (fail-close campaign, recon matrix, and verified-public parsers) does **not** need a wholesale rollback. Keepers: Bossier, Tangipahoa, St. Mary, Lee/Marshall/Etowah/St. Clair AL, Rankin. York’s parser is kept but remains `fail_closed` until ordinary access is revalidated. Lincoln NC and Miami-Dade still emit and stay `unverified` until their source-state rows are promoted on purpose.
+
+Leftover Louisiana jobs from that window that were still scheduled without a contract gate are now fail-closed:
+
+| Parish | Residual risk | Action |
+|---|---|---|
+| East Baton Rouge | Residential stealth + disclaimer browser walk + `EBR_` name-hash keys | Fail-closed 2026-08-16 |
+| Jefferson | Stealth TLS fingerprinting + browser fallback + `JEF_` name-hash keys | Fail-closed 2026-08-16 |
+| Lafayette | Captcha portal + TLS-disabled probes + `LAF_` name-hash keys | Fail-closed 2026-08-16 |
+| Ascension, Caddo, Livingston, Ouachita | Speculative `/api/...` endpoints, no booking-time contract | Fail-closed 2026-08-16 |
+
+Dashboard `SCRAPER_SOURCE_STATES` now also marks already-gated **Forsyth (NC)**, **Madison (AL)**, and **Mobile (AL)** as `fail_closed`. Unknown booking # on New Indemnitor no longer invents a stub prospective bond; Save & Do Paperwork only proceeds when the indemnitor linked to an existing arrest or bond.
+
+OCV listing parsers (Lincoln NC and siblings) now require a source `inmateID` and booked date/time; a Mongo `_id` is not a booking number.
+
+Bond Intelligence write-desk, Florida statutory premium, OpenCut overlay, and Holehe/HIBF OSINT chips from the same dates stay. They are not rolled back.
 
 ## Verified-public scraper health review (2026-08-15)
 
@@ -123,7 +142,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
 | **TN** | **22** | `scrapers/counties_tn/` | Putnam remains source-validated. Blount, Bradley, Sevier, Washington, Maury, Robertson, Hamblen, Bedford, Coffee, Lincoln, and Giles are deployed fail-closed guards pending compliant source contracts; public service checks were healthy. Per-source Mongo upsert and alert telemetry remain pending. |
 | **AL** | **16** | `scrapers/counties_al/` | Lee, Marshall, St. Clair, and Etowah are deployed after bounded official-roster smokes. Baldwin, Cullman, DeKalb, Houston, Jackson, Jefferson, Morgan, Shelby, Tuscaloosa, Madison, Mobile, and Montgomery are deployed fail-closed guards where no compliant source contract exists; public service checks were healthy. Per-scraper Mongo/alert evidence remains pending. |
-| **LA** | **13** | `scrapers/counties_la/` | Tangipahoa and St. Mary deployed 2026-08-14 with public host checks green. Bossier’s official public-card parser deployed 2026-08-15 in run `31852987527`; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Per-parish Mongo/alert evidence remains pending. |
+| **LA** | **13** | `scrapers/counties_la/` | Tangipahoa, St. Mary, and Bossier remain `verified_public`. Calcasieu, Orleans, and St. Tammany fail-closed 2026-08-15. East Baton Rouge, Jefferson, Lafayette, Ascension, Caddo, Livingston, and Ouachita fail-closed 2026-08-16. Per-parish Mongo/alert evidence remains pending. |
 | **MS** | **9** | `scrapers/counties_ms/` | Rankin is source-validated and deployed. DeSoto, Forrest, Harrison, Hinds, Jackson, Jones, Lauderdale, and Madison are deployed fail-closed guards; Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only. Public service checks were healthy; per-county Mongo/alert evidence remains pending. |
 | **CT** | **6** | `scrapers/counties_ct/` | CT DOC fail-closed guard deployed 2026-08-14 after official BITS BOT rejection; public hosts are healthy and Statewide dockets plus municipal paths remain registered. |
 | **Total** | **358** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
@@ -234,7 +253,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | TN (22 registered; Putnam deployed with public health green; Davidson/Knox historic success; Shelby TLS sensitivity) | ⏳ Deepen and obtain per-source Mongo/Slack telemetry; Sullivan remains recon-only |
 | TX (34 registered; Randall deployed; legacy P2C wrappers need source refresh) | ⏳ Obtain per-source Mongo/Slack telemetry and refresh unreachable legacy P2C sources |
 | AL (16 registered; Lee, Marshall, and St. Clair deployed with public host checks green) | ⏳ Obtain per-scraper Mongo/Slack telemetry and validate source health for existing Alabama jobs |
-| LA (12 registered; Tangipahoa and St. Mary deployed with public host checks green; Lafayette remains CAPTCHA-sensitive) | ⏳ Obtain parish-specific Mongo/Slack telemetry and validate existing parish source health |
+| LA (13 registered; Tangipahoa, St. Mary, Bossier `verified_public`; ten other registered parishes `fail_closed`) | ⏳ Obtain parish-specific Mongo/Slack telemetry for the three verified-public jobs |
 | MS (9 registered; registry reconciled; five assessed counties remain recon-only) | ⏳ Validate existing source telemetry and wait for a supported public roster/export before adding uncovered counties |
 | CT dockets + DOC | ⏳ CT DOC fail-closed guard deployed pending a supported booking-safe public source; do not claim CT DOC production writes or alerts. |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
