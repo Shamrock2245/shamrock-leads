@@ -327,213 +327,19 @@ async def api_record_bond(request: Request):
 
 @bonds_bp.post("/write-bond")
 async def api_write_bond(request: Request):
-    """
-    Accept defendant + indemnitor data + insurance company selection,
-    format a GAS-compatible SignNow payload, and forward it.
-
-    Accepts indemnitors as a list under the key "indemnitors" (up to 5),
-    or a single indemnitor under the legacy key "indemnitor".
-    All fields mirror Dashboard.html addIndemnitor() schema exactly.
-    """
-    data = await request.json()
-    if not data:
-        return JSONResponse({"success": False, "error": "No payload received"}, status_code=400)
-
-    insurer = data.get("insurance_company", "osi")
-    defendant = data.get("defendant", {})
-    booking = data.get("booking", {})
-    bond = data.get("bond", {})
-    charges = data.get("charges", "")
-    court = data.get("court", {})
-
-    # ── Indemnitor(s) — accept list or single object ──────────────────────────
-    raw_indemnitors = data.get("indemnitors") or []
-    if not raw_indemnitors and data.get("indemnitor"):
-        raw_indemnitors = [data["indemnitor"]]
-
-    def _build_indemnitor(ind: dict) -> dict:
-        """Normalize a single indemnitor dict to the GAS/Dashboard.html schema."""
-        g = lambda *keys: next((str(ind.get(k, "")).strip() for k in keys if ind.get(k)), "")
-        return {
-            # Personal
-            "firstName":        g("firstName", "IndFirstName", "indemnitorFirstName", "first_name"),
-            "middleName":       g("middleName", "IndMiddleName", "indemnitorMiddleName"),
-            "lastName":         g("lastName", "IndLastName", "indemnitorLastName", "last_name"),
-            "relationship":     g("relationship", "IndRelation", "indemnitorRelation", "Relationship"),
-            "dob":              g("dob", "IndDOB", "indemnitorDOB"),
-            "ssn":              g("ssn", "IndSSN", "indemnitorSSN"),
-            "dl":               g("dl", "IndDL", "indemnitorDL", "dlNumber"),
-            "dlState":          g("dlState", "IndDLState", "indemnitorDLState") or "FL",
-            # Contact
-            "phone":            g("phone", "IndPhone", "indemnitorPhone"),
-            "email":            g("email", "IndEmail", "indemnitorEmail"),
-            # Address
-            "address":          g("address", "IndAddress", "indemnitorStreetAddress", "indemnitorAddress"),
-            "city":             g("city", "IndCity", "indemnitorCity"),
-            "state":            g("state", "IndState", "indemnitorState") or "FL",
-            "zip":              g("zip", "IndZip", "indemnitorZipCode", "indemnitorZip"),
-            # Employment
-            "employer":         g("employer", "IndEmployer", "indemnitorEmployerName"),
-            "employerPhone":    g("employerPhone", "IndEmployerPhone", "indemnitorEmployerPhone"),
-            "employerCity":     g("employerCity", "IndEmployerCity", "indemnitorEmployerCity"),
-            "employerState":    g("employerState", "IndEmployerState", "indemnitorEmployerState"),
-            "supervisor":       g("supervisor", "IndJobTitle", "indemnitorSupervisorName", "jobTitle"),
-            "supervisorPhone":  g("supervisorPhone", "IndSupervisorPhone", "indemnitorSupervisorPhone"),
-            # References
-            "ref1Name":         g("ref1Name", "Ref1Name", "reference1Name"),
-            "ref1Relation":     g("ref1Relation", "Ref1Relation", "reference1Relation"),
-            "ref1Phone":        g("ref1Phone", "Ref1Phone", "reference1Phone"),
-            "ref1Address":      g("ref1Address", "Ref1Address", "reference1Address"),
-            "ref2Name":         g("ref2Name", "Ref2Name", "reference2Name"),
-            "ref2Relation":     g("ref2Relation", "Ref2Relation", "reference2Relation"),
-            "ref2Phone":        g("ref2Phone", "Ref2Phone", "reference2Phone"),
-            "ref2Address":      g("ref2Address", "Ref2Address", "reference2Address"),
-        }
-
-    indemnitors_payload = [_build_indemnitor(ind) for ind in raw_indemnitors]
-
-    # Validate required fields
-    if not defendant.get("full_name"):
-        return JSONResponse({"success": False, "error": "Defendant name required"}, status_code=400)
-    if not booking.get("booking_number"):
-        return JSONResponse({"success": False, "error": "Booking number required"}, status_code=400)
-
-    # Bond amount — scrapers often leave $0 until first appearance; staff must set real amount
-    try:
-        _bond_amt = float(bond.get("amount") or bond.get("bond_amount") or 0)
-    except (TypeError, ValueError):
-        _bond_amt = 0.0
-    if _bond_amt <= 0:
-        return JSONResponse({
+    """Retired legacy e-sign route; historical records are read-only."""
+    return JSONResponse(
+        {
             "success": False,
-            "error": (
-                "Bond amount is $0. Set the real bond amount on the defendant record "
-                "(Defendants tab or Write Bond modal) before writing. Jail sites often "
-                "publish bond hours after booking."
+            "error": "legacy_esign_retired",
+            "message": (
+                "This legacy e-sign route is retired. New paperwork must be created "
+                "through the validated Super CRM DocuSeal workflow."
             ),
-        }, status_code=400)
-
-    # Normalise surety to lowercase canonical form used by GAS template router
-    surety_id = insurer.lower().strip()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"  # safe default
-
-    # ── Format GAS-compatible payload ──
-    gas_payload = {
-        "action": "sendPaperwork",
-        "source": "shamrock-leads-dashboard",
-        # insuranceCompany: legacy GAS key (UPPERCASE) used by _shannon_buildFormData
-        "insuranceCompany": surety_id.upper(),
-        # surety_id: canonical lowercase key used by _resolveTemplateId in Telegram_Documents.js
-        "surety_id": surety_id,
-        "defendant": {
-            "fullName":   defendant.get("full_name", ""),
-            "firstName":  defendant.get("first_name", ""),
-            "lastName":   defendant.get("last_name", ""),
-            "middleName": defendant.get("middle_name", ""),
-            "dob":        defendant.get("dob", ""),
-            "address":    defendant.get("address", ""),
-            "city":       defendant.get("city", ""),
-            "state":      defendant.get("state", "FL"),
-            "zip":        defendant.get("zip", ""),
-            "sex":        defendant.get("sex", ""),
-            "race":       defendant.get("race", ""),
-            "height":     defendant.get("height", ""),
-            "weight":     defendant.get("weight", ""),
+            "use": "docuseal",
         },
-        "booking": {
-            "bookingNumber": booking.get("booking_number", ""),
-            "county":        booking.get("county", ""),
-            "facility":      booking.get("facility", ""),
-            "agency":        booking.get("agency", ""),
-            "arrestDate":    booking.get("arrest_date", ""),
-            "bookingDate":   booking.get("booking_date", ""),
-        },
-        "bond": {
-            "totalAmount": bond.get("amount", 0),
-            "premium":     bond.get("premium", 0),
-            "type":        bond.get("type", ""),
-            "paid":        bond.get("paid", "NO"),
-        },
-        "charges": charges,
-        "court": {
-            "date":       court.get("date", ""),
-            "time":       court.get("time", ""),
-            "type":       court.get("type", ""),
-            "location":   court.get("location", ""),
-            "caseNumber": court.get("case_number", ""),
-        },
-        # ── Indemnitors (full schema, mirrors Dashboard.html addIndemnitor) ──
-        "indemnitors": indemnitors_payload,
-        # Legacy single-indemnitor key for GAS backward compat
-        "indemnitor": indemnitors_payload[0] if indemnitors_payload else {},
-        # Intake source tracking
-        "intake_id":  data.get("intake_id", ""),
-        "intake_source": data.get("intake_source", "shamrock-leads-dashboard"),
-        # Agent constants — always locked to canonical values regardless of caller
-        "AgentName":         "Brendan O'Neal",
-        "AgentLicense":      "P139768",
-        "AgentLicenseNumber": "P139768",
-    }
-
-    # Log the formatted payload
-    logger.info(
-        "📋 WRITE BOND — %s | Insurance: %s | Bond: $%.2f | Premium: $%.2f | County: %s | Booking: %s | Indemnitors: %d",
-        defendant.get("full_name", "Unknown"), insurer.upper(), bond.get("amount", 0), bond.get("premium", 0), booking.get("county", "Unknown"), booking.get("booking_number", "N/A"), len(indemnitors_payload)
+        status_code=410,
     )
-
-    # ── Forward to GAS (when configured) ──
-    gas_url = os.getenv("GAS_WEB_APP_URL", "")
-    if gas_url:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(gas_url, json=gas_payload, timeout=30)
-                if resp.status_code < 400:
-                    content_type = resp.headers.get("content-type", "")
-                    gas_resp = resp.json() if "application/json" in content_type else resp.text[:200]
-
-                    # Real-time dashboard event — sl-core.js listens for 'bond_written'
-                    try:
-                        from dashboard.routers.events import publish_event
-                        await publish_event("bond_written", {
-                            "booking_number": booking.get("booking_number", ""),
-                            "defendant_name": defendant.get("full_name", ""),
-                            "county": booking.get("county", ""),
-                            "bond_amount": bond.get("amount", 0),
-                            "premium": bond.get("premium", 0),
-                            "surety": insurer.upper(),
-                        })
-                    except Exception:
-                        pass
-
-                    return {
-                        "success": True,
-                        "message": f"Packet sent to GAS for {defendant.get('full_name')}",
-                        "insurance_company": insurer.upper(),
-                        "indemnitor_count": len(indemnitors_payload),
-                        "gas_response": gas_resp,
-                    }
-                else:
-                    return JSONResponse(status_code=502, content={
-                        "success": False,
-                        "error": f"GAS returned {resp.status_code}: {resp.text[:200]}",
-                    })
-        except Exception as e:
-            return JSONResponse(status_code=502, content={
-                "success": False,
-                "error": f"GAS connection failed: {str(e)}",
-            })
-
-    # No GAS URL configured — return success with payload for review
-    return {
-        "success": True,
-        "message": f"Bond packet prepared for {defendant.get('full_name', 'Unknown')} via {insurer.upper()}",
-        "insurance_company": insurer.upper(),
-        "indemnitor_count": len(indemnitors_payload),
-        "payload": gas_payload,
-        "note": "GAS_WEB_APP_URL not configured — payload logged to console. Set GAS_WEB_APP_URL in .env to enable forwarding.",
-    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2062,12 +1868,12 @@ async def api_active_bond_edit(request: Request, booking_number: str):
 async def api_active_bond_release(request: Request, booking_number: str):
     """
     Mark a defendant as released from custody and trigger the post-release
-    Phase 2 signing flow via BlueBubbles.
+    staff-reviewed DocuSeal handoff.
 
     Steps:
       1. Update bond case status to 'released' with released_at timestamp
       2. Send walk-out notification to indemnitor via BlueBubbles
-      3. Generate Phase 2 SignNow signing link and send to indemnitor
+      3. Create a staff task to review the validated DocuSeal packet workflow
       4. Log audit event
 
     Body (all optional — falls back to stored bond case values):
@@ -2080,7 +1886,7 @@ async def api_active_bond_release(request: Request, booking_number: str):
             "agent_name":        "Brendan O'Neal",
             "agent_license":     "P123456",
             "surety_id":         "osi",
-            "send_signing_link": true,
+            "send_walkout_msg": false,
             "send_walkout_msg":  true
         }
     """
@@ -2125,7 +1931,7 @@ async def api_active_bond_release(request: Request, booking_number: str):
     from dashboard.services.bb_client import send_message_universal
 
     # 2. Walk-out notification to indemnitor
-    if data.get("send_walkout_msg", True) and indemnitor_phone:
+    if data.get("send_walkout_msg", False) and indemnitor_phone:
         first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
         walkout_msg = (
             f"Hi {first_name}! Great news — {defendant_name} has been released from "
@@ -2144,79 +1950,18 @@ async def api_active_bond_release(request: Request, booking_number: str):
         from dashboard.routers.helpers import mask_phone
         logger.info("[release] Walk-out msg to %s: %s", mask_phone(indemnitor_phone), walkout_result.get("success"))
 
-    # 3. Phase 2 SignNow packet + send link via BlueBubbles
-    if data.get("send_signing_link", True):
-        poa_number = data.get("poa_number", bond.get("poa_number", ""))
-        agent_name = data.get("agent_name", os.getenv("DEFAULT_AGENT_NAME", "Brendan O'Neal"))
-        agent_license = data.get("agent_license", os.getenv("DEFAULT_AGENT_LICENSE", ""))
-        surety_id = data.get("surety_id", bond.get("insurance_company", "osi").lower())
-
-        intake_doc = {
-            "intake_id": booking_number,
-            "booking_number": booking_number,
-            "defendant_name": defendant_name,
-            "defendant_first_name": bond.get("defendant_first_name", (defendant_name.split()[0] if defendant_name else "")),
-            "defendant_last_name": bond.get("defendant_last_name", (defendant_name.split()[-1] if defendant_name else "")),
-            "defendant_dob": bond.get("defendant_dob", ""),
-            "defendant_address": bond.get("defendant_address", ""),
-            "county": county,
-            "facility": release_facility,
-            "bond_amount": bond.get("bond_amount", 0),
-            "premium": bond.get("premium", 0),
-            "poa_number": poa_number,
-            "agent_name": agent_name,
-            "agent_license": agent_license,
-            "surety_id": surety_id,
-            "indemnitor_name": indemnitor_name,
-            "indemnitor_phone": indemnitor_phone,
-            "indemnitor_email": bond.get("indemnitor_email", ""),
-            "next_court_date": next_court_date,
-            "court_location": court_location,
-            "phase": 2,
-        }
-
-        try:
-            from dashboard.services.signnow_packet_service import SignNowPacketService
-            svc = SignNowPacketService()
-            packet_result = await svc.create_packet(
-                intake_doc=intake_doc,
-                packet_id=f"{booking_number}-phase2-release",
-            )
-            signing_link = packet_result.get("signing_link", "")
-            results["phase2_signing"] = {
-                "success": bool(signing_link),
-                "signing_link": signing_link,
-                "invite_id": packet_result.get("invite_id"),
-                "group_id": packet_result.get("group_id"),
-            }
-
-            if signing_link and indemnitor_phone:
-                first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
-                sign_msg = (
-                    f"Hi {first_name}! Now that {defendant_name} has been released, "
-                    f"please complete the remaining bond documents \U0001f4dd\n\n"
-                    f"Tap to review and sign (~2 min):\n{signing_link}\n\n"
-                    f"Questions? Call/text: (239) 332-2245 — Shamrock Bail Bonds \U0001f340"
-                )
-                sign_result = await send_message_universal(indemnitor_phone, sign_msg)
-                results["phase2_signing"]["bb_sent"] = sign_result.get("success")
-                results["phase2_signing"]["bb_channel"] = sign_result.get("channel")
-                from dashboard.routers.helpers import mask_phone
-                logger.info("[release] Phase 2 link sent to %s: %s", mask_phone(indemnitor_phone), sign_result.get("success"))
-
-            await active_bonds.update_one(
-                {"booking_number": booking_number},
-                {"$set": {
-                    "phase2_packet_sent": True,
-                    "phase2_signing_link": signing_link,
-                    "phase2_invite_id": packet_result.get("invite_id"),
-                    "phase2_sent_at": now,
-                    "updated_at": now,
-                }},
-            )
-        except Exception as exc:
-            logger.error("[release] Phase 2 SignNow error for %s: %s", booking_number, exc)
-            results["phase2_signing"] = {"success": False, "error": str(exc)}
+    # 3. New signing links are never created or delivered from a release event.
+    # Staff must open the validated BondCase and approve the DocuSeal packet after
+    # checking recipient details, surety, POA, and packet readiness.
+    results["phase2_signing"] = {
+        "success": False,
+        "staff_action_required": True,
+        "provider": "docuseal",
+        "message": (
+            "Release recorded. No signing link was created or sent; staff must review "
+            "the validated BondCase in Super CRM before initiating DocuSeal paperwork."
+        ),
+    }
 
     # 4. Audit log
     try:

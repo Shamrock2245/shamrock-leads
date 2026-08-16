@@ -44,7 +44,6 @@ logger = logging.getLogger(__name__)
 bb_docs_bp = APIRouter(prefix="/api", tags=["bb_document_delivery"])
 # VPS base URL for serving temporary document files
 _VPS_STATIC_URL = os.getenv("BB_WEBHOOK_PUBLIC_URL", "").rstrip("/")
-_SIGNNOW_BASE = "https://app.signnow.com/webapp/document/"
 
 
 async def _send_document_via_bb(
@@ -136,63 +135,19 @@ async def api_send_pdf(request: Request):
 
 @bb_docs_bp.post("/bb-docs/send-signing-link")
 async def api_send_signing_link(request: Request):
-    """Send a SignNow document signing link via iMessage.
-
-    Body:
+    """Retired direct signing-link delivery; DocuSeal delivery is staff-approved."""
+    return JSONResponse(
         {
-            "phone": "+12395550178",
-            "indemnitor_name": "Jane Smith",
-            "defendant_name": "JOHN SMITH",
-            "signing_url": "https://app.signnow.com/webapp/document/...",
-            "document_type": "Indemnitor Agreement"  (optional)
-        }
-    """
-    try:
-        data = await request.json() or {}
-        phone = format_phone(data.get("phone", ""))
-        indemnitor_name = data.get("indemnitor_name", "")
-        defendant_name = data.get("defendant_name", "")
-        signing_url = data.get("signing_url", "")
-        doc_type = data.get("document_type", "Bond Documents")
-
-        if not phone or not signing_url or not defendant_name:
-            return JSONResponse({"success": False, "error": "phone, signing_url, defendant_name required"}, status_code=400)
-
-        first_name = indemnitor_name.split()[0] if indemnitor_name else "there"
-        message = (
-            f"Hi {first_name}! Your {doc_type} for {defendant_name} are ready to sign 📝\n\n"
-            f"Tap the link below to review and sign — it takes about 2 minutes:\n"
-            f"{signing_url}\n\n"
-            f"Reply if you have any questions! — Shamrock Bail Bonds 🍀"
-        )
-
-        bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
-        if not bb_server:
-            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
-
-        bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"any;-;{phone}"
-
-        result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.5)
-
-        # Log
-        docs_coll = get_collection("document_deliveries")
-        await docs_coll.insert_one({
-            "phone": phone,
-            "indemnitor_name": indemnitor_name,
-            "defendant_name": defendant_name,
-            "signing_url": signing_url,
-            "doc_type": doc_type,
-            "channel": "imessage",
-            "status": "sent" if result.get("success") else "failed",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-        return {"success": result.get("success", False), "result": result}
-
-    except Exception as e:
-        logger.error("Send signing link error: %s", e, exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+            "success": False,
+            "error": "legacy_esign_retired",
+            "message": (
+                "Direct signing-link delivery is retired. Staff must verify the validated "
+                "BondCase and approve DocuSeal delivery from the paperwork workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
 
 @bb_docs_bp.post("/bb-docs/send-receipt")

@@ -12,11 +12,6 @@ import os
 
 logger = logging.getLogger(__name__)
 bond_lifecycle_bp = APIRouter(prefix="/api", tags=["bond_lifecycle"])
-def _get_signnow_service():
-    """Lazy-load SignNowPacketService to avoid import-time side effects."""
-    from dashboard.services.signnow_packet_service import SignNowPacketService
-    return SignNowPacketService()
-
 
 def _get_calendar_service():
     """Lazy-load GoogleCalendarService."""
@@ -26,130 +21,50 @@ def _get_calendar_service():
 
 @bond_lifecycle_bp.get("/paperwork/config")
 async def get_paperwork_config():
-    """Returns the SignNow DOC_RULES and TEMPLATE_MAP for UI inspection."""
-    signnow_service = _get_signnow_service()
-    return JSONResponse(status_code=200, content={
-        'status': 'success',
-        'doc_rules': signnow_service.DOC_RULES,
-        'template_map': signnow_service.TEMPLATE_MAP
-    })
-
+    """Return the active DocuSeal configuration without exposing secrets."""
+    from dashboard.services.docuseal_service import resolve_template_id_for_surety
+    return {
+        "success": True,
+        "esign_provider": "docuseal",
+        "templates": {
+            "osi": bool(resolve_template_id_for_surety("osi")),
+            "palmetto": bool(resolve_template_id_for_surety("palmetto")),
+        },
+    }
 
 
 @bond_lifecycle_bp.post("/phase1/trigger")
 async def trigger_phase_1(request: Request):
-    """
-    Trigger Phase 1: Indemnitor signs first.
-    Called when indemnitor submits intake form.
-    """
-    data = await request.json()
-    if not data:
-        return JSONResponse({'error': 'No data provided'}, status_code=400)
-
-    from extensions import get_db
-    from bson.objectid import ObjectId
-    db = get_db()
-    
-    intake_id = data.get('intake_id')
-    booking_number = data.get('booking_number')
-    
-    intake_doc = None
-    if intake_id:
-        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
-    if not intake_doc and booking_number:
-        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
-        
-    if not intake_doc:
-        return JSONResponse({'error': 'Could not locate intake record for phase 1'}, status_code=404)
-
-    signer_email = data.get('signer_email') or intake_doc.get("indemnitor_email")
-    signer_name = data.get('signer_name') or intake_doc.get("indemnitor_name")
-    surety_id = data.get('surety_id') or intake_doc.get("surety_id", "osi")
-
-    if not signer_email or not signer_name:
-        return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
-
-    try:
-        signnow_service = _get_signnow_service()
-        result = await signnow_service.send_phase_1(
-            intake_doc=intake_doc, 
-            signer_email=signer_email, 
-            signer_name=signer_name,
-            surety_id=surety_id
-        )
-        return JSONResponse(status_code=200, content=result)
-    except Exception as e:
-        logger.error(f"Error in Phase 1 trigger: {str(e)}")
-        return JSONResponse({'error': str(e)}, status_code=500)
+    """Retired legacy e-sign route; historical records are read-only."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "legacy_esign_retired",
+            "message": (
+                "This legacy e-sign route is retired. New paperwork must be created "
+                "through the validated Super CRM DocuSeal workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
 
 @bond_lifecycle_bp.post("/phase2/trigger")
 async def trigger_phase_2(request: Request):
-    """
-    Trigger Phase 2: Agent approval + POA entry.
-    Called when bondsman approves bond in dashboard.
-    """
-    data = await request.json()
-    if not data:
-        return JSONResponse({'error': 'No data provided'}, status_code=400)
-
-    from extensions import get_db
-    from bson.objectid import ObjectId
-    db = get_db()
-    
-    intake_id = data.get('intake_id')
-    booking_number = data.get('booking_number')
-    
-    intake_doc = None
-    if intake_id:
-        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
-    if not intake_doc and booking_number:
-        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
-        
-    if not intake_doc:
-        return JSONResponse({'error': 'Could not locate intake record for phase 2'}, status_code=404)
-
-    signer_email = data.get('signer_email') or intake_doc.get("indemnitor_email")
-    signer_name = data.get('signer_name') or intake_doc.get("indemnitor_name")
-    poa_number = data.get('poa_number')
-    surety_id = data.get('surety_id', 'osi')
-
-    if not poa_number:
-        return JSONResponse({'error': 'Missing POA number for Phase 2'}, status_code=400)
-    if not signer_email or not signer_name:
-        return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
-
-    try:
-        signnow_service = _get_signnow_service()
-        result = await signnow_service.send_phase_2(
-            intake_doc=intake_doc,
-            signer_email=signer_email,
-            signer_name=signer_name,
-            poa_number=poa_number,
-            surety_id=surety_id
-        )
-        return JSONResponse(status_code=200, content=result)
-    except ValueError as ve:
-        return JSONResponse({'error': str(ve)}, status_code=400)
-    except Exception as e:
-        logger.error(f"Error in Phase 2 trigger: {str(e)}")
-        return JSONResponse({'error': str(e)}, status_code=500)
-
-
-@bond_lifecycle_bp.post("/webhook/signnow/complete")
-async def signnow_completion_webhook(request: Request):
-    """Handle SignNow document.complete webhook."""
-    data = await request.json()
-    logger.info(f"Received SignNow completion webhook: {data}")
-
-    # In production:
-    # 1. Verify webhook signature
-    # 2. Download signed PDFs
-    # 3. Upload to Google Drive case folder
-    # 4. Update case status in DB
-    # 5. Send Slack alert
-
-    return JSONResponse(status_code=200, content={'status': 'received'})
+    """Retired legacy e-sign route; historical records are read-only."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "legacy_esign_retired",
+            "message": (
+                "This legacy e-sign route is retired. New paperwork must be created "
+                "through the validated Super CRM DocuSeal workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
 
 @bond_lifecycle_bp.post("/court-email/process")
@@ -305,208 +220,33 @@ async def add_lifecycle_note(request: Request, booking_number: str):
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 @bond_lifecycle_bp.post("/generate-packet")
 async def generate_packet(request: Request):
-    """
-    Unified endpoint to generate a SignNow packet with specific routing and custom manifests.
-    """
-    data = await request.json()
-    if not data:
-        return JSONResponse({'error': 'No data provided'}, status_code=400)
+    """Retired legacy e-sign route; historical records are read-only."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "legacy_esign_retired",
+            "message": (
+                "This legacy e-sign route is retired. New paperwork must be created "
+                "through the validated Super CRM DocuSeal workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
-    from dashboard.extensions import get_db
-    from bson.objectid import ObjectId
-    db = get_db()
-    
-    intake_id = data.get('intake_id')
-    booking_number = data.get('booking_number')
-    
-    intake_doc = None
-    if intake_id:
-        intake_doc = await db.intake_queue.find_one({"_id": ObjectId(intake_id)})
-    if not intake_doc and booking_number:
-        intake_doc = await db.intake_queue.find_one({"booking_number": booking_number})
-        
-    if not intake_doc:
-        # We might not have a formal intake, just use form_data
-        intake_doc = data.get('form_data', {})
-        intake_doc['intake_id'] = str(ObjectId()) # dummy ID if none
-        if not intake_doc.get('booking_number'):
-            intake_doc['booking_number'] = booking_number
-
-    signer_email = data.get('signer_email')
-    signer_name = data.get('signer_name')
-    surety_id = data.get('surety_id', 'osi')
-    poa_number = data.get('poa_number')
-    routing_scenario = data.get('routing_scenario', 'phase1_2')
-    custom_manifest = data.get('custom_manifest')
-
-    if not signer_email or not signer_name:
-        return JSONResponse({'error': 'Missing signer email or name'}, status_code=400)
-
-    try:
-        signnow_service = _get_signnow_service()
-        import uuid
-        packet_id = str(uuid.uuid4())
-        
-        res = await signnow_service.create_packet(
-            intake_doc=intake_doc,
-            packet_id=packet_id,
-            phase=1 if routing_scenario == 'phase1_2' else 0,
-            surety_id=surety_id,
-            signer_email=signer_email,
-            signer_name=signer_name,
-            routing_scenario=routing_scenario,
-            custom_manifest=custom_manifest,
-            poa_number=poa_number
-        )
-        return JSONResponse(status_code=200, content=res)
-    except Exception as e:
-        logger.error(f"SignNow packet creation failed ({str(e)}) — initiating Adobe Sign fallback")
-        try:
-            # E-sign packet only (indemnity / apps / waivers). Appearance bonds are
-            # print-only wet-ink → jail and must NEVER go through Adobe Sign.
-            from dashboard.services.packet_builder_service import send_via_adobe
-            from dashboard.paperwork_pdf_service import generate_full_packet
-
-            flat_pdf = generate_full_packet(
-                intake_doc if isinstance(intake_doc, dict) else {},
-                surety=surety_id,
-                include_appearance_bond=False,
-            )
-
-            if flat_pdf:
-                adobe_res = await send_via_adobe(
-                    flattened_pdf=flat_pdf,
-                    filename=f"Fallback_Packet_{booking_number or 'bond'}.pdf",
-                    signer_email=signer_email,
-                    signer_name=signer_name,
-                    agreement_name=f"Shamrock Bond Packet (Adobe Sign Fallback) — {signer_name}"
-                )
-                if adobe_res.get("success"):
-                    logger.info("✅ Adobe Sign e-sign fallback succeeded (appearance bonds excluded)")
-                    return JSONResponse(status_code=200, content={
-                        "status": "success",
-                        "provider": "adobe_sign_fallback",
-                        "signing_link": adobe_res.get("signing_link") or adobe_res.get("url") or "",
-                        "agreement_id": adobe_res.get("agreement_id"),
-                        "appearance_bonds": "print_only_not_included",
-                        "message": (
-                            "SignNow failed; e-sign packet sent via Adobe Sign. "
-                            "Appearance bonds are print-only (wet-ink → jail) and were not e-signed."
-                        ),
-                    })
-        except Exception as ad_err:
-            logger.error(f"Adobe Sign fallback also failed: {str(ad_err)}")
-
-        return JSONResponse({'error': f"SignNow error ({str(e)}) and Adobe Sign fallback failed."}, status_code=500)
 
 @bond_lifecycle_bp.post("/file-to-drive/{identifier}")
-async def file_to_drive(request: Request, identifier: str):
-    """
-    Downloads the completed document group from SignNow and uploads it to Google Drive.
-    Target Folder Hierarchy: Root -> DefendantName -> DefendantName_Date -> PDF
-    """
-    from extensions import get_db
-    from dashboard.services.google_drive_service import GoogleDriveService
-    import datetime
-
-    # Get document group ID from DB
-    db = get_db()
-    packet = await db.paperwork_packets.find_one({"$or": [{"packet_id": identifier}, {"booking_number": identifier}]})
-    if not packet:
-        return JSONResponse({'error': 'Packet not found'}, status_code=404)
-        
-    group_id = packet.get("document_group_id")
-    if not group_id:
-        return JSONResponse({'error': 'No document group ID associated with this packet'}, status_code=400)
-        
-    # Get Defendant Name and surety for correct Drive folder routing
-    defendant_name = packet.get("defendant_name", "Unknown_Defendant")
-    # Normalise surety_id from packet (stored as 'osi' or 'palmetto')
-    surety_id = (packet.get("surety_id") or packet.get("insurance_company") or "osi").lower().strip()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"
-    packet_id = packet.get("packet_id", identifier)  # fix undefined variable
-    
-    try:
-        signnow_service = _get_signnow_service()
-        pdf_bytes = await signnow_service.download_document_group(group_id)
-        
-        drive_service = GoogleDriveService()
-        if not drive_service.is_configured:
-            return JSONResponse({
-                'error': 'Google Drive is not configured',
-                'hint': (
-                    'Set GOOGLE_APPLICATION_CREDENTIALS (service account) or '
-                    'OAuth refresh token with Drive scope. '
-                    'Run: python scripts/verify_drive_auth.py'
-                ),
-            }, status_code=500)
-
-        # ── Drive Folder Hierarchy ──
-        # Root (Completed Bonds)
-        #   └─ OSI /  Palmetto          ← surety subfolder (GAP-G fix)
-        #       └─ DefendantLastName, FirstInitial_YYYYMMDD
-        #           └─ PDF file
-        root_folder_id = (
-            os.getenv("COMPLETED_BONDS_FOLDER_ID")
-            or os.getenv("GOOGLE_DRIVE_OUTPUT_FOLDER_ID")
-            or "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
-        )
-
-        # Surety subfolder (OSI or Palmetto)
-        surety_label = surety_id.upper()  # 'OSI' or 'PALMETTO'
-        surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
-        if not surety_folder_id:
-            err = drive_service.error_payload()
-            return JSONResponse({
-                'error': f'Failed to get/create surety folder ({surety_label})',
-                'drive_error': err.get('error'),
-                'error_code': err.get('error_code'),
-            }, status_code=500)
-
-        # Defendant subfolder — naming convention: LastName, FirstInitial_YYYYMMDD
-        date_str = datetime.datetime.now().strftime("%Y%m%d")
-        # Try to build canonical name from parts; fall back to full name
-        def_last = packet.get("defendant_last_name") or ""
-        def_first = packet.get("defendant_first_name") or ""
-        if def_last and def_first:
-            folder_name = f"{def_last}, {def_first[0].upper()}_{date_str}"
-        else:
-            folder_name = f"{defendant_name.replace(' ', '_')}_{date_str}"
-
-        def_folder_id = drive_service.get_or_create_folder(folder_name, surety_folder_id)
-        if not def_folder_id:
-            return JSONResponse({'error': 'Failed to get/create Defendant folder'}, status_code=500)
-
-        filename = f"{folder_name}_Completed_Bond.pdf"
-        link = drive_service.upload_pdf(pdf_bytes, filename, def_folder_id)
-        
-        if not link:
-            err = drive_service.error_payload()
-            return JSONResponse({
-                'error': 'Drive upload failed',
-                'drive_error': err.get('error'),
-                'error_code': err.get('error_code'),
-                'auth_mode': err.get('auth_mode'),
-            }, status_code=500)
-
-        if link:
-            # Update DB with drive link, surety, and filed status
-            await db.paperwork_packets.update_one(
-                {"packet_id": packet_id},
-                {"$set": {
-                    "drive_link": link,
-                    "drive_folder_id": def_folder_id,
-                    "surety_id": surety_id,
-                    "status": "filed",
-                    "filed_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                }}
-            )
-            logger.info("[file-to-drive] Filed %s (%s) → Drive: %s", defendant_name, surety_label, link)
-            return JSONResponse({'status': 'success', 'drive_link': link, 'surety': surety_label})
-        else:
-            return JSONResponse({'error': 'Failed to upload PDF to Drive'}, status_code=500)
-            
-    except Exception as e:
-        logger.error(f"Error in file_to_drive: {str(e)}")
-        return JSONResponse({'error': str(e)}, status_code=500)
+async def file_to_drive(request: Request):
+    """Retired legacy e-sign route; historical records are read-only."""
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "legacy_esign_retired",
+            "message": (
+                "This legacy e-sign route is retired. New paperwork must be created "
+                "through the validated Super CRM DocuSeal workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )

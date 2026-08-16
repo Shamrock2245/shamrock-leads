@@ -474,9 +474,6 @@ async def generate_packet(request: Request, intake_id: str):
             "updated_at": now,
             "delivered_via": None,
             "esign_provider": "docuseal",
-            "signnow_invite_id": None,
-            "signnow_document_id": None,            # legacy SignNow
-            "signnow_status": None,
             "docuseal_submission_id": None,         # populated on DocuSeal push
             "docuseal_status": None,
             "packet_version": 1,                    # policy Rule 3
@@ -533,7 +530,6 @@ async def list_all_packets(
         if status and status != "all":
             query["$or"] = [
                 {"status": status},
-                {"signnow_status": status},
             ]
         if surety and surety != "all":
             query["surety_id"] = surety.lower()
@@ -555,7 +551,7 @@ async def list_all_packets(
         from dashboard.services.paperwork_signers import party_signers_from_packet
 
         for p in packets:
-            for field in ("created_at", "updated_at", "delivered_at", "signnow_sent_at", "signed_at"):
+            for field in ("created_at", "updated_at", "delivered_at", "signed_at"):
                 val = p.get(field)
                 if isinstance(val, (datetime, date)):
                     p[field] = val.isoformat()
@@ -563,7 +559,7 @@ async def list_all_packets(
 
         # Summary KPIs
         total = await packets_col.count_documents({})
-        pending = await packets_col.count_documents({"status": {"$in": ["sent", "signnow_pending", "partially_signed"]}})
+        pending = await packets_col.count_documents({"status": {"$in": ["sent", "pending_signature", "partially_signed"]}})
         signed = await packets_col.count_documents({"status": {"$in": ["signed", "completed"]}})
         filed = await packets_col.count_documents({"drive_url": {"$exists": True, "$ne": None}})
 
@@ -815,27 +811,6 @@ async def deliver_packet(request: Request, packet_id: str):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# POST /api/paperwork/<packet_id>/signnow
-# Retired: SignNow is out of the active workflow.
-# ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.post("/paperwork/{packet_id}/signnow")
-async def push_to_signnow(request: Request, packet_id: str):
-    """Return 410 for retired SignNow pushes; use DocuSeal only."""
-    return JSONResponse(
-        {
-            "success": False,
-            "error": "signnow_retired",
-            "message": (
-                "SignNow is no longer part of the Shamrock paperwork workflow. "
-                "Use DocuSeal via /api/paperwork/packet/finalize or "
-                "/api/paperwork/{packet_id}/docuseal."
-            ),
-            "use": "docuseal",
-        },
-        status_code=410,
-    )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/paperwork/<packet_id>/void
@@ -923,7 +898,7 @@ async def list_packets(intake_id: str):
         packets = await cursor.to_list(length=50)
 
         for p in packets:
-            for field in ("created_at", "updated_at", "delivered_at", "signnow_sent_at"):
+            for field in ("created_at", "updated_at", "delivered_at"):
                 if hasattr(p.get(field), "isoformat"):
                     p[field] = p[field].isoformat()
 
@@ -944,23 +919,6 @@ async def list_packets(intake_id: str):
 
 
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GET /api/paperwork/signnow/validate-templates
-# Retired: SignNow template validation is intentionally unavailable.
-# ─────────────────────────────────────────────────────────────────────────────
-@paperwork_bp.get("/paperwork/signnow/validate-templates")
-async def validate_signnow_templates():
-    """Return 410 for retired SignNow diagnostics; use DocuSeal template endpoints."""
-    return JSONResponse(
-        {
-            "success": False,
-            "error": "signnow_retired",
-            "message": "SignNow templates are not used. Verify DocuSeal via /api/paperwork/docuseal/templates.",
-            "use": "docuseal",
-        },
-        status_code=410,
-    )
 
 
 @paperwork_bp.post("/paperwork/packet/context")
@@ -1123,47 +1081,35 @@ async def packet_builder_finalize(request: Request):
             except Exception as pref_exc:
                 logger.warning("save esign preference skipped: %s", pref_exc)
 
-        # Allow UI field overrides (staff edits after auto-fill)
+        # Packet-time changes to identity, contact, case, POA, or money create a
+        # misdelivery/misbinding risk. Staff must correct and revalidate the CRM
+        # record first; a signed packet is never a data-editing surface.
         overrides = body.get("field_overrides") or {}
         if isinstance(overrides, dict):
-            def_ = ctx.setdefault("defendant", {})
-            ind = ctx.setdefault("indemnitor", {})
-            map_def = {
-                "defendant_name": ("defendant", "name"),
-                "defendant_dob": ("defendant", "dob"),
-                "defendant_phone": ("defendant", "phone"),
-                "defendant_email": ("defendant", "email"),
-                "defendant_address": ("defendant", "address"),
-                "indemnitor_name": ("indemnitor", "name"),
-                "indemnitor_phone": ("indemnitor", "phone"),
-                "indemnitor_email": ("indemnitor", "email"),
-                "indemnitor_address": ("indemnitor", "address"),
-                "indemnitor_dob": ("indemnitor", "dob"),
-                "case_number": (None, "case_number"),
-                "booking_number": (None, "booking_number"),
-                "poa_number": (None, "poa_number"),
-                "bond_amount": (None, "bond_amount"),
+            protected_overrides = {
+                "defendant_name", "defendant_dob", "defendant_phone", "defendant_email",
+                "defendant_address", "indemnitor_name", "indemnitor_phone", "indemnitor_email",
+                "indemnitor_address", "indemnitor_dob", "case_number", "booking_number",
+                "poa_number", "bond_amount",
             }
-            for k, v in overrides.items():
-                if v is None or str(v).strip() == "":
-                    continue
-                target = map_def.get(k)
-                if not target:
-                    continue
-                group, field = target
-                if group is None:
-                    if field == "bond_amount":
-                        try:
-                            ctx[field] = float(str(v).replace("$", "").replace(",", ""))
-                        except ValueError:
-                            ctx[field] = v
-                    else:
-                        ctx[field] = v
-                elif group == "defendant":
-                    def_[field] = v
-                elif group == "indemnitor":
-                    ind[field] = v
-
+            attempted_protected = sorted(
+                key for key, value in overrides.items()
+                if key in protected_overrides and value is not None and str(value).strip()
+            )
+            if attempted_protected:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "packet_binding_override_blocked",
+                        "message": (
+                            "Update the validated CRM case record and complete the required review "
+                            "before creating a DocuSeal packet; packet-time identity, recipient, "
+                            "case, POA, and financial overrides are not permitted."
+                        ),
+                        "fields": attempted_protected,
+                    },
+                    status_code=409,
+                )
         fields = build_adaptive_field_map(ctx)
         audit = hydration_score(fields)
 
@@ -1253,6 +1199,76 @@ async def packet_builder_finalize(request: Request):
                 "relationship": ind.get("relationship") or ("Self" if ctx.get("self_indemnitor") else ""),
             },
         }
+
+        bond_data: dict = {}
+        if provider == "docuseal":
+            from dashboard.services.docuseal_service import (
+                DocuSealPacketValidationError,
+                build_bond_data_from_dashboard,
+                validate_docuseal_packet_binding,
+            )
+
+            bond_data = build_bond_data_from_dashboard(
+                ctx=ctx,
+                intake_doc=intake_doc,
+                field_overrides={},
+                body={},
+                surety_id=surety_id,
+            )
+            try:
+                validate_docuseal_packet_binding(
+                    packet_id=packet_id,
+                    bond_data=bond_data,
+                    indemnitors=bond_data.get("indemnitors"),
+                    include_defendant=bool(body.get("include_defendant", True)),
+                )
+            except DocuSealPacketValidationError as exc:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "docuseal_packet_binding_invalid",
+                        "message": str(exc),
+                    },
+                    status_code=422,
+                )
+
+            poa_doc = await get_collection("poa_inventory").find_one(
+                {
+                    "poa_number": bond_data["poa_number"],
+                    "surety_id": bond_data["surety_id"],
+                    "status": {"$in": ["assigned", "used"]},
+                },
+                {"_id": 0, "max_bond_value": 1},
+            )
+            if not poa_doc:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "docuseal_poa_not_assigned",
+                        "message": (
+                            "DocuSeal packet blocked: the selected POA must be assigned in the "
+                            "matching surety inventory before paperwork can be created."
+                        ),
+                    },
+                    status_code=422,
+                )
+            try:
+                poa_limit = float(poa_doc.get("max_bond_value") or 0)
+                bond_amount = float(bond_data.get("bond_amount") or 0)
+            except (TypeError, ValueError):
+                poa_limit, bond_amount = 0, 0
+            if poa_limit <= 0 or bond_amount <= 0 or bond_amount > poa_limit:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "docuseal_poa_tier_invalid",
+                        "message": (
+                            "DocuSeal packet blocked: the assigned POA tier must cover the "
+                            "authoritative BondCase amount."
+                        ),
+                    },
+                    status_code=422,
+                )
 
         # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
         # DocuSeal uses its two live templates — skip heavy stitch/flatten unless staff
@@ -1360,15 +1376,6 @@ async def packet_builder_finalize(request: Request):
                         ),
                     }
                 else:
-                    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
-
-                    bond_data = build_bond_data_from_dashboard(
-                        ctx=ctx,
-                        intake_doc=intake_doc,
-                        field_overrides=overrides if isinstance(overrides, dict) else {},
-                        body=body,
-                        surety_id=surety_id,
-                    )
                     docuseal_result = await ds.create_submission_for_packet(
                         template_id=template_id,
                         packet_id=packet_id,
@@ -1485,11 +1492,18 @@ async def packet_builder_finalize(request: Request):
         packets_col = get_collection("paperwork_packets")
         existing = await packets_col.find_one({"packet_id": packet_id})
         if existing:
-            packet_doc["packet_version"] = int(existing.get("packet_version") or 1) + 1
-            packet_doc["created_at"] = existing.get("created_at") or now
-            await packets_col.replace_one({"packet_id": packet_id}, packet_doc)
-        else:
-            await packets_col.insert_one(packet_doc)
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "packet_id_already_exists",
+                    "message": (
+                        "Existing packets are immutable. Void the prior packet with an audit reason "
+                        "and create a new packet ID for any corrected or replacement DocuSeal packet."
+                    ),
+                },
+                status_code=409,
+            )
+        await packets_col.insert_one(packet_doc)
 
         # Soft audit event
         try:

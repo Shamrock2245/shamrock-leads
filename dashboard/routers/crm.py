@@ -82,9 +82,6 @@ async def crm_health():
         "wix_webhook_auth": bool(
             os.getenv("WIX_WEBHOOK_SECRET") or os.getenv("GAS_API_KEY")
         ),
-        "signnow": bool(
-            os.getenv("SIGNNOW_API_TOKEN") or os.getenv("SIGNNOW_BASIC_AUTH")
-        ),
         "twilio": bool(os.getenv("TWILIO_ACCOUNT_SID") and os.getenv("TWILIO_AUTH_TOKEN")),
         "slack": bool(
             os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_ARRESTS")

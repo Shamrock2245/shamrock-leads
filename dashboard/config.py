@@ -28,11 +28,6 @@ class Config:
     # ── GAS Integration (legacy bridge) ──
     GAS_WEB_APP_URL = os.getenv("GAS_WEB_APP_URL", "")
 
-    # ── SignNow (Direct API — Phase E) ──
-    SIGNNOW_API_TOKEN = os.getenv("SIGNNOW_API_TOKEN", "")
-    SIGNNOW_API_BASE_URL = os.getenv("SIGNNOW_API_BASE_URL", "https://api.signnow.com")
-    SIGNNOW_WEBHOOK_SECRET = os.getenv("SIGNNOW_WEBHOOK_SECRET", "")
-
     # ── Twilio ──
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

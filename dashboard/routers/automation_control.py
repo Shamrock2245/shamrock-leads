@@ -132,7 +132,7 @@ ALL_SERVICE_KEYS = {
     "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
     "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
-    "forfeiture_scan", "signnow_poller", "docuseal_poller", "swipesimple_gmail_poll",
+    "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
     "compliance_backfill", "matching_backlog", "overdue_tasks",
     # Intelligence Pipeline
     "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
@@ -151,7 +151,7 @@ ALL_SERVICE_KEYS = {
     "nr_bounty_hunter", "nr_watchdog", "nr_gas_scheduler", "nr_intake_pipeline",
     "nr_revenue_snapshot", "nr_the_scout", "nr_staff_performance", "nr_weather_posting",
     "nr_review_harvester", "nr_payment_reminders", "nr_no_show_escalation",
-    "nr_whatsapp_campaigns", "nr_signnow_tracker", "nr_docuseal_tracker", "nr_bond_renewal",
+    "nr_whatsapp_campaigns", "nr_docuseal_tracker", "nr_bond_renewal",
 }
 
 # Service metadata for frontend rendering
@@ -166,7 +166,6 @@ SERVICE_META = {
     "forfeiture_scan":     {"name": "Forfeiture Scan",     "icon": "🔴", "category": "lifecycle", "desc": "Score active bonds; Slack high/critical risk"},
     "docuseal_poller":     {"name": "DocuSeal Poller",     "icon": "☘️", "category": "lifecycle", "desc": "Poll DocuSeal for completed packets; Drive archive backup"},
     "swipesimple_gmail_poll": {"name": "SwipeSimple Gmail", "icon": "💳", "category": "lifecycle", "desc": "Poll Gmail for SwipeSimple bond premium receipts"},
-    "signnow_poller":      {"name": "SignNow Poller (legacy)", "icon": "✍️", "category": "lifecycle", "desc": "LEGACY only — old SignNow packets; off by default"},
     "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
     "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
     "overdue_tasks":       {"name": "Overdue Tasks",       "icon": "⏰", "category": "lifecycle", "desc": "Flag overdue staff tasks / SLA breaches"},
@@ -211,7 +210,6 @@ SERVICE_META = {
     "nr_payment_reminders":   {"name": "Payment Reminders",       "icon": "💳", "category": "revenue",  "desc": "[Node-RED] Overdue payment iMessage reminders"},
     "nr_no_show_escalation":  {"name": "No-Show Escalation",      "icon": "⚠️", "category": "lifecycle", "desc": "[Node-RED] Court no-show detection & escalation"},
     "nr_whatsapp_campaigns":  {"name": "WhatsApp Campaigns",      "icon": "💬", "category": "revenue",  "desc": "[Node-RED] WhatsApp outreach campaigns (optional)"},
-    "nr_signnow_tracker":     {"name": "SignNow Tracker (legacy)","icon": "✍️", "category": "lifecycle", "desc": "[Node-RED] Legacy SignNow packet tracker"},
     "nr_docuseal_tracker":    {"name": "DocuSeal Tracker",        "icon": "☘️", "category": "lifecycle", "desc": "[Node-RED] DocuSeal packet status (if NR flow enabled)"},
     "nr_bond_renewal":        {"name": "Bond Renewal Reminders",  "icon": "🔔", "category": "lifecycle", "desc": "[Node-RED] Bond renewal date reminders"},
 }

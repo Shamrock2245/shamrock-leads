@@ -114,15 +114,6 @@ DEFAULT_CONFIG = {
         "interval_seconds": 14400,      # 4 hours
     },
 
-    # ── SignNow status poller (LEGACY packets only — off by default) ──
-    "signnow_poller": {
-        "enabled": False,
-        "limit": 40,
-        "create_payment_tasks": True,
-        "slack_digest": True,
-        "interval_seconds": 1800,       # 30 minutes
-    },
-
     # ── DocuSeal status poller (backup if webhooks miss) ──
     "docuseal_poller": {
         "enabled": True,
@@ -326,7 +317,7 @@ async def get_automation_config(db) -> dict:
         )
         logger.info("☘️  Revenue automations migration v1 applied (review mode)")
 
-    # One-time: lifecycle suite (forfeiture / SignNow / compliance / matching)
+    # One-time: lifecycle suite (forfeiture / DocuSeal / compliance / matching)
     if not cfg.get("_lifecycle_automations_v1"):
         now = datetime.now(timezone.utc).isoformat()
         set_doc: dict = {

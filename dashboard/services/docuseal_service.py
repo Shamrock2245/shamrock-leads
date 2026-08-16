@@ -140,6 +140,80 @@ def _nonempty_party(p: Any) -> bool:
     return False
 
 
+class DocuSealPacketValidationError(ValueError):
+    """Raised when a packet would violate Shamrock's required e-sign chain."""
+
+
+def _required_text(data: Dict[str, Any], key: str) -> str:
+    return str((data or {}).get(key) or "").strip()
+
+
+def validate_docuseal_packet_binding(
+    *,
+    packet_id: str,
+    bond_data: Dict[str, Any],
+    indemnitors: Optional[List[Dict[str, Any]]] = None,
+    defendant: Optional[Dict[str, Any]] = None,
+    include_defendant: bool = True,
+) -> None:
+    """Fail closed before DocuSeal can create a packet or contact any signer.
+
+    A new submission is permitted only for the authoritative workflow:
+    validated Match → bound BondCase → surety-specific POA → DocuSeal packet.
+    Contact values must come from the validated party records; callers may not
+    synthesize recipient addresses or use a body-only signer override.
+    """
+    data = bond_data or {}
+    missing = [
+        key for key in (
+            "bond_case_id", "match_id", "defendant_id", "indemnitor_id",
+            "case_number", "poa_number", "booking_number",
+        ) if not _required_text(data, key)
+    ]
+    if not str(packet_id or "").strip():
+        missing.append("packet_id")
+    if missing:
+        raise DocuSealPacketValidationError(
+            "DocuSeal packet blocked: missing required binding " + ", ".join(sorted(set(missing)))
+        )
+
+    if _required_text(data, "match_status").lower() != "validated":
+        raise DocuSealPacketValidationError(
+            "DocuSeal packet blocked: Match must be validated before paperwork."
+        )
+
+    surety = _required_text(data, "surety_id").lower()
+    if surety not in ("osi", "palmetto"):
+        raise DocuSealPacketValidationError(
+            "DocuSeal packet blocked: an explicit OSI or Palmetto surety is required."
+        )
+
+    parties: List[tuple[str, Dict[str, Any]]] = []
+    resolved_inds = indemnitors if indemnitors is not None else data.get("indemnitors")
+    if isinstance(resolved_inds, list):
+        for index, party in enumerate(resolved_inds):
+            if _nonempty_party(party):
+                parties.append(("indemnitor" if index == 0 else "co-indemnitor", party))
+    if not parties:
+        parties.append(("indemnitor", data.get("indemnitor") if isinstance(data.get("indemnitor"), dict) else {}))
+
+    if include_defendant:
+        parties.append(("defendant", defendant if isinstance(defendant, dict) else (
+            data.get("defendant") if isinstance(data.get("defendant"), dict) else {}
+        )))
+
+    for role, party in parties:
+        name = _required_text(party, "name") or _required_text(party, "full_name") or " ".join(
+            filter(None, (_required_text(party, "first_name") or _required_text(party, "firstName"),
+                          _required_text(party, "last_name") or _required_text(party, "lastName")))
+        )
+        email = _required_text(party, "email")
+        if not name or not email or "@" not in email or email.startswith("unsigned+"):
+            raise DocuSealPacketValidationError(
+                f"DocuSeal packet blocked: validated {role} name and email are required before a signing link can exist."
+            )
+
+
 class DocuSealService:
     """
     Thin async client for DocuSeal REST API + packet helpers.
@@ -565,9 +639,14 @@ class DocuSealService:
         send_email: bool = False,
         order: Optional[int] = None,
     ) -> Dict[str, Any]:
+        clean_email = (email or "").strip()
+        if not clean_email or "@" not in clean_email or clean_email.startswith("unsigned+"):
+            raise DocuSealPacketValidationError(
+                "DocuSeal submitter blocked: a validated recipient email is required."
+            )
         s: Dict[str, Any] = {
             "role": role,
-            "email": (email or "").strip() or f"unsigned+{uuid.uuid4().hex[:8]}@shamrockbailbonds.biz",
+            "email": clean_email,
             "send_email": send_email,
         }
         if name:
@@ -601,7 +680,7 @@ class DocuSealService:
         Map dashboard bond / intake fields → DocuSeal template field names.
 
         Template fields should use these names (or aliases set in DocuSeal UI).
-        Mirrors keys used by SignNowPacketService._build_prefill_fields.
+        Field names are aligned with Shamrock's approved DocuSeal templates.
         """
         bond_data = bond_data or {}
         def_ = bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {}
@@ -1017,6 +1096,13 @@ class DocuSealService:
         defendant: optional override; falls back to bond_data defendant fields.
         """
         bond_data = dict(bond_data or {})
+        validate_docuseal_packet_binding(
+            packet_id=packet_id,
+            bond_data=bond_data,
+            indemnitors=indemnitors,
+            defendant=defendant,
+            include_defendant=include_defendant,
+        )
         raw_values = self.prefill_values_from_bond(bond_data)
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
@@ -1117,7 +1203,9 @@ class DocuSealService:
             )
 
         if include_defendant:
-            def_info = defendant if isinstance(defendant, dict) else {}
+            def_info = defendant if isinstance(defendant, dict) else (
+                bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {}
+            )
             def_name = (
                 def_info.get("name")
                 or raw_values.get("defendant_name")
@@ -1367,27 +1455,18 @@ def build_bond_data_from_dashboard(
     )
     charges = ctx.get("charges") or intake_doc.get("charges") or body.get("charges")
 
-    bond_amount = (
-        overrides.get("bond_amount")
-        or body.get("bond_amount")
-        or ctx.get("bond_amount")
-        or intake_doc.get("bond_amount")
-        or 0
-    )
+    # Legal financial fields come only from the resolved BondCase context.
+    # Request-body values must never alter a packet's binding or obligation.
+    bond_amount = ctx.get("bond_amount") or intake_doc.get("bond_amount") or 0
     premium_amount = (
         body.get("premium_amount")
         or ctx.get("premium_amount")
         or intake_doc.get("premium_amount")
     )
 
-    poa = (
-        overrides.get("poa_number")
-        or body.get("poa_number")
-        or ctx.get("poa_number")
-        or ""
-    )
-    # Multi-POA list if provided
-    poa_numbers = body.get("poa_numbers") or ctx.get("poa_numbers") or poa
+    # POA identity is a surety-controlled case binding, never a UI override.
+    poa = ctx.get("poa_number") or ""
+    poa_numbers = ctx.get("poa_numbers") or poa
 
     agent_name_session = body.get("agent_name") or ctx.get("agent_name") or ""
     agent_license_session = body.get("license_number") or body.get("agent_license") or ctx.get("license_number") or ctx.get("agent_license") or ""
@@ -1413,17 +1492,21 @@ def build_bond_data_from_dashboard(
         "bondsman_license": bondsman_license,
         "bondsman_email": bondsman_email,
         "bondsman_phone": bondsman_phone,
-        "surety_id": (surety_id or ctx.get("surety_id") or "osi").lower(),
+        "surety_id": (surety_id or ctx.get("surety_id") or "").lower(),
+        "bond_case_id": ctx.get("bond_case_id") or "",
+        "match_id": ctx.get("match_id") or "",
+        "match_status": ctx.get("match_status") or "",
+        "defendant_id": ctx.get("defendant_id") or "",
+        "indemnitor_id": ctx.get("indemnitor_id") or "",
         "defendant": def_ or intake_doc.get("defendant") or {},
         "indemnitor": ind or intake_doc.get("indemnitor") or {},
-        "defendant_name": overrides.get("defendant_name")
-            or def_.get("name")
+        "defendant_name": def_.get("name")
             or intake_doc.get("defendant_name")
             or ctx.get("defendant_name")
             or "",
-        "defendant_dob": overrides.get("defendant_dob") or def_.get("dob") or "",
-        "defendant_phone": overrides.get("defendant_phone") or def_.get("phone") or "",
-        "defendant_email": overrides.get("defendant_email") or def_.get("email") or "",
+        "defendant_dob": def_.get("dob") or "",
+        "defendant_phone": def_.get("phone") or "",
+        "defendant_email": def_.get("email") or "",
         "defendant_address": overrides.get("defendant_address") or def_.get("address") or "",
         "defendant_city": def_.get("city") or "",
         "defendant_state": def_.get("state") or "FL",
@@ -1431,19 +1514,11 @@ def build_bond_data_from_dashboard(
         "defendant_dl": def_.get("dl") or "",
         "defendant_dl_state": def_.get("dl_state") or "FL",
         "defendant_ssn": def_.get("ssn") or "",
-        "indemnitor_name": overrides.get("indemnitor_name")
-            or ind.get("name")
+        "indemnitor_name": ind.get("name")
             or intake_doc.get("indemnitor_name")
             or "",
-        "indemnitor_phone": overrides.get("indemnitor_phone")
-            or ind.get("phone")
-            or intake_doc.get("indemnitor_phone")
-            or "",
-        "indemnitor_email": overrides.get("indemnitor_email")
-            or ind.get("email")
-            or intake_doc.get("indemnitor_email")
-            or body.get("signer_email")
-            or "",
+        "indemnitor_phone": ind.get("phone") or "",
+        "indemnitor_email": ind.get("email") or "",
         "indemnitor_address": overrides.get("indemnitor_address") or ind.get("address") or "",
         "indemnitor_dob": overrides.get("indemnitor_dob") or ind.get("dob") or "",
         "indemnitor_dl": ind.get("dl") or "",
@@ -1453,14 +1528,8 @@ def build_bond_data_from_dashboard(
         "indemnitor_zip": ind.get("zip") or "",
         "relationship": ind.get("relationship") or "",
         "county": ctx.get("county") or intake_doc.get("defendant_county") or intake_doc.get("county") or "",
-        "case_number": overrides.get("case_number")
-            or ctx.get("case_number")
-            or intake_doc.get("case_number")
-            or "",
-        "booking_number": overrides.get("booking_number")
-            or ctx.get("booking_number")
-            or intake_doc.get("defendant_booking_number")
-            or "",
+        "case_number": ctx.get("case_number") or intake_doc.get("case_number") or "",
+        "booking_number": ctx.get("booking_number") or intake_doc.get("defendant_booking_number") or "",
         "poa_number": poa,
         "poa_numbers": poa_numbers,
         "bond_amount": bond_amount,
@@ -1486,7 +1555,7 @@ def build_bond_data_from_dashboard(
     }
 
     # Multi-indemnitor list for Co-Indemnitor role
-    inds = body.get("indemnitors") or ctx.get("indemnitors") or intake_doc.get("indemnitors")
+    inds = ctx.get("indemnitors") or intake_doc.get("indemnitors")
     if isinstance(inds, list) and inds:
         bond_data["indemnitors"] = inds
     else:

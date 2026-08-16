@@ -586,28 +586,6 @@ async def _run_forfeiture_scan():
         )
 
 
-async def _run_signnow_poller():
-    from dashboard.services.lifecycle_automations import LifecycleAutomations
-    from dashboard.services.automation_config import get_automation_config
-    from dashboard.extensions import get_db
-    from datetime import datetime, timezone
-    db = get_db()
-    cfg = (await get_automation_config(db)).get("signnow_poller") or {}
-    result = await LifecycleAutomations(db).run_signnow_poller(cfg)
-    await db["automation_run_log"].insert_one({
-        "automation": "signnow_poller",
-        "run_at": datetime.now(timezone.utc),
-        "result": result,
-    })
-    if result.get("signed") or result.get("voided"):
-        logger.info(
-            "[SignNowPoller] signed=%s voided=%s payment_tasks=%s errors=%s",
-            result.get("signed"), result.get("voided"),
-            result.get("payment_tasks"), result.get("errors"),
-        )
-    elif result.get("skipped"):
-        logger.debug("[SignNowPoller] skipped: %s", result.get("error"))
-
 
 async def _run_docuseal_poller():
     from dashboard.services.lifecycle_automations import LifecycleAutomations
@@ -736,7 +714,6 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("bounty_hunter",      "BountyHunter",       3600, 120, _run_bounty_hunter),
     CronDef("watchdog",           "Watchdog",            300,  60, _run_watchdog),
     CronDef("forfeiture_scan",    "ForfeitureScan",    14400, 300, _run_forfeiture_scan, default_enabled=True),
-    CronDef("signnow_poller",     "SignNowPoller",      1800, 210, _run_signnow_poller, default_enabled=False),
     CronDef("docuseal_poller",    "DocuSealPoller",     1800, 210, _run_docuseal_poller, default_enabled=True),
     CronDef("swipesimple_gmail_poll", "SwipeSimpleGmail", 300, 120, _run_swipesimple_gmail_poll, default_enabled=True),
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),

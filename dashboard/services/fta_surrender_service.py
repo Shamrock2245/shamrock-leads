@@ -3,13 +3,12 @@ FTA Surrender Workflow Service — ShamrockLeads
 ===============================================
 When an FTA alert reaches Level 3, this service:
   1. Assembles a surrender packet (defendant info, bond details, court info)
-  2. Sends a SignNow surrender authorization document to the agent for signature
+  2. Creates a staff-review task for any required surrender documentation
   3. Sends a BB iMessage to the indemnitor notifying them of the surrender action
   4. Logs the surrender initiation in the fta_alerts collection
   5. Emits a bond_surrender_initiated SSE event
 
-The surrender document template ID is configured via SIGNNOW_SURRENDER_TEMPLATE_ID
-in the environment. If not set, the service skips SignNow and logs a warning.
+Surrender documentation remains staff-reviewed; this service never creates or sends an e-sign packet.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ log = logging.getLogger("shamrock.fta_surrender")
 _PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://shamrockbailbonds.biz")
 _AGENT_EMAIL = os.getenv("AGENT_EMAIL", "admin@shamrockbailbonds.biz")
 _AGENT_PHONE = os.getenv("AGENT_PHONE", "2393322245")
-_SURRENDER_TEMPLATE_ID = os.getenv("SIGNNOW_SURRENDER_TEMPLATE_ID", "")
 
 
 class FTASurrenderService:
@@ -49,7 +47,7 @@ class FTASurrenderService:
         Initiate the surrender workflow for a Level 3 FTA.
 
         Returns a dict with:
-          success, booking_number, signnow_sent, bb_sent, surrender_id
+          success, booking_number, staff_document_required, bb_sent, surrender_id
         """
         active_bonds = get_collection("active_bonds")
         fta_col = get_collection("fta_alerts")
@@ -82,21 +80,9 @@ class FTASurrenderService:
         # 3. Generate a surrender ID
         surrender_id = f"SRR-{booking_number}-{secrets.token_hex(4).upper()}"
 
-        # 4. Send SignNow surrender authorization document
-        signnow_sent = False
-        signnow_doc_id = None
-        if _SURRENDER_TEMPLATE_ID:
-            try:
-                signnow_sent, signnow_doc_id = await self._send_signnow_surrender(
-                    bond, surrender_id
-                )
-            except Exception as e:
-                log.warning("[Surrender] SignNow send failed for %s: %s", booking_number, e)
-        else:
-            log.warning(
-                "[Surrender] SIGNNOW_SURRENDER_TEMPLATE_ID not set — skipping SignNow for %s",
-                booking_number,
-            )
+        # 4. No e-sign packet is created for surrender authorization. Staff must
+        # review the case and use the approved document process outside automation.
+        staff_document_required = True
 
         # 5. Notify indemnitor via BB iMessage
         bb_sent = False
@@ -121,7 +107,7 @@ class FTASurrenderService:
                 "surrender_initiated_at": now,
                 "surrender_initiated_by": initiated_by,
                 "surrender_notes": notes,
-                "signnow_doc_id": signnow_doc_id,
+                "staff_document_required": staff_document_required,
             }},
         )
 
@@ -143,93 +129,24 @@ class FTASurrenderService:
                 "booking_number": booking_number,
                 "defendant_name": bond.get("defendant_name", ""),
                 "surrender_id": surrender_id,
-                "signnow_sent": signnow_sent,
+                "staff_document_required": staff_document_required,
             })
         except Exception:
             pass
 
         log.warning(
-            "[Surrender] INITIATED — booking=%s surrender_id=%s signnow=%s bb=%s by=%s",
-            booking_number, surrender_id, signnow_sent, bb_sent, initiated_by,
+            "[Surrender] INITIATED — booking=%s surrender_id=%s staff_document_required=%s bb=%s by=%s",
+            booking_number, surrender_id, staff_document_required, bb_sent, initiated_by,
         )
 
         return {
             "success": True,
             "booking_number": booking_number,
             "surrender_id": surrender_id,
-            "signnow_sent": signnow_sent,
-            "signnow_doc_id": signnow_doc_id,
+            "staff_document_required": staff_document_required,
             "bb_sent": bb_sent,
             "initiated_by": initiated_by,
         }
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # SignNow surrender authorization document
-    # ─────────────────────────────────────────────────────────────────────────
-    async def _send_signnow_surrender(self, bond: dict, surrender_id: str):
-        """Copy the surrender template, prefill fields, and send to agent."""
-        import httpx
-        from dashboard.services.signnow_service import SignNowService
-
-        svc = SignNowService(api_token=os.environ.get("SIGNNOW_API_TOKEN", ""))
-        token = await svc.get_token()
-
-        defendant_name = bond.get("defendant_name", "")
-        booking_number = bond.get("booking_number", "")
-        bond_amount = bond.get("bond_amount", 0)
-        court_date = bond.get("court_date", "")
-        county = bond.get("county", "")
-
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        doc_name = f"Surrender Auth — {defendant_name} — {surrender_id}"
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            # Copy template
-            copy_resp = await client.post(
-                f"{svc.base_url}/template/{_SURRENDER_TEMPLATE_ID}/copy",
-                headers=headers,
-                json={"document_name": doc_name},
-            )
-            copy_resp.raise_for_status()
-            doc_id = copy_resp.json().get("id", "")
-
-            if not doc_id:
-                raise ValueError("SignNow template copy returned no document ID")
-
-            # Prefill fields
-            fields = [
-                {"external_id": "defendant_name",  "value": defendant_name},
-                {"external_id": "booking_number",  "value": booking_number},
-                {"external_id": "bond_amount",     "value": f"${bond_amount:,.0f}"},
-                {"external_id": "court_date",      "value": court_date},
-                {"external_id": "county",          "value": county},
-                {"external_id": "surrender_id",    "value": surrender_id},
-                {"external_id": "initiated_date",  "value": datetime.now(timezone.utc).strftime("%m/%d/%Y")},
-            ]
-            await client.put(
-                f"{svc.base_url}/document/{doc_id}",
-                headers=headers,
-                json={"fields": fields},
-            )
-
-            # Send invite to agent
-            await client.post(
-                f"{svc.base_url}/document/{doc_id}/invite",
-                headers=headers,
-                json={
-                    "to": [{"email": _AGENT_EMAIL, "role": "Agent", "order": 1}],
-                    "from": _AGENT_EMAIL,
-                    "subject": f"⚠️ Surrender Authorization Required — {defendant_name}",
-                    "message": (
-                        f"A Level 3 FTA has been detected for {defendant_name} "
-                        f"(Booking #{booking_number}). Please review and sign the "
-                        f"surrender authorization to proceed.\n\nSurrender ID: {surrender_id}"
-                    ),
-                },
-            )
-
-        log.info("[Surrender] SignNow doc %s sent to agent for %s", doc_id, booking_number)
-        return True, doc_id
 
     # ─────────────────────────────────────────────────────────────────────────
     # BB iMessage — indemnitor notification
@@ -300,8 +217,8 @@ class FTASurrenderService:
             f"Booking: {booking}\n"
             f"Bond: ${bond_amount:,.0f} — {county}\n"
             f"Ref: {surrender_id}\n\n"
-            f"SignNow authorization has been sent to your email. "
-            f"Check the FTA Alerts tab for full details."
+            f"No e-sign packet was sent. Review the surrender documentation manually "
+            f"in the FTA Alerts tab before taking further action."
         )
 
         from dashboard.services.bb_client import send_message_universal

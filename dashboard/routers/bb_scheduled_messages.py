@@ -487,47 +487,19 @@ async def api_schedule_court_reminders(request: Request):
 
 @bb_schedule_bp.post("/bb-schedule/document-ready")
 async def api_schedule_document_ready(request: Request):
-    """Send a 'documents ready to sign' notification via iMessage.
-
-    Body:
+    """Retired direct signing-link scheduler; delivery must be staff-approved."""
+    return JSONResponse(
         {
-            "phone": "+12395550178",
-            "indemnitor_name": "Jane Smith",
-            "defendant_name": "JOHN SMITH",
-            "signing_url": "https://app.signnow.com/..."
-        }
-    """
-    try:
-        data = await request.json() or {}
-        phone = format_phone(data.get("phone", ""))
-        indemnitor_name = data.get("indemnitor_name", "")
-        defendant_name = data.get("defendant_name", "")
-        signing_url = data.get("signing_url", "")
-
-        if not phone or not defendant_name or not signing_url:
-            return JSONResponse({"success": False, "error": "phone, defendant_name, signing_url required"}, status_code=400)
-
-        bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
-        if not bb_server:
-            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
-
-        bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"any;-;{phone}"
-
-        context = {
-            "name": indemnitor_name.split()[0] if indemnitor_name else "there",
-            "defendant_name": defendant_name,
-            "signing_url": signing_url,
-        }
-        message = _build_reminder_message("document_ready", context)
-
-        result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.0)
-
-        return {"success": result.get("success", False), "result": result}
-
-    except Exception as e:
-        logger.error("Document ready notification error: %s", e, exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+            "success": False,
+            "error": "unverified_signing_delivery_retired",
+            "message": (
+                "Signing-link delivery is available only after staff verifies the validated "
+                "BondCase and approves the active DocuSeal packet workflow."
+            ),
+            "use": "docuseal",
+        },
+        status_code=410,
+    )
 
 
 @bb_schedule_bp.get("/bb-schedule/pending")

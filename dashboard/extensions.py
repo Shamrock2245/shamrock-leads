@@ -895,12 +895,6 @@ def resolve_scraper_status(
 
 
 
-# ── SignNow Template IDs ──
-# Single Source of Truth: SignNowPacketService.TEMPLATE_MAP
-# Location: dashboard/services/signnow_packet_service.py
-# Do NOT duplicate template IDs here — import from the service if needed.
-
-
 # ── App Factory Init ──
 
 async def _seed_poa_inventory_async():

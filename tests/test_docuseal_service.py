@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dashboard.services.docuseal_service import (
+    DocuSealPacketValidationError,
     DocuSealService,
     ROLE_INDEMNITOR,
     ROLE_DEFENDANT,
@@ -170,11 +171,9 @@ def test_normalize_create_response_list():
     assert out["submitters"][0]["role"] == "Indemnitor"
 
 
-def test_build_submitter_defaults_email():
-    s = DocuSealService.build_submitter(role=ROLE_INDEMNITOR, email="")
-    assert "@shamrockbailbonds.biz" in s["email"]
-    assert s["role"] == ROLE_INDEMNITOR
-    assert s["send_email"] is False
+def test_build_submitter_requires_validated_email():
+    with pytest.raises(DocuSealPacketValidationError, match="validated recipient email"):
+        DocuSealService.build_submitter(role=ROLE_INDEMNITOR, email="")
 
 
 def test_parse_swipesimple_receipt_bond_amount():
@@ -224,10 +223,19 @@ async def test_create_submission_for_packet_calls_api():
             template_id=42,
             packet_id="pkt-1",
             bond_data={
+                "bond_case_id": "bond-1",
+                "match_id": "match-1",
+                "match_status": "validated",
+                "defendant_id": "def-1",
+                "indemnitor_id": "ind-1",
+                "case_number": "26-CF-100",
+                "poa_number": "OSI3-100",
+                "booking_number": "BK123",
+                "surety_id": "osi",
                 "defendant_name": "Def",
                 "indemnitor_name": "Ind",
-                "indemnitor_email": "ind@example.com",
-                "defendant_email": "def@example.com",
+                "indemnitor": {"name": "Ind", "email": "ind@example.com"},
+                "defendant": {"name": "Def", "email": "def@example.com"},
             },
             send_email=False,
         )
@@ -255,7 +263,20 @@ async def test_multi_cosigner_roles():
         result = await svc.create_submission_for_packet(
             template_id=1,
             packet_id="pkt-multi",
-            bond_data={"defendant_name": "D", "defendant_email": "d@x.com"},
+            bond_data={
+                "bond_case_id": "bond-2",
+                "match_id": "match-2",
+                "match_status": "validated",
+                "defendant_id": "def-2",
+                "indemnitor_id": "ind-2",
+                "case_number": "26-CF-200",
+                "poa_number": "OSI3-200",
+                "booking_number": "BK200",
+                "surety_id": "osi",
+                "defendant_name": "D",
+                "defendant": {"name": "D", "email": "d@x.com"},
+                "indemnitor": {"name": "A", "email": "a@x.com"},
+            },
             indemnitors=[
                 {"name": "A", "email": "a@x.com"},
                 {"name": "B", "email": "b@x.com"},
@@ -269,6 +290,19 @@ async def test_multi_cosigner_roles():
         assert roles[0] == ROLE_INDEMNITOR
         assert len(result["submitters"]) == 3
         assert all(s.get("sign_url") for s in result["submitters"])
+
+
+@pytest.mark.asyncio
+async def test_create_submission_blocks_unbound_or_unverified_packet():
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    with patch.object(svc, "create_submission", new=AsyncMock()) as create:
+        with pytest.raises(DocuSealPacketValidationError, match="missing required binding"):
+            await svc.create_submission_for_packet(
+                template_id=1,
+                packet_id="pkt-invalid",
+                bond_data={"surety_id": "osi"},
+            )
+        create.assert_not_awaited()
 
 
 def test_prefill_never_raises_on_garbage():
