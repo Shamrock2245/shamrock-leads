@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-16 (Legacy e-sign retirement and DocuSeal binding gate)
+
+### Changed
+- **Legacy SignNow execution retired** — removed the Auto-CRM service modules, direct callbacks, direct signing-link delivery, release-stage generation, lifecycle poller/scheduler, and Node-RED tracking flows. Historical provider fields remain read-only for existing records.
+- **DocuSeal packet creation is fail closed** — a new submission now requires validated Match, bound BondCase, explicit OSI/Palmetto surety, assigned POA in the matching inventory tier, canonical recipient name/email, and a new packet ID. Packet-time identity, recipient, case, POA, and financial overrides are rejected.
+- **Signed-record safety** — packet ID collisions now return a conflict instead of replacing an existing packet version.
+
+### Verified
+- Focused DocuSeal service tests passed (**19**); commit `00c112c` deployed successfully through Hetzner workflow `31976473879`.
+- Public probes returned `200` for Auto-CRM, stable factory health, DocuSeal, school, paperwork, and Postiz `/auth`.
+- The platform is **not** marked production-hardened: staff workflow smoke tests and historical secret rotation remain open, and the strict local secrets check has no production environment files to inspect.
+
 ## [Unreleased] — 2026-08-16 (August wave leftover guards)
 
 ### Changed
