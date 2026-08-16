@@ -1250,7 +1250,7 @@ tr.row-error:hover td { background: rgba(255,71,87,.08); }
 .ra-body{padding:0;max-height:400px;overflow-y:auto;scrollbar-width:thin}
 
 /* ── Alert Card ── */
-.ra-card{position:relative;padding:16px 20px;border-bottom:1px solid var(--border);transition:all .25s ease;cursor:default;animation:raCardIn .3s ease backwards}
+.ra-card{position:relative;padding:16px 20px;border-bottom:1px solid var(--border);transition:all .25s ease;cursor:pointer;animation:raCardIn .3s ease backwards}
 .ra-card:last-child{border-bottom:none}
 .ra-card:hover{background:rgba(239,68,68,.02)}
 @keyframes raCardIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
@@ -1950,7 +1950,7 @@ input[type="datetime-local"] {
 }
 .prosp-drawer-overlay.open { display: block; }
 .prosp-drawer {
-  position: fixed; top: 0; right: 0; width: 780px; max-width: 96vw;
+  position: fixed; top: 0; right: 0; width: 440px; max-width: 96vw;
   height: 100vh; background: var(--panel); border-left: 1px solid var(--border);
   z-index: 1101; display: flex; flex-direction: column;
   transform: translateX(100%); transition: transform .3s cubic-bezier(.4,0,.2,1);
@@ -2407,7 +2407,7 @@ input[type="datetime-local"] {
 }
 @media(max-width:1024px) and (min-width:641px){
   .pipeline-board{grid-template-columns:repeat(2,1fr)}
-  .prosp-drawer{width:90vw}
+  .prosp-drawer{width:min(440px,92vw)}
 }
 
 

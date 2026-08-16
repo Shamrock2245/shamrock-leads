@@ -144,7 +144,7 @@ window.SLTasks = (() => {
         : '<span class="sl-task-due sl-task-due-ok">⏰ ' + _esc(relTime) + '</span>';
       var suretyBadge = _suretyBadge(t);
 
-      html += '<div class="sl-task-item' + (overdue ? ' sl-task-overdue' : '') + '" data-task-id="' + _esc(t._id) + '" role="listitem">'
+      html += '<div class="sl-task-item ld-clickable' + (overdue ? ' sl-task-overdue' : '') + '" data-task-id="' + _esc(t._id) + '" data-booking="' + _esc(t.booking_number || '') + '" role="listitem" title="Open lead detail">'
         + '<div class="sl-task-icon">' + icon + '</div>'
         + '<div class="sl-task-content">'
         + '<div class="sl-task-header">'
@@ -170,6 +170,12 @@ window.SLTasks = (() => {
         e.stopPropagation();
         var taskId = btn.getAttribute('data-task-id');
         if (taskId) complete(taskId, btn);
+      });
+    });
+    bodyEl.querySelectorAll('.sl-task-item[data-booking]').forEach(function(item) {
+      item.addEventListener('click', function() {
+        var bk = item.getAttribute('data-booking');
+        if (bk && window.SLProspective && SLProspective.openDetail) SLProspective.openDetail(bk);
       });
     });
   }

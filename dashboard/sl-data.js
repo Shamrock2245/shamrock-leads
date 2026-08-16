@@ -102,13 +102,14 @@ function renderLeads() {
     const custLower = custVal.toLowerCase();
     const custClass = custLower.includes('custody') ? 'custody' : custLower.includes('release') || custLower.includes('bonded') ? 'released' : custLower.includes('not in') ? 'released' : 'other';
     const bkEsc = String(l.booking_number||'').replace(/"/g,'&quot;');
+    const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     const custDropdown = `<select class="def-status-badge ${custClass}" style="cursor:pointer;border:1px solid var(--border);background:transparent;padding:2px 6px;font-size:11px;border-radius:6px" onchange="updateCustody('${bkEsc}',this.value,this)"><option value="" ${!custVal?'selected':''}>${custVal||'—'}</option><option value="In Custody" ${'In Custody'===custVal?'selected':''}>In Custody</option><option value="Not In Custody" ${'Not In Custody'===custVal?'selected':''}>Not In Custody</option><option value="Released" ${'Released'===custVal?'selected':''}>Released</option><option value="Bonded Out" ${'Bonded Out'===custVal?'selected':''}>Bonded Out</option></select>`;
     const courtCls = isCourtSoon(l.court_date) ? 'court-soon' : '';
     const st = (l.state || 'FL').toUpperCase();
     const stColor = stateColors[st] || '#64748b';
     const scrapedRel = _relTime(l.scraped_at);
     const arrestDisp = fmtDate(l.arrest_date || l.booking_date);
-    return `<tr>
+    return `<tr class="ld-clickable" title="Open lead detail" onclick="if(!event.target.closest('select,a,button,input'))SLProspective&&SLProspective.openDetail('${bkJs}')">
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
       <td><span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
       <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
@@ -201,7 +202,8 @@ async function loadDashboard() {
         const prem = Math.max(100, bond * 0.1);
         const bc = bond>=10000?'bond-high':bond>=2500?'bond-mid':'bond-low';
         const charges = (l.charges||'').length > 60 ? (l.charges||'').slice(0,57)+'…' : (l.charges||'—');
-        return `<tr>
+        const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        return `<tr class="ld-clickable" title="Open lead detail" onclick="if(!event.target.closest('button,select,a,input'))SLProspective&&SLProspective.openDetail('${bkJs}')">
           <td><strong>${l.full_name||'?'}</strong><br><span style="color:var(--muted);font-size:11px">${l.dob||''} · ${l.booking_number||''}</span></td>
           <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
           <td class="${bc}">$${bond.toLocaleString()}</td>
@@ -234,7 +236,8 @@ async function loadDashboard() {
         const st2 = (l.state || 'FL').toUpperCase();
         const stColor2 = STATE_COLORS_CMD[st2] || '#64748b';
         const charge = (l.charges||'').length > 38 ? (l.charges||'').slice(0,35)+'…' : (l.charges||'—');
-        return `<div class="county-row" style="flex-wrap:wrap;gap:2px">
+        const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        return `<div class="county-row ld-clickable" style="flex-wrap:wrap;gap:2px" title="Open lead detail" onclick="SLProspective&&SLProspective.openDetail('${bkJs}')">
           <span style="background:${stColor2}22;color:${stColor2};border:1px solid ${stColor2}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700">${st2}</span>
           <span class="county-name" style="font-size:12px">${dot} ${l.full_name||'?'}</span>
           <span style="color:var(--accent);font-size:12px;font-weight:700">$${(l.bond_amount||0).toLocaleString()}</span>

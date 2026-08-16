@@ -233,11 +233,18 @@ window.SLOmnibar = {
       if (b) SL.switchTab(b);
       if (window.SLIndemnitor) SLIndemnitor.load();
     } else if (src === 'prospective_bonds' || item.type === 'prospective') {
+      if (item.booking_number && window.SLProspective) {
+        SLProspective.openDetail(item.booking_number);
+        return;
+      }
       const b = document.querySelector('[data-tab="tabProspective"]');
       if (b) SL.switchTab(b);
       if (window.SLProspective) SLProspective.load();
     } else {
-      // Leads / tasks / default → defendants notes drawer
+      if (item.booking_number && window.SLProspective) {
+        SLProspective.openDetail(item.booking_number);
+        return;
+      }
       const b = document.querySelector('[data-tab="tabDefendants"]') || document.querySelector('[data-tab="tabLeads"]');
       if (b) SL.switchTab(b);
       if (typeof openShamrockNotes === 'function' && item.booking_number) {

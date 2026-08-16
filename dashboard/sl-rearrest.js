@@ -70,8 +70,9 @@ const SLRearrest = (() => {
       const timeStr = a.created_at ? _timeAgo(a.created_at) : '';
       const bondClass = bond >= 10000 ? 'ra-bond-high' : bond >= 2500 ? 'ra-bond-mid' : 'ra-bond-low';
 
+      const bk = a.booking_number || a.rearrest_booking || '';
       return `
-        <div class="ra-card" id="ra-${a._id}" data-id="${a._id}">
+        <div class="ra-card ld-clickable" id="ra-${a._id}" data-id="${a._id}" data-booking="${bk}" title="Open lead detail">
           <div class="ra-pulse-dot"></div>
           <div class="ra-card-top">
             <div class="ra-defendant">
@@ -92,16 +93,37 @@ const SLRearrest = (() => {
               <span class="ra-prior-count">${priorCount} prior bond${priorCount > 1 ? 's' : ''}</span>
             </div>
             <div class="ra-actions">
-              <button class="ra-btn ra-btn-contact" onclick="SLRearrest.contact('${a._id}')" title="Mark as contacted">
+              <button class="ra-btn ra-btn-contact" onclick="event.stopPropagation();SLRearrest.contact('${a._id}')" title="Mark as contacted">
                 📞 Contact
               </button>
-              <button class="ra-btn ra-btn-dismiss" onclick="SLRearrest.dismiss('${a._id}')" title="Dismiss alert">
+              <button class="ra-btn ra-btn-dismiss" onclick="event.stopPropagation();SLRearrest.dismiss('${a._id}')" title="Dismiss alert">
                 ✕
               </button>
             </div>
           </div>
         </div>`;
     }).join('');
+
+    body.querySelectorAll('.ra-card[data-booking]').forEach(card => {
+      card.addEventListener('click', () => SLRearrest.openLead(card.getAttribute('data-id')));
+    });
+  }
+
+  function openLead(id) {
+    const alert = _alerts.find(a => String(a._id) === String(id));
+    if (!alert) return;
+    const bk = alert.booking_number || alert.rearrest_booking || '';
+    if (!bk) {
+      toast('This alert has no booking number', 'error');
+      return;
+    }
+    if (window.SLProspective && SLProspective.openDetail) {
+      SLProspective.openDetail(bk, {
+        indemnitor_name: alert.indemnitor_name || '',
+        indemnitor_phone: alert.indemnitor_phone || '',
+        prior_bonds_count: alert.prior_bonds_count || 0,
+      });
+    }
   }
 
   async function dismiss(id) {
@@ -202,7 +224,7 @@ const SLRearrest = (() => {
   }
 
   // ── Expose public API ──────────────────────────────────────────────────
-  return { init, load, render, dismiss, contact, onSSE };
+  return { init, load, render, dismiss, contact, openLead, onSSE };
 })();
 
 // Auto-init when DOM ready (Command Center is default tab)

@@ -38,6 +38,9 @@ window.SLProspective = (function () {
   const $ = id => document.getElementById(id);
   const money = n => '$' + (parseFloat(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const toast = (msg, type) => { if (window.SL && window.SL.toast) SL.toast(msg, type); else if (window.showToast) showToast(msg, type); };
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const escAttr = s => esc(s).replace(/'/g, '&#39;');
 
   const timeAgo = ts => {
     if (!ts) return '—';
@@ -442,33 +445,57 @@ window.SLProspective = (function () {
     else toast('AI Intelligence module not loaded', 'error');
   }
 
-  // ── Detail Drawer ──────────────────────────────────────────────────────────
-  function openDetail(bk) {
-    _currentBk = bk;
-    _currentIdx = _data.findIndex(function(b) { return b.booking_number === bk; });
-    renderDetail(bk);
+  // ── Detail Drawer (universal lead inspector) ───────────────────────────────
+  let _detailExtra = null;
+  let _detailSeq = 0;
+
+  function openDrawerShell() {
     var drawer = $('prospDetailPanel');
     var overlay = $('prospDrawerOverlay');
     if (drawer) { drawer.classList.add('open'); document.body.classList.add('drawer-open'); }
-    if (overlay) overlay.classList.add('show');
+    if (overlay) { overlay.classList.add('show'); overlay.classList.add('open'); }
+  }
+
+  function openDetail(bk, extra) {
+    if (!bk) { toast('No booking number on this record', 'error'); return; }
+    _currentBk = bk;
+    _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    _detailExtra = extra || null;
+    var titleEl = $('prospDetailTitle');
+    if (titleEl) {
+      titleEl.textContent = 'Lead Detail';
+      titleEl.dataset.bk = bk;
+    }
+    var body = $('prospDetailBody');
+    if (body) {
+      body.innerHTML = '<div class="ld-loading"><div class="ld-spinner"></div><div>Loading lead…</div></div>';
+    }
+    openDrawerShell();
     updateDrawerNav();
+    renderDetail(bk);
   }
 
   function closeDetail() {
     _currentBk = null;
     _currentIdx = null;
+    _detailExtra = null;
     var drawer = $('prospDetailPanel');
     var overlay = $('prospDrawerOverlay');
     if (drawer) { drawer.classList.remove('open'); document.body.classList.remove('drawer-open'); }
-    if (overlay) overlay.classList.remove('show');
+    if (overlay) { overlay.classList.remove('show'); overlay.classList.remove('open'); }
+    var titleEl = $('prospDetailTitle');
+    if (titleEl) { titleEl.textContent = 'Lead Detail'; delete titleEl.dataset.bk; }
+    var body = $('prospDetailBody');
+    if (body) body.innerHTML = '';
   }
 
   function navDetail(dir) {
-    if (_currentIdx === null) return;
+    if (_currentIdx === null || _currentIdx < 0) return;
     var newIdx = _currentIdx + dir;
     if (newIdx < 0 || newIdx >= _data.length) return;
     _currentIdx = newIdx;
     _currentBk = _data[newIdx].booking_number;
+    _detailExtra = null;
     renderDetail(_currentBk);
     updateDrawerNav();
   }
@@ -476,18 +503,212 @@ window.SLProspective = (function () {
   function updateDrawerNav() {
     var prev = $('prospDrawerPrev');
     var next = $('prospDrawerNext');
-    if (prev) prev.disabled = _currentIdx === 0;
-    if (next) next.disabled = _currentIdx === _data.length - 1;
+    var inPipelineList = _currentIdx !== null && _currentIdx >= 0 && _data.length > 0;
+    if (prev) prev.disabled = !inPipelineList || _currentIdx === 0;
+    if (next) next.disabled = !inPipelineList || _currentIdx === _data.length - 1;
   }
 
-  function renderDetail(bk) {
-    var bond = _data.find(function(b) { return b.booking_number === bk; });
-    if (!bond) return;
-    var titleEl = $('prospDetailTitle');
-    if (titleEl) titleEl.textContent = '📋 ' + (bond.defendant_name || bk);
+  function pickLeadField(lead, bond, keys, fallback) {
+    var i, src, k;
+    for (i = 0; i < keys.length; i++) {
+      k = keys[i];
+      src = lead && lead[k];
+      if (src !== undefined && src !== null && src !== '') return src;
+      src = bond && bond[k];
+      if (src !== undefined && src !== null && src !== '') return src;
+    }
+    return fallback;
+  }
+
+  async function fetchJsonSafe(url) {
+    try {
+      var r = await fetch(url);
+      if (!r.ok) return null;
+      var ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) return null;
+      return await r.json();
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function resolveLeadContext(bk) {
+    var bond = _data.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+    var lead = (window._leadMap && window._leadMap[bk]) || null;
+    var jobs = [];
+    jobs.push(fetchJsonSafe(API + '/api/leads/' + encodeURIComponent(bk)).then(function(d) {
+      if (d && !d.error) {
+        lead = d;
+        window._leadMap = window._leadMap || {};
+        if (d.booking_number) window._leadMap[d.booking_number] = d;
+      }
+    }));
+    if (!bond) {
+      jobs.push(fetchJsonSafe(API + '/api/prospective-bonds?search=' + encodeURIComponent(bk)).then(function(d) {
+        var bonds = (d && d.bonds) || [];
+        bond = bonds.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+        if (bond && !_data.some(function(b) { return String(b.booking_number) === String(bk); })) {
+          _data.push(bond);
+        }
+      }));
+    }
+    await Promise.all(jobs);
+    return { lead: lead, bond: bond };
+  }
+
+  async function renderDetail(bk) {
+    var seq = ++_detailSeq;
     var body = $('prospDetailBody');
     if (!body) return;
+    var ctx = await resolveLeadContext(bk);
+    if (seq !== _detailSeq || _currentBk !== bk) return;
+    var bond = ctx.bond;
+    var lead = ctx.lead;
+    if (!bond && !lead) {
+      var titleMiss = $('prospDetailTitle');
+      if (titleMiss) titleMiss.textContent = 'Lead Detail';
+      body.innerHTML =
+        '<div class="ld-empty">' +
+          '<div class="ld-empty-icon">📋</div>' +
+          '<div class="ld-empty-title">No record for this booking</div>' +
+          '<div class="ld-empty-sub">Booking <span class="mono">' + esc(bk) + '</span> is not in arrests or the outreach pipeline. Nothing to inspect.</div>' +
+        '</div>';
+      updateDrawerNav();
+      return;
+    }
 
+    _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    updateDrawerNav();
+
+    var name = pickLeadField(lead, bond, ['full_name', 'defendant_name'], bk);
+    var county = pickLeadField(lead, bond, ['county'], '');
+    var state = pickLeadField(lead, bond, ['state'], '');
+    var booking = pickLeadField(lead, bond, ['booking_number'], bk);
+    var bondAmt = parseFloat(pickLeadField(lead, bond, ['bond_amount'], 0)) || 0;
+    var bondType = pickLeadField(lead, bond, ['bond_type'], '');
+    var charges = pickLeadField(lead, bond, ['charges'], '');
+    var score = pickLeadField(lead, bond, ['lead_score'], 0);
+    var status = pickLeadField(lead, bond, ['lead_status'], '');
+    var custody = pickLeadField(lead, bond, ['status', 'custody_status'], '');
+    var dob = pickLeadField(lead, bond, ['dob', 'date_of_birth'], '');
+    var facility = pickLeadField(lead, bond, ['facility', 'jail'], '');
+    var arrestDate = pickLeadField(lead, bond, ['arrest_date', 'booking_date'], '');
+    var courtDate = pickLeadField(lead, bond, ['court_date'], '');
+    var caseNumber = pickLeadField(lead, bond, ['case_number'], '');
+    var detailUrl = pickLeadField(lead, bond, ['detail_url', 'source_url'], '');
+    var mugshot = pickLeadField(lead, bond, ['mugshot_url', 'Mugshot_URL', 'photo_url', 'image_url', 'image', 'mugshot'], '');
+    var sex = pickLeadField(lead, bond, ['sex'], '');
+    var race = pickLeadField(lead, bond, ['race'], '');
+    var address = pickLeadField(lead, bond, ['address'], '');
+    var premium = Math.max(bondAmt > 0 ? bondAmt * 0.1 : 0, bondAmt > 0 ? 100 : 0);
+    var sc = String(status || '').toLowerCase();
+    var scoreCls = sc === 'hot' ? 'score-hot' : sc === 'warm' ? 'score-warm' : sc === 'disqualified' ? 'score-disq' : 'score-cold';
+    var custLower = String(custody || '').toLowerCase();
+    var custCls = custLower.indexOf('custody') >= 0 && custLower.indexOf('not') < 0 ? 'ld-pill-live'
+      : (custLower.indexOf('release') >= 0 || custLower.indexOf('bonded') >= 0 ? 'ld-pill-out' : 'ld-pill-muted');
+    var initials = String(name).replace(/[^A-Za-z]/g, ' ').trim().split(/\s+/).slice(0, 2).map(function(p) { return p.charAt(0); }).join('') || '?';
+    var extra = _detailExtra || {};
+    var ind = (bond && bond.indemnitor) || {};
+    var indName = ind.name || extra.indemnitor_name || extra.prior_indemnitor_name || '';
+    var indPhone = ind.phone || ind.callback_phone || extra.indemnitor_phone || '';
+    var priorCount = extra.prior_bonds_count || extra.priorCount || 0;
+    var inPipeline = !!bond;
+    var titleEl = $('prospDetailTitle');
+    if (titleEl) {
+      titleEl.textContent = name;
+      titleEl.dataset.bk = bk;
+    }
+
+    var fact = function(label, value) {
+      if (value === undefined || value === null || value === '') return '';
+      return '<div class="ld-fact"><span>' + esc(label) + '</span><strong>' + esc(value) + '</strong></div>';
+    };
+
+    var chargeHtml = '';
+    if (lead && Array.isArray(lead.charge_details) && lead.charge_details.length) {
+      chargeHtml = lead.charge_details.map(function(c) {
+        var amt = parseFloat(c.bond_amount || 0) || 0;
+        return '<div class="ld-charge-row"><span>' + esc(c.charge || c.description || 'Charge') + '</span><em>' + (amt ? money(amt) : (c.bond_type || '—')) + '</em></div>';
+      }).join('');
+    } else if (charges) {
+      chargeHtml = String(charges).split(/\s*\|\s*/).filter(Boolean).map(function(c) {
+        return '<div class="ld-charge-row"><span>' + esc(c) + '</span></div>';
+      }).join('');
+    } else {
+      chargeHtml = '<div class="ld-muted">No charges on file</div>';
+    }
+
+    var heroPhoto = mugshot
+      ? '<img class="ld-mug" src="' + escAttr(mugshot) + '" alt="" onerror="this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\'">' +
+        '<div class="ld-mug ld-mug-fallback" style="display:none">' + esc(initials) + '</div>'
+      : '<div class="ld-mug ld-mug-fallback">' + esc(initials) + '</div>';
+
+    var actionBk = escAttr(booking);
+    var actionName = escAttr(name);
+    var actionCounty = escAttr(county);
+
+    body.innerHTML =
+      '<div class="ld-workspace">' +
+        '<div class="ld-hero">' + heroPhoto +
+          '<div class="ld-hero-text">' +
+            '<div class="ld-name">' + esc(name) + '</div>' +
+            '<div class="ld-booking mono">' + esc(booking) + (county ? ' · ' + esc(county) : '') + (state ? ' (' + esc(String(state).toUpperCase()) + ')' : '') + '</div>' +
+            '<div class="ld-pill-row">' +
+              '<span class="score-pill ' + scoreCls + '">' + esc(score) + (status ? ' · ' + esc(status) : '') + '</span>' +
+              (custody ? '<span class="ld-pill ' + custCls + '">' + esc(custody) + '</span>' : '') +
+              (bondType ? '<span class="ld-pill ld-pill-muted">' + esc(bondType) + '</span>' : '') +
+              (inPipeline ? '<span class="ld-pill ld-pill-live">In pipeline · ' + esc(stageLabel(bond.stage)) + '</span>' : '<span class="ld-pill ld-pill-muted">Not in pipeline</span>') +
+              (priorCount ? '<span class="ld-pill ld-pill-hot">' + esc(priorCount) + ' prior bond' + (priorCount > 1 ? 's' : '') + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ld-money">' +
+          '<div><span>Bond</span><strong>' + money(bondAmt) + '</strong></div>' +
+          '<div><span>Est. premium</span><strong class="ld-prem">' + (bondAmt > 0 ? money(premium) : '—') + '</strong></div>' +
+          '<div><span>Type</span><strong>' + esc(bondType || '—') + '</strong></div>' +
+        '</div>' +
+        '<div class="ld-section"><div class="ld-section-label">Charges</div>' + chargeHtml + '</div>' +
+        '<div class="ld-facts">' +
+          fact('DOB', dob) +
+          fact('Sex / Race', [sex, race].filter(Boolean).join(' · ')) +
+          fact('Facility', facility) +
+          fact('Arrested', arrestDate) +
+          fact('Court', courtDate || '') +
+          fact('Case #', caseNumber) +
+          fact('Address', address) +
+        '</div>' +
+        ((indName || indPhone) ? (
+          '<div class="ld-section">' +
+            '<div class="ld-section-label">Known contact</div>' +
+            '<div class="ld-contact">' +
+              '<div><strong>' + esc(indName || 'Indemnitor') + '</strong>' + (ind.relationship ? '<span class="ld-muted"> · ' + esc(ind.relationship) + '</span>' : '') + '</div>' +
+              (indPhone ? '<div class="ld-phone">' + esc(indPhone) + '</div>' : '<div class="ld-muted">No phone on file</div>') +
+            '</div>' +
+          '</div>'
+        ) : '') +
+        '<div class="ld-actions">' +
+          '<button type="button" class="ld-btn ld-btn-primary" onclick="openBondModal(\'' + actionName + '\',' + bondAmt + ',\'' + actionCounty + '\',\'' + actionBk + '\')">✍️ Write Bond</button>' +
+          (inPipeline
+            ? '<button type="button" class="ld-btn" onclick="window.SL&&SL.switchTab(\'tabProspective\');SLProspective.load()">📂 Open Pipeline</button>'
+            : '<button type="button" class="ld-btn ld-btn-accent" onclick="SLProspective.trackLead(\'' + actionBk + '\',\'' + actionName + '\',\'' + actionCounty + '\',' + bondAmt + ')">☘️ Track Lead</button>') +
+          '<button type="button" class="ld-btn" onclick="SLiMessage&&SLiMessage.openCompose(\'' + actionBk + '\',\'' + actionName + '\')">💬 iMessage</button>' +
+          '<button type="button" class="ld-btn" onclick="openShamrockNotes&&openShamrockNotes(\'' + actionBk + '\')">📝 Notes</button>' +
+          '<button type="button" class="ld-btn" onclick="openChargeBondsModal&&openChargeBondsModal(\'' + actionBk + '\')">⚖️ Charges</button>' +
+          (detailUrl ? '<a class="ld-btn" href="' + escAttr(detailUrl) + '" target="_blank" rel="noopener">🔗 Source</a>' : '') +
+          '<button type="button" class="ld-btn" onclick="refreshDefendantFromSource&&refreshDefendantFromSource(\'' + actionBk + '\',this)">⚡ Fetch Bond</button>' +
+        '</div>' +
+        (inPipeline ? '<div id="ldPipelineMount"></div>' : '<div class="ld-hint">Track this lead to log outreach, assign an indemnitor, and move it through Contacted → Ready.</div>') +
+      '</div>';
+
+    if (inPipeline) {
+      var mount = $('ldPipelineMount');
+      if (mount) mount.innerHTML = renderPipelineWorkspace(bk, bond);
+      wireComposer(bk);
+    }
+    return;
+  }
+
+  function renderPipelineWorkspace(bk, bond) {
     var comms = bond.communication_log || [];
     var timeline = bond.timeline || [];
     var ind = bond.indemnitor || {};
@@ -512,21 +733,12 @@ window.SLProspective = (function () {
       return '<option' + (ind.relationship === r ? ' selected' : '') + '>' + r + '</option>';
     }).join('');
 
-    body.innerHTML =
+    return (
+      '<div class="ld-pipeline">' +
+      '<div class="ld-section-label">Outreach workspace</div>' +
       '<div class="prosp-stage-bar">' + stageBarHtml + '</div>' +
-      '<div class="prosp-detail-grid">' +
+      '<div class="prosp-detail-grid ld-pipeline-grid">' +
         '<div>' +
-          '<div class="prosp-info-card" style="margin-bottom:12px">' +
-            '<h4>🧑 Defendant</h4>' +
-            '<div class="prosp-field"><span>Name</span><span style="font-weight:700">' + (bond.defendant_name || '—') + '</span></div>' +
-            '<div class="prosp-field"><span>Booking #</span><span class="mono">' + (bond.booking_number || '—') + '</span></div>' +
-            '<div class="prosp-field"><span>County</span><span>' + (bond.county || '—') + '</span></div>' +
-            '<div class="prosp-field"><span>Bond Amount</span><span style="font-weight:800;color:var(--accent)">' + money(bond.bond_amount) + '</span></div>' +
-            '<div class="prosp-field"><span>Charges</span><span style="font-size:12px">' + (bond.charges || '—') + '</span></div>' +
-            '<div class="prosp-field"><span>Lead Score</span><span class="score-pill ' + ((bond.lead_status || '').toLowerCase() === 'hot' ? 'score-hot' : (bond.lead_status || '').toLowerCase() === 'warm' ? 'score-warm' : 'score-cold') + '">' + (bond.lead_score || 0) + ' · ' + (bond.lead_status || '—') + '</span></div>' +
-            '<div class="prosp-field"><span>FTA Risk</span><span>' + (riskBadge(bond) || '—') + '</span></div>' +
-            (bond.detail_url ? '<div style="margin-top:8px"><a href="' + bond.detail_url + '" target="_blank" class="prosp-ext-link">🔗 View Arrest Record</a></div>' : '') +
-          '</div>' +
           '<div class="prosp-info-card" style="margin-bottom:12px">' +
             '<h4>👤 Indemnitor / Contact</h4>' +
             '<div class="prosp-field"><span>Name</span><input class="prosp-inline-input" id="indName" value="' + (ind.name || '') + '" placeholder="Contact name"></div>' +
@@ -577,19 +789,21 @@ window.SLProspective = (function () {
         '</select></div>' +
         '<button class="btn-archive" style="font-size:12px" onclick="SLProspective.archiveLead(\'' + bk + '\')">📦 Archive</button>' +
         '<button class="btn-cancel" style="font-size:12px" onclick="SLProspective.promptClose(\'' + bk + '\')">❌ Close Lead</button>' +
-      '</div>';
+      '</div>' +
+      '</div>'
+    );
+  }
 
-    // Wire char counter and Ctrl+Enter
+  function wireComposer(bk) {
     var ta = $('commMessage');
-    if (ta) {
-      ta.addEventListener('input', function() {
-        var cc = $('commCharCount_' + bk);
-        if (cc) cc.textContent = ta.value.length;
-      });
-      ta.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendMessage(bk); }
-      });
-    }
+    if (!ta) return;
+    ta.addEventListener('input', function() {
+      var cc = $('commCharCount_' + bk);
+      if (cc) cc.textContent = ta.value.length;
+    });
+    ta.addEventListener('keydown', function(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendMessage(bk); }
+    });
   }
 
   // ── Conversation Rendering ─────────────────────────────────────────────────
@@ -1344,11 +1558,49 @@ window.SLProspective = (function () {
     }
   }
 
+  async function trackLead(bk, name, county, bondAmt, charges, score, status) {
+    if (!bk) { toast('No booking number to track', 'error'); return; }
+    openDetail(bk);
+    var existing = _data.find(function(b) { return String(b.booking_number) === String(bk); });
+    if (existing) {
+      toast('Already in the outreach pipeline', 'info');
+      return;
+    }
+    var lead = (window._leadMap && window._leadMap[bk]) || {};
+    try {
+      var r = await fetch(API + '/api/prospective-bonds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_number: bk,
+          defendant_name: name || lead.full_name || '',
+          county: county || lead.county || '',
+          bond_amount: bondAmt != null ? bondAmt : (lead.bond_amount || 0),
+          charges: charges || lead.charges || '',
+          lead_score: score != null ? score : (lead.lead_score || 0),
+          lead_status: status || lead.lead_status || '',
+          stage: 'contacted',
+          agent: 'Dashboard',
+        }),
+      });
+      var d = await r.json();
+      if (d.success !== false) {
+        toast((name || lead.full_name || bk) + ' added to pipeline', 'success');
+        await load();
+        if (_currentBk === bk) renderDetail(bk);
+      } else {
+        toast(d.error || 'Could not add to pipeline', 'error');
+      }
+    } catch (e) {
+      toast('Track failed: ' + e.message, 'error');
+    }
+  }
+
   // ── Keyboard Shortcuts ─────────────────────────────────────────────────────
   document.addEventListener('keydown', function(e) {
-    var tab = document.getElementById('tabProspective');
-    if (!tab || tab.style.display === 'none') return;
     if (e.key === 'Escape') { closeDetail(); closeAddModal(); }
+    var tab = document.getElementById('tabProspective');
+    if (!tab || !tab.classList.contains('active')) return;
     if (e.key === 'n' && !e.ctrlKey && !e.metaKey && !e.target.matches('input,textarea,select')) openAddModal();
   });
 
@@ -1534,7 +1786,7 @@ window.SLProspective = (function () {
     handleSSEEvent: handleSSEEvent,
     // Review Queue (The Closer)
     loadReviewQueue: loadReviewQueue, approveReview: approveReview, rejectReview: rejectReview, bulkApproveReview: bulkApproveReview,
-    trackLead: function(bk) { openDetail(bk); },
+    trackLead: trackLead,
     viewInDefendants: function(bk) {
       // Switch to Defendants tab and pre-filter to this booking number
       var tabBtn = document.querySelector('[data-tab="tabDefendants"]');
