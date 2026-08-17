@@ -4827,11 +4827,15 @@
     <div class="tab-content" id="tabPaperwork">
       <div class="header-banner glass-panel">
         <div class="header-content">
-          <h1>Document Operations & E-Signature Hub</h1>
-          <p>Twenty CRM Architecture — DocuSeal e-sign pipeline, field hydration audit, and 1-click packet execution.</p>
+          <h1>DocuSeal Packet Command Center</h1>
+          <p>Resolve the case chain, review the authoritative prefill, then record staff approval before any signing request is released.</p>
         </div>
-        <div class="header-actions">
-          <button class="btn btn-primary" onclick="SLPaperwork.load()">
+        <div class="header-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="SLPaperwork.openAdaptivePacketModal()" title="Start with a validated Match or BondCase; incomplete records remain blocked">
+            <span class="icon">☘️</span> Guided DocuSeal Packet
+          </button>
+          <a class="btn btn-secondary" href="https://sign.shamrockbailbonds.biz" target="_blank" rel="noopener noreferrer" title="Open the self-hosted DocuSeal workspace in a new tab">Open DocuSeal</a>
+          <button class="btn btn-secondary" onclick="SLPaperwork.load()">
             <span class="icon">🔄</span> Refresh Pipeline
           </button>
         </div>
@@ -4840,7 +4844,7 @@
       <!-- Sub-navigation Tabs -->
       <div class="inv-tabs" style="margin-top:16px;">
         <button class="inv-tab-btn active" id="pwSubTab_live" onclick="SLPaperwork.switchSubTab('live')">📋 Live Document Packets</button>
-        <button class="inv-tab-btn" id="pwSubTab_builder" onclick="SLPaperwork.switchSubTab('builder')">🎯 Drag & Drop Packet Builder</button>
+        <button class="inv-tab-btn" id="pwSubTab_builder" onclick="SLPaperwork.switchSubTab('builder')">🎯 Packet Composition Rules</button>
         <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
         <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
         <button class="inv-tab-btn" id="pwSubTab_post_release" onclick="SLPaperwork.switchSubTab('post_release')">🛡️ Post-Release & Forfeiture Remedies</button>
@@ -4856,7 +4860,7 @@
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
             <h3 style="margin:0">Active Document Packets</h3>
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-primary btn-sm" onclick="SLPaperwork.openAdaptivePacketModal()">🎯 Adaptive Packet Builder</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="SLPaperwork.openAdaptivePacketModal()">☘️ Start Guided DocuSeal Packet</button>
               <input type="text" id="pwSearchInput" placeholder="🔍 Search defendant, case#, packet..." onkeyup="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 12px;border-radius:6px;font-size:12px;width:220px;">
               <select id="pwStatusSelect" onchange="SLPaperwork.filterPackets()" style="background:var(--bg,#0f172a);border:1px solid var(--border,#334155);color:var(--text);padding:6px 10px;border-radius:6px;font-size:12px;">
                 <option value="all">All Statuses</option>
@@ -5186,8 +5190,17 @@
           </div>
           <div class="inv-modal-body" style="display:flex;flex-direction:column;gap:14px">
             <p style="margin:0;font-size:12px;color:var(--muted,#94a3b8)">
-              Auto-fills from the defendant ↔ indemnitor matching system. Drag extra docs into this case packet, authorize self-indemnitor for small bonds (PIN), then hydrate &amp; send via <strong style="color:#4ade80">DocuSeal</strong> (self-hosted e-sign). Appearance bonds remain print / wet-ink.
+              DocuSeal packets are built only from an authoritative, validated case. Resolve the case first; the command center locks identity, case, surety, and POA values from Super CRM. Preview is non-sending. Appearance bonds remain print / wet-ink.
             </p>
+
+            <div style="background:linear-gradient(135deg,rgba(16,185,129,.13),rgba(15,23,42,.82));border:1px solid rgba(74,222,128,.42);border-radius:10px;padding:12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:9px">
+                <strong style="font-size:13px;color:#bbf7d0">Case readiness before DocuSeal</strong>
+                <span style="font-size:10px;color:#94a3b8">Server-derived · no client overrides</span>
+              </div>
+              <div id="pwApReadinessRail" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+              <div id="pwApReadinessSummary" style="font-size:11px;margin-top:9px;color:#fbbf24">Resolve a validated case; incomplete or ambiguous records remain blocked.</div>
+            </div>
 
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
               <div>
@@ -5199,8 +5212,8 @@
                 <input type="text" id="pwApCounty" placeholder="Lee" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px">
               </div>
               <div>
-                <label style="font-size:11px;color:var(--muted)">Intake / Match / Packet ID</label>
-                <input type="text" id="pwApLookupId" placeholder="INT-… / Match / PKT-…" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px">
+                <label style="font-size:11px;color:var(--muted)">Match ID (preferred)</label>
+                <input type="text" id="pwApLookupId" placeholder="Validated Match ID" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:8px;border-radius:6px;font-size:13px" title="Use one unique Match ID. Do not paste ambiguous values from other record types.">
               </div>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -5303,6 +5316,9 @@
               <label style="font-size:12px;color:#94a3b8;display:flex;align-items:center;gap:6px">
                 <input type="checkbox" id="pwApIncludeDefendant" checked> Include defendant signature
               </label>
+              <label style="font-size:12px;color:#bbf7d0;display:flex;align-items:center;gap:6px;background:rgba(16,185,129,.12);border:1px solid rgba(74,222,128,.35);border-radius:6px;padding:6px 8px">
+                <input type="checkbox" id="pwApStaffApproval" onchange="SLPaperwork._setAdaptiveFinalizeEnabled()"> I reviewed the verified case and approve this DocuSeal signing request
+              </label>
               <label style="font-size:12px;color:#94a3b8" title="E-sign is DocuSeal only for new packets">E-sign provider</label>
               <select id="pwApProvider" style="background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 10px;border-radius:6px;font-size:12px" title="DocuSeal only — SignNow retired for new work">
                 <option value="docuseal" selected>☘️ DocuSeal (self-hosted · only)</option>
@@ -5318,7 +5334,7 @@
             <div style="display:flex;gap:8px;flex-wrap:wrap">
               <button type="button" class="btn btn-secondary" onclick="SLPaperwork.previewAdaptiveHydration()">🔍 Preview Hydration</button>
               <button type="button" class="btn btn-secondary" onclick="SLPaperwork.previewDocuSealPrefill()" title="Dry-run DocuSeal field map (no send)">📋 Preview DocuSeal Prefill</button>
-              <button type="button" class="btn btn-primary" onclick="SLPaperwork.finalizeAdaptivePacket()">✅ Flatten &amp; Send Packet</button>
+              <button type="button" id="pwApFinalizeBtn" class="btn btn-primary" onclick="SLPaperwork.finalizeAdaptivePacket()" disabled title="Resolve the case chain and record staff approval before sending.">✅ Staff Approve &amp; Send DocuSeal Packet</button>
             </div>
           </div>
         </div>

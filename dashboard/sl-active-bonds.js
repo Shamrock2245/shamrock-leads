@@ -316,7 +316,7 @@ function renderActiveBondsTable() {
       <td>
         <div style="display:flex;gap:4px;flex-wrap:wrap;min-width:280px">
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#7c3aed;color:#fff" onclick="window.openEditDrawer('${bkSafe}')">✏️ Edit</button>
-          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff;font-weight:600" onclick="window.startPaperworkFromBondObj(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="OSI / Palmetto DocuSeal packet">📄 Paperwork</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff;font-weight:600" onclick="window.startPaperworkFromBondObj(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Open the guided DocuSeal workflow. Match, BondCase, surety, POA, hydration, and staff approval must all pass before sending.">☘️ DocuSeal</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Appearance-bond print / wet-ink">🖨️ Print bonds</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
@@ -555,7 +555,7 @@ window.startPaperworkFromEditBond = function () {
   if (window.SLPaperwork && typeof SLPaperwork.startFromBond === 'function') {
     SLPaperwork.startFromBond(seed);
   } else if (window.SL?.toast) {
-    SL.toast('Paperwork module not loaded', 'error');
+    SL.toast('DocuSeal command center module not loaded', 'error');
   }
 };
 
@@ -679,7 +679,7 @@ window._buildEditDrawer = function () {
     </div>
     <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;background:var(--panel)">
       <button onclick="window.closeEditDrawer()" style="padding:8px 16px;background:var(--panel);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer">Cancel</button>
-      <button onclick="window.startPaperworkFromEditBond()" style="padding:8px 16px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">📄 Do Paperwork</button>
+      <button onclick="window.startPaperworkFromEditBond()" style="padding:8px 16px;background:#0ea5e9;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600" title="Open guided DocuSeal; case readiness and staff approval are required before send">☘️ Guided DocuSeal</button>
       <button onclick="openRenewBondModal(window._abEditBookingNumber||'','')" style="padding:8px 16px;background:#f59e0b;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">🔄 Renew Bond</button>
       <button id="abEditSaveBtn" onclick="window.saveEditDrawer()" style="padding:8px 20px;background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600">💾 Save Changes</button>
     </div>`;
@@ -1607,7 +1607,7 @@ window.sendBondImessage = function (bookingNumber, defendantName, phone) {
       </div>
       <div class="kb-card-actions">
         <button onclick="openEditDrawer('${escHtml(bond.booking_number)}')">Edit</button>
-        <button onclick="window.startPaperworkFromBondObj(${JSON.stringify(bond).replace(/"/g, '&quot;')})">Paperwork</button>
+        <button onclick="window.startPaperworkFromBondObj(${JSON.stringify(bond).replace(/"/g, '&quot;')})" title="Open guided DocuSeal; case readiness and staff approval are required before send">☘️ DocuSeal</button>
         <button onclick="openInTracking('${escHtml(bond.booking_number)}')">Track</button>
         <button onclick="sendBondImessage('${escHtml(bond.booking_number)}','${escHtml(bond.defendant_name)}','${escHtml(bond.indemnitor_phone || '')}')">💬</button>
         <button onclick="SLKanban.loadStatusHistory('${escHtml(bond.booking_number)}')">History</button>

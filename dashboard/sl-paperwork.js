@@ -790,8 +790,13 @@ const SLPaperwork = {
     this._adaptiveFields = null;
     this._draggedDocKey = null;
     this._pendingBondSeed = seed;
+    this._adaptiveReadiness = null;
+    this._setAdaptiveAuthoritativeFieldsLocked(false);
+    const approval = document.getElementById('pwApStaffApproval');
+    if (approval) approval.checked = false;
 
     this._applyBondSeed(seed);
+    this._renderDocuSealReadiness({});
 
     this.renderAdaptivePalette();
     this.renderCasePacketDrop();
@@ -805,11 +810,8 @@ const SLPaperwork = {
     modal.style.display = 'flex';
     modal.classList.add('active');
 
-    if (seed.packet_id || seed.intake_id || seed.booking_number || seed.match_id) {
-      this.loadAdaptiveContext(seed).then(() => {
-        // Manual/re-added cases win over empty match context
-        this._applyBondSeed(this._pendingBondSeed || seed);
-      });
+    if (seed.packet_id || seed.intake_id || seed.booking_number || seed.match_id || seed.bond_case_id) {
+      this.loadAdaptiveContext(seed);
     }
   },
 
@@ -819,6 +821,76 @@ const SLPaperwork = {
       modal.style.display = 'none';
       modal.classList.remove('active');
     }
+  },
+
+  _setAdaptiveAuthoritativeFieldsLocked(locked) {
+    const ids = [
+      'pwApBooking', 'pwApCounty', 'pwApDefName', 'pwApDefDob', 'pwApDefPhone',
+      'pwApDefAddress', 'pwApIndName', 'pwApIndPhone', 'pwApIndEmail',
+      'pwApIndAddress', 'pwApCaseNumber', 'pwApPoa', 'pwApBondAmount'
+    ];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.readOnly = !!locked;
+        el.setAttribute('aria-readonly', locked ? 'true' : 'false');
+        el.style.opacity = locked ? '.82' : '';
+      }
+    });
+    const surety = document.getElementById('pwApSurety');
+    if (surety) surety.disabled = !!locked;
+  },
+
+  _deriveDocuSealReadiness(data = {}) {
+    const ctx = data.context || this._adaptiveContext || {};
+    const hydration = data.hydration || {};
+    const score = Number(hydration.hydration_score ?? 0);
+    const surety = String(ctx.surety_id || '').toLowerCase();
+    const matchStatus = String(ctx.match_status || '').toLowerCase();
+    const steps = [
+      { key: 'match', label: 'Validated Match', detail: matchStatus || 'not resolved', ready: matchStatus === 'validated' },
+      { key: 'case', label: 'BondCase', detail: ctx.bond_case_id || 'not linked', ready: !!ctx.bond_case_id },
+      { key: 'surety', label: 'Surety Confirmed', detail: surety ? surety.toUpperCase() : 'not assigned', ready: surety === 'osi' || surety === 'palmetto' },
+      { key: 'poa', label: 'POA Assigned', detail: ctx.poa_number || 'not assigned', ready: !!ctx.poa_number },
+      { key: 'template', label: 'DocuSeal Ready', detail: data.providers?.docuseal ? `hydration ${score}%` : 'template/API unavailable', ready: !!data.providers?.docuseal && score >= 100 },
+    ];
+    return { steps, hydration_score: score, chainComplete: steps.every(step => step.ready) };
+  },
+
+  _renderDocuSealReadiness(data = {}) {
+    this._adaptiveReadiness = this._deriveDocuSealReadiness(data);
+    const el = document.getElementById('pwApReadinessRail');
+    if (el) {
+      el.innerHTML = this._adaptiveReadiness.steps.map(step => {
+        const color = step.ready ? '#4ade80' : '#fbbf24';
+        const mark = step.ready ? '✓' : '○';
+        return `<div style="min-width:132px;flex:1;background:rgba(15,23,42,.72);border:1px solid ${step.ready ? 'rgba(74,222,128,.45)' : 'rgba(251,191,36,.45)'};border-radius:8px;padding:8px 9px">
+          <div style="font-size:11px;font-weight:700;color:${color}">${mark} ${this._esc(step.label)}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${this._esc(step.detail)}">${this._esc(step.detail)}</div>
+        </div>`;
+      }).join('');
+    }
+    const summary = document.getElementById('pwApReadinessSummary');
+    if (summary) {
+      summary.textContent = this._adaptiveReadiness.chainComplete
+        ? 'Case chain is verified. Staff approval is required before sending.'
+        : 'Resolve a validated case; incomplete or ambiguous records remain blocked.';
+      summary.style.color = this._adaptiveReadiness.chainComplete ? '#86efac' : '#fbbf24';
+    }
+    this._setAdaptiveFinalizeEnabled();
+  },
+
+  _setAdaptiveFinalizeEnabled() {
+    const button = document.getElementById('pwApFinalizeBtn');
+    if (!button) return;
+    const approved = !!document.getElementById('pwApStaffApproval')?.checked;
+    const ready = !!this._adaptiveReadiness?.chainComplete;
+    button.disabled = !(ready && approved);
+    button.style.opacity = button.disabled ? '.48' : '';
+    button.style.cursor = button.disabled ? 'not-allowed' : '';
+    button.title = button.disabled
+      ? 'Resolve the case chain and record staff approval before sending.'
+      : 'Create the verified DocuSeal packet and release it for signature.';
   },
 
   toggleSelfIndemnitorUI() {
@@ -997,15 +1069,15 @@ const SLPaperwork = {
     if (seed.packet_id) body.packet_id = seed.packet_id;
     if (seed.intake_id) body.intake_id = seed.intake_id;
     if (seed.match_id) body.match_id = seed.match_id;
+    if (seed.bond_case_id) body.bond_case_id = seed.bond_case_id;
     if (seed.defendant_id) body.defendant_id = seed.defendant_id;
     if (lookup) {
       if (lookup.startsWith('PKT-') || lookup.toLowerCase().startsWith('pkt')) body.packet_id = lookup;
       else if (lookup.startsWith('INT-') || lookup.toLowerCase().includes('intake')) body.intake_id = lookup;
       else if (/match/i.test(lookup) || lookup.length > 20) body.match_id = lookup;
       else {
-        // ambiguous — try packet then intake
-        body.packet_id = lookup;
-        body.intake_id = lookup;
+        // Free-form identifiers are treated as Match IDs only. Never fan a
+        // single ambiguous value out to packet, intake, and match lookups.
         body.match_id = lookup;
       }
     }
@@ -1056,6 +1128,8 @@ const SLPaperwork = {
       this._adaptiveContext = data.context;
       this._adaptiveFields = data.fields;
       this._fillFormFromContext(data.context, data.fields);
+      this._setAdaptiveAuthoritativeFieldsLocked(true);
+      this._renderDocuSealReadiness(data);
 
       // Seed packet from rules manifest when empty
       if (!this._casePacketKeys.length && Array.isArray(data.manifest)) {
@@ -1096,8 +1170,17 @@ const SLPaperwork = {
         pdfBadge.style.color = dsOk ? '#4ade80' : '#fbbf24';
       }
 
-      this._setApStatus('Context loaded — review fields, pick this client’s e-sign destination, then flatten & send.', 'success');
+      this._setApStatus(
+        this._adaptiveReadiness?.chainComplete
+          ? 'Case chain verified — review the DocuSeal prefill, then record staff approval before sending.'
+          : 'Context loaded, but the case chain is incomplete. Resolve the flagged gate before any DocuSeal packet can be sent.',
+        this._adaptiveReadiness?.chainComplete ? 'success' : 'error'
+      );
     } catch (err) {
+      this._adaptiveContext = null;
+      this._adaptiveReadiness = null;
+      this._setAdaptiveAuthoritativeFieldsLocked(false);
+      this._renderDocuSealReadiness({});
       this._setApStatus(`Resolve failed: ${err.message}`, 'error');
     }
   },
@@ -1136,7 +1219,7 @@ const SLPaperwork = {
       ...this._lookupBody(),
       self_indemnitor: selfInd,
       authorization_pin: pin,
-      surety_id: document.getElementById('pwApSurety')?.value || 'osi',
+      surety_id: this._adaptiveContext?.surety_id || '',
       field_overrides: this._collectFieldOverrides(),
       poa_number: document.getElementById('pwApPoa')?.value || '',
       include_defendant: true,
@@ -1177,6 +1260,10 @@ const SLPaperwork = {
   },
 
   _collectFieldOverrides() {
+    // Once a case resolves, all signature-bound data comes from the
+    // authoritative server context. Packet-time UI edits must never override
+    // identity, recipient, case, POA, or money values.
+    if (this._adaptiveContext) return {};
     return {
       defendant_name: document.getElementById('pwApDefName')?.value || '',
       defendant_dob: document.getElementById('pwApDefDob')?.value || '',
@@ -1194,6 +1281,14 @@ const SLPaperwork = {
   },
 
   async finalizeAdaptivePacket() {
+    if (!this._adaptiveReadiness?.chainComplete || !this._adaptiveContext) {
+      this._setApStatus('DocuSeal send is blocked until the server resolves a validated Match, BondCase, surety, POA, and complete hydration.', 'error');
+      return;
+    }
+    if (!document.getElementById('pwApStaffApproval')?.checked) {
+      this._setApStatus('Record staff approval after reviewing the authoritative case and DocuSeal prefill before sending.', 'error');
+      return;
+    }
     const selfInd = !!document.getElementById('pwApSelfIndemnitor')?.checked;
     const pin = document.getElementById('pwApSelfPin')?.value || '';
     if (selfInd && !pin) {
@@ -1219,7 +1314,7 @@ const SLPaperwork = {
       ...this._lookupBody(),
       self_indemnitor: selfInd,
       authorization_pin: pin,
-      surety_id: document.getElementById('pwApSurety')?.value || 'osi',
+      surety_id: this._adaptiveContext?.surety_id || '',
       include_payment_plan: !!document.getElementById('pwApPaymentPlan')?.checked,
       packet_doc_keys: this._casePacketKeys.slice(),
       extra_doc_keys: this._casePacketKeys.slice(),
@@ -1230,6 +1325,7 @@ const SLPaperwork = {
       })),
       field_overrides: this._collectFieldOverrides(),
       provider,
+      staff_approved_for_send: true,
       include_defendant: document.getElementById('pwApIncludeDefendant')
         ? !!document.getElementById('pwApIncludeDefendant').checked
         : true,
@@ -1259,7 +1355,7 @@ const SLPaperwork = {
         else this._allPackets.unshift(merged);
       }
       this._setApStatus(
-        `Packet ${data.packet_id} ready · ${parties.length || 0} signer link(s) · hydration ${data.hydration?.hydration_score ?? '—'}%${providerMsg}`,
+        `Packet ${data.packet_id} created from the verified case · ${parties.length || 0} signer link(s) · hydration ${data.hydration?.hydration_score ?? '—'}%${providerMsg}`,
         'success'
       );
       this.renderPartyCards(parties, data.packet_id);
