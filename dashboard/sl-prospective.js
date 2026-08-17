@@ -643,10 +643,6 @@ window.SLProspective = (function () {
         '<div class="ld-mug ld-mug-fallback" style="display:none">' + esc(initials) + '</div>'
       : '<div class="ld-mug ld-mug-fallback">' + esc(initials) + '</div>';
 
-    var actionBk = escAttr(booking);
-    var actionName = escAttr(name);
-    var actionCounty = escAttr(county);
-
     body.innerHTML =
       '<div class="ld-workspace">' +
         '<div class="ld-hero">' + heroPhoto +
@@ -687,18 +683,25 @@ window.SLProspective = (function () {
           '</div>'
         ) : '') +
         '<div class="ld-actions">' +
-          '<button type="button" class="ld-btn ld-btn-primary" onclick="openBondModal(\'' + actionName + '\',' + bondAmt + ',\'' + actionCounty + '\',\'' + actionBk + '\')">✍️ Write Bond</button>' +
+          '<button type="button" class="ld-btn ld-btn-primary" data-ld-act="write">✍️ Write Bond</button>' +
           (inPipeline
-            ? '<button type="button" class="ld-btn" onclick="window.SL&&SL.switchTab(\'tabProspective\');SLProspective.load()">📂 Open Pipeline</button>'
-            : '<button type="button" class="ld-btn ld-btn-accent" onclick="SLProspective.trackLead(\'' + actionBk + '\',\'' + actionName + '\',\'' + actionCounty + '\',' + bondAmt + ')">☘️ Track Lead</button>') +
-          '<button type="button" class="ld-btn" onclick="SLiMessage&&SLiMessage.openCompose(\'' + actionBk + '\',\'' + actionName + '\')">💬 iMessage</button>' +
-          '<button type="button" class="ld-btn" onclick="openShamrockNotes&&openShamrockNotes(\'' + actionBk + '\')">📝 Notes</button>' +
-          '<button type="button" class="ld-btn" onclick="openChargeBondsModal&&openChargeBondsModal(\'' + actionBk + '\')">⚖️ Charges</button>' +
+            ? '<button type="button" class="ld-btn" data-ld-act="pipeline">📂 Open Pipeline</button>'
+            : '<button type="button" class="ld-btn ld-btn-accent" data-ld-act="track">☘️ Track Lead</button>') +
+          '<button type="button" class="ld-btn" data-ld-act="imessage">💬 iMessage</button>' +
+          '<button type="button" class="ld-btn" data-ld-act="notes">📝 Notes</button>' +
+          '<button type="button" class="ld-btn" data-ld-act="charges">⚖️ Charges</button>' +
           (detailUrl ? '<a class="ld-btn" href="' + escAttr(detailUrl) + '" target="_blank" rel="noopener">🔗 Source</a>' : '') +
-          '<button type="button" class="ld-btn" onclick="refreshDefendantFromSource&&refreshDefendantFromSource(\'' + actionBk + '\',this)">⚡ Fetch Bond</button>' +
+          '<button type="button" class="ld-btn" data-ld-act="fetch">⚡ Fetch Bond</button>' +
         '</div>' +
         (inPipeline ? '<div id="ldPipelineMount"></div>' : '<div class="ld-hint">Track this lead to log outreach, assign an indemnitor, and move it through Contacted → Ready.</div>') +
       '</div>';
+
+    wireLeadActions(body, {
+      booking: booking,
+      name: name,
+      county: county,
+      bondAmt: bondAmt,
+    });
 
     if (inPipeline) {
       var mount = $('ldPipelineMount');
@@ -706,6 +709,31 @@ window.SLProspective = (function () {
       wireComposer(bk);
     }
     return;
+  }
+
+  function wireLeadActions(root, ctx) {
+    if (!root) return;
+    root.querySelectorAll('[data-ld-act]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var act = btn.getAttribute('data-ld-act');
+        if (act === 'write' && typeof openBondModal === 'function') {
+          openBondModal(ctx.name, ctx.bondAmt, ctx.county, ctx.booking);
+        } else if (act === 'track') {
+          trackLead(ctx.booking, ctx.name, ctx.county, ctx.bondAmt);
+        } else if (act === 'pipeline') {
+          if (window.SL && SL.switchTab) SL.switchTab('tabProspective');
+          load();
+        } else if (act === 'imessage' && window.SLiMessage && SLiMessage.openCompose) {
+          SLiMessage.openCompose(ctx.booking, ctx.name);
+        } else if (act === 'notes' && typeof openShamrockNotes === 'function') {
+          openShamrockNotes(ctx.booking);
+        } else if (act === 'charges' && typeof openChargeBondsModal === 'function') {
+          openChargeBondsModal(ctx.booking);
+        } else if (act === 'fetch' && typeof refreshDefendantFromSource === 'function') {
+          refreshDefendantFromSource(ctx.booking, btn);
+        }
+      });
+    });
   }
 
   function renderPipelineWorkspace(bk, bond) {
