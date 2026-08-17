@@ -445,7 +445,7 @@ class DocuSealService:
         template_id: Union[int, str],
         submitters: List[Dict[str, Any]],
         send_email: bool = False,
-        order: str = "preserved",
+        order: str = "random",
         message: Optional[dict] = None,
         completed_redirect_url: Optional[str] = None,
         variables: Optional[dict] = None,
@@ -456,6 +456,8 @@ class DocuSealService:
 
         send_email defaults False — Shamrock portal/iMessage owns delivery;
         parties open sign links after PIN unlock.
+        order defaults to ``random`` so indemnitor, co-indemnitor, and
+        defendant can each open their /s/{slug} link immediately (OpenAPI).
         """
         body: Dict[str, Any] = {
             "template_id": int(template_id) if str(template_id).isdigit() else template_id,
@@ -638,6 +640,8 @@ class DocuSealService:
         metadata: Optional[Dict[str, Any]] = None,
         send_email: bool = False,
         order: Optional[int] = None,
+        fields: Optional[List[Dict[str, Any]]] = None,
+        completed_redirect_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         clean_email = (email or "").strip()
         if not clean_email or "@" not in clean_email or clean_email.startswith("unsigned+"):
@@ -672,6 +676,10 @@ class DocuSealService:
             s["metadata"] = metadata
         if order is not None:
             s["order"] = order
+        if fields:
+            s["fields"] = fields
+        if completed_redirect_url:
+            s["completed_redirect_url"] = completed_redirect_url
         return s
 
     @staticmethod
@@ -1085,7 +1093,7 @@ class DocuSealService:
         indemnitors: Optional[List[Dict[str, Any]]] = None,
         defendant: Optional[Dict[str, Any]] = None,
         send_email: bool = False,
-        order: str = "preserved",
+        order: str = "random",
         include_defendant: bool = True,
         completed_redirect_url: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -1137,6 +1145,15 @@ class DocuSealService:
                 inds = [primary]
 
         submitters: List[Dict[str, Any]] = []
+        from dashboard.services.docuseal_signing_ux import (
+            friendly_fields_for_values,
+            paperwork_done_url,
+        )
+
+        # OpenAPI: field titles shown on the signing form instead of raw keys.
+        signer_fields = friendly_fields_for_values(payload_values)
+        # Per-submitter redirect after that person finishes (not the whole packet).
+        party_done = completed_redirect_url or paperwork_done_url()
 
         # Optional Bondsman / agent role (template may require signature block)
         include_bondsman = bool(
@@ -1160,7 +1177,8 @@ class DocuSealService:
                     values=payload_values,
                     metadata={"packet_id": packet_id, "party_role": "bondsman"},
                     send_email=True,
-                    order=len(submitters) + 1,
+                    fields=signer_fields,
+                    completed_redirect_url=party_done,
                 )
             )
 
@@ -1198,7 +1216,8 @@ class DocuSealService:
                         "indemnitor_index": idx,
                     },
                     send_email=send_email,
-                    order=len(submitters) + 1,
+                    fields=signer_fields,
+                    completed_redirect_url=party_done,
                 )
             )
 
@@ -1235,7 +1254,8 @@ class DocuSealService:
                         "party_role": "defendant",
                     },
                     send_email=send_email,
-                    order=len(submitters) + 1,
+                    fields=signer_fields,
+                    completed_redirect_url=party_done,
                 )
             )
 

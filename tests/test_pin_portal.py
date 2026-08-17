@@ -17,6 +17,7 @@ def test_public_sign_redirect_prefers_role():
         "packet_id": "PKT-TEST1",
         "voided": False,
         "status": "pending_signature",
+        "defendant_name": "DOE, JOHN",
         "docuseal_submitters": [
             {"role": "indemnitor", "slug": "ind-aaa", "status": "pending"},
             {"role": "Defendant", "slug": "def-bbb", "status": "pending"},
@@ -24,8 +25,14 @@ def test_public_sign_redirect_prefers_role():
     })
     with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets):
         response = client.get("/sign/PKT-TEST1/defendant", follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers["location"].endswith("/s/def-bbb")
+        raw = client.get("/sign/PKT-TEST1/defendant?raw=1", follow_redirects=False)
+    assert response.status_code == 200
+    assert "docuseal-form" in response.text
+    assert "data-host" in response.text
+    assert "/s/def-bbb" in response.text
+    assert "You are signing as the defendant" in response.text
+    assert raw.status_code == 302
+    assert raw.headers["location"].endswith("/s/def-bbb")
 
 
 def test_extract_signing_link_prefers_indemnitor():
@@ -216,10 +223,13 @@ def test_portal_session_returns_packet():
 
 
 def test_remaining_fields_requires_session():
-    response = client.post(
-        "/api/portal/remaining-fields",
-        json={"session_token": "missing", "fields": {"indemnitor_employer": "Publix"}},
-    )
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value=None)
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins):
+        response = client.post(
+            "/api/portal/remaining-fields",
+            json={"session_token": "missing", "fields": {"indemnitor_employer": "Publix"}},
+        )
     assert response.status_code == 401
 
 
@@ -272,3 +282,45 @@ def test_remaining_fields_pushes_allowlisted_values():
     assert "poa_number" not in sent_values
     assert sent_values["indemnitor_employer"] == "Publix"
     assert "Fort Myers" in sent_values["indemnitor_city_state_zip"]
+
+
+def test_remaining_fields_targets_defendant_submitter():
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value={
+        "phone": "2395550199",
+        "session_token": "PORTAL-def",
+        "verified": True,
+        "role": "defendant",
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    })
+    mock_pins.update_one = AsyncMock()
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-2",
+        "defendant_name": "DOE, JOHN",
+        "status": "pending_signature",
+        "docuseal_submitters": [
+            {"id": 10, "role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind"},
+            {"id": 11, "role": "Defendant", "sign_url": "https://sign.shamrockbailbonds.biz/s/def"},
+        ],
+    })
+    mock_packets.update_one = AsyncMock()
+
+    def _col(name):
+        return mock_pins if name == "portal_pins" else mock_packets
+
+    mock_svc = MagicMock()
+    mock_svc.update_submitter = AsyncMock(return_value={"id": 11})
+
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=_col), \
+         patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
+        response = client.post("/api/portal/remaining-fields", json={
+            "session_token": "PORTAL-def",
+            "address_confirmed": True,
+            "fields": {"defendant_city": "Fort Myers", "defendant_dl": "D1234567"},
+        })
+    assert response.status_code == 200, response.text
+    assert mock_svc.update_submitter.await_args.args[0] == 11
+    sent = mock_svc.update_submitter.await_args.kwargs["values"]
+    assert sent["defendant_city"] == "Fort Myers"
+    assert sent["defendant_dl"] == "D1234567"

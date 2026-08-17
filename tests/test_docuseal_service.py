@@ -243,9 +243,12 @@ async def test_create_submission_for_packet_calls_api():
         kwargs = m.await_args.kwargs
         assert kwargs["template_id"] == 42
         assert kwargs["send_email"] is False
+        assert kwargs["order"] == "random"
         roles = [s["role"] for s in kwargs["submitters"]]
         assert ROLE_INDEMNITOR in roles
         assert ROLE_DEFENDANT in roles
+        assert all("order" not in s for s in kwargs["submitters"])
+        assert any(s.get("fields") for s in kwargs["submitters"])
         assert result["submission_id"] == 500
         assert len(result["submitters"]) == 2
 

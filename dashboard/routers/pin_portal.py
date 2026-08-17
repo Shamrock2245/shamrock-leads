@@ -5,6 +5,8 @@ Serves mobile PWA UI and fast 6-digit OTP PIN authentication for indemnitor e-si
 OTP is delivered exclusively via BlueBubbles (iMessage / green SMS through Messages).
 Never routes client text through Twilio.
 """
+import html as html_lib
+import json
 import os
 import re
 import random
@@ -95,8 +97,15 @@ async def _resolve_packet_for_client(
             {"delivered_to": {"$regex": phone_pat}},
             {"signer_phone": {"$regex": phone_pat}},
             {"defendant_phone": {"$regex": phone_pat}},
+            {"coindemnitor_phone": {"$regex": phone_pat}},
+            {"co_indemnitor_phone": {"$regex": phone_pat}},
             {"indemnitor.phone": {"$regex": phone_pat}},
+            {"defendant.phone": {"$regex": phone_pat}},
             {"parties.indemnitor.phone": {"$regex": phone_pat}},
+            {"parties.defendant.phone": {"$regex": phone_pat}},
+            {"parties.phone": {"$regex": phone_pat}},
+            {"indemnitors.phone": {"$regex": phone_pat}},
+            {"docuseal_submitters.phone": {"$regex": phone_pat}},
         ])
     if not or_clauses:
         return {
@@ -380,29 +389,26 @@ async def verify_portal_pin(req: VerifyPinRequest):
 
     session_token = f"PORTAL-{_secrets.token_urlsafe(24)}"
     pin_id = pin_doc.get("_id")
-    if pin_id is not None:
-        await pins_col.update_one(
-            {"_id": pin_id},
-            {"$set": {
-                "verified": True,
-                "session_token": session_token,
-                "verified_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-    else:
-        await pins_col.update_one(
-            {"phone": clean_phone, "pin": input_pin},
-            {"$set": {
-                "verified": True,
-                "session_token": session_token,
-                "verified_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
     meta = await _resolve_packet_for_client(
         clean_phone,
         booking=pin_doc.get("booking_number", "") or "",
         intake=pin_doc.get("intake_id", "") or "",
     )
+    session_role = (meta.get("role") or "").strip()
+    session_set = {
+        "verified": True,
+        "session_token": session_token,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "role": session_role,
+        "packet_id": meta.get("packet_id") or "",
+    }
+    if pin_id is not None:
+        await pins_col.update_one({"_id": pin_id}, {"$set": session_set})
+    else:
+        await pins_col.update_one(
+            {"phone": clean_phone, "pin": input_pin},
+            {"$set": session_set},
+        )
 
     return {
         "success": True,
@@ -436,6 +442,8 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "indemnitor_spouse_phone", "indemnitor_spouse_work_phone",
     "reference_1_name", "reference_1_relation", "reference_1_phone", "reference_1_address",
     "reference_2_name", "reference_2_relation", "reference_2_phone", "reference_2_address",
+    "defendant_address", "defendant_city", "defendant_state",
+    "defendant_zip", "defendant_phone", "defendant_dl", "defendant_dob",
 })
 
 
@@ -631,8 +639,8 @@ async def portal_selfie(request: Request):
 @pin_portal_router.post("/remaining-fields")
 async def portal_remaining_fields(req: RemainingFieldsRequest):
     """
-    Save indemnitor-confirmable fields and push them onto the existing
-    DocuSeal indemnitor submitter. Never creates a packet.
+    Save party-confirmable fields and push them onto that party's DocuSeal
+    submitter. Never creates a packet. Role comes from the PIN session.
     """
     session = await _load_verified_session(req.session_token)
     if not session:
@@ -664,15 +672,24 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     packet_id = meta.get("packet_id") or ""
     if packet_id and fields:
         try:
+            from dashboard.services.paperwork_signers import normalize_role
+
             packets = get_collection("paperwork_packets")
             packet = await packets.find_one({"packet_id": packet_id})
             submitters = list((packet or {}).get("docuseal_submitters") or [])
+            want_role = normalize_role(session.get("role") or meta.get("role") or "")
+            session_phone = _digits_phone(session.get("phone") or "")
             target = None
             for item in submitters:
-                role = str((item or {}).get("role") or "").strip().lower()
-                if role == "indemnitor":
+                item_role = normalize_role((item or {}).get("role"))
+                if want_role and item_role == want_role:
                     target = item
                     break
+            if not target and session_phone:
+                for item in submitters:
+                    if _digits_phone((item or {}).get("phone")) == session_phone:
+                        target = item
+                        break
             if not target and submitters:
                 target = submitters[0]
             submitter_id = (target or {}).get("id")
@@ -704,8 +721,110 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     }
 
 
-async def _redirect_to_party_sign(packet_id: str, role: Optional[str] = None):
-    """302 the client to the live DocuSeal slug for this packet + role."""
+def _branded_sign_page(
+    *,
+    sign_url: str,
+    role: str = "",
+    party_name: str = "",
+    defendant_name: str = "",
+) -> str:
+    """Self-hosted <docuseal-form> wrapper (official embed, not a 302 to raw UI)."""
+    from dashboard.services.docuseal_signing_ux import (
+        embed_form_config,
+        role_copy,
+        sign_origin,
+    )
+    from dashboard.services.paperwork_signers import normalize_role, ROLE_LABELS
+
+    copy = role_copy(role)
+    origin = sign_origin()
+    cfg = embed_form_config(src=sign_url, name=party_name, role=role)
+    label = ROLE_LABELS.get(normalize_role(role), "Signer")
+    safe_who = html_lib.escape(copy["you_are"])
+    safe_headline = html_lib.escape(copy["headline"])
+    safe_hint = html_lib.escape(copy["hint"])
+    safe_def = html_lib.escape(defendant_name or "")
+    safe_name = html_lib.escape(party_name or "")
+    case_line = f"Bond packet for {safe_def}" if safe_def else "Bond packet"
+    cfg_json = json.dumps(cfg)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#0b0f19">
+    <title>Shamrock Bail Bonds — Sign paperwork</title>
+    <script src="{origin}/js/form.js" defer></script>
+    <style>
+        :root {{ --bg:#0b0f19; --card:#151c2c; --accent:#22c55e; --text:#f8fafc; --muted:#94a3b8; }}
+        * {{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }}
+        html, body {{ margin:0; min-height:100%; background:var(--bg); color:var(--text);
+            font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }}
+        .bar {{ padding:calc(12px + env(safe-area-inset-top)) 16px 12px;
+            display:flex; justify-content:space-between; align-items:center; gap:10px;
+            border-bottom:1px solid rgba(255,255,255,.08); }}
+        .brand {{ color:var(--accent); font-weight:800; text-decoration:none; }}
+        .help {{ color:var(--accent); font-weight:600; text-decoration:none; min-height:44px; display:inline-flex; align-items:center; }}
+        .intro {{ max-width:720px; margin:0 auto; padding:16px 16px 8px; }}
+        .intro h1 {{ margin:0 0 6px; font-size:1.35rem; }}
+        .intro p {{ margin:0 0 6px; color:var(--muted); line-height:1.45; }}
+        .pill {{ display:inline-block; background:rgba(34,197,94,.16); color:var(--accent);
+            border-radius:999px; padding:4px 10px; font-size:12px; font-weight:700; margin-bottom:8px; }}
+        #docuseal-mount, docuseal-form {{ display:block; min-height:70dvh; width:100%; background:#fff; }}
+        .foot {{ text-align:center; padding:16px; color:var(--muted); font-size:13px; }}
+        .foot a {{ color:var(--accent); }}
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="brand" href="/">Shamrock Bail Bonds</a>
+        <a class="help" href="tel:+12393322245">(239) 332-2245</a>
+    </div>
+    <div class="intro">
+        <span class="pill">{html_lib.escape(label)}</span>
+        <h1>{safe_headline}</h1>
+        <p>{safe_who}</p>
+        <p>{case_line}{(' · ' + safe_name) if safe_name else ''}</p>
+        <p>{safe_hint}</p>
+    </div>
+    <div id="docuseal-mount"></div>
+    <p class="foot">Questions? <a href="tel:+12393322245">(239) 332-2245</a></p>
+    <script>
+        const CFG = {cfg_json};
+        function mountForm() {{
+            const mount = document.getElementById('docuseal-mount');
+            if (!mount) return;
+            if (!window.customElements || !customElements.get('docuseal-form')) {{
+                setTimeout(mountForm, 50);
+                return;
+            }}
+            const form = document.createElement('docuseal-form');
+            Object.keys(CFG).forEach(function (key) {{ form.setAttribute(key, CFG[key]); }});
+            form.id = 'embeddedDocuSeal';
+            form.addEventListener('completed', function () {{
+                window.location.href = CFG['data-completed-redirect-url'] || '/done';
+            }});
+            mount.innerHTML = '';
+            mount.appendChild(form);
+        }}
+        if (document.readyState === 'loading') {{
+            document.addEventListener('DOMContentLoaded', function () {{ setTimeout(mountForm, 0); }});
+        }} else {{
+            setTimeout(mountForm, 0);
+        }}
+    </script>
+</body>
+</html>"""
+
+
+async def _redirect_to_party_sign(
+    packet_id: str,
+    role: Optional[str] = None,
+    *,
+    raw_redirect: bool = False,
+):
+    """Branded embed by default; ?raw=1 302s to the live /s/{{slug}}."""
     from fastapi.responses import RedirectResponse
     from dashboard.services.paperwork_signers import (
         party_signers_from_packet,
@@ -746,14 +865,25 @@ async def _redirect_to_party_sign(packet_id: str, role: Optional[str] = None):
             "<p>Ask your bond agent to resend the paperwork. (239) 332-2245.</p></body></html>",
             status_code=404,
         )
-    return RedirectResponse(url=url, status_code=302)
+    if raw_redirect:
+        return RedirectResponse(url=url, status_code=302)
+    defendant = str(doc.get("defendant_name") or doc.get("Defendant_Name") or "")
+    return HTMLResponse(
+        content=_branded_sign_page(
+            sign_url=url,
+            role=(chosen or {}).get("role") or role or "",
+            party_name=(chosen or {}).get("name") or "",
+            defendant_name=defendant,
+        )
+    )
 
 
 @portal_page_router.get("/sign/{packet_id}")
 @portal_page_router.get("/sign/{packet_id}/{role}")
-async def public_sign_redirect(packet_id: str, role: Optional[str] = None):
-    """Branded client URL → DocuSeal submitter form. No staff PIN."""
-    return await _redirect_to_party_sign(packet_id, role)
+async def public_sign_redirect(request: Request, packet_id: str, role: Optional[str] = None):
+    """Branded Shamrock embed of the party's /s/{slug}. ?raw=1 keeps a 302."""
+    raw = (request.query_params.get("raw") or "").strip() in ("1", "true", "yes")
+    return await _redirect_to_party_sign(packet_id, role, raw_redirect=raw)
 
 
 def _is_paperwork_host(request: Request) -> bool:
@@ -1518,13 +1648,36 @@ async def get_portal_ui(request: Request):
             }
 
             const dsForm = document.createElement('docuseal-form');
-            dsForm.setAttribute('data-src', signUrl);
-            // Expand fields; keep title minimal for more signature canvas on iPad
-            dsForm.setAttribute('data-expand', 'true');
-            dsForm.setAttribute('data-minimize', 'false');
-            dsForm.setAttribute('data-with-title', 'false');
-            dsForm.setAttribute('data-send-copy-email', 'false');
-            dsForm.setAttribute('data-go-to-last', 'false');
+            // Official self-hosted embed: data-src=/s/{slug} + data-host (not cloud CDN).
+            const embedCfg = {
+                'data-src': signUrl,
+                'data-host': 'sign.shamrockbailbonds.biz',
+                'data-expand': 'true',
+                'data-minimize': 'false',
+                'data-go-to-last': 'true',
+                'data-autoscroll-fields': 'true',
+                'data-order-as-on-page': 'true',
+                'data-only-required-fields': 'true',
+                'data-with-complete-button': 'true',
+                'data-with-title': 'false',
+                'data-with-field-names': 'false',
+                'data-with-field-placeholder': 'true',
+                'data-remember-signature': 'true',
+                'data-reuse-signature': 'true',
+                'data-send-copy-email': 'false',
+                'data-allow-typed-signature': 'true',
+                'data-completed-message-title': 'You are done',
+                'data-completed-message-body': 'Thank you. Shamrock has your signature. Call (239) 332-2245 if you need anything else.',
+                'data-completed-button-title': 'All set',
+                'data-completed-redirect-url': '/done',
+                'data-completed-button-url': '/done',
+                'data-custom-css': '.submit-form-button,.expand-form-button,.start-form-submit-button,.completed-form-completed-button{background-color:#16a34a;border:0;border-radius:12px;color:#052e16;min-height:48px;font-weight:700;font-size:16px}.draw-canvas{border-radius:12px;min-height:140px;background:#fff}.field-area-active{border-color:#16a34a;outline-color:#22c55e}.field-area-active-label{background-color:#16a34a;color:#052e16}',
+                'data-i18n': '{"submit":"Continue","complete":"Finish signing","next":"Next","type":"Type name","draw":"Draw signature","upload":"Upload","clear":"Clear"}'
+            };
+            if (opts.email) embedCfg['data-email'] = opts.email;
+            if (opts.name) embedCfg['data-name'] = opts.name;
+            if (opts.role) embedCfg['data-role'] = opts.role;
+            Object.keys(embedCfg).forEach(function (key) { dsForm.setAttribute(key, embedCfg[key]); });
             dsForm.id = 'embeddedDocuSeal';
             // Allow stylus / multi-touch on the host element
             dsForm.style.touchAction = 'auto';
@@ -1627,6 +1780,9 @@ async def get_portal_ui(request: Request):
                         openDocuSealForm(d.signing_link, {
                             title: d.defendant_name ? ('Packet — ' + d.defendant_name) : 'Bond Agreement Packet',
                             fullscreen: inPerson || isTabletOrTouch(),
+                            role: d.role || '',
+                            name: d.name || '',
+                            email: d.email || '',
                         });
                     } else {
                         statusEl.className = 'status error';
